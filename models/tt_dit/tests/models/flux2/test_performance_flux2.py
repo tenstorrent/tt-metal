@@ -16,10 +16,51 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 from .test_pipeline_flux2 import line_params_8k_flux2, line_params_flux2, ring_params_8k_flux2
 
+# Each mesh row self-skips unless it matches the machine exactly, so one command selects the
+# right config per SKU instead of every leg pinning mesh ids by hand: bh_qb on a 4-chip
+# QuietBox, bh_lb on a LoudBox, the bh_glx rows on a galaxy. Derived dicts rather than mutating
+# the shared ones, which test_pipeline_flux2 also uses.
+_REQ_EXACT = {"require_exact_physical_num_devices": True}
+line_params_flux2_perf = {**line_params_flux2, **_REQ_EXACT}
+line_params_8k_flux2_perf = {**line_params_8k_flux2, **_REQ_EXACT}
+ring_params_8k_flux2_perf = {**ring_params_8k_flux2, **_REQ_EXACT}
+
 NUM_INFERENCE_STEPS = 50
 NUM_PERF_RUNS = 3
 
+# Upper bounds in seconds. Each is 1.5x the measured value in the trailing comment, taken from the
+# 1024x1024 / 50-step numbers reported in #53608 for sp=4 tp=8 Ring on a 4x8 galaxy -- the config
+# the bh_sc1 e2e leg runs, and the only flux2 perf measurement that exists. 1.5x is deliberately
+# loose: this is a regression tripwire, not a perf target, and it is seeded from a single report
+# rather than a distribution. Tighten it once the leg has banked a few CI runs of its own.
+#
+# The key is (mesh shape, width, topology, sp_axis, is_fsdp), which is what it takes to name one
+# parametrization uniquely. Mesh alone -- what flux1 uses -- is not enough here: flux2 runs 6 mesh
+# configs across 4 resolutions, 1024 and 8192 differ by orders of magnitude, and four of the six
+# rows are (4, 8), differing only in topology, sp axis and FSDP. A looser key would quietly measure
+# bh_glx_linear against Ring's numbers and report a regression that is really a different config.
+#
+# Configs absent from this table are reported but not gated: of the 24 mesh x resolution
+# combinations, only the ones with a CI leg have a number worth defending.
+PERF_THRESHOLDS = {
+    ((4, 8), 1024, ttnn.Topology.Ring, 0, False): {
+        "total_encoding_time": 0.13,  # measured 0.0865
+        "denoising_steps_time": 0.144 * NUM_INFERENCE_STEPS,  # measured 0.0957/step, 4.7949 total
+        "vae_decoding_time": 0.49,  # measured 0.3249
+        "total_time": 7.85,  # measured 5.2316
+    },
+}
 
+# Profiler step name -> the PERF_THRESHOLDS key it is gated against.
+_STEP_TO_METRIC = {
+    "encoder": "total_encoding_time",
+    "denoising": "denoising_steps_time",
+    "vae": "vae_decoding_time",
+    "run": "total_time",
+}
+
+
+@pytest.mark.timeout(6000)
 @pytest.mark.parametrize(
     "width, height",
     [
@@ -38,12 +79,13 @@ NUM_PERF_RUNS = 3
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, num_links, is_fsdp, dynamic_load, device_params",
     [
-        [(2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, False, line_params_flux2],
-        [(2, 4), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_flux2],
-        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_8k_flux2],
-        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2],
-        [(4, 8), 1, 0, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2],
-        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Ring, 2, True, False, ring_params_8k_flux2],
+        # Without dynamic_load the encoder OOMs during weight conversion on 4 chips.
+        [(2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, True, line_params_flux2_perf],
+        [(2, 4), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_flux2_perf],
+        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_8k_flux2_perf],
+        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2_perf],
+        [(4, 8), 1, 0, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2_perf],
+        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Ring, 2, True, False, ring_params_8k_flux2_perf],
     ],
     ids=[
         "bh_qb",
@@ -207,6 +249,20 @@ def test_flux2_performance(
 
     print("=" * 80)
 
+    measurements = {
+        "total_encoding_time": avg_encoding,
+        "denoising_steps_time": avg_denoising,
+        "vae_decoding_time": avg_vae,
+        "total_time": avg_total,
+    }
+    perf_key = (tuple(mesh_device.shape), width, topology, sp_axis, is_fsdp)
+    expected_metrics = PERF_THRESHOLDS.get(perf_key)
+    if expected_metrics is None:
+        logger.warning(
+            f"No perf thresholds for {perf_key}: reporting timings only. "
+            "Add a PERF_THRESHOLDS entry to gate this config against regressions."
+        )
+
     if is_ci_env:
         device_name_map = {
             (2, 2): "BH_QB",
@@ -217,13 +273,16 @@ def test_flux2_performance(
         benchmark_data = BenchmarkData()
         for i in range(NUM_PERF_RUNS):
             for step_name in ["encoder", "denoising", "vae", "run"]:
+                value = benchmark_profiler.get_duration(step_name, i)
                 benchmark_data.add_measurement(
                     profiler=benchmark_profiler,
                     iteration=i,
                     step_name=step_name,
                     name=step_name,
-                    value=benchmark_profiler.get_duration(step_name, i),
-                    target=benchmark_profiler.get_duration(step_name, i),  # No baseline targets yet
+                    value=value,
+                    # Was `target=value`, which made every run report as exactly on target and the
+                    # perf dashboard incapable of showing drift. Ungated configs still self-target.
+                    target=(expected_metrics or {}).get(_STEP_TO_METRIC[step_name], value),
                 )
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
@@ -240,5 +299,13 @@ def test_flux2_performance(
                 "topology": str(topology),
             },
         )
+
+    if expected_metrics is not None:
+        regressions = [
+            f"  {k}: {measurements[k]:.4f}s exceeds threshold {expected_metrics[k]:.4f}s"
+            for k in expected_metrics
+            if measurements[k] > expected_metrics[k]
+        ]
+        assert not regressions, f"FLUX.2 performance regression for {perf_key}:\n" + "\n".join(regressions)
 
     logger.info("Performance test completed successfully!")

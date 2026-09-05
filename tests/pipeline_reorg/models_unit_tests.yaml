@@ -1065,6 +1065,105 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+- name: TT-DiT Flux.2-dev unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE
+    # Persistent cache on the yyz4-mnt-models mount; tt_dit_cache stays out of the tt_cache/
+    # namespace tt_transformers uses. Read-only on a normal run; cache.load_model only writes
+    # on a miss.
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
+    # Every pytest below runs, and the leg still fails if any of them did. The step runs under
+    # `bash -e`, so a bare sequence stops at the first failure: on run 33678382128 the known
+    # all_blocks PCC failure meant single_blocks never executed at all, and on 33655962297 a
+    # flaky 1x1 mesh open suppressed all three tests after it. Aggregating is what keeps one
+    # expected red from hiding the state of everything else.
+    status=0
+    # -rs everywhere: the flux2 multi-device rows carry require_exact_physical_num_devices, so on
+    # this 4-chip SKU every one of them except 2x2 self-skips. The skip report is what shows the
+    # 2x2 rows actually ran rather than the job passing because it executed nothing. The VAE's
+    # 1x1 row is the exception -- it takes no fabric and no require_exact, so it runs here too.
+    pytest --timeout 900 -rs models/tt_dit/tests/models/flux2/test_vae_flux2.py || status=1
+    # test_upsample is excluded: it asserts nothing and is an autoregressive generation loop
+    # at temperature=0.15, so it is non-deterministic by construction.
+    pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode || status=1
+    # The two layer-skip parametrizations get one pytest invocation each so the process frees
+    # the host memory in between. Both in one process is an OOM kill (exit 137, run
+    # 33667518970, died at checkpoint shard 6/7). Both parametrizations load the full 32B torch
+    # reference checkpoint at test start -- that is unconditional, nothing to do with the TT
+    # cache, which run 33685965436 confirms both share one key of
+    # (TP2_1_SP2_0_mesh2x2_bf16_FSDP) -- and two of those in one process exhausts host RAM.
+    #
+    # The all_blocks 2x2 case fails until the Linear-topology correctness fix lands -- FLUX.2
+    # drops the attention residual off the non-Ring path in ColParallelLinear, giving noise
+    # (PCC -3.71%, RMSE/sigma 179%, reproduced on runs 33667518970 and 33678382128). Fix is on
+    # branch stisi/flux2-qb2, commit 92919ba7f5d.
+    pytest --timeout 3000 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k all_blocks || status=1
+    pytest --timeout 900 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks || status=1
+    exit $status
+  model: flux.2-dev
+  model_family: Flux
+  skus:
+    bh_quietbox_2:
+      # Measured on run 33685965436: VAE 66s, prompt encoder 27m02s, transformer all_blocks
+      # 39m28s, single_blocks 4m15s. Most of the two big numbers is the once-per-job cold NFS
+      # read of the converted cache (Mistral3Encoder 1220s, Flux2Transformer 1470s), which is
+      # why the allowances stay generous. Above the sum of the pytest --timeouts (120 min) so
+      # a hang fails cleanly rather than being killed by the runner.
+      timeout: 125
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+# Same three test files as the bh_quietbox_2 leg above, on the 4x8 galaxy instead of 2x2.
+# No mesh -k filters: require_exact_physical_num_devices means each row self-skips unless it
+# matches the machine, so this command and the QuietBox one are identical apart from the
+# multihost launcher and the env below.
+- name: TT-DiT Flux.2-dev multihost unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    # FLUX.2-dev is staged on the yyz4 mount the QuietBox uses, not on this one, so the first
+    # runs here still need the hub. Switch to HF_HUB_OFFLINE=1 (as the LTX legs do) once the
+    # checkpoint is present under /mnt/models/huggingface.
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/flux2/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # Every leg runs and the job fails if any of them did -- same reason as the QuietBox entry,
+    # and the same shape the LTX-2.3 bh_sc1 leg uses.
+    rc=0
+    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest -rs "$@" || rc=1; }
+    # Cheapest first. The two transformer parametrizations get a process each: each loads the full
+    # 32B torch reference checkpoint, and two in one process is an OOM kill on 4 chips
+    # (run 33667518970). They share one TT cache key, so the second is cheap once the first ran.
+    run --timeout 600 models/tt_dit/tests/models/flux2/test_vae_flux2.py
+    run --timeout 900 models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
+    # Ring topology (4x8) is not affected by the ColParallelLinear addcmul drop, which is why
+    # run 33689082073 gets PCC 99.9820% on single_blocks here against 0.3185% at 2x2 Linear.
+    # all_blocks still fails, at 70.8769%: the second defect in 92919ba7f5d -- the double block
+    # built without per_head_norm -- is a constructor argument, so it is topology-independent.
+    # single_blocks keeps only one double block and barely accumulates the error; all_blocks
+    # runs every one of them. Both cases go green when that fix lands.
+    run --timeout 1200 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k all_blocks
+    run --timeout 400 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks
+    exit $rc
+  model: flux.2-dev
+  model_family: Flux
+  skus:
+    bh_sc1:
+      # Measured on the green run 33801719909: VAE 2m06s, prompt encoder 5m22s, transformer
+      # all_blocks 9m20s, single_blocks 51s -- about 18 min of pytest. Far cheaper than the
+      # QuietBox leg: 32 chips, and the HF weights are staged on this mount. The allowances
+      # still cover a cold converted-weight cache, which this SKU rebuilds every run. Above the
+      # sum of the pytest --timeouts (52 min).
+      timeout: 60
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 - name: Z-Image-Turbo unit tests
   cmd: |
     unset HF_HUB_OFFLINE
