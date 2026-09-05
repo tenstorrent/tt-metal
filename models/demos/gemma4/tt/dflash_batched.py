@@ -45,6 +45,20 @@ class DFlashBatchedDecoder:
         H = drafter.hidden
         self.V = min(int(_os.environ.get("GEMMA4_DFLASH_VERIFY", str(K))), K)
         self.P_v = self.V + 1
+        # Verify modes:
+        #   fold (default): ONE B=1-shaped packed verify -- users folded into the
+        #     packed-rows dim (packed_p = B*P_v), single-row VIRTUAL page table
+        #     (user page rows concatenated), block-offset masks, virtual write
+        #     positions b*S + pos. Reuses the exact kernel config the B=1 V=15
+        #     runs validated (PNH=64, one table row).
+        #   split (GEMMA4_DFLASH_BVSPLIT=1): B separate B=1 verifies -- correctness
+        #     reference, ~2x target weight reads.
+        #   bbatch (GEMMA4_DFLASH_BBATCH=1): B in the SDPA batch dim. BROKEN as of
+        #     2026-09-05: user 0 clean, user 1+ corrupt even with identical
+        #     prompts -- the packed SDPA (q [1,B,H*P,hd], mask [B,1,H*P,S]) has
+        #     never been exercised at batch>1; kept for kernel-side debugging.
+        self.verify_split = _os.environ.get("GEMMA4_DFLASH_BVSPLIT", "0") == "1"
+        self.verify_bbatch = _os.environ.get("GEMMA4_DFLASH_BBATCH", "0") == "1"
         if B * self.P_v > 32:
             raise ValueError(
                 f"B*(V+1) = {B * self.P_v} > 32: the verify row cliff (measured on MTP) — "
@@ -85,6 +99,31 @@ class DFlashBatchedDecoder:
             )
             for _ in range(self.P_v)
         ]
+        self.pv_widx_fold = [
+            ttnn.from_torch(
+                z(1, dtype=torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._mapper,
+            )
+            for _ in range(B * self.P_v)
+        ]
+        self.pv_widx_u = None
+        if self.verify_split:
+            self.pv_widx_u = [
+                [
+                    ttnn.from_torch(
+                        z(1, dtype=torch.int32),
+                        device=self.mesh_device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=self._mapper,
+                    )
+                    for _ in range(self.P_v)
+                ]
+                for _ in range(B)
+            ]
         self.v_pt = None  # width-matched batched table (built in capture)
         self.pv_ptl = None
         self.pv_sk = None
@@ -134,32 +173,62 @@ class DFlashBatchedDecoder:
         for p in range(P_v):
             w = torch.tensor([self.start[b] + p for b in range(B)], dtype=torch.int32)
             self._upload(w, self.pv_widx[p], dtype=ttnn.int32)
+        if self.pv_widx_u is not None:
+            for b in range(B):
+                for p in range(P_v):
+                    self._upload(
+                        torch.tensor([self.start[b] + p], dtype=torch.int32),
+                        self.pv_widx_u[b][p],
+                        dtype=ttnn.int32,
+                    )
         # verify masks: per-user causal/window rows over the capped S_k
-        mf = torch.empty(B, 1, P_v, self.pv_sk)
-        ms = torch.empty(B, 1, P_v, self.pv_sk)
         NEG = -1e9
         j = torch.arange(self.pv_sk)
         W = self.target.hf_config.sliding_window
         ring = self.pv_ring
-        for b in range(B):
-            for p in range(P_v):
-                up = self.start[b] + p
-                mf[b, 0, p] = torch.where(j <= up, 0.0, NEG)
-            if ring:
-                top = self.start[b] + P_v - 1
-                jr = torch.arange(ring)
-                dd = torch.remainder(top - jr, ring)
-                for p in range(P_v):
-                    lo = P_v - 1 - p
-                    ok = (dd >= lo) & (dd < lo + W) & (dd <= top)
-                    ms[b, 0, p, :ring] = torch.where(ok, 0.0, NEG)
-                ms[b, 0, :, ring:] = NEG
-            else:
+        if not (self.verify_split or self.verify_bbatch):
+            # fold mode: rows user-major over B*P_v, columns block-diagonal per
+            # user at stride pv_sk; write idxs are VIRTUAL positions b*pv_sk+pos
+            S = self.pv_sk
+            mf = torch.full((1, 1, B * P_v, B * S), NEG)
+            ms = torch.full((1, 1, B * P_v, B * S), NEG)
+            for b in range(B):
                 for p in range(P_v):
                     up = self.start[b] + p
-                    ms[b, 0, p] = torch.where((j <= up) & (j > up - W), 0.0, NEG)
-        self._upload(mf.to(torch.bfloat16), self.pv_mask_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        self._upload(ms.to(torch.bfloat16), self.pv_mask_slide, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                    r = b * P_v + p
+                    mf[0, 0, r, b * S : (b + 1) * S] = torch.where(j <= up, 0.0, NEG)
+                    ms[0, 0, r, b * S : (b + 1) * S] = torch.where((j <= up) & (j > up - W), 0.0, NEG)
+            self._upload(mf.to(torch.bfloat16), self.pv_mask_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            self._upload(ms.to(torch.bfloat16), self.pv_mask_slide, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            for b in range(B):
+                for p in range(P_v):
+                    self._upload(
+                        torch.tensor([b * S + self.start[b] + p], dtype=torch.int32),
+                        self.pv_widx_fold[b * P_v + p],
+                        dtype=ttnn.int32,
+                    )
+        else:
+            mf = torch.empty(B, 1, P_v, self.pv_sk)
+            ms = torch.empty(B, 1, P_v, self.pv_sk)
+            for b in range(B):
+                for p in range(P_v):
+                    up = self.start[b] + p
+                    mf[b, 0, p] = torch.where(j <= up, 0.0, NEG)
+                if ring:
+                    top = self.start[b] + P_v - 1
+                    jr = torch.arange(ring)
+                    dd = torch.remainder(top - jr, ring)
+                    for p in range(P_v):
+                        lo = P_v - 1 - p
+                        ok = (dd >= lo) & (dd < lo + W) & (dd <= top)
+                        ms[b, 0, p, :ring] = torch.where(ok, 0.0, NEG)
+                    ms[b, 0, :, ring:] = NEG
+                else:
+                    for p in range(P_v):
+                        up = self.start[b] + p
+                        ms[b, 0, p] = torch.where((j <= up) & (j > up - W), 0.0, NEG)
+            self._upload(mf.to(torch.bfloat16), self.pv_mask_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            self._upload(ms.to(torch.bfloat16), self.pv_mask_slide, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         # drafter block-diagonal masks: stationary once every user's window is full
         key = tuple((self.ctx_len[b] - self.win_first[b], self.start[b] - self.win_first[b]) for b in range(B))
         if self._dmask_key != key:
@@ -243,44 +312,108 @@ class DFlashBatchedDecoder:
         # via explicit ttnn.slice (the proven MTP fused idiom; bracket slicing
         # RM uint32 tensors segfaulted here).
         flat = ttnn.reshape(draft_ids, (1, B * K))
-        parts = []
-        for b in range(B):
-            parts.append(ttnn.slice(self.noise_anchor_tok, [0, b], [1, b + 1]))
-            parts.append(ttnn.slice(flat, [0, b * K], [1, b * K + self.V]))
-        vx = ttnn.concat(parts, dim=1)  # [1, B*P_v]
-        for t in parts:
-            try:
-                t.deallocate(True)
-            except Exception:
-                pass
         H_l = self.target.layers[0].self_attn.config.num_attention_heads // self._tp
-        m_full = ttnn.repeat(self.pv_mask_full, ttnn.Shape([1, 1, H_l, 1]))
-        m_slide = ttnn.repeat(self.pv_mask_slide, ttnn.Shape([1, 1, H_l, 1]))
         self.target._dflash_sharded_logits = self._sampler is not None
-        logits, vhidden = self.target.ttnn_packed_verify_forward(
-            x=vx,
-            position_idx=self.pv_pos,
-            attn_mask_full=m_full,
-            attn_mask_sliding=m_slide,
-            packed_p=P_v,
-            page_table=self.v_pt,
-            kv_cache=self.kv_layers,
-            kv_write_idxs=self.pv_widx,
-            page_tables_per_layer=self.pv_ptl,
-        )
-        m_full.deallocate(True)
-        m_slide.deallocate(True)
-        if self._sampler is not None:
-            vidx, _lp = self._sampler.sample(logits, enable_trace=False)
+        if self.verify_split:
+            # Isolation probe: B separate B=1-shaped verifies (own 1-row table,
+            # [1] write idxs, own mask) + per-user sampler. Slower (B x target
+            # weight reads) -- correctness reference only.
+            assert self._sampler is not None
+            S_f = int(self.pv_mask_full.shape[3])
+            S_s = int(self.pv_mask_slide.shape[3])
+            vidx_parts, fc_parts = [], []
+            vx = None
+            for b in range(B):
+                a_b = ttnn.slice(self.noise_anchor_tok, [0, b], [1, b + 1])
+                dr_b = ttnn.slice(flat, [0, b * K], [1, b * K + self.V])
+                vx_b = ttnn.concat([a_b, dr_b], dim=1)
+                a_b.deallocate(True)
+                dr_b.deallocate(True)
+                pos_b = ttnn.slice(self.pv_pos, [0, b * P_v], [1, (b + 1) * P_v])
+                mfb = ttnn.slice(self.pv_mask_full, [b, 0, 0, 0], [b + 1, 1, P_v, S_f])
+                msb = ttnn.slice(self.pv_mask_slide, [b, 0, 0, 0], [b + 1, 1, P_v, S_s])
+                m_full = ttnn.repeat(mfb, ttnn.Shape([1, 1, H_l, 1]))
+                m_slide = ttnn.repeat(msb, ttnn.Shape([1, 1, H_l, 1]))
+                mfb.deallocate(True)
+                msb.deallocate(True)
+                lg_b, _vh_b = self.target.ttnn_packed_verify_forward(
+                    x=vx_b,
+                    position_idx=pos_b,
+                    attn_mask_full=m_full,
+                    attn_mask_sliding=m_slide,
+                    packed_p=P_v,
+                    page_table=self.v_pt_u[b],
+                    kv_cache=self.kv_layers,
+                    kv_write_idxs=self.pv_widx_u[b],
+                    page_tables_per_layer=None,
+                )
+                for t in (m_full, m_slide, pos_b, vx_b):
+                    t.deallocate(True)
+                v_b, _lp = self._sampler.sample(lg_b, enable_trace=False)
+                vidx_parts.append(v_b)
+                cat_b = ttnn.concat(self.tap_bufs, dim=3)
+                fc_parts.append(ttnn.linear(cat_b, d.fc, compute_kernel_config=d._ckc))
+                cat_b.deallocate(True)
+            vidx = ttnn.concat(vidx_parts, dim=len(vidx_parts[0].shape) - 1)
+            fc_out = ttnn.concat(fc_parts, dim=2)
+            for t in vidx_parts + fc_parts:
+                t.deallocate(True)
+            ttnn.assign(fc_out, self.fc_prev)
+            fc_out.deallocate(True)
         else:
-            vidx = ttnn.argmax(logits[:, :, :, : d.vocab], dim=-1)
-        logits.deallocate(True)
-        vhidden.deallocate(True)
-        # tap fc -> persistent for next commit
-        cat = ttnn.concat(self.tap_bufs, dim=3)
-        fc_out = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)
-        ttnn.assign(fc_out, self.fc_prev)
-        fc_out.deallocate(True)
+            parts = []
+            for b in range(B):
+                parts.append(ttnn.slice(self.noise_anchor_tok, [0, b], [1, b + 1]))
+                parts.append(ttnn.slice(flat, [0, b * K], [1, b * K + self.V]))
+            vx = ttnn.concat(parts, dim=1)  # [1, B*P_v]
+            for t in parts:
+                try:
+                    t.deallocate(True)
+                except Exception:
+                    pass
+            m_full = ttnn.repeat(self.pv_mask_full, ttnn.Shape([1, 1, H_l, 1]))
+            m_slide = ttnn.repeat(self.pv_mask_slide, ttnn.Shape([1, 1, H_l, 1]))
+            if self.verify_bbatch:
+                logits, vhidden = self.target.ttnn_packed_verify_forward(
+                    x=vx,
+                    position_idx=self.pv_pos,
+                    attn_mask_full=m_full,
+                    attn_mask_sliding=m_slide,
+                    packed_p=P_v,
+                    page_table=self.v_pt,
+                    kv_cache=self.kv_layers,
+                    kv_write_idxs=self.pv_widx,
+                    page_tables_per_layer=self.pv_ptl,
+                )
+            else:
+                # fold: users in the packed dim -- ONE B=1-shaped verify with the
+                # virtual single-row table and block-offset masks (see __init__)
+                logits, vhidden = self.target.ttnn_packed_verify_forward(
+                    x=vx,
+                    position_idx=self.pv_pos,
+                    attn_mask_full=m_full,
+                    attn_mask_sliding=m_slide,
+                    packed_p=B * P_v,
+                    page_table=self.v_pt_virt,
+                    kv_cache=self.kv_layers,
+                    kv_write_idxs=self.pv_widx_fold,
+                    page_tables_per_layer=None,
+                )
+            m_full.deallocate(True)
+            m_slide.deallocate(True)
+            if self._sampler is not None:
+                vidx, _lp = self._sampler.sample(logits, enable_trace=False)
+            else:
+                vidx = ttnn.argmax(logits[:, :, :, : d.vocab], dim=-1)
+            # NOTE: match the validated B=1 verify tail EXACTLY -- neither logits
+            # nor vhidden is deallocated here. Deallocating vhidden mid-graph
+            # segfaulted (it can alias model-internal state); both are trace-region
+            # tensors with a fixed footprint, not per-replay leaks.
+            # tap fc -> persistent for next commit
+            cat = ttnn.concat(self.tap_bufs, dim=3)
+            fc_out = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)
+            ttnn.assign(fc_out, self.fc_prev)
+            fc_out.deallocate(True)
         if self.out_draft is None:
             self.out_draft = ttnn.clone(draft_ids)
             self.out_vidx = ttnn.clone(vidx)
@@ -288,7 +421,8 @@ class DFlashBatchedDecoder:
         ttnn.copy(vidx, self.out_vidx)
         draft_ids.deallocate(True)
         vidx.deallocate(True)
-        vx.deallocate(True)
+        if vx is not None:
+            vx.deallocate(True)
         return self.out_draft, self.out_vidx
 
     def capture(self, anchors, starts, max_new=256):
@@ -297,7 +431,14 @@ class DFlashBatchedDecoder:
         self.start = list(starts)
         # verify horizon + width-matched tables (mirrors the B=1 decoder)
         horizon = max(starts) + max_new + P_v + 64
-        self.pv_sk = ((horizon + 1023) // 1024) * 1024
+        if not (self.verify_split or self.verify_bbatch):
+            # fold mode: block-granular S_k -- the virtual table is B*(pv_sk/64)
+            # wide and paged_update_cache requires table width <= pool blocks,
+            # so every wasted block costs B entries. 64-aligned satisfies the
+            # mask/k_chunk contract.
+            self.pv_sk = ((horizon + 63) // 64) * 64
+        else:
+            self.pv_sk = ((horizon + 1023) // 1024) * 1024
         t = self.target
         self.pv_ring = None
         for layer in t.layers:
@@ -307,15 +448,59 @@ class DFlashBatchedDecoder:
                 break
         z = torch.zeros
         mkT = dict(device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper)
-        self.pv_mask_full = ttnn.from_torch(z(B, 1, P_v, self.pv_sk, dtype=torch.bfloat16), **mkT)
-        s_slide = self.pv_ring if self.pv_ring else self.pv_sk
-        self.pv_mask_slide = ttnn.from_torch(z(B, 1, P_v, s_slide, dtype=torch.bfloat16), **mkT)
+        fold = not (self.verify_split or self.verify_bbatch)
+        if fold and self.pv_ring:
+            raise NotImplementedError(
+                "batched dFlash fold-verify + bounded ring: virtual ring tables not wired yet "
+                "(use GEMMA4_DFLASH_BVSPLIT=1 for bounded B>1, or unbounded KV)"
+            )
+        if fold:
+            # users folded into packed rows; columns are per-user S_k blocks
+            self.pv_mask_full = ttnn.from_torch(z(1, 1, B * P_v, B * self.pv_sk, dtype=torch.bfloat16), **mkT)
+            self.pv_mask_slide = ttnn.from_torch(z(1, 1, B * P_v, B * self.pv_sk, dtype=torch.bfloat16), **mkT)
+        else:
+            self.pv_mask_full = ttnn.from_torch(z(B, 1, P_v, self.pv_sk, dtype=torch.bfloat16), **mkT)
+            s_slide = self.pv_ring if self.pv_ring else self.pv_sk
+            self.pv_mask_slide = ttnn.from_torch(z(B, 1, P_v, s_slide, dtype=torch.bfloat16), **mkT)
         # per-user distinct table rows, width-matched to the mask
         bs = 64
         width = min(self.pv_sk // bs, int(self.page_table_torch.shape[1]))
         pt = self.page_table_torch[:B, :width].to(torch.int32)
         self.v_pt = ttnn.from_torch(
             pt, device=self.mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper
+        )
+        self.v_pt_u = [
+            ttnn.from_torch(
+                pt[b : b + 1],
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._mapper,
+            )
+            for b in range(B)
+        ]
+        # fold mode: ONE virtual row = users' page rows concatenated at a FIXED
+        # per-user stride of pv_sk//64 blocks, so virtual position b*pv_sk + pos
+        # lands on user b's page for pos (pv_sk % 64 == 0). Stride can exceed a
+        # user's physical width; the pad entries (page 0) sit under NEG-masked
+        # columns only -- table width == mask width, the root-cause-#4 rule.
+        vw = self.pv_sk // bs
+        pool_blocks = int(self.kv_layers[0][0].shape[0]) if self.kv_layers else B * vw
+        if B * vw > pool_blocks:
+            raise ValueError(
+                f"fold-verify virtual table needs B*(pv_sk/64) = {B * vw} blocks but the KV pool has "
+                f"{pool_blocks}; allocate more blocks (max_num_blocks) or lower max_new"
+            )
+        vrow = torch.zeros(1, B * vw, dtype=torch.int32)
+        for b in range(B):
+            w_b = min(vw, int(pt.shape[1]))
+            vrow[0, b * vw : b * vw + w_b] = pt[b, :w_b]
+        self.v_pt_virt = ttnn.from_torch(
+            vrow,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._mapper,
         )
         installed = getattr(t, "_active_page_tables_per_layer", None)
         self.pv_ptl = None

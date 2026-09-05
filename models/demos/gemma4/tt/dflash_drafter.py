@@ -470,7 +470,12 @@ class DFlashDrafter:
                 o = ccl_allreduce(o, self.mesh_config, self.ccl_manager)
             x = ttnn.add(resid, o)
             o.deallocate(True)
-            resid.deallocate(True)
+            # At li==0 resid IS the caller's x -- a PERSISTENT buffer in the
+            # batched decoder (noise_rows), refilled every replay. Freeing it
+            # here let the compile pass complete, then the trace pass read a
+            # dead buffer (segfault). This function does not consume x.
+            if li > 0:
+                resid.deallocate(True)
 
             resid = x
             xn = self._rms(x, lyr["post_norm"])
