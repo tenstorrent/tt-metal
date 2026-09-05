@@ -440,3 +440,42 @@ def test_unary_inplace_cache_hit_interleaved_readdresses(device):
 
     # One shared program reused across all four differently-addressed in-place hits.
     assert device.cache_entries_counter.total == 1
+
+
+def test_unary_cache_miss_preallocated_output_dtype(device):
+    """A preallocated output's dtype must reach the cache key.
+
+    output_dtype is part of the hashed UnaryParams, but unary_impl derived it from the INPUT while
+    taking only the memory config from the preallocated output. The program factory takes the output
+    CB's data format and page size from the output tensor, and that page size is what the writer
+    reads as page_bytes -- so two calls differing solely in the preallocated output dtype collided
+    and the second ran the first's page size against the other's buffer.
+
+    validate_on_program_cache_miss checks only the shape and layout of the preallocated output, and
+    does not run at all on a hit, so nothing else catches this.
+
+    bfloat16 runs first because its 2048 B pages are the narrower of the two: a collision then
+    leaves an fp32 tile half written, rather than overrunning a 2048 B page.
+    """
+    device.cache_entries_counter.reset()
+
+    shape = [1, 1, 32, 32]
+    torch_a = torch.rand(shape, dtype=torch.bfloat16) - 0.5  # straddle zero so relu does something
+    torch_ref = torch.relu(torch_a)
+
+    input_tensor = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def relu_into(out_dtype):
+        out = ttnn.from_torch(torch.zeros(shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        with device.cache_entries_counter.measure():
+            ttnn.relu(input_tensor, output_tensor=out)
+        return ttnn.to_torch(out)
+
+    got_bf16 = relu_into(ttnn.bfloat16)
+    got_fp32 = relu_into(ttnn.float32)
+
+    # relu is exact in both dtypes, so equality rather than a tolerance.
+    assert_equal(torch_ref, got_bf16)
+    assert_equal(torch_ref.float(), got_fp32)
+
+    assert device.cache_entries_counter.total == 2
