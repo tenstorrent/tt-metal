@@ -1451,7 +1451,24 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     # how _decode_gate treats a cache that crashes every time.
     if bound == "host" or (open_op.get("bucket") or "").lower() == "host_fallback":
         _host_kinds = {"structural", "trace", "trace-capture"}
-        _host_tried = [a for a in matches if (a.get("kernel_kind") or "").lower() in _host_kinds]
+        # COUNTED THE WAY THE LEVER IS APPLIED, NOT THE WAY THE TARGET IS NAMED.
+        #
+        # This rung is offered on the bucket `host_overhead` -- idle time between launches, which is
+        # not an op and has no shape. Its lever is a transform of the GENERATION LOOP, so the agent
+        # edits the loop and records the attempt against whatever it actually touched. Filtering the
+        # tries through _op_match then compared that op class against "host_overhead", failed, and
+        # counted nothing.
+        #
+        # Measured on voxtral_mini_3b_2507 (2026-09-05): offered 54 times in one run, 0 counted, so a
+        # cap of 3 was never approached and the rung was re-issued all run -- while prefill, the only
+        # stage still short of its band, waited behind it.
+        #
+        # Trace kinds are minted for THIS rung alone, so they count wherever they were recorded.
+        # `structural` is a general rung used on ordinary ops and still has to match this one, or
+        # three structural attempts on matmuls would retire the dispatch axis.
+        _trace_kinds = _host_kinds - _STRUCTURAL_RUNGS
+        _host_tried = [a for a in attempts if (a.get("kernel_kind") or "").lower() in _trace_kinds]
+        _host_tried += [a for a in matches if (a.get("kernel_kind") or "").lower() in _STRUCTURAL_RUNGS]
         # _ledger().is_win OWNS "is a win"; re-deriving it from beat_baseline here would be a second
         # definition of the same fact (test_single_source_of_truth enforces that). If the ledger is
         # unreadable, treat it as NOT won -- that keeps the rung open, which is the safe direction.
@@ -1459,6 +1476,9 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             _host_won = any(_ledger().is_win(a) for a in _host_tried)
         except Exception:  # noqa: BLE001
             _host_won = False
+        # Read from the FULL log, not from `attempts`: the caller filters that on
+        # kernel_detected_in_source, and an attempt that wedged the device may never have got far
+        # enough to have one. Unchanged -- the defect above was the op filter, not this source.
         try:
             _host_wedged = sum(
                 1 for a in _load_attempts() if (a.get("kernel_kind") or "").lower() in _host_kinds and a.get("wedged")
