@@ -123,6 +123,58 @@ bool write_named_ct_arg_map_header(const string& out_dir, const JitBuildSettings
     return true;
 }
 
+/**
+ * Emit get_token_if_present() helper for a given binding type.
+ *
+ * get_token_if_present() is a helper function on the device side that performs lookup of the resource binding token
+ * by name. The function returns a pointer to the binding token if found, otherwise nullptr.
+ *
+ * This is used by kernels to check if a binding is present when kernel is meant to be reusable across different
+ * programs.
+ */
+template <typename Entry>
+void emit_programmatic_binding_token_getter(
+    ostream& content, const vector<Entry>& entries, string_view null_binding_type) {
+    // Function header
+    content << "template <::internal::TemplateString name>\n"
+            // Using auto here as the tokens could be templated differently depending on the name.
+            << "constexpr auto get_token_if_present() {\n";
+
+    // 4 space left pad.
+    string padding(4, ' ');
+
+    // If statements for each entry, switching between `if constexpr` and `else if constexpr`
+    const char* if_kw = "if constexpr";
+    for (const auto& entry : entries) {
+        // Emits equivalent to:
+        // if constexpr (name == "entry_name") {
+        //     return &entry_name;
+        // }
+        content << padding << if_kw << " (name == \"" << entry.name << "\") {\n"
+                << padding << padding << "return &" << entry.name << ";\n";
+
+        if_kw = "} else if constexpr";
+    }
+
+    // Emit "cannot find binding" case
+    //
+    // equivalent to:
+    // using null_token_ptr_t = const <null_binding_type>*;
+    // return null_token_ptr_t{nullptr};
+    if (entries.empty()) {
+        content << padding << "using null_token_ptr_t = const " << null_binding_type << "*;\n"
+                << padding << "return null_token_ptr_t{nullptr};\n";
+    } else {
+        content << padding << "} else {\n"
+                << padding << padding << "using null_token_ptr_t = const " << null_binding_type << "*;\n"
+                << padding << padding << "return null_token_ptr_t{nullptr};\n"
+                << padding << "}\n";
+    }
+
+    // Function close
+    content << "}\n";
+}
+
 // METAL 2.0 only:
 // This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
 // Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
@@ -132,10 +184,14 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Get the DFB bindings from the settings callback
     // Sort them to ensure the file output is deterministic for the JIT build cache
     // (aka the on-disk per-object dephash cache)
-    vector<pair<string, uint16_t>> dfb_entries;
+    struct DfbEntry {
+        string name;
+        uint16_t id;
+    };
+    vector<DfbEntry> dfb_entries;
     settings.process_dataflow_buffer_binding_handles(
-        [&dfb_entries](const string& name, uint16_t id) { dfb_entries.emplace_back(name, id); });
-    sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        [&dfb_entries](const string& name, uint16_t id) { dfb_entries.push_back({name, id}); });
+    sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Get the semaphore bindings from the settings callback
     // Sort them to ensure the file output is deterministic, as explained above
@@ -209,146 +265,164 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
-    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty() &&
-        tensor_binding_sequence_entries.empty()) {
-        content << "// No bindings for this kernel.\n";
-    } else {
-        if (!dfb_entries.empty()) {
-            content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
-        }
-        if (!sem_entries.empty()) {
-            // Defines SemaphoreBindingToken and SemScope. Header-only and dependency-free,
-            // so it is safe on compute builds too.
-            content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
-        }
-        if (has_cached_sem) {
-            // Include for the entry/exit stubs' bodies (get_semaphore + the MEM_ defines),
-            // guarded exactly like those bodies (the pool is DM-only).
-            content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
-            content << "#include \"api/dataflow/dataflow_api.h\"\n";
-            content << "#endif\n";
-        }
-        if (!ta_entries.empty()) {
-            // This header defines TensorBindingToken, a type which can be used
-            // to construct a TensorAccessor or LocalTensorAccessor.
-            content << "#include \"api/tensor/tensor_binding_token.h\"\n";
-        }
-        if (!tensor_binding_sequence_entries.empty()) {
-            content << "#include <tuple>\n";
-        }
-        if (!scratch_entries.empty()) {
-            // The full Scratchpad type (NOC-free, so it compiles on both data-movement and
-            // compute/TRISC builds), which also pulls in the ScratchpadBindingToken type.
-            content << "#include \"api/scratchpad.h\"\n";
-        }
-        content << "\n";
 
-        if (!dfb_entries.empty()) {
-            content << "namespace dfb {\n";
-            for (const auto& [name, id] : dfb_entries) {
-                content << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
-            }
-            content << "}  // namespace dfb\n";
-        }
+    // Emit Includes:
+    // Support get_token_if_present() helper.
+    content << "#include \"internal/template_string.h\"\n";
 
-        if (!sem_entries.empty()) {
-            tt::tt_metal::emit_semaphore_binding_tokens(content, sem_entries);
-            if (has_cached_sem) {
-                // Cached-pool entry/exit stubs. A cached semaphore's pool row must be seeded
-                // with its init value once per program, by exactly one hart, before anyone
-                // touches it, and is left clean for the next program. Each 8B row is [0] = the
-                // counter, [1] = a bookkeeping word: entered[15:0], exited[30:16], seeded[31]
-                // On entry, each binder hart increments `entered`; whoever got there first
-                // copies the init value from the ring into the pool counter and sets `seeded`;
-                // everyone else waits for that bit. On exit, each hart increments `exited`;
-                // the last one zeroes the bookkeeping word so the next program starts fresh.
-                // Any number of local kernels/threads works.
-                content << "#define TT_DM_CACHED_SEM_STUBS 1\n";
-                content << "namespace sem_internal {\n";
-                content << "inline void init_dm_local_cached() {\n";
-                content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
-                for (const auto& entry : sem_entries) {
-                    if (entry.scope != SemScope::DM_LOCAL_CACHED) {
-                        continue;
-                    }
-                    content << "    {\n";
-                    content << "        auto* row = reinterpret_cast<uint32_t*>("
-                            << "static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + " << entry.id
-                            << "u * MEM_DM_CACHED_SEM_ROW);\n";
-                    content << "        if ((__atomic_fetch_add(row + 1, 1u, __ATOMIC_ACQ_REL) & 0xFFFFu) == 0u) {\n";
-                    content << "            row[0] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>("
-                            << "::get_semaphore(" << entry.id << "u) + MEM_L1_UNCACHED_BASE);\n";
-                    content << "            __atomic_fetch_or(row + 1, 0x80000000u, __ATOMIC_RELEASE);\n";
-                    content << "        } else {\n";
-                    content
-                        << "            while ((__atomic_load_n(row + 1, __ATOMIC_ACQUIRE) & 0x80000000u) == 0u) {\n";
-                    content << "            }\n";
-                    content << "        }\n";
-                    content << "    }\n";
-                }
-                content << "#endif\n";
-                content << "}\n";
-                content << "inline void finish_dm_local_cached() {\n";
-                content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
-                for (const auto& entry : sem_entries) {
-                    if (entry.scope != SemScope::DM_LOCAL_CACHED) {
-                        continue;
-                    }
-                    content << "    {\n";
-                    content << "        auto* row = reinterpret_cast<uint32_t*>("
-                            << "static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + " << entry.id
-                            << "u * MEM_DM_CACHED_SEM_ROW);\n";
-                    content << "        if (((__atomic_fetch_add(row + 1, 0x10000u, __ATOMIC_ACQ_REL) >> 16) & "
-                               "0x7FFFu) == "
-                            << entry.total_binder_harts << "u - 1u) {\n";
-                    content << "            __atomic_store_n(row + 1, 0u, __ATOMIC_RELEASE);\n";
-                    content << "        }\n";
-                    content << "    }\n";
-                }
-                content << "#endif\n";
-                content << "}\n";
-                content << "}  // namespace sem_internal\n";
-            }
-        }
-
-        if (!ta_entries.empty() || !tensor_binding_sequence_entries.empty()) {
-            // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
-            // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
-            // its implicit base-address CRTA.
-            // The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces.
-            //
-            // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
-            // template with extra metadata in the future without touching kernel source.
-            //
-            // Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
-            content << "namespace tensor {\n";
-            for (const auto& entry : ta_entries) {
-                content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
-                        << "u, " << entry.addr_crta_offset << "u>;\n";
-                content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
-            }
-            for (const auto& sequence : tensor_binding_sequence_entries) {
-                content << fmt::format(
-                    "constexpr auto {} = std::make_tuple({});\n", sequence.name, fmt::join(sequence.members, ", "));
-            }
-            content << "}  // namespace tensor\n";
-        }
-
-        if (!scratch_entries.empty()) {
-            // ScratchpadBindingToken scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
-            // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
-            // and the scratchpad's compile-time per-node size.
-            // The kernel-side Scratchpad(token) constructor unpacks both.
-            // The token's members are opaque, so the framework can extend it later without touching
-            // kernel source.
-            content << "namespace scratch {\n";
-            for (const auto& entry : scratch_entries) {
-                content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
-                        << entry.size_bytes << "u};\n";
-            }
-            content << "}  // namespace scratch\n";
-        }
+    if (!dfb_entries.empty()) {
+        content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
     }
+
+    if (!sem_entries.empty()) {
+        // Defines SemaphoreBindingToken and SemScope. Header-only and dependency-free,
+        // so it is safe on compute builds too.
+        content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
+    }
+    if (has_cached_sem) {
+        // Include for the entry/exit stubs' bodies (get_semaphore + the MEM_ defines),
+        // guarded exactly like those bodies (the pool is DM-only).
+        content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
+        content << "#include \"api/dataflow/dataflow_api.h\"\n";
+        content << "#endif\n";
+    }
+
+    // This is included unconditionally for the `get_token_if_present()` helper, as it needs to see the full templated
+    // definition of TensorBindingToken.
+    content << "#include \"api/tensor/tensor_binding_token.h\"\n";
+
+    if (!scratch_entries.empty()) {
+        content << "#include \"api/scratchpad.h\"\n";
+    }
+
+    if (!tensor_binding_sequence_entries.empty()) {
+        content << "#include <tuple>\n";
+    }
+    content << "\n";
+
+    // get_token_if_present() is always emitted. When this kernel has no DFB / scratchpad bindings,
+    // the headers that define those token types are omitted, but the empty getter still returns
+    // const BindingTokenType*{nullptr} and needs those types in scope.
+    if (dfb_entries.empty()) {
+        content << "struct DFBBindingToken;\n";
+    }
+    if (scratch_entries.empty()) {
+        content << "struct ScratchpadBindingToken;\n";
+    }
+
+    // Emit DFB bindings
+    content << "namespace dfb {\n";
+    for (const auto& entry : dfb_entries) {
+        content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
+    }
+    emit_programmatic_binding_token_getter(content, dfb_entries, "DFBBindingToken");
+    content << "}  // namespace dfb\n";
+
+    // Emit Semaphore bindings
+    tt::tt_metal::emit_semaphore_binding_tokens(content, sem_entries);
+    if (has_cached_sem) {
+        // Cached-pool entry/exit stubs. A cached semaphore's pool row must be seeded
+        // with its init value once per program, by exactly one hart, before anyone
+        // touches it, and is left clean for the next program. Each 8B row is [0] = the
+        // counter, [1] = a bookkeeping word: entered[15:0], exited[30:16], seeded[31]
+        // On entry, each binder hart increments `entered`; whoever got there first
+        // copies the init value from the ring into the pool counter and sets `seeded`;
+        // everyone else waits for that bit. On exit, each hart increments `exited`;
+        // the last one zeroes the bookkeeping word so the next program starts fresh.
+        // Any number of local kernels/threads works.
+        content << "#define TT_DM_CACHED_SEM_STUBS 1\n";
+        content << "namespace sem_internal {\n";
+        content << "inline void init_dm_local_cached() {\n";
+        content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
+        for (const auto& entry : sem_entries) {
+            if (entry.scope != SemScope::DM_LOCAL_CACHED) {
+                continue;
+            }
+            content << "    {\n";
+            content << "        auto* row = reinterpret_cast<uint32_t*>("
+                    << "static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + " << entry.id
+                    << "u * MEM_DM_CACHED_SEM_ROW);\n";
+            content << "        if ((__atomic_fetch_add(row + 1, 1u, __ATOMIC_ACQ_REL) & 0xFFFFu) == 0u) {\n";
+            content << "            row[0] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>("
+                    << "::get_semaphore(" << entry.id << "u) + MEM_L1_UNCACHED_BASE);\n";
+            content << "            __atomic_fetch_or(row + 1, 0x80000000u, __ATOMIC_RELEASE);\n";
+            content << "        } else {\n";
+            content << "            while ((__atomic_load_n(row + 1, __ATOMIC_ACQUIRE) & 0x80000000u) == 0u) {\n";
+            content << "            }\n";
+            content << "        }\n";
+            content << "    }\n";
+        }
+        content << "#endif\n";
+        content << "}\n";
+        content << "inline void finish_dm_local_cached() {\n";
+        content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
+        for (const auto& entry : sem_entries) {
+            if (entry.scope != SemScope::DM_LOCAL_CACHED) {
+                continue;
+            }
+            content << "    {\n";
+            content << "        auto* row = reinterpret_cast<uint32_t*>("
+                    << "static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + " << entry.id
+                    << "u * MEM_DM_CACHED_SEM_ROW);\n";
+            content << "        if (((__atomic_fetch_add(row + 1, 0x10000u, __ATOMIC_ACQ_REL) >> 16) & "
+                       "0x7FFFu) == "
+                    << entry.total_binder_harts << "u - 1u) {\n";
+            content << "            __atomic_store_n(row + 1, 0u, __ATOMIC_RELEASE);\n";
+            content << "        }\n";
+            content << "    }\n";
+        }
+        content << "#endif\n";
+        content << "}\n";
+        content << "}  // namespace sem_internal\n";
+    }
+
+    // Emit Tensor bindings
+    content << "namespace tensor {\n";
+    // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
+    // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
+    // its implicit base-address CRTA.
+    // The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces.
+    //
+    // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
+    // template with extra metadata in the future without touching kernel source.
+    //
+    // Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
+    for (const auto& entry : ta_entries) {
+        content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset << "u, "
+                << entry.addr_crta_offset << "u>;\n";
+        content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+    }
+
+    // Unlike other binding token types, TensorBindingToken has meaningful template parameters associated with it.
+    // Thus, a dedicated type is needed to represent the absence of a binding.
+    emit_programmatic_binding_token_getter(content, ta_entries, "::tensor_accessor::NullTensorBindingToken");
+
+    // Emit TensorBindingToken sequences
+    for (const auto& sequence : tensor_binding_sequence_entries) {
+        content << fmt::format(
+            "constexpr auto {} = std::make_tuple({});\n", sequence.name, fmt::join(sequence.members, ", "));
+    }
+
+    content << "}  // namespace tensor\n";
+
+    // Emit Scratchpad bindings
+    content << "namespace scratch {\n";
+
+    // ScratchpadBindingToken scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
+    // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
+    // and the scratchpad's compile-time per-node size.
+    // The kernel-side Scratchpad(token) constructor unpacks both.
+    // The token's members are opaque, so the framework can extend it later without touching
+    // kernel source.
+    for (const auto& entry : scratch_entries) {
+        content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
+                << entry.size_bytes << "u};\n";
+    }
+
+    emit_programmatic_binding_token_getter(content, scratch_entries, "ScratchpadBindingToken");
+
+    content << "}  // namespace scratch\n";
+
     write_file(path, content.str());
 }
 
