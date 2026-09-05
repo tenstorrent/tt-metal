@@ -438,6 +438,11 @@ inline void encode_2d_mcast_maps(
     std::uint32_t s_hops,
     std::uint32_t e_hops,
     std::uint32_t w_hops) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+    ASSERT(y_size != 1 || (n_hops == 0 && s_hops == 0));
+    ASSERT(x_size != 1 || (e_hops == 0 && w_hops == 0));
+#endif
+
     const std::uint32_t root_y = anchor_y;
     const std::uint32_t root_x = anchor_x;
     std::uint8_t* out_y = route_buffer;

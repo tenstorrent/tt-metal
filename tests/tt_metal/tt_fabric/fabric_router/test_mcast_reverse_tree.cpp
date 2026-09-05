@@ -697,6 +697,84 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         64);
 }
 
+void check_degenerate_axis(const std::string& name, std::uint32_t y_size, std::uint32_t x_size, int degenerate_axis) {
+    const auto descriptor = fmt::format(
+        R"(
+mesh_descriptors {{
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology {{ dims: [{}, {}] dim_types: [LINE, LINE] }}
+  host_topology   {{ dims: [1, 1] }}
+  channels {{ count: 2 }}
+}}
+top_level_instance {{ mesh {{ mesh_descriptor: "M0" mesh_id: 0 }} }}
+)",
+        y_size,
+        x_size);
+    const auto path = fabric_router_tests::write_temp_descriptor(name, descriptor);
+    const MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path);
+    const auto y_topo = derive_axis_topology(mesh_graph, MeshId{0}, 0);
+    const auto x_topo = derive_axis_topology(mesh_graph, MeshId{0}, 1);
+
+    ASSERT_EQ(y_topo.axis_len, y_size);
+    ASSERT_EQ(x_topo.axis_len, x_size);
+    const auto& degenerate_topo = degenerate_axis == 0 ? y_topo : x_topo;
+    ASSERT_EQ(degenerate_topo.axis_len, 1);
+
+    std::string failure;
+    const auto degenerate_tree = build_mcast_reverse_tree(mesh_graph, MeshId{0}, degenerate_topo, 0, &failure);
+    ASSERT_TRUE(degenerate_tree.has_value()) << failure;
+    EXPECT_TRUE(degenerate_tree->edges.empty());
+    const auto packed_degenerate_tree = pack_mcast_reverse_tree(*degenerate_tree, &failure);
+    ASSERT_TRUE(packed_degenerate_tree.has_value()) << failure;
+    EXPECT_TRUE(packed_degenerate_tree->empty());
+
+    check_axis(mesh_graph, y_topo, name + " Y");
+    check_axis(mesh_graph, x_topo, name + " X");
+
+    const int y_root = static_cast<int>(y_size / 2);
+    const int x_root = static_cast<int>(x_size / 2);
+    std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
+    ASSERT_TRUE(
+        embed_mcast_reverse_trees(mesh_graph, MeshId{0}, y_topo, x_topo, y_root, x_root, trees.data(), &failure))
+        << failure;
+
+    const std::uint32_t n_hops = y_size == 1 ? 0 : y_size / 2;
+    const std::uint32_t s_hops = y_size - 1 - n_hops;
+    const std::uint32_t e_hops = x_size == 1 ? 0 : x_size / 2;
+    const std::uint32_t w_hops = x_size - 1 - e_hops;
+    std::vector<std::uint8_t> maps(y_size + x_size, 0);
+    encode_2d_mcast_maps(
+        maps.data(),
+        trees.data(),
+        y_size,
+        x_size,
+        static_cast<std::uint32_t>(y_root),
+        static_cast<std::uint32_t>(x_root),
+        n_hops,
+        s_hops,
+        e_hops,
+        w_hops);
+
+    if (degenerate_axis == 0) {
+        EXPECT_EQ(
+            maps[0] & (Routing2DCodec::ACTION_NORTH | Routing2DCodec::ACTION_SOUTH | Routing2DCodec::ACTION_Z), 0);
+    } else {
+        for (std::uint32_t y = 0; y < y_size; y++) {
+            EXPECT_EQ(
+                maps[y] & (Routing2DCodec::ACTION_EAST | Routing2DCodec::ACTION_WEST | Routing2DCodec::ACTION_Z), 0);
+        }
+    }
+}
+
+TEST(McastReverseTreeTest, Supports1x4Mesh) {
+    check_degenerate_axis("fabric_1x4_line.textproto", 1, 4, /*degenerate_axis=*/0);
+}
+
+TEST(McastReverseTreeTest, Supports4x1Mesh) {
+    check_degenerate_axis("fabric_4x1_line.textproto", 4, 1, /*degenerate_axis=*/1);
+}
+
 TEST(McastReverseTreeTest, AllRootsFormTrees8x4) { check_fixture("express_links_8x4_mesh_graph_descriptor.textproto"); }
 TEST(McastReverseTreeTest, AllRootsFormTrees16x4) {
     check_fixture("express_links_16x4_mesh_graph_descriptor.textproto");
