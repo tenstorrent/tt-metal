@@ -477,7 +477,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
         ////////////////////////////////////////////////////////////
         // Blaze-only experimental named args
         // Removal is tracked by issue #50953
-        if (!kernel_descriptor.blaze_named_args.empty() || !kernel_descriptor.named_compile_time_args.empty()) {
+        if (!kernel_descriptor.blaze_named_args.empty()) {
             experimental::blaze::process_named_args(*this, kernel_descriptor, kernel_handle);
         } else {
             ////////////////////////////////////////////////////////////
