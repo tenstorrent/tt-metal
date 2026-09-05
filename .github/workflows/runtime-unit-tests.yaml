@@ -72,7 +72,7 @@ jobs:
           BH_SKUS="bh_p150b_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu,bh_p300,bh_loudbox"
           MULTICHIP_SKUS="wh_n300_civ2,wh_llmbox,wh_galaxy,bh_p300,bh_loudbox"
           ALL_SKUS="$WH_SKUS,$BH_SKUS"
-          VALID_SKUS="wh_n150_civ2 wh_n300_civ2 wh_llmbox wh_galaxy bh_p150b_civ2 bh_p100a_civ2_viommu bh_p150b_civ2_viommu bh_p300 bh_loudbox wh_all bh_all multichip all"
+          VALID_SKUS="sdxl sd35 motif tt-transformers-common wh_n150_civ2 wh_n300_civ2 wh_llmbox wh_galaxy bh_p150b_civ2 bh_p100a_civ2_viommu bh_p150b_civ2_viommu bh_p300 bh_loudbox wh_all bh_all multichip all"
 
           # Scheduled (non-dispatch) runs always cover everything.
           if [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
