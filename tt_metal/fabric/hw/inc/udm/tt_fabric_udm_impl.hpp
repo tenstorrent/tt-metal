@@ -95,39 +95,52 @@ struct udm_read_fields {
 /**
  * @brief Calculate the initial direction for a packet based on routing path
  *
- * Determines which direction (EAST, WEST, NORTH, SOUTH) a packet should initially
- * take to reach the destination chip in a 2D mesh topology.
+ * Determines which direction (EAST, WEST, NORTH, SOUTH — or Z on express meshes when the
+ * first hop is an express chord) a packet should initially take to reach the destination
+ * chip in a 2D mesh topology.
  *
  * @param dst_chip_id Destination chip ID
  * @param my_chip_id Source chip ID
  * @return Initial direction as uint32_t (eth_chan_directions enum value)
  */
 FORCE_INLINE uint32_t calculate_initial_direction(uint16_t dst_chip_id, uint16_t my_chip_id) {
-    auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
-
-    uint32_t initial_dir = static_cast<uint32_t>(eth_chan_directions::EAST);
-
-    const auto& compressed_route = routing_info->paths[dst_chip_id];
-    uint8_t ns_hops = compressed_route.get_ns_hops();
-    uint8_t ew_hops = compressed_route.get_ew_hops();
-
-    if (ns_hops > 0) {
-        // is there another way to know whether it's north or south hops?
-        if (dst_chip_id < my_chip_id) {
-            initial_dir = static_cast<uint32_t>(eth_chan_directions::NORTH);
-        } else {
-            initial_dir = static_cast<uint32_t>(eth_chan_directions::SOUTH);
+    // The 2D union slot holds the destination-major action-map table. The initial direction is the
+    // action the source coordinate carries toward the destination: the Y-axis action while rows
+    // differ (dimension order), else the X-axis action. Can legitimately be Z on an express mesh --
+    // which is why UDM + express is refused at compile time (see fabric_edm_packet_header.hpp): the
+    // mux fabric is cardinal-only and has no Z mux to hand such a packet to.
+    // ROUTING_TABLE_BASE, not MEM_TENSIX_ROUTING_TABLE_BASE: the base is core-type dependent
+    // (aerisc / ierisc / dispatch-tensix / tensix all differ, see fabric_common.h), and the two other
+    // readers in this file already use the macro. They coincide on a plain Tensix worker, so
+    // hardcoding the Tensix one happens to work there and silently reads the wrong region on a
+    // dispatch-engine or idle-erisc compile.
+    auto* routing_info = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    const uint32_t y_size = routing_info->mesh_y_size;
+    const uint32_t x_size = routing_info->mesh_x_size;
+    ASSERT(y_size > 0 && x_size > 0);
+    ASSERT(dst_chip_id < y_size * x_size);
+    const uint32_t dst_y = dst_chip_id / x_size;
+    const uint32_t dst_x = dst_chip_id % x_size;
+    const uint32_t my_y = routing_info->my_mesh_coord_y;
+    const uint32_t my_x = routing_info->my_mesh_coord_x;
+    (void)my_chip_id;
+    if (my_y != dst_y) {
+        const std::uint8_t* y_vec = Routing2DCodec::y_row(routing_info->route_table_2d.action_vectors, y_size, dst_y);
+        switch (Routing2DCodec::get_action_2bit(y_vec, my_y)) {
+            case Routing2DCodec::Y2_NORTH: return static_cast<uint32_t>(eth_chan_directions::NORTH);
+            case Routing2DCodec::Y2_SOUTH: return static_cast<uint32_t>(eth_chan_directions::SOUTH);
+            case Routing2DCodec::Y2_Z: return static_cast<uint32_t>(eth_chan_directions::Z);
+            default: ASSERT(false); return static_cast<uint32_t>(eth_chan_directions::EAST);
         }
-    } else if (ew_hops > 0) {
-        // is there another way to know whether it's east or west hops?
-        if (dst_chip_id < my_chip_id) {
-            initial_dir = static_cast<uint32_t>(eth_chan_directions::WEST);
-        } else {
-            initial_dir = static_cast<uint32_t>(eth_chan_directions::EAST);
+    } else {
+        const std::uint8_t* x_vec =
+            Routing2DCodec::x_row(routing_info->route_table_2d.action_vectors, y_size, x_size, dst_x);
+        switch (Routing2DCodec::get_action_2bit(x_vec, my_x)) {
+            case Routing2DCodec::X2_EAST: return static_cast<uint32_t>(eth_chan_directions::EAST);
+            case Routing2DCodec::X2_WEST: return static_cast<uint32_t>(eth_chan_directions::WEST);
+            default: ASSERT(false); return static_cast<uint32_t>(eth_chan_directions::EAST);
         }
     }
-
-    return initial_dir;
 }
 
 /**

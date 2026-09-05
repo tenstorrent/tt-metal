@@ -224,11 +224,7 @@ struct UnicastTrafficResult {
 // Follows the run_unicast_test_bw_chips pattern from test_basic_1d_fabric.cpp
 // ============================================================================
 UnicastTrafficResult run_unicast_traffic_bw_nodes(
-    BaseFabricFixture* fixture,
-    FabricNodeId src_fabric_node_id,
-    FabricNodeId dst_fabric_node_id,
-    uint32_t num_hops,
-    uint32_t num_packets = 10) {
+    FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, uint32_t num_hops, uint32_t num_packets = 10) {
     tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
     tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
 
@@ -266,15 +262,14 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, *forwarding_dir_opt);
     chan_id_t edm_port = dir_eth_chans[link_idx];
 
-    auto sender_device = fixture->get_device(src_physical);
-    auto receiver_device = fixture->get_device(dst_physical);
+    auto sender_device = BaseFabricFixture::devices_map_.at(src_physical);
+    auto receiver_device = BaseFabricFixture::devices_map_.at(dst_physical);
     tt::tt_metal::CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
     uint32_t is_2d_fabric = topology == Topology::Mesh;
 
     auto worker_mem_map = BaseFabricFixture::generate_worker_mem_map(sender_device, topology);
-    auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     std::vector<uint32_t> compile_time_args = {
@@ -310,8 +305,6 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
         time_seed,
         receiver_virtual_core.x,
         receiver_virtual_core.y,
-        mesh_shape[1],
-        src_fabric_node_id.chip_id,
         num_hops,
         1 /* fwd_range */,
         dst_fabric_node_id.chip_id,
@@ -344,9 +337,9 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
     // Launch and wait
-    fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+    tt_metal::LaunchProgram(*receiver_device, std::move(receiver_program), /*wait_until_cores_done=*/false);
     tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
-    fixture->WaitForSingleProgramDone(receiver_device);
+    tt::tt_metal::distributed::Finish(receiver_device->mesh_command_queue());
 
     // Validate sender/receiver status
     std::vector<uint32_t> sender_status;
@@ -455,6 +448,29 @@ MeshPathResult find_1d_path_with_hops(uint32_t num_hops) {
     return MeshPathResult{path.front(), path.back(), path, RoutingDirection::E, true};
 }
 
+MeshPathResult find_2d_path_with_transit() {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_shape = control_plane.get_physical_mesh_shape(MeshId{0});
+    uint32_t num_chips = mesh_shape.mesh_size();
+
+    for (uint32_t src = 0; src < num_chips; ++src) {
+        for (uint32_t dst = 0; dst < num_chips; ++dst) {
+            if (src == dst) {
+                continue;
+            }
+            FabricNodeId src_node(MeshId{0}, src);
+            FabricNodeId dst_node(MeshId{0}, dst);
+            auto route = control_plane.get_canonical_intramesh_route(src_node, dst_node);
+            auto direction = control_plane.get_forwarding_direction(src_node, dst_node);
+            if (route.size() >= 3 && direction.has_value()) {
+                return MeshPathResult{src_node, dst_node, std::move(route), *direction, true};
+            }
+        }
+    }
+
+    return MeshPathResult{FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 0), {}, RoutingDirection::E, false};
+}
+
 // ============================================================================
 // Helper: Find a src/dst pair where src has a forwarding channel in target_direction
 // Uses mesh coordinates to scan all positions.
@@ -498,7 +514,7 @@ protected:
             should_skip_ = true;
             return;
         }
-        if (tt::tt_metal::GetNumAvailableDevices() != 4) {
+        if (tt::tt_metal::GetNumAvailableDevices() < 4) {
             should_skip_ = true;
             return;
         }
@@ -673,7 +689,7 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastSenderAndReceiverChannelUsed) {
         path_result.dst_node.chip_id,
         static_cast<int>(path_result.direction));
 
-    auto result = run_unicast_traffic_bw_nodes(this, path_result.src_node, path_result.dst_node, 1);
+    auto result = run_unicast_traffic_bw_nodes(path_result.src_node, path_result.dst_node, 1);
     if (result.skipped) {
         GTEST_SKIP() << "No forwarding links between selected nodes";
     }
@@ -768,7 +784,7 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastMultiHopForwarding) {
         path_result.path[2].chip_id,
         static_cast<int>(path_result.direction));
 
-    auto result = run_unicast_traffic_bw_nodes(this, path_result.src_node, path_result.dst_node, 2);
+    auto result = run_unicast_traffic_bw_nodes(path_result.src_node, path_result.dst_node, 2);
     if (result.skipped) {
         GTEST_SKIP() << "No forwarding links between selected nodes";
     }
@@ -891,7 +907,7 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastPacketSizeTracking) {
         GTEST_SKIP() << "No 1-hop neighbor pair found on the mesh";
     }
 
-    auto result = run_unicast_traffic_bw_nodes(this, path_result.src_node, path_result.dst_node, 1);
+    auto result = run_unicast_traffic_bw_nodes(path_result.src_node, path_result.dst_node, 1);
     if (result.skipped) {
         GTEST_SKIP() << "No forwarding links between selected nodes";
     }
@@ -999,7 +1015,7 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelLiveness) {
             continue;
         }
 
-        auto result = run_unicast_traffic_bw_nodes(this, src_node, dst_node, 1, /*num_packets=*/10);
+        auto result = run_unicast_traffic_bw_nodes(src_node, dst_node, 1, /*num_packets=*/10);
         if (result.skipped) {
             log_info(
                 tt::LogTest,
@@ -1030,9 +1046,9 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelLiveness) {
 
         // --- Destination device: validate receiver channel activity ---
         // NOTE: In 2D, sender_channel_forwarded_to_bitfield_by_vc[0] is 0 at the terminal
-        // destination because hop_cmd_to_sender_channel_mask masks out my_direction,
-        // resulting in fwd_mask=0. Also, sender_channel_used may be non-zero if this
-        // router also forwards in other directions. We only check positive conditions.
+        // destination because its action-map entry requests local delivery with no outgoing
+        // ethernet action bit. sender_channel_used may be non-zero if this router also forwards
+        // in other directions, so only positive conditions are checked.
         auto dst_captures = read_capture_from_all_eth_cores(this, result.dst_physical_device_id);
         bool found_receiver = false;
         for (const auto& cap : dst_captures) {
@@ -1077,83 +1093,12 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelForwardedTo) {
     clear_all_capture_buffers(this);
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto mesh_shape = control_plane.get_physical_mesh_shape(MeshId{0});
-    uint32_t num_chips = mesh_shape.mesh_size();
-
-    if (num_chips < 4) {
-        GTEST_SKIP() << "Need at least 4 devices for multi-hop 2D routing test";
+    auto path_result = find_2d_path_with_transit();
+    if (!path_result.found) {
+        GTEST_SKIP() << "No multi-hop 2D route found";
     }
 
-    // Try to find two devices that are not direct neighbors (want multi-hop)
-    FabricNodeId src_node(MeshId{0}, 0);
-    FabricNodeId dst_node(MeshId{0}, 0);
-    bool found_pair = false;
-
-    for (uint32_t i = 0; i < num_chips && !found_pair; i++) {
-        FabricNodeId candidate_src(MeshId{0}, i);
-
-        for (uint32_t j = 0; j < num_chips; j++) {
-            if (i == j) {
-                continue;
-            }
-            FabricNodeId candidate_dst(MeshId{0}, j);
-
-            auto links = get_forwarding_link_indices(candidate_src, candidate_dst);
-            if (links.empty()) {
-                continue;
-            }
-
-            // Check this isn't a direct neighbor (want multi-hop)
-            // get_intra_chip_neighbors returns mesh chip_ids, so compare against j (mesh chip_id)
-            bool is_direct_neighbor = false;
-            for (auto dir :
-                 {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
-                auto neighbors = control_plane.get_intra_chip_neighbors(candidate_src, dir);
-                for (auto n : neighbors) {
-                    if (n == j) {
-                        is_direct_neighbor = true;
-                        break;
-                    }
-                }
-                if (is_direct_neighbor) {
-                    break;
-                }
-            }
-
-            if (!is_direct_neighbor) {
-                src_node = candidate_src;
-                dst_node = candidate_dst;
-                found_pair = true;
-                break;
-            }
-        }
-    }
-
-    if (!found_pair) {
-        // Fall back to any src/dst pair with forwarding links
-        for (uint32_t i = 0; i < num_chips && !found_pair; i++) {
-            for (uint32_t j = 0; j < num_chips; j++) {
-                if (i == j) {
-                    continue;
-                }
-                FabricNodeId candidate_src(MeshId{0}, i);
-                FabricNodeId candidate_dst(MeshId{0}, j);
-                auto links = get_forwarding_link_indices(candidate_src, candidate_dst);
-                if (!links.empty()) {
-                    src_node = candidate_src;
-                    dst_node = candidate_dst;
-                    found_pair = true;
-                    break;
-                }
-            }
-        }
-    }
-
-    if (!found_pair) {
-        GTEST_SKIP() << "No valid src/dst pair with forwarding links found";
-    }
-
-    auto result = run_unicast_traffic_bw_nodes(this, src_node, dst_node, 1, /*num_packets=*/10);
+    auto result = run_unicast_traffic_bw_nodes(path_result.src_node, path_result.dst_node, 1, /*num_packets=*/10);
     if (result.skipped) {
         GTEST_SKIP() << "No forwarding channels between selected src/dst pair";
     }
@@ -1161,7 +1106,6 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelForwardedTo) {
     // --- Source device: validate sender channel activity ---
     auto src_captures = read_capture_from_all_eth_cores(this, result.src_physical_device_id);
     bool found_src_sender = false;
-    bool found_forwarded_to = false;
     for (const auto& cap : src_captures) {
         if (cap.channel_id == result.edm_port) {
             EXPECT_NE(cap.capture.sender_channel_used_bitfield_by_vc, 0)
@@ -1172,28 +1116,37 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelForwardedTo) {
                 << ") should show worker channel (0) activity";
             found_src_sender = true;
         }
-
-        // Check forwarded_to on any eth core (for multi-hop intermediate routers on src device)
-        for (size_t vc = 0; vc < 2; vc++) {
-            if (cap.capture.sender_channel_forwarded_to_bitfield_by_vc[vc] != 0) {
-                found_forwarded_to = true;
-                log_info(
-                    tt::LogTest,
-                    "Source chip {} eth core chan {}: sender_channel_forwarded_to_bitfield_by_vc[{}] = 0x{:04x}",
-                    cap.physical_chip_id,
-                    static_cast<int>(cap.channel_id),
-                    vc,
-                    cap.capture.sender_channel_forwarded_to_bitfield_by_vc[vc]);
-            }
-        }
     }
-    EXPECT_TRUE(found_src_sender)
-        << "Expected to find sender activity on source device's edm_port " << static_cast<int>(result.edm_port);
+    EXPECT_TRUE(found_src_sender) << "Expected to find sender activity on source device's edm_port "
+                                  << static_cast<int>(result.edm_port);
 
-    // --- Destination device: validate receiver channel activity ---
-    // NOTE: In 2D, forwarded_to[0] is 0 at the terminal destination because
-    // hop_cmd_to_sender_channel_mask masks out my_direction (local write).
-    // sender_channel_used may also be non-zero if this router forwards in other directions.
+    auto all_captures = src_captures;
+
+    // --- Transit devices: a consumed packet must record an outgoing action-map arm ---
+    for (size_t route_index = 1; route_index + 1 < path_result.path.size(); ++route_index) {
+        ChipId transit_physical = control_plane.get_physical_chip_id_from_fabric_node_id(path_result.path[route_index]);
+        auto transit_captures = read_capture_from_all_eth_cores(this, transit_physical);
+        bool found_transit_receiver = false;
+        for (const auto& cap : transit_captures) {
+            if (cap.capture.receiver_channel_data_forwarded_bitfield_by_vc == 0) {
+                continue;
+            }
+            found_transit_receiver = true;
+            const uint16_t forwarded_to = cap.capture.sender_channel_forwarded_to_bitfield_by_vc[0];
+            EXPECT_NE(forwarded_to, 0) << "Transit router eth core (chan " << static_cast<int>(cap.channel_id)
+                                       << ") consumed VC0 traffic but recorded no outgoing 2D action-map arm";
+            EXPECT_EQ(forwarded_to & (forwarded_to - 1), 0)
+                << "A unicast transit hop should record exactly one destination sender channel";
+            EXPECT_EQ(cap.capture.used_noc_send_type_by_vc_bitfield[0], 0)
+                << "Pure unicast transit router eth core (chan " << static_cast<int>(cap.channel_id)
+                << ") should not record local delivery";
+        }
+        EXPECT_TRUE(found_transit_receiver)
+            << "Expected receiver activity on transit mesh chip " << path_result.path[route_index].chip_id;
+        all_captures.insert(all_captures.end(), transit_captures.begin(), transit_captures.end());
+    }
+
+    // --- Destination device: local delivery must not manufacture an outgoing forwarding bit ---
     auto dst_captures = read_capture_from_all_eth_cores(this, result.dst_physical_device_id);
     bool found_receiver_forwarding = false;
     for (const auto& cap : dst_captures) {
@@ -1207,19 +1160,106 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelForwardedTo) {
             EXPECT_TRUE(has_noc_send_type)
                 << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
                 << ") should show NocSendType activity (local delivery)";
+            EXPECT_EQ(cap.capture.sender_channel_forwarded_to_bitfield_by_vc[0], 0)
+                << "Terminal router eth core (chan " << static_cast<int>(cap.channel_id)
+                << ") should not record an outgoing 2D action-map arm";
             found_receiver_forwarding = true;
         }
     }
 
-    // At least one of forwarded_to or receiver forwarding should be set
-    EXPECT_TRUE(found_forwarded_to || found_receiver_forwarding)
-        << "Expected forwarding relationship to be recorded either as sender_channel_forwarded_to on source "
-           "or receiver_channel_data_forwarded on destination";
+    EXPECT_TRUE(found_receiver_forwarding) << "Expected destination receiver activity";
 
     // Roundtrip: export to YAML → import → compare
-    auto all_captures = src_captures;
     all_captures.insert(all_captures.end(), dst_captures.begin(), dst_captures.end());
     verify_capture_roundtrip(all_captures);
+}
+
+// ============================================================================
+// Fixture: capture a real multi-hop 2D route, then rebuild fabric from that profile.
+// ============================================================================
+class Fabric2DChannelTrimmingCaptureReplayFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE ||
+            tt::tt_metal::GetNumAvailableDevices() < 4) {
+            should_skip_ = true;
+            return;
+        }
+
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        capture_yaml_path_ =
+            std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "reports" / "channel_trimming_capture.yaml";
+        std::filesystem::remove(capture_yaml_path_);
+
+        rtoptions.set_enable_channel_trimming_capture(true);
+        rtoptions.set_fabric_trimming_profile_path("");
+        rtoptions.set_fabric_trimming_override_path("");
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        if (control_plane.express_routing_enabled(MeshId{0})) {
+            should_skip_ = true;
+            BaseFabricFixture::DoTearDownTestSuite();
+            rtoptions.set_enable_channel_trimming_capture(false);
+            return;
+        }
+
+        auto path_result = find_2d_path_with_transit();
+        if (!path_result.found) {
+            should_skip_ = true;
+            BaseFabricFixture::DoTearDownTestSuite();
+            rtoptions.set_enable_channel_trimming_capture(false);
+            return;
+        }
+        src_node_ = path_result.src_node;
+        dst_node_ = path_result.dst_node;
+
+        auto capture_result = run_unicast_traffic_bw_nodes(src_node_, dst_node_, 1, /*num_packets=*/10);
+        if (capture_result.skipped) {
+            should_skip_ = true;
+            BaseFabricFixture::DoTearDownTestSuite();
+            rtoptions.set_enable_channel_trimming_capture(false);
+            return;
+        }
+
+        // Fabric teardown exports the populated capture while its context and routing map are still active.
+        BaseFabricFixture::DoTearDownTestSuite();
+        rtoptions.set_enable_channel_trimming_capture(false);
+        if (!std::filesystem::exists(capture_yaml_path_)) {
+            should_skip_ = true;
+            return;
+        }
+
+        rtoptions.set_fabric_trimming_profile_path(capture_yaml_path_.string());
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+    }
+
+    static void TearDownTestSuite() {
+        if (!should_skip_) {
+            BaseFabricFixture::DoTearDownTestSuite();
+        }
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        rtoptions.set_enable_channel_trimming_capture(false);
+        rtoptions.set_fabric_trimming_profile_path("");
+        rtoptions.set_fabric_trimming_override_path("");
+    }
+
+    void SetUp() override {
+        if (should_skip_) {
+            GTEST_SKIP() << "2D channel trimming replay requires a non-express Blackhole mesh with a multi-hop route";
+        }
+        BaseFabricFixture::SetUp();
+    }
+
+    inline static bool should_skip_ = false;
+    inline static FabricNodeId src_node_{MeshId{0}, 0};
+    inline static FabricNodeId dst_node_{MeshId{0}, 0};
+    inline static std::filesystem::path capture_yaml_path_;
+};
+
+TEST_F(Fabric2DChannelTrimmingCaptureReplayFixture, MultiHopUnicastSurvivesReplay) {
+    auto result = run_unicast_traffic_bw_nodes(src_node_, dst_node_, 1, /*num_packets=*/10);
+    EXPECT_FALSE(result.skipped);
 }
 
 // ============================================================================
@@ -1310,7 +1350,22 @@ protected:
         rtoptions.set_fabric_trimming_override_path("");
         BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
 
-        // Export capture data (even if zero — that's a valid baseline)
+        auto path_result = find_1d_path_with_hops(1);
+        if (!path_result.found) {
+            should_skip_ = true;
+            BaseFabricFixture::DoTearDownTestSuite();
+            rtoptions.set_enable_channel_trimming_capture(false);
+            return;
+        }
+        auto capture_result = run_unicast_traffic_bw_nodes(path_result.src_node, path_result.dst_node, 1);
+        if (capture_result.skipped) {
+            should_skip_ = true;
+            BaseFabricFixture::DoTearDownTestSuite();
+            rtoptions.set_enable_channel_trimming_capture(false);
+            return;
+        }
+
+        // Export the populated capture before rebuilding the fabric in replay mode.
         auto env = tt::tt_metal::MetalEnvAccessor(tt::tt_metal::MetalContext::instance().get_env());
         tt::tt_fabric::export_channel_trimming_capture(env.impl());
         capture_yaml_path_ =
@@ -1412,7 +1467,7 @@ TEST_F(Fabric1DChannelTrimmingOverrideFixture, UnicastTrafficWithOverride) {
 
     // Traffic should flow — override-only mode constructs a fully-enabled baseline
     // and applies the override (which only affects VC1 here). VC0 remains fully enabled.
-    auto result = run_unicast_traffic_bw_nodes(this, path_result.src_node, path_result.dst_node, 1);
+    auto result = run_unicast_traffic_bw_nodes(path_result.src_node, path_result.dst_node, 1);
     EXPECT_FALSE(result.skipped) << "Override-only mode should not prevent traffic flow";
 }
 
@@ -1510,7 +1565,7 @@ TEST_F(Fabric1DChannelTrimmingOverrideChannel0OnlyFixture, UnicastTrafficWithCha
         GTEST_SKIP() << "No 1-hop neighbor pair found on the mesh";
     }
 
-    auto result = run_unicast_traffic_bw_nodes(this, path_result.src_node, path_result.dst_node, 1);
+    auto result = run_unicast_traffic_bw_nodes(path_result.src_node, path_result.dst_node, 1);
     EXPECT_FALSE(result.skipped) << "Override with only channel 0 enabled should still allow unicast traffic";
 }
 
@@ -1551,7 +1606,7 @@ TEST_F(Fabric1DChannelTrimmingCaptureAndOverrideFixture, UnicastTrafficWithCaptu
         GTEST_SKIP() << "No 1-hop neighbor pair found on the mesh";
     }
 
-    auto result = run_unicast_traffic_bw_nodes(this, path_result.src_node, path_result.dst_node, 1);
+    auto result = run_unicast_traffic_bw_nodes(path_result.src_node, path_result.dst_node, 1);
     if (result.skipped) {
         GTEST_SKIP() << "No forwarding links between selected nodes";
     }
@@ -1568,6 +1623,15 @@ TEST_F(Fabric1DChannelTrimmingCaptureAndOverrideFixture, UnicastTrafficWithCaptu
 // These tests don't require a device — they exercise YAML parsing and the
 // bitfield merge logic using synthetic data.
 // ============================================================================
+
+TEST(ChannelTrimmingForwardedMask, MapsMulticastSlotsToDestinationSenderChannels) {
+    constexpr uint8_t multicast_slots = 0b1011;
+    // slot 0 -> sender 2, slot 1 -> sender 1, slot 2 -> sender 7, slot 3 -> sender 5
+    constexpr uint32_t packed_sender_ids = 2u | (1u << 4) | (7u << 8) | (5u << 12);
+    EXPECT_EQ(forwarded_slots_to_sender_mask(multicast_slots, packed_sender_ids), 0b100110);
+    EXPECT_EQ(forwarded_slots_to_sender_mask(0b0100, packed_sender_ids), 0b10000000);
+    EXPECT_EQ(forwarded_slots_to_sender_mask(0, packed_sender_ids), 0);
+}
 
 TEST(ChannelTrimmingFastPath, DerivesPacketSizeOnlyFromUsedVC0Senders) {
     ChannelTrimmingOverrides entry{};

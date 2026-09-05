@@ -5,7 +5,8 @@
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
+#include "tt_metal/fabric/builder/router_wiring_rules.hpp"
+#include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/channel_trimming_report.hpp"
 #include "impl/context/metal_context.hpp"
@@ -16,46 +17,141 @@
 
 namespace tt::tt_fabric {
 
+namespace {
+
+// Does any intermesh edge in this fabric sit on a Z direction?
+//
+// Only such an edge produces the Z-facing intermesh boundary shape, whose channel counts the
+// fabric-wide maximum below has to cover. Deliberately local to that maximum: no router's shape is
+// derived from it -- each is derived from its own facing and edge capability -- so it is a property
+// of the fabric being sized, not a configuration fact worth carrying in IntermeshVCConfig.
+bool fabric_has_intermesh_z_edge(const MeshGraph& mesh_graph) {
+    for (const auto& mesh_connections : mesh_graph.get_inter_mesh_connectivity()) {
+        for (const auto& chip_connections : mesh_connections) {
+            for (const auto& [dst_mesh_id, router_edge] : chip_connections) {
+                if (router_edge.port_direction == RoutingDirection::Z) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
+StreamAssignment FabricBuilderContext::compute_stream_assignment(MeshId mesh_id) const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const bool express_enabled = control_plane.express_routing_enabled(mesh_id);
+    // The credit plan follows express enablement (per mesh) and multi-TXQ (device-wide, from the
+    // shared router config) -- the same facts the per-router derivation used, lifted to the scope
+    // they actually vary at.
+    const auto& base_config = get_fabric_router_config();
+    const bool multi_txq_enabled = base_config.sender_txq_id != base_config.receiver_txq_id;
+    const CreditTransportPlan plan{
+        .vc0_uses_counters = multi_txq_enabled,
+        .vc1_uses_counters = multi_txq_enabled || express_enabled,
+        // VC2 has no completion register to fall back on -- the completed table stops at flat
+        // position 8 and VC2's sender is position 9 -- so it rides counters wherever it exists.
+        .vc2_uses_counters = intermesh_vc_config_.requires_vc2};
+
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> max_senders{};
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> max_receivers{};
+    for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        max_senders[vc] = static_cast<uint32_t>(max_sender_channels_per_vc_[vc]);
+        max_receivers[vc] = static_cast<uint32_t>(max_receiver_channels_per_vc_[vc]);
+    }
+    const StreamPlacementInputs placement{
+        .max_sender_counts = max_senders,
+        .max_receiver_counts = max_receivers,
+        .vc2_present = intermesh_vc_config_.requires_vc2,
+        .tensix_relay_present = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
+                                tt::tt_fabric::FabricTensixConfig::UDM};
+    return make_stream_assignment(stream_requirements(placement, plan));
+}
+
+const StreamAssignment& FabricBuilderContext::get_stream_assignment(MeshId mesh_id) const {
+    const auto it = stream_assignments_.find(mesh_id);
+    TT_FATAL(
+        it != stream_assignments_.end(),
+        "No stream assignment for mesh M{}: the map is filled at construction for the meshes bound to this host, "
+        "and every caller asks about its own router's mesh",
+        *mesh_id);
+    return it->second;
+}
+
 void FabricBuilderContext::compute_max_channel_counts() {
-    // Create channel mappings for all router types that exist in this fabric
+    // Derive the shape of every router family present in this fabric. These are archetype
+    // queries -- "what shape would a router with these facts have" -- so no router or layout
+    // object is constructed; the derivation is a function call per family.
     const auto topology = fabric_context_.get_fabric_topology();
 
-    std::vector<FabricRouterChannelMapping> possible_mappings;
+    std::vector<RouterVcShape> possible_shapes;
 
-    // Always have MESH routers
-    bool needs_vc_config = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2;
-    possible_mappings.emplace_back(
-        topology,
-        false,  // no tensix
-        RouterVariant::MESH,
-        needs_vc_config ? &intermesh_vc_config_ : nullptr,
-        false);
-
-    // If Z routers exist in this fabric, add Z_ROUTER mapping
-    if (intermesh_vc_config_.router_type == IntermeshRouterType::Z_INTERMESH) {
-        possible_mappings.emplace_back(
-            topology,
-            false,  // no tensix
-            RouterVariant::Z_ROUTER,
-            &intermesh_vc_config_,
-            true);
+    // An express mesh router's VC0 is five wide, so the fabric-wide maximum has to account for it or
+    // the shared router config would report fewer sender channels than a router actually maps -- the
+    // variant-to-router channel lookup would then index past its end. Asked across every local mesh
+    // rather than per node, since this maximum is fabric-wide.
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    bool any_mesh_uses_express = false;
+    for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
+        any_mesh_uses_express = any_mesh_uses_express || control_plane.express_routing_enabled(mesh_id);
     }
 
-    // Compute max channel counts across all router types in this fabric
+    // The families are named by the one chip fact that distinguishes them: what the Z port is for.
+    // Every cardinal is an ordinary same-mesh edge in all of them, and the shape reads only this
+    // router's own capability and the Z role off the set.
+    const auto chip_with_z = [](std::optional<EdgeCapability> z_capability) {
+        PerDirectionCapabilities caps;
+        for (const auto direction :
+             {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+            caps.at(direction) = EdgeCapability::INTRAMESH_CARDINAL;
+        }
+        caps.at(RoutingDirection::Z) = z_capability;
+        return caps;
+    };
+
+    // Always have MESH routers
+    bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2;
+    possible_shapes.push_back(router_vc_shape(
+        topology,
+        RoutingDirection::N,
+        chip_with_z(std::nullopt),
+        any_mesh_uses_express,
+        intermesh_vc_config_active ? &intermesh_vc_config_ : nullptr));
+
+    // A Z-facing intermesh boundary introduces the boundary family (5 VC0 / 4 VC1) and mesh routers
+    // on the same chips (4 VC0 / 4 VC1 when non-express); enumerate both. VC1 is required because
+    // the boundary shape is defined by its from-boundary VC1 fanout.
+    const bool has_intermesh_z_boundary =
+        intermesh_vc_config_.requires_vc1 && fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
+    if (has_intermesh_z_boundary) {
+        const auto boundary_chip = chip_with_z(EdgeCapability::INTERMESH);
+        possible_shapes.push_back(router_vc_shape(
+            topology,
+            RoutingDirection::Z,
+            boundary_chip,
+            any_mesh_uses_express,  // inert for the boundary family, but this is the fabric's state
+            &intermesh_vc_config_));
+        // Mesh routers on boundary chips carry the from-Z slot.
+        possible_shapes.push_back(router_vc_shape(
+            topology,
+            RoutingDirection::N,
+            boundary_chip,
+            any_mesh_uses_express,
+            intermesh_vc_config_active ? &intermesh_vc_config_ : nullptr));
+    }
+
+    // Compute max channel counts across all router families in this fabric
     max_sender_channels_per_vc_.fill(0);
     max_receiver_channels_per_vc_.fill(0);
 
-    for (const auto& mapping : possible_mappings) {
-        uint32_t num_vcs = mapping.get_num_virtual_channels();
-        for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-            auto sender_count = mapping.get_num_sender_channels_for_vc(vc);
+    for (const auto& shape : possible_shapes) {
+        for (uint32_t vc = 0; vc < shape.num_vcs; ++vc) {
             max_sender_channels_per_vc_[vc] =
-                std::max(max_sender_channels_per_vc_[vc], static_cast<std::size_t>(sender_count));
-            // Count a receiver for this VC if the mapping created one.
-            // A VC has a receiver if it has a LogicalReceiverChannelKey{vc, 0} in the map.
-            auto receiver_count = mapping.get_num_receiver_channels_for_vc(vc);
+                std::max(max_sender_channels_per_vc_[vc], static_cast<std::size_t>(shape.sender_counts[vc]));
             max_receiver_channels_per_vc_[vc] =
-                std::max(max_receiver_channels_per_vc_[vc], static_cast<std::size_t>(receiver_count));
+                std::max(max_receiver_channels_per_vc_[vc], static_cast<std::size_t>(shape.receiver_counts[vc]));
         }
     }
 }
@@ -105,6 +201,12 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     }
 
     tensix_config_ = nullptr;
+
+    // Populate immutable per-mesh assignments before concurrent per-device kernel creation reads them.
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
+        stream_assignments_.emplace(mesh_id, compute_stream_assignment(mesh_id));
+    }
 
     // Initialize per-device build state
     num_devices_ = tt::tt_metal::GetNumAvailableDevices();
@@ -260,25 +362,6 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
         }
 
         if (total_intermesh_connections > 0) {
-            // Detect Z vs XY intermesh by checking for Z-direction connections in inter-mesh connectivity
-            bool has_z_routers = false;
-            for (const auto& mesh_connections : inter_mesh_connectivity) {
-                for (const auto& chip_connections : mesh_connections) {
-                    for (const auto& [dst_mesh_id, router_edge] : chip_connections) {
-                        if (router_edge.port_direction == RoutingDirection::Z) {
-                            has_z_routers = true;
-                            break;
-                        }
-                    }
-                    if (has_z_routers) {
-                        break;
-                    }
-                }
-                if (has_z_routers) {
-                    break;
-                }
-            }
-
             // Default to FULL_MESH when intermesh exists
             // TODO: Implement detection logic for:
             //   - EDGE_ONLY: Check if workload only needs edge nodes (optimization)
@@ -292,9 +375,6 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
             config = needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through()
                                              : IntermeshVCConfig::full_mesh();
-
-            // Set router type based on detection
-            config.router_type = has_z_routers ? IntermeshRouterType::Z_INTERMESH : IntermeshRouterType::XY_INTERMESH;
         }
     }
 
