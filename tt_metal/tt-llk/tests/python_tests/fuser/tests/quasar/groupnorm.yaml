@@ -1,0 +1,347 @@
+skip_for_perf: true
+
+operands:
+  - name: "x"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "input_mask"
+    dims: [64, 64]
+    format: "Float16_b"
+    const_value: 1.0
+
+  - name: "scaler"
+    dims: [64, 64]
+    format: "Float16_b"
+    const_value: 1.0
+
+  - name: "inv_num_datums"
+    dims: [64, 64]
+    format: "Float16_b"
+    const_value: 0.000244140625
+
+  - name: "eps"
+    dims: [64, 64]
+    format: "Float16_b"
+    const_value: 0.001
+
+  - name: "gamma"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "beta"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "reread_rm"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "x_tiled"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "x_masked"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "ex_sum"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "ex"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "xmm"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "xmm_masked"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "xmm2"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "ex2_sum"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "ex2"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "ex2pe"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "xmm_final"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "xmm_final_masked"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "normalized"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "reread_out"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "accum_out"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "gamma_out"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "out_tiled"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "output"
+    dims: [64, 64]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        in0: "x"
+        operation: "Datacopy"
+        unpacker: "UnpackerTilizeA"
+        math_fidelity: "LoFi"
+    block_size: [32, 64]
+    pack:
+      - output: "x_tiled"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "x_tiled"
+        in1: "input_mask"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        math_fidelity: "HiFi4"
+    block_size: [32, 32]
+    pack:
+      - output: "x_masked"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "x_masked"
+        in1: "scaler"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_SCALAR"
+        reduce_pool: "SUM"
+        reduce_to_tile: true
+        unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi4"
+    block_size: [32, 64]
+    pack:
+      - output: "ex_sum"
+        packer: "Packer"
+        pack_l1_accumulation: 1
+
+  - math:
+      - type: "Fpu"
+        in0: "ex_sum"
+        in1: "inv_num_datums"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "HiFi4"
+    block_size: [32, 32]
+    pack:
+      - output: "ex"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "x_tiled"
+        in1: "ex"
+        operation: "Elwsub"
+        unpacker: "UnpackerAB"
+        broadcast_type: "SCALAR"
+        broadcast_tile: 0
+        math_fidelity: "LoFi"
+    block_size: [32, 32]
+    pack:
+      - output: "xmm"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "xmm"
+        in1: "input_mask"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        math_fidelity: "HiFi4"
+    block_size: [32, 32]
+    pack:
+      - output: "xmm_masked"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "xmm_masked"
+        in1: "xmm_masked"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "HiFi4"
+    block_size: [32, 32]
+    pack:
+      - output: "xmm2"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "xmm2"
+        in1: "scaler"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_SCALAR"
+        reduce_pool: "SUM"
+        reduce_to_tile: true
+        unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi4"
+    block_size: [32, 64]
+    pack:
+      - output: "ex2_sum"
+        packer: "Packer"
+        pack_l1_accumulation: 1
+
+  - math:
+      - type: "Fpu"
+        in0: "ex2_sum"
+        in1: "inv_num_datums"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "HiFi4"
+    block_size: [32, 32]
+    pack:
+      - output: "ex2"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "ex2"
+        in1: "eps"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+      - type: "UnarySfpu"
+        operation: "Rsqrt"
+        approximation_mode: true
+        iterations: 32
+    block_size: [32, 32]
+    pack:
+      - output: "ex2pe"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "x_tiled"
+        in1: "ex"
+        operation: "Elwsub"
+        unpacker: "UnpackerAB"
+        broadcast_type: "SCALAR"
+        broadcast_tile: 0
+        math_fidelity: "LoFi"
+    block_size: [32, 32]
+    pack:
+      - output: "xmm_final"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "xmm_final"
+        in1: "input_mask"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        math_fidelity: "HiFi4"
+    block_size: [32, 32]
+    pack:
+      - output: "xmm_final_masked"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "xmm_final_masked"
+        in1: "ex2pe"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "SCALAR"
+        broadcast_tile: 0
+        math_fidelity: "HiFi4"
+    block_size: [32, 32]
+    pack:
+      - output: "normalized"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "reread_rm"
+        operation: "Datacopy"
+        unpacker: "UnpackerTilizeA"
+        math_fidelity: "LoFi"
+    block_size: [32, 64]
+    pack:
+      - output: "reread_out"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "reread_out"
+        in1: "normalized"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+    block_size: [32, 32]
+    pack:
+      - output: "accum_out"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "accum_out"
+        in1: "gamma"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        math_fidelity: "HiFi4"
+    block_size: [32, 32]
+    pack:
+      - output: "gamma_out"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "gamma_out"
+        in1: "beta"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        math_fidelity: "LoFi"
+    block_size: [32, 32]
+    pack:
+      - output: "out_tiled"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        in0: "out_tiled"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+    block_size: [32, 64]
+    pack:
+      - output: "output"
+        packer: "PackUntilize"
