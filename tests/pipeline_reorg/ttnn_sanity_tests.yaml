@@ -266,6 +266,16 @@
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
 
+- name: "ttnn llk helper library tests"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/kernel_lib -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 20
+    bh_p150b_civ2:
+      timeout: 20
+  team: ttnn
+  owner_id: U0BCCPS862F # Milan Alimpic
+
 - name: "core ttnn unit test group"
   # per_core_allocation runs as its own pytest process: TT_METAL_ALLOCATOR_MODE_HYBRID is read
   # once when MetalContext is first constructed, so it must be set before this process opens a
