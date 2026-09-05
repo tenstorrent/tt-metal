@@ -37,6 +37,17 @@ inline void llk_pack_init_impl(
     const std::uint32_t num_faces,
     const std::uint32_t num_tiles,
     const bool is_input_8bit_format) {
+    // Blackhole's MOP does not take the format at all; set_packer_strides is its only consumer here and
+    // reconfig_packer_data_format re-derives that, so a format reconfig between init and execute is legal
+    // and must not read as drift.
+    SAN_HOOK(init<OperationPack>(
+        StateDiscard<std::uint32_t>(pack_src_reg_format),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::TileWidth>(tile_c_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateDiscard<bool>(is_input_8bit_format),
+        StateVal<OperationPack::NumTiles>(num_tiles)));
+
     _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
         pack_src_reg_format, face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
 }
@@ -104,15 +115,15 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
         (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
-    llk::san::pack_operand_check(
-        is_fp32_dest_acc_en,
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_output_face_r_dim(output_id),
-        get_output_tile_c_dim(output_id),
-        get_output_num_faces(output_id),
-        llk::san::IGNORE,
-        llk::san::IGNORE);
+    SAN_HOOK(execute<OperationPack>(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(get_output_face_r_dim(output_id)),
+        StateVal<Operand<Exu::Pack>::TileWidth>(get_output_tile_c_dim(output_id)),
+        StateVal<Operand<Exu::Pack>::NumFaces>(get_output_num_faces(output_id)),
+        StateDiscard<std::uint32_t>(tile_index),
+        StateDiscard<std::uint32_t>(output_tile_index)));
 
     llk_pack_impl<is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
 }
@@ -129,15 +140,16 @@ inline void llk_matmul_pack(
         ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
-    llk::san::pack_operand_check(
-        is_fp32_dest_acc_en,
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_output_face_r_dim(output_id),
-        get_output_tile_c_dim(output_id),
-        get_output_num_faces(output_id),
-        llk::san::IGNORE,
-        llk::san::IGNORE);
+    SAN_HOOK(execute<OperationPack>(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(get_output_face_r_dim(output_id)),
+        StateVal<Operand<Exu::Pack>::TileWidth>(get_output_tile_c_dim(output_id)),
+        StateVal<Operand<Exu::Pack>::NumFaces>(get_output_num_faces(output_id)),
+        StateDiscard<std::uint32_t>(start_tile_index),
+        StateVal<OperationPack::NumTiles>(ntiles),
+        StateDiscard<std::uint32_t>(output_tile_index)));
 
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         std::uint32_t pack_tile_addr =
