@@ -129,8 +129,17 @@ Tensor batch_norm(
 
     // Skip when neither running stat is provided: the return value is discarded.
     if (training && (running_mean.has_value() || running_var.has_value())) {
+        Tensor var_for_running_stats = batch_var;
+        if (running_var.has_value()) {
+            const auto& shape = input.logical_shape();
+            const float m = static_cast<float>(shape[0] * shape[-2] * shape[-1]);
+            if (m > 1.0f) {
+                const float bessel_correction = m / (m - 1.0f);
+                var_for_running_stats = ttnn::multiply(batch_var, bessel_correction, std::nullopt, memory_config);
+            }
+        }
         ttnn::prim::running_statistics(
-            batch_mean, batch_var, momentum, running_mean, running_var, memory_config, compute_kernel_config);
+            batch_mean, var_for_running_stats, momentum, running_mean, running_var, memory_config, compute_kernel_config);
     }
 
     return output_tensor;
