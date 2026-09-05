@@ -10,6 +10,7 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "cmath_common.h"
+#include "llk_defs.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -39,8 +40,13 @@ namespace sfpu {
  */
 inline void reshuffle_rows_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false>
 inline void calculate_reshuffle_rows(uint idx_addr) {
+    // With FP32 destination accumulation each DEST entry is 32 bits wide, so the
+    // SFPU load/store instructions must select the FP32 instruction mode. The
+    // per-tile DEST stride below is unchanged: 64 is the stride in both modes.
+    constexpr InstrModLoadStore mod0 =
+        is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::DEFAULT;
     constexpr std::uint32_t output_tile_offset = 64;
 
     // clr DEST tile 1
@@ -84,14 +90,17 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
         std::uint32_t output_row_lreg = output_lreg[dst_row % 4];
 
         // load in the input row and output row
-        TT_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, input_row_addr);                             // Face 0/2, even columns
-        TT_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, input_row_addr + 2);                         // Face 0/2, odd columns
-        TT_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, input_row_addr + 16);                        // Face 1/3, even columns
-        TT_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_3, input_row_addr + 18);                        // Face 1/3, odd columns
-        TT_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_3, output_tile_offset + output_row_addr);       // Face 0/2, even columns
-        TT_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_3, output_tile_offset + output_row_addr + 2);   // Face 0/2, odd columns
-        TT_SFPLOAD(p_sfpu::LREG6, 0, ADDR_MOD_3, output_tile_offset + output_row_addr + 16);  // Face 1/3, even columns
-        TT_SFPLOAD(p_sfpu::LREG7, 0, ADDR_MOD_3, output_tile_offset + output_row_addr + 18);  // Face 1/3, odd columns
+        TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_3, input_row_addr);                       // Face 0/2, even columns
+        TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_3, input_row_addr + 2);                   // Face 0/2, odd columns
+        TT_SFPLOAD(p_sfpu::LREG2, mod0, ADDR_MOD_3, input_row_addr + 16);                  // Face 1/3, even columns
+        TT_SFPLOAD(p_sfpu::LREG3, mod0, ADDR_MOD_3, input_row_addr + 18);                  // Face 1/3, odd columns
+        TT_SFPLOAD(p_sfpu::LREG4, mod0, ADDR_MOD_3, output_tile_offset + output_row_addr);  // Face 0/2, even columns
+        TT_SFPLOAD(
+            p_sfpu::LREG5, mod0, ADDR_MOD_3, output_tile_offset + output_row_addr + 2);  // Face 0/2, odd columns
+        TT_SFPLOAD(
+            p_sfpu::LREG6, mod0, ADDR_MOD_3, output_tile_offset + output_row_addr + 16);  // Face 1/3, even columns
+        TT_SFPLOAD(
+            p_sfpu::LREG7, mod0, ADDR_MOD_3, output_tile_offset + output_row_addr + 18);  // Face 1/3, odd columns
         // TRANSPOSE #1: Rearrange loaded 4-row blocks to isolate target rows
         // SFPLOAD loads 4 consecutive rows (e.g., rows 4-7) into LREG0-3, but we only want one specific row (e.g., row
         // 5) This transpose shuffles the register contents so row 5 data becomes accessible via input_row_lreg[1]
@@ -108,10 +117,13 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
         // Prepares the computed result for SFPSTORE, which expects data in LREG4-7 positions
         // This undoes the first transpose to match the expected storage layout
         TTI_SFPTRANSP(0, 0, 0, 0);  // Puts desired output row back into LREG4-7 for storage
-        TT_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_3, output_tile_offset + output_row_addr);       // Face 0/2, even columns
-        TT_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_3, output_tile_offset + output_row_addr + 2);   // Face 0/2, odd columns
-        TT_SFPSTORE(p_sfpu::LREG6, 0, ADDR_MOD_3, output_tile_offset + output_row_addr + 16);  // Face 1/3, even columns
-        TT_SFPSTORE(p_sfpu::LREG7, 0, ADDR_MOD_3, output_tile_offset + output_row_addr + 18);  // Face 1/3, odd columns
+        TT_SFPSTORE(p_sfpu::LREG4, mod0, ADDR_MOD_3, output_tile_offset + output_row_addr);  // Face 0/2, even columns
+        TT_SFPSTORE(
+            p_sfpu::LREG5, mod0, ADDR_MOD_3, output_tile_offset + output_row_addr + 2);  // Face 0/2, odd columns
+        TT_SFPSTORE(
+            p_sfpu::LREG6, mod0, ADDR_MOD_3, output_tile_offset + output_row_addr + 16);  // Face 1/3, even columns
+        TT_SFPSTORE(
+            p_sfpu::LREG7, mod0, ADDR_MOD_3, output_tile_offset + output_row_addr + 18);  // Face 1/3, odd columns
     }
 }
 
