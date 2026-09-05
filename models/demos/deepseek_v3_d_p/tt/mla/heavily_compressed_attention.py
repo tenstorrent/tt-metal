@@ -15,6 +15,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCompressorUtils, TtHCACompressor, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 
 def _cache_write_rows(chunk_entries: int) -> int:
@@ -87,12 +88,11 @@ class TtHCA(LightweightModule):
         self.rms_norm_eps = float(rms_norm_eps)
         self.compressor = compressor
 
-        self.is_mesh = hasattr(device, "shape")
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
-        self.sp_factor = device.shape[sp_axis] if self.is_mesh else 1
-        self.tp_factor = device.shape[tp_axis] if self.is_mesh else 1
+        self.sp_factor = device.shape[sp_axis]
+        self.tp_factor = device.shape[tp_axis]
         self.tp_ccl_topology = topology
-        self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and (self.sp_factor > 1 or self.tp_factor > 1)) else None
+        self.tt_ccl = get_tt_ccl(device) if (self.sp_factor > 1 or self.tp_factor > 1) else None
         self.ccl_num_links = 2 if is_blackhole() else 1
         self.ops = TtCompressorUtils(
             device,
@@ -207,6 +207,7 @@ class TtHCA(LightweightModule):
         Every host tensor this layer will ever need is built here, which is what leaves forward with none.
         So the caller has to own the state: a prefill of one chunk allocates the same way a long one
         does."""
+        assert batch == 1, f"HCA state is single-user for now, got batch={batch}"
         entries = -(-int(max_seq_len) // self.compressor.compress_rate)
         capacity = -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE  # cache writes land on tile boundaries
         # A write always rewrites whole tiles, so the last one can reach past the entries themselves.
@@ -231,11 +232,29 @@ class TtHCA(LightweightModule):
         # builds its own, with a row per ENTRY.
         self._slab_rope = self.ops.build_rope_table(rope_table_tokens(max_seq_len, chunk), 1)
         self._slab_index = self.ops.rope_index_base(chunk // self.sp_factor)
+        # ``tail`` is not migrated, so it stays interleaved.
         return TtHCAState(
-            compressed_kv=self.ops.from_torch(torch.zeros(batch, 1, capacity, self.head_dim)),
-            sliding_carry=self.ops.from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
+            compressed_kv=self._alloc_cache(batch, capacity),
+            sliding_carry=self._alloc_cache(batch, self.sliding_window),
             tail=self.ops.from_torch(torch.zeros(batch, 1, ttnn.TILE_SIZE, self.head_dim)),
             max_seq_len=max_seq_len,
+        )
+
+    def _alloc_cache(self, batch: int, rows: int):
+        """``[batch, 1, rows, head_dim]``, ND-sharded so the migration address table can name it.
+
+        ``seq_len`` is pre-multiplied by sp_factor to cancel the division init_kvpe_cache does for its
+        SP-sharded cache: HCA replicates both caches, so every chip holds all ``rows``."""
+        return init_kvpe_cache(
+            kvpe_cache_head_dim=self.head_dim,
+            mesh_device=self.device,
+            seq_len=rows * self.sp_factor,
+            mesh_shape=list(self.device.shape),
+            sp_axis=self.sp_axis,
+            num_kvpe_cache_layers=1,
+            num_users=batch,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
         )
 
     @classmethod
@@ -411,7 +430,12 @@ class TtHCA(LightweightModule):
 
         # Pad Sk to a multiple of 32 by hand: SDPA would pad it with zeros, and the mask reads its own pad
         # columns as "attend", which would pollute the softmax. The mask -infs the columns added here.
-        parts = [carry, sliding_kv, compressed_kv]
+        # Both caches are ND-sharded, and concat refuses a mix of sharded and interleaved inputs.
+        parts = [
+            ttnn.to_memory_config(carry, ttnn.DRAM_MEMORY_CONFIG),
+            sliding_kv,
+            ttnn.to_memory_config(compressed_kv, ttnn.DRAM_MEMORY_CONFIG),
+        ]
         if self._kv_pad is not None:
             parts.append(self._kv_pad)
         kv = ttnn.concat(parts, dim=2)
@@ -652,5 +676,6 @@ class TtHCA(LightweightModule):
 
         state.entry_count = total_entries
         state.kv_actual += real_len
-        state.sliding_carry = next_carry
+        # In place, not a rebind: the migration table is built once from this tensor's address.
+        ttnn.kv_cache.fill_cache_for_user_(state.sliding_carry, next_carry, 0, update_idx=0)
         return self._o_proj(attn)
