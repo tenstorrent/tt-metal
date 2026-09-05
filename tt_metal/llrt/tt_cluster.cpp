@@ -447,7 +447,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
         } else {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
-                .num_host_mem_ch_per_mmio_device = 1,
+                .num_host_mem_ch_per_mmio_device = std::nullopt,
                 .target_devices = {0},
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
