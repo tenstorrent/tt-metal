@@ -784,24 +784,24 @@ class CCLManager:
             persistent_buf = self.get_np_ping_pong_buffer(
                 tensor.shape, dims, pad_left, pad_right, dtype=tensor.get_dtype(), t_front_pad=t_front_pad
             )
-        else:
-            # neighbor_pad leaves boundary/pad/corner regions unwritten and relies on a zeroed output;
-            # the non-persistent path otherwise allocates uninitialized DRAM, so those regions read stale
-            # allocator memory that differs run-to-run (nondeterministic decode). Hand the op a FRESH
-            # zeroed buffer per call (no ping-pong parity). Not free (alloc + fill each call).
-            out_shape = list(tensor.shape)
-            for i, dim in enumerate(dims):
-                out_shape[dim] += pad_left[i] + pad_right[i]
-            if t_front_pad > 0:
-                out_shape[dims[0] - 1] += t_front_pad
-            persistent_buf = ttnn.allocate_tensor_on_device(
-                ttnn.Shape(out_shape),
-                tensor.get_dtype(),
-                ttnn.ROW_MAJOR_LAYOUT,
-                self.mesh_device,
-                ttnn.DRAM_MEMORY_CONFIG,
-            )
-            ttnn.fill(persistent_buf, 0.0, output_tensor=persistent_buf)
+        # else:
+        #    # neighbor_pad leaves boundary/pad/corner regions unwritten and relies on a zeroed output;
+        #    # the non-persistent path otherwise allocates uninitialized DRAM, so those regions read stale
+        #    # allocator memory that differs run-to-run (nondeterministic decode). Hand the op a FRESH
+        #    # zeroed buffer per call (no ping-pong parity). Not free (alloc + fill each call).
+        #    out_shape = list(tensor.shape)
+        #    for i, dim in enumerate(dims):
+        #        out_shape[dim] += pad_left[i] + pad_right[i]
+        #    if t_front_pad > 0:
+        #        out_shape[dims[0] - 1] += t_front_pad
+        #    persistent_buf = ttnn.allocate_tensor_on_device(
+        #        ttnn.Shape(out_shape),
+        #        tensor.get_dtype(),
+        #        ttnn.ROW_MAJOR_LAYOUT,
+        #        self.mesh_device,
+        #        ttnn.DRAM_MEMORY_CONFIG,
+        #    )
+        #    ttnn.fill(persistent_buf, 0.0, output_tensor=persistent_buf)
 
         return ttnn.experimental.neighbor_pad_async(
             tensor,
