@@ -46,19 +46,23 @@ class DFlashBatchedDecoder:
         self.V = min(int(_os.environ.get("GEMMA4_DFLASH_VERIFY", str(K))), K)
         self.P_v = self.V + 1
         # Verify modes:
-        #   fold (default): ONE B=1-shaped packed verify -- users folded into the
-        #     packed-rows dim (packed_p = B*P_v), single-row VIRTUAL page table
-        #     (user page rows concatenated), block-offset masks, virtual write
-        #     positions b*S + pos. Reuses the exact kernel config the B=1 V=15
-        #     runs validated (PNH=64, one table row).
-        #   split (GEMMA4_DFLASH_BVSPLIT=1): B separate B=1 verifies -- correctness
-        #     reference, ~2x target weight reads.
-        #   bbatch (GEMMA4_DFLASH_BBATCH=1): B in the SDPA batch dim. BROKEN as of
-        #     2026-09-05: user 0 clean, user 1+ corrupt even with identical
-        #     prompts -- the packed SDPA (q [1,B,H*P,hd], mask [B,1,H*P,S]) has
-        #     never been exercised at batch>1; kept for kernel-side debugging.
+        #   bbatch (default): B in the SDPA batch dim (q [1,B,H*P,hd], mask
+        #     [B,1,H*P,S], B-row table). REQUIRES the mask to width-match the
+        #     table: the sdpa_decode reader's mask batch stride is PNHt*St with
+        #     St derived from the TABLE width, so a wider mask misaligns every
+        #     batch>0 (batch 0 is always fine -- why B=1 never saw it). Fastest:
+        #     each user scans only its own S_k. 4k code: B=2 1.76x / B=4 1.74x
+        #     over plain; 32k: 1.40x / 1.11x.
+        #   fold (GEMMA4_DFLASH_FOLD=1): users folded into the packed-rows dim
+        #     (packed_p = B*P_v), single-row VIRTUAL page table, block-offset
+        #     masks, virtual write positions b*S + pos. Correct but every row
+        #     scans ALL users' segments (SDPA reads scale B*S -- 0.33x at B=4
+        #     32k) and PNHt>=4 forces the 8-core reduction. Kept as the
+        #     independent cross-check of bbatch.
+        #   split (GEMMA4_DFLASH_BVSPLIT=1): B separate B=1 verifies --
+        #     correctness reference, ~Bx target weight reads.
         self.verify_split = _os.environ.get("GEMMA4_DFLASH_BVSPLIT", "0") == "1"
-        self.verify_bbatch = _os.environ.get("GEMMA4_DFLASH_BBATCH", "0") == "1"
+        self.verify_bbatch = not self.verify_split and _os.environ.get("GEMMA4_DFLASH_FOLD", "0") != "1"
         if B * self.P_v > 32:
             raise ValueError(
                 f"B*(V+1) = {B * self.P_v} > 32: the verify row cliff (measured on MTP) — "
@@ -437,6 +441,13 @@ class DFlashBatchedDecoder:
             # so every wasted block costs B entries. 64-aligned satisfies the
             # mask/k_chunk contract.
             self.pv_sk = ((horizon + 63) // 64) * 64
+        elif self.verify_bbatch:
+            # The sdpa_decode reader's mask batch stride is PNHt*St with St
+            # taken from the TABLE width -- the mask MUST width-match the table
+            # or every batch>0 reads a misaligned mask (root cause #4, batch
+            # dim). Batch 0 (offset 0) is always correct, which is why B=1 and
+            # the split probe never saw it.
+            self.pv_sk = 64 * min((horizon + 63) // 64, int(self.page_table_torch.shape[1]))
         else:
             self.pv_sk = ((horizon + 1023) // 1024) * 1024
         t = self.target
