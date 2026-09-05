@@ -411,7 +411,13 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         output_tile,
         /*enable_phase_alias_=*/true,
         activations_are_row_major,
-        geo::Knobs::from_env());
+        [&]() {
+            geo::Knobs knobs = geo::Knobs::from_env();
+            if (std::getenv("MOE_FUSED_SWIGLU_ACC_BF16") == nullptr) {
+                knobs.acc_bf16 = operation_arguments.intermediate_dtype == tt::tt_metal::DataType::BFLOAT16;
+            }
+            return knobs;
+        }());
     const DataFormat acc_format = blocking.acc_bf16 ? DataFormat::Float16_b : DataFormat::Bfp8_b;
 
     const bool direct_write = tensor_arguments.expert_region_offsets.has_value();

@@ -234,6 +234,10 @@ void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
             operation_arguments.output_dtype == tt::tt_metal::DataType::BFLOAT16,
         "moe_fused_swiglu: output dtype must be BFLOAT8_B or BFLOAT16");
     TT_FATAL(
+        operation_arguments.intermediate_dtype == tt::tt_metal::DataType::BFLOAT8_B ||
+            operation_arguments.intermediate_dtype == tt::tt_metal::DataType::BFLOAT16,
+        "moe_fused_swiglu: intermediate dtype must be BFLOAT8_B or BFLOAT16");
+    TT_FATAL(
         operation_arguments.output_memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM &&
             operation_arguments.output_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         "moe_fused_swiglu: output must be DRAM interleaved");
@@ -400,6 +404,7 @@ ttnn::Tensor moe_fused_swiglu(
     bool read_x_at_offset,
     operations::experimental::deepseek_prefill::moe_fused_swiglu::RoutedExpertActivation activation,
     tt::tt_metal::DataType output_dtype,
+    tt::tt_metal::DataType intermediate_dtype,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
@@ -418,6 +423,7 @@ ttnn::Tensor moe_fused_swiglu(
             .max_active_tokens = max_active_tokens,
             .activation = activation,
             .output_dtype = output_dtype,
+            .intermediate_dtype = intermediate_dtype,
             .output_memory_config = output_memory_config,
             .compute_kernel_config = compute_kernel_config},
         OperationType::tensor_args_t{

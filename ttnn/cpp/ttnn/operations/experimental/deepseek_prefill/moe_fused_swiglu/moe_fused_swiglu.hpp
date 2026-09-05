@@ -47,7 +47,10 @@ ttnn::Tensor moe_fused_swiglu(
     // dropped like a zero count. Wide open by default; a hybrid dispatch narrows it so this
     // op and unified_routed_expert_moe split the experts by load over ONE counts vector.
     uint32_t min_active_tokens = 0,
-    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max());
+    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max(),
+    // BFLOAT8_B (default, the original) or BFLOAT16: format of the gate/up K-partials and the
+    // reduce-scatter landing buffers. BFLOAT16 matches the composite op's bf16 partial sums.
+    const std::optional<tt::tt_metal::DataType>& intermediate_dtype = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu
 

@@ -129,6 +129,12 @@ def test_bench(device, active_tokens):
         "down_proj": torch.randn(emb, hidden, dtype=torch.float32) * wscale,
     }
     torch_active = torch.randn(active_tokens, emb, dtype=torch.float32) * xscale
+    if _env("BENCH_SPIKY", "0") == "1":
+        # heavy-tailed activations: 1% of the positions carry 16x outliers, plus 8 outlier channels
+        # (32x) shared by every token -- the block-float exponent-sharing worst case
+        mask = torch.rand(active_tokens, emb) < 0.01
+        torch_active = torch_active * (1 + 15 * mask.float())
+        torch_active[:, torch.randperm(emb)[:8]] *= 32
     torch_input = torch.zeros(ALLOCATED_TOKENS, emb, dtype=torch.float32)
     torch_input[:active_tokens] = torch_active
 
@@ -170,6 +176,7 @@ def test_bench(device, active_tokens):
             core_grid=grid,
             compute_kernel_config=_compute_config(approx),
             dtype=ttnn.bfloat16 if _env("BENCH_OUT_BF16", "0") == "1" else ttnn.bfloat8_b,
+            intermediate_dtype=ttnn.bfloat16 if _env("BENCH_INTERMEDIATE", "bfp8") == "bf16" else ttnn.bfloat8_b,
         )
 
     def run_old():

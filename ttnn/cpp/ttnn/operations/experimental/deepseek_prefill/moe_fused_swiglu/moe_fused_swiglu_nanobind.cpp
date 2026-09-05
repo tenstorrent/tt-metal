@@ -39,7 +39,9 @@ void bind_moe_fused_swiglu(nb::module_& mod) {
         descriptor per role serves the whole loop. The default output is
         BFLOAT8_B TILE in DRAM. By default all cores in the device's
         compute-with-storage grid are used. ``core_grid=(x, y)`` is an explicit
-        rectangular-prefix override.
+        rectangular-prefix override. ``intermediate_dtype`` (BFLOAT8_B default, or
+        BFLOAT16) is the format of the gate/up K-partials and of the reduce-scatter
+        landing buffers; BFLOAT16 keeps the partial sums in bf16 like the composite op.
         )doc",
         &moe_fused_swiglu,
         nb::arg("input").noconvert(),
@@ -59,7 +61,8 @@ void bind_moe_fused_swiglu(nb::module_& mod) {
         nb::arg("read_x_at_offset") = false,
         nb::arg("activation") = RoutedExpertActivation::Silu,
         nb::arg("min_active_tokens") = 0,
-        nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max());
+        nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max(),
+        nb::arg("intermediate_dtype") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::detail

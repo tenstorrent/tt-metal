@@ -25,7 +25,8 @@ ttnn::Tensor moe_fused_swiglu(
     bool read_x_at_offset,
     RoutedExpertActivation activation,
     uint32_t min_active_tokens,
-    uint32_t max_active_tokens) {
+    uint32_t max_active_tokens,
+    const std::optional<tt::tt_metal::DataType>& intermediate_dtype) {
     constexpr uint32_t TILE = 32;
     TT_FATAL(!w_gates.empty(), "moe_fused_swiglu: at least one local expert is required");
     TT_FATAL(
@@ -97,6 +98,7 @@ ttnn::Tensor moe_fused_swiglu(
         read_x_at_offset,
         activation,
         output_dtype,
+        intermediate_dtype.value_or(tt::tt_metal::DataType::BFLOAT8_B),
         output_memory_config,
         resolved_compute_config,
         output,

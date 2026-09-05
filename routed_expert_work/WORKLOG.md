@@ -263,3 +263,41 @@ odd sticks on NoC1): M=64 88.2 (+4%), M=256 124.7 (+7%); off.
 Goal check: bf16 regime at M=256 is 116.9 us (<= 120) with lower error than the shipped bfp8 path (0.2145 vs
 0.2171); the bfp8 regime is unchanged within noise. Remaining levers are compute-side: down-matmul two-row
 sub-blocks, scatter overlap with the last gate/up chunk.
+
+### 3.15 Two H rows per down-matmul call (REJECTED, kept behind `MOE_DOWN_ROWS_MAX`, default 1)
+Halves the W_down unpacks per K step. Correct once a pair is not allowed to straddle the cb_h wrap (row r
+sits in slot r % DEPTH_H because every block returns to the base), but M=256 131.7 (+13%), M=1024 398
+(+15%): popping rows in pairs halves the effective depth of the 3-deep H pipeline, and the down phase is
+paced by round delivery, not by the matmul. Would need DEPTH_H 4, which is illegal for partial blocks here.
+
+## 4. Deliverable state
+
+* `intermediate_dtype` op argument (BFLOAT8_B default = original, BFLOAT16 = bf16 partials + landing);
+  the env knob `MOE_FUSED_SWIGLU_ACC_BF16` still overrides it for A/B runs. L1: bfp8 1,145,408 B,
+  bf16 1,388,480 B of 1,461,248 (depth_x=1 in both).
+* Everything else defaults to the shipped schedule; every rejected experiment is behind a knob or removed.
+
+Final numbers (RT profiler, median of 3, bfp4 weights, x bf16 RM, 11x8; rel-RMS vs fp32 reference):
+| M | bfp8 regime ns | bf16 regime ns | delta | bfp8 rel-RMS | bf16 rel-RMS | old composite ns / rel-RMS |
+|---:|---:|---:|---:|---:|---:|---:|
+| 64 | 84,033 | 85,144 | +1.3% | 0.2078 | 0.2058 | 203,663 / 0.2031 |
+| 128 | 94,067 | 94,387 | +0.3% | 0.2093 | 0.2073 | 198,038 / 0.2046 |
+| 256 | 115,769 | 117,117 | +1.2% | 0.2171 | 0.2145 | 210,714 / 0.2043 |
+| 512 | 198,307 | 201,097 | +1.4% | 0.2169 | 0.2142 | 264,737 / 0.2041 |
+| 1024 | 346,536 | 358,166 | +3.4% | 0.2169 | 0.2142 | 376,619 / 0.2040 |
+| 5120 | 1,523,199 | 1,593,615 | +4.6% | 0.2167 | 0.2140 | 1,648,480 / 0.2038 |
+
+What did NOT move and why (the honest summary): phase 1 is DRAM-bound as a pair of weight streams (~470 GB/s)
+with a NoC0 row-arbitration skew that decides which cores finish last; every reordering of that phase
+(issue-all, early next chunk, grid barrier, W_gate after x, NoC split, early W_down, x read split, parallel or
+flag-ordered x rounds, chunk count, sub-block height) measured worse than the shipped schedule. The remaining
+gap to the old composite's error is dominated by the full-row down path's bfp8 pack (section 2.2), which is
+outside the two agreed precision regimes.
+
+Heavy-tailed inputs (`BENCH_SPIKY=1`: 1% of positions x16, 8 shared outlier channels x32), rel-RMS vs fp32:
+| M | bfp8 regime | bf16 regime | old composite |
+|---:|---:|---:|---:|
+| 64 | 0.2080 | 0.2057 | 0.2038 |
+| 256 | 0.2088 | 0.2060 | 0.2018 |
+| 1024 | 0.2094 | 0.2072 | 0.2001 |
+Same ordering as the Gaussian case: bf16 partials recover roughly a third to a half of the gap to the composite.

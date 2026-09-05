@@ -48,6 +48,7 @@ ttnn::Tensor moe_fused_swiglu(
     bool read_x_at_offset,
     ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::RoutedExpertActivation activation,
     tt::tt_metal::DataType output_dtype,
+    tt::tt_metal::DataType intermediate_dtype,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,

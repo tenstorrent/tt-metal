@@ -35,6 +35,11 @@ struct OperationArguments {
     uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max();
     RoutedExpertActivation activation = RoutedExpertActivation::Silu;
     tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::BFLOAT8_B;
+    // Format of the gate/up K-partials and of the reduce-scatter landing buffers. BFLOAT8_B is the
+    // original (a K/8 partial quantised to bfp8 before the 8-way sum); BFLOAT16 keeps the partials
+    // in bf16 like the unified_routed_expert_ffn composite does, at +190 KB of L1 and ~0-4% device time
+    // (M-dependent). Everything else on the h path stays bfp8 in both settings.
+    tt::tt_metal::DataType intermediate_dtype = tt::tt_metal::DataType::BFLOAT8_B;
     tt::tt_metal::MemoryConfig output_memory_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
@@ -49,6 +54,7 @@ struct OperationArguments {
         "max_active_tokens",
         "activation",
         "output_dtype",
+        "intermediate_dtype",
         "output_memory_config",
         "compute_kernel_config");
 
@@ -63,6 +69,7 @@ struct OperationArguments {
             max_active_tokens,
             activation,
             output_dtype,
+            intermediate_dtype,
             output_memory_config,
             compute_kernel_config);
     }

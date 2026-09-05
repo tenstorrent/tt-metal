@@ -682,9 +682,33 @@ void kernel_main() {
                     // result never leaves DEST for an intermediate BF16 accumulation spill.
                     constexpr uint32_t WD_RESIDENT_TILES = HGROUPS * HN_PAD * WD_EC_MAX;
                     wd_buf.wait_front(WD_RESIDENT_TILES);
-                    matmul_block_init(cb_h, cb_w_down, false, down_ec, 1, HID_T);
-                    const MatmulShape row_shape = MatmulShape::of(1, 1, 1, down_ec, HID_T, 1);
-                    for (uint32_t r = 0; r < down_rows; ++r) {
+                    // Rows per matmul call: several H rows against the same W_down K-step share one
+                    // in1 unpack (2x fewer W_down unpacks at two rows), bounded by DEST (rows x ec
+                    // tiles), by the rows that can sit in cb_h at once (DEPTH_H - 1, one slot must stay
+                    // free for the next round to land) and by an even split of the block.
+#ifndef MOE_DOWN_ROWS_MAX
+#define MOE_DOWN_ROWS_MAX 1  // 2 measured +13% at M=256: pair pops halve the 3-deep H pipeline
+#endif
+                    uint32_t rows_max = 1;
+                    while (rows_max * 2 <= MOE_DOWN_ROWS_MAX && rows_max * 2 <= DEPTH_H - 1 &&
+                           rows_max * 2 * down_ec <= DEST_LIMIT && down_rows % (rows_max * 2) == 0) {
+                        rows_max *= 2;
+                    }
+                    // A multi-row call reads its rows as ONE contiguous in0 block (row i at +i*HID_T), so
+                    // it must not straddle cb_h's wrap. Every mrow block starts at the CB base (the pad
+                    // slots keep that invariant), so row r sits in slot r % DEPTH_H; the grouped mode
+                    // does not return to the base and keeps single rows.
+                    uint32_t init_rows = 0;  // rows the current matmul_block_init was made for
+                    for (uint32_t r = 0; r < down_rows;) {
+                        uint32_t rows_per = wd_mgroup ? 1u : rows_max;
+                        while (rows_per > 1 && (r % DEPTH_H) + rows_per > DEPTH_H) {
+                            rows_per >>= 1;
+                        }
+                        if (rows_per != init_rows) {
+                            matmul_block_init(cb_h, cb_w_down, false, down_ec, rows_per, HID_T);
+                            init_rows = rows_per;
+                        }
+                        const MatmulShape row_shape = MatmulShape::of(1, 1, rows_per, down_ec, HID_T, 1);
                         matmul_row_major<
                             /*init_matmul=*/false,
                             /*retain_in0=*/false,
@@ -699,9 +723,10 @@ void kernel_main() {
                             /*out_row_width=*/out_ec_max,
                             FullKSteps{});
                         // The full output allocation was reserved before the loop, but publishing
-                        // this completed row advances the CB write pointer to row r+1 and lets the
-                        // writer issue row r while compute works on the next W_down matmul.
-                        out_tiles_buf.push_back(out_ec_max);
+                        // these completed rows advances the CB write pointer and lets the writer
+                        // issue them while compute works on the next W_down matmul.
+                        out_tiles_buf.push_back(rows_per * out_ec_max);
+                        r += rows_per;
                     }
                     for (uint32_t p = 0; p < mrow_pad; ++p) {
                         h_buf.wait_front(HID_T);
