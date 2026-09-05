@@ -278,12 +278,12 @@ void kernel_main() {
 #ifdef PACK_RELU
                 // for each batch we start with relu disabled so that intermediate results are not relu'd
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
-                    PACK((llk_pack_relu_config(ReluConfig::none())));
+                    pack_relu_config(ReluConfig::none());
                 }
 #endif
 
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
-                    PACK((pack_reconfig_data_format(mm_partials_cb_id)));
+                    pack_reconfig_data_format(mm_partials_cb_id);
                 }
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
@@ -292,22 +292,22 @@ void kernel_main() {
 #if not defined FUSE_BIAS and defined PACK_RELU
                     if (last_out) {
                         // if last block we pack the final result with relu enabled
-                        PACK((llk_pack_relu_config(ReluConfig::zero())));
+                        pack_relu_config(ReluConfig::zero());
                     }
 #endif
 
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_cb_id, in0_transpose_cb_id);
                         transpose_init(in0_transpose_cb_id);
-                        PACK((pack_reconfig_data_format(in0_cb_id)));
+                        pack_reconfig_data_format(in0_cb_id);
 #ifdef PACKER_L1_ACC
-                        PACK((llk_pack_reconfig_l1_acc(0)));
+                        pack_reconfig_l1_acc(0);
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_cb_id, in0_cb_id);
                         reconfig_data_format_srca(in0_transpose_cb_id, in1_cb_id);
                         matmul_block_init(
                             in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-                        PACK((pack_reconfig_data_format(mm_partials_cb_id)));
+                        pack_reconfig_data_format(mm_partials_cb_id);
                     }
 
                     in0_cb.wait_front(in0_block_num_tiles);
@@ -384,18 +384,18 @@ void kernel_main() {
 #endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                                PACK((pack_reconfig_data_format(mm_out_cb_id)));
+                                pack_reconfig_data_format(mm_out_cb_id);
 #endif
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
                                 if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
+                                    pack_reconfig_l1_acc(0);
                                 } else {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
+                                    pack_reconfig_l1_acc(1);
                                 }
 #else
-                                PACK((llk_pack_reconfig_l1_acc(0)));
+                                pack_reconfig_l1_acc(0);
 #endif
 #endif
                                 uint32_t start_dst_index = 0;
@@ -411,13 +411,13 @@ void kernel_main() {
 
 #ifdef PACKER_L1_ACC
                                 if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
+                                    pack_reconfig_l1_acc(0);
                                 } else if (block == 1) {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
+                                    pack_reconfig_l1_acc(1);
                                 } else if (in0_transpose_tile) {
                                     // For each block, l1_acc would have been enabled during the
                                     // transpose stage. So let us put it back here.
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
+                                    pack_reconfig_l1_acc(1);
                                 }
 #endif
 
@@ -472,13 +472,13 @@ void kernel_main() {
 #ifdef FUSE_BIAS
 #ifdef PACK_RELU
                 // if last block we pack the final result with relu enabled
-                PACK((llk_pack_relu_config(ReluConfig::zero())));
+                pack_relu_config(ReluConfig::zero());
 #endif
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                PACK((pack_reconfig_data_format(out_cb_id)));
+                pack_reconfig_data_format(out_cb_id);
 #endif
 #ifdef PACKER_L1_ACC
-                PACK((llk_pack_reconfig_l1_acc(0)));
+                pack_reconfig_l1_acc(0);
 #endif
                 reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
                 if constexpr (row_broadcast_bias) {
@@ -527,20 +527,11 @@ void kernel_main() {
                         untilize_mode_out_cb.reserve_back(out_subblock_num_tiles);
 
 #ifdef SFPU_ACTIVATION
-                        PACK(TTI_SEMWAIT(
-                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                            semaphore::t6_sem(semaphore::MATH_PACK),
-                            p_stall::STALL_ON_ZERO));
-
-                        // Flip destination register offset for PACKER access
-                        PACK(TT_SETC16(
-                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            ActivationApplyHelper<activation_type, activation_param0, activation_param1>::apply(i);
-                        }
-
-                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                        apply_activation_from_pack<
+                            activation_type,
+                            activation_param0,
+                            activation_param1,
+                            activation_param2>(out_subblock_num_tiles);
 #else
                         tile_regs_wait();
 #endif
@@ -559,15 +550,15 @@ void kernel_main() {
 #endif  // FUSE_BIAS
                 if constexpr (untilize_out) {
 #ifdef PACK_RELU
-                    PACK((llk_pack_relu_config(ReluConfig::none())));
+                    pack_relu_config(ReluConfig::none());
 #endif  // PACK_RELU
 #ifndef FUSE_BIAS
                     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                    PACK((pack_reconfig_data_format(out_cb_id)));
+                    pack_reconfig_data_format(out_cb_id);
 #endif
 #ifdef PACKER_L1_ACC
-                    PACK((llk_pack_reconfig_l1_acc(0)));
+                    pack_reconfig_l1_acc(0);
 #endif
 #endif  // FUSE_BIAS
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
