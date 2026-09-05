@@ -793,4 +793,10 @@ void kernel_main() {
             }
         }
     }  // close phase
+
+    // Flush the ring kv-relay writes before exit. The loop uses async_writes_flushed (sent, not
+    // acked); leaving non-posted writes outstanding at kernel completion is an inter-kernel data
+    // race that eager execution hides via the implicit inter-program barrier but trace replay does
+    // not. The ring-joint reader/writer already barrier at exit; this reader must too.
+    noc.async_write_barrier();
 }
