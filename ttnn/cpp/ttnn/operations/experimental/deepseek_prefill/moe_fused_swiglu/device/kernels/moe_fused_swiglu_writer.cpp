@@ -68,6 +68,7 @@ constexpr uint32_t WU_TRID = 12;
 // Block 0, row-major x: read the ODD sticks of this core's x row on NoC1 into cb_x_in (the reader
 // reads the even ones) and publish MBOX_X_HALF_DONE. Same accessor/addressing as the reader's.
 constexpr uint32_t X_SPLIT = CT(X_SPLIT);
+constexpr uint32_t CHUNKED_SCATTER = CT(CHUNKED_SCATTER);  // see the reader / common.hpp
 constexpr uint32_t INPUT_FORMAT = CT(INPUT_FORMAT);
 constexpr uint32_t M_T_MAX = CT(M_T_MAX);
 constexpr uint32_t X_PAGE = CT(X_PAGE);
@@ -246,6 +247,7 @@ void kernel_main() {
     // It spans the EXPERT boundary too: SEM_PHASE_FREE is published from inside that drain, and the
     // next expert's block 0 reader waits on it.
     uint32_t out_pending = 0;
+    uint32_t up_chunks_seen = 0;  // chunked reduce-scatter: the reader's MBOX_UP_CHUNK_DONE target
     constexpr uint32_t WU_BLOCK_TILES = KR_PAD * HN_PAD;
     // The N-chunk width of the gate/up weight stream. 1 is the whole block.
     constexpr uint32_t GU_CHUNK_W = HN_PAD / GU_CHUNKS;
@@ -481,7 +483,13 @@ void kernel_main() {
                     noc_semaphore_wait_min(sem_go_ptr, invites + KGROUPS);
                 }
                 invites += KGROUPS;
-                {
+#ifdef SITU_GLU
+                const bool chunked = false;
+#else
+                const bool chunked = CHUNKED_SCATTER && SCATTER_ONE_SIGNAL &&
+                                     moe_fused_swiglu::chunked_scatter_ok(m_eff, M_BLOCK, HN_PAD, KGROUPS, GU_CHUNKS);
+#endif
+                if (!chunked) {
                     MaybeDeviceZoneScope("writer_scatter_gate_wait");
                     cb_wait_front(cb_gate_acc, GU_FULL);
                 }
@@ -494,41 +502,80 @@ void kernel_main() {
                     const auto& iface = get_local_cb_interface(cb_gather_gate);
                     const uint32_t base = iface.fifo_limit - iface.fifo_size;
                     gate_dst = base + ((gb * GATHER_PAGES) % PHASE_ALIAS_PAGES) * ACC_TILE;
+                } else if (chunked) {
+                    // The chunked path pushes the landing CB per chunk, so it addresses from the base.
+                    const auto& iface = get_local_cb_interface(cb_gather_gate);
+                    gate_dst = iface.fifo_limit - iface.fifo_size;
                 }
-                // The GATE half of the column all-to-all, on NOC_1. The reader carries the UP half on
-                // NOC_0: split by PAYLOAD, not destination, so each RISC-V owns one
-                // accumulator CB outright — two RISC-Vs popping one CB corrupt its shared `tiles_acked`
-                // word the way two pushers corrupt `tiles_received`.
-                if constexpr (SCATTER_ONE_SIGNAL) {
-                    {
-                        MaybeDeviceZoneScope("writer_scatter_gate_payload");
-                        moe_fused_swiglu::scatter_payload_to(
-                            RT_PEERS, cb_gate_acc, gate_dst, sl_w, sl_a, my_row, ACC_TILE);
-                    }
-                    {
-                        MaybeDeviceZoneScope("writer_scatter_up_wait");
-                        while (mailbox_words[moe_fused_swiglu::MBOX_UP_SCATTER_DONE] < gb + 1) {
-                            invalidate_l1_cache();
+                if (chunked) {
+                    // CHUNKED: my GATE chunk c to every worker's landing slot for chunk c, then one
+                    // signal per destination once the reader's UP chunk c has landed too.
+                    constexpr uint32_t CHUNK_PAGES = M_BLOCK * GU_CHUNK_W;
+                    for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
+                        {
+                            MaybeDeviceZoneScope("writer_scatter_gate_wait");
+                            cb_wait_front(cb_gate_acc, CHUNK_PAGES);
                         }
-                    }
-                    // Both NoC payload barriers have now completed. One signal per source/destination
-                    // pair proves both gate and up are resident in the target landing buffers.
-                    {
-                        MaybeDeviceZoneScope("writer_scatter_signal");
-                        moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, sl_w);
+                        {
+                            MaybeDeviceZoneScope("writer_scatter_gate_payload");
+                            moe_fused_swiglu::scatter_payload_to(
+                                RT_PEERS,
+                                cb_gate_acc,
+                                gate_dst + c * CHUNK_PAGES * ACC_TILE,
+                                sl_w,
+                                GU_CHUNK_W,
+                                my_row,
+                                ACC_TILE);
+                        }
+                        ++up_chunks_seen;
+                        {
+                            MaybeDeviceZoneScope("writer_scatter_up_wait");
+                            while (mailbox_words[moe_fused_swiglu::MBOX_UP_CHUNK_DONE] < up_chunks_seen) {
+                                invalidate_l1_cache();
+                            }
+                        }
+                        {
+                            MaybeDeviceZoneScope("writer_scatter_signal");
+                            moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, sl_w);
+                        }
+                        cb_pop_front(cb_gate_acc, CHUNK_PAGES);
                     }
                 } else {
-                    {
-                        MaybeDeviceZoneScope("writer_scatter_gate_payload");
-                        moe_fused_swiglu::scatter_payload_to(
-                            RT_PEERS, cb_gate_acc, gate_dst, sl_w, sl_a, my_row, ACC_TILE);
+                    // The GATE half of the column all-to-all, on NOC_1. The reader carries the UP half on
+                    // NOC_0: split by PAYLOAD, not destination, so each RISC-V owns one
+                    // accumulator CB outright — two RISC-Vs popping one CB corrupt its shared `tiles_acked`
+                    // word the way two pushers corrupt `tiles_received`.
+                    if constexpr (SCATTER_ONE_SIGNAL) {
+                        {
+                            MaybeDeviceZoneScope("writer_scatter_gate_payload");
+                            moe_fused_swiglu::scatter_payload_to(
+                                RT_PEERS, cb_gate_acc, gate_dst, sl_w, sl_a, my_row, ACC_TILE);
+                        }
+                        {
+                            MaybeDeviceZoneScope("writer_scatter_up_wait");
+                            while (mailbox_words[moe_fused_swiglu::MBOX_UP_SCATTER_DONE] < gb + 1) {
+                                invalidate_l1_cache();
+                            }
+                        }
+                        // Both NoC payload barriers have now completed. One signal per source/destination
+                        // pair proves both gate and up are resident in the target landing buffers.
+                        {
+                            MaybeDeviceZoneScope("writer_scatter_signal");
+                            moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, sl_w);
+                        }
+                    } else {
+                        {
+                            MaybeDeviceZoneScope("writer_scatter_gate_payload");
+                            moe_fused_swiglu::scatter_payload_to(
+                                RT_PEERS, cb_gate_acc, gate_dst, sl_w, sl_a, my_row, ACC_TILE);
+                        }
+                        {
+                            MaybeDeviceZoneScope("writer_scatter_signal");
+                            moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, sl_w);
+                        }
                     }
-                    {
-                        MaybeDeviceZoneScope("writer_scatter_signal");
-                        moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, sl_w);
-                    }
+                    cb_pop_front(cb_gate_acc, GU_FULL);
                 }
-                cb_pop_front(cb_gate_acc, GU_FULL);
             }
             // ---- my finished h slice, straight into the ROOT's cb_h_local at its tile offset ----
             // The gather IS the assembly. cb_h_local is never pushed or popped, so its write pointer

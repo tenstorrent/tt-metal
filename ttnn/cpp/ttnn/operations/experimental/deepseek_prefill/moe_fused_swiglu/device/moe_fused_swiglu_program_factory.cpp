@@ -180,6 +180,7 @@ std::vector<uint32_t> make_reader_ct(
         blocking.knobs.wd_early ? 1u : 0u,
         blocking.knobs.mrow_partial ? 1u : 0u,
         blocking.knobs.x_split ? 1u : 0u,
+        blocking.knobs.chunked_scatter ? 1u : 0u,
         activation_page,
         activation_slice,
         counts_page,
@@ -270,6 +271,7 @@ std::vector<uint32_t> make_writer_ct(
         blocking.knobs.wd_early ? 1u : 0u,
         blocking.knobs.mrow_partial ? 1u : 0u,
         blocking.knobs.x_split ? 1u : 0u,
+        blocking.knobs.chunked_scatter ? 1u : 0u,
         activations_are_row_major ? 0u : 1u,
         operation_arguments.m_tiles,
         activation_page,
@@ -346,6 +348,7 @@ std::vector<uint32_t> make_compute_ct(
         blocking.gather_pages,
         blocking.depth_h,
         blocking.knobs.mrow_partial ? 1u : 0u,
+        blocking.knobs.chunked_scatter ? 1u : 0u,
         geo::CB_X_IN,
         geo::CB_X_TILES,
         geo::CB_X_STAGE,
@@ -391,7 +394,19 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     const uint32_t bfp8_tile = tile_size(DataFormat::Bfp8_b);
     const uint32_t bf16_tile = tile_size(DataFormat::Float16_b);
     const uint32_t output_tile = tile_size(output_format);
-    const uint32_t kr_pad = ((emb / geo::TILE) + kgroups - 1) / kgroups;
+    geo::Knobs knobs = geo::Knobs::from_env();
+    if (std::getenv("MOE_FUSED_SWIGLU_ACC_BF16") == nullptr) {
+        knobs.acc_bf16 = operation_arguments.intermediate_dtype == tt::tt_metal::DataType::BFLOAT16;
+    }
+    // The widest K slot any row can get: the even split, the taper's heaviest row, or the explicit list.
+    uint32_t kr_pad = ((emb / geo::TILE) + kgroups - 1) / kgroups;
+    if (knobs.kr_split.empty() && kgroups == geo::M_BLOCK && (emb / geo::TILE) % kgroups == 0 &&
+        (emb / geo::TILE) / kgroups > 2 * knobs.kr_taper) {
+        kr_pad += knobs.kr_taper;
+    }
+    for (const uint32_t rows : knobs.kr_split) {
+        kr_pad = std::max(kr_pad, rows);
+    }
     const uint32_t activation_slice =
         activations_are_row_major ? kr_pad * geo::TILE * tensor_arguments.activations.element_size() : bfp8_tile;
     const uint32_t l1_max = hal::get_max_worker_l1_unreserved_size();
@@ -411,13 +426,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         output_tile,
         /*enable_phase_alias_=*/true,
         activations_are_row_major,
-        [&]() {
-            geo::Knobs knobs = geo::Knobs::from_env();
-            if (std::getenv("MOE_FUSED_SWIGLU_ACC_BF16") == nullptr) {
-                knobs.acc_bf16 = operation_arguments.intermediate_dtype == tt::tt_metal::DataType::BFLOAT16;
-            }
-            return knobs;
-        }());
+        knobs);
     const DataFormat acc_format = blocking.acc_bf16 ? DataFormat::Float16_b : DataFormat::Bfp8_b;
 
     const bool direct_write = tensor_arguments.expert_region_offsets.has_value();
@@ -564,6 +573,11 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
 
     KernelDescriptor::Defines dataflow_defines{{"H_MCAST_POSTED", geo::H_MCAST_POSTED ? "1" : "0"}};
     KernelDescriptor::Defines compute_defines;
+    if (operation_arguments.activation == RoutedExpertActivation::SituGlu) {
+        // The chunked reduce-scatter is a SiLU-path schedule; the dataflow kernels need the same
+        // predicate the compute kernel derives from its SITU_GLU define.
+        dataflow_defines.emplace_back("SITU_GLU", "1");
+    }
     if (stage_profile_enabled()) {
         dataflow_defines.emplace_back("MOE_FUSED_SWIGLU_STAGE_PROFILE", "1");
         compute_defines.emplace_back("MOE_FUSED_SWIGLU_STAGE_PROFILE", "1");

@@ -91,6 +91,24 @@ Knobs Knobs::from_env() {
     knobs.gu_sbh = env_u32("MOE_FUSED_SWIGLU_GU_SBH", knobs.gu_sbh);
     knobs.mrow_partial = env_u32("MOE_FUSED_SWIGLU_MROW_PARTIAL", knobs.mrow_partial ? 1u : 0u) != 0;
     knobs.x_split = env_u32("MOE_FUSED_SWIGLU_X_SPLIT", knobs.x_split ? 1u : 0u) != 0;
+    knobs.chunked_scatter = env_u32("MOE_FUSED_SWIGLU_CHUNKED", knobs.chunked_scatter ? 1u : 0u) != 0;
+    knobs.kr_taper = env_u32("MOE_FUSED_SWIGLU_KR_TAPER", knobs.kr_taper);
+    if (const char* list = std::getenv("MOE_FUSED_SWIGLU_KR_SPLIT"); list != nullptr && *list != '\0') {
+        std::string item;
+        for (const char* p = list;; ++p) {
+            if (*p == ',' || *p == '\0') {
+                if (!item.empty()) {
+                    knobs.kr_split.push_back(static_cast<uint32_t>(std::stoul(item)));
+                }
+                item.clear();
+                if (*p == '\0') {
+                    break;
+                }
+            } else {
+                item.push_back(*p);
+            }
+        }
+    }
     knobs.wg_after_xmcast = env_u32("MOE_FUSED_SWIGLU_WG_AFTER_X", knobs.wg_after_xmcast ? 1u : 0u) != 0;
     knobs.wd_early = env_u32("MOE_FUSED_SWIGLU_WD_EARLY", knobs.wd_early ? 1u : 0u) != 0;
     return knobs;
@@ -138,6 +156,30 @@ Blocking::Blocking(
     TT_FATAL(m_eff_min <= M_BLOCK, "moe_fused_swiglu: gate/up subblock height exceeds M_BLOCK");
 
     std::tie(kr_sizes, kr_starts) = split(emb_t, kgroups);
+    if (knobs.kr_split.empty() && knobs.kr_taper != 0 && kgroups == M_BLOCK && emb_t % kgroups == 0 &&
+        emb_t / kgroups > 2 * knobs.kr_taper) {
+        // Row r gets base + taper * {-1, -1, -1/2, 0, 0, +1/2, +1, +1}: sums to emb_t, top rows lighter.
+        const uint32_t base = emb_t / kgroups;
+        const int32_t t = static_cast<int32_t>(knobs.kr_taper);
+        const int32_t deltas[8] = {-t, -t, -t / 2, 0, 0, t / 2, t, t};
+        uint32_t start = 0;
+        for (uint32_t r = 0; r < kgroups; ++r) {
+            kr_sizes[r] = static_cast<uint32_t>(static_cast<int32_t>(base) + deltas[r]);
+            kr_starts[r] = start;
+            start += kr_sizes[r];
+        }
+        TT_FATAL(start == emb_t, "moe_fused_swiglu: K taper does not sum to the embedding tile count");
+    }
+    if (!knobs.kr_split.empty()) {
+        TT_FATAL(knobs.kr_split.size() == kgroups, "moe_fused_swiglu: KR_SPLIT must have one entry per grid row");
+        uint32_t start = 0;
+        for (uint32_t r = 0; r < kgroups; ++r) {
+            kr_sizes[r] = knobs.kr_split[r];
+            kr_starts[r] = start;
+            start += kr_sizes[r];
+        }
+        TT_FATAL(start == emb_t, "moe_fused_swiglu: KR_SPLIT must sum to the embedding tile count {}", emb_t);
+    }
     kr_pad = *std::max_element(kr_sizes.begin(), kr_sizes.end());
     gu_chunks_target = knobs.gu_chunks;
 
@@ -201,6 +243,11 @@ Blocking::Blocking(
     wd_resident = WD_RESIDENT;
     depth_wd = wd_resident ? hgroups : min_depth_wd();
 
+    // First rung of the L1 ladder: the K taper (a few % of device time) before any pipeline depth.
+    if (kr_pad != (emb_t + kgroups - 1) / kgroups && l1_bytes(true, out_tile, enable_phase_alias) > l1_budget) {
+        std::tie(kr_sizes, kr_starts) = split(emb_t, kgroups);
+        kr_pad = *std::max_element(kr_sizes.begin(), kr_sizes.end());
+    }
     if (wd_mgroups && depth_h > 2 && l1_bytes(true, out_tile, enable_phase_alias) > l1_budget) {
         depth_h = 2;
         hack_ahead = std::max(1u, std::min(knobs.hack_ahead, depth_h - 1));
@@ -374,7 +421,9 @@ uint32_t Blocking::phase_cb_alias_pages(uint32_t requested_out_tile) const {
 bool Blocking::phase_cb_alias(uint32_t requested_out_tile) const {
     const uint32_t output_tile = requested_out_tile == 0 ? bfp8_tile : requested_out_tile;
     // The alias group shares one page size; a bf16 landing CB cannot share pages with a bfp8 output.
-    if (output_tile != bfp8_tile || acc_bf16) {
+    // The chunked reduce-scatter produces h_slice tiles while peers are still landing later chunks in
+    // cb_gather_gate, so those two may not share storage either.
+    if (output_tile != bfp8_tile || acc_bf16 || knobs.chunked_scatter) {
         return false;
     }
     const auto layout = cb_layout(true, requested_out_tile, 64, 64);

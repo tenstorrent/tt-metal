@@ -95,6 +95,8 @@ constexpr uint32_t MROW_PARTIAL = CT(MROW_PARTIAL);
 // Block 0, row-major x: this kernel reads the EVEN sticks of its x row, the writer the ODD ones on
 // NoC1, and publishes MBOX_X_HALF_DONE; both halves are needed before cb_x_in is pushed.
 constexpr uint32_t X_SPLIT = CT(X_SPLIT);
+// Full blocks: scatter each gate/up chunk as compute publishes it (see common.hpp chunked_scatter_ok).
+constexpr uint32_t CHUNKED_SCATTER = CT(CHUNKED_SCATTER);
 
 // X_PAGE is the ACTIVATION TENSOR's own page (bf16: one full emb stick; bfp8: one tile) — what
 // TensorAccessor needs to place a page in a bank. X_SLICE is the cb_x_in page stride, i.e. only
@@ -339,6 +341,8 @@ void kernel_main() {
     mailbox_words[moe_fused_swiglu::MBOX_HSEND_DONE] = 0;
     mailbox_words[moe_fused_swiglu::MBOX_UP_SCATTER_DONE] = 0;
     mailbox_words[moe_fused_swiglu::MBOX_X_HALF_DONE] = 0;
+    mailbox_words[moe_fused_swiglu::MBOX_UP_CHUNK_DONE] = 0;
+    uint32_t up_chunks_done = 0;  // chunked reduce-scatter: UP chunks scattered so far (monotone)
 
     // Row multicast state.  All receivers initialize their own flag before
     // acknowledging a sender; the sender waits for every acknowledgement, so
@@ -771,13 +775,16 @@ void kernel_main() {
                                 noc_semaphore_wait(x_free, XMCAST_CONSUMERS);
                                 noc_semaphore_set(x_free, 0);
                             }
+                            // Only this grid row's REAL K tiles travel: the slot is KR_PAD wide (the
+                            // heaviest row under the K taper) but every core in the row shares kr_rows,
+                            // and the matmul never reads the pad tiles.
                             const uint32_t src = x_base + t * X_ROW_BYTES;
                             ncrisc_noc_fast_write_any_len<noc_mode>(
                                 noc_index,
                                 write_cmd_buf,
                                 src,
                                 get_noc_multicast_addr(xbounds.sx, xbounds.sy, xbounds.ex, xbounds.ey, src),
-                                X_ROW_BYTES,
+                                kr_rows * BFP8_TILE,
                                 NOC_MULTICAST_WRITE_VC,
                                 /*mcast=*/true,
                                 /*linked=*/true,
@@ -931,7 +938,55 @@ void kernel_main() {
                 }
                 noc_async_atomic_barrier();
             }
-            {
+#ifdef SITU_GLU
+            const bool chunked = false;
+#else
+            const bool chunked = CHUNKED_SCATTER && SCATTER_ONE_SIGNAL &&
+                                 moe_fused_swiglu::chunked_scatter_ok(m_eff, M_BLOCK, HN_PAD, KGROUPS, GU_CHUNKS);
+#endif
+            if (chunked) {
+                // CHUNKED: for each gate/up N-chunk as compute publishes it, scatter my UP chunk (the
+                // writer scatters GATE and signals once both halves of the chunk are resident), then
+                // wait for the column's chunk to land here and publish it to compute, which folds and
+                // SiLUs it while the next chunk is still being computed. Landing addresses are derived
+                // from the landing CB's BASE (identical on every core), chunk-major.
+                constexpr uint32_t CHUNK_PAGES = M_BLOCK * GU_CHUNK_W;
+                const auto& gu_iface = get_local_cb_interface(cb_gather_up);
+                const uint32_t gather_up_base = gu_iface.fifo_limit - gu_iface.fifo_size;
+                {
+                    MaybeDeviceZoneScope("reader_reduce_invite_wait");
+                    moe_fused_swiglu::sem_wait_min(SEM_GO, (gb + 1) * KGROUPS);
+                }
+                for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
+                    {
+                        MaybeDeviceZoneScope("reader_reduce_up_wait");
+                        cb_wait_front(cb_up_acc, CHUNK_PAGES);
+                    }
+                    {
+                        MaybeDeviceZoneScope("reader_reduce_up_payload");
+                        moe_fused_swiglu::scatter_payload_to(
+                            RT_PEERS,
+                            cb_up_acc,
+                            gather_up_base + c * CHUNK_PAGES * ACC_TILE,
+                            slice_worker_count,
+                            GU_CHUNK_W,
+                            my_row,
+                            ACC_TILE);
+                    }
+                    asm volatile("fence" ::: "memory");
+                    mailbox_words[moe_fused_swiglu::MBOX_UP_CHUNK_DONE] = ++up_chunks_done;
+                    cb_pop_front(cb_up_acc, CHUNK_PAGES);
+                    if (slice_tiles) {
+                        data_arrivals += KGROUPS;
+                        {
+                            MaybeDeviceZoneScope("reader_reduce_data_wait");
+                            noc_semaphore_wait_min(sem_data_ptr, data_arrivals);
+                        }
+                        cb_push_back(cb_gather_gate, CHUNK_PAGES);
+                        cb_push_back(cb_gather_up, CHUNK_PAGES);
+                    }
+                }
+            } else {
                 {
                     MaybeDeviceZoneScope("reader_reduce_up_wait");
                     cb_wait_front(cb_up_acc, GU_FULL);
@@ -967,7 +1022,7 @@ void kernel_main() {
                 }
                 cb_pop_front(cb_up_acc, GU_FULL);
             }
-            if (slice_tiles) {
+            if (slice_tiles && !chunked) {
                 // One signal per payload by default; SCATTER_ONE_SIGNAL keeps both payloads concurrent
                 // but has the source writer signal once, after both have landed.
                 data_arrivals += (SCATTER_ONE_SIGNAL ? 1 : 2) * KGROUPS;

@@ -301,3 +301,57 @@ Heavy-tailed inputs (`BENCH_SPIKY=1`: 1% of positions x16, 8 shared outlier chan
 | 256 | 0.2088 | 0.2060 | 0.2018 |
 | 1024 | 0.2094 | 0.2072 | 0.2001 |
 Same ordering as the Gaussian case: bf16 partials recover roughly a third to a half of the gap to the composite.
+
+## 5. Second round (after the goal check): two wins
+
+### 3.16 Chunked reduce-scatter (ACCEPTED, `MOE_FUSED_SWIGLU_CHUNKED`, default on)
+Full blocks only (slice == one token row, a == HN_PAD). The gate/up accumulator becomes chunk-major
+([chunk][row][GU_CHUNK_W]); compute publishes each N-chunk as it completes; reader/writer scatter that chunk
+(GU_CHUNK_W tiles per worker, one signal per chunk after both halves land); the landing CBs are pushed per
+chunk and compute folds/SiLUs/multiplies per chunk. Only the last chunk's transfer stays exposed. The bfp8
+phase alias (gather_gate / h_slice / out_tiles) had to be dropped under this schedule (h_slice tiles are
+produced while peers still land later chunks): +58 KB, plenty of room after depth_x=1.
+Two bugs on the way: (1) the pack index had the chunk offset added although the per-chunk push already
+moved the CB write pointer (double offset -> inf); (2) the alias corruption above.
+| M | bfp8 before | bfp8 chunked | bf16 before | bf16 chunked |
+|---:|---:|---:|---:|---:|
+| 256 | 116.3 | 116.2 | 117.1 | 117.6 |
+| 512 | 195-198 | 194.1 | 201.1 | 194.4 |
+| 1024 | 343.5 | 338.0 | 358.2 | 339.5 |
+| 5120 | 1523 | 1490 | 1594 | 1486 |
+The bf16 regime's doubled payload is now fully hidden at high M (it matches bfp8).
+
+### 3.17 Reduce chunk c-1 between gate/up matmul chunks (REJECTED: hangs)
+Meant to overlap the PACK-thread SiLU of chunks 0-1 with the next chunk's matmul. Deadlocks on every core
+(watcher: MATH past its DEST acquire, PACK spinning in the SiLU helper's manual MATH_PACK wait, reader in a
+semaphore wait, writer in a CB wait). Also hangs with the SFPU loop removed and with a standard
+`tile_regs_wait()` instead of the raw wait, so the eltwise-between-matmul-chunks DEST handshake itself is the
+problem, not the SiLU math. Not pursued further; all chunks are reduced after the last matmul.
+
+### 3.18 K taper across grid rows (ACCEPTED, `MOE_FUSED_SWIGLU_KR_TAPER`=4, `_KR_SPLIT` explicit override)
+The rows that lose NoC0 read arbitration (logical rows 0-1) get fewer K tiles, the winners (rows 6-7) more:
+24,24,26,28,28,30,32,32 at emb 7168. Tried 22..34 and 20..34 too (worse at small M: kr_pad grows the padded x
+slot and multicast). With the taper the x row-multicast sends only the row's real kr_rows tiles instead of the
+KR_PAD slot. The taper is the first rung of the L1 fallback ladder (dropped before any pipeline depth).
+| M | bfp8 even | bfp8 taper | bf16 even | bf16 taper |
+|---:|---:|---:|---:|---:|
+| 64 | 84.3 | 85.5 | 85.1 | 84.9 |
+| 128 | 94.4 | 93.2 | 94.4 | 97.3 |
+| 256 | 116.7 | 111.8 | 117.6 | 111.4 |
+| 512 | 194.1 | 187.2 | 194.4 | 190.5 |
+| 1024 | 336.3 | 327.4 | 339.5 | 331.7 |
+| 5120 | 1490 | 1449 | 1486 | 1459 |
+Caveat: this tunes to a measured arbitration pattern of the 11x8 grid on this Blackhole; if another board's
+pattern differs the cost is bounded by the same few percent, and the knob turns it off.
+
+## 6. Final numbers vs the inherited baseline (bfp4 weights, x bf16 RM, 11x8, RT profiler, median of 3)
+| M | baseline bfp8 | **bfp8 now** | **bf16 now** | old composite |
+|---:|---:|---:|---:|---:|
+| 64 | 84.6 | 85.5 (+1%) | 84.9 | 203.7 |
+| 128 | 93.5 | 93.2 (0%) | 97.3 | 198.0 |
+| 256 | 115.6 | 111.8 (-3.3%) | 111.4 (-3.6%) | 210.7 |
+| 512 | 195.1 | 187.2 (-4.1%) | 190.5 (-2.4%) | 264.7 |
+| 1024 | 341.6 | 327.4 (-4.2%) | 331.7 (-2.9%) | 376.6 |
+| 5120 | 1522.6 | 1449.2 (-4.8%) | 1459.1 (-4.2%) | 1648.5 |
+rel-RMS vs fp32 at M=256: baseline 0.2171, bfp8 now 0.2172 (partition changes rounding by 1e-4), bf16 now 0.2145.
+Functional suite (kimi_k26 + glm_51, ragged counts 251/768/3001, x RM and TILE, 0..5120 sweep): 28/28.

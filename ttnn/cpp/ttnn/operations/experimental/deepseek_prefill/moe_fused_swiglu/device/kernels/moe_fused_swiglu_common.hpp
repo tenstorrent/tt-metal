@@ -68,6 +68,9 @@ constexpr uint32_t MBOX_UP_SCATTER_DONE = 6;
 // Writer -> reader, same core: the writer's half of this block's x sticks (X_SPLIT, block 0) has
 // landed in cb_x_in. Monotone block sequence (gb + 1).
 constexpr uint32_t MBOX_X_HALF_DONE = 7;
+// Reader -> writer, same core: cumulative count of gate/up N-chunks whose UP payload this core has
+// scattered (chunked reduce-scatter, full blocks). Monotone across blocks and experts.
+constexpr uint32_t MBOX_UP_CHUNK_DONE = 8;
 
 // ---------------------------------------------------------------------------
 // The mailbox handshake. The reader fills words 0..2 and then stamps MAGIC into word 3; the writer
@@ -233,6 +236,19 @@ inline uint32_t mrow_workers_per_row(uint32_t m_eff, uint32_t hn_pad, uint32_t k
 // Payload-free cb_h slots pushed after the m_eff rounds so every block returns cb_h to its base
 // (the writer derives landing addresses from the base): m_eff + pad == 0 (mod DEPTH_H).
 inline uint32_t mrow_pad_slots(uint32_t m_eff, uint32_t depth_h) { return (depth_h - (m_eff % depth_h)) % depth_h; }
+
+// ---------------------------------------------------------------------------
+// Chunked reduce-scatter (full blocks). The gate/up block is produced in GU_CHUNKS hidden-N chunks;
+// when every worker's slice is one whole token tile-row (a == HN_PAD, the full-block plan), chunk c
+// of that slice is the GU_CHUNK_W tiles [c*w, (c+1)*w) of the row, so each chunk can be scattered,
+// folded and SiLU'd as soon as it is produced instead of after the whole block: two thirds of the
+// epilogue overlap the last chunk's matmul. The accumulator and landing CBs then use a CHUNK-MAJOR
+// layout, [chunk][row or contributor][w], so a chunk is CHUNK_PAGES contiguous pages and can be pushed
+// on its own. Grid-uniform (a function of m_eff and the grid), like every other plan decision.
+inline bool chunked_scatter_ok(uint32_t m_eff, uint32_t m_block, uint32_t hn_pad, uint32_t kgroups, uint32_t chunks) {
+    const uint32_t t = m_block * hn_pad;
+    return chunks > 1 && m_eff == m_block && (t / slice_workers(t, kgroups)) == hn_pad;
+}
 
 // Tile-rows that core `my_col` injects into the x row-multicast for a block of `m_eff` tile-rows.
 // Round `t`'s rotating injector is column `t % hgroups`, so this counts t in [0, m_eff) with

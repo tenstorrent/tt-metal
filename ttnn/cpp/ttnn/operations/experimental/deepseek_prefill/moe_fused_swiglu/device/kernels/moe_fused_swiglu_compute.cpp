@@ -90,6 +90,7 @@ constexpr uint32_t ELTWISE_BLK = CT(ELTWISE_BLK);
 constexpr uint32_t DEST_LIMIT = CT(DEST_LIMIT);
 constexpr uint32_t GATHER_PAGES = CT(GATHER_PAGES);  // the WHOLE landing CB, in tiles
 constexpr uint32_t MROW_PARTIAL = CT(MROW_PARTIAL);
+constexpr uint32_t CHUNKED_SCATTER = CT(CHUNKED_SCATTER);
 
 constexpr uint32_t cb_x_in = CT(CB_X_IN);
 constexpr uint32_t cb_x_tiles = CT(CB_X_TILES);
@@ -446,6 +447,33 @@ void kernel_main() {
             // itself below. `down` has no such freedom — see shape_dn.
             const uint32_t m_rows = moe_fused_swiglu::m_tiles_real(m_t, block_idx, M_BLOCK);
 
+            // Chunked reduce-scatter (common.hpp): the accumulator is CHUNK-MAJOR ([chunk][row][w]),
+            // each chunk is published and reduced on its own. SiLU-path full blocks only.
+#ifdef SITU_GLU
+            const bool chunked = false;
+#else
+            const bool chunked =
+                CHUNKED_SCATTER && moe_fused_swiglu::chunked_scatter_ok(m_eff, M_BLOCK, HN_PAD, KGROUPS, GU_CHUNKS);
+#endif
+            constexpr uint32_t CHUNK_PAGES = M_BLOCK * GU_CHUNK_W;  // one chunk of the accumulator
+            // MY SLICE of this block's m_eff*HN_PAD tiles, from the one shared plan in common.hpp — a
+            // pure function of (m_eff, KGROUPS, my_row), identical on every core, which is what keeps
+            // the all-to-all deadlock-free. 0 = idle: still contributes a partial, owns no slice.
+            const uint32_t slice_tiles = moe_fused_swiglu::slice_assigned(gu_block_tiles, KGROUPS, my_row);
+#ifndef SITU_GLU
+            // Chunked reduce: fold the KGROUPS contributions of one landed chunk of my slice, SiLU the
+            // gate sum (PACK-thread SFPU) and multiply -- GU_CHUNK_W tiles of my h slice in hidden order.
+            // Called between gate/up chunks so the SiLU of chunk c-1 overlaps the matmul of chunk c.
+            auto reduce_chunk = [&]() {
+                fold_chain<cb_slice_gate, cb_gather_gate>(KGROUPS - 1, GU_CHUNK_W);
+                gg_buf.wait_front(GU_CHUNK_W);
+                add_silu_elementwise(sg_buf, gg_buf, silu_buf, GU_CHUNK_W, 0);
+                gg_buf.pop_front(GU_CHUNK_W);
+                fold_chain<cb_slice_up, cb_gather_up>(KGROUPS, GU_CHUNK_W);
+                mul_blocked<cb_gate_silu, cb_slice_up, cb_h_slice>(GU_CHUNK_W);
+            };
+#endif
+
             // gate/up: [m_eff, HN_PAD] = x[m_eff, kr_rows] @ W[kr_rows, HN_PAD]. ONE K-block whose width is the
             // whole per-row K extent, which is what lets both matmuls read the same resident in0.
             // The in1 sub-blocking sits WITHIN one N-chunk; the host keeps HN_BLOCK a divisor of
@@ -515,8 +543,17 @@ void kernel_main() {
                         wg_buf.pop_front(CHUNK_W_TILES);
                         wu_buf.wait_front(CHUNK_W_TILES);
                         wu_buf.pop_front(CHUNK_W_TILES);
+                        if (chunked) {
+                            gate_buf.push_back(CHUNK_PAGES);  // pad chunk, published unwritten
+                            up_buf.push_back(CHUNK_PAGES);
+                        }
                         continue;
                     }
+                    // Chunk-major: chunk c occupies the CHUNK_PAGES pages after the previous chunk's push,
+                    // GU_CHUNK_W tiles per row. The pack index is relative to the CB write pointer, which
+                    // the per-chunk push below has already advanced to this chunk, so no column offset.
+                    const uint32_t out_row_width = chunked ? GU_CHUNK_W : HN_PAD;
+                    const uint32_t out_col_offset = chunked ? 0u : chunk_col0;
                     MatmulShape shape_c = MatmulShape::of(
                         moe_fused_swiglu::round_up_capped(m_rows, OUT_SUBBLOCK_H_GU, m_eff) / OUT_SUBBLOCK_H_GU,
                         GU_IN1_SUBBLOCKS,
@@ -550,11 +587,11 @@ void kernel_main() {
                                 accum_buf,
                                 shape_c,
                                 /*in1_width=*/GU_CHUNK_W,
-                                /*out_row_width=*/HN_PAD,
+                                out_row_width,
                                 KrSteps{kr_rows},
                                 NoPreKBlock{},
                                 NoIn1Offset{},
-                                chunk_col0);
+                                out_col_offset);
                         } else {
                             MaybeDeviceZoneScope("compute_gate_matmul");
                             matmul_row_major<
@@ -568,26 +605,33 @@ void kernel_main() {
                                 accum_buf,
                                 shape_c,
                                 /*in1_width=*/GU_CHUNK_W,
-                                /*out_row_width=*/HN_PAD,
+                                out_row_width,
                                 KrSteps{kr_rows},
                                 NoPreKBlock{},
                                 NoIn1Offset{},
-                                chunk_col0);
+                                out_col_offset);
                         }
                     }
+                    if (chunked) {
+                        // Publish this chunk now: the dataflow kernels scatter it while the next chunk
+                        // computes. (Compute pushes; the reservation above covered the whole block.)
+                        gate_buf.push_back(CHUNK_PAGES);
+                        up_buf.push_back(CHUNK_PAGES);
+                        // Reducing chunk c-1 HERE (so its PACK-thread SiLU overlaps chunk c's matmul) was
+                        // tried and HANGS: the compute threads deadlock on DEST after the reduce chain
+                        // runs between two matmul chunks (MATH past its dest acquire, PACK spinning in
+                        // the SiLU helper's manual sync). All chunks are reduced after the loop instead.
+                    }
                 }
-                gate_buf.push_back(GU_FULL);
-                up_buf.push_back(GU_FULL);
+                if (!chunked) {
+                    gate_buf.push_back(GU_FULL);
+                    up_buf.push_back(GU_FULL);
+                }
                 // packer_l1_acc leaves L1 accumulation ENABLED after the last chunk (the `down` matmul
                 // below carries the same note). The reduce chain that follows would otherwise ACCUMULATE
                 // onto stale L1 instead of overwriting.
                 pack_reconfig_l1_acc(0);
             }
-
-            // MY SLICE of this block's m_eff*HN_PAD tiles, from the one shared plan in common.hpp — a
-            // pure function of (m_eff, KGROUPS, my_row), identical on every core, which is what keeps
-            // the all-to-all deadlock-free. 0 = idle: still contributes a partial, owns no slice.
-            const uint32_t slice_tiles = moe_fused_swiglu::slice_assigned(gu_block_tiles, KGROUPS, my_row);
 
             // ---- 3. cross-column reduce + SwiGLU ----
             {
@@ -596,7 +640,15 @@ void kernel_main() {
                 // the reduce is `slice_tiles` wide rather than the whole block — that factor IS the win.
                 // PACK must be the ONLY pusher of the slice CBs: `cb_push_back` writes the shared
                 // `tiles_received` word from the pushing RISC-V's own count, so two pushers corrupt it.
-                if (slice_tiles) {
+                if (slice_tiles && chunked) {
+#ifndef SITU_GLU
+                    // The landing CBs hold [contributor][GU_CHUNK_W] per chunk, pushed by the reader as
+                    // each chunk's contributions land; only the LAST chunk's transfer is still exposed.
+                    for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
+                        reduce_chunk();
+                    }
+#endif
+                } else if (slice_tiles) {
 #ifdef SITU_GLU
                     // SiTU fuses both reductions with the binary SFPU pass below.
 #else
@@ -624,8 +676,9 @@ void kernel_main() {
                 MaybeDeviceZoneScope("compute_swiglu");
                 // SwiGLU on MY SLICE ONLY, straight into the CB the writer unicasts from. The workers'
                 // slices tile the ROOT's cb_h_local as they LAND, so the gather IS the assembly: no
-                // landing CB and no root-side copy.
-                if (slice_tiles) {
+                // landing CB and no root-side copy. (The chunked path did all of this per chunk above;
+                // its live tile count equals the landing capacity, so no padding tail remains.)
+                if (slice_tiles && !chunked) {
 #ifdef SITU_GLU
                     fold_situ_glu_blocked<cb_gather_gate, cb_gather_up, cb_h_slice>(KGROUPS, slice_tiles);
 #else
