@@ -262,9 +262,12 @@ abandoned; the tidy steps skip `sim_*` SKUs. Three independent blockers:
   the pinned SFPI ≥ 7.73.0). **Wormhole PACK TUs currently fail to parse**:
   `tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_pack.h:393` puts
   `[[maybe_unused]]` on a template parameter, a GCC extension clang rejects.
-  `tt_metal/tt-llk` is part of this repo (not a submodule), so the one-line
-  fix that unblocks the whole PACK role is available here; the attribute is
-  cosmetic at that site. `ckernel_sfpu_recip.h` has the same pattern.
+  `ckernel_sfpu_recip.h` has the same pattern. This surfaces in the report as
+  a `clang-diagnostic-error` and is left there deliberately, for the LLK
+  owners to judge: `tt_metal/tt-llk` is part of this repo, so it is fixable
+  here, but the call belongs to them rather than to this tooling change.
+  Until it is resolved, wormhole PACK TUs contribute parse errors instead of
+  check findings.
 * Blackhole is expected to behave like wormhole (same mechanisms; multilib and
   `-mcpu` mappings are in place) but has not been exercised yet. Quasar is
   untested and its headers use the same template-parameter-attribute extension
