@@ -121,6 +121,7 @@ it is classified differently on different systems.
 | VGGNet | WH N150 |
 | BERT-Tiny | WH N150 |
 | BERT-Large | WH N150 |
+| ModernBERT-base | WH N300 |
 | DistilBERT | WH N150 |
 | SqueezeBERT | WH N150 |
 | MNIST MLP classifier | WH N150 |
