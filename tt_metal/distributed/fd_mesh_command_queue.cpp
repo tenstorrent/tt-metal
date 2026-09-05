@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
+#include <map>
 #include <array>
 #include <functional>
 #include <mutex>
@@ -434,6 +435,16 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
                 device_range,
                 program_dispatch::create_trace_node(program.impl(), mesh_device_, num_workers, use_prefetcher_cache)));
+            // Telemetry: accumulate this trace's per-core CB peak, keyed by the range the
+            // program runs on. Capture dispatches nothing, so it is applied on replay.
+            auto& by_range = trace_ctx_->cb_bytes_per_core_by_range;
+            auto entry =
+                std::find_if(by_range.begin(), by_range.end(), [&](const auto& e) { return e.first == device_range; });
+            if (entry == by_range.end()) {
+                by_range.emplace_back(device_range, std::map<CoreCoord, uint64_t>{});
+                entry = std::prev(by_range.end());
+            }
+            Device::accumulate_trace_cb_peak_per_core(program.impl(), entry->second);
         }
         trace_node.multicast_go_signals = mcast_go_signals;
         trace_node.unicast_go_signals = unicast_go_signals;
@@ -533,6 +544,15 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             mesh_workload.impl().get_program_binary_status(mesh_device_id),
             std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores),
             static_cast<uint8_t>(this->id()));
+
+        // Telemetry: this program's CB config is about to be written to L1, so record its
+        // footprint as resident. At dispatch, not registration, so the figure is what is in use
+        // rather than a high-water mark over the program cache. No-op when tracking is off.
+        for_each_local(mesh_device_, device_range, [&](const auto& coord) {
+            if (auto* device = dynamic_cast<Device*>(mesh_device_->impl().get_device(coord))) {
+                device->record_dispatched_program_cbs(program.impl());
+            }
+        });
 
         record_program_sub_device_for_range(mesh_device_, device_range, program.get_runtime_id(), sub_device_id);
 
@@ -1225,6 +1245,65 @@ void FDMeshCommandQueue::write_program_cmds_to_subgrid(
     });
 }
 
+void FDMeshCommandQueue::apply_trace_cb_residency(const MeshTraceDescriptor& descriptor) {
+    const auto& by_range = descriptor.cb_bytes_per_core_by_range;
+
+    // Entries are keyed by the exact MeshCoordinateRange each program ran on. Two programs in
+    // one trace may use ranges that overlap without being equal -- overlap is forbidden only
+    // within a single MeshWorkload -- so a device can appear in more than one entry. Applying
+    // the entries one after another would leave it holding whichever was iterated last, since
+    // apply_cb_residency() stores per core rather than taking a maximum. What that device must
+    // actually accommodate is the largest of them, so overlapping entries are merged per
+    // device first.
+    //
+    // The overwhelmingly common shapes -- one entry, or entries on disjoint ranges -- need no
+    // merge at all, and replay is a hot path, so they take the direct route.
+    const bool ranges_overlap = [&] {
+        for (size_t i = 0; i < by_range.size(); i++) {
+            for (size_t j = i + 1; j < by_range.size(); j++) {
+                if (by_range[i].first.intersects(by_range[j].first)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }();
+
+    if (!ranges_overlap) {
+        for (const auto& [range, per_core] : by_range) {
+            if (per_core.empty()) {
+                continue;
+            }
+            for_each_local(mesh_device_, range, [&](const MeshCoordinate& coord) {
+                if (auto* device = dynamic_cast<Device*>(mesh_device_->impl().get_device(coord))) {
+                    device->apply_cb_residency(per_core);
+                }
+            });
+        }
+        return;
+    }
+
+    std::map<MeshCoordinate, std::map<CoreCoord, uint64_t>> merged_by_device;
+    for (const auto& [range, per_core] : by_range) {
+        if (per_core.empty()) {
+            continue;
+        }
+        for_each_local(mesh_device_, range, [&](const MeshCoordinate& coord) {
+            auto& merged = merged_by_device[coord];
+            for (const auto& [core, bytes] : per_core) {
+                uint64_t& peak = merged[core];
+                peak = std::max(peak, bytes);
+            }
+        });
+    }
+
+    for (const auto& [coord, per_core] : merged_by_device) {
+        if (auto* device = dynamic_cast<Device*>(mesh_device_->impl().get_device(coord))) {
+            device->apply_cb_residency(per_core);
+        }
+    }
+}
+
 void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
     std::unordered_set<uint32_t>& chip_ids_in_workload,
     const SubDeviceId& sub_device_id,
@@ -1262,6 +1341,10 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
     auto descriptor = trace_inst->desc;
     auto buffer = trace_inst->mesh_buffer;
+
+    // Telemetry: replay rewrites the captured CB configs into L1. There is no per-program
+    // host pass here to hook, which is why the footprint is carried on the trace.
+    apply_trace_cb_residency(*descriptor);
     uint32_t num_sub_devices = descriptor->sub_device_ids.size();
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto sub_device_id : descriptor->sub_device_ids) {

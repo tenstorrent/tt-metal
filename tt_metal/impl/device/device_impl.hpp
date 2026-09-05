@@ -60,7 +60,7 @@ public:
     Device(const Device& other) = delete;
     Device& operator=(const Device& other) = delete;
 
-    // Move constructor/assignment deleted due to active_programs_mutex_ (std::mutex is not movable)
+    // Move constructor/assignment deleted due to cb_residency_mutex_ (std::mutex is not movable)
     Device(Device&& other) noexcept = delete;
     Device& operator=(Device&& other) noexcept = delete;
 
@@ -180,10 +180,27 @@ public:
     // Get SHM stats provider for real-time memory monitoring (used by GraphTracker)
     SharedMemoryStatsProvider* get_shm_stats_provider() const { return shm_stats_provider_.get(); }
 
-    // Program tracking for accurate CB memory reporting
-    void register_program(detail::ProgramImpl* program);
-    void unregister_program(detail::ProgramImpl* program);
+    // Bytes of L1 occupied by circular buffers, as currently configured on the device.
+    // Maintained per core at dispatch time, mirroring the CB config the dispatcher writes into
+    // L1, so it matches a readback. Do not recompute it from live programs: that is O(live
+    // programs) per call and counts cached programs, which occupy no CB space until dispatched.
     uint64_t get_total_cb_allocated() const;
+
+    // Called for each program as it is dispatched: records that program's CB footprint
+    // on the cores it covers. Cores it does not cover keep their previous value, which
+    // is correct -- their L1 CB config was not overwritten.
+    void record_dispatched_program_cbs(const detail::ProgramImpl& program);
+
+    // Accumulate a program's CB footprint into a trace's running per-core peak, once per
+    // captured program. Takes the maximum per core, not the last value; see
+    // MeshTraceDescriptor::cb_bytes_per_core_by_range for why that is the useful quantity.
+    static void accumulate_trace_cb_peak_per_core(
+        const detail::ProgramImpl& program, std::map<CoreCoord, uint64_t>& per_core);
+
+    // Install a per-core CB footprint wholesale. Used by trace replay: the host does not
+    // walk programs when replaying, so the footprint is computed once during capture and
+    // re-applied on every replay.
+    void apply_cb_residency(const std::map<CoreCoord, uint64_t>& per_core);
 
 private:
     // Deprecated overrides for sub_device_manager_tracker
@@ -274,8 +291,34 @@ private:
     std::unique_ptr<class SharedMemoryStatsProvider> shm_stats_provider_;
 
     // Program tracking for CB memory reporting
-    std::unordered_set<detail::ProgramImpl*> active_programs_;
-    mutable std::mutex active_programs_mutex_;
+
+    // Merge `per_core` into cb_bytes_per_core_ and update total_cb_resident_. Returns whether
+    // the total moved, i.e. whether there is anything to publish. Caller holds
+    // cb_residency_mutex_; publishing is done outside it.
+    bool apply_cb_residency_locked(const std::map<CoreCoord, uint64_t>& per_core);
+
+    // Push the current CB total to shared memory. Must be called without cb_residency_mutex_.
+    void publish_cb_residency();
+
+    // Resolve a core's entry in cb_bytes_by_core_, growing the grid if this is the first time
+    // a circular buffer has been seen on it. Caller holds cb_residency_mutex_.
+    uint64_t& cb_residency_slot_locked(CoreCoord core);
+
+    // CB bytes resident per core, indexed row-major over the grid below. A flat array rather
+    // than a map keyed by CoreCoord: this is walked once per dispatch whose footprint differs
+    // from the last one, and per-core tree lookups cost ~3 us per enqueue on a 56-core grid.
+    mutable std::mutex cb_residency_mutex_;
+    std::vector<uint64_t> cb_bytes_by_core_;
+    uint32_t cb_residency_width_ = 0;
+    uint32_t cb_residency_height_ = 0;
+    // Kept in step with cb_bytes_by_core_ incrementally, under cb_residency_mutex_. Re-summing
+    // the whole grid per dispatch made the enqueue path scale with the device, not the program.
+    std::atomic<uint64_t> total_cb_resident_{0};
+    // The program footprint last applied to this device, or null if the residency was last set
+    // by something other than a program dispatch (trace replay). Holding the shared_ptr keeps
+    // the object alive, so its address cannot be recycled by a later footprint while it is
+    // still the one being compared against.
+    std::shared_ptr<const std::map<CoreCoord, uint64_t>> last_cb_footprint_;
 
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(
