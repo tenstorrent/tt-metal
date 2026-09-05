@@ -486,6 +486,14 @@ class DFlashFusedDecoder:
         self.V = min(int(_os.environ.get("GEMMA4_DFLASH_VERIFY", str(K))), K) if self.use_packed else K
         self.P_v = self.V + 1
         self.pv_pos = None  # allocated in capture() (needs the generation horizon)
+        # Persistent OUTPUT slots (lazy first-use clone on the compile pass,
+        # then ttnn.copy per body run). The body's fresh draft_ids/vidx are
+        # created MID-GRAPH; ops after them (the whole packed verify) can
+        # reclaim their trace-region buffers -- observed as float-bit garbage
+        # ids at P_v=16 (allocator-layout dependent: V=7 and the short-prompt
+        # e2e happened to survive). Same hygiene as fc_prev / the tap buffers.
+        self.out_draft = None
+        self.out_vidx = None
         self.fc_prev = ttnn.from_torch(z(1, 1, self.P_v, H, dtype=torch.bfloat16), **mkT)
         self.merge_idx = ttnn.from_torch(
             torch.arange(ctx_cap, dtype=torch.int64).reshape(1, ctx_cap),
@@ -722,7 +730,15 @@ class DFlashFusedDecoder:
         cat = ttnn.concat(self.tap_bufs, dim=3)
         fc_out = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)
         ttnn.assign(fc_out, self.fc_prev)
-        return draft_ids, vidx, fc_out
+        fc_out.deallocate(True)
+        if self.out_draft is None:  # compile pass: allocate at the real shapes
+            self.out_draft = ttnn.clone(draft_ids)
+            self.out_vidx = ttnn.clone(vidx)
+        ttnn.copy(draft_ids, self.out_draft)
+        ttnn.copy(vidx, self.out_vidx)
+        draft_ids.deallocate(True)
+        vidx.deallocate(True)
+        return self.out_draft, self.out_vidx, self.fc_prev
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -910,8 +926,8 @@ class DFlashFusedDecoder:
         self._upload_iter_inputs(anchor_id, start)
         a, b, c = self._body()  # compile pass (idempotent KV writes)
         ttnn.synchronize_device(self.mesh_device)
-        for t in (a, b, c):
-            t.deallocate(True)
+        # outputs are now PERSISTENT slots (out_draft/out_vidx/fc_prev) -- do
+        # not deallocate them between compile and capture.
         tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         self._out = self._body()
         ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
@@ -942,6 +958,8 @@ class DFlashFusedDecoder:
         # Verify truncation: only the first V drafts were verified (P_v rows).
         drafts = self._read_ids(draft_ids_t)[: self.V]
         posterior = self._read_ids(vidx_t)[: self.P_v]
+        if _os.environ.get("GEMMA4_DFLASH_DEBUG_STEP") == "1":
+            print(f"[dbg] start={self.start} drafts={drafts} posterior={posterior}", flush=True)
         acc = 0
         for dtok, ptok in zip(drafts, posterior[:-1]):
             if dtok == ptok:
