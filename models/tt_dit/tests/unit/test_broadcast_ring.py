@@ -54,20 +54,24 @@ OWNER = 5  # sender index along the ring (cluster) axis
     ],
     indirect=["mesh_device", "device_params"],
 )
+# sender=-1 means "last ring index" (sp_factor-1) -- the wrap edge, which the production reference-frame
+# owner actually hits (the reference is the last frame). chunk64 matches the production chunk size.
+@pytest.mark.parametrize("sender", [pytest.param(5, id="owner5"), pytest.param(-1, id="owner_last")])
 @pytest.mark.parametrize(
     ("tiles_per_shard", "chunk_size_tiles", "use_l1_relay"),
     [
         pytest.param(128, 0, False, id="128tiles_chunkauto_dram"),
-        pytest.param(128, 8, False, id="128tiles_chunk8_dram"),
-        pytest.param(128, 8, True, id="128tiles_chunk8_l1"),
+        pytest.param(128, 64, False, id="128tiles_chunk64_dram"),
+        pytest.param(128, 64, True, id="128tiles_chunk64_l1"),
         pytest.param(128, 32, True, id="128tiles_chunk32_l1"),
     ],
 )
 def test_broadcast_ring_wholeshard(
-    mesh_device, sp_axis, tp_axis, device_params, topology, tiles_per_shard, chunk_size_tiles, use_l1_relay
+    mesh_device, sp_axis, tp_axis, device_params, topology, tiles_per_shard, chunk_size_tiles, use_l1_relay, sender
 ):
     tp_factor, sp_factor = tuple(mesh_device.shape)
     N = tiles_per_shard
+    owner = sender if sender >= 0 else sp_factor - 1
 
     grid = mesh_device.compute_with_storage_grid_size()
     crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
@@ -93,7 +97,7 @@ def test_broadcast_ring_wholeshard(
 
     tt_out = ttnn.experimental.broadcast_ring(
         tt_in,
-        sender_ring_index=OWNER,
+        sender_ring_index=owner,
         cluster_axis=sp_axis,
         topology=topology,
         subdevice_id=wsd_id,
@@ -110,7 +114,7 @@ def test_broadcast_ring_wholeshard(
     # Every ring device must hold the sender's shard, tile-for-tile, for its own tp row.
     bad = []
     for r in range(tp_factor):
-        golden = host[0, 0, r * T : (r + 1) * T, OWNER * N * T : (OWNER + 1) * N * T]
+        golden = host[0, 0, r * T : (r + 1) * T, owner * N * T : (owner + 1) * N * T]
         for c in range(sp_factor):
             block = out[0, 0, r * T : (r + 1) * T, c * N * T : (c + 1) * N * T]
             if not torch.equal(block, golden):
