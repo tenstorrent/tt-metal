@@ -54,6 +54,12 @@ sfpi_inline sfpi::vFloat unsigned_remainder_recip(const sfpi::vInt& b_signed) {
 // and the scaled reciprocal 1/|b| precomputed.
 // Use 32-bit integer division from ckernel_sfpu_div_int32_floor.h
 // Returns: unsigned remainder r
+// All overloads share the numerator_can_be_int_min contract: false asserts that
+// the numerator magnitude is strictly below 2^31 (as in the range-reduced UINT32
+// callers). This skips the numerator's sign-magnitude repair and rules out a
+// positive 2^31 residual. It does not rule out a negative INT_MIN residual from
+// quotient overshoot, whose magnitude conversion must remain safe independently.
+// The default true also supports the magnitude 2^31 from a signed INT32_MIN.
 template <bool numerator_can_be_int_min = true>
 sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     sfpi::vMag a, sfpi::vFloat a_f, const sfpi::vInt& b_signed, const sfpi::vFloat& inv_b_f) {
