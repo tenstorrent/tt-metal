@@ -195,37 +195,41 @@ void append_fabric_connection_rt_args(
 
     const auto fabric_router_channel = candidate_eth_chans[link_idx];
 
-    uint32_t worker_teardown_semaphore_id;
-    uint32_t worker_buffer_index_semaphore_id;
-    uint32_t worker_flow_control_semaphore_id;
+    uint32_t worker_teardown_semaphore_id = 0;
+    uint32_t worker_buffer_index_semaphore_id = 0;
+    uint32_t worker_flow_control_semaphore_id = 0;
 
-    if constexpr (std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>) {
-        auto teardown_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
-        TT_FATAL(teardown_sem_id_opt.has_value(), "No available semaphore ID for teardown semaphore");
-        worker_teardown_semaphore_id = teardown_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = worker_teardown_semaphore_id,
-            .core_type = core_type,
-            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-            .initial_value = 0});
+    // Ethernet dispatch resolves teardown and buffer index from semaphore ids; a Tensix
+    // worker is on VC0 and reads both from the conn table.
+    if (core_type != CoreType::WORKER) {
+        if constexpr (std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>) {
+            auto teardown_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
+            TT_FATAL(teardown_sem_id_opt.has_value(), "No available semaphore ID for teardown semaphore");
+            worker_teardown_semaphore_id = teardown_sem_id_opt.value();
+            worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_teardown_semaphore_id,
+                .core_type = core_type,
+                .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
 
-        auto buffer_index_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
-        TT_FATAL(buffer_index_sem_id_opt.has_value(), "No available semaphore ID for buffer index semaphore");
-        worker_buffer_index_semaphore_id = buffer_index_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = worker_buffer_index_semaphore_id,
-            .core_type = core_type,
-            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-            .initial_value = 0});
-    } else {
-        worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
-        worker_buffer_index_semaphore_id =
-            tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
+            auto buffer_index_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
+            TT_FATAL(buffer_index_sem_id_opt.has_value(), "No available semaphore ID for buffer index semaphore");
+            worker_buffer_index_semaphore_id = buffer_index_sem_id_opt.value();
+            worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_buffer_index_semaphore_id,
+                .core_type = core_type,
+                .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
+        } else {
+            worker_teardown_semaphore_id =
+                tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
+            worker_buffer_index_semaphore_id =
+                tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
+        }
     }
 
     if (core_type == CoreType::WORKER) {
-        append_worker_to_fabric_edm_sender_rt_args(
-            fabric_router_channel, worker_teardown_semaphore_id, worker_buffer_index_semaphore_id, worker_args);
+        append_worker_to_fabric_edm_sender_rt_args(fabric_router_channel, worker_args);
 #if defined(TT_METAL_USE_EMULE)
         // Record (src_chip, worker_core, forwarding_direction, neighbor_chip) for the emule teleport's 1D
         // dst resolution. Called per connection in fwd-then-bwd order (matches the kernel's read order).
@@ -694,24 +698,12 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
 }
 
 // Compute fabric connection RT args without any PD mutation.
-// Caller provides pre-allocated semaphore IDs (2 per connection: teardown + buffer_index).
+// Emits [direction, eth_channel] per connection.
 // Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
-    const std::vector<uint32_t>& connection_link_indices,
-    const std::vector<uint32_t>& teardown_sem_ids,
-    const std::vector<uint32_t>& buffer_index_sem_ids) {
-    TT_FATAL(
-        teardown_sem_ids.size() == dst_nodes.size(),
-        "teardown_sem_ids size ({}) must match dst_nodes size ({})",
-        teardown_sem_ids.size(),
-        dst_nodes.size());
-    TT_FATAL(
-        buffer_index_sem_ids.size() == dst_nodes.size(),
-        "buffer_index_sem_ids size ({}) must match dst_nodes size ({})",
-        buffer_index_sem_ids.size(),
-        dst_nodes.size());
+    const std::vector<uint32_t>& connection_link_indices) {
     TT_FATAL(
         connection_link_indices.empty() ||
             (connection_link_indices.size() == 1 || connection_link_indices.size() == dst_nodes.size()),
@@ -721,7 +713,7 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
     const auto& fabric_context = control_plane.get_fabric_context();
 
     std::vector<uint32_t> worker_args;
-    worker_args.reserve(dst_nodes.size() * 4 + (fabric_context.is_2D_routing_enabled() ? 3 + dst_nodes.size() * 2 : 0));
+    worker_args.reserve(dst_nodes.size() * 2 + (fabric_context.is_2D_routing_enabled() ? 3 + dst_nodes.size() * 2 : 0));
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];
@@ -751,10 +743,8 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
         TT_FATAL(link_idx < candidate_eth_chans.size(), "Link index {} out of bounds", link_idx);
         const auto fabric_router_channel = candidate_eth_chans[link_idx];
 
-        // Per-connection RT args: [eth_channel, teardown_sem, buffer_idx_sem]
+        // Per-connection RT args: [eth_channel]
         worker_args.push_back(fabric_router_channel);
-        worker_args.push_back(teardown_sem_ids[i]);
-        worker_args.push_back(buffer_index_sem_ids[i]);
     }
 
     // 2D metadata
