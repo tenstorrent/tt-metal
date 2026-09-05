@@ -36,6 +36,12 @@ void kernel_main() {
     constexpr uint32_t num_senders = get_compile_time_arg_val(2);
     constexpr uint32_t in1_page_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(4);
+#ifdef USE_CUSTOM_MM
+    constexpr uint32_t Bc = get_compile_time_arg_val(5);
+    constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(6);
+    constexpr uint32_t K_tiles = num_senders * inA_K_tiles_per_core;
+    constexpr uint32_t k_slice_bytes = inA_K_tiles_per_core * tile_size_bytes;
+#endif
 
     const uint32_t b_idx = get_arg_val<uint32_t>(0);
 
@@ -60,6 +66,22 @@ void kernel_main() {
 
     // in0 shard is at the same L1 offset on every core.
     const uint32_t src_addr = in0_cb.get_read_ptr() + b_idx * block_slice_bytes;
+#ifdef USE_CUSTOM_MM
+    // Restripe sender-major [sender][bc][k_local] into [bc][k_global] so custom_mm sees
+    // kt_dim consecutive K tiles per batch.
+    for (uint32_t s = 0; s < num_senders; ++s) {
+        const uint32_t sender_x = get_arg_val<uint32_t>(1 + 2 * s);
+        const uint32_t sender_y = get_arg_val<uint32_t>(2 + 2 * s);
+        for (uint32_t bc_i = 0; bc_i < Bc; ++bc_i) {
+            noc.async_read(
+                sender,
+                full_in0_cb,
+                k_slice_bytes,
+                {.noc_x = sender_x, .noc_y = sender_y, .addr = src_addr + bc_i * k_slice_bytes},
+                {.offset_bytes = (bc_i * K_tiles + s * inA_K_tiles_per_core) * tile_size_bytes});
+        }
+    }
+#else
     for (uint32_t s = 0; s < num_senders; ++s) {
         const uint32_t sender_x = get_arg_val<uint32_t>(1 + 2 * s);
         const uint32_t sender_y = get_arg_val<uint32_t>(2 + 2 * s);
@@ -70,6 +92,7 @@ void kernel_main() {
             {.noc_x = sender_x, .noc_y = sender_y, .addr = src_addr},
             {.offset_bytes = s * block_slice_bytes});
     }
+#endif
     noc.async_read_barrier();
 
     full_in0_cb.push_back(num_senders * block_slice_tiles);

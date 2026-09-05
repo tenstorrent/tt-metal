@@ -13,6 +13,8 @@
 #include "tt-metalium/work_split.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
+#include <cmath>
+
 namespace ttnn::operations::experimental::matmul_decode {
 
 uint32_t gcb_num_receivers(const tt::tt_metal::experimental::GlobalCircularBuffer& gcb) {
@@ -128,6 +130,40 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     const bool batched = input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1;
     const bool partial = !batched && operation_attributes.partial_width_sharded;
 
+    if (operation_attributes.rms_norm) {
+        TT_FATAL(operation_attributes.rms_norm_gamma.has_value(), "matmul_decode rms_norm requires rms_norm_gamma");
+        TT_FATAL(
+            std::isfinite(*operation_attributes.rms_norm_gamma),
+            "matmul_decode rms_norm_gamma must be finite, but got {}",
+            *operation_attributes.rms_norm_gamma);
+        TT_FATAL(
+            std::isfinite(operation_attributes.rms_norm_epsilon) && operation_attributes.rms_norm_epsilon >= 0.0F,
+            "matmul_decode rms_norm_epsilon must be finite and non-negative, but got {}",
+            operation_attributes.rms_norm_epsilon);
+        TT_FATAL(!batched, "matmul_decode rms_norm is only supported on the full-width factory");
+        TT_FATAL(!partial, "matmul_decode rms_norm is only supported on the full-width factory");
+        TT_FATAL(!operation_attributes.all_gather, "matmul_decode rms_norm is not supported with all_gather");
+        TT_FATAL(!operation_attributes.ring_gather, "matmul_decode rms_norm is not supported with ring_gather");
+        TT_FATAL(
+            operation_attributes.N % tt::constants::TILE_WIDTH == 0,
+            "matmul_decode rms_norm requires N ({}) to be divisible by {}",
+            operation_attributes.N,
+            tt::constants::TILE_WIDTH);
+        // The epilogue is built on the fused multiply-reduce-scalar and add_rsqrt LLKs, which exist
+        // only in the Blackhole tree.
+        TT_FATAL(
+            input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
+            "matmul_decode rms_norm is only supported on Blackhole");
+        // Statistics come from a scalar reduction, which collapses an entire tile to one value. That
+        // value is only this row's mean of squares if a tile holds exactly one row.
+        const uint32_t tile_height = in0_tile_for_compute(input_tensor_a).get_height();
+        TT_FATAL(
+            tile_height == 1,
+            "matmul_decode rms_norm requires a tile height of 1, but got {}. Normalizing a taller "
+            "tile needs a per-row reduction, which the narrow decode tile does not support.",
+            tile_height);
+    }
+
     if (operation_attributes.mesh_coords.has_value()) {
         TT_FATAL(!operation_attributes.mesh_coords->empty(), "matmul_decode mesh_coords cannot be empty");
         TT_FATAL(!batched, "matmul_decode mesh_coords is not supported with the batched width-sharded factory");
@@ -168,6 +204,33 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
             "matmul_decode ring_gather is not supported with global_cb (tensor prefetcher); the "
             "reader<->prefetcher handshake lives on the two-hub gather path");
         TT_FATAL(!batched, "matmul_decode ring_gather is not supported with the batched width-sharded factory");
+    }
+
+    if (operation_attributes.output_core_grid.has_value()) {
+        TT_FATAL(!batched, "matmul_decode output_core_grid is only supported on the full-width factory");
+        TT_FATAL(!partial, "matmul_decode output_core_grid is only supported on the full-width factory");
+        TT_FATAL(
+            !operation_attributes.all_gather,
+            "matmul_decode output_core_grid is mutually exclusive with fused all_gather");
+        TT_FATAL(!operation_attributes.ring_gather, "matmul_decode output_core_grid is not supported with ring_gather");
+        TT_FATAL(
+            !operation_attributes.output_mem_config.has_value(),
+            "matmul_decode output_core_grid is mutually exclusive with output_mem_config");
+        const auto& grid = *operation_attributes.output_core_grid;
+        TT_FATAL(!grid.empty(), "matmul_decode output_core_grid cannot be empty");
+        const CoreRange bbox = grid.bounding_box();
+        TT_FATAL(
+            grid == CoreRangeSet(bbox) && grid.num_cores() == bbox.size(),
+            "matmul_decode output_core_grid must be a filled rectangle for NOC multicast, but got {}",
+            grid.str());
+        if (operation_attributes.output_mcast_two_hub) {
+            TT_FATAL(
+                grid.num_cores() >= 2 && bbox.start_coord != bbox.end_coord,
+                "matmul_decode two-hub output mcast requires output_core_grid to contain at least 2 cores");
+        }
+    } else {
+        TT_FATAL(
+            !operation_attributes.output_mcast_two_hub, "matmul_decode output_mcast_two_hub requires output_core_grid");
     }
 
     TT_FATAL(input_tensor_b.layout() == Layout::TILE, "Input tensor B must be in tile layout");
@@ -704,10 +767,20 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     int per_core_output_width = tt::div_up(output_N, output_num_cores);
     const uint32_t shard_height = tt::round_up(operation_attributes.M, output_tile.get_height());
     std::array<uint32_t, 2> shard_shape = {shard_height, per_core_output_width};
+    auto shard_layout = TensorMemoryLayout::WIDTH_SHARDED;
+    if (operation_attributes.output_core_grid.has_value()) {
+        output_core_range_set = *operation_attributes.output_core_grid;
+        output_num_cores = static_cast<int>(output_core_range_set.num_cores());
+        shard_shape = {shard_height, static_cast<uint32_t>(output_N)};
+        shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;
+        // HEIGHT_SHARDED volume is dest cores × shard. Each dest core holds a full [M, N]
+        // replica, so the logical height is dest_cores * M rather than M.
+        output_shape[-2] = output_num_cores * operation_attributes.M;
+    }
     auto shard_spec =
         tt::tt_metal::ShardSpec(output_core_range_set, shard_shape, tt::tt_metal::ShardOrientation::ROW_MAJOR);
-    auto memory_config = operation_attributes.output_mem_config.value_or(
-        MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, shard_spec));
+    auto memory_config =
+        operation_attributes.output_mem_config.value_or(MemoryConfig(shard_layout, BufferType::L1, shard_spec));
 
     return tt::tt_metal::TensorSpec(
         output_shape,
@@ -735,7 +808,12 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     const std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec>& packed_weight,
     bool all_gather,
     const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords,
-    bool ring_gather) {
+    bool ring_gather,
+    const std::optional<CoreRangeSet>& output_core_grid,
+    bool output_mcast_two_hub,
+    bool rms_norm,
+    std::optional<float> rms_norm_gamma,
+    float rms_norm_epsilon) {
     using OperationType = ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation;
     using ttnn::operations::experimental::matmul_decode::gcb_num_receivers;
 
@@ -743,6 +821,11 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         attrs.all_gather = all_gather;
         attrs.ring_gather = ring_gather;
         attrs.mesh_coords = mesh_coords;
+        attrs.output_core_grid = output_core_grid;
+        attrs.output_mcast_two_hub = output_mcast_two_hub;
+        attrs.rms_norm = rms_norm;
+        attrs.rms_norm_gamma = rms_norm_gamma;
+        attrs.rms_norm_epsilon = rms_norm_epsilon;
         attrs.in0_row_major_height_sharded =
             input_tensor_a.layout() == Layout::ROW_MAJOR &&
             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
