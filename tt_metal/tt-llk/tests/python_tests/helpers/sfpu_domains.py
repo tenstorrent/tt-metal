@@ -797,6 +797,34 @@ _OP_DOMAIN_REGISTRY: Dict[
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=10.0
         ),
     ),
+    # logaddexp: finite for any finite pair, so the sweep deliberately crosses the
+    # exp() overflow boundary (|x| > 88.7) where the naive log(exp(a) + exp(b))
+    # composition returns +/-inf. Independent +/-200 draws land ~10% of positions
+    # with |a - b| < 20 — the band where the log1p(exp(-|a-b|)) correction is
+    # non-negligible — and the rest exercise the max-dominated path at magnitudes
+    # the composed form cannot survive. +/-200 stays representable in fp16.
+    MathOperation.SfpuLogaddexp: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+    ),
+    # logaddexp2: same shape, tighter boundary. The composed log2(2**a + 2**b) form
+    # overflows past |x| > 127 rather than 88.7, so the same +/-200 draw crosses it
+    # with room to spare: 33.2% of positions have max(a, b) past 127. The
+    # log2(1 + 2**-|a - b|) correction is worth more than half an ulp of the result
+    # on 1.3% of positions, against 0.7% for logaddexp -- a band 1.85x wider,
+    # because 2**-|a - b| decays more slowly than e**-|a - b|.
+    MathOperation.SfpuLogaddexp2: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+    ),
     MathOperation.SfpuAddTopRow: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
@@ -1113,6 +1141,8 @@ _SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwpow,
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuXlogy,
+        MathOperation.SfpuLogaddexp,
+        MathOperation.SfpuLogaddexp2,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLogicalRightShift,
@@ -2460,6 +2490,11 @@ _BINARY_SPECIALS_NOT_READY: Dict[MathOperation, str] = {
     MathOperation.SfpuBinaryRemainder: "composition: as fmod. Section 5.6 Q1.",
     MathOperation.SfpuAtan2: "composition: ratio plus a format-specific polynomial. Diverges on "
     "2 cells rather than 4, so its non-finite handling is partial. Section 5.6 Q1.",
+    MathOperation.SfpuLogaddexp: "composition: max(a, b) + log1p(exp(-|a - b|)), so a log and an "
+    "exp behind the same question as div and xlogy. Section 5.6 Q1.",
+    MathOperation.SfpuLogaddexp2: "composition: as SfpuLogaddexp, with the correction "
+    "scaled by log2(e) -- the same log and the same exp, so the same question. "
+    "Section 5.6 Q1.",
     # (2) Compare-against-zero on an operand that may be a NaN. calculate_mask is
     # `v_if(mask == 0)`, which lowers to SFPSETCC -- whose contract is conditioned "provided that
     # VC is neither negative zero nor any kind of NaN". Identical to what holds Sign and Heaviside

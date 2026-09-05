@@ -57,6 +57,8 @@
 #include "llk_sfpu/ckernel_sfpu_lcm.h"
 #include "llk_sfpu/ckernel_sfpu_lgamma.h"
 #include "llk_sfpu/ckernel_sfpu_log.h"
+#include "llk_sfpu/ckernel_sfpu_logaddexp.h"
+#include "llk_sfpu/ckernel_sfpu_logaddexp2.h"
 #include "llk_sfpu/ckernel_sfpu_logical_not.h"
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"
 #include "llk_sfpu/ckernel_sfpu_mask.h"
@@ -1624,6 +1626,21 @@ void call_binary_sfpu_operation_init()
         // fmod uses the reciprocal path; init loads the reciprocal polynomial.
         SFPU_BINARY_INIT_FN(add1, fmod_binary_init, (APPROXIMATION_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::LOGADDEXP)
+    {
+        // logaddexp's log1p reads its polynomial coefficients from the program
+        // constant registers; the coefficient set differs by destination precision,
+        // so the init is templated on DST_ACCUM_MODE. Baseline (add1) addrmod setup,
+        // like fmod/remainder. Mirrors logaddexp_binary_tile_init().
+        SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_logaddexp_init, (DST_ACCUM_MODE));
+    }
+    else if constexpr (BINOP == BinaryOp::LOGADDEXP2)
+    {
+        // Same shape as logaddexp: log1p's coefficients live in the program constant
+        // registers and differ by destination precision. The base-2 conversion is in the
+        // kernel, not here, so this loads exactly the constants log1p expects.
+        SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_logaddexp2_init, (DST_ACCUM_MODE));
+    }
     else if constexpr (BINOP == BinaryOp::REMAINDER)
     {
         // remainder_binary_init loads the reciprocal polynomial (Wormhole) or
@@ -1789,6 +1806,37 @@ void call_binary_sfpu_operation(
             DST_ACCUM_MODE,
             calculate_sfpu_binary_div,
             (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::LOGADDEXP)
+    {
+        // The fused overflow-safe kernel from ckernel_sfpu_logaddexp.h; DST_ACCUM_MODE
+        // (is_fp32_dest_acc_en) selects the fp32 vs bf16 log1p coefficient set that the
+        // paired init loaded, and the bf16 round-to-nearest-even on store.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_logaddexp,
+            (APPROXIMATION_MODE, DST_ACCUM_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::LOGADDEXP2)
+    {
+        // Same kernel shape in base 2: the input is scaled by ln 2 and the log1p result
+        // by log2(e), so log1p sees the same (0, 1] argument range and needs no new
+        // coefficients. Measured: a variant with log2(e) folded into its own minimax fit
+        // came out at the same 1.45e-06 worst relative error over 262144 pairs.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_logaddexp2,
+            (APPROXIMATION_MODE, DST_ACCUM_MODE, PER_FACE_ITERATIONS),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,

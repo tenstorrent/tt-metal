@@ -433,3 +433,215 @@ def test_binary_div_edge_case_ttnn(fast_and_approximate_mode, rounding_mode, dev
             torch.isnan(golden_tensor), torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
         )
     assert_with_ulp(golden_tensor, output_tensor, 0, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        (100.0, 0.0),  # exact answer is 100; exp(100) is not representable
+        (89.0, 0.0),  # just past log(FLT_MAX) = 88.72
+        (90.0, 89.0),
+        (200.0, 199.0),
+        (1000.0, 999.0),
+        (100.0, 100.0),
+        (-100.0, -100.0),  # both exponentials underflow to zero
+        (-1000.0, -1000.0),
+        (5.0, 3.0),  # inside the currently-working band, as a control
+        (0.0, 0.0),
+    ],
+)
+def test_logaddexp_beyond_exp_range_fp32(device, a, b):
+    # logaddexp is bounded by its own inputs:
+    #     max(a, b) <= logaddexp(a, b) <= max(a, b) + ln 2
+    # so a finite pair always has a finite result. Composing it as
+    # log(exp(a) + exp(b)) breaks that: exp() saturates above 88.72 and flushes
+    # to zero below -87, and the composition returned +/-inf on both sides.
+    #
+    # The existing coverage draws from [-64, 64] in
+    # tests/sweep_framework/sweeps/eltwise/binary/logaddexp, and from [1, 4] in
+    # test_logaddexp_fp32 above, so this range was never exercised.
+    x_torch = torch.tensor([[a]], dtype=torch.float32)
+    y_torch = torch.tensor([[b]], dtype=torch.float32)
+    golden_fn = ttnn.get_golden_function(ttnn.logaddexp)
+    z_torch = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.logaddexp(x_tt, y_tt))
+
+    assert torch.isfinite(tt_out).all(), (
+        f"logaddexp({a}, {b}) returned {tt_out.flatten()[0].item()}; "
+        f"the exact result is {z_torch.flatten()[0].item()}"
+    )
+    assert_allclose(tt_out, z_torch, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        (89.0, 0.0),  # ijankowskiTT's repro: inf on main, because bfloat16 never reached the kernel
+        (100.0, 0.0),
+        (128.0, 127.0),
+        (-100.0, -100.0),
+        (5.0, 3.0),  # inside the working band, as a control
+    ],
+)
+def test_logaddexp_beyond_exp_range_bf16(device, a, b):
+    # The kernel is templated on the destination precision and has always had a bfloat16
+    # path, but is_binary_sfpu_op gated logaddexp to fp32 only, so ttnn.logaddexp on
+    # bfloat16 kept going down the composed exp/add/log route and kept overflowing.
+    # The LLK sweep sits below that gate, so it exercised the kernel without exercising
+    # the routing. This test goes through the ttnn op, which is what the gate decides.
+    x_torch = torch.tensor([[a]], dtype=torch.bfloat16)
+    y_torch = torch.tensor([[b]], dtype=torch.bfloat16)
+    golden_fn = ttnn.get_golden_function(ttnn.logaddexp)
+    z_torch = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.logaddexp(x_tt, y_tt))
+
+    got = tt_out.flatten()[0].item()
+    want = z_torch.flatten()[0].item()
+    assert torch.isfinite(tt_out).all(), f"logaddexp({a}, {b}) on bfloat16 returned {got}; the exact result is {want}"
+    assert_allclose(tt_out, z_torch, rtol=1e-2, atol=1e-2)
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        (float("inf"), float("inf")),
+        (float("-inf"), float("-inf")),
+        (float("inf"), float("-inf")),  # different signs: the difference is well defined
+        (float("inf"), 0.0),  # one infinite operand, as a control
+        (float("-inf"), 0.0),
+    ],
+)
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)])
+def test_logaddexp_infinities(device, a, b, torch_dtype, ttnn_dtype):
+    # max(a, b) + log1p(exp(-|a - b|)) needs matching infinities handled
+    # separately: inf - inf is NaN, and the NaN then swallows the result. The
+    # composed form it replaces returns +/-inf on these two points, so leaving them
+    # out would trade an overflow bug for a NaN one.
+    #
+    # torch.logaddexp is the reference here: logaddexp(inf, inf) is inf and
+    # logaddexp(-inf, -inf) is -inf.
+    x_torch = torch.tensor([[a]], dtype=torch_dtype)
+    y_torch = torch.tensor([[b]], dtype=torch_dtype)
+    golden_fn = ttnn.get_golden_function(ttnn.logaddexp)
+    z_torch = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.logaddexp(x_tt, y_tt))
+
+    # Compared as scalars on purpose: torch.equal also compares shape, and would report
+    # False rather than raise if to_torch ever came back padded. == is exact here, which
+    # is what these five points need -- an allclose against +/-inf says nothing.
+    got = tt_out.flatten()[0].item()
+    want = z_torch.flatten()[0].item()
+    assert got == want, f"logaddexp({a}, {b}) returned {got}; the exact result is {want}"
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        (200.0, 0.0),  # exact answer is 200; 2**200 is not representable
+        (128.0, 0.0),  # just past log2(FLT_MAX) = 128
+        (129.0, 128.0),
+        (200.0, 199.0),
+        (1000.0, 999.0),
+        (127.0, 127.0),  # 2**127 + 2**127 = 2**128 overflows; the answer is 128
+        (-150.0, -150.0),  # both powers flush to zero; the answer is -149
+        (-1000.0, -1000.0),
+        (5.0, 3.0),  # inside the currently-working band, as a control
+        (0.0, 0.0),
+    ],
+)
+def test_logaddexp2_beyond_exp2_range_fp32(device, a, b):
+    # logaddexp2 is bounded by its own inputs, exactly like logaddexp:
+    #     max(a, b) <= logaddexp2(a, b) <= max(a, b) + 1
+    # so a finite pair always has a finite result. Composing it as
+    # log2(2**a + 2**b) breaks that at the base-2 thresholds: 2**x saturates
+    # above 128 and flushes to zero below -149, and the composition returned
+    # +/-inf on both sides.
+    #
+    # The existing coverage draws from [-60, 100] in
+    # tests/sweep_framework/sweeps/eltwise/binary/logaddexp2, and from [1, 4] in
+    # test_logaddexp2_fp32 above, so this range was never exercised.
+    x_torch = torch.tensor([[a]], dtype=torch.float32)
+    y_torch = torch.tensor([[b]], dtype=torch.float32)
+    golden_fn = ttnn.get_golden_function(ttnn.logaddexp2)
+    z_torch = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.logaddexp2(x_tt, y_tt))
+
+    assert torch.isfinite(tt_out).all(), (
+        f"logaddexp2({a}, {b}) returned {tt_out.flatten()[0].item()}; "
+        f"the exact result is {z_torch.flatten()[0].item()}"
+    )
+    assert_allclose(tt_out, z_torch, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        (128.0, 0.0),  # inf on main: bfloat16 shares the base-2 threshold, since log2(BF16_MAX) = 128
+        (200.0, 0.0),
+        (256.0, 255.0),
+        (-150.0, -150.0),
+        (5.0, 3.0),  # inside the working band, as a control
+    ],
+)
+def test_logaddexp2_beyond_exp2_range_bf16(device, a, b):
+    # Same routing question as test_logaddexp_beyond_exp_range_bf16: the kernel has a
+    # bfloat16 path, and this test goes through the ttnn op so that it is the
+    # is_binary_sfpu_op gate, not only the kernel, that is exercised.
+    x_torch = torch.tensor([[a]], dtype=torch.bfloat16)
+    y_torch = torch.tensor([[b]], dtype=torch.bfloat16)
+    golden_fn = ttnn.get_golden_function(ttnn.logaddexp2)
+    z_torch = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.logaddexp2(x_tt, y_tt))
+
+    got = tt_out.flatten()[0].item()
+    want = z_torch.flatten()[0].item()
+    assert torch.isfinite(tt_out).all(), f"logaddexp2({a}, {b}) on bfloat16 returned {got}; the exact result is {want}"
+    assert_allclose(tt_out, z_torch, rtol=1e-2, atol=1e-2)
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        (float("inf"), float("inf")),
+        (float("-inf"), float("-inf")),
+        (float("inf"), float("-inf")),  # different signs: the difference is well defined
+        (float("inf"), 0.0),  # one infinite operand, as a control
+        (float("-inf"), 0.0),
+    ],
+)
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)])
+def test_logaddexp2_infinities(device, a, b, torch_dtype, ttnn_dtype):
+    # max(a, b) + log2(1 + 2**-|a - b|) needs matching infinities handled separately
+    # for the same reason as logaddexp: inf - inf is NaN, and the NaN then swallows the
+    # result. The kernel classifies infinity from the exponent/mantissa fields and
+    # requires identical bit patterns, exactly as ckernel_sfpu_logaddexp.h does.
+    #
+    # torch.logaddexp2 is the reference here: logaddexp2(inf, inf) is inf and
+    # logaddexp2(-inf, -inf) is -inf.
+    x_torch = torch.tensor([[a]], dtype=torch_dtype)
+    y_torch = torch.tensor([[b]], dtype=torch_dtype)
+    golden_fn = ttnn.get_golden_function(ttnn.logaddexp2)
+    z_torch = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.logaddexp2(x_tt, y_tt))
+
+    got = tt_out.flatten()[0].item()
+    want = z_torch.flatten()[0].item()
+    assert got == want, f"logaddexp2({a}, {b}) returned {got}; the exact result is {want}"
