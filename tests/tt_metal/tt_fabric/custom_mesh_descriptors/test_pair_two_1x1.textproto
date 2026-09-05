@@ -1,0 +1,48 @@
+# Second of the two descriptors placed together in the multi-descriptor test.
+#
+#   M0 (1x1) --3-- M1 (1x1)
+#
+# Same instance names as test_pair_1x2_then_1x1.textproto, different shapes behind them: here M0 is
+# a single chip where the other descriptor's M0 is a 1x2. Confusing the two therefore gives a mesh
+# the wrong shape rather than merely the wrong seat, which is what the multi-descriptor test looks
+# for.
+#
+# Two single chips rather than a mirror of the other descriptor, so that the two descriptors are not
+# interchangeable: only one 1x2 mesh exists across the pair, and it belongs to the other descriptor.
+#
+# This one's seam requires 3 channels, STRICT like its companion. The 4-channel link goes to the other
+# descriptor, so the only link left that can carry this seam is 103-104, putting this descriptor on
+# the right of the pinch:
+# M0 and M1 take chips 103 and 104. Which of the two takes which chip is not pinned down -- both are
+# single chips and the seam is symmetric -- so the test asserts the pair, not the order.
+
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 3 policy: STRICT }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

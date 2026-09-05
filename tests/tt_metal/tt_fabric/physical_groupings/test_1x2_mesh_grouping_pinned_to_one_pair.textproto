@@ -1,0 +1,29 @@
+# A PGD grouping that matches a 1x2 mesh and places on its own, but cannot serve two mesh instances.
+#
+# The shape is the same 1x2 line as test_1x2_mesh_grouping.textproto, so it matches an MGD 1x2 mesh
+# during topology matching. The difference is that its chips are pinned to ASIC locations 0 and 1,
+# which in test_4asic_line.textproto are chips 100 and 101:
+#
+#     100 == 101 == 102 == 103
+#     '----v----'
+#      pinned here, and only here
+#
+# That is a perfectly good embedding, so the grouping passes the placement check the matcher runs
+# before committing it -- that check asks only whether the shape fits somewhere on the PSD, with no
+# other mesh placed and no seam to satisfy.
+#
+# It is not good enough for a descriptor with two 1x2 meshes, though. Both instances share this one
+# committed grouping, both are pinned to the same single pair, and two meshes cannot occupy the same
+# chips. The MGD's own unpinned 1x2 grouping would place both without trouble, so this is a case
+# where the downgrade is the right answer but is never reached.
+groupings {
+  name: "1x2_Mesh_OnePair"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_0 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_1 } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}

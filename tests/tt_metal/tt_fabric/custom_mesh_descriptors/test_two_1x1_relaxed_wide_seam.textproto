@@ -1,0 +1,38 @@
+# Two single-chip meshes whose seam asks for more channels than the system has, as a preference.
+#
+#   M0 (1x1) --8-- M1 (1x1)   channels policy: RELAXED
+#
+# No link on test_3asic_uneven_line.textproto carries 8 channels, so this count cannot be met at all.
+# RELAXED makes it a preference rather than a requirement, so placement should still succeed -- the
+# meshes only have to touch -- and should take the widest seam available, 101-102.
+
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
