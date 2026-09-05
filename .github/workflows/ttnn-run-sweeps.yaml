@@ -463,6 +463,8 @@ on:
           - eltwise.unary_backward.pow_bw.pow_bw_sharded
           - eltwise.unary_backward.rad2deg_bw.rad2deg_bw
           - eltwise.unary_backward.rad2deg_bw.rad2deg_bw_sharded
+          - eltwise.unary_backward.deg2rad_bw.deg2rad_bw
+          - eltwise.unary_backward.deg2rad_bw.deg2rad_bw_sharded
           - eltwise.unary_backward.rdiv_bw.rdiv_bw
           - eltwise.unary_backward.rdiv_bw.rdiv_bw_sharded
           - eltwise.unary_backward.relu6_bw.relu6_bw
