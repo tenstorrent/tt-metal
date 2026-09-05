@@ -177,7 +177,7 @@ sfpi_inline void calculate_remainder_uint32_body(
     // pass). t = (uint32)a >> 1 is always < 2^31, so the helper sees valid [0, 2^31) operands; rt
     // is only used on the b < 2^31 lanes, but every lane pays the call.
     sfpi::vInt t = sfpi::vInt(sfpi::vUInt(a) >> 1);
-    sfpi::vInt rt = compute_unsigned_remainder_int32<false>(t, b);
+    sfpi::vInt rt = compute_unsigned_remainder_int32<false /* numerator_can_be_int_min */>(t, b);
 
     // Reload a from DEST instead of keeping it live across the helper
     a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
