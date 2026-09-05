@@ -37,6 +37,115 @@ import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allgather, ccl_allreduce
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
+_SHARD_ARGMAX_K = 32
+
+
+def _argmax_last(logits, rows):
+    """argmax over the last dim -- [1,1,rows] uint32. ttnn.argmax is only
+    correct multicore on ROW_MAJOR input with the row dim EXACTLY one tile, so
+    pad each <=32-row chunk to 32, untilize multicore, argmax, slice back
+    (ported from ign/gemma4_31B_MTP_Dflash)."""
+    R32 = 32
+    if rows > R32:
+        vocab = logits.shape[-1]
+        chunks = []
+        off = 0
+        while off < rows:
+            n = min(R32, rows - off)
+            part = ttnn.slice(logits, [0, 0, off, 0], [1, 1, off + n, vocab])
+            chunks.append(_argmax_last(part, n))
+            part.deallocate(True)
+            off += n
+        out = ttnn.concat(chunks, dim=2)
+        for c in chunks:
+            c.deallocate(True)
+        return out
+    src = logits
+    padded = None
+    if rows < R32:
+        padded = ttnn.pad(logits, [(0, 0), (0, 0), (0, R32 - rows), (0, 0)], value=0.0)
+        src = padded
+    u = ttnn.untilize(src, use_multicore=True)
+    if padded is not None:
+        padded.deallocate(True)
+    idx = ttnn.argmax(u, dim=-1, keepdim=False)
+    u.deallocate(True)
+    if rows < R32:
+        sliced = ttnn.slice(idx, [0, 0, 0], [1, 1, rows])
+        idx.deallocate(True)
+        idx = sliced
+    return idx
+
+
+def _shard_offset_tables(cache, mesh_device, mapper, shard_w, tp, k):
+    """Cached replicated TILE tables (built OUTSIDE trace capture -- the compile
+    pass runs eagerly first, so the lazy build lands before begin_trace)."""
+    key = (shard_w, tp, k)
+    if cache.get("key") == key:
+        return cache["off"], cache["cols"]
+    n = k * tp
+    off = torch.zeros(1, 1, 1, n, dtype=torch.int32)
+    cols = torch.arange(n, dtype=torch.int32).reshape(1, 1, 1, n)
+    for d in range(tp):
+        off[0, 0, 0, d * k : (d + 1) * k] = d * shard_w
+    cache["off"] = ttnn.from_torch(
+        off, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32, mesh_mapper=mapper
+    )
+    cache["cols"] = ttnn.from_torch(
+        cols, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32, mesh_mapper=mapper
+    )
+    cache["key"] = key
+    return cache["off"], cache["cols"]
+
+
+def _shard_argmax(logits, rows, mesh_device, mapper, mesh_config, ccl, cache):
+    """Global greedy ids from TP-sharded vocab logits WITHOUT the 262k-wide
+    all-gather: per-shard topk(32), all-gather the 32*tp scalars, offset to
+    global vocab ids, argmax the gathered scores, index-select. Matches full
+    argmax up to exact bf16 ties (which follow gather/device order). Returns
+    [1,1,rows] uint32 RM (ported from ign/gemma4_31B_MTP_Dflash)."""
+    k = _SHARD_ARGMAX_K
+    tp = mesh_config.tp
+    shard_w = int(logits.shape[-1])
+    vals, idxs = ttnn.topk(logits, k=k, dim=-1)
+    if int(vals.shape[2]) != rows:
+        vals_s = ttnn.slice(vals, [0, 0, 0, 0], [1, 1, rows, k])
+        idxs_s = ttnn.slice(idxs, [0, 0, 0, 0], [1, 1, rows, k])
+        vals.deallocate(True)
+        idxs.deallocate(True)
+        vals, idxs = vals_s, idxs_s
+    gvals = ccl_allgather(vals, mesh_config, ccl)
+    gidxs = ccl_allgather(idxs, mesh_config, ccl)
+    off, cols = _shard_offset_tables(cache, mesh_device, mapper, shard_w, tp, k)
+    gidxs_i = ttnn.typecast(gidxs, ttnn.int32)
+    gidxs.deallocate(True)
+    global_i = ttnn.add(gidxs_i, off)
+    gidxs_i.deallocate(True)
+    win = _argmax_last(gvals, rows)
+    gvals.deallocate(True)
+    win4 = ttnn.to_layout(ttnn.reshape(win, (1, 1, rows, 1)), ttnn.TILE_LAYOUT)
+    win.deallocate(True)
+    win_i = ttnn.typecast(win4, ttnn.int32)
+    win4.deallocate(True)
+    mask = ttnn.eq(cols, win_i)
+    win_i.deallocate(True)
+    zeros = ttnn.subtract(global_i, global_i)
+    picked = ttnn.where(mask, global_i, zeros)
+    mask.deallocate(True)
+    global_i.deallocate(True)
+    zeros.deallocate(True)
+    sel = ttnn.sum(picked, dim=3, keepdim=True)
+    picked.deallocate(True)
+    sel_u = ttnn.typecast(sel, ttnn.uint32)
+    sel.deallocate(True)
+    out = ttnn.reshape(sel_u, (1, 1, rows))
+    sel_u.deallocate(True)
+    if out.layout != ttnn.ROW_MAJOR_LAYOUT:
+        rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        out.deallocate(True)
+        out = rm
+    return out
+
 
 def _rope_tables(head_dim, theta, max_pos):
     """HF rotate_half-convention cos/sin tables [max_pos, head_dim]."""
@@ -179,6 +288,10 @@ class DFlashDrafter:
         embed_w = target_embed_weight_loader()  # [vocab, H] torch (raw, unscaled)
         self._embed_w_host = embed_w  # host reference for noise-row gathers
         self.vocab = embed_w.shape[0]
+        # per-shard topk argmax (no 262k all-gather); SAFE here because gemma4's
+        # padded vocab == real vocab (no invalid tail to mask). A/B knob.
+        self._use_shard_argmax = _os.environ.get("GEMMA4_DFLASH_SHARD_ARGMAX", "0") == "1"
+        self._sa_cache = {}
         # lm_head stays VOCAB-SHARDED even when the drafter runs replicated:
         # a replicated 262k x H head is 2.7 GB/device, and the on-device
         # sampler consumes sharded logits (its own tiny top-1 gather).
@@ -400,9 +513,22 @@ class DFlashDrafter:
         x.deallocate(True)
         h_drafts = h[:, :, 1:, :]
         h.deallocate(True)
+        n_draft_rows = int(h_drafts.shape[2])
         logits = ttnn.linear(h_drafts, self.lm_head, compute_kernel_config=self._ckc)
         h_drafts.deallocate(True)
         sampler = getattr(self, "_sampler", None)
+        if self._use_shard_argmax and self.tp > 1:
+            ids = _shard_argmax(
+                logits,
+                n_draft_rows,
+                self.mesh_device,
+                self._replicate,
+                self.mesh_config,
+                self.ccl_manager,
+                self._sa_cache,
+            )
+            logits.deallocate(True)
+            return ids
         if sampler is not None:
             tt_tokens, _lp = sampler.sample(logits, enable_trace=False)
             logits.deallocate(True)
@@ -499,6 +625,7 @@ class DFlashDrafter:
         # rows are user-major [b*K1 + i]; drafts are i in [1, K1) per user.
         parts = [h[:, :, b * K1 + 1 : (b + 1) * K1, :] for b in range(B)]
         h_drafts = ttnn.concat(parts, dim=2) if B > 1 else parts[0]
+        n_draft_rows = B * (K1 - 1)
         if B > 1:  # at B==1 h_drafts IS parts[0]
             for t in parts:
                 try:
@@ -509,6 +636,18 @@ class DFlashDrafter:
         logits = ttnn.linear(h_drafts, self.lm_head, compute_kernel_config=self._ckc)
         h_drafts.deallocate(True)
         sampler = getattr(self, "_sampler", None)
+        if self._use_shard_argmax and self.tp > 1:
+            ids = _shard_argmax(
+                logits,
+                n_draft_rows,
+                self.mesh_device,
+                self._replicate,
+                self.mesh_config,
+                self.ccl_manager,
+                self._sa_cache,
+            )
+            logits.deallocate(True)
+            return ids
         if sampler is not None:
             tt_tokens, _lp = sampler.sample(logits, enable_trace=False)
             logits.deallocate(True)
@@ -600,6 +739,7 @@ class DFlashDrafter:
         x.deallocate(True)
         h_drafts = h[:, :, 1:, :]
         h.deallocate(True)
+        n_draft_rows = int(h_drafts.shape[2])
         logits = ttnn.linear(h_drafts, self.lm_head, compute_kernel_config=self._ckc)
         h_drafts.deallocate(True)
         # Greedy ids via the model's PROVEN on-device sampling module when
@@ -608,6 +748,18 @@ class DFlashDrafter:
         # and it is the same path serving uses at B=32). enable_trace=False so
         # its ops inline into OUR single fused trace instead of nesting one.
         sampler = getattr(self, "_sampler", None)
+        if self._use_shard_argmax and self.tp > 1:
+            ids = _shard_argmax(
+                logits,
+                n_draft_rows,
+                self.mesh_device,
+                self._replicate,
+                self.mesh_config,
+                self.ccl_manager,
+                self._sa_cache,
+            )
+            logits.deallocate(True)
+            return ids
         if sampler is not None:
             tt_tokens, _lp = sampler.sample(logits, enable_trace=False)
             logits.deallocate(True)
@@ -722,8 +874,7 @@ class DFlashFusedDecoder:
         # reclaim their trace-region buffers -- observed as float-bit garbage
         # ids at P_v=16 (allocator-layout dependent: V=7 and the short-prompt
         # e2e happened to survive). Same hygiene as fc_prev / the tap buffers.
-        self.out_draft = None
-        self.out_vidx = None
+        self.out_ids = None
         self.fc_prev = ttnn.from_torch(z(1, 1, self.P_v, H, dtype=torch.bfloat16), **mkT)
         # ── ctx K/V CACHE-APPEND (GEMMA4_DFLASH_CTX_CACHE, default on) ──
         # Per drafter layer, persistent roped ctx K/V [1, local_kv, cap, hd].
@@ -855,19 +1006,21 @@ class DFlashFusedDecoder:
         h = ttnn.from_torch(bp, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper)
         ttnn.copy_host_to_device_tensor(h, self.blk_pos)
         h.deallocate(True)
-        vp = torch.zeros(1, 32, dtype=torch.int64)
-        vp[0, : K + 1] = torch.arange(start, start + K + 1)
-        h = ttnn.from_torch(vp, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper)
-        ttnn.copy_host_to_device_tensor(h, self.v_pu)
-        h.deallocate(True)
-        h = ttnn.from_torch(
-            torch.arange(start, start + K + 1, dtype=torch.int32),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.int32,
-            mesh_mapper=self._mapper,
-        )
-        ttnn.copy_host_to_device_tensor(h, self.v_pi)
-        h.deallocate(True)
+        if not self.use_packed:
+            # v_pu / v_pi feed the batch-dim verify only -- dead in packed mode.
+            vp = torch.zeros(1, 32, dtype=torch.int64)
+            vp[0, : K + 1] = torch.arange(start, start + K + 1)
+            h = ttnn.from_torch(vp, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper)
+            ttnn.copy_host_to_device_tensor(h, self.v_pu)
+            h.deallocate(True)
+            h = ttnn.from_torch(
+                torch.arange(start, start + K + 1, dtype=torch.int32),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.int32,
+                mesh_mapper=self._mapper,
+            )
+            ttnn.copy_host_to_device_tensor(h, self.v_pi)
+            h.deallocate(True)
         # masks: block queries at positions [start .. start+K], keys = padded ctx
         # rows (positions == row index; rows >= ctx_len masked) then the block
         win_len = self.ctx_len - self.win_first
@@ -988,29 +1141,58 @@ class DFlashFusedDecoder:
             )  # [1,1,1,K] uint32
         flat = ttnn.reshape(draft_ids, (1, K))
         vx = ttnn.concat([self.anchor_tok, flat], dim=-1)  # [1, K+1] uint32
-        # sharded verify logits when the sampling module can consume them
-        self.target._dflash_sharded_logits = self._sampler is not None
+        # sharded verify logits when the sampling module (or shard-argmax)
+        # consumes them pre-gather
+        self.target._dflash_sharded_logits = (self._sampler is not None) or (
+            self.drafter._use_shard_argmax and self.drafter.tp > 1
+        )
         if self.use_packed:
             # ONE KV read for all P_v rows (vs P_v reads batch-dim). Fallback
             # per-position writes (kv_write_idxs) -- no staging. Masks arrive
             # P-row and are repeated H x in-trace (h*P+p packed row order).
             vxp = ttnn.slice(vx, [0, 0], [1, self.P_v]) if self.P_v < K + 1 else vx
             H_l = self.target.layers[0].self_attn.config.num_attention_heads // self.drafter.tp
-            m_full = ttnn.repeat(self.pv_mask_full, ttnn.Shape([1, 1, H_l, 1]))
-            m_slide = ttnn.repeat(self.pv_mask_slide, ttnn.Shape([1, 1, H_l, 1]))
+            # full-range ttnn.slice can alias its input -- never wrap-and-free
+            # the persistent blk_pos at P_v == K+1
+            pv_pos = ttnn.slice(self.blk_pos, [0, 0], [1, self.P_v]) if self.P_v < K + 1 else self.blk_pos
+            widx = [ttnn.slice(self.pv_widx_all, [p], [p + 1]) for p in range(self.P_v)]
+            # device-built verify masks: full = -1e9 where iota > pos (row-wise
+            # outer broadcast, fp32 for exact integer positions); sliding
+            # (unbounded) additionally blocks iota <= pos - W. Bounded slide
+            # comes from the host ring upload.
+            posf = ttnn.typecast(
+                ttnn.to_layout(ttnn.reshape(pv_pos, (1, 1, self.P_v, 1)), ttnn.TILE_LAYOUT), ttnn.float32
+            )
+            diff = ttnn.sub(self.pv_iota, posf)
+            gt = ttnn.gtz(diff)
+            mf_p = ttnn.typecast(ttnn.multiply(gt, -1e9), ttnn.bfloat16)
+            m_full = ttnn.repeat(mf_p, ttnn.Shape([1, 1, H_l, 1]))
+            if self.pv_slide_ring:
+                m_slide = ttnn.repeat(self.pv_mask_slide, ttnn.Shape([1, 1, H_l, 1]))
+            else:
+                W_t = float(self.target.hf_config.sliding_window)
+                far = ttnn.gez(ttnn.multiply(ttnn.add(diff, W_t), -1.0))  # iota <= pos - W
+                ind = ttnn.add(gt, far)
+                ms_p = ttnn.typecast(ttnn.multiply(ind, -1e9), ttnn.bfloat16)
+                m_slide = ttnn.repeat(ms_p, ttnn.Shape([1, 1, H_l, 1]))
             logits, hidden = self.target.ttnn_packed_verify_forward(
                 x=vxp,
-                position_idx=self.pv_pos,
+                position_idx=pv_pos,
                 attn_mask_full=m_full,
                 attn_mask_sliding=m_slide,
                 packed_p=self.P_v,
                 page_table=self.v_pt,
                 kv_cache=self.kv_layers,
-                kv_write_idxs=self.pv_widx,
+                kv_write_idxs=widx,
                 page_tables_per_layer=self.pv_tables,
             )
             m_full.deallocate(True)
             m_slide.deallocate(True)
+            # NOTE: pv_pos and the widx slices are NOT deallocated. 1-element
+            # ttnn.slice views can ALIAS their source buffer; freeing them
+            # double-frees pv_widx_all/blk_pos and corrupts the allocator (the
+            # verify sampler then throws "Tensor is not allocated" on a healthy
+            # logits tensor). Fixed-footprint per-replay temporaries are fine.
             if vxp is not vx:
                 vxp.deallocate(True)
         else:
@@ -1022,7 +1204,17 @@ class DFlashFusedDecoder:
                 kv_cache=self.kv_layers,
                 page_tables_per_layer=self.v_ptl,
             )
-        if self._sampler is not None:
+        if self.drafter._use_shard_argmax and self.drafter.tp > 1:
+            vidx = _shard_argmax(
+                logits,
+                self.P_v if self.use_packed else K + 1,
+                self.mesh_device,
+                self._mapper,
+                self.target.mesh_config,
+                self.target.ccl_manager,
+                self.drafter._sa_cache,
+            )
+        elif self._sampler is not None:
             vidx, _lp = self._sampler.sample(logits, enable_trace=False)
         else:
             vidx = ttnn.argmax(logits[:, :, :, : d.vocab], dim=-1)
@@ -1033,14 +1225,18 @@ class DFlashFusedDecoder:
         fc_out = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)
         ttnn.assign(fc_out, self.fc_prev)
         fc_out.deallocate(True)
-        if self.out_draft is None:  # compile pass: allocate at the real shapes
-            self.out_draft = ttnn.clone(draft_ids)
-            self.out_vidx = ttnn.clone(vidx)
-        ttnn.copy(draft_ids, self.out_draft)
-        ttnn.copy(vidx, self.out_vidx)
+        # ONE fused id output ([1, K+P_v]: drafts then posterior) -> ONE
+        # blocking readback in step() instead of two.
+        dflat = ttnn.reshape(draft_ids, (1, K))
+        vflat = ttnn.reshape(vidx, (1, self.P_v))
+        ids_cat = ttnn.concat([dflat, vflat], dim=-1)
+        if self.out_ids is None:  # compile pass: allocate at the real shape
+            self.out_ids = ttnn.clone(ids_cat)
+        ttnn.copy(ids_cat, self.out_ids)
+        ids_cat.deallocate(True)
         draft_ids.deallocate(True)
         vidx.deallocate(True)
-        return self.out_draft, self.out_vidx, self.fc_prev
+        return self.out_ids, self.fc_prev
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -1177,19 +1373,29 @@ class DFlashFusedDecoder:
         mkU = dict(device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper)
         ring = self.pv_ring.get("sliding_attention")
         self.pv_ssl = ring if ring else self.pv_sk
+        self.pv_slide_ring = ring
         self.pv_pos = ttnn.from_torch(z(1, P_v, dtype=torch.int64), **mkU)
-        self.pv_mask_full = ttnn.from_torch(z(1, 1, P_v, self.pv_sk, dtype=torch.bfloat16), **mkT)
-        self.pv_mask_slide = ttnn.from_torch(z(1, 1, P_v, self.pv_ssl, dtype=torch.bfloat16), **mkT)
-        self.pv_widx = [
-            ttnn.from_torch(
-                z(1, dtype=torch.int32),
-                device=self.mesh_device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=self._mapper,
-            )
-            for _ in range(P_v)
-        ]
+        # Verify masks are built ON DEVICE from pv_iota + the block positions
+        # (sub/gtz/mul -- probe-verified boundary-exact in fp32; bf16 would
+        # round positions > 256). Only the bounded RING slide mask stays a host
+        # upload (ring-width, tiny; the wrap modulo is host math).
+        self.pv_iota = ttnn.from_torch(
+            torch.arange(self.pv_sk, dtype=torch.float32).reshape(1, 1, 1, self.pv_sk),
+            device=self.mesh_device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self._mapper,
+        )
+        self.pv_mask_slide = ttnn.from_torch(z(1, 1, P_v, self.pv_ssl, dtype=torch.bfloat16), **mkT) if ring else None
+        # ONE [P_v] int32 upload; the body slices per-position [1] views for the
+        # fallback KV writes (was P_v singleton uploads -- pure dispatch waste).
+        self.pv_widx_all = ttnn.from_torch(
+            z(P_v, dtype=torch.int32),
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._mapper,
+        )
 
     def _pv_host_masks(self, start):
         """P-row target-side masks (H-repeated in-trace). Full: causal to
@@ -1225,25 +1431,37 @@ class DFlashFusedDecoder:
 
     def _pv_upload(self, start):
         P_v = self.P_v
-        pos = torch.zeros(1, P_v, dtype=torch.int64)
-        pos[0, :] = torch.arange(start, start + P_v)
-        h = ttnn.from_torch(pos, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper)
-        ttnn.copy_host_to_device_tensor(h, self.pv_pos)
-        h.deallocate(True)
-        mf, ms = self._pv_host_masks(start)
-        for host, dev in ((mf, self.pv_mask_full), (ms, self.pv_mask_slide)):
-            h = ttnn.from_torch(host, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=self._mapper)
-            ttnn.copy_host_to_device_tensor(h, dev)
-            h.deallocate(True)
-        for pi in range(P_v):
+        # pv positions are a PREFIX of blk_pos ([start..start+K]); the body
+        # slices them in-trace and builds both masks ON DEVICE (unbounded).
+        # Only the bounded ring slide mask (wrap modulo) crosses the host
+        # boundary, plus the [P_v] write-idx vector.
+        if self.pv_slide_ring:
+            ring, W = self.pv_slide_ring, self.target.hf_config.sliding_window
+            NEG = float("-inf")
+            top = start + P_v - 1
+            jr = torch.arange(ring)
+            d = torch.remainder(top - jr, ring)
+            ms = torch.empty(P_v, ring)
+            for pi in range(P_v):
+                lo = P_v - 1 - pi
+                ok = (d >= lo) & (d < lo + W) & (d <= top)
+                ms[pi] = torch.where(ok, 0.0, NEG)
             h = ttnn.from_torch(
-                torch.tensor([start + pi], dtype=torch.int32),
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.int32,
+                ms.reshape(1, 1, P_v, ring).to(torch.bfloat16),
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
                 mesh_mapper=self._mapper,
             )
-            ttnn.copy_host_to_device_tensor(h, self.pv_widx[pi])
+            ttnn.copy_host_to_device_tensor(h, self.pv_mask_slide)
             h.deallocate(True)
+        h = ttnn.from_torch(
+            torch.arange(start, start + P_v, dtype=torch.int32),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+            mesh_mapper=self._mapper,
+        )
+        ttnn.copy_host_to_device_tensor(h, self.pv_widx_all)
+        h.deallocate(True)
 
     def capture(self, anchor_id, start, max_new=256):
         """Compile-run then capture the fused body at the first-iteration inputs."""
@@ -1253,10 +1471,10 @@ class DFlashFusedDecoder:
             self._pv_upload(start)
         self.target.dflash_capture_taps(self.drafter.target_layer_ids, buffers=self.tap_bufs)
         self._upload_iter_inputs(anchor_id, start)
-        a, b, c = self._body()  # compile pass (idempotent KV writes)
+        self._body()  # compile pass (idempotent KV writes)
         ttnn.synchronize_device(self.mesh_device)
-        # outputs are now PERSISTENT slots (out_draft/out_vidx/fc_prev) -- do
-        # not deallocate them between compile and capture.
+        # outputs are PERSISTENT slots (out_ids/fc_prev) -- do not deallocate
+        # them between compile and capture.
         tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         self._out = self._body()
         ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
@@ -1280,13 +1498,25 @@ class DFlashFusedDecoder:
         """One iteration: (replay unless first) -> acceptance -> commit -> host updates.
 
         Returns (accepted_tokens_list, bonus, produced)."""
+        _prof = _os.environ.get("GEMMA4_DFLASH_PROF") == "1"
+        if _prof:
+            import time as _t
+
+            _t0 = _t.perf_counter()
         if not first:
             self._upload_iter_inputs(self.anchor, self.start)
+            if _prof:
+                _t1 = _t.perf_counter()
             ttnn.execute_trace(self.mesh_device, self.trace, cq_id=0, blocking=False)
-        draft_ids_t, vidx_t, fc_out = self._out
+        elif _prof:
+            _t1 = _t0
+        out_ids_t, fc_out = self._out
         # Verify truncation: only the first V drafts were verified (P_v rows).
-        drafts = self._read_ids(draft_ids_t)[: self.V]
-        posterior = self._read_ids(vidx_t)[: self.P_v]
+        ids = self._read_ids(out_ids_t)
+        drafts = ids[: self.V]
+        posterior = ids[self.K : self.K + self.P_v]
+        if _prof:
+            _t2 = _t.perf_counter()
         if _os.environ.get("GEMMA4_DFLASH_DEBUG_STEP") == "1":
             print(f"[dbg] start={self.start} drafts={drafts} posterior={posterior}", flush=True)
         acc = 0
@@ -1333,4 +1563,11 @@ class DFlashFusedDecoder:
         accepted = [self.anchor] if False else drafts[:acc]
         self.anchor = bonus
         self.start = self.start + produced
+        if _prof:
+            _t3 = _t.perf_counter()
+            print(
+                f"[prof] upload={1000*(_t1-_t0):.1f} trace+read={1000*(_t2-_t1):.1f} "
+                f"commit={1000*(_t3-_t2):.1f} total={1000*(_t3-_t0):.1f}",
+                flush=True,
+            )
         return accepted, bonus, produced
