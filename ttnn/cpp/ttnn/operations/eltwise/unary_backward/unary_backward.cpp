@@ -975,22 +975,23 @@ std::vector<Tensor> atanh_bw(
         0.f,
         grad_a,
         output_mem_config);
-    grad_a = where(
-        ttnn::logical_and(
-            ttnn::logical_or(
-                ttnn::eq(input, 1, std::nullopt, output_mem_config),
-                ttnn::eq(input, -1, std::nullopt, output_mem_config),
-                std::nullopt,
-                output_mem_config),
-            ttnn::nez(grad, output_mem_config)),
-        t_inf,
-        grad_a,
+    // At |input| == 1, the derivative diverges with sign(grad) * inf (#54695).
+    // Sign must be applied at the pole directly without inverting valid overflow (+inf) for |input| > 1.
+    Tensor at_pole = ttnn::logical_and(
+        ttnn::logical_or(
+            ttnn::eq(input, 1.0f, std::nullopt, output_mem_config),
+            ttnn::eq(input, -1.0f, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        ttnn::nez(grad, output_mem_config),
+        std::nullopt,
         output_mem_config);
-    grad_a = where(
-        ttnn::logical_and(ttnn::eq(grad_a, t_inf, std::nullopt, output_mem_config), ttnn::ltz(grad, output_mem_config)),
+    Tensor signed_pole_inf = where(
+        ttnn::ltz(grad, output_mem_config),
         -t_inf,
-        grad_a,
+        t_inf,
         output_mem_config);
+    grad_a = where(at_pole, signed_pole_inf, grad_a, output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
 }
