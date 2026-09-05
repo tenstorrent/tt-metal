@@ -19,7 +19,12 @@ constexpr float TWO_POW_31 = 2147483648.0f;
 // Computes 1/|b| for the unsigned remainder (single Newton–Raphson refinement). Split recip and
 // remainder computation so that the tensor-scalar path can hoist this loop-invariant work above its
 // element loop, since a scalar divisor is identical for every lane and iteration.
-sfpi_inline sfpi::vFloat unsigned_remainder_recip(const sfpi::vMag& b) {
+// Tensor callers prepare the numerator in the reciprocal's dependency slots.
+// The inlined callbacks keep this arithmetic shared with the scalar path without
+// delaying numerator preparation until after the reciprocal. They must perform
+// only independent numerator work and leave the reciprocal operands unchanged.
+template <typename PrepareNumerator>
+sfpi_inline sfpi::vFloat unsigned_remainder_recip_scheduled(const sfpi::vMag& b, PrepareNumerator prepare_numerator) {
     // Convert to float; handle 2^31 edge case where sign-magnitude conversion yields negative
     sfpi::vFloat b_f = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::Nearest);
     v_if(b_f < 0.0f) { b_f = TWO_POW_31; }
@@ -28,7 +33,14 @@ sfpi_inline sfpi::vFloat unsigned_remainder_recip(const sfpi::vMag& b) {
     sfpi::vFloat inv_b_f = sfpi::approx_recip(b_f);
     // One NR step: inv_b = inv_b * (2 - b * inv_b)
     sfpi::vFloat e = -inv_b_f * b_f + 1.0f;
+    // Fill the refinement MAD's dependency slot with numerator magnitude preparation.
+    prepare_numerator();
     return e * inv_b_f + inv_b_f;
+}
+
+// Scalar callers hoist the reciprocal and have no per-row numerator to prepare here.
+sfpi_inline sfpi::vFloat unsigned_remainder_recip(const sfpi::vMag& b) {
+    return unsigned_remainder_recip_scheduled(b, []() {});
 }
 
 // Core remainder calculation with numerator magnitude, repaired numerator float,
@@ -118,14 +130,8 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
 template <bool numerator_can_be_int_min = true>
 sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_signed, const sfpi::vInt& b_signed) {
     sfpi::vMag b = sfpi::abs(b_signed);
-    sfpi::vFloat b_f = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::Nearest);
-    v_if(b_f < 0.0f) { b_f = TWO_POW_31; }
-    v_endif;
-    sfpi::vFloat inv_b_f = sfpi::approx_recip(b_f);
-    sfpi::vFloat e = -inv_b_f * b_f + 1.0f;
-    // Prepare the numerator in the reciprocal refinement's dependency slot.
-    sfpi::vMag a = sfpi::abs(a_signed);
-    inv_b_f = e * inv_b_f + inv_b_f;
+    sfpi::vMag a;
+    sfpi::vFloat inv_b_f = unsigned_remainder_recip_scheduled(b, [&]() { a = sfpi::abs(a_signed); });
     sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
     if constexpr (numerator_can_be_int_min) {
         v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
@@ -252,8 +258,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     return result;
 }
 
+// Force inlining so the scheduled reciprocal callbacks do not make SFPI outline
+// this loop and lose constant tile indices at the caller.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+sfpi_inline void calculate_remainder_int32(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_remainder_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
@@ -261,8 +270,11 @@ inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_i
     }
 }
 
+// Force inlining so the scheduled reciprocal callbacks do not make SFPI outline
+// this loop and lose constant tile indices at the caller.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_remainder_uint32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+sfpi_inline void calculate_remainder_uint32(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_remainder_uint32_body(dst_index_in0, dst_index_in1, dst_index_out);

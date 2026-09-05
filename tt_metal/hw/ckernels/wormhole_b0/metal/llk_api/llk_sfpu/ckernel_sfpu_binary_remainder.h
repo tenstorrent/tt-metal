@@ -20,7 +20,13 @@ constexpr float TWO_POW_31 = 2147483648.0f;
 // plus an exponent-based scale). Split recip and remainder computation so that the tensor-scalar
 // path can hoist this loop-invariant work above its element loop, since a scalar divisor is identical
 // for every lane and iteration.
-sfpi_inline sfpi::vFloat unsigned_remainder_recip(const sfpi::vInt& b_signed) {
+// Tensor callers prepare the numerator in the reciprocal's dependency slots.
+// The inlined callbacks keep this arithmetic shared with the scalar path without
+// delaying numerator preparation until after the reciprocal. They must perform
+// only independent numerator work and leave the reciprocal operands unchanged.
+template <typename PrepareMagnitude, typename PrepareFloat>
+sfpi_inline sfpi::vFloat unsigned_remainder_recip_scheduled(
+    const sfpi::vInt& b_signed, PrepareMagnitude prepare_magnitude, PrepareFloat prepare_float) {
     // Get absolute value of b for reciprocal computation
     sfpi::vMag b = sfpi::abs(b_signed);
 
@@ -42,12 +48,21 @@ sfpi_inline sfpi::vFloat unsigned_remainder_recip(const sfpi::vInt& b_signed) {
     scale = sfpi::as<sfpi::vFloat>((254 << 23) - sfpi::as<sfpi::vInt>(scale));
     inv_b_f = t * inv_b_f + inv_b_f;
 
+    // Fill the first refinement MAD's dependency slot with the numerator magnitude.
+    prepare_magnitude();
     // Second Newton-Raphson iteration
     sfpi::vFloat e = inv_b_f * neg_b_f + 1.0f;
+    // Convert the numerator while the second refinement's error MAD completes.
+    prepare_float();
     inv_b_f = e * inv_b_f + inv_b_f;
 
     // Apply scaling factor to finalize reciprocal
     return inv_b_f * scale;
+}
+
+// Scalar callers hoist the reciprocal and have no per-row numerator to prepare here.
+sfpi_inline sfpi::vFloat unsigned_remainder_recip(const sfpi::vInt& b_signed) {
+    return unsigned_remainder_recip_scheduled(b_signed, []() {}, []() {});
 }
 
 // Core remainder calculation with numerator magnitude, repaired numerator float,
@@ -173,24 +188,12 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
 // Returns: unsigned remainder r
 template <bool numerator_can_be_int_min = true>
 sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_signed, const sfpi::vInt& b_signed) {
-    // Interleave numerator preparation with the same two Newton steps as
-    // unsigned_remainder_recip, preserving the scalar path's hoisted reciprocal.
-    sfpi::vMag b = sfpi::abs(b_signed);
-    sfpi::vFloat b_f = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::Nearest);
-    v_if(b_f < 0.0f) { b_f = TWO_POW_31; }
-    v_endif;
-    sfpi::vFloat neg_b_f = sfpi::copyman(-1.0f, b_f);
-    sfpi::vFloat inv_b_f = sfpi::vConstFloatPrgm2 + sfpi::vConstFloatPrgm1 * neg_b_f;
-    sfpi::vFloat scale = sfpi::setman(b_f, 0);
-    sfpi::vFloat t = inv_b_f * neg_b_f + 1.0f;
-    scale = sfpi::as<sfpi::vFloat>((254 << 23) - sfpi::as<sfpi::vInt>(scale));
-    inv_b_f = t * inv_b_f + inv_b_f;
-    // Independent numerator operations fill the refinement's dependency slots.
-    sfpi::vMag a = sfpi::abs(a_signed);
-    sfpi::vFloat e = inv_b_f * neg_b_f + 1.0f;
-    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
-    inv_b_f = e * inv_b_f + inv_b_f;
-    inv_b_f *= scale;
+    sfpi::vMag a;
+    sfpi::vFloat a_f;
+    sfpi::vFloat inv_b_f = unsigned_remainder_recip_scheduled(
+        b_signed,
+        [&]() { a = sfpi::abs(a_signed); },
+        [&]() { a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest); });
     if constexpr (numerator_can_be_int_min) {
         v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
         v_endif;
@@ -322,8 +325,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     return result;
 }
 
+// Force inlining so the scheduled reciprocal callbacks do not make SFPI outline
+// this loop and lose constant tile indices at the caller.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+sfpi_inline void calculate_remainder_int32(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_remainder_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
@@ -331,8 +337,11 @@ inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_i
     }
 }
 
+// Force inlining so the scheduled reciprocal callbacks do not make SFPI outline
+// this loop and lose constant tile indices at the caller.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_remainder_uint32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+sfpi_inline void calculate_remainder_uint32(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_remainder_uint32_body(dst_index_in0, dst_index_in1, dst_index_out);
