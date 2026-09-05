@@ -331,6 +331,17 @@ _QUASAR_CLASS_PAIRS_COVERED = {("CFG", 0), ("SYNC", 0), ("THCON", 0), ("MATH", 1
 
 # Quasar-only metrics as (name, suffix), in CSV column order. Percent metrics take " (%)",
 # per-cycle rates take none. Declared once for the CSV headers, the per-op writer and the summary.
+# Metrics reported per cycle rather than as a percentage: their CSV columns carry no " (%)".
+# Declared once so the header list, the device-only report and its CSV writer agree.
+RAW_RATE_METRICS = (
+    "T0 Instrn Issue Rate",
+    "T1 Instrn Issue Rate",
+    "T2 Instrn Issue Rate",
+    "T3 Instrn Issue Rate",
+    *[f"T{t} Instrn Per Issue-Ready Cycle" for t in range(4)],
+    "Avg HF Cycles Per Instrn",
+)
+
 QUASAR_METRICS = (
     *[(n, " (%)") for n in ("Thread 3 Issue Stall Rate", *QUASAR_STALL_REASON_METRICS)],
     *[
@@ -339,7 +350,7 @@ QUASAR_METRICS = (
         for t in range(4)
         if (cls, t) not in _QUASAR_CLASS_PAIRS_COVERED
     ],
-    ("T3 Instrn Issue Rate", ""),
+    ("T3 Instrn Issue Rate", ""),  # raw rate, see RAW_RATE_METRICS
     *[
         (n, " (%)")
         for n in (
@@ -2470,15 +2481,7 @@ def compute_device_only_metrics(
         "Packer Load Imbalance",
         "Compute-to-Unpack Ratio",
     ]
-    # Non-percentage metrics (raw rates)
-    _ipc_metric_names = [
-        "T0 Instrn Issue Rate",
-        "T1 Instrn Issue Rate",
-        "T2 Instrn Issue Rate",
-        "T3 Instrn Issue Rate",
-        *[f"T{t} Instrn Per Issue-Ready Cycle" for t in range(4)],
-        "Avg HF Cycles Per Instrn",
-    ]
+    _ipc_metric_names = list(RAW_RATE_METRICS)
 
     agg_metrics: Dict[str, Dict] = {}
     for base_name in _pct_metric_names + _ipc_metric_names:

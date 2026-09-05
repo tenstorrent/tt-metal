@@ -40,6 +40,7 @@ from tracy import device_post_proc_config
 from tracy.perf_counter_analysis import (
     PERF_COUNTER_CSV_HEADERS,
     QUASAR_METRICS,
+    RAW_RATE_METRICS,
     compute_device_only_metrics,
     compute_perf_counter_metrics,
     extract_perf_counters,
@@ -1322,10 +1323,7 @@ def get_device_data_generate_report(
                     metrics = device_efficiency_metrics[device]
 
                     for base_name, m in metrics.items():
-                        is_raw = (
-                            "IPC" in base_name or "Issue Rate" in base_name or base_name == "Avg HF Cycles Per Instrn"
-                        )
-                        suffix = "" if is_raw else " (%)"
+                        suffix = "" if base_name in RAW_RATE_METRICS else " (%)"
                         # Legacy "Avg on full grid" column names.
                         if base_name == "SFPU Util":
                             rowDict["Avg SFPU util on full grid (%)"] = m["avg"].get(lookup_key, nan)
