@@ -432,12 +432,12 @@ Tensor div(
 }
 
 Tensor div_no_nan(
-    const Tensor& input_a, unary::ScalarVariant value, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    const Tensor& input_a, unary::ScalarVariant value, const std::optional<MemoryConfig>& output_mem_config) {
     float value_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, value);
     if (value_f == 0) {
-        return ttnn::zeros_like(input_a);
+        return ttnn::zeros_like(input_a, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
-    return ttnn::multiply(input_a, (1.0f / value_f));
+    return ttnn::multiply(input_a, (1.0f / value_f), std::nullopt, output_mem_config);
 }
 
 Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
@@ -712,7 +712,7 @@ Tensor polyval(
     const Tensor& input_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(!coeffs.empty() && "coeffs should be 1 or more coefficients");
     if (coeffs.size() == 1) {
-        return ttnn::full_like(input_a, coeffs[0]);
+        return ttnn::full_like(input_a, coeffs[0], std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
     Tensor result = ttnn::multiply(input_a, coeffs[0], std::nullopt, output_mem_config);
     for (int idx = 1; idx < coeffs.size() - 1; idx++) {
