@@ -102,6 +102,25 @@ def prepare_conv_transpose2d_bias(*args, **kwargs):
     return ttnn._ttnn.operations.conv.prepare_conv_transpose2d_bias(*args, **kwargs)
 
 
+def determine_conv2d_dram_slice_config(*args, **kwargs):
+    """
+    Preview the slice decision :func:`ttnn.conv2d`'s DRAM path would make for these arguments, without running
+    the convolution. Returns the :class:`ttnn.Conv2dSliceConfig` it would use, or ``None`` when no slice count
+    fits in L1 -- the case where ``conv2d`` itself fails with "DRAM Auto slice could not find valid slice
+    configuration". Lets a caller choose another formulation up front instead of paying for a failed attempt.
+
+    Keyword-only; arguments mirror :func:`ttnn.conv2d` (``input_tensor``, ``weight_tensor``, ``device``,
+    ``in_channels``, ``out_channels``, ``batch_size``, ``input_height``, ``input_width``, ``kernel_size``,
+    ``stride``, ``padding``, ``dilation``, ``groups``, and optional ``dtype``, ``bias_tensor``, ``conv_config``,
+    ``compute_config``, ``slice_config``). The input must be a DRAM-path input (DRAM interleaved, or an explicit
+    DRAM slice config); the weight and bias tensors are only referenced, never read.
+
+    :return: the slice config conv2d would use, or None if nothing fits.
+    :rtype: ttnn.Conv2dSliceConfig or None
+    """
+    return ttnn._ttnn.operations.conv.determine_conv2d_dram_slice_config(*args, **kwargs)
+
+
 # TODO: remove this function after #21040 is fixed
 def prepare_conv_weights(*args, **kwargs):
     """

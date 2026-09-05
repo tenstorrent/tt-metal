@@ -78,4 +78,27 @@ std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
     const DeviceComputeKernelConfig& compute_config,
     MeshDevice* device);
 
+// Preview of the slice decision conv2d's DRAM path makes for these arguments, without running anything:
+// the Conv2dSliceConfig it would use, or nullopt when no slice count fits in L1 (where conv2d would
+// TT_FATAL). Mirrors conv2d_DRAM's setup; the weight/bias tensors are only referenced, never read.
+std::optional<Conv2dSliceConfig> determine_conv2d_dram_slice_config(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    MeshDevice* device,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    const std::optional<const DataType>& dtype = std::nullopt,
+    const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
+    const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt);
+
 }  // namespace ttnn::operations::conv::conv2d

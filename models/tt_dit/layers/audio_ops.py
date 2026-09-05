@@ -275,6 +275,79 @@ def _t_neighbor_pad(
     )
 
 
+TAP_PATH_CANDIDATES = ["direct", 128, 64, 32, "mac"]
+
+
+def _tap_conv1d_fits(x_BTC, weight, *, B, C, T_pad, K, stride, mesh_device, dtype, conv_config, compute_config):
+    """Would ``ttnn.conv1d`` find a DRAM slice configuration for this depthwise filter?
+
+    Asks the op's own slicer up front (the same decision it makes inside the call), so a shape that cannot
+    fit is known without a failed attempt and its TT_FATAL log. ``x_BTC`` only lends its layout, dtype and
+    memory config -- a channel slice of it has the same three -- and ``weight`` only its dtype. Returns None
+    when the input would not take the DRAM path (then only trying tells).
+    """
+    mem = x_BTC.memory_config()
+    if mem.buffer_type != ttnn.BufferType.DRAM or mem.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        return None
+    return (
+        ttnn.determine_conv2d_dram_slice_config(
+            input_tensor=x_BTC,
+            weight_tensor=weight,
+            device=mesh_device,
+            in_channels=C,
+            out_channels=C,
+            batch_size=B,
+            input_height=1,  # conv1d runs as a [B, 1, T_pad, C] conv2d with a {1, K} kernel
+            input_width=T_pad,
+            kernel_size=(1, K),
+            stride=(1, stride),
+            padding=(0, 0),
+            dilation=(1, 1),
+            groups=C,
+            dtype=dtype,
+            conv_config=conv_config,
+            compute_config=compute_config,
+        )
+        is not None
+    )
+
+
+def _predict_tap_path(x_BTC, weight, *, B, C, T_pad, K, stride, mesh_device, dtype, conv_config, compute_config):
+    """The first of TAP_PATH_CANDIDATES that fits: the full-C conv, else the widest C-chunk conv, else MAC.
+
+    Mirrors what the probe loop in ``depthwise_tap_filter`` would discover by trial. None when the fit
+    cannot be asked (input not on the DRAM path).
+    """
+
+    def fits(channels):
+        return _tap_conv1d_fits(
+            x_BTC,
+            weight,
+            B=B,
+            C=channels,
+            T_pad=T_pad,
+            K=K,
+            stride=stride,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            conv_config=conv_config,
+            compute_config=compute_config,
+        )
+
+    for candidate in TAP_PATH_CANDIDATES:
+        if candidate == "mac":
+            return "mac"
+        channels = C if candidate == "direct" else candidate
+        if candidate != "direct" and (C % candidate or candidate >= C):
+            continue
+        verdict = fits(channels)
+        if verdict is None:
+            return None
+        if verdict:
+            return candidate
+    return "mac"
+
+
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     """Valid depthwise filter (same K taps per channel) on padded ``(B, T_pad, C)`` ROW_MAJOR.
 
@@ -367,13 +440,28 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
         logger.warning(f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback{reason}")
         return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
 
-    # Which candidate fits depends only on (C, K, stride), so it's stable across calls: cache the
-    # winner found in warmup and try it first, skipping the dead ends that preceded it. A miss still
-    # falls through the whole chain, so this can't fail a call that would otherwise succeed. The
-    # slicer's error text is not a stable API, so any RuntimeError just tries the next candidate.
-    candidates = ["direct", 128, 64, 32, "mac"]
-    path_key = ("tap_path", C, stride, K)
+    # Which candidate fits depends on the shape (rows per core as well as C, K, stride), so it is cached
+    # per shape. First time through, ask conv1d's slicer which candidate fits instead of finding out by
+    # failed attempts (each one costs an allocation, a compile and a TT_FATAL log). The trial loop stays
+    # as the safety net: the predicted candidate goes first, and a miss still falls through the chain, so
+    # this can't fail a call that would otherwise succeed.
+    candidates = list(TAP_PATH_CANDIDATES)
+    path_key = ("tap_path", B, T_pad, C, stride, K)
     known = cache.get(path_key)
+    if known is None:
+        known = _predict_tap_path(
+            x_BTC,
+            weight,
+            B=B,
+            C=C,
+            T_pad=T_pad,
+            K=K,
+            stride=stride,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            conv_config=conv_config,
+            compute_config=cache["cc"],
+        )
     if known in candidates:
         candidates.insert(0, candidates.pop(candidates.index(known)))
 

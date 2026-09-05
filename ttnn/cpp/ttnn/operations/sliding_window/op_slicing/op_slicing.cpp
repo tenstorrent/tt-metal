@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "op_slicing.hpp"
+#include <optional>
+#include <string>
 #include <tuple>
+#include <fmt/format.h>
 #include <ttnn/operations/core/core.hpp>
 #include <ttnn/operations/data_movement/untilize/untilize.hpp>
 #include <ttnn/operations/functions.hpp>
@@ -152,14 +155,16 @@ static Op2DSliceConfig::SliceType best_guess_slice_type(
     return Op2DSliceConfig::SliceType::DRAM_WIDTH;
 }
 
-// Internal helper that tracks whether we've already attempted a fallback
-static Op2DSliceConfig determine_slice_config_internal(
+// Internal helper that tracks whether we've already attempted a fallback. Returns nullopt when no slice
+// count fits in L1, with the reason in `failure_reason`, so callers decide whether that is fatal.
+static std::optional<Op2DSliceConfig> determine_slice_config_internal(
     OpSliceAttr* op_slice_attr,
     const ttnn::Shape& input_shape,
     const ttnn::Shape& output_shape,
     const std::optional<Op2DSliceConfig> slice_config_,
     const tt::tt_metal::Layout output_layout,
     MeshDevice* device,
+    std::string& failure_reason,
     bool is_retry_attempt) {
     if (slice_config_.has_value() && slice_config_.value().num_slices > 0) {
         return slice_config_.value();
@@ -241,6 +246,7 @@ static Op2DSliceConfig determine_slice_config_internal(
                 Op2DSliceConfig{.slice_type = Op2DSliceConfig::SliceType::DRAM_HEIGHT, .num_slices = 0},
                 output_layout,
                 device,
+                failure_reason,
                 true);  // Mark as retry attempt
         }
         // Switch from height slicing to width slicing and try again.
@@ -251,24 +257,26 @@ static Op2DSliceConfig determine_slice_config_internal(
             Op2DSliceConfig{.slice_type = Op2DSliceConfig::SliceType::DRAM_WIDTH, .num_slices = 0},
             output_layout,
             device,
+            failure_reason,
             true);  // Mark as retry attempt
     }
 
-    // If we haven't found a valid config, this is fatal
-    TT_FATAL(
-        found_valid_config,
-        "DRAM Auto slice could not find valid slice configuration. Tried up to {} slices for {}-slicing on output "
-        "dimension {}. Available L1: {} bytes. Operation requires more memory than available even with maximum "
-        "slicing.",
-        current_num_slices - 1,
-        return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "height" : "width",
-        output_sliced_dim,
-        L1_stats.total_free_bytes);
+    if (!found_valid_config) {
+        failure_reason = fmt::format(
+            "DRAM Auto slice could not find valid slice configuration. Tried up to {} slices for {}-slicing on "
+            "output dimension {}. Available L1: {} bytes. Operation requires more memory than available even with "
+            "maximum slicing.",
+            current_num_slices - 1,
+            return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "height" : "width",
+            output_sliced_dim,
+            L1_stats.total_free_bytes);
+        return std::nullopt;
+    }
 
     return return_slice_config;
 }
 
-// Public wrapper that starts the slice configuration search
+// Public wrapper that starts the slice configuration search; no fitting configuration is fatal.
 Op2DSliceConfig determine_slice_config(
     OpSliceAttr* op_slice_attr,
     const ttnn::Shape& input_shape,
@@ -276,8 +284,29 @@ Op2DSliceConfig determine_slice_config(
     const std::optional<Op2DSliceConfig> slice_config_,
     const tt::tt_metal::Layout output_layout,
     MeshDevice* device) {
-    return determine_slice_config_internal(
-        op_slice_attr, input_shape, output_shape, slice_config_, output_layout, device, false);
+    std::string failure_reason;
+    auto slice_config = determine_slice_config_internal(
+        op_slice_attr, input_shape, output_shape, slice_config_, output_layout, device, failure_reason, false);
+    TT_FATAL(slice_config.has_value(), "{}", failure_reason);
+    return slice_config.value();
+}
+
+// Same search, but a shape that fits nowhere answers nullopt instead of throwing -- for callers that
+// want to pick a different formulation (e.g. channel chunking) without paying for a failed attempt.
+std::optional<Op2DSliceConfig> try_determine_slice_config(
+    OpSliceAttr* op_slice_attr,
+    const ttnn::Shape& input_shape,
+    const ttnn::Shape& output_shape,
+    const std::optional<Op2DSliceConfig> slice_config_,
+    const tt::tt_metal::Layout output_layout,
+    MeshDevice* device) {
+    std::string failure_reason;
+    auto slice_config = determine_slice_config_internal(
+        op_slice_attr, input_shape, output_shape, slice_config_, output_layout, device, failure_reason, false);
+    if (!slice_config.has_value()) {
+        log_debug(tt::LogOp, "try_determine_slice_config: {}", failure_reason);
+    }
+    return slice_config;
 }
 
 void run_sliced_op(
