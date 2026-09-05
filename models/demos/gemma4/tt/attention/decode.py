@@ -815,12 +815,18 @@ def packed_decode_forward(
     # build. The drift is inherent packed-vs-decode path numerics; it is handled
     # by the ISL tier gate in spec_decode._fused_packed_enabled, not here.
     _k_chunk = int(os.environ.get("GEMMA4_PV_K_CHUNK", "64"))
+    # The flash cross-core reduction CBs scale with PNHt * cores_per_head_batch.
+    # At PNHt<=2 (<=64 packed query rows) 16 cores fit L1; at PNHt=4 (the B>1
+    # dFlash fold, 128 rows) 16 cores overflow (~2.06 MB > 1.5 MB) and head
+    # splits can't help when nkv_local > 1 (31B sliding: 16 kv heads / tp8 = 2),
+    # so trade reduction parallelism for L1: 8 cores fits (~1.29 MB).
+    _pnht = (H_local * P + 31) // 32
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=_packed_sdpa_grid(config, mesh_device),
         q_chunk_size=32,
         k_chunk_size=_k_chunk,
         exp_approx_mode=False,
-        max_cores_per_head_batch=16,
+        max_cores_per_head_batch=16 if _pnht <= 2 else 8,
     )
     _grid = sdpa_program_config.compute_with_storage_grid_size
     n_sdpa_splits = _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=_grid.x * _grid.y)

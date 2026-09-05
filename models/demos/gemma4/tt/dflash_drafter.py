@@ -499,11 +499,12 @@ class DFlashDrafter:
         # rows are user-major [b*K1 + i]; drafts are i in [1, K1) per user.
         parts = [h[:, :, b * K1 + 1 : (b + 1) * K1, :] for b in range(B)]
         h_drafts = ttnn.concat(parts, dim=2) if B > 1 else parts[0]
-        for t in parts:
-            try:
-                t.deallocate(True)
-            except Exception:
-                pass
+        if B > 1:  # at B==1 h_drafts IS parts[0]
+            for t in parts:
+                try:
+                    t.deallocate(True)
+                except Exception:
+                    pass
         h.deallocate(True)
         logits = ttnn.linear(h_drafts, self.lm_head, compute_kernel_config=self._ckc)
         h_drafts.deallocate(True)

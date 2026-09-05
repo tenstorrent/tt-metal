@@ -484,24 +484,26 @@ class DFlashBatchedDecoder:
         # lands on user b's page for pos (pv_sk % 64 == 0). Stride can exceed a
         # user's physical width; the pad entries (page 0) sit under NEG-masked
         # columns only -- table width == mask width, the root-cause-#4 rule.
-        vw = self.pv_sk // bs
-        pool_blocks = int(self.kv_layers[0][0].shape[0]) if self.kv_layers else B * vw
-        if B * vw > pool_blocks:
-            raise ValueError(
-                f"fold-verify virtual table needs B*(pv_sk/64) = {B * vw} blocks but the KV pool has "
-                f"{pool_blocks}; allocate more blocks (max_num_blocks) or lower max_new"
+        self.v_pt_virt = None
+        if fold:
+            vw = self.pv_sk // bs
+            pool_blocks = int(self.kv_layers[0][0].shape[0]) if self.kv_layers else B * vw
+            if B * vw > pool_blocks:
+                raise ValueError(
+                    f"fold-verify virtual table needs B*(pv_sk/64) = {B * vw} blocks but the KV pool has "
+                    f"{pool_blocks}; allocate more blocks (max_num_blocks) or lower max_new"
+                )
+            vrow = torch.zeros(1, B * vw, dtype=torch.int32)
+            for b in range(B):
+                w_b = min(vw, int(pt.shape[1]))
+                vrow[0, b * vw : b * vw + w_b] = pt[b, :w_b]
+            self.v_pt_virt = ttnn.from_torch(
+                vrow,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._mapper,
             )
-        vrow = torch.zeros(1, B * vw, dtype=torch.int32)
-        for b in range(B):
-            w_b = min(vw, int(pt.shape[1]))
-            vrow[0, b * vw : b * vw + w_b] = pt[b, :w_b]
-        self.v_pt_virt = ttnn.from_torch(
-            vrow,
-            device=self.mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=self._mapper,
-        )
         installed = getattr(t, "_active_page_tables_per_layer", None)
         self.pv_ptl = None
         if installed:
@@ -600,8 +602,13 @@ class DFlashBatchedDecoder:
         src = ttnn.get_device_tensors(t)[0] if self._tp > 1 else t
         return ttnn.to_torch(src).reshape(-1).to(torch.int64).tolist()
 
-    def step(self, first=False):
-        """One batched iteration. Returns per-user (committed, produced)."""
+    def step(self, first=False, frozen=()):
+        """One batched iteration. Returns per-user (committed, produced).
+
+        ``frozen``: user ids past their token budget -- their state stops
+        advancing (they re-verify the same block each replay, which is
+        deterministic and idempotent) so a straggler can't push a finished
+        user's positions past the mask/table horizon."""
         B, K, P_v = self.B, self.K, self.P_v
         if not first:
             self._upload_iter_inputs()
@@ -614,6 +621,10 @@ class DFlashBatchedDecoder:
         cpos = torch.zeros(1, B * P_v, dtype=torch.int64)
         results = []
         for b in range(B):
+            if b in frozen:
+                cpos[0, b * P_v : (b + 1) * P_v] = torch.arange(self.start[b], self.start[b] + P_v)
+                results.append(([], 0))
+                continue
             drafts = drafts_all[b * K : b * K + self.V]
             post = post_all[b * P_v : (b + 1) * P_v]
             acc = 0
