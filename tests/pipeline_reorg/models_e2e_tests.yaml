@@ -1452,6 +1452,14 @@
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # Cover the shape actually served (Console: 1080p / ~6s / 25fps), not the legacy
+    # 145f@24. FPS is real conditioning -- it sets the audio latent length and scales the
+    # A/V cross-PE -- so without these the 25fps path has no automated coverage and a
+    # regression to a hardcoded 24 would keep every LTX test green. 153 because
+    # 6s x 25fps = 150 does not satisfy (num_frames-1) % 8 == 0.
+    # The 24-vs-25 arithmetic is additionally guarded on CPU by
+    # models/tt_dit/tests/models/ltx/test_fps_conditioning_ltx.py.
+    export NUM_FRAMES=153 FPS=25
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       python3 -m pytest --timeout 2100 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0"
   model: ltx-2.3-fast-t2v
