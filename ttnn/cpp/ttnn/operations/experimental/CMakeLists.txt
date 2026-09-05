@@ -70,7 +70,6 @@ add_subdirectory(ssm)
 add_subdirectory(tensor_prefetcher)
 add_subdirectory(test)
 add_subdirectory(topk_router_gpt)
-add_subdirectory(unary_backward)
 
 # Umbrella target for everything migrated into this file: ttnncpp links this
 # one target instead of enumerating these op libraries itself. Add/remove
@@ -116,7 +115,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::TensorPrefetcher
         TTNN::Ops::Experimental::Test
         TTNN::Ops::Experimental::TopkRouterGpt
-        TTNN::Ops::Experimental::UnaryBackward
 )
 
 # target_link_libraries() alone is not enough: per the CMake docs, an OBJECT
@@ -167,5 +165,4 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TensorPrefetcher>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Test>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkRouterGpt>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::UnaryBackward>
 )

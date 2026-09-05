@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,26 +15,24 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_unary/fill.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg(args::num_tiles);
 
-    constexpr auto cb_grad_out = tt::CBIndex::c_0;
-    constexpr auto cb_input = tt::CBIndex::c_1;
-    constexpr auto cb_grad_in = tt::CBIndex::c_2;
-
-    CircularBuffer cb_grad_out_cb(cb_grad_out);
-    CircularBuffer cb_input_cb(cb_input);
-    CircularBuffer cb_grad_in_cb(cb_grad_in);
+    // grad_out / input are consumed from the reader; grad_in is produced for the writer.
+    DataflowBuffer dfb_grad_out(dfb::grad_out);
+    DataflowBuffer dfb_input(dfb::input);
+    DataflowBuffer dfb_grad_in(dfb::grad_in);
 
     constexpr float kSqrt2 = 1.41421356237309504880f;          // sqrt(2)
     constexpr float kTwoOverSqrtPi = 1.12837916709551257390f;  // 2/sqrt(pi)
     constexpr float kBeta = kSqrt2 * kTwoOverSqrtPi * 0.5f;
     constexpr float kKappa = 0.044715f;
 
-    compute_kernel_hw_startup(cb_grad_out, cb_grad_in);
-    copy_init(cb_grad_out);
+    compute_kernel_hw_startup(dfb::grad_out, dfb::grad_in);
+    copy_init(dfb::grad_out);
     add_binary_tile_init();
     mul_binary_tile_init();
     square_tile_init();
@@ -42,81 +40,79 @@ void kernel_main() {
     sub_binary_tile_init();
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_grad_in_cb.reserve_back(1);
-        cb_grad_out_cb.wait_front(1);
-        cb_input_cb.wait_front(1);
+        dfb_grad_in.reserve_back(1);
+        dfb_grad_out.wait_front(1);
+        dfb_input.wait_front(1);
 
         tile_regs_acquire();
 
-        copy_tile(cb_grad_out, 0, 0);
-        copy_tile(cb_input, 0, 1);
-        copy_tile(cb_input, 0, 2);  // tile[2] = x
-        copy_tile(cb_input, 0, 5);  // tile[5] = x
+        copy_tile(dfb::grad_out, 0, 0);
+        copy_tile(dfb::input, 0, 1);
+        copy_tile(dfb::input, 0, 2);  // tile[2] = x
+        copy_tile(dfb::input, 0, 5);  // tile[5] = x
 
-        // tile[1] = x³
-        square_tile(1);            // tile[1] = x²
-        mul_binary_tile(1, 2, 1);  // tile[1] = x² * x = x³
+        // tile[1] = x^3
+        square_tile(1);
+        mul_binary_tile(1, 2, 1);
 
-        // tile[1] = kKappa * x³
+        // tile[1] = 0.044715 * x^3
         fill_tile(3, kKappa);
         mul_binary_tile(1, 3, 1);
 
-        // tile[1] = x + kKappa * x³
+        // tile[1] = x + 0.044715 * x^3
         add_binary_tile<BF16_ROUNDING_MODE>(1, 2, 1);
 
-        // tile[1] = kBeta * (x + kKappa * x³) = inner
+        // tile[1] = sqrt(2/π) * (x + 0.044715 * x^3)
         fill_tile(3, kBeta);
         mul_binary_tile(1, 3, 1);
 
-        // tile[1] = tanh(inner)
+        // tile[1] = tanh(sqrt(2/π) * (x + 0.044715 * x^3))
         tanh_tile_init();
         tanh_tile(1);
-        COPY_DEST_VALUES(1, 4);  // tile[4] = tanh(inner)
+        COPY_DEST_VALUES(1, 4);  // save tanh to tile[4]
 
-        // CDF term: tile[1] = 0.5 * (1 + tanh)
+        // CDF term: tile[1] = 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
         fill_tile(3, 1.0f);
-        add_binary_tile<BF16_ROUNDING_MODE>(1, 3, 1);  // tile[1] = 1 + tanh
+        add_binary_tile<BF16_ROUNDING_MODE>(1, 3, 1);
         fill_tile(3, 0.5f);
-        mul_binary_tile(1, 3, 1);  // tile[1] = 0.5*(1 + tanh) = CDF term
+        mul_binary_tile(1, 3, 1);
 
-        // sech²: tile[4] = 1 - tanh²
-        square_tile(4);  // tile[4] = tanh²
+        // tile[4] = 1 - tanh^2
+        square_tile(4);
         fill_tile(3, 1.0f);
-        sub_binary_tile<BF16_ROUNDING_MODE>(3, 4, 3);  // tile[3] = 1 - tanh²
-        COPY_DEST_VALUES(3, 4);    // tile[4] = sech²
+        sub_binary_tile<BF16_ROUNDING_MODE>(3, 4, 3);
+        COPY_DEST_VALUES(3, 4);
 
-        // PDF term: 0.5 * kBeta * x * (1 + 3*kKappa*x²) * sech²
-        // tile[2] still = x, need x²
+        // tile[2] = (1 + 0.134145 * x**2)
         fill_tile(3, kKappa * 3.0f);
-        square_tile(2);            // tile[2] = x²
-        mul_binary_tile(2, 3, 2);  // tile[2] = 3*kKappa * x²
+        square_tile(2);            // x^2
+        mul_binary_tile(2, 3, 2);  // 0.134145 * x**2
         fill_tile(3, 1.0f);
-        add_binary_tile<BF16_ROUNDING_MODE>(2, 3, 2);  // tile[2] = 1 + 3*kKappa*x²
+        add_binary_tile<BF16_ROUNDING_MODE>(2, 3, 2);  // 1 + 0.134145 * x**2
 
-        // tile[2] = sech² * (1 + 3*kKappa*x²)
+        // PDF term: tile[2] = 0.5 * sqrt(2/π) * (1 + 0.134145 * x^2) * (1 - tanh^2)
         mul_binary_tile(2, 4, 2);
-
-        // tile[2] = kBeta/2 * sech² * (1 + 3*kKappa*x²)
         fill_tile(3, kBeta / 2.0f);
         mul_binary_tile(2, 3, 2);
 
-        // tile[2] = x * kBeta/2 * sech² * (1 + 3*kKappa*x²) = PDF term
-        COPY_DEST_VALUES(5, 3);  // tile[3] = x (saved in tile[5])
+        // tile[2] = x * pdf term
+        COPY_DEST_VALUES(5, 3);
         mul_binary_tile(2, 3, 2);
 
-        // result = grad * (CDF_term + PDF_term)
-        add_binary_tile<BF16_ROUNDING_MODE>(1, 2, 1);  // tile[1] = CDF + PDF
-        mul_binary_tile(0, 1, 0);  // tile[0] = grad * (CDF + PDF)
+        // result: tile[1] = grad * (cdf_term + x * pdf_term)
+        add_binary_tile<BF16_ROUNDING_MODE>(1, 2, 1);  // cdf_term + x * pdf_term
+        // tile[0] = grad * (cdf_term + x * pdf_term)
+        mul_binary_tile(0, 1, 0);
 
         tile_regs_commit();
         tile_regs_wait();
 
-        pack_tile(0, cb_grad_in);
+        pack_tile(0, dfb::grad_in);
 
         tile_regs_release();
 
-        cb_grad_out_cb.pop_front(1);
-        cb_input_cb.pop_front(1);
-        cb_grad_in_cb.push_back(1);
+        dfb_grad_out.pop_front(1);
+        dfb_input.pop_front(1);
+        dfb_grad_in.push_back(1);
     }
 }
