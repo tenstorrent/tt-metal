@@ -37,6 +37,7 @@ from ....models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3Au
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
+from ....utils.test import line_params_8k
 from .common import build_audio_decoder, load_config, psnr, weights_subdir
 
 # The vocoder needs extra L1 scratch, as the LTX audio tests do.
@@ -464,14 +465,13 @@ def test_audio_decode_traced(mesh_device):
     assert psnr_db > 60.0, f"traced output diverges from untraced: PSNR {psnr_db:.2f} dB"
 
 
+# 8 KB fabric packets, as the pipeline opens its mesh: the T halo exchange (`neighbor_pad_async`) ships one row per
+# packet and silently corrupts rows wider than the packet payload. The encoder's final trunk conv exchanges fp32 rows
+# of 2048 channels = 8192 bytes, which the default 4352-byte packets split; `_t_neighbor_pad` now refuses that case.
 MESH = [
     pytest.param(
         (4, 8),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "require_exact_physical_num_devices": True,
-            "l1_small_size": 65536,
-        },
+        {**line_params_8k, "require_exact_physical_num_devices": True, "l1_small_size": 65536},
         id="mesh4x8",
     )
 ]
