@@ -143,3 +143,20 @@ def test_selu_atol(low, high, expected_Atol, device):
     tt_result = ttnn.selu(tt_in)
     result = ttnn.to_torch(tt_result)
     torch.allclose(golden, result, atol=expected_Atol)
+
+
+def test_selu_canonical_constants_precision(device):
+    # Verify that default ttnn.selu aligns with canonical PyTorch float32 constants (#55393)
+    torch_input = torch.tensor([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=torch.bfloat16).reshape(1, 1, 1, 5)
+    golden = torch.nn.functional.selu(torch_input)
+
+    tt_in = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_result = ttnn.selu(tt_in)
+    result = ttnn.to_torch(tt_result)
+    assert_with_pcc(golden, result, 0.999)
