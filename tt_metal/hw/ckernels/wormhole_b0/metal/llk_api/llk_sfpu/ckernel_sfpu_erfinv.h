@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "ckernel_sfpu_erfinv_bf16.h"
 #include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_sqrt_custom.h"
 
@@ -45,15 +46,20 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_erfinv() {
     constexpr int ITERATIONS = 8;
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat result = calculate_erfinv_body<false>(in);
-        in = sfpi::dst_reg[0];  // reload due to register pressure
-        sfpi::dst_reg[0] = sfpi::copysgn(result, in);
-        sfpi::dst_reg++;
+    if constexpr (is_fp32_dest_acc_en) {
+        // fp32 destination: preserve the pre-existing Winitzki path.
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::vFloat result = calculate_erfinv_body<false>(in);
+            in = sfpi::dst_reg[0];  // reload due to register pressure
+            sfpi::dst_reg[0] = sfpi::copysgn(result, in);
+            sfpi::dst_reg++;
+        }
+    } else {
+        calculate_erfinv_bf16<ITERATIONS>();
     }
 }
 
