@@ -7,6 +7,7 @@
   <title>add_binary_tile &mdash; TT-Metalium™  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/add_binary_tile.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../../../" id="documentation_options" src="../../../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../../../_static/doctools.js?v=888ff710"></script>
         <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../../_static/js/theme.js"></script>
@@ -291,13 +294,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
-          <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
-          <li class="breadcrumb-item"><a href="compute.html">Compute APIs</a></li>
-      <li class="breadcrumb-item active">add_binary_tile</li>
+  <li><a href="../../../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../../index.html">APIs</a></li><li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li><li class="breadcrumb-item"><a href="compute.html">Compute APIs</a></li>
+  <li class="breadcrumb-item active">add_binary_tile</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/kernel_apis/compute/add_binary_tile.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -325,8 +324,8 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>dst_rounding_mode</strong> – Controls bf16 narrowing for the result. Default truncates (native SFPSTORE behavior); NearestEven applies IEEE 754 round-to-nearest-even in software before the store. Ignored when fp32 DEST accumulation is enabled. Note: in WH and BH, mul_binary_tile and div_binary_tile apply RNE rounding when narrowing to bf16. Kept as the first template parameter for source compatibility with add_binary_tile&lt;DstRoundingMode::…&gt;(…). </p></li>
-<li><p><strong>is_fp32_dest_acc_en</strong> – Enables fp32 DEST accumulation. Defaults to DST_ACCUM_MODE. </p></li>
+<li><p><span class="tt-api-param-name"><strong>dst_rounding_mode</strong></span><span class="tt-api-param-desc">Controls bf16 narrowing for the result. Default truncates (native SFPSTORE behavior); NearestEven applies IEEE 754 round-to-nearest-even in software before the store. Ignored when fp32 DEST accumulation is enabled. Note: in WH and BH, mul_binary_tile and div_binary_tile apply RNE rounding when narrowing to bf16. Kept as the first template parameter for source compatibility with add_binary_tile&lt;DstRoundingMode::…&gt;(…). </span></p></li>
+<li><p><span class="tt-api-param-name"><strong>is_fp32_dest_acc_en</strong></span><span class="tt-api-param-desc">Enables fp32 DEST accumulation. Defaults to DST_ACCUM_MODE. </span></p></li>
 </ul>
 </dd>
 </dl>

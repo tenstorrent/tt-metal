@@ -7,6 +7,7 @@
   <title>reduce_tile &mdash; TT-Metalium™  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/reduce_tile.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../../../" id="documentation_options" src="../../../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../../../_static/doctools.js?v=888ff710"></script>
         <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../../_static/js/theme.js"></script>
@@ -291,13 +294,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
-          <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
-          <li class="breadcrumb-item"><a href="compute.html">Compute APIs</a></li>
-      <li class="breadcrumb-item active">reduce_tile</li>
+  <li><a href="../../../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../../index.html">APIs</a></li><li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li><li class="breadcrumb-item"><a href="compute.html">Compute APIs</a></li>
+  <li class="breadcrumb-item active">reduce_tile</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/kernel_apis/compute/reduce_tile.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -331,60 +330,14 @@
 
 <p>Return value: None</p>
 <p></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Param Type  </p></th>
-<th class="head"><p>Name  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>Template  </p></td>
-<td><p>reduce_type  </p></td>
-<td><p>The type of reduce op - sum, average or maximum  </p></td>
-<td><p>PoolType  </p></td>
-<td><p>{SUM, AVG, MAX}  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Template  </p></td>
-<td><p>reduce_dim  </p></td>
-<td><p>The dimension of reduce op - row, column or both  </p></td>
-<td><p>ReduceDim  </p></td>
-<td><p>{REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>icb  </p></td>
-<td><p>The identifier of the circular buffer (CB) containing operand A  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>icb_scaler  </p></td>
-<td><p>CB holding scaling factors (see above)  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>ocb  </p></td>
-<td><p>The identifier of the output circular buffer (CB)  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-</tbody>
-</table>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Param Type  </span><span class="tt-api-param-desc">Name  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Template  </span><span class="tt-api-param-desc">reduce_type  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Template  </span><span class="tt-api-param-desc">reduce_dim  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">icb  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">icb_scaler  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">ocb  </span></p>
+</div>
 
 </dd>
 </dl>
@@ -405,76 +358,16 @@
 <p>The templates take <code class="docutils literal notranslate"><span class="pre">reduce_type</span></code> which can be <code class="docutils literal notranslate"><span class="pre">ReduceFunc::Sum</span></code>, <code class="docutils literal notranslate"><span class="pre">ReduceFunc::Avg</span></code>, or <code class="docutils literal notranslate"><span class="pre">ReduceFunc::Max</span></code> and <code class="docutils literal notranslate"><span class="pre">reduce_dim</span></code> which can be <code class="docutils literal notranslate"><span class="pre">Reduce::R</span></code>, <code class="docutils literal notranslate"><span class="pre">Reduce::C</span></code>, or <code class="docutils literal notranslate"><span class="pre">Reduce::RC</span></code>. They can also be specified by defines REDUCE_OP and REDUCE_DIM.</p>
 <p>NOTE: Before the next operation is initialized, the <code class="docutils literal notranslate"><span class="pre">reduce_uninit</span></code> function must be called to reset the packer state to default. NOTE: For SUM and AVG operations, the value in <code class="docutils literal notranslate"><span class="pre">icb_scaler</span></code> is a scaling factor of the final sum of values across rows/columns/both, so there is no real constraint in terms of it’s value. For MAX operation, maximum value will be obtained as expected, but it will be scaled by the values in <code class="docutils literal notranslate"><span class="pre">icb_scaler</span></code>. In any case, it is recommended to use the above-mentioned scaling factors to ensure that operations function as intended. Refer to ISA documentation for more details. NOTE: For other valid ways of populating the <code class="docutils literal notranslate"><span class="pre">icb_scaler</span></code>, refer to the ISA documentation. Return value: None</p>
 <p></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Param Type  </p></th>
-<th class="head"><p>Name  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>Template  </p></td>
-<td><p>reduce_type  </p></td>
-<td><p>The type of reduce op - sum, average or maximum  </p></td>
-<td><p>PoolType  </p></td>
-<td><p>{SUM, AVG, MAX}  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Template  </p></td>
-<td><p>reduce_dim  </p></td>
-<td><p>The dimension of reduce op - row, column or both  </p></td>
-<td><p>ReduceDim  </p></td>
-<td><p>{REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>icb  </p></td>
-<td><p>The identifier of the circular buffer (CB) containing operand A  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>icb_scaler  </p></td>
-<td><p>CB holding scaling factors (see above)  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>itile  </p></td>
-<td><p>The index of the tile within the first CB  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Must be less than the size of the CB  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>itile_scaler  </p></td>
-<td><p>The index of the tile within the scaling factor CB.  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Must be less than the size of the CB  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>idst  </p></td>
-<td><p>The index of the tile in DST REG for the result  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Must be less than the acquired size of DST REG  </p></td>
-<td><p>True  </p></td>
-</tr>
-</tbody>
-</table>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Param Type  </span><span class="tt-api-param-desc">Name  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Template  </span><span class="tt-api-param-desc">reduce_type  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Template  </span><span class="tt-api-param-desc">reduce_dim  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">icb  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">icb_scaler  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">itile  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">itile_scaler  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">idst  </span></p>
+</div>
 
 </dd>
 </dl>
@@ -488,84 +381,17 @@
 <p>NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47478. NOTE: Before the next operation is initialized, the <code class="docutils literal notranslate"><span class="pre">reduce_uninit</span></code> function must be called to reset the packer state to default.</p>
 <p>Return value: None</p>
 <p></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Param Type  </p></th>
-<th class="head"><p>Name  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>Template  </p></td>
-<td><p>reduce_type  </p></td>
-<td><p>The type of reduce op - sum, average or maximum  </p></td>
-<td><p>PoolType  </p></td>
-<td><p>{SUM, AVG, MAX}  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Template  </p></td>
-<td><p>reduce_dim  </p></td>
-<td><p>The dimension of reduce op - row, column or both  </p></td>
-<td><p>ReduceDim  </p></td>
-<td><p>{REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>icb  </p></td>
-<td><p>The identifier of the circular buffer (CB) containing operand A  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>icb_scaler  </p></td>
-<td><p>CB holding scaling factors (see reduce_init/reduce_tile)  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>start_itile  </p></td>
-<td><p>The index of the first tile within the first CB  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Must be less than the size of the CB  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>itile_scaler  </p></td>
-<td><p>The index of the tile within the scaling factor CB  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Must be less than the size of the CB  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>start_idst  </p></td>
-<td><p>The index of the first tile in DST REG for the result  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Must be less than the acquired size of DST REG  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>ntiles  </p></td>
-<td><p>The number of consecutive tiles to reduce  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>start_idst + ntiles &lt;= acquired DST REG size  </p></td>
-<td><p>True  </p></td>
-</tr>
-</tbody>
-</table>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Param Type  </span><span class="tt-api-param-desc">Name  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Template  </span><span class="tt-api-param-desc">reduce_type  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Template  </span><span class="tt-api-param-desc">reduce_dim  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">icb  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">icb_scaler  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">start_itile  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">itile_scaler  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">start_idst  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">ntiles  </span></p>
+</div>
 
 </dd>
 </dl>

@@ -7,6 +7,7 @@
   <title>quant_tile &mdash; TT-Metalium™  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/quant_tile.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../../../" id="documentation_options" src="../../../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../../../_static/doctools.js?v=888ff710"></script>
         <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../../_static/js/theme.js"></script>
@@ -291,13 +294,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
-          <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
-          <li class="breadcrumb-item"><a href="compute.html">Compute APIs</a></li>
-      <li class="breadcrumb-item active">quant_tile</li>
+  <li><a href="../../../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../../index.html">APIs</a></li><li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li><li class="breadcrumb-item"><a href="compute.html">Compute APIs</a></li>
+  <li class="breadcrumb-item active">quant_tile</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/kernel_apis/compute/quant_tile.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -316,26 +315,10 @@
 <p>Initialize the sfpu with the zero point argument of the quantization Op. To be called once at beginning of a kernel.</p>
 <p>Return value: None</p>
 <p></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Argument  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Data type  </p></th>
-<th class="head"><p>Valid range  </p></th>
-<th class="head"><p>Required  </p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>zero_point  </p></td>
-<td><p>The zero point of the quantization Op  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Any number  </p></td>
-<td><p>Yes  </p></td>
-</tr>
-</tbody>
-</table>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Argument  </span><span class="tt-api-param-desc">Description  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">zero_point  </span><span class="tt-api-param-desc">The zero point of the quantization Op  </span></p>
+</div>
 
 </dd>
 </dl>
@@ -348,40 +331,12 @@
 <p>Performs an elementwise per-tensor affine quantization operation on the first operand using the scaling factor in the second operand. Output overwrites odst in DST.</p>
 <p>Return value: None</p>
 <p></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Argument  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>idst0  </p></td>
-<td><p>The index of the tile in DST register buffer to use as first operand  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Must be less than the size of the DST register buffer  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>idst1  </p></td>
-<td><p>The index of the tile in DST register buffer to use as second operand  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Must be less than the size of the DST register buffer  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>odst  </p></td>
-<td><p>The index of the tile in DST register buffer to use as output  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Must be less than the size of the DST register buffer  </p></td>
-<td><p>True  </p></td>
-</tr>
-</tbody>
-</table>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Argument  </span><span class="tt-api-param-desc">Description  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">idst0  </span><span class="tt-api-param-desc">The index of the tile in DST register buffer to use as first operand  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">idst1  </span><span class="tt-api-param-desc">The index of the tile in DST register buffer to use as second operand  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">odst  </span><span class="tt-api-param-desc">The index of the tile in DST register buffer to use as output  </span></p>
+</div>
 
 </dd>
 </dl>

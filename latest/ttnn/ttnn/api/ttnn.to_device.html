@@ -7,6 +7,7 @@
   <title>ttnn.to_device &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.to_device.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -330,11 +333,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.to_device</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.to_device</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.to_device.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -356,20 +357,20 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>tensor</strong> (<em>ttnn.Tensor</em>) – The tensor to be copied from host to device.</p></li>
-<li><p><strong>device</strong> (<em>ttnn.Device</em><em> | </em><em>ttnn.MeshDevice</em>) – The target device where the tensor will be copied.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – The memory configuration to use. Defaults to <cite>None</cite>, DRAM_MEMORY_CONFIG will be used.</p></li>
+<li><p><span class="tt-api-param-name"><strong>tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">The tensor to be copied from host to device.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>device</strong> (<em>ttnn.Device</em><em> | </em><em>ttnn.MeshDevice</em>)</span><span class="tt-api-param-desc">The target device where the tensor will be copied.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The memory configuration to use. Defaults to <cite>None</cite>, DRAM_MEMORY_CONFIG will be used.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><strong>queue_id</strong> (<em>ttnn.QueueId</em><em>, </em><em>optional</em>) – The queue id to use. Defaults to <cite>None</cite>.</p>
+<p><span class="tt-api-param-name"><strong>queue_id</strong> (<em>ttnn.QueueId</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The queue id to use. Defaults to <cite>None</cite>.</span></p>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – The device tensor copy.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">The device tensor copy.</span></p>
 </dd>
 </dl>
 <div class="admonition-example admonition">

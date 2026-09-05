@@ -7,6 +7,7 @@
   <title>ttnn.experimental.indexer_score_msa &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.experimental.indexer_score_msa.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -333,11 +336,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.experimental.indexer_score_msa</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.experimental.indexer_score_msa</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.experimental.indexer_score_msa.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -366,50 +367,52 @@ For DeepSeek-V3.2 / GLM-5’s relu + gated + head-summed indexer, use
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>q</strong> – [B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)</p></li>
-<li><p><strong>k</strong> – [B, 1, T, D] bf16 or bfp8_b tiled, single shared head</p></li>
-<li><p><strong>chunk_start_idx</strong> – absolute global position of rank 0’s query row 0
+<li><p><span class="tt-api-param-name"><strong>q</strong></span><span class="tt-api-param-desc">[B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>k</strong></span><span class="tt-api-param-desc">[B, 1, T, D] bf16 or bfp8_b tiled, single shared head</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>chunk_start_idx</strong></span><span class="tt-api-param-desc">absolute global position of rank 0’s query row 0
 (causality: key t visible to query s iff t &lt;= chunk_start + s).
 OMIT on a mesh -&gt; deduced as T - sp_ring*Sq; single device: set to
-history + rank*Sq per rank (same semantics as indexer_score_dsa).</p></li>
-<li><p><strong>scale</strong> – constant gate applied to every head (e.g. 1/sqrt(d))</p></li>
-<li><p><strong>num_groups</strong> – REQUIRED (no default). 1 sums all Hi heads into one plane
+history + rank*Sq per rank (same semantics as indexer_score_dsa).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>scale</strong></span><span class="tt-api-param-desc">constant gate applied to every head (e.g. 1/sqrt(d))</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>num_groups</strong></span><span class="tt-api-param-desc">REQUIRED (no default). 1 sums all Hi heads into one plane
 (the TP=4 group-aligned deployment, Hi=1/device). G&gt;1 partitions the heads into G groups
 of Hi/G and sums within each group -&gt; output [B, G, Sq, T] (multiple
 GQA groups on one chip). G&gt;1 needs all heads resident
-(head_group_size 0 or Hi) and k_chunk_size &gt;= 64.</p></li>
-<li><p><strong>block_size</strong> – 0 (default) = no pooling -&gt; score [B, G, Sq, T]. &gt;0 =
+(head_group_size 0 or Hi) and k_chunk_size &gt;= 64.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>block_size</strong></span><span class="tt-api-param-desc">0 (default) = no pooling -&gt; score [B, G, Sq, T]. &gt;0 =
 block-max-pool over block_size keys -&gt; score [B, G, Sq, T/block_size]
 (block selection; the downstream topk then picks per-group top-k
 blocks). Requires block_size a multiple of 32, T % block_size == 0,
-and k_chunk_size % block_size == 0.</p></li>
-<li><p><strong>program_config</strong> – work-unit knobs (q_chunk_size, k_chunk_size,
-head_group_size; elements, tile-aligned). Defaults always fit L1.</p></li>
-<li><p><strong>compute_kernel_config</strong> – optional DeviceComputeKernelConfig. Only
+and k_chunk_size % block_size == 0.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>program_config</strong></span><span class="tt-api-param-desc">work-unit knobs (q_chunk_size, k_chunk_size,
+head_group_size; elements, tile-aligned). Defaults always fit L1.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_kernel_config</strong></span><span class="tt-api-param-desc">optional DeviceComputeKernelConfig. Only
 math_fidelity is honored (default: HiFi2, or LoFi when q and k
 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
-stay false (the custom LLK is validated for bf16 DEST half-sync).</p></li>
-<li><p><strong>cache_batch_idx</strong> – optional int. Selects the batch slot of a shared
+stay false (the custom LLK is validated for bf16 DEST half-sync).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>cache_batch_idx</strong></span><span class="tt-api-param-desc">optional int. Selects the batch slot of a shared
 [B, 1, T, D] k cache (which may then be ND-sharded across DRAM
 banks). Re-applied each dispatch, so switching slots does not
-recompile. Same semantics as indexer_score_dsa.</p></li>
-<li><p><strong>kv_len</strong> – optional int. Valid prefix of a k allocated at its full T;
+recompile. Same semantics as indexer_score_dsa.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>kv_len</strong></span><span class="tt-api-param-desc">optional int. Valid prefix of a k allocated at its full T;
 the rest is masked out. Tile-aligned, in (0, T], with
-chunk_start_idx + Sq &lt;= kv_len. When block-max-pooling
+chunk_start_idx &lt; kv_len – the chunk must BEGIN inside the valid
+prefix, but its causal window MAY end past kv_len (and past T).
+When block-max-pooling
 (block_size &gt; 0) it must also be a multiple of block_size (whole
 blocks are written). Re-applied each dispatch (a serving loop
 growing kv_len reuses one program). Only columns/blocks within
-the valid prefix are written.</p></li>
-<li><p><strong>seq_shard_axes</strong> – the mesh axes the query seq is sharded over. MSA has no
+the valid prefix are written.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>seq_shard_axes</strong></span><span class="tt-api-param-desc">the mesh axes the query seq is sharded over. MSA has no
 TP sub-shard, so at most one axis: [] = linear device order, [sp] = SP
-ring (device r along it uses chunk_start = chunk_start_idx + r*Sq).</p></li>
-<li><p><strong>block_cyclic_chunk_local</strong> (<em>block_cyclic_sp_axis /</em>) – same semantics as
+ring (device r along it uses chunk_start = chunk_start_idx + r*Sq).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>block_cyclic_chunk_local</strong> (<em>block_cyclic_sp_axis /</em>)</span><span class="tt-api-param-desc">same semantics as
 indexer_score_dsa. block_cyclic_sp_axis = the MESH AXIS the K cache
 was striped over (sp derived from the mesh shape on that axis) and
 block_cyclic_chunk_local = the per-shard chunk length; the reader
 reads the permuted cache back in natural token order so the per-group
 scores (and the block-max-pool, which pools token-contiguous blocks)
-come out correct. Unset = contiguous K.</p></li>
+come out correct. Unset = contiguous K.</span></p></li>
 </ul>
 </dd>
 </dl>

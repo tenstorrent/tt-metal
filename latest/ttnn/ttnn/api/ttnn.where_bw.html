@@ -7,6 +7,7 @@
   <title>ttnn.where_bw &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.where_bw.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -415,11 +418,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.where_bw</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.where_bw</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.where_bw.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -448,26 +449,26 @@ The values of <code class="xref py py-attr docutils literal notranslate"><span c
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>grad_tensor</strong> (<em>ttnn.Tensor</em>) – the gradient with respect to the output of the forward <cite>ttnn.where</cite> call.</p></li>
-<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the predicate tensor of the forward <cite>ttnn.where</cite> call, containing only 0’s or 1’s.</p></li>
-<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em>) – the true_value tensor of the forward <cite>ttnn.where</cite> call.</p></li>
-<li><p><strong>input_tensor_c</strong> (<em>ttnn.Tensor</em>) – the false_value tensor of the forward <cite>ttnn.where</cite> call.</p></li>
+<li><p><span class="tt-api-param-name"><strong>grad_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the gradient with respect to the output of the forward <cite>ttnn.where</cite> call.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the predicate tensor of the forward <cite>ttnn.where</cite> call, containing only 0’s or 1’s.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the true_value tensor of the forward <cite>ttnn.where</cite> call.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_c</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the false_value tensor of the forward <cite>ttnn.where</cite> call.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>are_required_outputs</strong> (<em>List</em><em>[</em><em>bool</em><em>]</em><em>, </em><em>optional</em>) – which output gradients to compute. A <cite>False</cite> entry skips that gradient, and the returned list holds <cite>None</cite> in its place. Defaults to <cite>[True, True]</cite>.</p></li>
-<li><p><strong>input_a_grad</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated tensor to hold the first of the two results (corresponding to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code>). Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>input_b_grad</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated tensor to hold the second of the two results (corresponding to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_c</span></code>). Defaults to <cite>None</cite>.</p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>are_required_outputs</strong> (<em>List</em><em>[</em><em>bool</em><em>]</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">which output gradients to compute. A <cite>False</cite> entry skips that gradient, and the returned list holds <cite>None</cite> in its place. Defaults to <cite>[True, True]</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_a_grad</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">preallocated tensor to hold the first of the two results (corresponding to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code>). Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_b_grad</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">preallocated tensor to hold the second of the two results (corresponding to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_c</span></code>). Defaults to <cite>None</cite>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>List of ttnn.Tensor</em> – the gradients with respect to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_c</span></code>, or <cite>None</cite> if the corresponding entry in <code class="xref py py-attr docutils literal notranslate"><span class="pre">are_required_outputs</span></code> is <cite>False</cite>.</p>
+<p><span class="tt-api-param-name"><em>List of ttnn.Tensor</em></span><span class="tt-api-param-desc">the gradients with respect to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_c</span></code>, or <cite>None</cite> if the corresponding entry in <code class="xref py py-attr docutils literal notranslate"><span class="pre">are_required_outputs</span></code> is <cite>False</cite>.</span></p>
 </dd>
 </dl>
 <div class="admonition note">

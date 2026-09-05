@@ -1,0 +1,8 @@
+﻿ttnn.experimental.indexed\_fused\_update\_cache
+===============================================
+
+.. currentmodule:: ttnn.experimental
+
+.. _ttnn.experimental.indexed_fused_update_cache:
+
+.. autooperation:: ttnn.experimental.indexed_fused_update_cache

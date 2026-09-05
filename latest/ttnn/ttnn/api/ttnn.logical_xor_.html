@@ -7,6 +7,7 @@
   <title>ttnn.logical_xor_ &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.logical_xor_.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
         <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
@@ -375,11 +378,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.logical_xor_</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.logical_xor_</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.logical_xor_.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -403,27 +404,27 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
-<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em><em> or </em><em>Number</em>) – the input tensor.</p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em><em> or </em><em>Number</em>)</span><span class="tt-api-param-desc">the input tensor.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – sub core grids for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>sub_device_id</strong> (<em>ttnn.SubDeviceId</em><em>, </em><em>optional</em>) – sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
+<li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">sub core grids for the operation. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>sub_device_id</strong> (<em>ttnn.SubDeviceId</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
 </dd>
 </dl>
-<p>Binary elementwise operations, C=op(A,B), support input tensors A and B in row major and tile layout, in interleaved or sharded format (height, width or block sharded), in DRAM or L1. A and B are completely independent, and can have different tensor specs.</p>
+<p>Binary elementwise operations, C=op(A,B), support input tensors A and B in tile and row major layouts (unless dtype requires specific layout, e.g. BFLOAT8_B or BFLOAT4_B), in interleaved or sharded format (height, width or block sharded), in DRAM or L1. A and B are independent, and can have different tensor specs, with restrictions as in notes below.</p>
 <p>Broadcast of A and B operands is supported up to dimension 5 (DNCHW). Any dimensions of size 1 in either A or B will be expanded to match the other input, and data will be duplicated along that dimension. For example, if the shape of A is [2,1,1,32] and B is [1,16,8,1], the output shape will be [2,16,8,32]. The size of dimensions higher than 5 must match between A and B.</p>
-<p>The output C also supports row major and tile layout, interleaved or sharded format (height, width or block sharded), in DRAM or L1. The tensor spec of C is independent of A and B, and can be explicitly set using the optional output tensor input; if not provided, the operation will attempt a best decision at an appropriate tensor spec. The dimensions of C, or equivalently the optional output tensor, must match the broadcast-matched size of A and B.</p>
+<p>The output C supports the same layouts and formats as A and B, under the same dtype restriction. For operations that return a new tensor, the layout and memory configuration of C are independent of A and B. The memory configuration can be set with memory_config, and the full tensor spec with output_tensor where the operation takes one; if neither is given, the operation will attempt a best decision at an appropriate tensor spec. The dimensions of C, or of output_tensor if given, must match the broadcast-matched size of A and B. By default, C takes the dtype of A unless an operation-specific rule applies: comparison ops return a boolean mask, and a mixed float pair follows A rather than the wider dtype. There is no boolean dtype, so the mask is carried as 1 for true and 0 for false in the output dtype. Where supported, the output dtype can be overridden by the dtype argument or output_tensor. In-place operations write into A, so C is A and keeps its layout, memory configuration and dtype.</p>
 <p>Performance considerations:
 Elementwise operations operate natively in tile format, tiled tensors are preferred as an input, and row-major tensors are tilized and untilized during the operation.
 L1 sharded layout is preferred, with no broadcast and matching tensor specs for A, B and C.</p>

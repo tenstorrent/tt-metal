@@ -7,6 +7,7 @@
   <title>ttnn.reduce_to_root &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.reduce_to_root.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -321,11 +324,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.reduce_to_root</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.reduce_to_root</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.reduce_to_root.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -347,29 +348,29 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor_l</strong> (<em>ttnn.Tensor</em>) – the SDPA values (l) state tensor, sharded across the 4 devices.</p></li>
-<li><p><strong>input_tensor_s</strong> (<em>ttnn.Tensor</em>) – the SDPA running-sum (s) state tensor, sharded across the 4 devices.</p></li>
-<li><p><strong>input_tensor_m</strong> (<em>ttnn.Tensor</em>) – the SDPA running-max (m) state tensor, sharded across the 4 devices.</p></li>
-<li><p><strong>root_coord</strong> (<em>ttnn.MeshCoordinate</em>) – Coordinate of the root device. Should be (1, 0) for the 4-device setup.</p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_l</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the SDPA values (l) state tensor, sharded across the 4 devices.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_s</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the SDPA running-sum (s) state tensor, sharded across the 4 devices.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_m</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the SDPA running-max (m) state tensor, sharded across the 4 devices.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>root_coord</strong> (<em>ttnn.MeshCoordinate</em>)</span><span class="tt-api-param-desc">Coordinate of the root device. Should be (1, 0) for the 4-device setup.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>scale_fp32</strong> (<em>float</em><em>, </em><em>optional</em>) – scale applied during the reduction. Defaults to <cite>1.0</cite>.</p></li>
-<li><p><strong>topology</strong> (<em>ttnn.Topology</em><em>, </em><em>optional</em>) – Fabric topology. Defaults to <cite>ttnn.Topology.Linear</cite>.</p></li>
-<li><p><strong>output_tensor_l</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor for values. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>output_tensor_s</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor for sum. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>output_tensor_m</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor for max. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>intermediate_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated intermediate tensor. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>input_mux_cores</strong> (<em>List</em><em>[</em><em>ttnn.CoreCoord</em><em>]</em><em>, </em><em>optional</em>) – the 4 mux core coordinates used for the reduction. Defaults to <cite>None</cite>.</p></li>
+<li><p><span class="tt-api-param-name"><strong>scale_fp32</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">scale applied during the reduction. Defaults to <cite>1.0</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>topology</strong> (<em>ttnn.Topology</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Fabric topology. Defaults to <cite>ttnn.Topology.Linear</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_tensor_l</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated output tensor for values. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_tensor_s</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated output tensor for sum. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_tensor_m</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated output tensor for max. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>intermediate_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated intermediate tensor. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_mux_cores</strong> (<em>List</em><em>[</em><em>ttnn.CoreCoord</em><em>]</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the 4 mux core coordinates used for the reduction. Defaults to <cite>None</cite>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>List[ttnn.Tensor]</em> – the reduced (l, s, m) tensors, each with the same spec as the corresponding input. The results are valid only on the root device.</p>
+<p><span class="tt-api-param-name"><em>List[ttnn.Tensor]</em></span><span class="tt-api-param-desc">the reduced (l, s, m) tensors, each with the same spec as the corresponding input. The results are valid only on the root device.</span></p>
 </dd>
 </dl>
 <p>Supported dtypes and layouts:</p>

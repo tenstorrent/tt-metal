@@ -7,6 +7,7 @@
   <title>ttnn.linear &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.linear.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -320,11 +323,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.linear</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.linear</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.linear.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -402,34 +403,34 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the first tensor to be multiplied. Needs to be on the device.</p></li>
-<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em>) – the second tensor to be multiplied. Needs to be on the device.</p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the first tensor to be multiplied. Needs to be on the device.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the second tensor to be multiplied. Needs to be on the device.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the bias tensor to be added. If specified, needs to be on the device. Defaults to <cite>None</cite>.
+<li><p><span class="tt-api-param-name"><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the bias tensor to be added. If specified, needs to be on the device. Defaults to <cite>None</cite>.
 Most program configs take a row-vector bias of shape <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">N]</span></code> (or <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">1,</span> <span class="pre">1,</span> <span class="pre">N]</span></code>), broadcast across the output rows.
 The batched <code class="docutils literal notranslate"><span class="pre">MatmulMultiCoreReuseProgramConfig</span></code> path additionally supports a full-tile bias of shape <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">N]</span></code>,
-added to the output and broadcast over the batch dimension.</p></li>
-<li><p><strong>transpose_a</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to transpose input_tensor_a. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>transpose_b</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to transpose input_tensor_b. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration of the output tensor. Defaults to <cite>None</cite>, which will result in using <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</p></li>
-<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – the data type of the output tensor. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>program_config</strong> (<em>MatmulProgramConfig</em><em>, </em><em>optional</em>) – the program configuration for the matmul operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>activation</strong> (<em>str</em><em> or </em><em>ttnn.UnaryWithParam</em><em>, </em><em>optional</em>) – the activation function to be applied. Defaults to <cite>None</cite>. When using sharded tensors, the <code class="xref py py-attr docutils literal notranslate"><span class="pre">fused_activation</span></code> parameter of the <code class="xref py py-attr docutils literal notranslate"><span class="pre">program_config</span></code> should be used instead.</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – the compute kernel configuration for the matmul operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>core_grid</strong> (<em>ttnn.CoreGrid</em><em>, </em><em>optional</em>) – the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>output_tile</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>) – Specifies the output tile configuration. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>optional_output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – User provided on-device output tensor where the result of linear is to be written. Defaults to <cite>None</cite>.</p></li>
+added to the output and broadcast over the batch dimension.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>transpose_a</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Whether to transpose input_tensor_a. Defaults to <cite>False</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>transpose_b</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Whether to transpose input_tensor_b. Defaults to <cite>False</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the memory configuration of the output tensor. Defaults to <cite>None</cite>, which will result in using <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the data type of the output tensor. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>program_config</strong> (<em>MatmulProgramConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the program configuration for the matmul operation. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>activation</strong> (<em>str</em><em> or </em><em>ttnn.UnaryWithParam</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the activation function to be applied. Defaults to <cite>None</cite>. When using sharded tensors, the <code class="xref py py-attr docutils literal notranslate"><span class="pre">fused_activation</span></code> parameter of the <code class="xref py py-attr docutils literal notranslate"><span class="pre">program_config</span></code> should be used instead.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the compute kernel configuration for the matmul operation. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>core_grid</strong> (<em>ttnn.CoreGrid</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_tile</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Specifies the output tile configuration. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>optional_output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">User provided on-device output tensor where the result of linear is to be written. Defaults to <cite>None</cite>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
 </dd>
 </dl>
 <div class="admonition-example admonition">

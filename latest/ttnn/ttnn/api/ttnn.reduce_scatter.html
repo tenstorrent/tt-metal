@@ -7,6 +7,7 @@
   <title>ttnn.reduce_scatter &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.reduce_scatter.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -321,11 +324,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.reduce_scatter</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.reduce_scatter</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.reduce_scatter.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -347,32 +348,32 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – Input tensor to be reduced and scattered.</p></li>
-<li><p><strong>dim</strong> (<em>int</em>) – Dimension along which to reduce.</p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Input tensor to be reduced and scattered.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dim</strong> (<em>int</em>)</span><span class="tt-api-param-desc">Dimension along which to reduce.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>cluster_axis</strong> (<em>int</em><em>, </em><em>optional</em>) – The cluster axis to reduce across. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>subdevice_id</strong> (<em>ttnn.SubDeviceId</em><em>, </em><em>optional</em>) – Subdevice id for worker cores.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Output memory configuration.</p></li>
-<li><p><strong>intermediate_memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for intermediate buffer used within the operation.</p></li>
-<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor.</p></li>
-<li><p><strong>num_links</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of links to use for the reduce-scatter operation. Defaults to <cite>None</cite>, for which the number of links is determined automatically.</p></li>
-<li><p><strong>topology</strong> (<em>ttnn.Topology</em><em>, </em><em>optional</em>) – Fabric topology. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>chunks_per_sync</strong> (<em>int</em><em>, </em><em>optional</em>) – Hyperparameter.</p></li>
-<li><p><strong>num_workers_per_link</strong> (<em>int</em><em>, </em><em>optional</em>) – Hyperparameter.</p></li>
-<li><p><strong>num_buffers_per_channel</strong> (<em>int</em><em>, </em><em>optional</em>) – Hyperparameter.</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Compute kernel configuration for the reduction. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>use_l1_small_for_semaphores</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, allocate internal global semaphores in L1_SMALL instead of L1 to reduce L1 fragmentation. Defaults to <cite>False</cite>.</p></li>
+<li><p><span class="tt-api-param-name"><strong>cluster_axis</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The cluster axis to reduce across. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>subdevice_id</strong> (<em>ttnn.SubDeviceId</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Subdevice id for worker cores.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Output memory configuration.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>intermediate_memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for intermediate buffer used within the operation.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated output tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>num_links</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The number of links to use for the reduce-scatter operation. Defaults to <cite>None</cite>, for which the number of links is determined automatically.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>topology</strong> (<em>ttnn.Topology</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Fabric topology. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>chunks_per_sync</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Hyperparameter.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>num_workers_per_link</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Hyperparameter.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>num_buffers_per_channel</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Hyperparameter.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Compute kernel configuration for the reduction. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>use_l1_small_for_semaphores</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">If True, allocate internal global semaphores in L1_SMALL instead of L1 to reduce L1 fragmentation. Defaults to <cite>False</cite>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – The reduced and scattered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the <cite>cluster_axis</cite> if specified, else the total number of devices along the mesh.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">The reduced and scattered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the <cite>cluster_axis</cite> if specified, else the total number of devices along the mesh.</span></p>
 </dd>
 </dl>
 <p>Supported dtypes and layouts:</p>

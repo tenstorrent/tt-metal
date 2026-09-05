@@ -7,6 +7,7 @@
   <title>ttnn.group_norm &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.group_norm.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
         <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
@@ -326,11 +329,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.group_norm</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.group_norm</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.group_norm.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -385,33 +386,33 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p>
+<p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor.</span></p>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>num_groups</strong> (<em>int</em>) – Number of groups to split the tensor’s channels into.</p></li>
-<li><p><strong>epsilon</strong> (<em>float</em>) – Defaults to 1e-12.</p></li>
-<li><p><strong>input_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>. When processing the inputs, the mask is used to only look at the elements of the current group.</p></li>
-<li><p><strong>weight</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Gamma (scale) parameter for the affine transformation. When omitted, no scaling is applied. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Beta (shift) parameter for the affine transformation. When omitted, no shift is applied. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – Output data type. When provided, it must equal the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> dtype; a mismatch is rejected. Defaults to <cite>None</cite> (output dtype matches the input).</p></li>
-<li><p><strong>core_grid</strong> (<em>CoreGrid</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>inplace</strong> (<em>bool</em><em>, </em><em>optional</em>) – Defaults to <cite>True</cite>.</p></li>
-<li><p><strong>output_layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>num_out_blocks</strong> (<em>int</em><em>, </em><em>optional</em>) – For non-sharded (interleaved) inputs, splits the per-core output height (<code class="docutils literal notranslate"><span class="pre">block_h</span></code>, in tiles) into <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> chunks so each iteration uses less SRAM, at the cost of performance. Ignored for sharded inputs. Should only be set if needed to relieve SRAM pressure. Accepted explicit values are <code class="docutils literal notranslate"><span class="pre">-1</span></code> (use the built-in auto-heuristic) or a chunk count in range <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">block_h]</span></code>. Defaults to <cite>None</cite>, whose meaning depends on <code class="xref py py-attr docutils literal notranslate"><span class="pre">core_grid</span></code> (non-sharded inputs only): when <code class="xref py py-attr docutils literal notranslate"><span class="pre">core_grid</span></code> is also <cite>None</cite> (auto-selected), <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> is determined automatically using the same auto-heuristic as <code class="docutils literal notranslate"><span class="pre">-1</span></code>, and passing an explicit <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> in that case is rejected. When <code class="xref py py-attr docutils literal notranslate"><span class="pre">core_grid</span></code> is provided and <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> is <cite>None</cite> (default), <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> defaults to <code class="docutils literal notranslate"><span class="pre">1</span></code> (no chunking).</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Compute kernel configuration for the op. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>negative_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>. Can be used only in row-major sharded input/output tensors. Created with ttnn.create_group_norm_input_negative_mask. Used to reduce the number of CB’s used in the sharded version of the kernel. When no tensor is passed the op synthesizes the mask in L1 if and only if the program would otherwise not fit in L1.</p></li>
-<li><p><strong>use_welford</strong> (<em>bool</em><em>, </em><em>optional</em>) – Defaults to <cite>False</cite>. If <cite>True</cite>, the Welford’s algorithm is used to compute the mean and variance. Welford cannot exclude the tile-padding rows, so if the per-sample <code class="docutils literal notranslate"><span class="pre">H*W</span></code> is not a multiple of the tile height this silently falls back to the two-pass path – which handles that case correctly – and <code class="xref py py-attr docutils literal notranslate"><span class="pre">reciprocals</span></code> is ignored. The fallback is warned once per process.</p></li>
-<li><p><strong>reciprocals</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>. FP32 tensor containing pre-computed reciprocal values. Only valid when <code class="docutils literal notranslate"><span class="pre">use_welford</span></code> is True. Must be sharded to L1 using the legacy <code class="docutils literal notranslate"><span class="pre">ShardSpec</span></code> representation, with the shard grid matching the compute <code class="xref py py-attr docutils literal notranslate"><span class="pre">core_grid</span></code>. Interleaved tensors and <code class="docutils literal notranslate"><span class="pre">NdShardSpec</span></code> sharding are currently not supported for the <code class="xref py py-attr docutils literal notranslate"><span class="pre">reciprocals</span></code> tensor.</p></li>
+<li><p><span class="tt-api-param-name"><strong>num_groups</strong> (<em>int</em>)</span><span class="tt-api-param-desc">Number of groups to split the tensor’s channels into.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>epsilon</strong> (<em>float</em>)</span><span class="tt-api-param-desc">Defaults to 1e-12.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Defaults to <cite>None</cite>. When processing the inputs, the mask is used to only look at the elements of the current group.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>weight</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Gamma (scale) parameter for the affine transformation. When omitted, no scaling is applied. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Beta (shift) parameter for the affine transformation. When omitted, no shift is applied. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Output data type. When provided, it must equal the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> dtype; a mismatch is rejected. Defaults to <cite>None</cite> (output dtype matches the input).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>core_grid</strong> (<em>CoreGrid</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>inplace</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Defaults to <cite>True</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>num_out_blocks</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">For non-sharded (interleaved) inputs, splits the per-core output height (<code class="docutils literal notranslate"><span class="pre">block_h</span></code>, in tiles) into <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> chunks so each iteration uses less SRAM, at the cost of performance. Ignored for sharded inputs. Should only be set if needed to relieve SRAM pressure. Accepted explicit values are <code class="docutils literal notranslate"><span class="pre">-1</span></code> (use the built-in auto-heuristic) or a chunk count in range <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">block_h]</span></code>. Defaults to <cite>None</cite>, whose meaning depends on <code class="xref py py-attr docutils literal notranslate"><span class="pre">core_grid</span></code> (non-sharded inputs only): when <code class="xref py py-attr docutils literal notranslate"><span class="pre">core_grid</span></code> is also <cite>None</cite> (auto-selected), <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> is determined automatically using the same auto-heuristic as <code class="docutils literal notranslate"><span class="pre">-1</span></code>, and passing an explicit <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> in that case is rejected. When <code class="xref py py-attr docutils literal notranslate"><span class="pre">core_grid</span></code> is provided and <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> is <cite>None</cite> (default), <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> defaults to <code class="docutils literal notranslate"><span class="pre">1</span></code> (no chunking).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Compute kernel configuration for the op. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>negative_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Defaults to <cite>None</cite>. Can be used only in row-major sharded input/output tensors. Created with ttnn.create_group_norm_input_negative_mask. Used to reduce the number of CB’s used in the sharded version of the kernel. When no tensor is passed the op synthesizes the mask in L1 if and only if the program would otherwise not fit in L1.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>use_welford</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Defaults to <cite>False</cite>. If <cite>True</cite>, the Welford’s algorithm is used to compute the mean and variance. Welford cannot exclude the tile-padding rows, so if the per-sample <code class="docutils literal notranslate"><span class="pre">H*W</span></code> is not a multiple of the tile height this silently falls back to the two-pass path – which handles that case correctly – and <code class="xref py py-attr docutils literal notranslate"><span class="pre">reciprocals</span></code> is ignored. The fallback is warned once per process.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>reciprocals</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Defaults to <cite>None</cite>. FP32 tensor containing pre-computed reciprocal values. Only valid when <code class="docutils literal notranslate"><span class="pre">use_welford</span></code> is True. Must be sharded to L1 using the legacy <code class="docutils literal notranslate"><span class="pre">ShardSpec</span></code> representation, with the shard grid matching the compute <code class="xref py py-attr docutils literal notranslate"><span class="pre">core_grid</span></code>. Interleaved tensors and <code class="docutils literal notranslate"><span class="pre">NdShardSpec</span></code> sharding are currently not supported for the <code class="xref py py-attr docutils literal notranslate"><span class="pre">reciprocals</span></code> tensor.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
 </dd>
 </dl>
 <div class="admonition note">

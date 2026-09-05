@@ -7,6 +7,7 @@
   <title>ttnn.rand &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.rand.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -327,11 +330,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.rand</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.rand</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.rand.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -379,25 +380,25 @@ uniform distribution. DataType.uint8 and fp8_e4m3 are not supported.</p>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>device</strong> (<em>ttnn.Device</em><em> | </em><em>ttnn.MeshDevice</em><em>, </em><em>optional</em>) – The device on which the tensor will be allocated. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – The data type of the tensor. Defaults to ttnn.bfloat16.</p></li>
-<li><p><strong>layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – The layout of the tensor. Defaults to ttnn.TILE_LAYOUT.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</p></li>
-<li><p><strong>low</strong> (<em>float</em><em>, </em><em>optional</em>) – The lower bound of the range (inclusive).</p></li>
-<li><p><strong>high</strong> (<em>float</em><em>, </em><em>optional</em>) – The upper bound of the range (exclusive).</p></li>
-<li><p><strong>seed</strong> (<em>int</em><em>, </em><em>optional</em>) – An optional seed to initialize the random number generator
-for reproducible results. Defaults to 0.</p></li>
-<li><p><strong>mesh_mapper</strong> (<em>ttnn.MeshMapperConfig</em><em>, </em><em>optional</em>) – Distribution strategy for multi-device tensors.
+<li><p><span class="tt-api-param-name"><strong>device</strong> (<em>ttnn.Device</em><em> | </em><em>ttnn.MeshDevice</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The device on which the tensor will be allocated. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The data type of the tensor. Defaults to ttnn.bfloat16.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The layout of the tensor. Defaults to ttnn.TILE_LAYOUT.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>low</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The lower bound of the range (inclusive).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>high</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The upper bound of the range (exclusive).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>seed</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">An optional seed to initialize the random number generator
+for reproducible results. Defaults to 0.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>mesh_mapper</strong> (<em>ttnn.MeshMapperConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Distribution strategy for multi-device tensors.
 Use <code class="docutils literal notranslate"><span class="pre">ttnn.MeshMapperConfig([ttnn.PlacementShard(dim)])</span></code> to shard across mesh devices along the
 given tensor dimension, or <code class="docutils literal notranslate"><span class="pre">ttnn.MeshMapperConfig([ttnn.PlacementReplicate()])</span></code> to replicate.
 When sharding, each device generates unique random values; when replicating with a fixed seed,
-all devices produce the same values. Defaults to <cite>None</cite>.</p></li>
+all devices produce the same values. Defaults to <cite>None</cite>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – A tensor with specified shape, dtype, and layout containing random values.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">A tensor with specified shape, dtype, and layout containing random values.</span></p>
 </dd>
 </dl>
 <div class="admonition-example admonition">

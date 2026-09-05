@@ -7,6 +7,7 @@
   <title>ttnn.conv1d &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.conv1d.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -321,11 +324,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.conv1d</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.conv1d</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.conv1d.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -347,32 +348,32 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – The input tensor. This must be in the format [N, H, W, C]. It can be on host or device.</p></li>
-<li><p><strong>weight_tensor</strong> (<em>ttnn.Tensor</em>) – The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width].</p></li>
-<li><p><strong>device</strong> (<em>ttnn.MeshDevice</em>) – The device to use.</p></li>
-<li><p><strong>in_channels</strong> (<em>int</em>) – Number of input channels.</p></li>
-<li><p><strong>out_channels</strong> (<em>int</em>) – Number of output channels.</p></li>
-<li><p><strong>batch_size</strong> (<em>int</em>) – Batch size.</p></li>
-<li><p><strong>input_length</strong> (<em>int</em>) – Length of the input signal.</p></li>
-<li><p><strong>kernel_size</strong> (<em>int</em>) – Size of the convolving kernel.</p></li>
-<li><p><strong>stride</strong> (<em>int</em>) – Stride of the cross-correlation.</p></li>
-<li><p><strong>padding</strong> (<em>int</em><em> or </em><em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – Zero-padding added to both sides of the input. pad_length or [pad_left, pad_right].</p></li>
-<li><p><strong>dilation</strong> (<em>int</em>) – Spacing between kernel elements.</p></li>
-<li><p><strong>groups</strong> (<em>int</em>) – Number of blocked connections from input channels to output channels.</p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">The input tensor. This must be in the format [N, H, W, C]. It can be on host or device.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>weight_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width].</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>device</strong> (<em>ttnn.MeshDevice</em>)</span><span class="tt-api-param-desc">The device to use.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>in_channels</strong> (<em>int</em>)</span><span class="tt-api-param-desc">Number of input channels.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>out_channels</strong> (<em>int</em>)</span><span class="tt-api-param-desc">Number of output channels.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>batch_size</strong> (<em>int</em>)</span><span class="tt-api-param-desc">Batch size.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_length</strong> (<em>int</em>)</span><span class="tt-api-param-desc">Length of the input signal.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>kernel_size</strong> (<em>int</em>)</span><span class="tt-api-param-desc">Size of the convolving kernel.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>stride</strong> (<em>int</em>)</span><span class="tt-api-param-desc">Stride of the cross-correlation.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>padding</strong> (<em>int</em><em> or </em><em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">Zero-padding added to both sides of the input. pad_length or [pad_left, pad_right].</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dilation</strong> (<em>int</em>)</span><span class="tt-api-param-desc">Spacing between kernel elements.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>groups</strong> (<em>int</em>)</span><span class="tt-api-param-desc">Number of blocked connections from input channels to output channels.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>bias_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Optional bias tensor. Default: None</p></li>
-<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – The data type of the input tensor. Default: None (will use the same dtype as input_tensor).</p></li>
-<li><p><strong>conv_config</strong> (<a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><em>ttnn.Conv2dConfig</em></a><em>, </em><em>optional</em>) – Configuration for convolution. Default: None</p></li>
-<li><p><strong>compute_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Configuration for compute kernel. Default: None</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Output Tensor’s Memory Configuration. Default: None</p></li>
-<li><p><strong>slice_config</strong> (<a class="reference internal" href="ttnn.Conv2dSliceConfig.html#ttnn.Conv2dSliceConfig" title="ttnn.Conv2dSliceConfig"><em>ttnn.Conv2dSliceConfig</em></a><em>, </em><em>optional</em>) – Configuration for slicing the input &amp; output tensors in DRAM along the input_length (width) dimension. Use slice_type=Conv2dDRAMSliceWidth with num_slices=0 to auto-determine the number of slices, or num_slices=N to slice manually. DRAM_HEIGHT slicing is not supported because the conv1d height is always 1. If None, slicing is auto-routed by input location: inputs already in L1 run fully in L1, while DRAM/host inputs are auto width-sliced through DRAM. Default: None</p></li>
-<li><p><strong>return_output_dim</strong> (<em>bool</em><em>, </em><em>optional</em>) – If true, the op also returns the length of the output tensor. Default: False</p></li>
-<li><p><strong>return_weights_and_bias</strong> (<em>bool</em><em>, </em><em>optional</em>) – If true, the op also returns the preprocessed weight and bias on device. Default: False</p></li>
+<li><p><span class="tt-api-param-name"><strong>bias_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Optional bias tensor. Default: None</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The data type of the input tensor. Default: None (will use the same dtype as input_tensor).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>conv_config</strong> (<a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><em>ttnn.Conv2dConfig</em></a><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Configuration for convolution. Default: None</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Configuration for compute kernel. Default: None</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Output Tensor’s Memory Configuration. Default: None</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>slice_config</strong> (<a class="reference internal" href="ttnn.Conv2dSliceConfig.html#ttnn.Conv2dSliceConfig" title="ttnn.Conv2dSliceConfig"><em>ttnn.Conv2dSliceConfig</em></a><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Configuration for slicing the input &amp; output tensors in DRAM along the input_length (width) dimension. Use slice_type=Conv2dDRAMSliceWidth with num_slices=0 to auto-determine the number of slices, or num_slices=N to slice manually. DRAM_HEIGHT slicing is not supported because the conv1d height is always 1. If None, slicing is auto-routed by input location: inputs already in L1 run fully in L1, while DRAM/host inputs are auto width-sliced through DRAM. Default: None</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>return_output_dim</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">If true, the op also returns the length of the output tensor. Default: False</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>return_weights_and_bias</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">If true, the op also returns the preprocessed weight and bias on device. Default: False</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>

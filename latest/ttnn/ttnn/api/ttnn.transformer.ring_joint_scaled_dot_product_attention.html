@@ -7,6 +7,7 @@
   <title>ttnn.transformer.ring_joint_scaled_dot_product_attention &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.transformer.ring_joint_scaled_dot_product_attention.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -333,11 +336,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.transformer.ring_joint_scaled_dot_product_attention</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.transformer.ring_joint_scaled_dot_product_attention</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.transformer.ring_joint_scaled_dot_product_attention.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -369,61 +370,61 @@ both the “original” and “joint” sequences.</p>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor_q</strong> (<em>ttnn.Tensor</em>) – Original queries  [b x nh x N/num_devices x dh].</p></li>
-<li><p><strong>input_tensor_k</strong> (<em>ttnn.Tensor</em>) – Original keys     [b x nh x N/num_devices x dh].</p></li>
-<li><p><strong>input_tensor_v</strong> (<em>ttnn.Tensor</em>) – Original values [b x nhv x N/num_devices x dv].</p></li>
-<li><p><strong>joint_tensor_q</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Joint queries     [b x nh x L x dh]. Defaults to None.</p></li>
-<li><p><strong>joint_tensor_k</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Joint keys        [b x nh x L x dh]. Defaults to None.</p></li>
-<li><p><strong>joint_tensor_v</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Joint values [b x nhv x L x dv].
-Defaults to None when L == 0.</p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_q</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Original queries  [b x nh x N/num_devices x dh].</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_k</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Original keys     [b x nh x N/num_devices x dh].</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_v</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Original values [b x nhv x N/num_devices x dv].</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>joint_tensor_q</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Joint queries     [b x nh x L x dh]. Defaults to None.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>joint_tensor_k</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Joint keys        [b x nh x L x dh]. Defaults to None.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>joint_tensor_v</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Joint values [b x nhv x L x dv].
+Defaults to None when L == 0.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>persistent_output_buffer_k</strong> (<em>ttnn.Tensor</em>) – Persistent buffer for gathered K tensor.</p></li>
-<li><p><strong>persistent_output_buffer_v</strong> (<em>ttnn.Tensor</em>) – Persistent buffer for gathered V tensor.</p></li>
-<li><p><strong>joint_strategy</strong> (<em>str</em>) – Strategy for joint attention. Must be “rear”.</p></li>
-<li><p><strong>logical_n</strong> (<em>int</em>) – The logical sequence length N before sharding across devices.</p></li>
-<li><p><strong>logical_l</strong> (<em>int</em><em>, </em><em>optional</em>) – The full prompt (joint) sequence length L before sharding.
+<li><p><span class="tt-api-param-name"><strong>persistent_output_buffer_k</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Persistent buffer for gathered K tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>persistent_output_buffer_v</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Persistent buffer for gathered V tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>joint_strategy</strong> (<em>str</em>)</span><span class="tt-api-param-desc">Strategy for joint attention. Must be “rear”.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>logical_n</strong> (<em>int</em>)</span><span class="tt-api-param-desc">The logical sequence length N before sharding across devices.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>logical_l</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The full prompt (joint) sequence length L before sharding.
 Pass the full L when joint_tensor_q/k/v are sharded L/P per device.
 The op infers the sharded path when per-device joint seq == logical_l / ring_size.
-If 0 (default) or omitted, behaves as the replicated path (backward-compatible).</p></li>
-<li><p><strong>program_config</strong> (<em>ttnn.SDPAProgramConfig</em>) – Program configuration for the operation.</p></li>
-<li><p><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>) – Scale factor for QK^T. Defaults to None.</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Defaults to None.</p></li>
-<li><p><strong>dim</strong> (<em>int</em>) – Dimension along which to perform the ring all-gather operation.</p></li>
-<li><p><strong>multi_device_global_semaphore</strong> (<em>List</em><em>[</em><em>ttnn.GlobalSemaphore</em><em>]</em>) – Global semaphores for multi-device synchronization.</p></li>
-<li><p><strong>num_links</strong> (<em>int</em>) – Number of communication links to use for ring all-gather.</p></li>
-<li><p><strong>cluster_axis</strong> (<em>int</em>) – Axis of the mesh device along which to perform the all-gather.</p></li>
-<li><p><strong>mesh_device</strong> (<em>ttnn.MeshDevice</em>) – Multi-device mesh for distributed computation.</p></li>
-<li><p><strong>topology</strong> (<em>ttnn.ccl.Topology</em>) – Communication topology (Ring or Linear).</p></li>
-<li><p><strong>subdevice_id</strong> (<em>Optional</em><em>[</em><em>tt.tt_metal.SubDeviceId</em><em>]</em>) – Sub-device identifier. Defaults to None.</p></li>
-<li><p><strong>ccl_core_grid_offset</strong> (<em>ttnn.CoreCoord</em>) – Core grid offset for CCL operations.</p></li>
-<li><p><strong>use_column_major_ccl</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, allocate CCL worker cores in column-major order.
+If 0 (default) or omitted, behaves as the replicated path (backward-compatible).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>program_config</strong> (<em>ttnn.SDPAProgramConfig</em>)</span><span class="tt-api-param-desc">Program configuration for the operation.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Scale factor for QK^T. Defaults to None.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Defaults to None.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dim</strong> (<em>int</em>)</span><span class="tt-api-param-desc">Dimension along which to perform the ring all-gather operation.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>multi_device_global_semaphore</strong> (<em>List</em><em>[</em><em>ttnn.GlobalSemaphore</em><em>]</em>)</span><span class="tt-api-param-desc">Global semaphores for multi-device synchronization.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>num_links</strong> (<em>int</em>)</span><span class="tt-api-param-desc">Number of communication links to use for ring all-gather.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>cluster_axis</strong> (<em>int</em>)</span><span class="tt-api-param-desc">Axis of the mesh device along which to perform the all-gather.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>mesh_device</strong> (<em>ttnn.MeshDevice</em>)</span><span class="tt-api-param-desc">Multi-device mesh for distributed computation.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>topology</strong> (<em>ttnn.ccl.Topology</em>)</span><span class="tt-api-param-desc">Communication topology (Ring or Linear).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>subdevice_id</strong> (<em>Optional</em><em>[</em><em>tt.tt_metal.SubDeviceId</em><em>]</em>)</span><span class="tt-api-param-desc">Sub-device identifier. Defaults to None.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>ccl_core_grid_offset</strong> (<em>ttnn.CoreCoord</em>)</span><span class="tt-api-param-desc">Core grid offset for CCL operations.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>use_column_major_ccl</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">If True, allocate CCL worker cores in column-major order.
 This places CCL workers in a column (useful when reserving the last column for CCL).
-If False (default), uses row-major allocation. Defaults to False.</p></li>
-<li><p><strong>is_causal</strong> (<em>bool</em>) – Whether to use causal attention masking. Defaults to False.</p></li>
-<li><p><strong>is_balanced</strong> (<em>bool</em>) – Whether to use balanced attention computation. Defaults to False.</p></li>
-<li><p><strong>is_cross</strong> (<em>bool</em>) – Whether to use non-causal cross-attention (short Q, long K/V). Defaults to False.</p></li>
-<li><p><strong>kv_cache_batch_idx</strong> (<em>int</em><em>, </em><em>optional</em>) – Selects the shared K/V cache batch slot when K and V are full caches.</p></li>
-<li><p><strong>kv_actual_isl</strong> (<em>int</em><em>, </em><em>optional</em>) – Prior valid global KV length before this fixed-size chunk.
+If False (default), uses row-major allocation. Defaults to False.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>is_causal</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">Whether to use causal attention masking. Defaults to False.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>is_balanced</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">Whether to use balanced attention computation. Defaults to False.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>is_cross</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">Whether to use non-causal cross-attention (short Q, long K/V). Defaults to False.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>kv_cache_batch_idx</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Selects the shared K/V cache batch slot when K and V are full caches.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>kv_actual_isl</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Prior valid global KV length before this fixed-size chunk.
 When passed, enables KV-pad-aware rotation and derives current valid tokens as
-logical_n - kv_actual_isl.</p></li>
-<li><p><strong>attention_sink</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Per-query-head attention sink with logical shape
+logical_n - kv_actual_isl.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>attention_sink</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Per-query-head attention sink with logical shape
 [1 x nqh x 1 x 1], sharded across the tensor-parallel head axis and replicated across
 the sequence-parallel ring. The ring-attention sink path requires BF16, streaming
 compute, causal separate-K/V attention, and supports both full-causal and
-sliding-window attention. Defaults to None.</p></li>
-<li><p><strong>sliding_window_size</strong> (<em>int</em><em>, </em><em>optional</em>) – Causal attention window in tokens. The ring reader and
+sliding-window attention. Defaults to None.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>sliding_window_size</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Causal attention window in tokens. The ring reader and
 compute kernels prune K chunks outside the window. Ring attention currently supports the
 GPT-OSS specialization: a 128-token window, local 8Q:1K:1V heads with D64, BF16 Q,
-BFP8_B K/V, SP4 production or SP8 test topology, and chunked prefill without joint tokens.</p></li>
-<li><p><strong>persistent_output_buffer_joint_k</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Persistent buffer for the
-gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.</p></li>
-<li><p><strong>persistent_output_buffer_joint_v</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Persistent buffer for the
-gathered joint V tensor [b x nhv x L x dv]. Allocated internally when omitted.</p></li>
+BFP8_B K/V, SP4 production or SP8 test topology, and chunked prefill without joint tokens.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>persistent_output_buffer_joint_k</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Persistent buffer for the
+gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>persistent_output_buffer_joint_v</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Persistent buffer for the
+gathered joint V tensor [b x nhv x L x dv]. Allocated internally when omitted.</span></p></li>
 </ul>
 </dd>
 </dl>
@@ -441,9 +442,9 @@ while kv_actual_isl marks the prior valid cache length before the current chunk.
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>(ttnn.Tensor, ttnn.Tensor, ttnn.Tensor)</em> –   - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dv].
+<p><span class="tt-api-param-name"><em>(ttnn.Tensor, ttnn.Tensor, ttnn.Tensor)</em></span><span class="tt-api-param-desc">  - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dv].
 - The attention output for the joint Q/K/V shape [b x nh x L/num_devices x dv] (or [b x nh x L x dv] on the replicated path).
-- The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L/num_devices) x 1]</p>
+- The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L/num_devices) x 1]</span></p>
 </dd>
 </dl>
 </dd>
