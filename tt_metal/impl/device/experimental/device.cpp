@@ -6,6 +6,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "llrt/tt_cluster.hpp"
 #include "tt_metal/impl/device/device_impl.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
