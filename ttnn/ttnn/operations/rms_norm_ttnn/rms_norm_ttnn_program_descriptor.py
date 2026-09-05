@@ -97,6 +97,33 @@ is priced in l1_ledger.md's "Deviations" table with its measurement:
       SUM through the SFPU, and the wide-W precision cell this op cares about is
       bfloat16 -- D7 is the lever that reaches it.  fp32 DEST accumulation still
       comes from fp32_dest_acc_en=True.
+
+      MEASURED by the Phase-0 verifier, and the result is stronger than the
+      argument above -- Accurate is not merely unhelpful here, it is UNSAFE at
+      this op's own default.  A/B by flipping the single ReduceFp32Mode template
+      argument at the accumulate_reduce_block() call site, float32 input, TILE,
+      HiFi4/approx, rel-RMS against an fp32 torch reference:
+
+        distribution / shape          Fast dest16  Acc dest16   Fast dest32  Acc dest32
+        positive_only (1,1,32,64)       0.00459      **inf**      0.00068     0.00068
+        positive_only (1,1,128,256)     0.00537      **inf**      0.00076     0.00076
+        negative_only (1,1,32,64)       0.00454      **inf**      0.00068     0.00068
+        randn         (1,1,128,256)     0.00424      **inf**      0.00076     0.00076
+        bfloat16 control                0.00357     unchanged (the flag only touches Float32)
+
+      Two facts, and each on its own settles it:
+        * at fp32_dest_acc_en=False -- the op's OWN DEFAULT (A7) -- the SFPU
+          reduce path returns inf/NaN (pcc nan).  The path needs a 32-bit DEST;
+          the 16-bit one corrupts it.  So Accurate could never be unconditional
+          here, only predicated on fp32_dest_acc_en.
+        * at fp32_dest_acc_en=True, where it DOES work, it is bit-for-bit as
+          accurate as Fast to 5 significant figures.  The residual error there
+          (~5.3e-4 ratio std) is tf32's 2^-11 = 4.9e-4 mantissa step, but
+          removing the FPU's tf32 truncation buys nothing because the reduce's
+          *accumulation* -- not its input rounding -- sets the error.
+      So there is no predicate under which Accurate is worth taking, and Fast is
+      not a default left unexamined.  Do not re-propose it without re-running the
+      A/B above; the inf at dest16 is silent (no assert, no hang).
   D4  The regime predicate SEARCHES the depth knob rather than fixing it: it
       walks CB_DEPTH_CANDIDATES coarsest-first and takes RESIDENT at the first
       depth whose whole-row working set fits, dropping to STREAM only when no

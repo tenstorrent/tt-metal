@@ -512,4 +512,3 @@ Not edits to `feature_spec.py` — noted here only so the user can fold them in 
 |-----------|---------------------|
 | `{rank: 0, layout: TILE_LAYOUT}` and `{rank: 1, layout: TILE_LAYOUT}` | A tensor with no second-to-last dimension has no tile grid to lay out on. The cartesian never generates it today (rank is shape-derived and `INPUTS` carries no rank ≤ 1 shape), so it costs nothing to leave out — but a future rank-0 `INPUTS` entry would make it reachable |
 | `{rank: 0, gamma_layout: ROW_MAJOR_LAYOUT, …blocked form}` | The blocked `(Wt, 32)` form of a 1-channel operand is `(1, 32)` with 31 padding lanes — legal, but indistinguishable from a flat rank-2 operand under the detection rule above. Only reachable if a rank-0 case ever supplies a blocked operand |
-</content>

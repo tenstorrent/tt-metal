@@ -72,6 +72,27 @@ TILE_DIM = 32
 
 #: dtypes accepted for a per-channel operand (weight / bias).  X-08: the SAME
 #: set at BOTH layouts, checked at both.
+#:
+#: This is the op's KERNEL CAPABILITY -- the widest set the per-channel reader
+#: and its CB format derivation can carry -- and it is deliberately a SUPERSET
+#: invariant over the registry axis, asserted below.  The two refusals are
+#: different in kind and must stay different in TYPE:
+#:
+#:   * a dtype outside THIS set is an input-contract violation ("this op does
+#:     not accept a bfloat4_b weight at all") and raises ValueError, which is
+#:     what `eval/prompts/rms_norm_ttnn.txt` "## Validation" requires and what
+#:     `test_validation.py::test_refuses_per_channel_dtype_outside_the_accepted_set`
+#:     asserts;
+#:   * a dtype inside this set but outside `SUPPORTED["gamma_dtype"]` is a
+#:     registry support refusal and raises `UnsupportedAxisValue`
+#:     (a NotImplementedError), which is what the golden suite's xfail-strict
+#:     gate requires.
+#:
+#: Today the two sets coincide, so only the first refusal is reachable.  The
+#: superset assertion is what keeps the second reachable if a future refinement
+#: ever narrows the axis: `_check_per_channel` runs BEFORE validate()'s
+#: SUPPORTED loop, so a narrowed axis value must pass this gate to reach the
+#: loop that is supposed to refuse it.
 PER_CHANNEL_DTYPES = (ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b)
 
 
@@ -269,6 +290,18 @@ SUPPORTED = {
 EXCLUSIONS: list = []
 
 
+# The PER_CHANNEL_DTYPES superset invariant, checked at import so it cannot rot.
+# `_check_per_channel` runs BEFORE validate()'s SUPPORTED loop, so any value the
+# registry axis still lists must clear the kernel-capability gate to reach the
+# loop that would refuse it -- otherwise a narrowed axis would surface as a
+# ValueError where the golden suite's xfail-strict gate expects a
+# NotImplementedError (verify_supported would report `xfail_wrong_mode`).
+assert set(SUPPORTED["gamma_dtype"]) - {"none"} <= set(PER_CHANNEL_DTYPES), (
+    "rms_norm_ttnn: SUPPORTED['gamma_dtype'] lists a dtype outside PER_CHANNEL_DTYPES; "
+    "widen PER_CHANNEL_DTYPES (the kernel-capability set) or narrow the axis"
+)
+
+
 # ---------------------------------------------------------------------------
 # 3b. PROPERTIES — non-axis capabilities
 # ---------------------------------------------------------------------------
@@ -276,7 +309,16 @@ EXCLUSIONS: list = []
 PROPERTIES = {
     # The row axis is split over device.compute_with_storage_grid_size(), and a
     # width split adds a second axis where the row axis under-fills the grid.
-    "multi_core": {"value": True, "source": "declared"},
+    #
+    # "verified", not "declared": the Phase-0 golden run records `device_num_cores`
+    # per cell (eval/profiling.py reads the core_count of the dominant program in
+    # the op's profiler window -- i.e. the grid the program ACTUALLY used, which is
+    # exactly the evidence eval/op_template.py names for this field).  Over 23 340
+    # measured cells the maximum is 110 = the whole 11x10 Blackhole compute grid,
+    # and the grid-filling shapes sit at 64-110 (see verification_report.md's
+    # occupancy table).  The single-core cells are the small shapes where the row
+    # axis is one tile-row and the width split is correctly gated off.
+    "multi_core": {"value": True, "source": "verified"},
     # Every CB page count derives from BLOCK_ROWS / WT_CHUNK / a depth knob,
     # each bounded by the L1 budget predicate in the program descriptor.
     "bounded_cb": {"value": True, "source": "declared"},
@@ -313,7 +355,13 @@ def _check_per_channel(name, operand, input_tensor, width):
     wrongly refuse every blocked operand whose W exceeds 32.
     """
     if operand.dtype not in PER_CHANNEL_DTYPES:
-        raise UnsupportedAxisValue(
+        # ValueError, not a support refusal: a dtype outside the op's accepted
+        # per-channel set is an input-contract violation, which the prompt's
+        # "## Validation" list requires be raised as ValueError / RuntimeError.
+        # A dtype INSIDE the set but outside SUPPORTED["gamma_dtype"] is the other
+        # refusal, and validate()'s SUPPORTED loop raises UnsupportedAxisValue for
+        # it -- see PER_CHANNEL_DTYPES' superset invariant.
+        raise ValueError(
             f"rms_norm_ttnn: {name} dtype {operand.dtype!r} is not in the accepted "
             f"per-channel set {list(PER_CHANNEL_DTYPES)} (the same set at BOTH layouts; "
             f"got layout {operand.layout})"

@@ -187,8 +187,22 @@ For the chosen split. `C` = active cores, `nb` = row-blocks per core, `nc` = `NU
 | `bias` | **C** | identical reasoning | none |
 | output | **1** | written once | none |
 
-Total ≈ `(2 + HAS_R)·Sx + C·(HAS_G·Sg + HAS_B·Sb)` bytes across DRAM, where `Sx` is the activation
-size and `Sg`/`Sb` the operand sizes. Cross-core: **zero**.
+Total ≈ `(2 + HAS_R)·Sx + C·(HAS_G·Sg' + HAS_B·Sb')` bytes across DRAM, where `Sx` is the activation
+size and `Sg'`/`Sb'` the operand **bytes actually fetched**. Cross-core: **zero**.
+
+> **`Sg'` is not `Sg`, and the difference is 16× — added by the verifier, because every
+> figure below this line was written against whole tiles.** A per-channel operand is a
+> `(1,1,1,W)` vector whose only consumer reads TILE ROW 0, so D23 trims the TILE-layout read
+> to **two face-rows**: `GAMMA_TRIM = 2` fetches `2 · TILE_DIM · elem_bytes` = **128 B of a
+> 2048 B bf16 tile** (`GAMMA_TRIM = 1`, the bf8b demotion, fetches half a page). So
+> `Sg' = Sg / 16` at bf16 TILE, `Sg / 2` at bf8b, and `Sg' = Sg` only for a ROW_MAJOR
+> operand, which is one stick and already minimal. The whole-tile figures quoted in the two
+> sections below (and the `118 MB` / `50 MB` gamma numbers in `op_design.md`'s `GAMMA_MCAST`
+> row and D14) predate that trim and **over-count the reuse-shared term by that factor**.
+> Corrected: on `(1,1,8192,7168)` ROW_RESIDENT the operand term is ~3 MB, not 50 MB, against
+> 234 MB of x+out — i.e. ~1%, so `GAMMA_MCAST`'s deferral is *more* clearly right than its
+> own row argues, not less. Nothing about the chosen split changes; only the price of the
+> deferred alternative does.
 
 ### ROWS · STREAM — the fallback
 
@@ -241,7 +255,6 @@ grid first, then take the coarsest block. Conversely rank 2 is chosen over rank 
 profiles *even though it adds cross-core traffic*, because rank 1 there leaves 109 of 110 cores
 idle — and it is chosen over rank 1 on the operand traffic even where both fill the grid. Neither
 decision was made by counting busy cores alone.
-</content>
 
 ---
 
