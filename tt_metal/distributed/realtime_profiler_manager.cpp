@@ -16,6 +16,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -118,6 +119,12 @@ struct RealtimeProfilerEligibility {
 // Checks: not mock/emulated, MMIO-capable, IOMMU if 64-bit PCIe, fabric tensix datamover off, a tensix reserved and
 // in-grid, kernels not nullified, L1 bank fits the layout.
 RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* device, ContextId context_id) {
+    // Local profiling experiment: retain the normal configuration unless explicitly disabled.
+    const char* disable_for_host_profile = std::getenv("TT_METAL_HOST_PROFILE_DISABLE_RT");
+    if (disable_for_host_profile != nullptr && std::string_view(disable_for_host_profile) == "1") {
+        log_info(tt::LogMetal, "Real-time profiler disabled for host profiling on device {}", device->id());
+        return {};
+    }
     auto device_id = device->id();
     auto& metal = MetalContext::instance(context_id);
     const auto& hal = metal.hal();

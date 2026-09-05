@@ -6,6 +6,7 @@
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <utility>
+#include <tracy/Tracy.hpp>
 
 #include "device.hpp"
 #include "mesh_device.hpp"
@@ -22,6 +23,7 @@
 namespace tt::tt_metal::distributed {
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
+    ZoneScopedN("HostProfile::EnqueueMeshWorkload");
     // Short-circuit for inactive MeshDevices (no-op)
     if (mesh_cq.device()->get_view().get_devices().empty()) {
         return;
@@ -114,6 +116,7 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 
     auto& ctx = tt::tt_metal::MetalContext::instance();
     if (ctx.rtoptions().get_fast_dispatch()) {
+        ZoneScopedN("HostProfile::prepare_mesh_workload");
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
