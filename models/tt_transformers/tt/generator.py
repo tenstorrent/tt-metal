@@ -1847,6 +1847,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
 
+        supports_async_decode = self.model_capabilities.get("supports_async_decode", False)
+
         # vLLM under async scheduling supplies a one-step-stale last token at
         # reset steps (its host state lags device sampling). The device token
         # buffer holds the authoritative token sampled at the previous decode
@@ -1855,6 +1857,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # decode submit (their last token came from prefill, not decode).
         if (
             on_device_sampling
+            and supports_async_decode
             and (reset_batch or mode_switched)
             and enable_trace
             and self.trace_inputs_decode[on_device_sampling]
