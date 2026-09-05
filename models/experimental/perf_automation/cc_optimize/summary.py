@@ -998,6 +998,20 @@ def _peak_for_stage(stage, profile, model: str = "", task: str = ""):
         _top = max(_rows, key=lambda r: r[1])
         if not _top[1]:
             return 0.0, ""
+        # NO PER-STAGE ANCHOR: TAKE THE PINNED WHOLE-MODEL PEAK BEFORE DERIVING ONE.
+        # Deriving here reads the fidelity the build runs at TODAY, so the roof rises the moment the
+        # fidelity rung lands and the band retreats by exactly the factor the measurement improved.
+        # Measured on voxtral 2026-09-05: relabelling the same capture's ops hifi4 -> lofi moved
+        # encode and prefill 175.5 -> 702.0 TFLOPS with nothing about the model changed. Decode held
+        # only because its derivation happens to return nothing and it fell through to the pin --
+        # stability by accident, on the one stage that had it.
+        #
+        # The whole-model anchor is written at the same baseline the per-stage ones would be, so it
+        # is the same quantity at a coarser key: a stage without its own anchor is better served by a
+        # pinned model-wide peak than by a number that moves under it.
+        _whole = _pinned_peak_flops(_unit_key(""), model=model, task=task)
+        if _whole and float(_whole) > 0:
+            return float(_whole), ""
         from agent.environment import ARCH_FACTS
         from agent.perf_target import chip_peak_flops as _cpf
 

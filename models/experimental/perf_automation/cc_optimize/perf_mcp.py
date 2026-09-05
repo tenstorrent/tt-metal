@@ -6772,9 +6772,23 @@ def _persist_throughput(rep: dict, prof_for_peak: dict | None = None) -> None:
         # unit the ceiling describes. Not on _win: a peak is a property of the math mode and the
         # silicon, not of how many layers the profiler happened to build.
         # PER-STAGE PEAKS pinned beside the per-stage bytes, when the capture marked its stages.
+        #
+        # ANNOTATE FIRST. `flops` is not in the capture -- roofline.annotate_op derives it from the
+        # matmul shape and writes it onto the op. The whole-model call below is handed `rep`, which
+        # residual_report has already annotated; this one was handed RAW stage buckets, so every op
+        # failed `if o.get("flops")`, _dominant_peak_flops returned 0.0, and `if _p > 0` skipped the
+        # write without a word. The anchor this loop exists to create has never been written for any
+        # stage of any model, and _peak_for_stage has been re-deriving the roof from the fidelity of
+        # the current build ever since -- which is the one thing pinning is for.
         try:
             for _st, _bk in ((prof_for_peak or {}).get("stage_buckets") or {}).items():
-                _p = _dominant_peak_flops({"open_ops": [o for b in _bk for o in (b.get("top_ops") or [])]})
+                _ops = [o for b in _bk for o in (b.get("top_ops") or [])]
+                for _o in _ops:
+                    try:
+                        roofline.annotate_op(_o, _ENV)
+                    except Exception:  # noqa: BLE001 -- an op that cannot be priced simply carries no flops
+                        pass
+                _p = _dominant_peak_flops({"open_ops": _ops})
                 if _st and _p > 0:
                     _ledger().anchor(
                         _ledger().KIND_PEAK_FLOPS,
