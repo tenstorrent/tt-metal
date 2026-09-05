@@ -670,6 +670,11 @@ const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const std
     return &it->second;
 }
 
+const std::unordered_map<std::string, KernelHandle>& ProgramImpl::get_registered_kernel_handles() const {
+    static const std::unordered_map<std::string, KernelHandle> empty;
+    return metal2_registry_ ? metal2_registry_->kernel_handles : empty;
+}
+
 std::vector<std::string> ProgramImpl::get_registered_kernel_names() const {
     std::vector<std::string> names;
     if (metal2_registry_) {

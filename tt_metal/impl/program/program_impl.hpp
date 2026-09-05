@@ -465,6 +465,8 @@ public:
 
     // Metal 2.0: Get all registered kernel names (for completeness validation)
     std::vector<std::string> get_registered_kernel_names() const;
+    // Borrowed view; valid while the Program lives and its spec registry is not modified.
+    const std::unordered_map<std::string, KernelHandle>& get_registered_kernel_handles() const;
 
     // Metal 2.0: Pre-size RTA/CRTA host buffers from the registered schema + CRTA layout so
     // finalize_offsets can compute dispatch sizes before SetProgramRunArgs fills values.

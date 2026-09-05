@@ -494,20 +494,58 @@ void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& 
 //
 // Pre-condition: ValidateTensorArgs has enforced that every declared TensorParameter
 // has a corresponding TensorArgument, so the lookup below cannot miss for any registered binding.
+using TensorLookup = std::unordered_map<std::string, const MeshTensor*>;
+
+// Bound direct scans to the Table's usual inline size. Larger tables retain the original
+// hashed lookup complexity across all kernel bindings and borrowed DFBs in this update.
+static std::optional<TensorLookup> BuildLargeTensorLookup(
+    const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args) {
+    constexpr size_t max_direct_scan_size = 8;
+    if (tensor_args.size() <= max_direct_scan_size) {
+        return std::nullopt;
+    }
+    ZoneNamedN(__tracy_phase_zone, "HostProfile::metal2_tensor_lookup", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                   return enabled;
+               }()));
+    TensorLookup lookup;
+    lookup.reserve(tensor_args.size());
+    for (const auto& [param_name, tensor_arg] : tensor_args) {
+        lookup.emplace(param_name.get(), &mesh_tensor_of(tensor_arg));
+    }
+    return lookup;
+}
+
+static const MeshTensor* FindSuppliedTensor(
+    const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args,
+    const std::string& name,
+    const TensorLookup* lookup) {
+    if (lookup != nullptr) {
+        const auto it = lookup->find(name);
+        return it == lookup->end() ? nullptr : it->second;
+    }
+    for (const auto& [param_name, tensor_arg] : tensor_args) {
+        if (param_name.get() == name) {
+            return &mesh_tensor_of(tensor_arg);
+        }
+    }
+    return nullptr;
+}
+
 void AttachBorrowedDFBBuffers(
     detail::ProgramImpl& program_impl,
-    const std::unordered_map<std::string, const MeshTensor*>& tensor_by_param,
-    bool require_all = true) {
+    const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args,
+    bool require_all,
+    const TensorLookup* lookup) {
     const auto& borrowed_bindings = program_impl.get_dfb_borrowed_bindings();
     if (borrowed_bindings.empty()) {
         return;
     }
 
-    // tensor_by_param is the param_name -> MeshTensor lookup the caller already built to fill the
-    // binding CRTA sections; reuse it here rather than rebuilding an identical map per enqueue.
+    // Reuse the supplied typed table; omitted bindings retain their previous buffer on partial updates.
     for (const auto& [dfb_id, tp_name] : borrowed_bindings) {
-        auto it = tensor_by_param.find(tp_name);
-        if (it == tensor_by_param.end()) {
+        const MeshTensor* supplied = FindSuppliedTensor(tensor_args, tp_name, lookup);
+        if (supplied == nullptr) {
             // Partial update (require_all=false): the borrowed TensorParameter was omitted; the DFB
             // keeps its previously-attached backing buffer. On the full path (require_all=true) every
             // borrowed binding must have been supplied.
@@ -519,7 +557,7 @@ void AttachBorrowedDFBBuffers(
                 tp_name);
             continue;
         }
-        const MeshTensor& tensor = *it->second;
+        const MeshTensor& tensor = *supplied;
         const tt::tt_metal::Buffer* buffer = tensor.mesh_buffer().get_reference_buffer();
 
         // Attach-time legality checks (analogous to dynamic CB's
@@ -853,7 +891,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             {program_impl.get_dfb_handle(*dfb_params.dfb), dfb_params.entry_size, dfb_params.num_entries});
     }
     program_impl.apply_dfb_size_overrides(size_overrides);
-    AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
+    AttachBorrowedDFBBuffers(program_impl, params.tensor_args, /*require_all=*/true, &tensor_by_param);
     program_impl.mark_program_run_args_initialized();
 }
 
@@ -885,20 +923,9 @@ void UpdateTensorArgs(
         ValidateTensorArgs(program, tensor_args);
     }
 
-    // Build a tensor_parameter_name -> MeshTensor lookup.
-    // As in SetProgramRunArgs, this assumes lockstep mesh allocation:
-    // a single device-independent value set per binding.
-    std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
-    {
-        ZoneNamedN(__tracy_phase_zone, "HostProfile::metal2_tensor_lookup", ([] {
-                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
-                       return enabled;
-                   }()));
-        tensor_by_param.reserve(tensor_args.size());
-        for (const auto& [param_name, tensor_arg] : tensor_args) {
-            tensor_by_param.emplace(param_name.get(), &mesh_tensor_of(tensor_arg));
-        }
-    }
+    const auto tensor_lookup = BuildLargeTensorLookup(tensor_args);
+    const TensorLookup* lookup = tensor_lookup ? &*tensor_lookup : nullptr;
+
     // For every kernel with tensor bindings, patch the binding slots in its CRTA buffer in
     // place. Each binding occupies (1 + num_runtime_field_crta_words) words starting at
     // handle.addr_crta_offset: the always-present address word, plus any runtime accessor
@@ -911,8 +938,8 @@ void UpdateTensorArgs(
                        static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
                        return enabled;
                    }()));
-        for (const auto& kernel_name : program_impl.get_registered_kernel_names()) {
-            std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
+        for (const auto& [kernel_name, kernel_id] : program_impl.get_registered_kernel_handles()) {
+            std::shared_ptr<Kernel> kernel = program_impl.get_kernel(kernel_id);
             const auto& binding_handles = kernel->tensor_binding_handles();
             if (binding_handles.empty()) {
                 continue;
@@ -929,15 +956,15 @@ void UpdateTensorArgs(
 
             RuntimeArgsData& crta = kernel->common_runtime_args_data();
             for (const auto& handle : binding_handles) {
-                auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
+                const MeshTensor* supplied = FindSuppliedTensor(tensor_args, handle.tensor_parameter_name, lookup);
                 TT_FATAL(
-                    t_it != tensor_by_param.end(),
+                    supplied != nullptr,
                     "Internal error: tensor binding '{}' has no resolved MeshTensor (validation should have "
                     "caught this).",
                     handle.tensor_parameter_name);
                 // addr_crta_offset is a byte offset; data() is uint32_t*.
                 uint32_t* dst = crta.data() + (handle.addr_crta_offset / sizeof(uint32_t));
-                EmitBindingCrtaValues(handle, *t_it->second, [&dst](uint32_t w) { *dst++ = w; });
+                EmitBindingCrtaValues(handle, *supplied, [&dst](uint32_t w) { *dst++ = w; });
             }
         }
     }
@@ -947,7 +974,7 @@ void UpdateTensorArgs(
                        static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
                        return enabled;
                    }()));
-        AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
+        AttachBorrowedDFBBuffers(program_impl, tensor_args, /*require_all=*/true, lookup);
     }
 }
 
@@ -1325,31 +1352,22 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
     // ---- Tensor bindings: patch CRTA address slots for SUPPLIED tensors only ----
     // (Tensors omitted from params keep their previously-patched binding slots.)
     if (!params.tensor_args.empty()) {
-        std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
-        {
-            ZoneNamedN(__tracy_phase_zone, "HostProfile::metal2_tensor_lookup", ([] {
-                           static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
-                           return enabled;
-                       }()));
-            tensor_by_param.reserve(params.tensor_args.size());
-            for (const auto& [param_name, tensor_arg] : params.tensor_args) {
-                tensor_by_param.emplace(param_name.get(), &mesh_tensor_of(tensor_arg));
-            }
-        }
+        const auto tensor_lookup = BuildLargeTensorLookup(params.tensor_args);
+        const TensorLookup* lookup = tensor_lookup ? &*tensor_lookup : nullptr;
         {
             ZoneNamedN(__tracy_phase_zone, "HostProfile::metal2_binding_patch", ([] {
                            static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
                            return enabled;
                        }()));
-            for (const auto& kernel_name : program_impl.get_registered_kernel_names()) {
-                std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
+            for (const auto& [kernel_name, kernel_id] : program_impl.get_registered_kernel_handles()) {
+                std::shared_ptr<Kernel> kernel = program_impl.get_kernel(kernel_id);
                 const auto& binding_handles = kernel->tensor_binding_handles();
                 if (binding_handles.empty()) {
                     continue;
                 }
                 bool any_supplied = false;
                 for (const auto& handle : binding_handles) {
-                    if (tensor_by_param.contains(handle.tensor_parameter_name)) {
+                    if (FindSuppliedTensor(params.tensor_args, handle.tensor_parameter_name, lookup) != nullptr) {
                         any_supplied = true;
                         break;
                     }
@@ -1364,12 +1382,13 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                     kernel_name);
                 RuntimeArgsData& crta = kernel->common_runtime_args_data();
                 for (const auto& handle : binding_handles) {
-                    auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
-                    if (t_it == tensor_by_param.end()) {
+                    const MeshTensor* supplied =
+                        FindSuppliedTensor(params.tensor_args, handle.tensor_parameter_name, lookup);
+                    if (supplied == nullptr) {
                         continue;  // tensor omitted → binding slot retained.
                     }
                     uint32_t* dst = crta.data() + (handle.addr_crta_offset / sizeof(uint32_t));
-                    EmitBindingCrtaValues(handle, *t_it->second, [&dst](uint32_t w) { *dst++ = w; });
+                    EmitBindingCrtaValues(handle, *supplied, [&dst](uint32_t w) { *dst++ = w; });
                 }
             }
         }
@@ -1379,7 +1398,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                            static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
                            return enabled;
                        }()));
-            AttachBorrowedDFBBuffers(program_impl, tensor_by_param, /*require_all=*/false);
+            AttachBorrowedDFBBuffers(program_impl, params.tensor_args, /*require_all=*/false, lookup);
         }
     }
 }

@@ -1832,6 +1832,84 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_SkipValidationBypassesSpecCh
         << "skip_validation should bypass only the checks, not the address patch";
 }
 
+TEST_F(ProgramRunArgsTestGen1, CPU_UpdateProgramRunArgs_PartialTensorTableRetainsOmittedBinding) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    const std::string left_name = "input_left_with_long_parameter_name";
+    const std::string right_name = "input_right_with_long_parameter_name";
+    auto left_binding = MakeMinimalTensorParameter(left_name);
+    auto right_binding = MakeMinimalTensorParameter(right_name);
+    spec.tensor_parameters = {left_binding, right_binding};
+    BindTensorParameterToKernel(spec.kernels[0], left_name, "left_ta");
+    BindTensorParameterToKernel(spec.kernels[0], right_name, "right_ta");
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto left = AllocateTensorForBinding(*mesh_device_, left_binding);
+    auto right = AllocateTensorForBinding(*mesh_device_, right_binding);
+    auto replacement = AllocateTensorForBinding(*mesh_device_, right_binding);
+    ASSERT_NE(right.address(), replacement.address());
+    auto params = MakeRunArgsForMinimalSpec(NodeCoord{0, 0}, {}, {});
+    // Reverse declaration order so lookup cannot accidentally rely on table position.
+    params.tensor_args = {
+        {TensorParamName{right_name}, TensorArgument{right}},
+        {TensorParamName{left_name}, TensorArgument{left}},
+    };
+    SetProgramRunArgs(program, params);
+    ProgramRunArgs update;
+    update.tensor_args = {{TensorParamName{right_name}, TensorArgument{replacement}}};
+    UpdateProgramRunArgs(program, update);
+    EXPECT_EQ(ReadBindingAddressFromCRTA(program, "dm_kernel", left_name), left.address());
+    EXPECT_EQ(ReadBindingAddressFromCRTA(program, "dm_kernel", right_name), replacement.address());
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_TensorLookupThresholdPreservesPartialUpdates) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters.clear();
+    std::vector<std::string> names;
+    for (size_t i = 0; i < 10; ++i) {
+        names.push_back("tensor_lookup_threshold_long_parameter_" + std::to_string(i));
+        spec.tensor_parameters.push_back(MakeMinimalTensorParameter(names.back()));
+        BindTensorParameterToKernel(spec.kernels[0], names.back(), "accessor_" + std::to_string(i));
+    }
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto original = AllocateTensorForBinding(*mesh_device_, spec.tensor_parameters[0]);
+    auto replacement = AllocateTensorForBinding(*mesh_device_, spec.tensor_parameters[0]);
+    ASSERT_NE(original.address(), replacement.address());
+    auto params = MakeRunArgsForMinimalSpec(NodeCoord{0, 0}, {}, {});
+    for (const auto& name : names) {
+        params.tensor_args.insert({TensorParamName{name}, TensorArgument{original}});
+    }
+    SetProgramRunArgs(program, params);
+
+    // Nine supplied parameters exercise hashed lookup, with reversed order and one omission.
+    ProgramRunArgs update;
+    for (size_t i = 9; i > 0; --i) {
+        update.tensor_args.insert({TensorParamName{names[i]}, TensorArgument{replacement}});
+    }
+    UpdateProgramRunArgs(program, update);
+    for (size_t i = 0; i < names.size(); ++i) {
+        EXPECT_EQ(
+            ReadBindingAddressFromCRTA(program, "dm_kernel", names[i]),
+            i == 0 ? original.address() : replacement.address());
+    }
+
+    // Eight parameters switch to direct lookup; omitted bindings retain their previous values.
+    update.tensor_args.clear();
+    for (size_t i = 1; i <= 8; ++i) {
+        update.tensor_args.insert({TensorParamName{names[i]}, TensorArgument{original}});
+    }
+    UpdateProgramRunArgs(program, update);
+    for (size_t i = 0; i < names.size(); ++i) {
+        EXPECT_EQ(
+            ReadBindingAddressFromCRTA(program, "dm_kernel", names[i]),
+            i == 9 ? replacement.address() : original.address());
+    }
+
+    // The full tensor-only API uses the same large-table lookup and patches every binding.
+    UpdateTensorArgs(program, params.tensor_args);
+    for (const auto& name : names) {
+        EXPECT_EQ(ReadBindingAddressFromCRTA(program, "dm_kernel", name), original.address());
+    }
+}
+
 TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_PatchesBindingAddress) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
