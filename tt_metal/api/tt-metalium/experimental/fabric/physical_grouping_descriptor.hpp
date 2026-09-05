@@ -93,7 +93,7 @@ struct GroupingInfo {
     GroupingInfo& operator=(GroupingInfo&&) noexcept;
 };
 
-// One disjoint placement produced by find_all_in_psd: the ASIC footprint it covers, plus the mesh-local
+// One disjoint placement: the ASIC footprint it covers, plus the mesh-local
 // (row-major) chip id -> ASIC position pinning (copied from the matched grouping's mesh_node_to_asic_position;
 // empty when the grouping had no MGD pairing, where callers assume row-major identity). Only the pinning map is
 // retained, not the full GroupingInfo, to avoid deep-copying its items + adjacency_graph per placement.
@@ -233,10 +233,8 @@ public:
     // variants are provided, the variant with the highest total ASIC coverage is chosen; alternatives are not
     // mixed in the same packing. Returns an empty vector if no valid packing exists.
     //
-    // TODO: both overloads are superseded by solve_adjacency_guided_placement below. The coverage
-    // objective above picks tile boundaries without consulting the MGD's mesh-level edges, so a packing that is
-    // maximal can still be unusable. The only non-test callers are the two Phase 3 loops in
-    // topology_mapper_utils.cpp; once those move to the DFS this becomes test-only and should be deleted.
+    // Coverage-maximizing packing of one grouping's embeddings. Not used by
+    // build_physical_multi_mesh_adjacency_graph (that path uses solve_adjacency_guided_placement).
     std::vector<PsdPlacement> find_all_in_psd(
         const std::vector<GroupingInfo>& groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
@@ -251,8 +249,7 @@ public:
         const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
         std::vector<std::string>* errors_out = nullptr) const;
 
-    // WIP: adjacency-guided placement. Not yet the production path; find_all_in_psd still
-    // owns live mapping.
+    // Adjacency-guided placement. Production path for build_physical_multi_mesh_adjacency_graph.
     //
     // Places one chip-disjoint physical region per mesh *instance*, so a descriptor that instantiates
     // the same mesh definition N times gets N regions rather than one. The descriptor is what supplies
@@ -264,8 +261,8 @@ public:
     // valid_groupings must come from get_valid_groupings_for_mgd(s) over the same descriptor(s), since
     // it is looked up by mesh definition name (and by "mgd{i}_" prefix in the multi-descriptor case).
     //
-    // Returns one PsdPlacement per mesh instance, ordered by ascending merged MeshId. An empty vector
-    // means placement failed; no error is surfaced to the caller.
+    // Returns one PsdPlacement per mesh instance. An empty vector means placement failed; no error is
+    // surfaced to the caller.
     //
     // node_budget caps how many DFS search nodes the placement search expands before stopping.
     // 0 means no limit. Non-zero values are mainly for tests and guarding against runaway search.

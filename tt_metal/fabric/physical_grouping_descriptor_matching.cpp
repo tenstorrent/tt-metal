@@ -1296,7 +1296,8 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 // already encodes its own topology (the MESH grid, or RING wrap edges for TORUSX/TORUSY/TORUSXY) and
                 // was pre-filtered by can_map_to_psd during flattening, so we PSD-validate and commit the variant's
                 // own adjacency directly rather than rebuilding it from the MGD device topology. Keeping the PGD
-                // (tray_id, asic_location) slot labels is intentional so find_all_in_psd places on the same graph.
+                // (tray_id, asic_location) slot labels is intentional so adjacency-guided placement
+                // (and find_all_in_psd) places on the same graph.
                 auto make_committed_grouping = [&](const MeshTopologyMatch& match) -> GroupingInfo {
                     GroupingInfo committed = mesh_flat_groupings.at(match.name)[match.idx];
                     // The topology solve used the MGD mesh adjacency as target and this PGD variant as global, so
@@ -1665,9 +1666,7 @@ constexpr std::chrono::milliseconds kSetPackingBudget{5000};
 //             ASIC coverage. Wall-clock-budgeted; returns best feasible solution found on expiry.
 // Returns map from each GroupingInfo* (by address into the input vector) to its vector of selected MappingResults.
 //
-// TODO: delete once the adjacency-guided DFS is the only placement producer. Phase B commits to a
-// maximum-coverage tiling before anything has looked at the MGD's mesh-level edges, which is the root cause the
-// DFS exists to remove. Its only caller is find_all_in_psd, so this and solve_set_packing go together.
+// Test-only packer (find_all_in_psd). Production placement is solve_adjacency_guided_placement.
 std::unordered_map<const GroupingInfo*, std::vector<MappingResult<LogicalChipId, AsicID>>>
 solve_for_many_groupings_to_psd_heterogeneous(
     const std::vector<GroupingInfo>& groupings,
@@ -2076,6 +2075,20 @@ std::optional<GlobalMeshId> select_next_mesh(
 // requirement is on links: a cardinality constraint bounds how many of this mesh's chips must sit on the
 // neighbour's boundary, which is necessary but not sufficient, and the exact link count is then checked
 // on each finished placement.
+//
+// TODO: honour the descriptor's inter-mesh channel policy instead of treating every count as a hard
+// requirement. Today a seam must carry the full mesh-level edge multiplicity whatever the descriptor
+// said. That is right for STRICT but too strong for RELAXED, where the mapper treats the count as a
+// preference and only warns when a seam comes up short (see the "Check channel counts (strict mode)"
+// gate in topology_solver.tpp). So placement is currently stricter than a RELAXED descriptor asks and
+// can report no placement at all where the mapper would have accepted one. Under RELAXED the floor
+// should drop to a single link -- the mesh-level edge still means the two regions touch -- with the
+// count kept as a preference: candidates carrying the requested channels are returned ahead of those
+// that fall short, so the search tries a fully-provisioned seating first and only settles for a thinner
+// seam if that fails. Read the policy off the descriptor the way MeshGraph does, from the first FABRIC
+// connection (MGD validation forbids mixing policies within one descriptor), falling back to the
+// top-level graph topology. AdjacencyGuidedPlacement.RelaxedSeamStillPlacesWhenChannelsFallShort covers
+// this and fails until it is done.
 std::vector<PsdPlacement> next_step_pool(
     const GlobalMeshId& mesh_id,
     const AssignedMeshes& assignment,
@@ -2421,7 +2434,6 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::solve_adjacency_guided_pla
         global_mesh_groupings, merged.mesh_level_graph_, physical_graph, physical_system_descriptor, node_budget);
 
     // Drop the mesh keying the caller does not consume and return the placements as a flat list.
-    // TODO: Consider keeping GlobalmeshId as hint for later lookups
     std::vector<PsdPlacement> placements;
     placements.reserve(mesh_placements.size());
     for (PlacedMesh& placed : mesh_placements) {
@@ -2433,7 +2445,8 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::solve_adjacency_guided_pla
     return placements;
 }
 
-// TODO: delete both overloads once solve_adjacency_guided_placement is the only producer.
+// TODO: delete both overloads; they are test-only now that build_physical_multi_mesh_adjacency_graph
+// uses solve_adjacency_guided_placement.
 std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {

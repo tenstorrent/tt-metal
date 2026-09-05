@@ -2746,8 +2746,6 @@ namespace utils = tt::tt_metal::experimental::tt_fabric;
 constexpr const char* kAdjacencyPgdPath =
     "tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping.textproto";
 constexpr const char* kRingPgdPath = "tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto";
-constexpr const char* kGapPgdPath =
-    "tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping_pinned_across_gap.textproto";
 constexpr const char* kSingleMeshMgdPath =
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_single_1x2_mesh.textproto";
 constexpr const char* kTwoPairPsdPath = "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto";
@@ -2760,6 +2758,32 @@ constexpr const char* kUnlinkedMgdPath =
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_unlinked.textproto";
 constexpr const char* kRingMgdPath =
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_alternating_ring_meshes.textproto";
+constexpr const char* kMixedShapePgdPath =
+    "tests/tt_metal/tt_fabric/physical_groupings/test_mixed_shape_groupings.textproto";
+constexpr const char* kMixedShapeMgdPath =
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_mixed_shape_chain_meshes.textproto";
+constexpr const char* kSquareForkPsdPath =
+    "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_10asic_square_fork.textproto";
+constexpr const char* kStarMgdPath =
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_star_channel_count_meshes.textproto";
+constexpr const char* kStarPsdPath = "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_12asic_star.textproto";
+constexpr const char* kWideThenNarrowMgdPath =
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_pair_1x2_then_1x1.textproto";
+constexpr const char* kTwoSinglesMgdPath =
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_pair_two_1x1.textproto";
+constexpr const char* kDumbbellPsdPath = "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_5asic_dumbbell.textproto";
+constexpr const char* kNarrowThenWideMgdPath =
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_pair_1x1_then_1x2.textproto";
+constexpr const char* kWideDumbbellPsdPath = "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_dumbbell.textproto";
+constexpr const char* kUnevenLinePsdPath = "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto";
+constexpr const char* kRelaxedSeamMgdPath =
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_seam.textproto";
+constexpr const char* kRelaxedWideSeamMgdPath =
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_wide_seam.textproto";
+constexpr const char* kStrictWideSeamMgdPath =
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_strict_wide_seam.textproto";
+constexpr const char* kOnePairPgdPath =
+    "tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping_pinned_to_one_pair.textproto";
 
 // ----- pipeline steps -------------------------------------------------------------------------
 //
@@ -2812,6 +2836,19 @@ std::vector<std::set<uint64_t>> mapped_footprints(const utils::TopologyMappingRe
         footprints.push_back(std::move(asics));
     }
     return footprints;
+}
+
+std::size_t channels_between(
+    const AdjacencyGraph<tt::tt_metal::AsicID>& flat_graph,
+    const std::set<uint64_t>& left,
+    const std::set<uint64_t>& right) {
+    std::size_t channels = 0;
+    for (uint64_t chip : left) {
+        for (const auto& neighbor : flat_graph.get_neighbors(tt::tt_metal::AsicID{chip})) {
+            channels += static_cast<std::size_t>(right.count(*neighbor));
+        }
+    }
+    return channels;
 }
 
 std::set<uint64_t> chips_in(const std::vector<std::set<uint64_t>>& footprints) {
@@ -3147,6 +3184,425 @@ TEST(AdjacencyGuidedPlacement, AlternatingShapeRingFailsWhenRingCannotClose) {
 
 // Control: the unpinned PGD grouping is free to land on either linked pair, so it places and is
 // committed under its own name. Nothing falls back here.
+// Four meshes, four different shapes, chained on a topology that admits exactly one placement.
+// Where the ring case is about interleaving two shapes, this one is about the shapes constraining
+// each other: each is easy to place on its own, and it is the chain that pins them all down.
+//
+//   mesh-level graph                     physical graph (10 chips)
+//
+//     D --- C --- B --- A                  100 == 101
+//    (2x2) (1x3) (1x2) (1x1)                ||     ||
+//                                          103 == 102 == 104 == 107 == 108 == 109
+//                                                         ||
+//                                                        105 == 106
+//
+//   the only placement
+//
+//     100 == 101
+//      ||     ||
+//     103 == 102 == 104 == 107 == 108 == 109
+//     '------v------' ||   '---v---'  '-v-'
+//            D        ||       B        A
+//                    105 == 106
+//                     '----v----'
+//                      C (with 104)
+//
+// The shapes are pinned down in order. D can only be the 4-cycle, since nothing else in the PSD
+// closes a square. C has to touch D, and 104 is the only free chip adjacent to the square, so C
+// must contain the junction. That leaves C a genuine choice of branch, and it is the wrong one that
+// makes this test worth having: running C along the spine as {104,107,108} is a perfectly good 1x3
+// that still touches D, but it strands the far end -- {105,106} and {109} are then the only pieces
+// left, and 109 touches nothing outside C, so the B--A seam has no link under it. The search has to
+// walk that back and send C down the short branch instead.
+TEST(AdjacencyGuidedPlacement, MixedShapeChainPlacesTheOnlyWayItFits) {
+    // build pgd
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(kMixedShapePgdPath)};
+    MeshGraphDescriptor mgd{std::filesystem::path(kMixedShapeMgdPath)};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kSquareForkPsdPath);
+
+    // get valid groupings
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    // build logical
+    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+
+    // place, and build the flat ASIC adjacency the physical graph is derived from
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+    ASSERT_EQ(placements.size(), 4u) << "all four meshes should be placed on the 10 chips";
+
+    // build physical
+    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+
+    // place and map
+    utils::TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
+    EXPECT_EQ(mapping.fabric_node_to_asic.size(), 10u) << "every logical fabric node should be bound to an ASIC";
+
+    // Ordered by mesh id, so D, C, B, A as the descriptor declares them.
+    EXPECT_THAT(
+        mapped_footprints(mapping),
+        ::testing::ElementsAre(
+            std::set<uint64_t>({100, 101, 102, 103}),
+            std::set<uint64_t>({104, 105, 106}),
+            std::set<uint64_t>({107, 108}),
+            std::set<uint64_t>({109})))
+        << "this is the only assignment of the four shapes that satisfies every link in the chain";
+}
+
+// Four different shapes around a hub, where the channel count on each seam is what seats them.
+//
+//   mesh-level graph                  physical graph (12-chip star)
+//
+//          Sc (1x1)                            104 == 105 == 106     branch X, first link 2
+//            |                                /
+//            2                    100 == 101 =/
+//            |                     ||    ||
+//   Sb -3- H (2x2) -4- Sa          102 == 103 ==== 107 == 108 == 109  branch Y, first link 4
+//  (1x2)              (1x3)         |
+//                                   +==== 110 == 111                 branch Z, first link 3
+//
+//   the only placement
+//
+//     H = {100,101,102,103}   Sa = {107,108,109}   Sb = {110,111}   Sc = {104}
+//
+// Two things have to work together here. The hub is settled by shape: a 2x2 needs a 4-cycle and the
+// block is the only one in the graph. The spokes are not -- the branches are plain lines, so by
+// shape alone Sa fits either 3-chip branch and Sb or Sc fit almost anywhere. What seats them is how
+// many channels each seam asks for: Sa asks for 4 and only the 103-107 branch carries that many,
+// Sb asks for 3 and only the 102-110 branch is left that does, and Sc takes the head of the branch
+// that remains.
+//
+// That is the multiplicity half of the seam check. The mesh-level graph repeats a neighbour once
+// per requested channel, the flat ASIC graph repeats it once per ethernet channel, and a candidate
+// is only offered when the second count covers the first. Ask every seam for a single channel and
+// four placements satisfy this descriptor rather than one.
+//
+// Note that the spokes leave chips 105 and 106 unused: placement covers the meshes the descriptor
+// asks for, not every chip in the system.
+TEST(AdjacencyGuidedPlacement, StarSeamsPlaceByChannelCount) {
+    // build pgd
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(kMixedShapePgdPath)};
+    MeshGraphDescriptor mgd{std::filesystem::path(kStarMgdPath)};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kStarPsdPath);
+
+    // get valid groupings
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    // build logical
+    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+
+    // place, and build the flat ASIC adjacency the physical graph is derived from
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+    ASSERT_EQ(placements.size(), 4u) << "the hub and all three spokes should be placed";
+
+    // build physical
+    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+
+    // place and map
+    utils::TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
+    EXPECT_EQ(mapping.fabric_node_to_asic.size(), 10u) << "the hub's 4 chips plus the spokes' 3, 2 and 1";
+
+    // Ordered by mesh id: the hub, then the 4-, 3- and 2-channel spokes.
+    EXPECT_THAT(
+        mapped_footprints(mapping),
+        ::testing::ElementsAre(
+            std::set<uint64_t>({100, 101, 102, 103}),
+            std::set<uint64_t>({107, 108, 109}),
+            std::set<uint64_t>({110, 111}),
+            std::set<uint64_t>({104})))
+        << "each spoke must take the branch whose attaching link carries the channels its seam asks for";
+}
+
+// Two descriptors placed onto one system in a single pass, and neither may borrow the other's meshes.
+//
+//   descriptor A            descriptor B         physical graph (5-chip dumbbell)
+//
+//   M0 (1x2) -4- M1 (1x1)   M0 (1x1) -3- M1 (1x1)   100 == 101 ==== 102 -- 103 ==== 104
+//                                                       2       4        1       3
+//   the only placement
+//
+//     A: M0 = {100,101}, M1 = {102}      B: M0 and M1 take 103 and 104
+//
+// Both descriptors name their meshes "M0" and "M1", and the shapes behind those names differ: A's
+// M0 is the 1x2 while B's M0 is a single chip. That is the point of the pair. Valid groupings are
+// looked up by instance name, so if the two descriptors were not kept apart, a lookup of "M0" would
+// hand back whichever shape was merged last and a mesh would be built with the wrong shape
+// entirely, not merely seated in the wrong place. Keying by descriptor index is what prevents it.
+//
+// Nothing connects the two descriptors -- there is no seam from A to B -- so chip-disjointness is
+// all that separates them. They end up on opposite sides of the 1-channel pinch because A's seam
+// needs 4 channels and only 101-102 carries that many, which leaves 103-104 as the only link that
+// can still carry B's 3-channel seam.
+//
+// B's two meshes are both single chips joined by a symmetric seam, so which of them takes 103 and
+// which takes 104 is genuinely not pinned down; the test asserts that pair as a set.
+TEST(AdjacencyGuidedPlacement, TwoDescriptorsPlaceWithoutBorrowingEachOthersMeshes) {
+    // build pgd
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(kRingPgdPath)};
+    std::vector<MeshGraphDescriptor> mgds;
+    mgds.emplace_back(std::filesystem::path(kWideThenNarrowMgdPath));
+    mgds.emplace_back(std::filesystem::path(kTwoSinglesMgdPath));
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kDumbbellPsdPath);
+
+    // get valid groupings
+    // Merged keys carry the descriptor index, so the two same-named instances stay distinct and each
+    // still resolves to its own shape: A's M0 is the 1x2 (two nodes) and B's M0 is a single chip.
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgds(mgds, psd);
+    const auto& meshes = valid_groupings.at("MESH");
+    EXPECT_THAT(
+        meshes,
+        ::testing::UnorderedElementsAre(
+            ::testing::Key("mgd0_M0"), ::testing::Key("mgd0_M1"), ::testing::Key("mgd1_M0"), ::testing::Key("mgd1_M1")))
+        << "each descriptor's instances should be keyed by descriptor index, not merged by name";
+    ASSERT_FALSE(meshes.at("mgd0_M0").empty());
+    ASSERT_FALSE(meshes.at("mgd1_M0").empty());
+    EXPECT_EQ(meshes.at("mgd0_M0").front().adjacency_graph.get_nodes().size(), 2u)
+        << "the first descriptor's M0 is the 1x2";
+    EXPECT_EQ(meshes.at("mgd1_M0").front().adjacency_graph.get_nodes().size(), 1u)
+        << "the second descriptor's M0 is a single chip, despite sharing the name";
+
+    // build logical
+    // One merged logical graph over both descriptors, with mesh ids renumbered so that the first
+    // descriptor's meshes come first. That renumbering is the order the placements come back in.
+    std::vector<utils::LogicalMultiMeshGraph> parts;
+    parts.reserve(mgds.size());
+    for (const auto& mgd : mgds) {
+        parts.push_back(utils::build_logical_multi_mesh_adjacency_graph(mgd));
+    }
+    const auto logical = utils::merge_logical_multi_mesh_adjacency_graphs(parts);
+
+    // place, and build the flat ASIC adjacency the physical graph is derived from
+    const std::vector<const MeshGraphDescriptor*> descriptors{&mgds[0], &mgds[1]};
+    const auto placements = pgd.solve_adjacency_guided_placement(descriptors, valid_groupings, psd);
+    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+    ASSERT_EQ(placements.size(), 4u) << "two meshes from each descriptor";
+
+    const auto placed = footprints_of(placements);
+    EXPECT_THAT(
+        placed,
+        ::testing::ElementsAre(std::set<uint64_t>({100, 101}), std::set<uint64_t>({102}), ::testing::_, ::testing::_))
+        << "the first descriptor's meshes come first, on the left of the pinch";
+    EXPECT_THAT(
+        std::vector<std::set<uint64_t>>(placed.begin() + 2, placed.end()),
+        ::testing::UnorderedElementsAre(std::set<uint64_t>({103}), std::set<uint64_t>({104})))
+        << "and the second descriptor's take the right, in either order";
+
+    // build physical
+    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+
+    // place and map
+    utils::TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
+    EXPECT_EQ(mapping.fabric_node_to_asic.size(), 5u) << "all five chips are bound, three of them A's and two B's";
+
+    // The binding has to agree with the placement, mesh for mesh: A's 1x2 is the only two-chip mesh
+    // in either descriptor, and the seam pulls its 1x1 to 102.
+    const auto footprints = mapped_footprints(mapping);
+    ASSERT_EQ(footprints.size(), 4u);
+    EXPECT_THAT(
+        footprints,
+        ::testing::ElementsAre(std::set<uint64_t>({100, 101}), std::set<uint64_t>({102}), ::testing::_, ::testing::_))
+        << "the first descriptor's meshes should be bound to the first descriptor's chips";
+    EXPECT_EQ(chips_in({footprints[0], footprints[1]}), std::set<uint64_t>({100, 101, 102}))
+        << "the first descriptor owns the left of the pinch";
+    EXPECT_EQ(chips_in({footprints[2], footprints[3]}), std::set<uint64_t>({103, 104}))
+        << "the second descriptor owns the right of the pinch";
+}
+
+// A STRICT seam has to survive mapping, not just placement.
+//
+//   descriptor A            descriptor B          physical graph (6-chip dumbbell)
+//
+//   M0 (1x2) -4- M1 (1x1)   M0 (1x1) -3- M1 (1x2)   100 == 101 ==== 102 -- 103 ==== 104 == 105
+//   both STRICT                                         2       4        1       3       2
+//
+//   the only placement
+//
+//     A: M0 = {100,101}, M1 = {102}      B: M0 = {103}, M1 = {104,105}
+//
+// These two descriptors are mirror images, so by shape either fits either side of the pinch and the
+// counts are the only thing separating them: A requires 4 channels and only 101-102 carries that many,
+// which leaves 103-104 as the only link that can still carry B's 3. Placement gets this right.
+//
+// The mapper is then free to disagree, because it re-solves the logical-to-physical binding from
+// scratch rather than keeping the association placement established. Under RELAXED it would: it treats
+// a mesh-level edge as present-or-absent, so swapping the two descriptors looks just as good, and it
+// would seat A's 4-channel seam on the 3-channel link and merely log that the seam is narrower than
+// asked for. Under STRICT it counts channels and the swap is rejected.
+//
+// Both descriptors here say STRICT, so the test asks for the counts to hold end to end. It sets the
+// validation mode to match, which is what production does -- topology_mapper.cpp derives
+// inter_mesh_validation_mode from the descriptor's own policy via MeshGraph::is_inter_mesh_policy_relaxed.
+// A MeshGraph needs a cluster to build, so the mode is set directly here rather than derived.
+TEST(AdjacencyGuidedPlacement, StrictSeamSurvivesInterMeshMapping) {
+    // build pgd
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(kRingPgdPath)};
+    std::vector<MeshGraphDescriptor> mgds;
+    mgds.emplace_back(std::filesystem::path(kWideThenNarrowMgdPath));
+    mgds.emplace_back(std::filesystem::path(kNarrowThenWideMgdPath));
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kWideDumbbellPsdPath);
+
+    // get valid groupings
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgds(mgds, psd);
+
+    // build logical
+    std::vector<utils::LogicalMultiMeshGraph> parts;
+    parts.reserve(mgds.size());
+    for (const auto& mgd : mgds) {
+        parts.push_back(utils::build_logical_multi_mesh_adjacency_graph(mgd));
+    }
+    const auto logical = utils::merge_logical_multi_mesh_adjacency_graphs(parts);
+
+    // place, and build the flat ASIC adjacency the physical graph is derived from
+    const std::vector<const MeshGraphDescriptor*> descriptors{&mgds[0], &mgds[1]};
+    const auto placements = pgd.solve_adjacency_guided_placement(descriptors, valid_groupings, psd);
+    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+    ASSERT_EQ(placements.size(), 4u) << "two meshes from each descriptor";
+    ASSERT_THAT(
+        footprints_of(placements),
+        ::testing::ElementsAre(
+            std::set<uint64_t>({100, 101}),
+            std::set<uint64_t>({102}),
+            std::set<uint64_t>({103}),
+            std::set<uint64_t>({104, 105})))
+        << "placement should seat each descriptor on the side whose link is wide enough for its seam";
+
+    // build physical
+    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+
+    // place and map
+    utils::TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    config.inter_mesh_validation_mode = ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
+
+    const auto footprints = mapped_footprints(mapping);
+    ASSERT_EQ(footprints.size(), 4u);
+    EXPECT_EQ(channels_between(flat_graph, footprints[0], footprints[1]), 4u)
+        << "the first descriptor requires 4 channels, so the physical seam its two meshes were bound to "
+           "must carry that many";
+    EXPECT_EQ(chips_in({footprints[0], footprints[1]}), std::set<uint64_t>({100, 101, 102}))
+        << "and the mapper should keep it on the chips placement chose for it";
+}
+
+// The three tests below pin down what a descriptor's inter-mesh channel policy is supposed to mean to
+// placement. All three put two single-chip meshes on the same system, three chips whose two links are
+// different widths:
+//
+//   M0 (1x1) --n-- M1 (1x1)            100 == 101 ==== 102
+//                                          2       4
+//
+// A seam wanting 4 channels can only be met on 101-102. A seam wanting 8 cannot be met anywhere, and
+// that is where the policy decides the outcome: STRICT has no placement, while RELAXED should still
+// place, because the count is a preference and the mesh-level edge only insists the two regions touch.
+//
+// Placement does not read the policy yet -- see the TODO on next_step_pool -- so it treats every count
+// as a requirement, which makes RelaxedSeamStillPlacesWhenChannelsFallShort below the failing one.
+
+// A preference that can be met should be met: the seam wants 4 channels and only 101-102 has them.
+// Passes today, and must keep passing once the policy is read, since it is the preference half of
+// RELAXED rather than the requirement half.
+TEST(AdjacencyGuidedPlacement, RelaxedSeamPrefersTheFullChannelCount) {
+    // build pgd
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(kRingPgdPath)};
+    MeshGraphDescriptor mgd{std::filesystem::path(kRelaxedSeamMgdPath)};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kUnevenLinePsdPath);
+
+    // get valid groupings
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    // build logical
+    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+
+    // place, and build the flat ASIC adjacency the physical graph is derived from
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+    ASSERT_EQ(placements.size(), 2u) << "both meshes should be placed";
+    EXPECT_THAT(
+        footprints_of(placements),
+        ::testing::UnorderedElementsAre(std::set<uint64_t>({101}), std::set<uint64_t>({102})))
+        << "the 4-channel link is the only seam wide enough, so the 2-channel pair should be left alone";
+
+    // build physical
+    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+
+    // place and map
+    utils::TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
+    EXPECT_EQ(chips_in(mapped_footprints(mapping)), std::set<uint64_t>({101, 102}));
+}
+
+// A requirement that cannot be met should fail. Guards the STRICT half, so that teaching placement to
+// relax a RELAXED count does not quietly relax a STRICT one too.
+TEST(AdjacencyGuidedPlacement, StrictSeamFailsWhenChannelsFallShort) {
+    // build pgd
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(kRingPgdPath)};
+    MeshGraphDescriptor mgd{std::filesystem::path(kStrictWideSeamMgdPath)};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kUnevenLinePsdPath);
+
+    // get valid groupings
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+    ASSERT_FALSE(valid_groupings.at("MESH").empty()) << "the shapes themselves are placeable; only the seam is not";
+
+    // place
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    EXPECT_TRUE(placements.empty())
+        << "no link carries the 8 channels a STRICT seam requires, so there should be no placement at all";
+}
+
+// EXPECTED TO FAIL until next_step_pool reads the channel policy.
+//
+// Same unsatisfiable count as the STRICT test above, but the descriptor says RELAXED, which makes the
+// count a preference. The meshes still have to touch, and 101-102 is the widest seam on offer, so
+// placement should seat them there rather than giving up. Today placement treats the count as a hard
+// requirement regardless of policy, finds nothing that carries 8 channels and returns empty -- which is
+// stricter than the descriptor asked for, and stricter than the mapper, which would accept this seating
+// and log that the seam is narrower than requested.
+TEST(AdjacencyGuidedPlacement, RelaxedSeamStillPlacesWhenChannelsFallShort) {
+    // build pgd
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(kRingPgdPath)};
+    MeshGraphDescriptor mgd{std::filesystem::path(kRelaxedWideSeamMgdPath)};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kUnevenLinePsdPath);
+
+    // get valid groupings
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    // build logical
+    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+
+    // place, and build the flat ASIC adjacency the physical graph is derived from
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+    ASSERT_EQ(placements.size(), 2u)
+        << "a RELAXED count is a preference, so an unmeetable one should not stop the meshes being placed";
+    EXPECT_THAT(
+        footprints_of(placements),
+        ::testing::UnorderedElementsAre(std::set<uint64_t>({101}), std::set<uint64_t>({102})))
+        << "and the preference should still steer them onto the widest seam available";
+
+    // build physical
+    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+
+    // place and map
+    utils::TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    EXPECT_TRUE(mapping.success) << "the mapper accepts a short seam under RELAXED, so mapping should succeed: "
+                                 << mapping.error_message;
+}
+
 TEST(AdjacencyGuidedPlacement, PgdGroupingThatPlacesIsCommittedDirectly) {
     // build pgd
     PhysicalGroupingDescriptor pgd{std::filesystem::path(kAdjacencyPgdPath)};
@@ -3161,6 +3617,13 @@ TEST(AdjacencyGuidedPlacement, PgdGroupingThatPlacesIsCommittedDirectly) {
     ASSERT_EQ(committed.size(), 1u);
     EXPECT_EQ(committed.front().name, "1x2_Mesh_flat")
         << "the PGD grouping embeds into the PSD, so it should be committed rather than dropped";
+
+    // Whichever path commits, the grouping carries the shape as its own adjacency graph, and that
+    // is what placement then has to embed: two nodes, joined.
+    const auto& grouping_graph = committed.front().adjacency_graph;
+    ASSERT_EQ(grouping_graph.get_nodes().size(), 2u);
+    EXPECT_THAT(grouping_graph.get_neighbors(0u), ::testing::ElementsAre(1u));
+    EXPECT_THAT(grouping_graph.get_neighbors(1u), ::testing::ElementsAre(0u));
 
     // build logical
     const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
@@ -3184,55 +3647,91 @@ TEST(AdjacencyGuidedPlacement, PgdGroupingThatPlacesIsCommittedDirectly) {
         << "the mesh must sit on one of the two linked pairs";
 }
 
-// The case this section exists for: the PGD grouping is pinned to ASIC locations 1 and 2, which are
-// chips 101 and 102 -- one taken from each pair, with no link between them.
+// The downgrade above only triggers when the PGD grouping cannot be embedded at all. This is the
+// case it misses: a grouping that embeds fine on its own but cannot serve every mesh instance that
+// shares it.
 //
-//     100 == 101      102 == 103
-//             '--------'
-//          pinned here, but not linked
+//   mesh-level graph (linked MGD)        physical graph (4-chip line)
 //
-// Both locations exist in the PSD, so the grouping survives the slot-count prefilter and does match
-// the MGD's 1x2 topology; it fails only when it is asked to embed. That is the "matched but
-// unplaceable" state, and the matcher should downgrade to the MGD grouping instead of committing a
-// grouping that cannot be placed or giving up entirely.
-TEST(AdjacencyGuidedPlacement, PgdGroupingThatCannotPlaceDowngradesToMgdGrouping) {
+//     M0[0] == M0[1]                       100 == 101 == 102 == 103
+//
+//   the committed PGD grouping is pinned to ASIC locations 0 and 1
+//
+//     100 == 101 == 102 == 103
+//     '----v----'
+//      the only footprint it allows
+//
+// Both mesh instances are instances of the same descriptor, so they share one committed grouping,
+// and that grouping admits exactly one footprint. Two meshes cannot both have it, so placement
+// fails outright. The MGD's own unpinned 1x2 grouping would have placed them on {100,101} and
+// {102,103}, which is what LinkedMeshesPlaceAdjacentlyOnLine shows on this very PSD.
+//
+// The matcher never gets there. Its pre-commit check calls enumerate_distinct_placements_for_grouping
+// with empty constraints, so it asks only "does this shape fit somewhere on the PSD", with nothing
+// else placed and no seam to satisfy. The pinned grouping answers yes, gets committed, and the
+// fallback is skipped -- committed_pgd_matches is already true by the time the search discovers the
+// grouping cannot cover both instances.
+//
+// TODO: this test asserts the behaviour we want and currently fails. The fix belongs in
+// get_valid_groupings_for_mgd: when a committed PGD grouping cannot cover every instance that shares
+// it, the MGD grouping should be offered alongside it rather than skipped. The search already walks
+// the grouping variants for a mesh in next_step_pool, so with both on the list it can seat one
+// instance on the pinned grouping and fall back to the MGD grouping for the other -- which is why
+// the check at the end of this test wants two entries, not a replacement.
+TEST(AdjacencyGuidedPlacement, PgdGroupingThatCannotCoverEveryInstanceShouldDowngrade) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kGapPgdPath)};
-    MeshGraphDescriptor mgd{std::filesystem::path(kSingleMeshMgdPath)};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kTwoPairPsdPath);
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(kOnePairPgdPath)};
+    MeshGraphDescriptor mgd{std::filesystem::path(kLinkedMgdPath)};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kLinePsdPath);
 
-    // get valid groupings -- this is where the downgrade happens
+    // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
-    const auto& committed = valid_groupings.at("MESH").at("M0");
-    ASSERT_EQ(committed.size(), 1u);
-    EXPECT_EQ(committed.front().name, "M0")
-        << "the pinned PGD grouping matched but could not embed, so the MGD grouping should be "
-        << "used in its place; seeing \"1x2_Mesh_Gap_flat\" here would mean an unplaceable "
-        << "grouping was committed";
 
     // build logical
     const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
 
-    // place, and build the flat ASIC adjacency
+    // place, and build the flat ASIC adjacency the physical graph is derived from
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
     const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+    EXPECT_EQ(placements.size(), 2u)
+        << "one instance can take the pinned pair and the other the MGD grouping, so both should place";
 
-    // The downgrade is only useful if the fallback grouping actually places.
-    ASSERT_EQ(placements.size(), 1u) << "the MGD grouping is an unpinned 1x2 and should place";
+    // Nothing to build a physical graph from while placement comes back empty. Guarded rather than
+    // asserted so the grouping check at the end still reports in the same run.
+    if (!placements.empty()) {
+        // build physical
+        const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
 
-    // build physical
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+        // place and map
+        utils::TopologyMappingConfig config;
+        config.disable_rank_bindings = true;
+        const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+        EXPECT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: "
+                                     << mapping.error_message;
+        EXPECT_THAT(
+            mapped_footprints(mapping),
+            ::testing::UnorderedElementsAre(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}))
+            << "the same seating LinkedMeshesPlaceAdjacentlyOnLine gets from the unpinned grouping";
+    }
 
-    // place and map -- and the downgraded grouping must map, not just place
-    utils::TopologyMappingConfig config;
-    config.disable_rank_bindings = true;
-    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
-    ASSERT_TRUE(mapping.success) << "the fallback placement should map, but failed with: " << mapping.error_message;
-    EXPECT_EQ(mapping.fabric_node_to_asic.size(), 2u) << "both logical chips should be bound";
-    EXPECT_THAT(
-        mapped_footprints(mapping),
-        ::testing::ElementsAre(::testing::AnyOf(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103})))
-        << "the fallback placement must still land on a linked pair, not on the pinned 101/102 gap";
+    // Only now, the grouping list that has to be there for the above to be reachable: the pinned PGD
+    // grouping AND the MGD grouping, so the search has something to fall back to for the instance the
+    // pinned one cannot serve. A single entry means one of the two was dropped at commit time.
+    const auto& committed = valid_groupings.at("MESH").at("M0");
+    std::vector<std::string> committed_names;
+    for (const auto& grouping : committed) {
+        committed_names.push_back(grouping.name);
+    }
+    EXPECT_THAT(committed_names, ::testing::UnorderedElementsAre("1x2_Mesh_OnePair_flat", "M0"))
+        << "both the committed PGD grouping and the MGD grouping should be available as variants";
+
+    // Either way round, each describes the same 1x2 shape, so placement has the same adjacency graph
+    // to embed: two nodes, joined.
+    for (const auto& grouping : committed) {
+        EXPECT_EQ(grouping.adjacency_graph.get_nodes().size(), 2u) << "grouping " << grouping.name;
+        EXPECT_THAT(grouping.adjacency_graph.get_neighbors(0u), ::testing::ElementsAre(1u));
+        EXPECT_THAT(grouping.adjacency_graph.get_neighbors(1u), ::testing::ElementsAre(0u));
+    }
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

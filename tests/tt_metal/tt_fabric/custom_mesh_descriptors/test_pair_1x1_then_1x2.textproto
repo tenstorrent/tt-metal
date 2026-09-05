@@ -1,0 +1,45 @@
+# Mirror image of test_pair_1x2_then_1x1.textproto, used only by the mapper seam-width test.
+#
+#   M0 (1x1) --3-- M1 (1x2)
+#
+# Same two instance names, shapes the other way round: here M0 is the single chip and M1 the 1x2.
+# That makes the two descriptors interchangeable as far as shape goes -- each is a 1x2 joined to a
+# single chip -- so nothing but the channel count on the seam says which side of the system each
+# one belongs on. This one's seam requires 3 channels -- STRICT, like its companion, so that the
+# mapper test using this pair can ask for the counts to be honoured end to end. On
+# test_6asic_dumbbell.textproto the 4-channel link goes to the other descriptor, which puts this one
+# on the right: M0 = {103}, M1 = {104,105}.
+#
+# The multi-descriptor placement test uses test_pair_two_1x1.textproto instead, precisely because it
+# is not interchangeable with its companion.
+
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 3 policy: STRICT }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

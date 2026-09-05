@@ -1,0 +1,43 @@
+# First of the two descriptors placed together in the multi-descriptor test.
+#
+#   M0 (1x2) --4-- M1 (1x1)
+#
+# The companion descriptor, test_pair_two_1x1.textproto, reuses both instance names but gives them
+# different shapes: its M0 is a 1x1, not a 1x2. Two descriptors placed at once are keyed apart by
+# descriptor index, and that reuse is what makes a failure of the keying visible -- look up "M0"
+# without knowing which descriptor asked and a mesh gets built with the wrong shape.
+#
+# This one's seam requires 4 channels -- STRICT, so the count is a requirement rather than a
+# preference. On both systems this descriptor is placed on, only the 101-102 link carries that many,
+# so it lands on the left of the pinch: M0 = {100,101}, M1 = {102}.
+
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 4 policy: STRICT }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

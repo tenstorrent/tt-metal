@@ -4125,13 +4125,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // Verify the expected number of individual meshes
-    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 16u);
-
-    // Each of the mesh level graphs should have connections to other nodes
-    for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
-        EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
-    }
+    // Single MGD mesh instance: adjacency-guided placement seats that one 32-ASIC galaxy.
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
 
     // Check that each graph has exit nodes
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
@@ -4190,12 +4185,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
     // Single top-level mesh M0 (32x4 torus = 128 ASICs)
-    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 4u);
-
-    // Each of the mesh level graphs should have connections to other nodes
-    for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
-        EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
-    }
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
 
     // Check that each graph has exit nodes
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
@@ -4284,7 +4274,7 @@ TEST_F(
     TopologyMapperUtilsTest,
     BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_DisaggregatedPrefill2x4PipelineDecode32x4Combined) {
     // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
-    // Blitz 4x2 pipeline MGD (SP4 GLX mock: 64 physical meshes vs 48 on triple 16x8 / 12 ranks)
+    // Prefill 2x4 pipeline (48 stages) plus one 32x4 decode mesh.
     using namespace ::tt::tt_fabric;
 
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
@@ -4322,7 +4312,7 @@ TEST_F(
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_Blitz2x4) {
     // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
-    // Blitz 4x2 pipeline MGD (SP4 GLX mock: 64 physical meshes vs 48 on triple 16x8 / 12 ranks)
+    // Blitz 4x2 pipeline MGD (10 logical stages; adjacency-guided placement seats one region per stage)
     using namespace ::tt::tt_fabric;
 
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
@@ -4354,8 +4344,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // Verify the expected number of individual meshes
-    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 64u);
+    // 10-stage pipeline: one 8-ASIC region per stage.
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 10u);
 
     // Each of the mesh level graphs should have connections to other nodes
     for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
@@ -4491,7 +4481,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
 
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 64u);
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), kPipelineStages);
 
     for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
         EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
@@ -4623,7 +4613,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
 
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 64u);
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), kPipelineStages);
 
     for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
         EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
@@ -4799,8 +4789,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // MGD has 2 logical meshes; SP4 GLX mock yields 32 physical mesh graphs (vs 24 on triple 16x8).
-    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 32u);
+    // MGD has 2 logical meshes; adjacency-guided placement seats one region per instance.
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 2u);
 
     // Each of the mesh level graphs should have connections to other nodes
     for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
@@ -4862,8 +4852,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // MGD has 2 logical meshes; SP4 GLX mock yields 32 physical mesh graphs (vs 24 on triple 16x8).
-    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 32u);
+    // MGD has 2 logical meshes; adjacency-guided placement seats one region per instance.
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 2u);
 
     // Each of the mesh level graphs should have connections to other nodes
     for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
@@ -4925,8 +4915,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // SP4 GLX mock: 16 meshes (vs 12 on triple 16x8)
-    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 16u);
+    // Single MGD mesh instance: one 32-ASIC region.
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
 
     // Check that the graph has exit nodes
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
@@ -4984,10 +4974,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // Single BH galaxy: 1 mesh (full 32-ASIC 8x4 torus)
-    // The MGD describes a single logical 1x16 mesh (one BH galaxy), but on this BH system it
-    // is realized as 2 physical meshes (each 1x16, totaling 32 ASICs), so we expect 2 graphs.
-    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 2u);
+    // Single logical 1x16 mesh: adjacency-guided placement seats that one 16-ASIC region.
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
 
     // Check that the graph has exit nodes (single-host may have 0 exit nodes)
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
@@ -5009,7 +4997,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 // Closest match for 2x1 is 2x2
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SingleBHGalaxy_N300) {
     // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
-    // Single BH galaxy (32 ASICs): p300 (1x2) matches PGD halftray_2x2 (4 ASICs), 32/4 = 8 meshes
+    // Single BH galaxy (32 ASICs): p300 (1x2) matches PGD halftray_2x2 (4 ASICs).
     using namespace ::tt::tt_fabric;
 
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
@@ -5036,8 +5024,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // PGD 2x2 halftray (4 ASICs) is smallest; 32/4 = 8 meshes
-    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 8u);
+    // Single MGD mesh instance; the closest PGD grouping is 2x2 (4 ASICs).
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
 
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
         EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
@@ -5348,7 +5336,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // Single BH galaxy (32 ASICs): 32/8 = 4 meshes of 2x4
+    // Four pipeline stages of 2x4 (8 ASICs each).
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 4u);
 
     // Check that the graph has exit nodes
