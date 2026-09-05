@@ -291,6 +291,7 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     std::optional<uint32_t> num_links,
     std::optional<uint32_t> input_batch_index,
     std::optional<uint32_t> gathered_dim_size) {
+    ZoneScopedN("HostProfile::all_gather_build_args");
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -336,8 +337,10 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
         }
         axis_topology[axis] = ::ttnn::ccl::get_axis_topology(input_tensor, fabric_config, axis);
         axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
-        const auto discovered_num_links =
-            static_cast<uint32_t>(ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));
+        const auto discovered_num_links = [&] {
+            ZoneScopedN("HostProfile::all_gather_get_num_links");
+            return static_cast<uint32_t>(ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));
+        }();
         if (num_links.has_value()) {
             TT_FATAL(
                 *num_links > 0,
@@ -366,6 +369,7 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
                                                                : ttnn::ccl::snake_ring::Orientation::Row;
     std::optional<uint64_t> direct_neighbor_route_hash;
     if (fabric_is_2d && (linearized_mesh_ring || one_active_axis)) {
+        ZoneScopedN("HostProfile::all_gather_resolve_ring_plan");
         const auto mesh_ring_plan = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
             input_tensor, cluster_axis, collective_num_links, axis_topology, true, "high_bw_all_gather");
         if (mesh_ring_plan.has_value()) {
