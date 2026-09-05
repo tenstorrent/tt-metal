@@ -75,7 +75,7 @@
 
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "hostdev/rta_constants.h"
-#include "hostdev/cross_node_dfb_constants.h"
+#include "hostdev/remote_dfb_constants.h"
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
@@ -378,23 +378,23 @@ uint32_t finalize_cross_node_dfbs(
     if (max_num_cross_node_dfbs == 0) {
         for (ProgramImpl* program : programs) {
             for (auto& kg : program->get_kernel_groups(programmable_core_type_index)) {
-                kg->launch_msg.view().kernel_config().cross_node_dfb_offset() = CROSS_NODE_DFB_OFFSET_NONE;
+                kg->launch_msg.view().kernel_config().cross_node_dfb_offset() = REMOTE_DFB_OFFSET_NONE;
             }
         }
         return base_offset;
     }
 
     const uint32_t cross_node_dfb_offset = base_offset;
-    const uint32_t cross_node_dfb_region_words = cross_node_dfb_config_region_words(max_num_cross_node_dfbs);
+    const uint32_t cross_node_dfb_region_words = remote_dfb_config_region_words(max_num_cross_node_dfbs);
     const uint32_t cross_node_dfb_region_bytes = cross_node_dfb_region_words * sizeof(uint32_t);
     TT_FATAL(
         cross_node_dfb_offset <= std::numeric_limits<uint16_t>::max(),
         "CrossNodeDFB config offset {} overflows uint16_t launch-msg field",
         cross_node_dfb_offset);
     TT_FATAL(
-        cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE,
-        "CrossNodeDFB config offset collides with CROSS_NODE_DFB_OFFSET_NONE (0x{:x})",
-        CROSS_NODE_DFB_OFFSET_NONE);
+        cross_node_dfb_offset != REMOTE_DFB_OFFSET_NONE,
+        "CrossNodeDFB config offset collides with REMOTE_DFB_OFFSET_NONE (0x{:x})",
+        REMOTE_DFB_OFFSET_NONE);
 
     for (ProgramImpl* program : programs) {
         const auto& per_core_participants = program->get_per_core_cross_node_dfbs();
@@ -415,7 +415,7 @@ uint32_t finalize_cross_node_dfbs(
 
             auto kernel_config = kg->launch_msg.view().kernel_config();
             kernel_config.cross_node_dfb_offset() =
-                has_participants ? static_cast<uint16_t>(cross_node_dfb_offset) : CROSS_NODE_DFB_OFFSET_NONE;
+                has_participants ? static_cast<uint16_t>(cross_node_dfb_offset) : REMOTE_DFB_OFFSET_NONE;
         }
     }
 
@@ -426,7 +426,7 @@ uint32_t finalize_cross_node_dfbs(
 // Slots this core does not participate in stay zeroed; firmware skips config_page_addr == 0.
 std::vector<uint32_t> build_cross_node_dfb_config_payload(
     uint8_t num_program_slots, const std::vector<ProgramImpl::CrossNodeDFBParticipant>& sparse_participants) {
-    std::vector<uint32_t> payload(cross_node_dfb_config_region_words(num_program_slots), 0u);
+    std::vector<uint32_t> payload(remote_dfb_config_region_words(num_program_slots), 0u);
     payload[0] = num_program_slots;
     for (const auto& participant : sparse_participants) {
         TT_FATAL(
@@ -435,7 +435,7 @@ std::vector<uint32_t> build_cross_node_dfb_config_payload(
             participant.remote_dfb_id,
             num_program_slots);
         const uint32_t base =
-            CROSS_NODE_DFB_REGION_HEADER_WORDS + participant.remote_dfb_id * CROSS_NODE_DFB_CONFIG_WORDS;
+            REMOTE_DFB_REGION_HEADER_WORDS + participant.remote_dfb_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
         payload[base + 0] = participant.config_page_addr;
         payload[base + 1] = participant.entry_size;
         payload[base + 2] = participant.relay_dfb_id;
@@ -470,6 +470,114 @@ std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
     for (auto& [payload, representative_and_cores] : cores_by_payload) {
         const auto& [representative_core, cores] = representative_and_cores;
         // Constructing from CoreCoords merges them into maximal rectangles.
+        groups.push_back(
+            {payload, representative_core, CoreRangeSet(ttsl::Span<const CoreCoord>(cores.data(), cores.size()))});
+    }
+    return groups;
+}
+
+uint32_t finalize_prefetcher_pipes(
+    const MetalContext& metal_ctx,
+    uint32_t programmable_core_type_index,
+    ttsl::Span<ProgramImpl*> programs,
+    uint32_t base_offset) {
+    uint8_t max_num_prefetcher_pipes = 0;
+    for (ProgramImpl* program : programs) {
+        max_num_prefetcher_pipes = std::max(max_num_prefetcher_pipes, program->num_prefetcher_pipe_slots());
+    }
+
+    if (max_num_prefetcher_pipes == 0) {
+        for (ProgramImpl* program : programs) {
+            for (auto& kg : program->get_kernel_groups(programmable_core_type_index)) {
+                kg->launch_msg.view().kernel_config().prefetcher_pipe_offset() = REMOTE_DFB_OFFSET_NONE;
+            }
+        }
+        return base_offset;
+    }
+
+    const uint32_t prefetcher_pipe_offset = base_offset;
+    const uint32_t prefetcher_pipe_region_words = remote_dfb_config_region_words(max_num_prefetcher_pipes);
+    const uint32_t prefetcher_pipe_region_bytes = prefetcher_pipe_region_words * sizeof(uint32_t);
+    TT_FATAL(
+        prefetcher_pipe_offset <= std::numeric_limits<uint16_t>::max(),
+        "PrefetcherPipe config offset {} overflows uint16_t launch-msg field",
+        prefetcher_pipe_offset);
+    TT_FATAL(
+        prefetcher_pipe_offset != REMOTE_DFB_OFFSET_NONE,
+        "PrefetcherPipe config offset collides with REMOTE_DFB_OFFSET_NONE (0x{:x})",
+        REMOTE_DFB_OFFSET_NONE);
+
+    for (ProgramImpl* program : programs) {
+        const auto& per_core_participants = program->get_per_core_prefetcher_pipes();
+        for (auto& kg : program->get_kernel_groups(programmable_core_type_index)) {
+            bool has_participants = false;
+            for (const CoreRange& cr : kg->core_ranges.ranges()) {
+                for (const auto& core : cr) {
+                    auto it = per_core_participants.find(core);
+                    if (it != per_core_participants.end() && !it->second.empty()) {
+                        has_participants = true;
+                        break;
+                    }
+                }
+                if (has_participants) {
+                    break;
+                }
+            }
+
+            auto kernel_config = kg->launch_msg.view().kernel_config();
+            kernel_config.prefetcher_pipe_offset() =
+                has_participants ? static_cast<uint16_t>(prefetcher_pipe_offset) : REMOTE_DFB_OFFSET_NONE;
+        }
+    }
+
+    return tt::align(base_offset + prefetcher_pipe_region_bytes, metal_ctx.hal().get_alignment(HalMemType::L1));
+}
+
+std::vector<uint32_t> build_prefetcher_pipe_config_payload(
+    uint8_t num_program_slots, const std::vector<ProgramImpl::PrefetcherPipeParticipant>& sparse_participants) {
+    std::vector<uint32_t> payload(remote_dfb_config_region_words(num_program_slots), 0u);
+    payload[0] = num_program_slots;
+    for (const auto& participant : sparse_participants) {
+        TT_FATAL(
+            participant.prefetcher_pipe_id < num_program_slots,
+            "PrefetcherPipe sparse participant prefetcher_pipe_id {} exceeds program slot count {}",
+            participant.prefetcher_pipe_id,
+            num_program_slots);
+        const uint32_t base =
+            REMOTE_DFB_REGION_HEADER_WORDS + participant.prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
+        payload[base + 0] = participant.config_page_addr;
+        payload[base + 1] = participant.entry_size;
+        payload[base + 2] = participant.relay_dfb_id;
+    }
+    return payload;
+}
+
+std::vector<PrefetcherPipeCoreGroup> partition_cores_by_prefetcher_pipe_payload(
+    const CoreRangeSet& kernel_group_cores,
+    const std::unordered_map<CoreCoord, std::vector<ProgramImpl::PrefetcherPipeParticipant>>& per_core_prefetcher_pipes,
+    uint8_t num_program_slots) {
+    std::map<std::vector<uint32_t>, std::pair<CoreCoord, std::vector<CoreCoord>>> cores_by_payload;
+
+    for (const CoreRange& core_range : kernel_group_cores.ranges()) {
+        for (const CoreCoord& core : core_range) {
+            auto it = per_core_prefetcher_pipes.find(core);
+            if (it == per_core_prefetcher_pipes.end() || it->second.empty()) {
+                continue;
+            }
+
+            std::vector<uint32_t> payload = build_prefetcher_pipe_config_payload(num_program_slots, it->second);
+            auto& entry = cores_by_payload[payload];
+            if (entry.second.empty()) {
+                entry.first = core;
+            }
+            entry.second.push_back(core);
+        }
+    }
+
+    std::vector<PrefetcherPipeCoreGroup> groups;
+    groups.reserve(cores_by_payload.size());
+    for (auto& [payload, representative_and_cores] : cores_by_payload) {
+        const auto& [representative_core, cores] = representative_and_cores;
         groups.push_back(
             {payload, representative_core, CoreRangeSet(ttsl::Span<const CoreCoord>(cores.data(), cores.size()))});
     }
@@ -1604,8 +1712,8 @@ public:
         const auto& program_config = program.get_program_config(index);
         const uint32_t cross_node_dfb_offset = program_config.cross_node_dfb_offset;
         TT_FATAL(
-            cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE,
-            "CrossNodeDFBCommandGenerator: unexpected CROSS_NODE_DFB_OFFSET_NONE with participants present");
+            cross_node_dfb_offset != REMOTE_DFB_OFFSET_NONE,
+            "CrossNodeDFBCommandGenerator: unexpected REMOTE_DFB_OFFSET_NONE with participants present");
         const uint32_t start_addr = cross_node_dfb_offset;
         const uint8_t num_program_slots = program.num_cross_node_dfb_slots();
         for (const auto& kg : kernel_groups) {
@@ -1670,6 +1778,60 @@ private:
     // Payload buffers kept alive until batched_transfers is consumed.
     std::vector<std::vector<uint32_t>> payloads_;
     std::vector<std::vector<uint32_t>> page_payloads_;
+};
+
+// Generates multicast writes for the dense PrefetcherPipe index in the worker-config
+// ringbuffer only. Config pages are materialized at Create and never rewritten on launch.
+class PrefetcherPipeCommandGenerator {
+public:
+    void construct_commands(
+        const MetalContext& metal_ctx,
+        IDevice* device,
+        const CommandConstants& constants,
+        ProgramImpl& program,
+        BatchedTransfers& batched_transfers) {
+        const auto& per_core_prefetcher_pipes = program.get_per_core_prefetcher_pipes();
+        if (per_core_prefetcher_pipes.empty()) {
+            return;
+        }
+
+        const auto& hal = metal_ctx.hal();
+        const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        const auto& kernel_groups = program.get_kernel_groups(index);
+        const auto& program_config = program.get_program_config(index);
+        const uint32_t prefetcher_pipe_offset = program_config.prefetcher_pipe_offset;
+        TT_FATAL(
+            prefetcher_pipe_offset != REMOTE_DFB_OFFSET_NONE,
+            "PrefetcherPipeCommandGenerator: unexpected REMOTE_DFB_OFFSET_NONE with participants present");
+        const uint32_t start_addr = prefetcher_pipe_offset;
+        const uint8_t num_program_slots = program.num_prefetcher_pipe_slots();
+        for (const auto& kg : kernel_groups) {
+            for (auto& group : partition_cores_by_prefetcher_pipe_payload(
+                     kg->core_ranges, per_core_prefetcher_pipes, num_program_slots)) {
+                payloads_.push_back(std::move(group.payload));
+                const auto& payload = payloads_.back();
+                const uint32_t payload_bytes = static_cast<uint32_t>(payload.size() * sizeof(uint32_t));
+
+                for (const CoreRange& core_range : group.cores.ranges()) {
+                    const CoreCoord virtual_start =
+                        device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
+                    const CoreCoord virtual_end =
+                        device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
+                    CoreRange virtual_range(virtual_start, virtual_end);
+                    auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
+
+                    batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] =
+                        std::vector<Transfer>{
+                            {.start = start_addr,
+                             .data = ttsl::Span<const uint8_t>(
+                                 reinterpret_cast<const uint8_t*>(payload.data()), payload_bytes)}};
+                }
+            }
+        }
+    }
+
+private:
+    std::vector<std::vector<uint32_t>> payloads_;
 };
 
 class ProgramBinaryCommandGenerator {
@@ -2521,6 +2683,10 @@ void assemble_device_commands(
     CrossNodeDFBCommandGenerator cross_node_dfb_command_generator;
     cross_node_dfb_command_generator.construct_commands(
         metal_ctx, mesh_device, constants, program, batched_transfers, absolute_cross_node_config_transfers);
+
+    PrefetcherPipeCommandGenerator prefetcher_pipe_command_generator;
+    prefetcher_pipe_command_generator.construct_commands(
+        metal_ctx, mesh_device, constants, program, batched_transfers);
 
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(metal_ctx, batched_transfers, program_config_buffer_calculator);
