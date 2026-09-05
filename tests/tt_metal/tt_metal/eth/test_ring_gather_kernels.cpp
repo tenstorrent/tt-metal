@@ -27,6 +27,7 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -390,7 +391,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     std::vector<uint32_t> full_input;
     full_input.reserve(numel * sender_receivers.size());
 
-    std::vector<std::shared_ptr<tt_metal::Buffer>> output_buffers;
+    std::vector<std::shared_ptr<distributed::MeshBuffer>> output_buffers;
     output_buffers.reserve(sender_receivers.size());
 
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
@@ -411,15 +412,16 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 
         auto& program = programs[device_id];
 
-        auto input_buffer = CreateBuffer(
-            tt_metal::InterleavedBufferConfig{device->get_devices()[0], cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type});
-        tt_metal::detail::WriteToBuffer(input_buffer, inputs[i]);
-        output_buffers.emplace_back(CreateBuffer(tt_metal::InterleavedBufferConfig{
-            device->get_devices()[0],
-            cfg.size_bytes * sender_receivers.size(),
-            cfg.page_size_bytes,
-            cfg.output_buffer_type}));
-        tt_metal::detail::WriteToBuffer(output_buffers[i], all_zeros);
+        auto input_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = cfg.size_bytes},
+            {.page_size = cfg.page_size_bytes, .buffer_type = cfg.input_buffer_type},
+            device.get());
+        distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, inputs[i], true);
+        output_buffers.emplace_back(distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = cfg.size_bytes * sender_receivers.size()},
+            {.page_size = cfg.page_size_bytes, .buffer_type = cfg.output_buffer_type},
+            device.get()));
+        distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), output_buffers[i], all_zeros, true);
 
         auto eth_sender_kernel = tt_metal::CreateKernel(
             program,
@@ -432,8 +434,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
                     uint32_t(num_bytes_per_send >> 4),
                     uint32_t(device->get_devices()[0]->ethernet_core_from_logical_core(eth_receiver_core).x),
                     uint32_t(device->get_devices()[0]->ethernet_core_from_logical_core(eth_receiver_core).y),
-                    uint32_t(input_buffer->buffer_type() == tt_metal::BufferType::DRAM),
-                    uint32_t(output_buffers[i]->buffer_type() == tt_metal::BufferType::DRAM)}});
+                    uint32_t(input_buffer->device_local_config().buffer_type == tt_metal::BufferType::DRAM),
+                    uint32_t(output_buffers[i]->device_local_config().buffer_type == tt_metal::BufferType::DRAM)}});
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -471,7 +473,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
                     uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).x),
                     uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).y),
                     uint32_t(
-                        output_buffers[i]->buffer_type() ==
+                        output_buffers[i]->device_local_config().buffer_type ==
                         tt_metal::BufferType::DRAM)}});  // probably want to use NOC_1 here
 
         tt_metal::SetRuntimeArgs(
@@ -508,7 +510,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
         const auto& device = std::get<0>(sender_receivers[i]);
         const auto& core = std::get<2>(sender_receivers[i]);
         std::vector<uint32_t> readback_vec;
-        tt_metal::detail::ReadFromBuffer(output_buffers[i], readback_vec);
+        distributed::EnqueueReadMeshBuffer(device->mesh_command_queue(), readback_vec, output_buffers[i], true);
         auto a = std::mismatch(full_input.begin(), full_input.end(), readback_vec.begin());
         bool p = (a.first == full_input.end());
         pass &= p;

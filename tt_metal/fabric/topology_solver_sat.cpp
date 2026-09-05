@@ -26,8 +26,17 @@
 namespace tt::tt_fabric::detail {
 
 // Full definition of the opaque session type forward-declared in topology_solver.hpp.
+// Conflict budget for solving under a HARD host-group cap. An intractable at-most-K cap is abandoned after this
+// many conflicts (a few seconds) rather than churning unbounded; the caller then relaxes the cap. Shared by the
+// single-shot solve (topology_sat_search) and the enumeration session so both bail identically. Tractable caps
+// finish well within it and return the identical model, so golden mappings are unchanged.
+static constexpr int kHostCapConflictBudget = 300'000;
+
 struct TopologySatSession {
     TopologySatSolver solver;
+    // Set when a hard host-group cap is encoded: solves are conflict-limited to kHostCapConflictBudget so an
+    // intractable cap is abandoned (like the single-shot path) instead of hanging in CaDiCaL for minutes.
+    bool cap_active = false;
 };
 
 // ── Adjacency and Edge Helpers ────────────────────────────────────────────────
@@ -1590,10 +1599,9 @@ bool topology_sat_search(
             // makes tight packings like a 16-host ring on a 24-host cluster tractable (issue #50253).
             const bool uniform_capacity = (min_group_capacity == max_group_capacity);
             const bool full_packing = uniform_capacity && (graph_data.n_target == K * max_group_capacity);
-            // The occupancy solve is conflict-capped so an intractable cap is abandoned for the fall-through rather
-            // than proved unbounded. Tractable caps finish well within the budget and return the identical model
-            // they would unbounded, so existing golden mappings are unchanged.
-            static constexpr int kHostCapConflictBudget = 300'000;
+            // The occupancy solve is conflict-capped (kHostCapConflictBudget, file scope) so an intractable cap is
+            // abandoned for the fall-through rather than proved unbounded. Tractable caps finish well within the
+            // budget and return the identical model they would unbounded, so existing golden mappings are unchanged.
             // Attempt the at-most-K occupancy encode once. Returns: 1 = solved (mapping finalized), 0 =
             // UNSAT/unencodable/timed out (fall through), -1 = hard constraints alone are UNSAT (defer to the
             // normal path for error messaging).
@@ -1793,22 +1801,18 @@ bool topology_sat_search_n(
         return false;
     }
 
-    // One CaDiCaL::Solver for the whole enumeration: encode once, then add blocking clauses and solve() in a loop.
-    // (No full re-encode / new solver per model.)
-    TopologySatSolver solver;
-    solver.configure_for_blocking_clause_enumeration();
+    // Enumerate through the lazy-session bridge so the upfront (eager) enumeration and the streaming session share
+    // ONE encode + solve path -- same hard-cap conflict budget, same encoding -- instead of duplicating the loop.
     TopologySatHardEncoding enc;
-    if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
-        return false;
-    }
-    if (!topology_sat_encode_host_group_cap_for_enumeration(solver, constraint_data, enc)) {
-        return false;  // hard host-group cap is trivially unencodable -> no capped solutions
+    auto session = topology_sat_session_create_and_encode(graph_data, constraint_data, enc, validation_mode);
+    if (!session) {
+        return false;  // hard constraints or hard host-group cap trivially unencodable -> no solutions
     }
 
     for (const auto& shape_key : initial_forbidden_shape_keys) {
         std::vector<int> forbid_clause;
         topology_sat_build_shape_blocking_clause(enc, shape_key, forbid_clause);
-        topology_sat_add_shape_clause_or_unsat(solver, enc, forbid_clause);
+        topology_sat_add_shape_clause_or_unsat(session->solver, enc, forbid_clause);
     }
 
     using enum_clock = std::chrono::steady_clock;
@@ -1817,14 +1821,9 @@ bool topology_sat_search_n(
     auto last_enum_progress_log = enum_clock::now() - kEnumProgressLogInterval;
 
     while (all_mappings_out.size() < max_solutions) {
-        const int status = solver.solve();
-        if (status != TopologySatSolver::kSat) {
-            break;
-        }
-
         std::vector<int> current_mapping;
-        if (!topology_sat_decode_hard_solution(solver, enc, current_mapping)) {
-            break;
+        if (!topology_sat_session_solve_and_decode(session.get(), enc, current_mapping)) {
+            break;  // conflict-budget exhausted on a hard cap, genuine UNSAT, or decode failure
         }
         all_mappings_out.push_back(std::move(current_mapping));
 
@@ -1841,7 +1840,7 @@ bool topology_sat_search_n(
             }
         }
 
-        if (!topology_sat_add_blocking_clause_for_mapping(solver, enc, all_mappings_out.back(), unique_shapes)) {
+        if (!topology_sat_session_add_blocking_clause(session.get(), enc, all_mappings_out.back(), unique_shapes)) {
             break;
         }
     }
@@ -1868,6 +1867,14 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
     const TopologySatConstraintView& constraint_data,
     TopologySatHardEncoding& enc,
     ConnectionValidationMode validation_mode) {
+    // Capacity precheck (same as the single-shot solve): if the K largest host groups can't even sum to n_target,
+    // no capped placement can exist -- report "no session" so the caller relaxes the cap, instead of encoding and
+    // solving an unsatisfiable at-most-K.
+    if (constraint_data.max_same_rank_groups_used > 0 &&
+        !topology_sat_max_groups_cap_capacity_feasible(
+            constraint_data, graph_data.n_target, constraint_data.max_same_rank_groups_used)) {
+        return nullptr;
+    }
     auto session = std::unique_ptr<TopologySatSession, TopologySatSessionDeleter>(new TopologySatSession{});
     session->solver.configure_for_blocking_clause_enumeration();
     enc = {};
@@ -1877,6 +1884,7 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
     if (!topology_sat_encode_host_group_cap_for_enumeration(session->solver, constraint_data, enc)) {
         return nullptr;  // hard host-group cap is trivially unencodable -> no capped solutions
     }
+    session->cap_active = (constraint_data.max_same_rank_groups_used > 0);
     return session;
 }
 
@@ -1890,7 +1898,12 @@ bool topology_sat_session_add_blocking_clause(
 
 bool topology_sat_session_solve_and_decode(
     TopologySatSession* session, const TopologySatHardEncoding& enc, std::vector<int>& raw_out) {
-    if (session->solver.solve() != TopologySatSolver::kSat) {
+    // Under a HARD cap, conflict-limit the solve so an intractable at-most-K cap is abandoned (returns "not found")
+    // rather than churning unbounded in CaDiCaL -- mirroring the single-shot topology_sat_search. The caller then
+    // relaxes the cap. Uncapped solves stay unlimited so genuine exhaustion is never misreported.
+    const int status =
+        session->cap_active ? session->solver.solve_limited(kHostCapConflictBudget) : session->solver.solve();
+    if (status != TopologySatSolver::kSat) {
         return false;
     }
     return topology_sat_decode_hard_solution(session->solver, enc, raw_out);

@@ -16,7 +16,6 @@
 #include <vector>
 
 #include "allocator.hpp"
-#include "impl/allocator/persistent_l1_arena.hpp"
 #include "hal_types.hpp"
 #include "sub_device.hpp"
 #include "sub_device_types.hpp"
@@ -70,7 +69,6 @@ public:
     uint8_t num_sub_devices() const;
     bool has_allocations() const;
     DeviceAddr local_l1_size() const;
-    DeviceAddr global_l1_bottom_reservation_size() const;
 
     const std::vector<SubDeviceId>& get_sub_device_stall_group() const;
     void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids);
@@ -96,12 +94,7 @@ private:
     tt::tt_metal::ContextId context_id_;
 
     DeviceAddr local_l1_size_;
-    DeviceAddr global_l1_bottom_reservation_size_ = 0;
     std::vector<std::unique_ptr<AllocatorImpl>> sub_device_allocators_;
-    // One seal per sub-device Tensix grid carved in populate_sub_allocators.
-    // Empty when local_l1_size_ == 0. Destructors unseal even during MeshDevice
-    // tracker teardown, when device_->allocator_impl() is no longer usable.
-    std::vector<PersistentL1Arena::Seal> persistent_l1_seals_;
 
     std::array<uint32_t, NumHalProgrammableCoreTypes> num_cores_{};
 
