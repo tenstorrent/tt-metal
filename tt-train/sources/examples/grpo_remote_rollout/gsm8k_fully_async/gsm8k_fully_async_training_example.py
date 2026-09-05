@@ -5,21 +5,29 @@
 
 """GRPO on GSM8K, FULLY-ASYNC rollout variant -- FIRST CUT.
 
-Two-rank tt-run entrypoint (rank 0 = mock training loop that only drives the
-event protocol; rank 1 = real TttGenerationWorker running a generation-with-
-log-probs loop). Neither rank does actual GRPO training in this cut; the
-purpose is to validate the event protocol, log-prob plumbing, and dataset
-loader end-to-end before we swap in a real ``FullyAsyncGRPOTrainer``.
+Two-rank tt-run entrypoint (rank 0 = mock training loop that pushes fake
+weight bytes to rank 1 through a threaded host bridge; rank 1 = real
+TttGenerationWorker running a generation-with-log-probs loop and polling the
+bridge for received weights). Neither rank does actual GRPO training in this
+cut; the purpose is to validate:
+
+  * the :class:`ThreadedHostWeightBridge` async ``push`` / ``poll`` API on
+    top of real MPI transfers,
+  * the trimmed :class:`AsyncTrainingEvent` protocol (``TRAINING_BATCH_SIZE`` /
+    ``DRAIN`` / ``TRAINING_STOPPED``), and
+  * the log-probs + dataset-loader plumbing end-to-end.
 
 Diffs vs the one-step sibling ``gsm8k_onestep_training_example.py``:
 
-  * No trainer, no completer, no weight bridge -- rank 0 is a sleep-based
-    mock that fires typed :class:`AsyncTrainingEvent` s to rank 1.
+  * No trainer, no completer -- rank 0 is a sleep-based mock plus one dummy
+    100 MiB ttnn.Tensor allocated on the ttml mesh, used as a stand-in for
+    ``qwen3_weights_ref_hf_dict(model)`` and pushed to the bridge every step.
   * Rank 1 owns its own tokenizer (via ``AutoTokenizer.from_pretrained``) so
     ``DatasetLoader`` can tokenise gsm8k prompts on the rollout side; the
     training rank doesn't touch the dataset in this cut.
-  * All messaging goes through :class:`AsyncTrainingEventChannel`, backed
-    by the new ``distributed_context_iprobe_bytes`` non-blocking probe.
+  * Event channel (``AsyncTrainingEventChannel``) is used only for
+    ``TRAINING_BATCH_SIZE`` / ``DRAIN`` / ``TRAINING_STOPPED``; weight bytes
+    flow over the bridge's dedicated tag pair (22300/22301).
 
 Run:
     tt-train/sources/examples/grpo_remote_rollout/gsm8k_fully_async/runner.sh
@@ -42,6 +50,7 @@ _EXAMPLE_ROOT = os.path.dirname(_THIS_DIR)
 if _EXAMPLE_ROOT not in sys.path:
     sys.path.insert(0, _EXAMPLE_ROOT)
 
+import torch
 import ttml
 import ttnn
 from datasets import load_dataset
@@ -50,6 +59,7 @@ from ttml.common.config import DeviceConfig, load_config
 
 from utils.async_training_event_channel import AsyncTrainingEvent, AsyncTrainingEventChannel
 from utils.qwen3_ttt_presets import bf16_attn_bfp8_mlp_optimizations, qwen3_stop_and_pad
+from utils.threaded_host_weight_bridge import ThreadedHostWeightBridge
 from utils.ttt_generation_worker import TttGenerationWorker
 from utils.weight_bridge import TTML_RANK, TTT_RANK
 
@@ -66,9 +76,12 @@ SYSTEM_PROMPT = (
     "Respond in the following format:\n" f"{THINK_OPEN}\n...\n{THINK_CLOSE}\n" f"{ANSWER_OPEN}\n...\n{ANSWER_CLOSE}\n"
 )
 
-# Matches gsm8k_onestep -- FABRIC_2D is required by MeshSocketWeightBridge in the
-# real (follow-up) version and cheap to set unconditionally here.
-ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
+# NOTE: no ttnn.set_fabric_config here. This example uses ThreadedHostWeightBridge
+# (pure MPI, host-only transport), not MeshSocketWeightBridge. Skipping fabric
+# init saves ~1s of boot on each rank AND avoids the two-rank barrier that used
+# to gate rank 1's `ttnn.open_mesh_device` on rank 0 also opening a mesh (which
+# gsm8k_onestep needs but we don't). A follow-up that wires in a real
+# fabric-based bridge should re-enable FABRIC_2D here.
 
 _NUM_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 
@@ -151,29 +164,67 @@ def _num_devices_from_config(device_config) -> int:
     return n
 
 
+def _weight_bytes_to_shape(byte_size: int) -> tuple[int, int]:
+    """Pick a (rows, cols) bfloat16 shape that (a) totals exactly ``byte_size``
+    bytes and (b) is TILE-aligned (both dims multiples of 32) so
+    ``_validate_source_tensor`` passes.
+
+    Uses rows=1024 by construction and derives cols=byte_size/(2*1024); asserts
+    the divisions come out exact.
+    """
+    assert byte_size % 2 == 0, f"weight_bytes_size must be even (bf16 = 2 B/elem), got {byte_size}"
+    n_elems = byte_size // 2
+    rows = 1024
+    assert n_elems % rows == 0, f"weight_bytes_size / 2 must be divisible by {rows} for the mock shape"
+    cols = n_elems // rows
+    assert rows % 32 == 0 and cols % 32 == 0, f"({rows}, {cols}) is not tile-aligned"
+    return rows, cols
+
+
+def _build_mock_weight_tensor(mesh: "ttnn.MeshDevice", byte_size: int) -> "ttnn.Tensor":
+    """Allocate one dummy bfloat16 TILE-layout DRAM tensor of exactly
+    ``byte_size`` bytes on the given mesh, replicated across all devices.
+
+    Stand-in for a real ``qwen3_weights_ref_hf_dict(model)`` entry in this
+    mock; the future real trainer will pass its own hf_dict to
+    ``ThreadedHostWeightBridge.push`` and never call this helper.
+    """
+    rows, cols = _weight_bytes_to_shape(byte_size)
+    host = torch.zeros(rows, cols, dtype=torch.bfloat16)
+    return ttnn.from_torch(
+        host,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh),
+    )
+
+
 def _ttml_main() -> None:
     """Mock training loop.
 
-    Does NOT build a model or an optimizer -- just drives the event protocol so
-    the two ranks can validate the handshake end-to-end.
+    Does NOT build a real model or run any optimizer. What it DOES do:
 
-    We DO open a ttml mesh on this rank even though the mock loop never touches
-    device tensors: ttnn.set_fabric_config(FABRIC_2D) plus the intermesh
-    connection declared in mgd.textproto (graph G0) make rank 1's
-    ttnn.open_mesh_device block on a fabric handshake with mesh 0. Matching the
-    gsm8k_onestep pattern (autograd_ctx.open_device) satisfies that handshake
-    without dragging in any tensor work.
+      * Open the ttml mesh so we can allocate a dummy ttnn.Tensor for the
+        mock weights. Fabric is intentionally NOT enabled at module level,
+        so this open does not gate on rank 1 (unlike gsm8k_onestep).
+      * Allocate one dummy 100 MiB bfloat16 ttnn tensor as a stand-in for the
+        real model's weights.
+      * Every mock training step, ``push`` an hf_dict wrapping that tensor
+        into a :class:`ThreadedHostWeightBridge` (sender side) and fire a
+        ``DRAIN`` event. Fire-and-forget: no ack expected.
+      * On loop exit, close the bridge (drains + joins the sender thread) and
+        send ``TRAINING_STOPPED`` on the event channel.
     """
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     autograd_ctx.initialize_distributed_context(*sys.argv)
 
     device_config, raw = _load_device_config()
-
-    # Open the ttml device solely so the fabric intermesh channel between mesh 0
-    # (this rank) and mesh 1 (peer) can be established -- rank 1's open blocks
-    # until we do this. Closed in the finally below.
     _open_ttml_device(device_config)
+    mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
 
+    bridge: Optional[ThreadedHostWeightBridge] = None
     try:
         # completions_per_batch matches GRPOTrainer._setup:1067:
         #   completions_per_microbatch = per_device_train_batch_size * num_devices
@@ -188,7 +239,7 @@ def _ttml_main() -> None:
         )
 
         wait_step_s: float = float(fa["wait_step_s"])
-        weight_bridge_mock_s: float = float(fa["weight_bridge_mock_s"])
+        weight_bytes_size: int = int(fa["weight_bytes_size"])
         steps: int = int(fa["steps"])
 
         print(
@@ -196,44 +247,75 @@ def _ttml_main() -> None:
             f"per_device_train_batch_size={grpo['per_device_train_batch_size']}, "
             f"gradient_accumulation_steps={grpo['gradient_accumulation_steps']}, "
             f"completions_per_batch={completions_per_batch}, "
-            f"wait_step_s={wait_step_s}, weight_bridge_mock_s={weight_bridge_mock_s}, "
+            f"wait_step_s={wait_step_s}, weight_bytes_size={weight_bytes_size}, "
             f"steps={steps}",
             flush=True,
         )
+
+        # Allocate the mock weight tensor ONCE; reused every push. In a real
+        # trainer this dict comes from qwen3_weights_ref_hf_dict(model) and
+        # its underlying bytes change as optimizer.step() mutates them.
+        print(f"[mock-training] allocating mock weight tensor ({weight_bytes_size} B)...", flush=True)
+        mock_weight = _build_mock_weight_tensor(mesh_device, weight_bytes_size)
+        hf_dict = {"mock_weight": mock_weight}
+
+        # Bring up the bridge. connect() does a handshake with rank 1 and
+        # spawns the internal sender thread.
+        print(f"[mock-training] connecting ThreadedHostWeightBridge sender to rank {TTT_RANK}...", flush=True)
+        bridge = ThreadedHostWeightBridge.init_sender(
+            mesh=mesh_device,
+            peer_rank=TTT_RANK,
+            expected_bytes_size=weight_bytes_size,
+        )
+        bridge.connect()
+        print("[mock-training] bridge connected + sender thread started", flush=True)
 
         channel = AsyncTrainingEventChannel(peer_rank=TTT_RANK)
         channel.send(AsyncTrainingEvent.TRAINING_BATCH_SIZE, payload=completions_per_batch)
         print(f"[mock-training] sent TRAINING_BATCH_SIZE({completions_per_batch}) to rank {TTT_RANK}", flush=True)
 
-        weights_pushed = False
+        # Block until rank 1 finishes its heavy init (worker + trace capture,
+        # tokenizer, dataset build) and signals it's about to enter the
+        # generation loop. Prevents mock weight blobs from stacking up in the
+        # receiver pad while inference is still warming up, and keeps the log
+        # ordering readable.
+        print("[mock-training] waiting for INFERENCE_READY from rank 1...", flush=True)
+        _t_wait = time.perf_counter()
+        ev, _ = channel.wait_for_next_event()
+        assert (
+            ev == AsyncTrainingEvent.INFERENCE_READY
+        ), f"expected INFERENCE_READY from rank 1 before starting step loop, got {ev.name}"
+        print(
+            f"[mock-training] got INFERENCE_READY from rank 1 ({time.perf_counter() - _t_wait:.1f}s wait); "
+            "starting step loop",
+            flush=True,
+        )
+
         for step in range(steps):
             time.sleep(wait_step_s)
             print(f"[mock-training] step {step} done (slept {wait_step_s}s)", flush=True)
 
-            if weights_pushed:
-                ev, _payload = channel.wait_for_next_event()
-                assert (
-                    ev == AsyncTrainingEvent.INFERENCE_RECEIVED_WEIGHTS
-                ), f"expected INFERENCE_RECEIVED_WEIGHTS, got {ev.name}"
-                print("[mock-training] got INFERENCE_RECEIVED_WEIGHTS ack", flush=True)
-
-            channel.send(AsyncTrainingEvent.TRAINING_ABOUT_TO_SEND_WEIGHTS)
-            print("[mock-training] sent TRAINING_ABOUT_TO_SEND_WEIGHTS", flush=True)
-
-            # Mock the actual weight-bridge push. In the follow-up cut this becomes
-            # a HostWeightBridge / MeshSocketWeightBridge send_weights call.
-            time.sleep(weight_bridge_mock_s)
-            channel.send(AsyncTrainingEvent.TRAINING_SENT_WEIGHTS)
+            # push() runs on THIS thread: D->H + torch.save into the sending
+            # pad, then returns. The bridge's internal sender thread does the
+            # actual MPI send. Fire-and-forget on our side.
+            _t = time.perf_counter()
+            bridge.push(hf_dict)
             print(
-                f"[mock-training] sent TRAINING_SENT_WEIGHTS after mock push of {weight_bridge_mock_s}s",
+                f"[mock-training] bridge.push v={step} done in {(time.perf_counter()-_t)*1000:.1f}ms "
+                f"(D->H + serialize; MPI send is off-thread)",
                 flush=True,
             )
 
-            weights_pushed = True
+            channel.send(AsyncTrainingEvent.DRAIN, payload=step)
+            print(f"[mock-training] fired DRAIN v={step}", flush=True)
 
         channel.send(AsyncTrainingEvent.TRAINING_STOPPED)
-        print("[mock-training] sent TRAINING_STOPPED, exiting", flush=True)
+        print("[mock-training] sent TRAINING_STOPPED", flush=True)
     finally:
+        if bridge is not None:
+            print("[mock-training] closing bridge (draining sender thread)...", flush=True)
+            bridge.close()
+            print("[mock-training] bridge closed", flush=True)
         _close_ttml_device()
 
 
@@ -248,9 +330,11 @@ def _ttt_main() -> None:
     """Real inference loop.
 
     Owns the parent mesh, the ``TttGenerationWorker``, a locally-loaded tokenizer,
-    the :class:`DatasetLoader`, and the :class:`AsyncTrainingEventChannel`. Runs
+    the :class:`DatasetLoader`, the :class:`AsyncTrainingEventChannel`, and a
+    :class:`ThreadedHostWeightBridge` on the receiver side. Runs
     :meth:`TttGenerationWorker.generate_and_get_log_probs` in a wrap-around loop
-    until it receives ``TRAINING_STOPPED``.
+    until it receives ``TRAINING_STOPPED``, polling the bridge between batches
+    for freshly received (mock) weights.
     """
     _log("entering _ttt_main")
     if not ttnn.distributed_context_is_initialized():
@@ -264,6 +348,7 @@ def _ttt_main() -> None:
     model_id = raw["training_config"]["model_id"]
     rr = raw["remote_rollout_config"]
     seed = int(raw["training_config"].get("seed", 0))
+    weight_bytes_size = int(raw["training_config"]["fully_async_config"]["weight_bytes_size"])
 
     _log(f"opening parent mesh {tuple(rr['mesh_shape'])}...")
     _t0 = time.perf_counter()
@@ -275,6 +360,7 @@ def _ttt_main() -> None:
 
     worker: Any = None
     channel: Optional[AsyncTrainingEventChannel] = None
+    bridge: Optional[ThreadedHostWeightBridge] = None
     try:
         _log(f"resolving stop/pad tokens for {model_id}...")
         _t1 = time.perf_counter()
@@ -310,6 +396,17 @@ def _ttt_main() -> None:
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
         _log(f"tokenizer ready ({time.perf_counter() - _t3:.1f}s)")
 
+        _log(f"connecting ThreadedHostWeightBridge receiver to rank {TTML_RANK}...")
+        _t_bridge = time.perf_counter()
+        bridge = ThreadedHostWeightBridge.init_receiver(
+            mesh=parent_mesh,
+            peer_rank=TTML_RANK,
+            submeshes=worker.submeshes,
+            expected_bytes_size=weight_bytes_size,
+        )
+        bridge.connect()
+        _log(f"bridge connected + receiver thread started ({time.perf_counter() - _t_bridge:.1f}s)")
+
         channel = AsyncTrainingEventChannel(peer_rank=TTML_RANK)
         _log("waiting for TRAINING_BATCH_SIZE from rank 0...")
         ev, batch_size_completions = channel.wait_for_next_event()
@@ -331,7 +428,13 @@ def _ttt_main() -> None:
             tokenizer=tokenizer,
             prompts_per_batch=prompts_per_batch,
         )
-        _log(f"dataset loader ready ({time.perf_counter() - _t4:.1f}s); entering generation loop")
+        _log(f"dataset loader ready ({time.perf_counter() - _t4:.1f}s)")
+
+        # Rank 0 blocks on this before firing its first bridge.push, so mock
+        # weight blobs don't queue up in the receiver pad while we were still
+        # doing worker + tokenizer + dataset init.
+        channel.send(AsyncTrainingEvent.INFERENCE_READY)
+        _log("sent INFERENCE_READY to rank 0; entering generation loop")
 
         for iter_idx, prompts in enumerate(loader.iter()):
             # Expand 1:1 with the worker's output slots (each prompt spawns G completions).
@@ -355,31 +458,33 @@ def _ttt_main() -> None:
             )
             # TODO: ship (completions, logprobs) to the rollout completions queue -- deferred.
 
+            # Non-blocking check for freshly received weights on the bridge.
+            # In the follow-up cut this dispatches to worker.update_weights(...).
+            new_bytes = bridge.poll()
+            if new_bytes is not None:
+                pad_version = bridge.latest_version()
+                _log(
+                    f"iter {iter_idx}: got fresh weights from bridge "
+                    f"({len(new_bytes)} B, pad_version={pad_version}) -- mock apply"
+                )
+
+            # Drain the event channel: TRAINING_STOPPED breaks the loop; DRAIN
+            # is observability only (weights themselves come through the bridge).
             ev_opt = channel.poll()
             if ev_opt is None:
-                _log(f"iter {iter_idx}: no pending event, continuing")
                 continue
-
-            kind, _payload = ev_opt
-            _log(f"iter {iter_idx}: polled event {kind.name}")
+            kind, payload = ev_opt
             if kind == AsyncTrainingEvent.TRAINING_STOPPED:
                 _log("got TRAINING_STOPPED, exiting loop")
                 break
-
-            if kind == AsyncTrainingEvent.TRAINING_ABOUT_TO_SEND_WEIGHTS:
-                _log("waiting for matching TRAINING_SENT_WEIGHTS...")
-                kind2, _ = channel.wait_for_next_event()
-                assert (
-                    kind2 == AsyncTrainingEvent.TRAINING_SENT_WEIGHTS
-                ), f"expected TRAINING_SENT_WEIGHTS after _ABOUT_TO_SEND, got {kind2.name}"
-                # TODO: worker.update_weights(pad_dict) once the real bridge is wired.
-                _log("would copy weights from bridge pad into the worker here")
-                channel.send(AsyncTrainingEvent.INFERENCE_RECEIVED_WEIGHTS)
-                _log("sent INFERENCE_RECEIVED_WEIGHTS ack")
+            if kind == AsyncTrainingEvent.DRAIN:
+                _log(f"iter {iter_idx}: DRAIN v={payload} observed")
             else:
-                _log(f"unexpected event {kind.name}; ignoring")
+                _log(f"iter {iter_idx}: unexpected event {kind.name} payload={payload}")
     finally:
-        _log("cleaning up (releasing worker + closing mesh)...")
+        _log("cleaning up (closing bridge, releasing worker, closing mesh)...")
+        if bridge is not None:
+            bridge.close()
         worker = None
         channel = None
         gc.collect()

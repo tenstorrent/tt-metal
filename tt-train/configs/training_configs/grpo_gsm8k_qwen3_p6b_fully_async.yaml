@@ -2,16 +2,15 @@
 # 1 mock training chip + 1 TTT rollout chip (2 chips total on one host).
 #
 # Sibling of grpo_gsm8k_qwen3_p6b_remote_rollout.yaml. Differences:
-#   - No optimizer / actual training happens on rank 0 in this cut: rank 0 is a
-#     sleep-based mock that fires typed AsyncTrainingEvent messages to rank 1
-#     via the new AsyncTrainingEventChannel (see fully_async_config below).
-#   - weight_bridge omitted; both send/receive events are mocked with sleeps.
-#     Real bridge integration lands in a follow-up cut and will re-enable the
-#     weight_bridge field then.
+#   - No optimizer / actual training happens on rank 0 in this cut: rank 0 is
+#     a sleep-based mock that pushes a fixed-size dummy ttnn.Tensor over the
+#     new ThreadedHostWeightBridge every step (real MPI transfer, mock content).
+#   - AsyncTrainingEvent channel is trimmed to TRAINING_BATCH_SIZE / DRAIN /
+#     TRAINING_STOPPED; no ack -- fire-and-forget weight pushes.
 #
-# Rank 1 (TTT) still runs a real TttGenerationWorker with the same sampling
-# config, and now also collects per-token sampled log-probs alongside the
-# completions.
+# Rank 1 (TTT) runs a real TttGenerationWorker with the same sampling config,
+# collects per-token sampled log-probs alongside completions, and polls the
+# bridge between generation batches for freshly received (mock) weights.
 
 training_config:
   # Only max_sequence_length is read from here.
@@ -43,8 +42,12 @@ training_config:
   # First-cut, mock-only knobs.
   fully_async_config:
     wait_step_s: 5                    # mock trainer sleeps this long per step
-    weight_bridge_mock_s: 2           # mock weight-bridge push duration per step
-    steps: 10                         # number of mock training iterations
+    steps: 100                         # number of mock training iterations
+    # Size of the dummy weight tensor pushed each step (bfloat16, tile-aligned).
+    # 100 MiB = 52,428,800 elems = shape (1024, 51200) at bf16 -- both dims are
+    # multiples of 32 so ThreadedHostWeightBridge's TILE-layout validation
+    # passes. See _weight_bytes_to_shape in the example script.
+    weight_bytes_size: 104857600
 
 device_config:
   enable_ddp: false

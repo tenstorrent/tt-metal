@@ -1,11 +1,11 @@
 # Mesh Graph Descriptor for the fully-async GRPO GSM8K example: two [1, 1]
-# meshes (one per MPI rank), each covering one P150 card; the FABRIC graph
-# wires them together for the cross-rank transport.
+# meshes (one per MPI rank), each covering one P150 card.
 #
-# Identical to gsm8k_onestep's mgd.textproto -- we keep the intermesh
-# connection even though this cut doesn't run a real MeshSocketWeightBridge,
-# so the topology is ready for the follow-up cut that wires it up as a
-# pure code change (no config churn).
+# The example does NOT enable fabric (see set_fabric_config comment in
+# gsm8k_fully_async_training_example.py). The FABRIC graph + intermesh
+# connection below stays declared as a no-op so a follow-up that wires in
+# MeshSocketWeightBridge can just flip `ttnn.set_fabric_config(FABRIC_2D)`
+# back on with no config churn.
 #
 # !!! HARDWARE-SPECIFIC TEMPLATE !!!
 # The full physical eth topology must be declared here or

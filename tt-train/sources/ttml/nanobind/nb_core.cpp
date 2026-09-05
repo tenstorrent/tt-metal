@@ -236,6 +236,14 @@ void py_module(nb::module_& m) {
         // tests can validate them directly without going through MeshSocket,
         // which requires sender_mesh_id != receiver_mesh_id (not satisfied
         // on Galaxy single-mesh layouts).
+        // GIL RELEASE: every blocking MPI call below must run without the GIL,
+        // otherwise a background Python thread stuck in send/recv would starve
+        // the main thread on the same rank (Python cannot switch threads while
+        // the GIL is held in C++). Concretely: on the ThreadedHostWeightBridge,
+        // the receiver thread's recv on the private context would block the
+        // main thread from ever calling AsyncTrainingEventChannel.send /
+        // channel.wait_for_next_event on the world context, deadlocking the
+        // handshake.
         py_dist_ctx.def(
             "send",
             [](DistributedContext& self, nb::bytes data, int dest, int tag) {
@@ -246,17 +254,50 @@ void py_module(nb::module_& m) {
             },
             nb::arg("data"),
             nb::arg("dest"),
-            nb::arg("tag") = 0);
+            nb::arg("tag") = 0,
+            nb::call_guard<nb::gil_scoped_release>());
         py_dist_ctx.def(
             "recv",
             [](DistributedContext& self, std::size_t nbytes, int source, int tag) -> nb::bytes {
                 std::vector<std::byte> buffer(nbytes);
                 self.recv(ttsl::Span<std::byte>(buffer.data(), buffer.size()), DistRank{source}, DistTag{tag});
+                // Reacquire GIL to construct the nb::bytes return value.
+                nb::gil_scoped_acquire acq;
                 return nb::bytes(reinterpret_cast<const char*>(buffer.data()), buffer.size());
             },
             nb::arg("nbytes"),
             nb::arg("source"),
-            nb::arg("tag") = 0);
+            nb::arg("tag") = 0,
+            nb::call_guard<nb::gil_scoped_release>());
+        // Non-blocking probe -- returns Optional[int] size in bytes of a pending
+        // message from source with tag, or None if none is currently available.
+        // Backed by DistributedContext::iprobe_incoming_msg_size, defined on the
+        // abstract interface and implemented on the MPI backend as MPI_Iprobe.
+        // Still release the GIL: even though iprobe is non-blocking, it takes
+        // an internal MPI lock that would otherwise serialize with other MPI
+        // calls holding the GIL from another Python thread on the same rank.
+        py_dist_ctx.def(
+            "iprobe_bytes",
+            [](DistributedContext& self, int source, int tag) -> nb::object {
+                auto result = self.iprobe_incoming_msg_size(DistRank{source}, DistTag{tag});
+                nb::gil_scoped_acquire acq;
+                if (!result.has_value()) {
+                    return nb::none();
+                }
+                return nb::cast(*result);
+            },
+            nb::arg("source"),
+            nb::arg("tag") = 0,
+            nb::call_guard<nb::gil_scoped_release>());
+        // MPI_Comm_dup -- returns a fresh DistributedContext sharing this one's
+        // process group but with a separate matching space + progress state.
+        // Collective across all ranks in this context; both sides must call
+        // ``duplicate`` in the same order for the returned contexts to line up.
+        // Collective means it can block waiting for the peer, so release GIL.
+        py_dist_ctx.def(
+            "duplicate",
+            [](DistributedContext& self) -> std::shared_ptr<DistributedContext> { return self.duplicate(); },
+            nb::call_guard<nb::gil_scoped_release>());
 
         // Bind SocketManager methods
         auto py_socket_manager =

@@ -133,6 +133,7 @@ from ttnn._ttnn.multi_device import (
     send_bytes as distributed_context_send_bytes,
     recv_bytes as distributed_context_recv_bytes,
     iprobe_bytes as distributed_context_iprobe_bytes,
+    duplicate_current_world as distributed_context_duplicate,
     subcontext_id as distributed_context_subcontext_id,
     subcontext_count as distributed_context_subcontext_count,
     subcontext_sizes as distributed_context_subcontext_sizes,

@@ -1250,6 +1250,49 @@ void py_module(nb::module_& mod) {
             Raises:
                 RuntimeError: If the distributed context has not been initialized.
         )doc");
+
+    // Module-level entry point: duplicate the CURRENT world context. Returns
+    // a shared_ptr<DistributedContext>; the Python-visible class binding lives
+    // in _ttml (see tt-train/sources/ttml/nanobind/nb_core.cpp), which
+    // registers ``DistributedContext`` in ``_ttml.core.distributed``. nanobind's
+    // global type registry means the shared_ptr converts to a Python object of
+    // the ttml-registered class without a redundant registration here (which
+    // would trip a nanobind "type already registered" error).
+    //
+    // MPI_Comm_dup is collective; both ranks must call in the same order.
+    mod.def(
+        "duplicate_current_world",
+        []() -> std::shared_ptr<DistributedContext> {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            return DistributedContext::get_current_world()->duplicate();
+        },
+        R"doc(Duplicate the current world context via MPI_Comm_dup.
+
+            Returns a fresh ``DistributedContext`` sharing the world context's
+            process group but with a separate matching space + progress state.
+            Independent from the world context and from any other duplicated
+            contexts.
+
+            Collective across all ranks -- both ranks must call this in the
+            same order for the returned contexts to match. Typically called
+            once at bridge / subsystem setup time, before any threads that
+            will use the duplicated context are spawned.
+
+            The returned Python object is an instance of the same class as
+            :class:`_ttml.core.distributed.DistributedContext` (nanobind
+            shares its type registry across ``_ttml`` and ``_ttnn``). Use
+            its ``send`` / ``recv`` / ``iprobe_bytes`` / ``duplicate`` methods
+            (defined in :mod:`_ttml.core.distributed`) to route MPI traffic.
+
+            Returns:
+                DistributedContext: The duplicated context.
+
+            Raises:
+                RuntimeError: If the distributed context has not been initialized.
+        )doc");
+
     // Sub-context API for split MPI worlds. Returns the sub-context identifier
     // assigned by tt-run when rank bindings compose multiple overlays.
     mod.def(

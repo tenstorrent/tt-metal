@@ -35,18 +35,30 @@ _MSG_TAG: int = 22200
 
 
 class AsyncTrainingEvent(IntEnum):
-    """Typed events exchanged between the training rank and the inference rank."""
+    """Typed events exchanged between the training rank and the inference rank.
+
+    Fire-and-forget: no ack round-trip. Actual weight transfer runs over a
+    dedicated bridge (see ``ThreadedHostWeightBridge``); these events are for
+    lifecycle handshakes plus observability of weight-push cadence only.
+    """
 
     # Training -> inference: initial payload is completions-per-batch (u32).
     TRAINING_BATCH_SIZE = 1
-    # Training -> inference: about to push a fresh weight version.
-    TRAINING_ABOUT_TO_SEND_WEIGHTS = 2
-    # Training -> inference: the receiving pad now holds the new weights.
-    TRAINING_SENT_WEIGHTS = 3
-    # Inference -> training: the pad contents have been installed into the model.
-    INFERENCE_RECEIVED_WEIGHTS = 4
+    # Training -> inference: observability heads-up that a fresh weight blob
+    # was just pushed to the bridge. Payload is a caller-defined version /
+    # step counter. Nothing on the inference side is gated on this event;
+    # actual "weights ready" is signalled implicitly by the bridge's receiver
+    # thread landing bytes into the receiving pad.
+    DRAIN = 2
     # Training -> inference: no more steps; drop out of the generation loop.
-    TRAINING_STOPPED = 5
+    TRAINING_STOPPED = 3
+    # Inference -> training: sent once, after the inference rank has finished
+    # all its heavy per-run init (mesh open, worker + trace capture, tokenizer,
+    # bridge handshake, dataset build) and is about to enter its generation
+    # loop. The training rank blocks on this before firing its first
+    # ``bridge.push`` so mock weight blobs don't queue up in the bridge's
+    # receiver pad while inference is still warming up. Payload unused.
+    INFERENCE_READY = 4
 
 
 class AsyncTrainingEventChannel:
