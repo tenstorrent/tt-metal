@@ -57,7 +57,8 @@ void bind_broadcast_ring(nb::module_& mod) {
         nb::arg("broadcast_offset_tiles") = 0,
         nb::arg("broadcast_num_tiles") = 0,
         nb::arg("use_l1_relay") = false,
-        nb::arg("num_slots") = 0);
+        nb::arg("num_slots") = 0,
+        nb::arg("persistent_output_buffer") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

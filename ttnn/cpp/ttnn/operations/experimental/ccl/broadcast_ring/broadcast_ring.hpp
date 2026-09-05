@@ -29,6 +29,9 @@ ttnn::Tensor broadcast_ring(
     uint32_t broadcast_offset_tiles = 0,  // broadcast only [offset, +num) of the sender's shard; 0 num = whole.
     uint32_t broadcast_num_tiles = 0,
     bool use_l1_relay = false,  // relay through L1 (no per-hop DRAM read) via a credit protocol. Experimental.
-    uint32_t num_slots = 0);    // L1-relay credit window (recv-buffer slots); 0 = auto. Tuning knob.
+    uint32_t num_slots = 0,     // L1-relay credit window (recv-buffer slots); 0 = auto. Tuning knob.
+    // Caller-owned output buffer (same shape as input). Required under tracing: a fresh per-call output is
+    // clobbered on trace replay, so pass a persistent buffer for a stable baked address.
+    const std::optional<ttnn::Tensor>& persistent_output_buffer = std::nullopt);
 
 }  // namespace ttnn

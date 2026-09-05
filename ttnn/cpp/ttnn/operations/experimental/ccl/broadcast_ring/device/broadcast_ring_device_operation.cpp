@@ -40,6 +40,10 @@ tt::tt_metal::TensorSpec BroadcastRingDeviceOperation::compute_output_specs(
 
 Tensor BroadcastRingDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Trace-safe path: reuse the caller's persistent buffer (stable baked address across replays).
+    if (tensor_args.persistent_output_buffer.has_value()) {
+        return tensor_args.persistent_output_buffer.value();
+    }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
@@ -56,9 +60,17 @@ Tensor broadcast_ring(
     uint32_t broadcast_offset_tiles,
     uint32_t broadcast_num_tiles,
     bool use_l1_relay,
-    uint32_t num_slots) {
+    uint32_t num_slots,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer) {
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(num_devices > 1, "broadcast_ring needs >1 device along cluster_axis, got {}", num_devices);
+    if (persistent_output_buffer.has_value()) {
+        TT_FATAL(
+            persistent_output_buffer->logical_shape() == input_tensor.logical_shape(),
+            "broadcast_ring persistent_output_buffer shape {} must match input shape {}",
+            persistent_output_buffer->logical_shape(),
+            input_tensor.logical_shape());
+    }
 
     return ttnn::device_operation::launch<BroadcastRingDeviceOperation>(
         BroadcastRingParams(
@@ -74,7 +86,7 @@ Tensor broadcast_ring(
             broadcast_num_tiles,
             use_l1_relay,
             num_slots),
-        BroadcastRingInputs{.input_tensor = input_tensor});
+        BroadcastRingInputs{.input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer});
 }
 
 }  // namespace ttnn::prim

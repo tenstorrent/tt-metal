@@ -95,6 +95,10 @@ struct BroadcastRingParams {
 
 struct BroadcastRingInputs {
     Tensor input_tensor;
+    // Optional caller-owned output buffer. Required for trace-safety: a captured trace bakes the output
+    // address, so a fresh per-call output (create_device_tensor) is freed after capture and clobbered on
+    // replay. Pass a persistent buffer (same spec as the input) to reuse a stable address across replays.
+    std::optional<Tensor> persistent_output_buffer;
 };
 
 }  // namespace ttnn::prim
