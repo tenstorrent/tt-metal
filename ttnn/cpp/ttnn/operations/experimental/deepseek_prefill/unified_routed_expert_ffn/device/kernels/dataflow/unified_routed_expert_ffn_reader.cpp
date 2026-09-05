@@ -878,7 +878,7 @@ void kernel_main() {
                 // linked=true keeps the multicast path RESERVED so the
                 // valid-semaphore multicast below travels the SAME path and is
                 // delivered AFTER the data at every receiver. With linked=false
-                // the path is released and the (posted) valid-sem multicast can
+                // the path is released and the valid-sem multicast can
                 // overtake the bulk data multicast at a receiver -> the receiver
                 // observes act_valid, pushes cb_in0_down_full, and compute reads
                 // stale L1 -> that core's whole down-matmul output block is wrong
