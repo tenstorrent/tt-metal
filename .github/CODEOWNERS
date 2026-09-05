@@ -596,6 +596,7 @@ models/experimental/SSD512 @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/experimental/bevformer/ @mbezuljTT @ddjekicTT
 models/experimental/efficientdetd0 @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn
+models/experimental/exaone45_vl @changh95 @uaydonat @mtairum
 models/experimental/functional_unet @esmalTT @uaydonat
 models/experimental/llama32_1b_quasar @tenstorrent/metalium-developers-mmfusedreduce
 models/experimental/mobileNetV3 @dvartaniansTT @tenstorrent/cse-developer-ttnn

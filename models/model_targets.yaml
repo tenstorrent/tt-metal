@@ -553,6 +553,30 @@ targets:
             accuracy:
               top1: 95
               top5: 100
+  exaone-4.5-33b:
+    aliases: ["EXAONE-4.5-33B", "LGAI-EXAONE/EXAONE-4.5-33B"]
+    skus:
+      bh_loudbox:
+        entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf:
+              # Measured 2026-08-25 on P150x8: 36.3 t/s/u decode, TTFT 51 ms.
+              decode_t/s/u: 34
+            accuracy:
+              # Measured 2026-08-25 (performance/bfp8, ci-token-matching): 91.40 / 99.60.
+              top1: 89
+              top5: 98
+          - batch_size: 32
+            seq_len: 712
+            status: active
+            perf:
+              # Measured 2026-08-25 on P150x8: 34.1 t/s/u (1090 t/s), TTFT 14.4 ms.
+              decode_t/s/u: 32
+              prefill_time_to_first_token: 14.4
+            accuracy: {}
+
   llama3.1-8b:
     aliases: ["Llama-3.1-8B", "meta-llama/Llama-3.1-8B-Instruct"]
     skus:
