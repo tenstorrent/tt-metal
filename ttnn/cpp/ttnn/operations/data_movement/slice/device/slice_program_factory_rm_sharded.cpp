@@ -8,6 +8,7 @@
 
 #include <map>
 #include <optional>
+#include <tracy/Tracy.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -357,6 +358,7 @@ void patch_slice_program_addresses(
     const SliceParams& operation_attributes,
     const SliceInputs& tensor_args,
     Tensor& output) {
+    ZoneScopedN("HostProfile::slice_patch_addresses");
     // Height-sharded RM is CB-bound: the reader args are all keyed, so only the two sharded CB
     // addresses move. CBs are matched positionally -- src0, then c_16.
     if (std::holds_alternative<SliceRmShardedProgramFactory>(factory)) {
@@ -404,8 +406,11 @@ void patch_slice_program_addresses(
                                                   ? ttnn::operations::data_movement::get_tiled_start_offset(
                                                         tensor_args.input, operation_attributes.slice_start)
                                                   : 0u;
-                const auto per_core = slice_tile_dynamic_args(
-                    operation_attributes, tensor_args, output, start_offset, kReaderKernelIdx, kWriterKernelIdx);
+                const auto per_core = [&] {
+                    ZoneScopedN("HostProfile::slice_build_dynamic_args");
+                    return slice_tile_dynamic_args(
+                        operation_attributes, tensor_args, output, start_offset, kReaderKernelIdx, kWriterKernelIdx);
+                }();
                 tt::tt_metal::apply_dynamic_runtime_args(program, per_core);
             }
         },

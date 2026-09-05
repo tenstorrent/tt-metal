@@ -7,6 +7,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tuple>
 #include <vector>
+#include <tracy/Tracy.hpp>
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -35,6 +36,7 @@ auto compute_slice_parameters(
     const MeshPartitionDeviceOperation::operation_attributes_t& operation_attributes,
     const MeshPartitionDeviceOperation::tensor_args_t& tensor_args,
     const ttnn::MeshCoordinate& mesh_coordinate) {
+    ZoneScopedN("HostProfile::partition_compute_slice_params");
     const auto& input_tensor = tensor_args.input_tensor;
 
     const uint32_t cluster_size = detail::get_cluster_axis_size(input_tensor, operation_attributes.cluster_axis);
