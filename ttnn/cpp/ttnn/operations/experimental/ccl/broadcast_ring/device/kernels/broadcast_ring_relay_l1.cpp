@@ -10,6 +10,15 @@
 // increments its upstream's cred sem, and a sender/relay waits for that credit before refilling the
 // downstream slot. data_ready flows with the data (forward on the fwd arc, backward on the bwd arc); the
 // credit flows the opposite way. Runs per orthogonal-axis line; payload split across links.
+//
+// Credit window: a receiver GRANTS its num_slots window explicitly at kernel start (one atomic-inc of
+// num_slots on its upstream's cred sem); the upstream waits cred >= chunk+1 before filling the downstream
+// slot for `chunk` -- including the first num_slots chunks. Gating the first chunks on the grant is what
+// makes the (never-rotated) recv buffer safe ACROSS calls: no payload can land in this device's slots
+// until this device's kernel for THIS call has started, i.e. its previous call -- which may still have
+// been reading those slots -- has exited. Without it, back-to-back broadcasts with adjacent senders (the
+// reference-frame owner pair) flip the arc-boundary device's upstream, and the new upstream's un-gated
+// first chunks could smash slots the previous call was still consuming.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
@@ -150,17 +159,40 @@ void kernel_main() {
         conn->send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(pkt_sem), sizeof(PACKET_HEADER_TYPE));
     };
 
-    // Increment the upstream's slot-free credit sem (no payload).
+    // Increment the upstream's slot-free credit sem (no payload). `val` is 1 per consumed chunk in steady
+    // state, num_slots for the initial window grant at kernel start.
     auto send_credit = [&](volatile PACKET_HEADER_TYPE* pkt_sem,
                            tt::tt_fabric::WorkerToFabricEdmSender* conn,
                            const ccl_routing_utils::line_unicast_route_info_t& route,
-                           uint64_t sem_noc) {
-        pkt_sem->to_noc_unicast_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc, static_cast<uint32_t>(1)});
+                           uint64_t sem_noc,
+                           uint32_t val) {
+        pkt_sem->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc, val});
         conn->wait_for_empty_write_slot();
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_sem, route);
         conn->send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(pkt_sem), sizeof(PACKET_HEADER_TYPE));
     };
+
+    // Sanity (watcher builds): a call must start with clean counters. data_ready cannot have been bumped
+    // yet -- the upstream only sends data after receiving this device's window grant (below) -- and a cred
+    // sem can hold at most the downstream's initial grant (per-chunk credits require us to have sent data).
+    // A trip here means a stale or foreign increment leaked in (a previous call's reset raced, or another
+    // op hit this address) -- the precursor of stale-slot consumption.
+    ASSERT(*data_ready == 0);
+    if constexpr (send_data_fwd) {
+        ASSERT(*my_cred_fwd <= num_slots);
+    }
+    if constexpr (send_data_bwd) {
+        ASSERT(*my_cred_bwd <= num_slots);
+    }
+
+    // Initial credit-window grant: open my num_slots recv window to my upstream. Gates the upstream's
+    // first chunks on THIS call's kernel having started (cross-call slot safety, see header comment).
+    if constexpr (credit_via_backward) {
+        send_credit(pkt_hdr_cred_bwd, bwd_conn, bwd_route, up_cred_fwd_noc, num_slots);  // grant idx-1
+    }
+    if constexpr (credit_via_forward) {
+        send_credit(pkt_hdr_cred_fwd, fwd_conn, fwd_route, up_cred_bwd_noc, num_slots);  // grant idx+1
+    }
 
     const uint32_t tile_end = tile_start + tile_count;
     uint32_t tiles_done = tile_start;
@@ -169,15 +201,17 @@ void kernel_main() {
         const uint32_t chunk_tiles = std::min(tile_end - tiles_done, packet_size_in_pages);
         const uint32_t slot_addr = relay_base + (chunk % num_slots) * slot_bytes;
 
-        // 1) Get this chunk into my slot; make sure the downstream slot I'll write is free (credit).
+        // 1) Get this chunk into my slot; make sure the downstream slot I'll write is free. The downstream
+        //    slot for `chunk` is free once its credits reach chunk+1: the initial window grant supplies
+        //    num_slots, then one credit arrives per chunk it consumed -- same steady-state window as
+        //    before, but the first num_slots chunks are now gated on the downstream having entered this
+        //    call (cross-call slot safety).
         if constexpr (is_sender) {
-            if (chunk >= num_slots) {
-                if constexpr (send_data_fwd) {
-                    noc_semaphore_wait_min(my_cred_fwd, chunk - num_slots + 1);
-                }
-                if constexpr (send_data_bwd) {
-                    noc_semaphore_wait_min(my_cred_bwd, chunk - num_slots + 1);
-                }
+            if constexpr (send_data_fwd) {
+                noc_semaphore_wait_min(my_cred_fwd, chunk + 1);
+            }
+            if constexpr (send_data_bwd) {
+                noc_semaphore_wait_min(my_cred_bwd, chunk + 1);
             }
             uint32_t wr = slot_addr;
             for (uint32_t t = 0; t < chunk_tiles; ++t) {
@@ -187,13 +221,11 @@ void kernel_main() {
             noc_async_read_barrier();
         } else {
             noc_semaphore_wait_min(data_ready, chunk + 1);  // upstream wrote this chunk into my slot
-            if (chunk >= num_slots) {
-                if constexpr (send_data_fwd) {
-                    noc_semaphore_wait_min(my_cred_fwd, chunk - num_slots + 1);
-                }
-                if constexpr (send_data_bwd) {
-                    noc_semaphore_wait_min(my_cred_bwd, chunk - num_slots + 1);
-                }
+            if constexpr (send_data_fwd) {
+                noc_semaphore_wait_min(my_cred_fwd, chunk + 1);
+            }
+            if constexpr (send_data_bwd) {
+                noc_semaphore_wait_min(my_cred_bwd, chunk + 1);
             }
         }
 
@@ -216,10 +248,10 @@ void kernel_main() {
 
         // 4) Credit my upstream that this slot is consumed.
         if constexpr (credit_via_backward) {
-            send_credit(pkt_hdr_cred_bwd, bwd_conn, bwd_route, up_cred_fwd_noc);  // inc idx-1.cred_fwd
+            send_credit(pkt_hdr_cred_bwd, bwd_conn, bwd_route, up_cred_fwd_noc, 1);  // inc idx-1.cred_fwd
         }
         if constexpr (credit_via_forward) {
-            send_credit(pkt_hdr_cred_fwd, fwd_conn, fwd_route, up_cred_bwd_noc);  // inc idx+1.cred_bwd
+            send_credit(pkt_hdr_cred_fwd, fwd_conn, fwd_route, up_cred_bwd_noc, 1);  // inc idx+1.cred_bwd
         }
 
         tiles_done += chunk_tiles;
@@ -235,17 +267,19 @@ void kernel_main() {
     // calls and the wait_min targets are satisfied by stale values -> reads stale data. Mirrors
     // all_gather's reader reset (minimal_default_reader.cpp).
     //
-    // Drain before zeroing the credit sems: the loop only waits credits up to chunk-num_slots+1, so the last
-    // few credits from the downstream are still in flight at loop exit. `chunk` now equals num_chunks, the
-    // total credits the downstream sends (one per consumed chunk), so waiting on it per active direction lets
+    // Drain before zeroing the credit sems: the loop only waits credits up to chunk+1-num_slots' worth of
+    // consumption, so the last few credits from the downstream are still in flight at loop exit. The
+    // downstream sends num_slots (initial window grant) + num_chunks (one per consumed chunk) credits in
+    // total, and `chunk` now equals num_chunks, so waiting for chunk+num_slots per active direction lets
     // every in-flight inc land before the set(0) -- otherwise a late credit lands after the reset and leaves
     // the sem nonzero, satisfying a wait_min prematurely on the next call (premature slot reuse -> dropped or
-    // stale chunk). Deadlock-free: every device sends all its credits inside the loop, before any drain here.
+    // stale chunk). Deadlock-free: every device sends its grant at kernel start and all its credits inside
+    // the loop, before any drain here.
     if constexpr (send_data_fwd) {
-        noc_semaphore_wait_min(my_cred_fwd, chunk);
+        noc_semaphore_wait_min(my_cred_fwd, chunk + num_slots);
     }
     if constexpr (send_data_bwd) {
-        noc_semaphore_wait_min(my_cred_bwd, chunk);
+        noc_semaphore_wait_min(my_cred_bwd, chunk + num_slots);
     }
     noc_semaphore_set(data_ready, 0);
     noc_semaphore_set(my_cred_fwd, 0);
