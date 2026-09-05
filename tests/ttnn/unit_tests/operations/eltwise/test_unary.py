@@ -298,6 +298,39 @@ def test_relu_uint32_full_range(device, input_shapes, value_ranges):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
+@pytest.mark.parametrize("dtype,bit_width", [(torch.uint16, 16), (torch.uint32, 32)])
+def test_reglu_golden_restores_native_unsigned_width(dtype, bit_width):
+    maximum = 2**bit_width - 1
+    input_tensor = torch.tensor([[maximum, maximum, 2, 3]], dtype=torch.int64).to(dtype)
+    golden_function = ttnn.get_golden_function(ttnn.reglu)
+
+    output = golden_function(input_tensor)
+
+    expected = torch.tensor(
+        [[(maximum * 2) % (2**bit_width), (maximum * 3) % (2**bit_width)]], dtype=torch.int64
+    ).to(dtype)
+    assert output.dtype == dtype
+    assert torch.equal(output, expected)
+
+
+@pytest.mark.parametrize(
+    "operation_kwargs,should_skip",
+    [
+        ({"variant": ttnn.GeluVariant.Accurate}, False),
+        ({"variant": ttnn.GeluVariant.Tanh}, False),
+        ({"variant": ttnn.GeluVariant.FastLut}, True),
+        ({"fast_and_approximate_mode": True}, True),
+    ],
+)
+def test_gelu_golden_skips_only_device_specific_fast_variants(operation_kwargs, should_skip):
+    from ttnn.operations.unary import _preprocess_gelu_golden_inputs
+
+    golden_args, golden_kwargs = _preprocess_gelu_golden_inputs((torch.tensor([0.5]),), operation_kwargs)
+    output = ttnn.get_golden_function(ttnn.gelu)(*golden_args, **golden_kwargs)
+
+    assert (output is None) == should_skip
+
+
 def test_relu_reglu_uint32_edge_cases(device):
     values = [0, 1, 35, 41, 600, 2147483647, 2147483648, 4294967295]
     torch_input_tensor = torch.tensor([values], dtype=torch.int64).to(torch.uint32)
