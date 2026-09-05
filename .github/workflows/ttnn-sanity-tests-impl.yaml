@@ -505,11 +505,22 @@ jobs:
             --config tt_metal/jit_build/kernel_clang_tidy/codechecker.json \
             --jobs 8 \
             --output /work/kernel_tidy/reports || echo "::warning::CodeChecker analyze reported failures (continuing)"
-          CodeChecker parse /work/kernel_tidy/reports --export html --output /work/kernel_tidy_html \
-            | tee -a /work/kernel_tidy/summary.txt || true
-          # Machine-readable counts for the aggregated index, shipped with the report.
+          # Counts only. The browsable report is rendered once by the
+          # consolidate job from every leg's merged plists.
           CodeChecker parse /work/kernel_tidy/reports --export json \
-            --output /work/kernel_tidy_html/reports.json >/dev/null 2>&1 || true
+            --output /work/kernel_tidy/reports.json >/dev/null 2>&1 || true
+          python3 - <<'PY' | tee -a /work/kernel_tidy/summary.txt
+          import collections, json, pathlib
+          p = pathlib.Path("/work/kernel_tidy/reports.json")
+          reports = json.loads(p.read_text()).get("reports", []) if p.is_file() else []
+          by_severity = collections.Counter(r.get("severity") for r in reports)
+          print(f"findings: {len(reports)}")
+          for name in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "STYLE", "UNSPECIFIED"):
+              if by_severity.get(name):
+                  print(f"  {name}: {by_severity[name]}")
+          PY
+          # Suggested-fix YAMLs are ~35% of the artifact and unused downstream.
+          rm -rf /work/kernel_tidy/reports/fixit
           {
             echo '<details><summary>Kernel clang-tidy (prototype, non-blocking)</summary>'
             echo ''
@@ -529,16 +540,6 @@ jobs:
           # Single glob on purpose: the runner's host->container path translation
           # only handles the first line of a multiline path (run 33827663605).
           path: ${{ github.workspace }}/docker-job/kernel_tidy/*
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Upload kernel clang-tidy HTML report (kernel clang-tidy)
-        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') }}
-        continue-on-error: true
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: kernel-clang-tidy-html-${{ matrix.test-group.name }}
-          path: ${{ github.workspace }}/docker-job/kernel_tidy_html/*
           if-no-files-found: warn
           retention-days: 14
 

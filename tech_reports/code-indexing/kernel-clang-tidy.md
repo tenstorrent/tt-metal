@@ -169,12 +169,15 @@ kernel-compile cache layers defeated for that leg only (see the gotcha above:
 tests, a non-blocking (`continue-on-error`) step translates the captured
 commands (this script, no `--run`) and analyzes them with CodeChecker —
 `CodeChecker analyze compile_commands.json --config
-tt_metal/jit_build/kernel_clang_tidy/codechecker.json`, then `CodeChecker
-parse --export html` — the same tooling `clang-static-analyzer.yaml` uses.
-See [Checker selection and scoping](#checker-selection-and-scoping) for how
-that config decides what runs and what is reported.
-Two artifacts per group: `kernel-clang-tidy-<group>` (compile_commands.json,
-summary, plists) and `kernel-clang-tidy-html-<group>` (browsable report).
+tt_metal/jit_build/kernel_clang_tidy/codechecker.json` — the same tooling
+`clang-static-analyzer.yaml` uses. See
+[Checker selection and scoping](#checker-selection-and-scoping) for how that
+config decides what runs and what is reported. The leg does not render HTML;
+it uploads one `kernel-clang-tidy-<group>` artifact (plists,
+compile_commands.json, `reports.json` counts, summary) and the consolidate job
+does all rendering. The suggested-fix YAMLs `CodeChecker` writes to
+`reports/fixit` are deleted before upload: measured at 304 MB of an 880 MB
+artifact, and nothing downstream reads them.
 Gotcha found while wiring this: CodeChecker's compilation-db parser consults
 `ClangSA.analyzer_binary()` unconditionally, so a `clang` binary must be
 resolvable even though only clang-tidy runs. Handled the way
@@ -187,25 +190,46 @@ dev image tt-umd uses, so the toolchain is not guaranteed present.
 The dedicated caller is `.github/workflows/kernel-clang-tidy.yaml` (structured
 after `code-coverage.yaml`): build → run the ttnn sanity suite on hardware via
 `ttnn-sanity-tests-impl.yaml` with the experiment enabled on every leg → a
-publish job that downloads every `kernel-clang-tidy-html-*` artifact, stages
-them side by side, and pushes them to
-`tenstorrent/tt-metal-kernel-clang-tidy-results` gh-pages (on main, or when
-dispatched with `publish-html: true`). Launch with:
+`consolidate-report` job that merges every leg's plists into one report and
+pushes it to `tenstorrent/tt-metal-kernel-clang-tidy-results` gh-pages (on
+main, or when dispatched with `publish-html: true`). Launch with:
 
 ```sh
 gh workflow run kernel-clang-tidy.yaml --ref <branch> \
   -f enabled-skus=wh_n300_civ2 -f publish-html=true
 ```
 
-The per-leg reports cannot be merged into a single CodeChecker report:
-`CodeChecker parse --export html` reads the analyzed sources to render its
-report pages, and those (wheel-installed headers, generated files in the
-tt-metal-cache dir) exist only inside the leg's container. Exporting from the
-collected plists alone yields an index and statistics page with no report
-pages at all — measured, not assumed. So each leg exports its own HTML plus a
-`reports.json` (CodeChecker's JSON export), and
-`.github/scripts/utils/kernel_tidy_index.py` stages them into one site with a
-navigation index whose counts come from those JSON files.
+### Consolidating the legs into one report
+
+`consolidate-report` flattens every leg's plists into a single directory and
+runs `CodeChecker parse --export html` once, so the published site is one
+genuine CodeChecker report: a sortable table with Severity, Checker name, File
+and Message columns, plus its own checker- and severity-statistics pages. No
+hand-written HTML and no per-leg navigation — leg provenance is deliberately
+dropped, since the same kernel code is analyzed on many legs and the reader
+only cares about the finding.
+
+CodeChecker deduplicates the merged reports itself. Measured on two legs:
+11,866 + 19,995 = 31,861 raw findings collapse to 20,103 (19,835 unique
+file/line/column/checker locations). The overlap is high because legs share
+dispatch, fabric and LLK code — of the 50 CRITICAL+HIGH findings across those
+two legs, only 29 are distinct.
+
+The one requirement is that rendering needs the analyzed sources on the same
+absolute paths the legs used, which is why this job runs in the ci-test
+container with `setup-job` installing the wheel, rather than on a bare
+`ubuntu-latest`. Two roots cover everything: `/opt/venv/...` (16,829 of the
+19,835 unique findings, wheel-installed headers) and `/work/...` (3,006, the
+checkout). Nothing resolves into the per-leg tt-metal-cache, because the
+skiplist excludes generated JIT glue. Skip the sources and
+`--export html` silently produces `index.html` and `statistics.html` with
+**zero** finding pages — measured, not assumed, which is what an earlier
+attempt to merge on `ubuntu-latest` got wrong.
+
+Plist filenames are prefixed with their leg on merge, since translation units
+are named after the firmware wrapper (`trisck.cc`, `brisck.cc`, …) and would
+otherwise collide across legs. Note the volume: plists run 15–16 MB each, so
+the merge input is roughly 560 MB per two legs.
 
 ### Why not the simulator legs?
 
