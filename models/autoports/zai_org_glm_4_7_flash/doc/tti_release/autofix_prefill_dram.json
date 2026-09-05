@@ -1,0 +1,87 @@
+{
+  "finding_id": "TR-001",
+  "title": "whole-prompt prefill activation pair was not reserved out of the vLLM KV pool",
+  "date": "2026-09-04",
+  "device": "1x Blackhole p300c chip, 1x1 mesh (MESH_DEVICE=N150), host tt-quietbox",
+  "served_context_tokens": 202752,
+  "server_launch": "./python_env/bin/python -m models.common.readiness_check.run_vllm_server --stages serve --model-dir models/autoports/zai_org_glm_4_7_flash --hf-model zai-org/GLM-4.7-Flash --mesh-device N150 --max-num-seqs 32 --max-model-len 202752 --tt-config '{\"trace_region_size\": 350000000}' --additional-server-args \"--reasoning-parser glm47\"",
+  "mechanism": {
+    "unreserved_tensor_pair": "GLM47FlashModel.run_layer_stack_prefill holds the layer input x and the layer output nxt live at each of the 47 layer boundaries; FusedDecoder.prefill_forward allocates out_acc for the whole physical prompt up front",
+    "shape_each": "[1, 1, phys, 2048] bfloat16",
+    "bytes_per_prompt_token": 8192,
+    "bytes_at_202752": 1660944384,
+    "bytes_at_131072": 1073741824,
+    "bytes_at_65536": 536870912,
+    "collides_with": "FusedDecoder._moe_prefill's gate_up transpose (tt/fused_decoder.py:429), which needs its 402653184 B input and its 402653184 B output live simultaneously (805306368 B = the pre-existing 0.75 GiB fixed margin, exactly)",
+    "chunk_independence": "402653184 = VLLM_PREFILL_CHUNK_SIZE(1024) * n_routed_experts(64) * 2*moe_intermediate_size(3072) * 2 B; the activation pair does NOT scale with the chunk, only with the prompt"
+  },
+  "before": {
+    "budget_tokens": 469104,
+    "vllm_pool_tokens": 471168,
+    "vllm_pool_blocks": 7362,
+    "fixed_margin_gib": 0.75,
+    "prompt_len_pass": [32768],
+    "prompt_len_fail": [47104, 48128, 65536],
+    "failure": "TT_FATAL bank_manager.cpp:462 Out of Memory allocating 402653184 B DRAM buffer, EngineCore dead, HTTP 500",
+    "failing_call_site": "tt/fused_decoder.py:429 _moe_prefill -> ttnn.transpose(gu, 1, 3)",
+    "allocator_at_65536": {
+      "per_bank_allocated_b": 4196373888,
+      "per_bank_free_b": 32214016,
+      "per_bank_largest_free_block_b": 20877312,
+      "device_free_b": 257712128,
+      "device_largest_free_block_b": 167018496
+    },
+    "allocator_at_47104": {
+      "per_bank_allocated_b": 4177094016,
+      "per_bank_free_b": 51493888,
+      "per_bank_largest_free_block_b": 23799872,
+      "device_free_b": 411951104,
+      "device_largest_free_block_b": 190398976,
+      "note": "device-wide free (411951104 B) already exceeded the 402653184 B request; the request still failed because the largest contiguous per-bank block (23799872 B) was under half the 50331648 B/bank needed. The activation pair both consumes and fragments the space the transpose needs."
+    }
+  },
+  "after": {
+    "budget_tokens": 412563,
+    "vllm_pool_tokens": 414656,
+    "vllm_pool_blocks": 6479,
+    "vllm_reported_max_concurrency_at_full_context": "2.05x",
+    "fixed_margin_gib": 0.75,
+    "prefill_activation_reservation_gib": 1.547,
+    "prefill_activation_reservation_b": 1660944384,
+    "pool_tokens_over_served_context": 211904,
+    "prompt_len_pass": [10000, 65536, 131072, 131071, 202751],
+    "prompt_len_fail": [],
+    "oom_lines_in_server_log": 0
+  },
+  "prompt_probes_one_server_process": [
+    {"requested_len": 10000, "status": 200, "prompt_tokens": 10000, "exact_echo": true, "wall_s": 22.1},
+    {"requested_len": 65536, "status": 200, "prompt_tokens": 65536, "exact_echo": true, "wall_s": 295.1},
+    {"requested_len": 131072, "status": 200, "prompt_tokens": 131072, "exact_echo": true, "wall_s": 1022.0},
+    {"requested_len": 131071, "status": 200, "prompt_tokens": 131071, "exact_echo": true, "wall_s": 978.6},
+    {"requested_len": 202751, "status": 200, "prompt_tokens": 202751, "exact_echo": true, "wall_s": 2199.5}
+  ],
+  "prompt_probe_method": "POST /v1/completions with an integer token-id prompt (no chat template), temperature 0.0, max_tokens = min(8, 202752 - N); usage.prompt_tokens echoed the requested length exactly in every case",
+  "decode_regression": {
+    "command": "./python_env/bin/python -m models.common.readiness_check.run_vllm_server --stages benchmark --server-url http://127.0.0.1:8000 --model-dir models/autoports/zai_org_glm_4_7_flash --hf-model zai-org/GLM-4.7-Flash --benchmark-prompt-len 128 --benchmark-output-len 128 --benchmark-num-requests 1 --benchmark-concurrency 1 --no-benchmark-ci-serving",
+    "reference_optimized_vllm_stage": {"mean_tpot_ms": 29.496, "decode_tps_per_user": 33.903, "mean_ttft_ms": 274},
+    "after_fix_fresh_server": {"mean_tpot_ms": 29.49024218099749, "decode_tps_per_user": 33.9095, "mean_ttft_ms": 280.8614090026822},
+    "after_fix_post_long_prefills": {"mean_tpot_ms": 29.49434814962749, "decode_tps_per_user": 33.9048, "mean_ttft_ms": 275.8426549844444},
+    "verdict": "no decode regression (TPOT within 0.02% of the recorded headline)"
+  },
+  "release_sweep_point_21_rerun": {
+    "profile": "isl=65536 osl=128 max_concurrency=1 (the exact point that killed EngineCore)",
+    "completed_requests": 1,
+    "total_input_tokens": 65536,
+    "total_output_tokens": 128,
+    "mean_ttft_ms": 319455.9860040026,
+    "mean_tpot_ms": 153.334813346485,
+    "verdict": "completes; long-context decode TPOT of 153.3 ms/token at a 65k context is consistent with the contract's 136.3 ms/token at position 202751"
+  },
+  "context_contract_gate": {
+    "command": "./python_env/bin/python .agents/scripts/check_context_contract.py --model-dir models/autoports/zai_org_glm_4_7_flash --hf-model zai-org/GLM-4.7-Flash --stage tti-release --require-contract",
+    "exit_code": 0,
+    "note": "advisory lines are pre-existing mentions in optimized_vllm/vllm_integration evidence, unchanged by this fix"
+  },
+  "files_changed": ["tt/generator_vllm.py"],
+  "capability_reduction": "none: the advertised 202752-token context is now reachable through the serving path (it was not before). The KV pool shrinks 471168 -> 414656 tokens (-12.0%), still 2.05x the served context."
+}

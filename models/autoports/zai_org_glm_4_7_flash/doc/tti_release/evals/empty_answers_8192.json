@@ -1,0 +1,62 @@
+[
+  {
+    "label": "ifeval_doc0",
+    "prompt_preview": "Write a 300+ word summary of the wikipedia page \"https://en.wikipedia.org/wiki/Raymond_III,_Count_of_Tripoli\". Do not use any commas and hig",
+    "rendered_prompt_tail": "ted section part 3*.<|assistant|><think>",
+    "max_tokens_requested": 8192,
+    "finish_reason": "stop",
+    "prompt_tokens": 80,
+    "completion_tokens": 7440,
+    "closed_think_block": true,
+    "reasoning_chars": 30054,
+    "answer_after_think": "Raymond III ruled as the Count of Tripoli for nearly forty years. He reigned from 1113 until his death in 1152. He was the son of Raymond II and Countess Hodierna. Raymond III lived during a time of great political change in the region. *Early Life and Education* Raymond inherited the title at a ver",
+    "trigram_loop_fraction": 0.721,
+    "raw_tail": "eat dedication to the cause. *Death and Legacy* He died in 1152 without a male heir. This succession issue caused trouble for the kingdom. Raymond III is remembered for his cultural refinement and military prowess. He died without a male heir which caused problems. He left a daughter named Hodierna.",
+    "cause": "completed"
+  },
+  {
+    "label": "ifeval_doc17",
+    "prompt_preview": "Write two jokes about rockets. Do not contain commas in your response. Separate the two jokes with 6 asterisk symbols: ******.",
+    "rendered_prompt_tail": "isk symbols: ******.<|assistant|><think>",
+    "max_tokens_requested": 8192,
+    "finish_reason": "stop",
+    "prompt_tokens": 33,
+    "completion_tokens": 1482,
+    "closed_think_block": true,
+    "reasoning_chars": 5545,
+    "answer_after_think": "Why did the astronaut bring a ladder? He wanted to take off.\n******\nWhat did the broken rocket say? I have no fuel left to give.",
+    "trigram_loop_fraction": 0.382,
+    "raw_tail": "d to take off.\n    2. What did one rocket say to the other? Please watch out or I will blow your stack.\n\n    Check for commas... None found.\n\n    Separation: ******</think>Why did the astronaut bring a ladder? He wanted to take off.\n******\nWhat did the broken rocket say? I have no fuel left to give.",
+    "cause": "completed"
+  },
+  {
+    "label": "gpqa_doc5",
+    "prompt_preview": "What is the correct answer to this question:A quantum mechanical particle of mass m moves in two dimensions in the following potential, as a",
+    "rendered_prompt_tail": "in \\boxed{}.\nAnswer:<|assistant|><think>",
+    "max_tokens_requested": 8192,
+    "finish_reason": "length",
+    "prompt_tokens": 197,
+    "completion_tokens": 8192,
+    "closed_think_block": false,
+    "reasoning_chars": 20079,
+    "answer_after_think": null,
+    "trigram_loop_fraction": 0.2965,
+    "raw_tail": "f we multiply both sides by something, but the presence of V(r,\u03b8) that is product A(r)B(\u03b8) suggests we can set:\n\n-\u210f^2/(2m) (1/r) d/dr (r dR/dr)/R + A(r)B(\u03b8) = E + \u210f^2/(2m) (1/r^2) (\u2202^2 \u03a6)/\u03a6.\n\nNot separable because left side has terms that are functions of r times B(\u03b8) and the right side has r factor",
+    "cause": "length"
+  },
+  {
+    "label": "gpqa_doc8",
+    "prompt_preview": "What is the correct answer to this question:which of the following molecules has c3h symmetry?\ntriisopropyl borate\nquinuclidine\nbenzo[1,2-c:",
+    "rendered_prompt_tail": "in \\boxed{}.\nAnswer:<|assistant|><think>",
+    "max_tokens_requested": 8192,
+    "finish_reason": "length",
+    "prompt_tokens": 218,
+    "completion_tokens": 8192,
+    "closed_think_block": false,
+    "reasoning_chars": 34371,
+    "answer_after_think": null,
+    "trigram_loop_fraction": 0.292,
+    "raw_tail": "identical, it's fine. So why would D3h be reduced? Because D3h also includes a horizontal mirror plane and three C2 axes perpendicular to C3. In D3h, the two bridgeheads are equivalent (both are carbon), so the mirror plane that contains the axis and two other elements might also be present. In quin",
+    "cause": "length"
+  }
+]

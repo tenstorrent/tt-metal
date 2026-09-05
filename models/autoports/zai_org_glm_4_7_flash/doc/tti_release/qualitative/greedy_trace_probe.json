@@ -1,0 +1,38 @@
+{
+  "greedy": {
+    "finish_reason": "length",
+    "completion_tokens": 4096,
+    "closed_think_block": false,
+    "stats": {
+      "words": 2872,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.7955,
+      "distinct_trigram_ratio": 0.308,
+      "most_common_trigram": [
+        "...a peculiar, glowing",
+        29
+      ]
+    },
+    "first_400_chars": "1.  **Analyze the Request:**\n    *   **Prompt:** \"Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered...\"\n    *   **Genre:** Fairy tale/Fantasy.\n    *   **Tone:** Whimsical, adventurous, perhaps a bit magical.\n    *   **Character:** Curious young inventor.\n    *   **Action:** Discovered something.\n\n2.  **Brainstorming \"Discovered\":**\n   ",
+    "last_400_chars": "ce.\n\n    *   *Drafting:*\n        ...a peculiar, glowing beetle that hummed with the rhythm of a heartbeat. It wasn't just an insect; it was a map, a compass, and a guide all rolled into one. Elara realized that this beetle held the secret to the kingdom's eternal winter. The sun had frozen over, and only the warmth of this tiny creature could melt the ice. She built a contraption\u2014a \"Thawing Cage\"\u2014",
+    "middle_400_chars": ". (I really like the beetle. I will use that).\n\n    *   **Final Story Choice:** A beetle that melts ice.\n\n    *   *Drafting:*\n        ...a peculiar, glowing beetle that hummed with the rhythm of a heartbeat. It wasn't just an insect; it was a map, a compass, and a guide all rolled into one. Elara realized that this beetle held the secret to the kingdom's eternal winter. The sun had frozen over, an"
+  },
+  "sampled": {
+    "finish_reason": "stop",
+    "completion_tokens": 1713,
+    "closed_think_block": true,
+    "stats": {
+      "words": 1113,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0846,
+      "distinct_trigram_ratio": 0.9496,
+      "most_common_trigram": [
+        "curious young inventor",
+        5
+      ]
+    },
+    "first_400_chars": "1.  **Analyze the Request:**\n    *   **Premise:** Complete a story starter.\n        *   *Scenario:* \"Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered...\"\n    *   **Tone:** Generally, open-ended. It can be fairy tale, sci-fi, adventure, or quirky comedy.\n    *   **Goal:** Write the rest of the story, maintaining narrative flow and engagement.\n\n2.  **Brains",
+    "last_400_chars": "it began, the colors faded from the clouds, returning the kingdom to its usual grey and rainy reality\u2014much to the relief of her grumpy neighbors who, for the first time in history, had been forced to enjoy a slow day. From that moment on, though she never found another moonstone gear, she never rushed through a problem again. She had learned that sometimes, the world just needed a moment to pause.",
+    "middle_400_chars": "**\n    **Discovery:** **...that ordinary socks, if sewn to the feet of dragons, could run faster than wind.**\n    *That's fun. Let's go with that.*\n\n    *Drafting:*\n    The Story:\n    ...discovered that ordinary socks, if woven into the tails of dragons, could move them with terrifying speed.\n    How did he do it? Spent 3 years messing around.\n    Outcome: The King complains about the weather. \"Ba"
+  }
+}

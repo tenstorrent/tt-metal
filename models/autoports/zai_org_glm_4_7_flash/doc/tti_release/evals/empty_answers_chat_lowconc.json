@@ -1,0 +1,24 @@
+[
+  {
+    "label": "ifeval_doc0",
+    "endpoint": "chat_completions",
+    "max_tokens_requested": 16384,
+    "finish_reason": "stop",
+    "prompt_tokens": 80,
+    "completion_tokens": 7440,
+    "content_is_empty": false,
+    "content_chars": 1287,
+    "content_head": "Raymond III ruled as the Count of Tripoli for nearly forty years. He reigned from 1113 until his death in 1152. He was the son of Raymond II and Countess Hodierna. Raymond III lived during a time of g"
+  },
+  {
+    "label": "ifeval_doc17",
+    "endpoint": "chat_completions",
+    "max_tokens_requested": 16384,
+    "finish_reason": "stop",
+    "prompt_tokens": 33,
+    "completion_tokens": 1482,
+    "content_is_empty": false,
+    "content_chars": 128,
+    "content_head": "Why did the astronaut bring a ladder? He wanted to take off.\n******\nWhat did the broken rocket say? I have no fuel left to give."
+  }
+]

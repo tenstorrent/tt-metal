@@ -1,0 +1,1045 @@
+{
+    "metadata": {
+        "model_name": "zai-org/GLM-4.7-Flash",
+        "device": "P150",
+        "generated_at": "2026-09-04T20:55:46+00:00",
+        "report_id": "id_autoport-glm47-flash_GLM-4.7-Flash_p150_2026-09-04_20-48-56",
+        "workflow": "release",
+        "server_mode": "API",
+        "run_command": "python run.py --model GLM-4.7-Flash --dev-mode --tt-device p150 --workflow release --service-port 8000 --limit-samples-mode ci-nightly --no-auth --skip-system-sw-validation --disable-trace-capture",
+        "runtime_model_spec_json": "/home/stisi/tt-inference-server/workflow_logs/runtime_model_specs/runtime_model_spec_2026-09-04_15-40-09_id_autoport-glm47-flash_GLM-4.7-Flash_p150_xUUhcIYO.json",
+        "model_id": "id_autoport-glm47-flash_GLM-4.7-Flash_p150",
+        "model_repo": "zai-org/GLM-4.7-Flash",
+        "inference_engine": "vLLM",
+        "tt_metal_commit": null,
+        "vllm_commit": null,
+        "model_impl": "autoport-glm47-flash"
+    },
+    "sections": [
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "ifeval",
+                "tolerance": 0.05,
+                "published_score": null,
+                "published_score_ref": null,
+                "gpu_reference_score": null,
+                "gpu_reference_score_ref": null,
+                "score": 71.42857142857143,
+                "ratio_to_published": "N/A",
+                "ratio_to_reference": "N/A",
+                "accuracy_check": 1,
+                "mean_seconds_per_task": 11.952903454928933
+            },
+            "title": "LLM Eval \u2014 ifeval",
+            "task_type": "llm",
+            "id": "GLM-4.7-Flash_P150",
+            "targets": {
+                "task_name": "ifeval",
+                "tolerance": 0.05,
+                "published_score": null,
+                "published_score_ref": null
+            }
+        },
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "gpqa_diamond_cot_zeroshot",
+                "tolerance": 0.05,
+                "published_score": 75.2,
+                "published_score_ref": "https://huggingface.co/zai-org/GLM-4.7-Flash#performances-on-benchmarks",
+                "gpu_reference_score": null,
+                "gpu_reference_score_ref": null,
+                "score": 70.0,
+                "ratio_to_published": 0.9308510638297872,
+                "ratio_to_reference": "N/A",
+                "accuracy_check": 3,
+                "mean_seconds_per_task": 420.0788745600992
+            },
+            "title": "LLM Eval \u2014 gpqa_diamond_cot_zeroshot",
+            "task_type": "llm",
+            "id": "GLM-4.7-Flash_P150",
+            "targets": {
+                "task_name": "gpqa_diamond_cot_zeroshot",
+                "tolerance": 0.05,
+                "published_score": 75.2,
+                "published_score_ref": "https://huggingface.co/zai-org/GLM-4.7-Flash#performances-on-benchmarks"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 8,
+                "input_sequence_length": 128,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 296.0808,
+                "p50_ttft": 300.3574,
+                "p99_ttft": 310.2449,
+                "mean_tpot_ms": 29.4953,
+                "mean_e2el_ms": 4041.9856,
+                "tps_input_throughput": 31.6654,
+                "tps_output_throughput": 31.6654,
+                "tps_total_throughput": 63.3308,
+                "request_throughput": 0.2474,
+                "error_request_count": null,
+                "target_check": 3,
+                "target_checks": {
+                    "functional": {
+                        "ttft_check": 1,
+                        "tput_user": 25.64,
+                        "tput_user_ratio": 1.3222974528959697,
+                        "tput_user_check": 2,
+                        "tput": 25.64,
+                        "tput_ratio": 1.235,
+                        "tput_check": 2
+                    },
+                    "complete": {
+                        "ttft_check": 1,
+                        "tput_user": 128.2,
+                        "tput_user_ratio": 0.26445949057919393,
+                        "tput_user_check": 3,
+                        "tput": 128.2,
+                        "tput_ratio": 0.24700000000000003,
+                        "tput_check": 3
+                    },
+                    "target": {
+                        "ttft": 274.07,
+                        "ttft_ratio": 1.0803108694858978,
+                        "ttft_check": 3,
+                        "tput_user": 33.903,
+                        "tput_user_ratio": 1.0000208445344856,
+                        "tput_user_check": 2,
+                        "tput": 31.838,
+                        "tput_ratio": 0.9945788052013318,
+                        "tput_check": 2
+                    }
+                }
+            },
+            "title": "vLLM Benchmark Targets \u2014 ISL 128 / OSL 128, concurrency 1",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 16:56:27"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 256,
+                "input_sequence_length": 128,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 9317.8821,
+                "p50_ttft": 9324.825,
+                "p99_ttft": 9393.6472,
+                "mean_tpot_ms": 91.5973,
+                "mean_e2el_ms": 20950.7343,
+                "tps_input_throughput": 195.4976,
+                "tps_output_throughput": 195.4976,
+                "tps_total_throughput": 390.9952,
+                "request_throughput": 1.5273,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 16:59:26"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 128,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 290.253,
+                "p50_ttft": 289.6102,
+                "p99_ttft": 303.7454,
+                "mean_tpot_ms": 30.7254,
+                "mean_e2el_ms": 31722.2865,
+                "tps_input_throughput": 4.035,
+                "tps_output_throughput": 32.2799,
+                "tps_total_throughput": 36.3149,
+                "request_throughput": 0.0315,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 17:02:12"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 128,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 9347.9149,
+                "p50_ttft": 9358.7665,
+                "p99_ttft": 9391.2556,
+                "mean_tpot_ms": 99.0029,
+                "mean_e2el_ms": 110627.8875,
+                "tps_input_throughput": 37.0245,
+                "tps_output_throughput": 296.1962,
+                "tps_total_throughput": 333.2207,
+                "request_throughput": 0.2893,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 17:10:13"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 1024,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 1961.0501,
+                "p50_ttft": 1961.3157,
+                "p99_ttft": 2045.4713,
+                "mean_tpot_ms": 31.4342,
+                "mean_e2el_ms": 5953.1945,
+                "tps_input_throughput": 172.0004,
+                "tps_output_throughput": 21.5001,
+                "tps_total_throughput": 193.5005,
+                "request_throughput": 0.168,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 17:10:50"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 1024,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 64251.348,
+                "p50_ttft": 64265.3169,
+                "p99_ttft": 64424.2786,
+                "mean_tpot_ms": 93.5896,
+                "mean_e2el_ms": 76137.2283,
+                "tps_input_throughput": 430.3724,
+                "tps_output_throughput": 53.7966,
+                "tps_total_throughput": 484.169,
+                "request_throughput": 0.4203,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 17:16:08"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 2048,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 4042.4849,
+                "p50_ttft": 4062.5122,
+                "p99_ttft": 4170.969,
+                "mean_tpot_ms": 33.6151,
+                "mean_e2el_ms": 8311.6031,
+                "tps_input_throughput": 246.3938,
+                "tps_output_throughput": 15.3996,
+                "tps_total_throughput": 261.7934,
+                "request_throughput": 0.1203,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 17:16:57"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 2048,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 131504.3916,
+                "p50_ttft": 131529.6466,
+                "p99_ttft": 131977.1001,
+                "mean_tpot_ms": 96.3503,
+                "mean_e2el_ms": 143740.8762,
+                "tps_input_throughput": 455.9259,
+                "tps_output_throughput": 28.4954,
+                "tps_total_throughput": 484.4213,
+                "request_throughput": 0.2226,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 17:26:48"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 4096,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 8492.2939,
+                "p50_ttft": 8553.1156,
+                "p99_ttft": 8700.7582,
+                "mean_tpot_ms": 37.249,
+                "mean_e2el_ms": 13222.9198,
+                "tps_input_throughput": 309.7585,
+                "tps_output_throughput": 9.68,
+                "tps_total_throughput": 319.4385,
+                "request_throughput": 0.0756,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 17:28:03"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 4096,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 275014.243,
+                "p50_ttft": 275402.0273,
+                "p99_ttft": 275969.7213,
+                "mean_tpot_ms": 99.7596,
+                "mean_e2el_ms": 287683.711,
+                "tps_input_throughput": 455.6084,
+                "tps_output_throughput": 14.2378,
+                "tps_total_throughput": 469.8462,
+                "request_throughput": 0.1112,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 17:47:35"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 8192,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 18122.6708,
+                "p50_ttft": 18122.6708,
+                "p99_ttft": 18392.2166,
+                "mean_tpot_ms": 45.2162,
+                "mean_e2el_ms": 23865.1298,
+                "tps_input_throughput": 343.2571,
+                "tps_output_throughput": 5.3634,
+                "tps_total_throughput": 348.6205,
+                "request_throughput": 0.0419,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 17:48:55"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 24,
+                "num_requests": 48,
+                "input_sequence_length": 8192,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 449201.361,
+                "p50_ttft": 449174.4653,
+                "p99_ttft": 450633.7833,
+                "mean_tpot_ms": 103.3937,
+                "mean_e2el_ms": 462332.3573,
+                "tps_input_throughput": 425.2505,
+                "tps_output_throughput": 6.6445,
+                "tps_total_throughput": 431.895,
+                "request_throughput": 0.0519,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 18:04:51"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 8192,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 18128.75,
+                "p50_ttft": 18128.75,
+                "p99_ttft": 18395.3488,
+                "mean_tpot_ms": 46.056,
+                "mean_e2el_ms": 65244.0744,
+                "tps_input_throughput": 125.5587,
+                "tps_output_throughput": 15.6948,
+                "tps_total_throughput": 141.2535,
+                "request_throughput": 0.0153,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 18:08:14"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 22,
+                "num_requests": 44,
+                "input_sequence_length": 8192,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 411401.6019,
+                "p50_ttft": 411376.4354,
+                "p99_ttft": 412720.8894,
+                "mean_tpot_ms": 108.0965,
+                "mean_e2el_ms": 521984.3069,
+                "tps_input_throughput": 345.2657,
+                "tps_output_throughput": 43.1582,
+                "tps_total_throughput": 388.4239,
+                "request_throughput": 0.0421,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 18:26:51"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 10000,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 23478.893,
+                "p50_ttft": 23478.893,
+                "p99_ttft": 23839.2508,
+                "mean_tpot_ms": 49.5198,
+                "mean_e2el_ms": 74137.642,
+                "tps_input_throughput": 134.8837,
+                "tps_output_throughput": 13.8121,
+                "tps_total_throughput": 148.6958,
+                "request_throughput": 0.0135,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 18:30:41"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 18,
+                "num_requests": 36,
+                "input_sequence_length": 10000,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 434613.3305,
+                "p50_ttft": 434589.5746,
+                "p99_ttft": 435880.0531,
+                "mean_tpot_ms": 106.1902,
+                "mean_e2el_ms": 543245.8859,
+                "tps_input_throughput": 331.3404,
+                "tps_output_throughput": 33.9293,
+                "tps_total_throughput": 365.2696,
+                "request_throughput": 0.0331,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 18:50:10"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 16384,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 42454.5375,
+                "p50_ttft": 42454.5375,
+                "p99_ttft": 42963.7993,
+                "mean_tpot_ms": 60.4325,
+                "mean_e2el_ms": 50129.4712,
+                "tps_input_throughput": 326.8312,
+                "tps_output_throughput": 2.5534,
+                "tps_total_throughput": 329.3845,
+                "request_throughput": 0.0199,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 18:52:48"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 12,
+                "num_requests": 24,
+                "input_sequence_length": 16384,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 522535.978,
+                "p50_ttft": 522511.9548,
+                "p99_ttft": 524101.9145,
+                "mean_tpot_ms": 105.4103,
+                "mean_e2el_ms": 535923.0814,
+                "tps_input_throughput": 366.8574,
+                "tps_output_throughput": 2.8661,
+                "tps_total_throughput": 369.7234,
+                "request_throughput": 0.0224,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 19:11:38"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 1,
+                "input_sequence_length": 32768,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 108868.9675,
+                "p50_ttft": 108868.9675,
+                "p99_ttft": 108868.9675,
+                "mean_tpot_ms": 91.6293,
+                "mean_e2el_ms": 120505.8884,
+                "tps_input_throughput": 271.9193,
+                "tps_output_throughput": 1.0622,
+                "tps_total_throughput": 272.9815,
+                "request_throughput": 0.0083,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 19:15:48"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 6,
+                "num_requests": 6,
+                "input_sequence_length": 32768,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 668893.8611,
+                "p50_ttft": 668902.958,
+                "p99_ttft": 668905.1019,
+                "mean_tpot_ms": 111.6262,
+                "mean_e2el_ms": 683070.3823,
+                "tps_input_throughput": 287.8289,
+                "tps_output_throughput": 1.1243,
+                "tps_total_throughput": 288.9533,
+                "request_throughput": 0.0088,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 19:29:19"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 1,
+                "input_sequence_length": 65536,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 319610.1297,
+                "p50_ttft": 319610.1297,
+                "p99_ttft": 319610.1297,
+                "mean_tpot_ms": 153.1955,
+                "mean_e2el_ms": 339065.9582,
+                "tps_input_throughput": 193.2837,
+                "tps_output_throughput": 0.3775,
+                "tps_total_throughput": 193.6613,
+                "request_throughput": 0.0029,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 19:40:46"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 3,
+                "num_requests": 3,
+                "input_sequence_length": 65536,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 953219.0965,
+                "p50_ttft": 953234.4288,
+                "p99_ttft": 953235.6592,
+                "mean_tpot_ms": 164.6571,
+                "mean_e2el_ms": 974130.5432,
+                "tps_input_throughput": 201.8289,
+                "tps_output_throughput": 0.3942,
+                "tps_total_throughput": 202.2231,
+                "request_throughput": 0.0031,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 20:02:47"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 1,
+                "input_sequence_length": 131072,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 1034101.9377,
+                "p50_ttft": 1034101.9377,
+                "p99_ttft": 1034101.9377,
+                "mean_tpot_ms": 277.1422,
+                "mean_e2el_ms": 1069298.9943,
+                "tps_input_throughput": 122.5775,
+                "tps_output_throughput": 0.1197,
+                "tps_total_throughput": 122.6972,
+                "request_throughput": 0.0009,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "zai-org__GLM-4.7-Flash_P150",
+            "targets": {
+                "tool": "vllm",
+                "model": "zai-org/GLM-4.7-Flash",
+                "device": "P150",
+                "timestamp": "2026-09-04 20:38:35"
+            }
+        },
+        {
+            "kind": "spec_tests",
+            "data": {
+                "success": true,
+                "child_result": "OK",
+                "status": "pass",
+                "attempts": 1,
+                "logs": [],
+                "elapsed_seconds": 0.004722277983091772,
+                "test_name": "LoggerForkSafetyTest",
+                "description": "Test for logging fork safety to prevent deadlocks"
+            },
+            "title": "Logger Fork Safety",
+            "task_type": "unit",
+            "id": "GLM-4.7-Flash_P150",
+            "targets": {
+                "num_of_devices": 1
+            }
+        },
+        {
+            "kind": "spec_tests",
+            "data": {
+                "endpoint_url": "http://127.0.0.1:8000/v1/chat/completions",
+                "model_name": "zai-org/GLM-4.7-Flash",
+                "task_name": "vllm_chat_completions",
+                "parameter_conformance_summary": [
+                    {
+                        "test_case": "test_coherence_verbatim_echo",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "status": "\u2705 PASS",
+                        "summary": "3/3 passed"
+                    },
+                    {
+                        "test_case": "test_logprobs",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    },
+                    {
+                        "test_case": "test_n",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    },
+                    {
+                        "test_case": "test_non_uniform_seeding",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "status": "\u2705 PASS",
+                        "summary": "9/9 passed"
+                    },
+                    {
+                        "test_case": "test_seed_reproducibility",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    }
+                ],
+                "detailed_test_results": [
+                    {
+                        "test_case": "test_coherence_verbatim_echo",
+                        "parametrization": "test_coherence_verbatim_echo",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[temperature-0.0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[top_k-1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[top_p-0.01]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_logprobs",
+                        "parametrization": "test_logprobs",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "parametrization": "test_max_tokens[10]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "parametrization": "test_max_tokens[5]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_n",
+                        "parametrization": "test_n[2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_n",
+                        "parametrization": "test_n[3]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_non_uniform_seeding",
+                        "parametrization": "test_non_uniform_seeding",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-repeat_trap-messages0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-repeat_trap-messages0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-repeat_trap-messages0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_seed_reproducibility",
+                        "parametrization": "test_seed_reproducibility",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "parametrization": "test_stop[stop_seq0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "parametrization": "test_stop[stop_seq1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    }
+                ],
+                "success": true,
+                "status": "pass",
+                "attempts": 1,
+                "logs": [
+                    "/home/stisi/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/lib/python3.10/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option \"asyncio_default_fixture_loop_scope\" is unset.",
+                    "The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: \"function\", \"class\", \"module\", \"package\", \"session\"",
+                    "",
+                    "  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))",
+                    "......................                                                   [100%]",
+                    "22 passed in 620.91s (0:10:20)"
+                ],
+                "elapsed_seconds": 621.1938378310006,
+                "test_name": "VLLMParamConformanceTest",
+                "description": "vLLM chat/completions parameter conformance (GLM-4.7-Flash autoport, non-thinking request mode)"
+            },
+            "title": "Vllm Chat Completions",
+            "task_type": "functional",
+            "id": "GLM-4.7-Flash_P150",
+            "targets": {
+                "num_of_devices": 1,
+                "num_concurrent_requests": 1,
+                "request_defaults": {
+                    "chat_template_kwargs": {
+                        "enable_thinking": false
+                    }
+                }
+            }
+        }
+    ],
+    "acceptance_criteria": true,
+    "acceptance_blockers": {},
+    "acceptance_criteria_metadata": {
+        "enforcement_result": "PASS",
+        "model_status": "EXPERIMENTAL",
+        "categories": [
+            {
+                "name": "Benchmarks",
+                "status": "PASS",
+                "total": 23,
+                "passed": 1,
+                "failed": 0,
+                "na": 22,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Evals",
+                "status": "PASS",
+                "total": 2,
+                "passed": 0,
+                "failed": 0,
+                "na": 1,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {
+                    "evals:LLM Eval \u2014 gpqa_diamond_cot_zeroshot": "Accuracy check failed. (informational: model status=EXPERIMENTAL)"
+                }
+            },
+            {
+                "name": "Spec Tests",
+                "status": "PASS",
+                "total": 1,
+                "passed": 1,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            }
+        ]
+    },
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u2705 `PASS`\n- Model status: `EXPERIMENTAL`\n- Benchmarks: \u2705 `PASS` (1/23 passed, 22 NA)\n- Evals: \u2705 `PASS` (0/2 passed, 1 waived, 1 NA)\n- Spec Tests: \u2705 `PASS` (1/1 passed)\n- All acceptance criteria passed."
+}

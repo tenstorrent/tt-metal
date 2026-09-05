@@ -1,0 +1,110 @@
+{
+  "findings": [
+    {
+      "severity": "advisory",
+      "artifact": "/home/stisi/glm47_tti_release/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "metric": "near_empty_completion",
+      "value": 0.0,
+      "threshold": 5.0,
+      "detail": "Completion is empty or whitespace; verify EOS handling and sampler output."
+    }
+  ],
+  "measured": [
+    {
+      "artifact": "/home/stisi/glm47_tti_release/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[0] greedy_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 11,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2727
+    },
+    {
+      "artifact": "/home/stisi/glm47_tti_release/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[0] sampled_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 14,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2143
+    },
+    {
+      "artifact": "/home/stisi/glm47_tti_release/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 294,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0306
+    },
+    {
+      "artifact": "/home/stisi/glm47_tti_release/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[1] sampled_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 375,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.016
+    },
+    {
+      "artifact": "/home/stisi/glm47_tti_release/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": null,
+      "near_empty": true
+    },
+    {
+      "artifact": "/home/stisi/glm47_tti_release/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[2] sampled_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 104,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0288
+    },
+    {
+      "artifact": "/home/stisi/glm47_tti_release/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[3] greedy_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 331,
+      "adjacent_duplication": 0.003,
+      "trigram_loop_fraction": 0.0272
+    },
+    {
+      "artifact": "/home/stisi/glm47_tti_release/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[3] sampled_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 423,
+      "adjacent_duplication": 0.0024,
+      "trigram_loop_fraction": 0.0213
+    },
+    {
+      "artifact": "/home/stisi/glm47_tti_release/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[4] greedy_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 11,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2727
+    },
+    {
+      "artifact": "/home/stisi/glm47_tti_release/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[4] sampled_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 65,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0923
+    },
+    {
+      "artifact": "/home/stisi/glm47_tti_release/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 71,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0845
+    },
+    {
+      "artifact": "/home/stisi/glm47_tti_release/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[5] sampled_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 111,
+      "adjacent_duplication": 0.0091,
+      "trigram_loop_fraction": 0.0541
+    }
+  ],
+  "exit_code": 1
+}
