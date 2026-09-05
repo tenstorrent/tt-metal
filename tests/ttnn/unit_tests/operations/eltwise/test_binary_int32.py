@@ -977,6 +977,208 @@ def test_div_exact_quotient_cases(device):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
+INT32_MIN = -(2**31)
+
+# INT32_MIN as the dividend: the residual-correction path in trunc/floor int32 division collapses the
+# whole quotient when the aligned quotient estimate underflows to zero (q_m == 0), because the raw
+# remainder 2**31 has bit pattern 0x80000000, which converts to -0.0f and reads as a negative
+# remainder. Divisors below span the Wormhole (2**21) and Blackhole (2**22) quotient-estimation
+# thresholds, both signs, and the region above 2**30 where the true quotient is ±1.
+INT32_MIN_DIVISORS = [
+    1,
+    2,
+    3,
+    7,
+    100,
+    1024,
+    2097151,  # 2**21 - 1 (just under Wormhole threshold)
+    2097152,  # 2**21     (Wormhole threshold)
+    2097153,  # 2**21 + 1
+    -2097151,
+    -2097152,
+    -2097153,
+    4194303,  # 2**22 - 1 (just under Blackhole threshold)
+    4194304,  # 2**22     (Blackhole threshold)
+    4194305,  # 2**22 + 1
+    -4194303,
+    -4194304,
+    -4194305,
+    239823930,
+    -239823930,
+    1073741824,  # 2**30
+    -1073741824,
+    536870912,  # 2**29
+    -536870912,
+    268435456,  # 2**28
+    -268435456,
+    2147483647,
+    -2147483647,
+    INT32_MIN,  # b == a == INT32_MIN
+    -5,
+    -2,
+    -3,
+]
+
+
+@pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
+def test_div_int32_min_dividend(rounding_mode, device):
+    torch_a = torch.full((1, 32), INT32_MIN, dtype=torch.int32)
+    torch_b = torch.tensor(INT32_MIN_DIVISORS, dtype=torch.int32).reshape(1, 32)
+
+    input_a = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_b = ttnn.from_torch(
+        torch_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.div)
+    torch_output = golden_function(torch_a, torch_b, rounding_mode=rounding_mode, device=device)
+
+    output = ttnn.to_torch(ttnn.div(input_a, input_b, rounding_mode=rounding_mode))
+
+    assert torch.equal(output, torch_output)
+
+
+@pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
+@pytest.mark.parametrize(
+    "scalar", [2097152, -2097152, 4194304, -4194304, 239823930, -239823930, 1073741824, -1073741824, 3, -3]
+)
+def test_div_int32_min_dividend_scalar(rounding_mode, scalar, device):
+    torch_a = torch.tensor([INT32_MIN, INT32_MIN, INT32_MIN, INT32_MIN], dtype=torch.int32).reshape(1, 4)
+
+    input_a = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_output = torch.div(torch_a, scalar, rounding_mode=rounding_mode)
+
+    output = ttnn.to_torch(ttnn.div(input_a, scalar, rounding_mode=rounding_mode))
+
+    assert torch.equal(output, torch_output)
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+def test_remainder_fmod_int32_min_dividend(ttnn_op, device):
+    torch_a = torch.full((1, 32), INT32_MIN, dtype=torch.int32)
+    torch_b = torch.tensor(INT32_MIN_DIVISORS, dtype=torch.int32).reshape(1, 32)
+
+    input_a = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_b = ttnn.from_torch(
+        torch_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output = golden_function(torch_a, torch_b, device=device)
+
+    output = ttnn.to_torch(ttnn_op(input_a, input_b))
+
+    assert torch.equal(output, torch_output)
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+@pytest.mark.parametrize("scalar", [2097152, -2097152, 4194304, -4194304, 239823930, -239823930, 3, -3, -2147483648])
+def test_remainder_fmod_int32_min_dividend_scalar(ttnn_op, scalar, device):
+    torch_a = torch.tensor([INT32_MIN, INT32_MIN, INT32_MIN, INT32_MIN], dtype=torch.int32).reshape(1, 4)
+
+    input_a = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output = golden_function(torch_a, scalar, device=device)
+
+    output = ttnn.to_torch(ttnn_op(input_a, scalar))
+
+    assert torch.equal(output, torch_output)
+
+
+# FP32 scalar promotion (issue #55502): an int32 tensor combined with a floating-point scalar must
+# follow the intended FP32 promotion semantics -- the integer operand is promoted to fp32 (never
+# bit-reinterpreted as an fp32 scalar fed to the int32 kernel) and the result dtype is fp32.
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
+@pytest.mark.parametrize("scalar", [3.0, -3.0, 3.5, 7.0, 100.0, 1024.0, -1024.0])
+def test_div_int32_float_scalar_promotion(rounding_mode, scalar, device):
+    torch_a = torch.tensor(
+        [INT32_MIN, -2147483647, -1000000, 123456, 2147483647, INT32_MIN], dtype=torch.int32
+    ).reshape(1, 6)
+
+    input_a = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Reference in fp32: int32 -> fp32 (same rounding as the device path), then fp32 divide/round.
+    torch_a_fp32 = torch_a.float()
+    if rounding_mode is None:
+        torch_output = torch.div(torch_a_fp32, scalar)
+    elif rounding_mode == "floor":
+        torch_output = torch.floor(torch.div(torch_a_fp32, scalar))
+    else:
+        torch_output = torch.trunc(torch.div(torch_a_fp32, scalar))
+
+    output = ttnn.to_torch(ttnn.div(input_a, scalar, rounding_mode=rounding_mode))
+
+    assert output.dtype == torch.float32, "int32 tensor + float scalar must promote to FP32"
+    assert_with_ulp(output, torch_output, ulp_threshold=1.0)
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+@pytest.mark.parametrize("scalar", [3.0, -3.0, 3.5, 7.0, 100.0, 1024.0, -1024.0])
+def test_remainder_fmod_int32_float_scalar_promotion(ttnn_op, scalar, device):
+    torch_a = torch.tensor(
+        [INT32_MIN, -2147483647, -1000000, 123456, 2147483647, INT32_MIN], dtype=torch.int32
+    ).reshape(1, 6)
+
+    input_a = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # torch.fmod/remainder promote an fp32 tensor + python float scalar to fp32.
+    if ttnn_op is ttnn.remainder:
+        torch_output = torch.remainder(torch_a.float(), scalar)
+    else:
+        torch_output = torch.fmod(torch_a.float(), scalar)
+
+    output = ttnn.to_torch(ttnn_op(input_a, scalar))
+
+    assert output.dtype == torch.float32, "int32 tensor + float scalar must promote to FP32"
+    assert_with_ulp(output, torch_output, ulp_threshold=1.0)
+
+
 # FP32 mantissa precision boundary: Bit-exactness only holds when the operands and the quotient fit within the fp32 mantissa
 # (|value| <= 2**24 = 16777216). div_int32 converts int32 -> fp32 before dividing,
 # so operands above 2**24 are rounded before the reciprocal even runs and the residual step cannot
