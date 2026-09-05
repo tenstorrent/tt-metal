@@ -100,6 +100,19 @@ SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-
 # Full 36-host subtorus SC36 galaxy (revC, Aisle D, hosts bh-glx-120-d01..d10). 36 hosts / 144 mesh
 # slots -- the largest all-hosts mock; used by bh-ring-stress to exercise the mapper at scale.
 SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC36_32x4_revC_subtorus_aisleD_mapping.yaml"
+# SC28 and SC24 (6-quad) ring subsets of the SC36 revC subtorus aisleD capture (the hosts whose
+# quads close each ring; see the mappings' headers). Exact fits for the 112-stage 4x2 ring /
+# SC28-K3 7-BigMesh and for the SC24-GLM 6-BigMesh respectively.
+# Mappings landed in tt-cluster-descriptors #19 (in the pinned submodule).
+# The other SC28/SC24 ring host lists (120-C, 110-A/C/D) have no complete mock capture in
+# tt-cluster-descriptors yet (aisle-C sets have 20 of 36 hosts and none include c07/Quad6;
+# 110-D has a 16-host set only; 110-A has none), so only the 120-D (revC) mappings exist for now.
+SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC28_32x4_revC_subtorus_aisleD_mapping.yaml"
+SC24_REVC_SUBTORUS_AISLED_RING_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC24_32x4_revC_subtorus_aisleD_ring_mapping.yaml"
+# 24-host SC24 revC subtorus (system-110, aisle C columns c01-c07, units u02-u20); used by the SC24
+# 96-stage / six-BigMesh ring-stress entries.
+# Set landed in tt-cluster-descriptors #17 (in the pinned submodule).
+SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_aisleC/SC24_32x4_revC_subtorus_aisleC_mapping.yaml"
 # (The non-subtorus flat SC20 revAB Aisle C mock was removed: real revAB systems are subtorus, and the
 # flat mock only exposes 12 physical meshes, so the SC20 rings can't map onto it. Use the revAB subtorus
 # mock (SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING) instead.)
@@ -137,6 +150,13 @@ MGD_BLITZ_24="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_24s
 MGD_BLITZ_28="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_28stage_mesh_graph_descriptor.textproto"
 MGD_BLITZ_32="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_32stage_mesh_graph_descriptor.textproto"
 MGD_BLITZ_36="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_36stage_mesh_graph_descriptor.textproto"
+# Long rings for the bh-ring-stress sweep. Each is the exact fit for its SC<N/4> supercluster
+# (N x 8 = 32 x hosts ASICs); on larger mocks they run as the ring-embedded-into-a-larger-graph
+# case. 96 reuses the SC24 exact-fit descriptor from the SC24 entries below.
+MGD_BLITZ_96="${MGD_SUBTORUS}/subtorus_sc24_4x2_pipeline_96stage_ring_mesh_graph_descriptor.textproto"
+MGD_BLITZ_112="${MGD_SUBTORUS}/subtorus_sc28_4x2_pipeline_112stage_ring_mesh_graph_descriptor.textproto"
+MGD_BLITZ_128="${MGD_SUBTORUS}/subtorus_sc32_4x2_pipeline_128stage_ring_mesh_graph_descriptor.textproto"
+MGD_BLITZ_144="${MGD_SUBTORUS}/subtorus_sc36_4x2_pipeline_144stage_ring_mesh_graph_descriptor.textproto"
 
 GTEST_GALAXY_LAYOUT_CHECK="ControlPlaneFixture.TestGalaxyLayoutCheck"
 GTEST_GALAXY_4X4_SPLIT_HOST_LAYOUT_CHECK="ControlPlaneFixture.TestGalaxy4x4SplitHostLayoutCheck"
@@ -709,24 +729,58 @@ fi # bh-blitz-decode
 
 ######################################
 # BH Galaxy: ring-mapping stress test (LONG RUNNING -- own group)
-# Non-pod-aligned Blitz-decode ring lengths (20/24/28/32/36 stages) mapped onto the full 36-host SC36 revC
-# subtorus aisleD mock. These lengths don't align to pod (4-host) / galaxy boundaries, so they exercise
-# the topology mapper's general-SAT host-minimization fallback -- erratic cost that scales with ring
-# length (36-stage ~42s local vs sub-second for 20/24/28/32). The subtorus wrap-around lets every length
-# close and map. Own shard; ~1.5 min end-to-end locally, ~6.5 min on the ~4x-slower cpu_medium CI runner.
+# Blitz-decode ring lengths 16/64 swept over every subtorus cluster mock large
+# enough to hold them (a ring of N stages needs N mesh slots = N/4 hosts). Rings shorter than the
+# cluster's slot count are the ring-embedded-into-a-larger-graph host-minimization SAT case; the
+# length equal to the slot count is the exact-fit packing. The subtorus wrap-around lets every
+# length close and map.
+# Cluster mocks swept x fitting stage counts:
+#   - SC36 revC subtorus aisleD (full 36-host mapping, 144 slots): 16/64 (96-144 disabled, see
+#     #51629 note below).
+#   - SC36 revAB subtorus aisleC: only 20 of the 36 hosts were captured, so its largest mapping is
+#     the SC20 one (80 slots) -- 16/64 only (96+ need >= 24 hosts).
+#   - SC28 revC subtorus aisleD (28-host SC28-ring subset of the aisleD capture, 112 slots):
+#     16/64 (96/112 disabled, see #51629 note below).
+#   - SC24 revC subtorus aisleC (24 hosts, 96 slots; tt-cluster-descriptors #17): 16 only
+#     (64 embedded + 96 disabled, see #51629 note below).
+# Own shard; see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml for the CI budget.
 ######################################
 if run_group "bh-ring-stress"; then
 
 # Per-op mapper watchdog: 300s -- above the worst per-stage solve on CI (~3 min on the slower cpu_medium
-# runner) and below the shard step timeout (10 min, see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml)
+# runner) and below the shard step timeout (see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml)
 # so a stuck solve is caught/reported here rather than cancelled mid-shard by GitHub Actions.
+# The 96+ stage rings get the longer SC24-style budget (their solves are much bigger).
 RING_STRESS_TIMEOUT=300
+LONG_RING_STRESS_TIMEOUT=600
+# TODO(https://github.com/tenstorrent/tt-metal/issues/51629): the LONG (96/112/128/144-stage) 4x2
+# multimesh rings are DISABLED in this sweep for mapper performance: on these lengths the pipeline
+# builder / general-SAT host-minimization solve does not finish in a CI-compatible budget. Measured:
+# the 112-stage exact-fit solve was still running after ~5.5 min locally on a 64-core host, and the
+# 128-stage ring on the SC36 mock was still solving ~40 min into the cpu_medium CI shard (run
+# 33221850239), blowing the 45-min step timeout -- the 600 s TT_METAL_OPERATION_TIMEOUT does not
+# cover the phase-1 solve. Re-add "96"/"112"/"128"/"144" to the stage lists below once #51629
+# lands. (The standalone SC24 96-stage exact-fit entry further down stays: its solve is ~27 s.)
+# ALSO disabled per #51629: 64-stage on the SC24 110-aisleC mock -- the 64-ring-into-96-slots
+# embedding hung the mapper >40 min on CI (run 33224879320; solver went silent right after phase-1
+# setup) even though 64-into-144 (SC36, ~3 min) and 64-into-80 (SC20 aisleC, ~42 s) solve fine;
+# the general-SAT host-minimization cost is erratic in the embedded case.
 for entry in \
-    "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:20 24 28 32 36" ; do
+    "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64" \
+    "SC36_revAB_subtorus_120_aisleC_sc20:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
+    "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64" \
+    "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
+  if [[ ! -f "${cluster_map}" ]]; then
+    # Guard against a tt-cluster-descriptors pin that predates the mapping (all current entries are in the pin).
+    echo "WARNING: [bh-ring-stress] skipping ${entry%%:*} -- mock mapping not in the pinned tt-cluster-descriptors submodule: ${cluster_map}" >&2
+    continue
+  fi
   for stage in ${stages}; do
     mgd_var="MGD_BLITZ_${stage}"
-    run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${RING_STRESS_TIMEOUT} tt-run --mesh-graph-descriptor "${!mgd_var}" --mock-cluster-rank-binding "${cluster_map}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
+    stage_timeout=${RING_STRESS_TIMEOUT}
+    if (( stage >= 96 )); then stage_timeout=${LONG_RING_STRESS_TIMEOUT}; fi
+    run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${stage_timeout} tt-run --mesh-graph-descriptor "${!mgd_var}" --mock-cluster-rank-binding "${cluster_map}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
   done
 done
 
@@ -741,6 +795,41 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${
     --per-solution-timeout ${RING_STRESS_TIMEOUT} \
     --recover-command 'true' \
     -- ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.SweepConsumer_SolutionSpansExpectedHosts:${GTEST_SUBTORUS_2X4_PIPELINE}"
+
+# SC24 (24-host) mocks. Two views of the same 96-rank spec-decode fabric tour:
+#  - 96-stage 4x2 ring: one mesh per rank, exact-fit host packing (96 x 8 = 768 = 24 x 32 ASICs).
+#  - six 4x32 BigMeshes (host_topology [1,16] -> 16 ranks each), fully connected (15 relaxed pairs)
+#    so the resolver can place the closed 96-stage tour across the six physical quads.
+SC24_RING_STRESS_TIMEOUT=600
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${SC24_RING_STRESS_TIMEOUT} tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc24_4x2_pipeline_96stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_2X4_PIPELINE}"
+# TODO(https://github.com/tenstorrent/tt-metal/issues/49629): TestPipelineBuilderCheck omitted, like the
+# SC20 5-group 32x4 entry: on group-of-BigMesh MGDs the pipeline builder's resolve_graph_layout does not
+# complete (>35 min on a 104-core host with all 96 ranks pinned in it). Layout + corner pins pass (~45 s/rank).
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${SC24_RING_STRESS_TIMEOUT} tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc24_4x32_6bigmesh_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}"
+
+# BigMesh sweep, same entry format as the ring sweep above (cluster mock x BigMesh count).
+# MGD_BIGMESH_7 is the full SC28_4x2 spec-decode shape (MGD_BIGMESH_6 is its six-quad reduction):
+# seven 4x32 BigMeshes, all-to-all (21 relaxed pairs), 112 ranks / 28 hosts. 6-BigMesh is exact
+# fit on the SC24 mocks; 7-BigMesh is exact fit on the SC28 mocks. Each BigMesh MGD runs only on
+# its size-matched mocks (no embedded runs). Same gtest set as the SC24 aisle-C entry
+# above -- TestPipelineBuilderCheck omitted per #49629.
+MGD_BIGMESH_6="${MGD_SUBTORUS}/subtorus_sc24_4x32_6bigmesh_ring_mesh_graph_descriptor.textproto"
+MGD_BIGMESH_7="${MGD_SUBTORUS}/subtorus_sc28_4x32_7bigmesh_ring_mesh_graph_descriptor.textproto"
+for entry in \
+    "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:6" \
+    "SC24_revC_subtorus_120_aisleD_ring:${SC24_REVC_SUBTORUS_AISLED_RING_CLUSTER_DESC_MAPPING}:6" \
+    "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:7" ; do
+  rest="${entry#*:}"; cluster_map="${rest%%:*}"; bigmeshes="${rest#*:}"
+  if [[ ! -f "${cluster_map}" ]]; then
+    # Guard against a tt-cluster-descriptors pin that predates the mapping (all current entries are in the pin).
+    echo "WARNING: [bh-ring-stress] skipping ${entry%%:*} -- mock mapping not in the pinned tt-cluster-descriptors submodule: ${cluster_map}" >&2
+    continue
+  fi
+  for bigmesh in ${bigmeshes}; do
+    mgd_var="MGD_BIGMESH_${bigmesh}"
+    run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${LONG_RING_STRESS_TIMEOUT} tt-run --mesh-graph-descriptor "${!mgd_var}" --mock-cluster-rank-binding "${cluster_map}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}"
+  done
+done
 
 fi # bh-ring-stress
 
