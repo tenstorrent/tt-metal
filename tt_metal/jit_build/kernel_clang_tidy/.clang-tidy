@@ -229,4 +229,11 @@ CheckOptions:
 
 FormatStyle: 'file'
 
-HeaderFilterRegex: '.*/(kernels|kernels_ng|kernels_dfb|test_kernels)/.*'
+# Report findings from in-repo device code only. Kernel sources land here via
+# the kernels dirs (they are #included into the trisck.cc/brisck.cc wrappers,
+# so clang treats them as headers); tt_metal/{tt-llk,hw,fabric} covers the
+# LLK, ckernel/SFPU and fabric header stack, all of which live in this repo.
+# Matches both the repo tree and the wheel-installed copies under
+# site-packages/ttnn/. Deliberately excluded, being upstream/toolchain and not
+# fixable here: the SFPI headers (/opt/tenstorrent/sfpi/...) and libc/libstdc++.
+HeaderFilterRegex: '.*/(kernels|kernels_ng|kernels_dfb|test_kernels)/.*|.*/tt_metal/(tt-llk|hw|fabric)/.*'

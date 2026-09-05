@@ -238,18 +238,19 @@ abandoned; the tidy steps skip `sim_*` SKUs. Three independent blockers:
   only **8** TUs, against ~2450 kernel sources in the tree — hence wiring
   every leg. Second, `--dedupe kernel-role` (the default) lints one config per
   (kernel, RISC target), so the same kernel under many compile-time-arg
-  configurations is analyzed once. Third, and most significant,
-  `HeaderFilterRegex` is `.*/(kernels|kernels_ng|kernels_dfb|test_kernels)/.*`
-  — clang-tidy check findings are reported only from files under those
-  directories. Kernel sources qualify (they are `#include`d into the
-  `trisck.cc`/`brisck.cc` wrappers, so clang treats them as headers), but the
-  LLK/ckernel/SFPU header stack where much device logic actually lives does
-  not, so check findings there are dropped. Compiler diagnostics
-  (`clang-diagnostic-*`) bypass header filters, which is why the errors seen
-  so far are mostly from those headers. Widening the regex is the next lever
-  and should be a deliberate, separate change — it will raise volume a lot,
-  and findings in `tt_metal/tt-llk` and the SFPI toolchain are not fixable in
-  this repo.
+  configurations is analyzed once. Third, `HeaderFilterRegex` decides which
+  files check findings may come from at all — kernel sources qualify because
+  they are `#include`d into the `trisck.cc`/`brisck.cc` wrappers, so clang
+  treats them as headers. Its original value covered only the `kernels/`
+  directories, which silently dropped every check finding in the
+  LLK/ckernel/SFPU header stack — some 2000 in-repo device headers, and where
+  much of the device logic actually lives. It now also covers
+  `tt_metal/{tt-llk,hw,fabric}` (matching both the repo tree and the
+  wheel-installed copies under `site-packages/ttnn/`), leaving out only the
+  SFPI toolchain headers and libc/libstdc++, which genuinely are upstream.
+  Note that compiler diagnostics (`clang-diagnostic-*`) bypass header filters
+  entirely — that is why the pre-widening runs surfaced parse errors from
+  those headers but no check findings from them.
 * **Coverage = what the run compiled.** One test lints one test's kernels; a
   suite lints what the suite exercises. Kernels (or TRISC roles, or `#ifdef`
   branches) the run never compiled are not analyzed.
@@ -259,9 +260,11 @@ abandoned; the tidy steps skip `sim_*` SKUs. Three independent blockers:
   `sfpi.h` header stack, thanks to SFPI's shipped analysis fallback
   (`tensix_builtins.h` + machine-generated `tensix_builtins.def`; present in
   the pinned SFPI ≥ 7.73.0). **Wormhole PACK TUs currently fail to parse**:
-  `tt_llk_wormhole_b0/llk_lib/llk_pack.h:393` puts `[[maybe_unused]]` on a
-  template parameter, a GCC extension clang rejects. One-line upstream tt-llk
-  fix unblocks it.
+  `tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_pack.h:393` puts
+  `[[maybe_unused]]` on a template parameter, a GCC extension clang rejects.
+  `tt_metal/tt-llk` is part of this repo (not a submodule), so the one-line
+  fix that unblocks the whole PACK role is available here; the attribute is
+  cosmetic at that site. `ckernel_sfpu_recip.h` has the same pattern.
 * Blackhole is expected to behave like wormhole (same mechanisms; multilib and
   `-mcpu` mappings are in place) but has not been exercised yet. Quasar is
   untested and its headers use the same template-parameter-attribute extension
