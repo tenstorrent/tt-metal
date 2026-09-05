@@ -107,7 +107,7 @@ def test_ttnn_where_row_col_mixed_bcast_tst(c_shape, f_shape, device):
 @pytest.mark.parametrize("value", [1.5, 0.5, -0.25])
 @pytest.mark.parametrize("ttnn_op", [ttnn.addcmul, ttnn.addcdiv])
 def test_ttnn_addc_ops_row_col_mixed_bcast(a_shape, b_shape, c_shape, value, ttnn_op, device):
-    torch.manual_seed(0)
+    torch.manual_seed(1)
     in_data1 = torch.empty(a_shape, dtype=torch.bfloat16).uniform_(-100, 100)
     in_data2 = torch.empty(b_shape, dtype=torch.bfloat16).uniform_(-100, 100)
     in_data3 = torch.empty(c_shape, dtype=torch.bfloat16).uniform_(-100, 100)
