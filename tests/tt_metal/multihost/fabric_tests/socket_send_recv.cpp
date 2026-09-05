@@ -264,9 +264,12 @@ TEST_F(SplitGalaxyMeshDeviceFixture, SocketSubContextValidation) {
             {socket_connection}, socket_mem_config, MeshId{0}, MeshId{1}, sub_context);
         tt_metal::distributed::SocketConfig socket_config_2(
             {invalid_socket_connection}, socket_mem_config, Rank{0}, Rank{1}, sub_context);
+        tt_metal::distributed::SocketConfig socket_config_3(
+            {invalid_socket_connection}, socket_mem_config, MeshId{0}, MeshId{1}, sub_context);
         auto send_socket_0 = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_0);
         auto send_socket_1 = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_1);
         EXPECT_THROW(tt_metal::distributed::MeshSocket(mesh_device_, socket_config_2), std::exception);
+        EXPECT_THROW(tt_metal::distributed::MeshSocket(mesh_device_, socket_config_3), std::exception);
     } else if (parent_context->rank() == Rank{2}) {
         auto sub_context = parent_context->create_sub_context(handshake_ranks);
         tt_metal::distributed::SocketConfig socket_config_0(
@@ -275,9 +278,12 @@ TEST_F(SplitGalaxyMeshDeviceFixture, SocketSubContextValidation) {
             {socket_connection}, socket_mem_config, MeshId{0}, MeshId{1}, sub_context);
         tt_metal::distributed::SocketConfig socket_config_2(
             {invalid_socket_connection}, socket_mem_config, Rank{0}, Rank{1}, sub_context);
+        tt_metal::distributed::SocketConfig socket_config_3(
+            {invalid_socket_connection}, socket_mem_config, MeshId{0}, MeshId{1}, sub_context);
         auto recv_socket_0 = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_0);
         auto recv_socket_1 = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_1);
         EXPECT_THROW(tt_metal::distributed::MeshSocket(mesh_device_, socket_config_2), std::exception);
+        EXPECT_THROW(tt_metal::distributed::MeshSocket(mesh_device_, socket_config_3), std::exception);
     }
     parent_context->barrier();
 }
