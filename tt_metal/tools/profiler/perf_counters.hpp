@@ -622,6 +622,8 @@ void read_perf_counters() {
 
 #endif  // PERF_COUNTER_READ_RISC
 
+// WRAP_RISC arms and stops the counters around the kernel; READ_RISC collects them. Both are
+// chosen per architecture at the top of this file.
 #if defined(PERF_COUNTER_WRAP_RISC)
 
 #if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)

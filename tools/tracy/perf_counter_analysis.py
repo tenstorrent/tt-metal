@@ -329,6 +329,30 @@ def quasar_l1_client_label(sel):
 # (class, thread) pairs already covered by the tt-1xx metric names above them.
 _QUASAR_CLASS_PAIRS_COVERED = {("CFG", 0), ("SYNC", 0), ("THCON", 0), ("MATH", 1), ("UNPACK", 0), ("PACK", 2)}
 
+# Quasar-only metrics as (name, suffix), in CSV column order. Percent metrics take " (%)",
+# per-cycle rates take none. Declared once for the CSV headers, the per-op writer and the summary.
+QUASAR_METRICS = (
+    *[(n, " (%)") for n in ("Thread 3 Issue Stall Rate", *QUASAR_STALL_REASON_METRICS)],
+    *[
+        (f"{cls} Instrn Avail Rate T{t}", " (%)")
+        for cls in QUASAR_INSTRN_CLASSES
+        for t in range(4)
+        if (cls, t) not in _QUASAR_CLASS_PAIRS_COVERED
+    ],
+    ("T3 Instrn Issue Rate", ""),
+    *[
+        (n, " (%)")
+        for n in (
+            "Math Src Data Ready Rate",
+            "FPU SFPU Overlap",
+            *[f"Unpacker{u} Busy T{t} Util" for u in (0, 1) for t in range(4)],
+            *[f"{s} Write T{t} Share" for s in ("Srca", "Srcb") for t in (0, 1)],
+            *[m.replace(" Rate", " Share") for m in QUASAR_STALL_REASON_METRICS],
+        )
+    ],
+    *[(f"T{t} Instrn Per Issue-Ready Cycle", "") for t in range(4)],
+)
+
 
 # Perf counter headers are only included in CSV output when perf counter data is available.
 PERF_COUNTER_CSV_HEADERS = [
@@ -585,67 +609,7 @@ PERF_COUNTER_CSV_HEADERS = [
     "PACK Instrn Avail Rate T2 Max (%)",
     "PACK Instrn Avail Rate T2 Avg (%)",
     # === Quasar (A0) ===
-    *[
-        f"{name} {stat} (%)"
-        for name in [
-            "Thread 3 Issue Stall Rate",
-            "Tile Counter Stall Pack Rate",
-            "Tile Counter Stall Unpack Rate",
-            "Srcs Stall Pack Rate",
-            "Srcs Stall SFPU Rate",
-            "Srcs Stall Unpack Rate",
-            "Dest Stall Pack Rate",
-            "Dest Stall SFPU Rate",
-            "Dest Stall Math Rate",
-            "Dest Stall Unpack Rate",
-            "SFPU Data Hazard Stall Rate",
-            "FPU Data Hazard Stall Rate",
-            "SrcB Stall Unpack Rate",
-            "SrcA Stall Unpack Rate",
-            "DValid Stall Math Rate",
-            "SrcA Stall Math Rate",
-        ]
-        for stat in ("Min", "Median", "Max", "Avg")
-    ],
-    *[
-        f"{cls} Instrn Avail Rate T{thread} {stat} (%)"
-        for cls in ("CFG", "SYNC", "THCON", "XSEARCH", "INSTISSUE", "MATH", "UNPACK", "PACK")
-        for thread in range(4)
-        if (cls, thread) not in {("CFG", 0), ("SYNC", 0), ("THCON", 0), ("MATH", 1), ("UNPACK", 0), ("PACK", 2)}
-        for stat in ("Min", "Median", "Max", "Avg")
-    ],
-    *[f"T3 Instrn Issue Rate {stat}" for stat in ("Min", "Median", "Max", "Avg")],
-    *[
-        f"{name} {stat} (%)"
-        for name in [
-            "Math Src Data Ready Rate",
-            "FPU SFPU Overlap",
-            *[f"Unpacker{u} Busy T{t} Util" for u in (0, 1) for t in range(4)],
-            *[f"{s} Write T{t} Share" for s in ("Srca", "Srcb") for t in (0, 1)],
-            *[
-                f"{r} Share"
-                for r in (
-                    "Tile Counter Stall Pack",
-                    "Tile Counter Stall Unpack",
-                    "Srcs Stall Pack",
-                    "Srcs Stall SFPU",
-                    "Srcs Stall Unpack",
-                    "Dest Stall Pack",
-                    "Dest Stall SFPU",
-                    "Dest Stall Math",
-                    "Dest Stall Unpack",
-                    "SFPU Data Hazard Stall",
-                    "FPU Data Hazard Stall",
-                    "SrcB Stall Unpack",
-                    "SrcA Stall Unpack",
-                    "DValid Stall Math",
-                    "SrcA Stall Math",
-                )
-            ],
-        ]
-        for stat in ("Min", "Median", "Max", "Avg")
-    ],
-    *[f"T{t} Instrn Per Issue-Ready Cycle {stat}" for t in range(4) for stat in ("Min", "Median", "Max", "Avg")],
+    *[f"{name} {stat}{suffix}" for name, suffix in QUASAR_METRICS for stat in ("Min", "Median", "Max", "Avg")],
     # === Write port blocking ===
     "SrcB Write Port Blocked Rate Min (%)",
     "SrcB Write Port Blocked Rate Median (%)",

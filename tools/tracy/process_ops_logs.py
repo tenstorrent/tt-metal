@@ -39,6 +39,7 @@ from tracy.common import (
 from tracy import device_post_proc_config
 from tracy.perf_counter_analysis import (
     PERF_COUNTER_CSV_HEADERS,
+    QUASAR_METRICS,
     compute_device_only_metrics,
     compute_perf_counter_metrics,
     extract_perf_counters,
@@ -1051,15 +1052,22 @@ def _enrich_ops_from_device_logs(
                 assign_metric("NOC vs Compute Balance", per_op_stats.get("NOC vs Compute Balance", {}))
                 assign_metric("TDMA vs NOC L1 Share", per_op_stats.get("TDMA vs NOC L1 Share", {}))
 
-                # Assign anything the explicit list above missed (Quasar metrics, l1_client rates),
-                # skipping names already assigned under either suffix convention.
-                for metric_name, metric_dict in per_op_stats.items():
-                    if f"{metric_name} Avg (%)" in device_op or f"{metric_name} Avg" in device_op:
-                        continue
-                    catch_all_suffix = (
-                        "" if metric_name.endswith(("Instrn Issue Rate", "Instrn Per Issue-Ready Cycle")) else " (%)"
-                    )
-                    assign_metric(metric_name, metric_dict, suffix=catch_all_suffix)
+                # Header-declared metrics with no section of their own above.
+                for metric_name in (
+                    "Packer Load Imbalance",
+                    "Compute-to-Unpack Ratio",
+                ):
+                    assign_metric(metric_name, per_op_stats.get(metric_name, {}))
+
+                # Quasar-only metrics, from the same declaration as their CSV columns.
+                for metric_name, suffix in QUASAR_METRICS:
+                    assign_metric(metric_name, per_op_stats.get(metric_name, {}), suffix=suffix)
+
+                # The l1_client counter is one CSR routed by TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL, so
+                # its metric is named after the run's selection and cannot be listed statically.
+                for metric_name in per_op_stats:
+                    if str(metric_name).startswith("L1_CLIENT_"):
+                        assign_metric(metric_name, per_op_stats[metric_name])
 
         if perf_counter_df is not None and not perf_counter_df.empty:
             print_efficiency_metrics_summary(pd.DataFrame(host_ops_by_device[device]), device)
@@ -1390,7 +1398,8 @@ def get_device_data_generate_report(
                 for header in OPS_CSV_HEADER + PERF_COUNTER_CSV_HEADERS:
                     if header in csv_row_headers:
                         allHeaders.append(header)
-                # Dynamic l1_client columns must be in fieldnames or DictWriter raises.
+                # L1_CLIENT_* columns are named after the run's l1_client selection, so they cannot be
+                # declared statically in PERF_COUNTER_CSV_HEADERS like every other counter column.
                 allHeaders += sorted(
                     h for h in csv_row_headers if str(h).startswith("L1_CLIENT_") and h not in allHeaders
                 )

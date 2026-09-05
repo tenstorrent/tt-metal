@@ -126,35 +126,38 @@ enum class EnvVarID {
     // ========================================
     // PROFILING & PERFORMANCE
     // ========================================
-    TT_METAL_DEVICE_PROFILER,                       // Enable device profiling
-    TT_METAL_DEVICE_PROFILER_DISPATCH,              // Enable dispatch core profiling
-    TT_METAL_PROFILER_SYNC,                         // Enable synchronous profiling
-    TT_METAL_DEVICE_PROFILER_NOC_EVENTS,            // Enable NoC events profiling
-    TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,   // NoC events report path
-    TT_METAL_PROFILE_PERF_COUNTERS,                 // Enable Performance Counter profiling
+    TT_METAL_DEVICE_PROFILER,                      // Enable device profiling
+    TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
+    TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
+    TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
+    TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
+    TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
+
+    // Quasar l1_client counter selection
     TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL,          // Quasar l1_client event counter selection
     TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL_PER_NEO,  // Stride the l1_client selection by NEO
-    TT_METAL_MEM_PROFILER,                          // Enable memory/buffer profiling
-    TT_METAL_TRACE_PROFILER,                        // Enable trace profiling
-    TT_METAL_PROFILER_TRACE_TRACKING,               // Enable trace tracking
-    TT_METAL_PROFILER_MID_RUN_DUMP,                 // Force mid-run profiler dumps
-    TT_METAL_PROFILER_CPP_POST_PROCESS,             // Enable C++ post-processing for profiler
-    TT_METAL_PROFILER_SUM,                          // Enable sum profiling
-    TT_METAL_PROFILER_ACCUMULATE,                   // Accumulate multiple kernels in L1 before DRAM push
-    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT,        // Maximum number of programs supported by the profiler
-    TT_METAL_TRACY_MID_RUN_PUSH,                    // Force Tracy mid-run pushes
-    TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES,        // Disable dumping collected device data to files
-    TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY,        // Disable pushing collected device data to Tracy GUI
-    TT_METAL_GTEST_NUM_HW_CQS,                      // Number of HW command queues in tests
-    TT_METAL_ARC_DEBUG_BUFFER_SIZE,                 // ARC processor debug buffer size
-    TT_METAL_OPERATION_TIMEOUT_SECONDS,             // Operation timeout duration
-    TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,   // Terminal command to execute on dispatch timeout.
-    TT_METAL_NOC_DEBUG_DUMP,                        // Enable experimental NOC debug dump to detect missing barriers
-    TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS,            // NOC debug dump: background poll period (ms)
-    TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS,       // NOC debug dump: period between self-triggered full reads (ms)
-    TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS,         // NOC debug dump: mid-run watermark margin (ms)
-    TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,           // Dispatch kernel progress update period in milliseconds
-    TT_METAL_DISPATCH_TELEMETRY_DISABLE,            // Dispatch telemetry
+
+    TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
+    TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
+    TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
+    TT_METAL_PROFILER_MID_RUN_DUMP,                // Force mid-run profiler dumps
+    TT_METAL_PROFILER_CPP_POST_PROCESS,            // Enable C++ post-processing for profiler
+    TT_METAL_PROFILER_SUM,                         // Enable sum profiling
+    TT_METAL_PROFILER_ACCUMULATE,                  // Accumulate multiple kernels in L1 before DRAM push
+    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT,       // Maximum number of programs supported by the profiler
+    TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
+    TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES,       // Disable dumping collected device data to files
+    TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY,       // Disable pushing collected device data to Tracy GUI
+    TT_METAL_GTEST_NUM_HW_CQS,                     // Number of HW command queues in tests
+    TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
+    TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
+    TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
+    TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
+    TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS,           // NOC debug dump: background poll period (ms)
+    TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS,      // NOC debug dump: period between self-triggered full reads (ms)
+    TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS,        // NOC debug dump: mid-run watermark margin (ms)
+    TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
+    TT_METAL_DISPATCH_TELEMETRY_DISABLE,           // Dispatch telemetry
 
     // ========================================
     // WATCHER SYSTEM
