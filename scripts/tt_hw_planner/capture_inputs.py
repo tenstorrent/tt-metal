@@ -1,0 +1,1327 @@
+"""Capture-and-replay helper for the per-component PCC test scaffold.
+
+Why this exists
+---------------
+The auto-generated `tests/pcc/test_<component>.py` files synthesize a
+plausible-looking input tensor for every required forward arg via
+`_make_arg_for(...)`. The heuristic works for image classifiers and
+plain encoders, but it falls over for prompt-conditioned models like
+SAM2 where the test scaffolder cannot reasonably fabricate a 6-tensor
+multi-modal kwargs set that matches what the real model passes between
+its submodules. Result: those tests SKIP with "synthetic inputs are
+incompatible", and the bring-up loop has no way to PCC-validate the
+generated stub.
+
+This module fixes the problem at the source. We load the HF model ONCE,
+register forward hooks on every submodule that has a NEW stub on disk,
+run a single forward pass with a realistic top-level input (typically a
+pixel_values tensor of the right size), and dump each captured submodule
+IO triple `(args, kwargs, output)` to `<demo_dir>/_captured/<safe>/...`
+as torch tensor files.
+
+The PCC test files are then patched (idempotently) to prefer these
+captured tensors over the synthetic ones. When a component's captured
+inputs are available, the test runs with the EXACT tensors the model
+itself produces, and the reference output is the captured `output.pt`
+- so we get a true PCC value, not a synthetic stand-in.
+
+Design constraints
+------------------
+* No model-specific code. We resolve submodules via the same
+  `_CANDIDATE_SUBMODULE_PATHS` list the generated tests already use, and
+  we drive the model via a single `pixel_values` input that we size off
+  `model.config.image_size`. This works for every vision HF model in
+  the codebase today; for non-vision models we degrade gracefully and
+  the test scaffolder's synthetic-input path stays in effect.
+* Best-effort. If the model raises during forward, we still save
+  whatever submodule IO we captured up to that point. If a particular
+  submodule never fires (e.g. lazy branches), its directory simply
+  doesn't appear and the PCC test stays on the synthetic path.
+* Lightweight on disk. We save tensors as `torch.save` blobs (compact,
+  no double-encoding) under `<demo_dir>/_captured/<safe>/`. Each
+  directory has `args.pt`, `kwargs.pt`, `output.pt` and a `manifest.json`
+  with shape/dtype metadata for human inspection.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+
+def _safe_id(name: str) -> str:
+    """Backwards-compat shim. See :func:`module_tree.safe_identifier`."""
+    from .module_tree import safe_identifier
+
+    return safe_identifier(name)
+
+
+def _resolve_attr(obj: Any, dotted: str) -> Any:
+    """Backwards-compat shim. See :func:`module_tree.resolve_dotted`."""
+    from .module_tree import resolve_dotted
+
+    return resolve_dotted(obj, dotted)
+
+
+def _read_candidates_from_test(test_path: Path) -> List[str]:
+    """Pull `_CANDIDATE_SUBMODULE_PATHS = [...]` out of a generated test file.
+
+    Uses bracket-balanced extraction so paths containing `[0]`, `[1]` etc.
+    inside the list strings don't trip up the regex."""
+    if not test_path.is_file():
+        return []
+    txt = test_path.read_text(errors="ignore")
+    m = re.search(r"_CANDIDATE_SUBMODULE_PATHS\s*=\s*\[", txt)
+    if not m:
+        return []
+    i = m.end() - 1
+    depth = 0
+    j = i
+    in_str: Optional[str] = None
+    while j < len(txt):
+        c = txt[j]
+        if in_str is not None:
+            if c == "\\" and j + 1 < len(txt):
+                j += 2
+                continue
+            if c == in_str:
+                in_str = None
+        else:
+            if c in ("'", '"'):
+                in_str = c
+            elif c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+                if depth == 0:
+                    break
+        j += 1
+    if depth != 0:
+        return []
+    literal = txt[i : j + 1]
+    try:
+        import ast
+
+        return [str(x) for x in ast.literal_eval(literal)]
+    except Exception:
+        return []
+
+
+class _Omit:
+    pass
+
+
+_OMIT = _Omit()
+
+
+def _arg_for(
+    name: str,
+    *,
+    model: Any,
+    pixel_values: Any,
+    image_size: int,
+    captured: Dict[str, Dict[str, Any]],
+    components_by_path: Dict[str, str],
+) -> Any:
+    """Fabricate a plausible value for one forward arg of a submodule we are
+    driving directly. Prefers tensors we've already captured from upstream
+    components over fresh random tensors, so downstream submodules see
+    realistic image_embeddings / prompt_embeddings instead of pure noise.
+
+    Mirrors the synthetic-input policy in the auto-generated PCC tests,
+    but is reused here so the capture loop produces the same shapes the
+    tests would have produced — and the captured tensors are then a
+    drop-in replacement for the synthetic inputs."""
+    import torch
+
+    def _captured_output_of(target_path: str) -> Optional[Any]:
+        comp_name = components_by_path.get(target_path)
+        if comp_name and comp_name in captured and "output" in captured[comp_name]:
+            return captured[comp_name]["output"]
+        return None
+
+    cfg = getattr(model, "config", None)
+    hidden_size = getattr(cfg, "hidden_size", None) or 768
+    if name == "pixel_values":
+        return pixel_values
+    if name in ("hidden_states", "inputs_embeds", "embeddings"):
+        return torch.randn(1, 64, hidden_size)
+    if name in ("x", "features", "input", "inputs", "hidden_states_in"):
+        return torch.randn(1, 64, hidden_size)
+    if name == "input_ids":
+        vocab = getattr(cfg, "vocab_size", None) or 32000
+        return torch.randint(low=1, high=min(vocab, 1000), size=(1, 64), dtype=torch.long)
+    if name == "attention_mask":
+        return torch.ones(1, 64, dtype=torch.long)
+    if name in ("position_ids", "token_type_ids"):
+        return torch.zeros(1, 64, dtype=torch.long)
+    if name == "image_embeddings":
+        cached = captured.get("__image_embeddings_list__")
+        if isinstance(cached, list) and cached:
+            return cached[-1]
+        v = _captured_output_of("vision_encoder")
+        if v is not None:
+            for attr in ("last_hidden_state", "vision_features", "image_embeddings", "image_embedding"):
+                t = getattr(v, attr, None)
+                if isinstance(t, torch.Tensor):
+                    return t
+            if isinstance(v, (tuple, list)) and v and isinstance(v[-1], torch.Tensor):
+                return v[-1]
+        return torch.randn(1, 256, 64, 64)
+    if name == "image_positional_embeddings":
+        if hasattr(model, "shared_image_embedding"):
+            sie = model.shared_image_embedding
+            for fn_name in ("get_dense_positional_embedding", "get_dense_pe"):
+                fn = getattr(sie, fn_name, None)
+                if callable(fn):
+                    try:
+                        return fn((64, 64))
+                    except Exception:
+                        pass
+        return torch.randn(1, 256, 64, 64)
+    if name == "sparse_prompt_embeddings":
+        v = _captured_output_of("prompt_encoder")
+        if isinstance(v, (tuple, list)) and len(v) >= 1 and isinstance(v[0], torch.Tensor):
+            return v[0]
+        return torch.randn(1, 1, 256)
+    if name == "dense_prompt_embeddings":
+        v = _captured_output_of("prompt_encoder")
+        if isinstance(v, (tuple, list)) and len(v) >= 2 and isinstance(v[1], torch.Tensor):
+            return v[1]
+        return torch.randn(1, 256, 64, 64)
+    if name == "high_resolution_features":
+        cached = captured.get("__image_embeddings_list__")
+        if isinstance(cached, list) and len(cached) >= 2:
+            return list(cached[:-1])
+        v = _captured_output_of("vision_encoder")
+        if v is not None:
+            hrf = getattr(v, "fpn_hidden_states", None)
+            if isinstance(hrf, (list, tuple)) and len(hrf) >= 2:
+                return list(hrf[:2])
+        return [torch.randn(1, 32, 256, 256), torch.randn(1, 64, 128, 128)]
+    if name == "input_points":
+        return torch.tensor([[[[512.0, 512.0]]]])
+    if name == "input_labels":
+        return torch.tensor([[[1]]])
+    if name in ("input_boxes", "input_masks"):
+        return None
+    if name == "multimask_output":
+        return True
+    if name.startswith("output_"):
+        return False
+    if name in {
+        "past_key_values",
+        "cache_position",
+        "use_cache",
+        "return_dict",
+        "head_mask",
+        "encoder_hidden_states",
+        "encoder_attention_mask",
+        "labels",
+    }:
+        return None
+    return _OMIT
+
+
+def _detect_image_size(model) -> int:
+    cfg = getattr(model, "config", None)
+    for path in ("vision_config.image_size", "image_size", "vision_config.input_size"):
+        cur = cfg
+        ok = True
+        for tok in path.split("."):
+            cur = getattr(cur, tok, None)
+            if cur is None:
+                ok = False
+                break
+        if ok and isinstance(cur, int):
+            return int(cur)
+    return 224
+
+
+def _summarize_value(v: Any) -> Dict[str, Any]:
+    """Produce a JSON-able shape/dtype summary of one tensor / structure."""
+    import torch
+
+    if isinstance(v, torch.Tensor):
+        return {"kind": "tensor", "shape": list(v.shape), "dtype": str(v.dtype)}
+    if isinstance(v, (list, tuple)):
+        return {"kind": type(v).__name__, "items": [_summarize_value(e) for e in v]}
+    if isinstance(v, dict):
+        return {"kind": "dict", "items": {k: _summarize_value(val) for k, val in v.items()}}
+    if v is None:
+        return {"kind": "none"}
+    return {"kind": "scalar", "type": type(v).__name__, "repr": repr(v)[:120]}
+
+
+def _resolve_submodule(model: Any, component_name: str, *, demo_dir: Path) -> Optional[Tuple[Any, str]]:
+    """Try the same candidate paths the test scaffold uses, then a few
+    auto-derived ones, to find the torch submodule for `component_name`.
+
+    We pull `_CANDIDATE_SUBMODULE_PATHS` from both the PCC test file AND
+    the stub file — whichever one has it. (Phase-1 SMOKE test files do
+    NOT carry the candidate list, but the stub always does.)"""
+    safe = _safe_id(component_name)
+    test_path = demo_dir / "tests" / "pcc" / f"test_{safe}.py"
+    stub_path = demo_dir / "_stubs" / f"{safe}.py"
+    candidates: List[str] = []
+    for source in (test_path, stub_path):
+        for c in _read_candidates_from_test(source):
+            if c and c not in candidates:
+                candidates.append(c)
+
+    for variant in (component_name, safe, safe.replace("_", ".")):
+        if variant and variant not in candidates:
+            candidates.append(variant)
+    seen: set = set()
+    for path in candidates:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        try:
+            sub = _resolve_attr(model, path)
+            return sub, path
+        except (AttributeError, IndexError, KeyError, TypeError):
+            continue
+
+    try:
+        comp_norm = re.sub(r"[^a-z0-9]+", "", safe.lower())
+        for path, mod in model.named_modules():
+            if not path:
+                continue
+            cls_norm = re.sub(r"[^a-z0-9]+", "", type(mod).__name__.lower())
+            if comp_norm and comp_norm in cls_norm:
+                return mod, path
+    except Exception:
+        pass
+    return None
+
+
+_SAMPLES_ENV = "TT_PLANNER_CAPTURE_SAMPLES"
+_SAMPLES_DIRNAME = "samples"
+
+# The three files that make up one captured set, in the order they are written and read. Named
+# once here because the reader and the writer disagreeing is a silent failure: the set is simply
+# treated as absent and the test drops back to synthetic inputs with nothing said.
+CAPTURE_ARTIFACT_FILES: Tuple[str, ...] = ("args.pt", "kwargs.pt", "output.pt")
+# Same reason, for the sidecar that records what was captured: writer and reader sit on opposite
+# sides of the generation boundary, so the name is stated once on each and pinned equal by a test.
+CAPTURE_MANIFEST_FILE = "manifest.json"
+
+
+def _save_capture_triple(dest: Path, capture: Dict[str, Any]) -> None:
+    """Write one captured `(args, kwargs, output)` set. One writer for the primary and the extras."""
+    import torch
+
+    dest.mkdir(parents=True, exist_ok=True)
+    values = (capture.get("args", ()), capture.get("kwargs", {}), capture["output"])
+    for name, value in zip(CAPTURE_ARTIFACT_FILES, values):
+        torch.save(value, dest / name)
+
+
+def _extra_sample_rounds() -> int:
+    """How many EXTRA input sets to capture beyond the first (total = 1 + this).
+
+    Correctness used to be established at exactly one input, so a component that is right for one
+    shape or sequence length and wrong for another passed with nothing to say so. Defaults to one
+    extra; set the env var to 1 to restore single-sample capture.
+    """
+    import os
+
+    try:
+        total = int(os.environ.get(_SAMPLES_ENV, "2"))
+    except ValueError:
+        total = 2
+    return max(0, total - 1)
+
+
+def _capture_extra_samples(*, model, pixel_values, resolved, state, seed, rounds, driver, verbose):
+    """Re-drive the model on fresh inputs to collect additional input sets per component.
+
+    The hooks are still registered at this point, so an extra set costs one more forward. Strictly
+    best-effort: a failure here means fewer samples, never a failed capture, and the primary set is
+    restored untouched whatever happens.
+    """
+    import torch
+
+    extras: Dict[str, List[Dict[str, Any]]] = {}
+    if rounds <= 0 or driver is None:
+        return extras
+    primary = {k: dict(v) for k, v in state.items()}
+    try:
+        for r in range(rounds):
+            torch.manual_seed(seed + 1 + r)
+            state.clear()
+            try:
+                driver(model, torch.randn_like(pixel_values))
+            except Exception as exc:  # noqa: BLE001 -- an extra sample is a bonus, never a failure
+                if verbose:
+                    print(
+                        f"  [capture] extra sample {r + 1} not collected: {type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                    )
+                break
+            for comp_name, _sub, _path in resolved:
+                got = state.get(comp_name)
+                if got and "output" in got:
+                    extras.setdefault(comp_name, []).append(dict(got))
+    finally:
+        state.clear()
+        state.update(primary)
+    return extras
+
+
+def capture_real_inputs(
+    *,
+    model_id: str,
+    demo_dir: Path,
+    components: List[str],
+    image_size_override: Optional[int] = None,
+    verbose: bool = True,
+) -> Dict[str, Dict[str, Any]]:
+    """Run the HF model ONCE and capture per-component forward IO.
+
+    Returns a `{component: {status, path, manifest}}` dict. `status` is
+    one of `"captured"`, `"submodule_not_resolved"`, `"never_fired"`, or
+    `"capture_failed"`.
+    """
+    import os
+
+    import torch
+    import transformers
+
+    try:
+        _capture_seed = int(os.environ.get("TT_PLANNER_CAPTURE_SEED", "0"))
+    except ValueError:
+        _capture_seed = 0
+    torch.manual_seed(_capture_seed)
+    if hasattr(torch, "cuda") and torch.cuda.is_available():
+        torch.cuda.manual_seed_all(_capture_seed)
+
+    captured_root = demo_dir / "_captured"
+    captured_root.mkdir(parents=True, exist_ok=True)
+
+    if verbose:
+        print(
+            f"  [capture] loading {model_id} (seed={_capture_seed}) ...",
+            file=sys.stderr,
+        )
+
+    from scripts.tt_hw_planner.agentic.probe import iter_hf_model_variants, load_hf_model_cascade
+
+    model = None
+    best_loader = None
+    best_count = -1
+    for _cand_model, _cand_loader in iter_hf_model_variants(model_id, torch_dtype="bfloat16", verbose=verbose):
+        _cnt = sum(1 for _c in components if _resolve_submodule(_cand_model, _c, demo_dir=demo_dir) is not None)
+        if _cnt > best_count:
+            if model is not None:
+                del model
+            model, best_loader, best_count = _cand_model, _cand_loader, _cnt
+        else:
+            del _cand_model
+        if best_count >= len(components):
+            break
+    if model is None:
+        _m, loader_or_err = load_hf_model_cascade(model_id, torch_dtype="float32", verbose=verbose)
+        if _m is None:
+            try:
+                from .module_tree import _load_reference_module
+
+                _m = _load_reference_module(model_id, demo_dir)
+            except Exception:
+                _m = None
+        if _m is None:
+            if verbose:
+                print(f"  [capture] {loader_or_err}", file=sys.stderr)
+            return {c: {"status": "model_load_failed", "error": loader_or_err or "load failed"} for c in components}
+        model = _m
+    elif verbose:
+        print(
+            f"  [capture] selected {best_loader} ({type(model).__name__}) "
+            f"resolving {best_count}/{len(components)} component(s)",
+            file=sys.stderr,
+        )
+
+    resolved: List[Tuple[str, Any, str]] = []
+    out: Dict[str, Dict[str, Any]] = {}
+    for comp in components:
+        res = _resolve_submodule(model, comp, demo_dir=demo_dir)
+        if res is None:
+            if verbose:
+                print(f"  [capture] {comp}: submodule not resolved; skipping.", file=sys.stderr)
+            out[comp] = {"status": "submodule_not_resolved"}
+            continue
+        sub, path = res
+        resolved.append((comp, sub, path))
+        out[comp] = {"status": "pending", "submodule_path": path}
+
+    if not resolved:
+        return out
+
+    state: Dict[str, Dict[str, Any]] = {}
+
+    def _make_hook(comp_name: str) -> Tuple[Callable, Callable]:
+        def pre_hook(_module, args, kwargs):
+            state.setdefault(comp_name, {})
+            state[comp_name]["args"] = args
+            state[comp_name]["kwargs"] = dict(kwargs) if isinstance(kwargs, dict) else {}
+            return None
+
+        def post_hook(_module, _input, output):
+            state.setdefault(comp_name, {})
+            state[comp_name]["output"] = output
+            return None
+
+        return pre_hook, post_hook
+
+    handles: List[Any] = []
+    for comp_name, sub, _path in resolved:
+        pre, post = _make_hook(comp_name)
+
+        try:
+            handles.append(sub.register_forward_pre_hook(pre, with_kwargs=True))
+        except TypeError:
+            handles.append(
+                sub.register_forward_pre_hook(
+                    lambda m, a, _c=comp_name: state.setdefault(_c, {}).update({"args": a, "kwargs": {}})
+                )
+            )
+        handles.append(sub.register_forward_hook(post))
+
+    image_size = image_size_override or _detect_image_size(model)
+    pixel_values = torch.randn(1, 3, image_size, image_size)
+    if verbose:
+        print(
+            f"  [capture] running drivers with pixel_values shape "
+            f"{tuple(pixel_values.shape)} on {len(resolved)} hook(s) ...",
+            file=sys.stderr,
+        )
+
+    forward_errors: List[str] = []
+
+    def _try(label: str, fn: Callable[[], Any]) -> None:
+        try:
+            with torch.no_grad():
+                fn()
+            if verbose:
+                print(f"  [capture] driver `{label}`: ok", file=sys.stderr)
+        except Exception as exc:
+            forward_errors.append(f"{label}: {type(exc).__name__}: {exc}")
+            if verbose:
+                print(f"  [capture] driver `{label}`: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+    try:
+        try:
+            from transformers import AutoTokenizer
+
+            _tok = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+            _probe_text = os.environ.get(
+                "TT_PLANNER_CAPTURE_PROBE_TEXT",
+                "The quick brown fox jumps over the lazy dog.",
+            )
+            _enc = _tok(_probe_text, return_tensors="pt")
+            _input_ids = _enc.get("input_ids")
+            _attn_mask = _enc.get("attention_mask")
+            if _input_ids is not None:
+
+                def _run_text():
+                    _kw = {"input_ids": _input_ids}
+                    if _attn_mask is not None:
+                        _kw["attention_mask"] = _attn_mask
+                    model(**_kw)
+
+                _try(
+                    f"model(input_ids=..., attention_mask=...) " f"[{_input_ids.shape[-1]} tokens]",
+                    _run_text,
+                )
+
+                if hasattr(model, "generate"):
+                    try:
+                        _gen_n = int(os.environ.get("TT_PLANNER_CAPTURE_GEN_TOKENS", "") or 0) or 16
+                    except ValueError:
+                        _gen_n = 16
+                    _tgt_lang = os.environ.get("TT_PLANNER_CAPTURE_TGT_LANG", "eng")
+
+                    def _run_generate():
+                        _gkw = {"input_ids": _input_ids, "max_new_tokens": _gen_n}
+                        if _attn_mask is not None:
+                            _gkw["attention_mask"] = _attn_mask
+                        try:
+                            model.generate(**_gkw)
+                        except (TypeError, ValueError) as _ge:
+                            if "lang" in str(_ge).lower():
+                                model.generate(tgt_lang=_tgt_lang, **_gkw)
+                            else:
+                                raise
+
+                    _try(f"model.generate(input_ids=..., max_new_tokens={_gen_n})", _run_generate)
+        except Exception as _exc:
+            if verbose:
+                print(
+                    f"  [capture] text-driver setup skipped " f"({type(_exc).__name__}: {_exc})",
+                    file=sys.stderr,
+                )
+
+        if hasattr(model, "get_image_embeddings"):
+
+            def _run_gie():
+                out = model.get_image_embeddings(pixel_values=pixel_values)
+                if isinstance(out, list):
+                    state["__image_embeddings_list__"] = out
+
+            _try("model.get_image_embeddings(pixel_values)", _run_gie)
+
+        _try("model(pixel_values=...)", lambda: model(pixel_values=pixel_values))
+
+        try:
+            from .capture_drivers import try_capture_drivers as _try_capture_drivers
+            from .auto_capture_driver_onboard import (
+                load_learned_drivers as _load_learned_drivers,
+            )
+        except Exception:
+            _try_capture_drivers = None
+            _load_learned_drivers = None
+
+        if _load_learned_drivers is not None:
+            _loaded = _load_learned_drivers()
+            if _loaded and verbose:
+                print(f"  [capture] loaded {len(_loaded)} learned driver(s)", file=sys.stderr)
+
+        _generic_attempts: List[str] = []
+        if _try_capture_drivers is not None:
+            _ok_generic, _generic_attempts = _try_capture_drivers(model, pixel_values)
+            for _line in _generic_attempts:
+                if verbose:
+                    print(f"  [capture] generic-driver: {_line}", file=sys.stderr)
+            if _ok_generic:
+                forward_errors.append("generic-driver: ok")
+
+        _generic_attempts_for_onboard = list(_generic_attempts)
+
+        import inspect as _inspect
+
+        def _build_kwargs_for(submodule: Any) -> Dict[str, Any]:
+            sig = _inspect.signature(submodule.forward)
+            kw: Dict[str, Any] = {}
+            for pname, param in sig.parameters.items():
+                if pname == "self":
+                    continue
+                if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+                    continue
+                if param.default is not _inspect.Parameter.empty:
+                    is_required = False
+                else:
+                    is_required = True
+                if not is_required and pname not in {
+                    "pixel_values",
+                    "hidden_states",
+                    "input_ids",
+                    "image_embeddings",
+                    "image_positional_embeddings",
+                    "sparse_prompt_embeddings",
+                    "dense_prompt_embeddings",
+                    "high_resolution_features",
+                    "input_points",
+                    "input_labels",
+                    "input_boxes",
+                    "input_masks",
+                    "multimask_output",
+                    "inputs_embeds",
+                    "embeddings",
+                }:
+                    continue
+                val = _arg_for(
+                    pname,
+                    model=model,
+                    pixel_values=pixel_values,
+                    image_size=image_size,
+                    captured=state,
+                    components_by_path={p: c for (c, _s, p) in resolved},
+                )
+                if val is _OMIT:
+                    if is_required:
+                        return {}
+                    continue
+                kw[pname] = val
+            return kw
+
+        for comp_name, sub, path in resolved:
+            if comp_name in state and "output" in state[comp_name]:
+                continue
+            try:
+                kw = _build_kwargs_for(sub)
+            except Exception as exc:
+                forward_errors.append(f"build_kwargs[{comp_name}]: {exc}")
+                continue
+            if not kw:
+                continue
+            try:
+                _sub_dtype = next(sub.parameters()).dtype
+                kw = {
+                    k: (v.to(_sub_dtype) if isinstance(v, torch.Tensor) and v.is_floating_point() else v)
+                    for k, v in kw.items()
+                }
+            except StopIteration:
+                pass
+            _try(f"submodule[{path}](**{list(kw.keys())})", lambda _sub=sub, _kw=kw: _sub(**_kw))
+
+        try:
+            from .auto_capture_driver_onboard import auto_onboard_capture_driver as _auto_onboard_drv
+        except Exception:
+            _auto_onboard_drv = None
+
+        _still_uncaptured = [
+            comp_name for comp_name, _s, _p in resolved if comp_name not in state or "output" not in state[comp_name]
+        ]
+        if (
+            _auto_onboard_drv is not None
+            and _still_uncaptured
+            and os.environ.get("TT_PLANNER_AUTO_ONBOARD_DRIVER", "1") not in ("0", "false", "False")
+        ):
+            if verbose:
+                print(
+                    f"  [capture] generic framework left {len(_still_uncaptured)} "
+                    f"component(s) un-captured (never_fired); invoking auto-onboard to draft a "
+                    f"custom driver via LLM (default on; set TT_PLANNER_AUTO_ONBOARD_DRIVER=0 to disable)",
+                    file=sys.stderr,
+                )
+            try:
+                _components_by_path = {comp_name: _path for (comp_name, _sub, _path) in resolved}
+                ok, path, msg = _auto_onboard_drv(
+                    model=model,
+                    model_id=model_id,
+                    uncaptured_components=_still_uncaptured,
+                    framework_attempts=_generic_attempts_for_onboard,
+                    components_by_path=_components_by_path,
+                    pixel_values=pixel_values,
+                )
+                if verbose:
+                    print(f"  [capture] auto-onboard: {msg}", file=sys.stderr)
+                if ok:
+                    from .capture_drivers import try_capture_drivers as _retry_drivers
+
+                    _ok_retry, _retry_attempts = _retry_drivers(model, pixel_values)
+                    for _line in _retry_attempts:
+                        if verbose:
+                            print(f"  [capture] post-onboard: {_line}", file=sys.stderr)
+            except Exception as exc:
+                if verbose:
+                    print(
+                        f"  [capture] auto-onboard raised: {type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                    )
+
+        _repair_uncaptured = [
+            comp_name for comp_name, _s, _p in resolved if comp_name not in state or "output" not in state[comp_name]
+        ]
+        if _repair_uncaptured and forward_errors and _try_capture_drivers is not None:
+            try:
+                from .cpu_compat import apply_cpu_repair as _cpu_apply
+                from .cpu_compat import cpu_repair_remedy_for as _cpu_remedy_for
+            except Exception:
+                _cpu_remedy_for = None
+                _cpu_apply = None
+            if _cpu_remedy_for is not None:
+                _repairs_done = []
+                for _ in range(4):
+                    _fe_text = "; ".join(forward_errors)
+                    _remedy = _cpu_remedy_for(None, _fe_text)
+                    if _remedy is None or _remedy in _repairs_done:
+                        break
+                    _repairs_done.append(_remedy)
+                    _changed = _cpu_apply(_remedy, None, _fe_text)
+                    if verbose:
+                        print(
+                            f"  [capture] CPU-incompat detected in driver errors -> applied "
+                            f"remedy {_remedy!r} (changed={_changed}); re-running drivers",
+                            file=sys.stderr,
+                        )
+                    if not _changed:
+                        continue
+                    try:
+                        _ok_rep, _rep_attempts = _try_capture_drivers(model, pixel_values)
+                        for _l in _rep_attempts:
+                            forward_errors.append(f"repair-retry: {_l}")
+                            if verbose:
+                                print(f"  [capture] repair-retry: {_l}", file=sys.stderr)
+                    except Exception as _rexc:
+                        forward_errors.append(f"repair-retry-raised: {type(_rexc).__name__}: {_rexc}")
+                    if not [c for c, _s, _p in resolved if c not in state or "output" not in state[c]]:
+                        break
+                _still_unrepaired = [c for c, _s, _p in resolved if c not in state or "output" not in state[c]]
+                if _still_unrepaired and _cpu_remedy_for(None, "; ".join(forward_errors)) is None:
+                    _llm_fixed = False
+                    if os.environ.get("TT_PLANNER_LLM_CPU_REPAIR", "1") != "0":
+                        try:
+                            from .cpu_compat import apply_llm_cpu_remedy as _llm_apply
+                            from .cpu_compat import llm_propose_cpu_remedy as _llm_propose
+                        except Exception:
+                            _llm_propose = None
+                        if _llm_propose is not None:
+                            for _ in range(3):
+                                _code = _llm_propose("; ".join(forward_errors))
+                                if not _code or not _llm_apply(_code):
+                                    break
+                                if verbose:
+                                    print(
+                                        "  [capture] no registry remedy -> LLM proposed a CPU-compat remedy; re-running drivers",
+                                        file=sys.stderr,
+                                    )
+                                try:
+                                    _okl, _la = _try_capture_drivers(model, pixel_values)
+                                    for _l in _la:
+                                        forward_errors.append(f"llm-repair-retry: {_l}")
+                                except Exception as _le:
+                                    forward_errors.append(f"llm-repair-retry-raised: {type(_le).__name__}: {_le}")
+                                if not [c for c, _s, _p in resolved if c not in state or "output" not in state[c]]:
+                                    _llm_fixed = True
+                                    break
+                    if not _llm_fixed and verbose:
+                        print(
+                            f"  [capture] {len(_still_unrepaired)} component(s) still uncaptured; driver "
+                            f"errors match NO known CPU-compat remedy and the LLM could not resolve it -- "
+                            f"if this is a new CPU incompatibility, add a remedy. errors: {('; '.join(forward_errors))[:300]}",
+                            file=sys.stderr,
+                        )
+
+        extra_samples = _capture_extra_samples(
+            model=model,
+            pixel_values=pixel_values,
+            resolved=resolved,
+            state=state,
+            seed=_capture_seed,
+            rounds=_extra_sample_rounds(),
+            driver=_try_capture_drivers,
+            verbose=verbose,
+        )
+    finally:
+        for h in handles:
+            try:
+                h.remove()
+            except Exception:
+                pass
+
+    forward_error: Optional[str] = "; ".join(forward_errors) if forward_errors else None
+
+    for comp_name, _sub, path in resolved:
+        if comp_name not in state or "output" not in state[comp_name]:
+            out[comp_name] = {
+                "status": "never_fired",
+                "submodule_path": path,
+                "forward_error": forward_error,
+            }
+            continue
+        capture = state[comp_name]
+        safe = _safe_id(comp_name)
+        comp_dir = captured_root / safe
+        comp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            _save_capture_triple(comp_dir, capture)
+            # Extra input sets live beside the primary rather than replacing it, so everything that
+            # reads args.pt next to manifest.json keeps working and only the PCC test, which knows
+            # to look, gains the additional coverage.
+            extras = extra_samples.get(comp_name, [])
+            for idx, extra in enumerate(extras, start=1):
+                _save_capture_triple(comp_dir / _SAMPLES_DIRNAME / f"{idx:02d}", extra)
+            manifest = {
+                "component": comp_name,
+                "submodule_path": path,
+                "samples": 1 + len(extras),
+                "args": _summarize_value(capture.get("args", ())),
+                "kwargs": _summarize_value(capture.get("kwargs", {})),
+                "output": _summarize_value(capture["output"]),
+            }
+            (comp_dir / CAPTURE_MANIFEST_FILE).write_text(json.dumps(manifest, indent=2))
+            out[comp_name] = {
+                "status": "captured",
+                "submodule_path": path,
+                "dir": str(comp_dir),
+                "manifest": manifest,
+            }
+            if verbose:
+                print(
+                    f"  [capture] {comp_name}: captured "
+                    f"args={len(capture.get('args', ()))} kwargs="
+                    f"{len(capture.get('kwargs', {}))} output={_summarize_value(capture['output']).get('kind')}",
+                    file=sys.stderr,
+                )
+        except Exception as exc:
+            out[comp_name] = {
+                "status": "capture_failed",
+                "submodule_path": path,
+                "error": str(exc),
+            }
+            if verbose:
+                print(f"  [capture] {comp_name}: save failed: {exc}", file=sys.stderr)
+
+    return out
+
+
+CAPTURE_LOADER_SOURCE = '''
+_ARTIFACT_FILES = ("args.pt", "kwargs.pt", "output.pt")
+_SAMPLES_SUBDIR = "samples"
+_MANIFEST_FILE = "manifest.json"
+
+
+def _component_dir(component_name):
+    """`<demo_dir>/_captured/<safe>` for a component.
+
+    One place derives it. It was worked out independently in three functions here, each repeating
+    the same safe-id rule and the same parents[2] walk from `tests/pcc/test_X.py`, so a change to
+    either would have moved some readers and not others -- and a reader looking in the wrong place
+    does not fail, it silently reports no captured inputs and drops back to synthetic ones.
+    """
+    import re as _re
+    from pathlib import Path as _Path
+
+    safe = _re.sub(r"[^A-Za-z0-9_]+", "_", component_name).strip("_").lower() or "component"
+    return _Path(__file__).resolve().parents[2] / "_captured" / safe
+
+
+def _captured_submodule_path(component_name):
+    """Read the submodule_path the capture step hooked when it saved
+    inputs for this component. Returns the path string or ``None``.
+
+    BUG-2 FIX: when capture records args for submodule path A but the
+    test resolves a different path B (different entry in
+    ``_CANDIDATE_SUBMODULE_PATHS``), the captured args/kwargs don't
+    fit B's signature and the test fails silently with a misleading
+    ``_make_arg_for() inputs are shape-incompatible`` error. Reading
+    the manifest's recorded path and using it as the FIRST candidate
+    keeps capture's resolution and test's resolution aligned."""
+    import json as _json
+    manifest_p = _component_dir(component_name) / _MANIFEST_FILE
+    if not manifest_p.is_file():
+        return None
+    try:
+        data = _json.loads(manifest_p.read_text())
+        path = data.get("submodule_path")
+        if isinstance(path, str) and path:
+            return path
+    except Exception:
+        pass
+    return None
+
+
+def _maybe_load_captured(component_name):
+    """Load `(args, kwargs, output)` from `<demo_dir>/_captured/<safe>/...`
+    if the planner's capture-inputs step produced them; return `None`
+    otherwise. Lets the test bypass the synthetic-input path when we have
+    REAL intermediate tensors from a live HF forward pass."""
+    comp_dir = _component_dir(component_name)
+    if not comp_dir.is_dir():
+        return None
+    loaded = _load_sample(comp_dir)
+    if loaded is not None:
+        print(f"[bringup] using captured inputs from {comp_dir}", flush=True)
+    return loaded
+
+
+# What the captured short-circuit learned, for the forward stage to use. A dict rather than
+# globals so the short-circuit can fill it in without `global` declarations at every write.
+_CAPTURED_STATE = {"golden_out": None}
+
+
+def _is_plain_input(value):
+    """True for values a module forward takes as data rather than as live state.
+
+    Used to tell captured tensors/flags apart from objects like a KV cache WITHOUT naming any of
+    them. A name list only ever covers the models whoever wrote it had in mind; asking the value
+    what it is keeps working when a model ships a cache class nobody here has heard of.
+    """
+    import torch as _torch
+
+    if value is None or isinstance(value, (bool, int, float, str, _torch.Tensor)):
+        return True
+    if isinstance(value, (list, tuple)):
+        return all(_is_plain_input(_v) for _v in value)
+    return False
+
+
+def _captured_sample_dirs(component_name):
+    """Every captured input set for a component: the primary first, then any extra samples.
+
+    The primary stays exactly where it always was, so everything that reads `args.pt` next to
+    `manifest.json` is untouched; extra samples live under `samples/<n>/`.
+    """
+    comp_dir = _component_dir(component_name)
+    if not comp_dir.is_dir():
+        return []
+    dirs = [comp_dir]
+    extra_root = comp_dir / _SAMPLES_SUBDIR
+    if extra_root.is_dir():
+        dirs.extend(sorted((d for d in extra_root.iterdir() if d.is_dir()), key=lambda d: d.name))
+    return dirs
+
+
+def _load_sample(sample_dir):
+    """`(args, kwargs, output)` from one captured sample directory, or None if it is incomplete.
+
+    The one reader of a captured set: the primary and every extra come through here, so a set that
+    loads for one cannot fail to load for the other.
+    """
+    import torch as _torch
+
+    paths = [sample_dir / n for n in _ARTIFACT_FILES]
+    if not all(p.is_file() for p in paths):
+        return None
+    try:
+        return tuple(_torch.load(p, map_location="cpu", weights_only=False) for p in paths)
+    except Exception as _e:
+        print(f"[bringup] captured sample load failed for {sample_dir}: {_e}", flush=True)
+        return None
+
+
+def _captured_kwargs_and_primary(torch_module, cap_args, cap_kwargs):
+    """Turn one captured `(args, kwargs)` pair into `(kwargs, primary)` for a module call.
+
+    Shared by the first sample and every extra one. When this lived inline in the short-circuit,
+    extra samples would have needed their own copy of the dtype cast, the positional-to-name
+    mapping and the primary pick -- three chances for the samples to be prepared differently from
+    the one the test actually gates on.
+    """
+    import torch as _torch
+
+    cap_kwargs = dict(cap_kwargs or {})
+    # Cast captured floats to the live module's parameter dtype. Capture usually runs in float32
+    # while the test's model often loads in bfloat16; without this the attention forward raises on
+    # mismatched dtypes and the test skips despite the inputs being fine.
+    target_dtype = None
+    try:
+        for p in torch_module.parameters():
+            if p.is_floating_point():
+                target_dtype = p.dtype
+                break
+    except Exception:
+        target_dtype = None
+
+    def _cast(x):
+        if target_dtype is None or x is None:
+            return x
+        if isinstance(x, _torch.Tensor) and x.is_floating_point() and x.dtype != target_dtype:
+            return x.to(target_dtype)
+        if isinstance(x, (list, tuple)):
+            seq = [_cast(v) for v in x]
+            return tuple(seq) if isinstance(x, tuple) else type(x)(seq)
+        # Cache-like objects hold their tensors in attributes, so casting only the top level left
+        # those at the capture dtype -- the mismatch that made dropping the cache look necessary.
+        held = getattr(x, "__dict__", None)
+        if isinstance(held, dict) and held:
+            for attr, val in list(held.items()):
+                new = _cast(val)
+                if new is not val:
+                    try:
+                        setattr(x, attr, new)
+                    except Exception:
+                        pass
+        return x
+
+    cap_args = tuple(_cast(v) for v in cap_args) if cap_args else cap_args
+    kwargs = {k: _cast(v) for k, v in cap_kwargs.items()}
+    if cap_args:
+        import inspect as _inspect
+
+        names = [
+            p.name
+            for p in _inspect.signature(torch_module.forward).parameters.values()
+            if p.name != "self" and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+        ]
+        for i, v in enumerate(cap_args):
+            if i >= len(names):
+                break
+            if names[i] not in kwargs:
+                kwargs[names[i]] = v
+    primary = None
+    for name, val in kwargs.items():
+        if isinstance(val, _torch.Tensor):
+            primary = (name, val)
+            break
+    if primary is None:
+        primary = ("(captured)", _torch.zeros(1))
+    return kwargs, primary
+
+
+def _captured_extra_samples(component_name, torch_module):
+    """Prepared `(name, kwargs, primary, golden)` for every captured input set after the first.
+
+    Correctness used to be argued from a single input, which cannot distinguish a port that is
+    right from one that happens to line up for one shape. Prepared through the SAME helper the
+    gating sample uses, so an extra sample cannot be built differently from the one it backs up.
+    """
+    out = []
+    for sample_dir in _captured_sample_dirs(component_name)[1:]:
+        loaded = _load_sample(sample_dir)
+        if loaded is None:
+            continue
+        cap_args, cap_kwargs, cap_out = loaded
+        kwargs, primary = _captured_kwargs_and_primary(torch_module, cap_args, cap_kwargs)
+        out.append((sample_dir.name, kwargs, primary, cap_out))
+    return out
+
+
+def _stateful_keys(kwargs):
+    """Which captured kwargs are live state rather than data, asked of the values themselves."""
+    return tuple(k for k, v in (kwargs or {}).items() if not _is_plain_input(v))
+
+
+def _reference_forward(torch_module, sample_kwargs):
+    """Run the reference forward, preferring the captured state and falling back without it.
+
+    Returns `(output, kwargs_actually_used)`. Raises the last exception if nothing worked, so each
+    caller phrases its own skip. Passing the captured state is what makes the reference reproduce
+    the forward the model really ran; a module that rebuilds its state internally rejects it, and
+    those components stay testable instead of skipping.
+
+    Shared because the sharded test runs the SAME reference: if only one of them knew how to retry,
+    a component needing the fallback would pass in one and skip in the other for no visible reason.
+    """
+    import torch as _torch
+
+    candidates = [sample_kwargs]
+    # Asked of the kwargs in hand rather than read off shared state, so every sample -- the one the
+    # test gates on and each extra one -- is judged by what it actually holds.
+    stateful = _stateful_keys(sample_kwargs)
+    if stateful:
+        candidates.append({_k: _v for _k, _v in sample_kwargs.items() if _k not in stateful})
+    last_exc = None
+    for cand in candidates:
+        try:
+            with _torch.no_grad():
+                out = torch_module(**cand)
+            if cand is not sample_kwargs:
+                print(
+                    f"[bringup] reference forward rejected captured state {list(stateful)}; "
+                    f"retried without it",
+                    flush=True,
+                )
+            return out, cand
+        except Exception as exc:
+            last_exc = exc
+    raise last_exc
+
+
+def _check_captured_fidelity(torch_out):
+    """Fail if the reference forward did not reproduce the output that capture recorded.
+
+    `output.pt` was loaded and then dropped on the floor. It is the one thing that can say whether
+    the inputs this test rebuilt drive the module the way the real forward did. If the reference
+    cannot reproduce it, then whatever PCC the test prints afterwards describes a computation the
+    model never performed, and a green result means nothing.
+
+    Held to the SAME bar the component itself must meet: a reconstruction we would not accept from
+    the TT port is not good enough to be the yardstick that judges it.
+    """
+    golden = _CAPTURED_STATE.get("golden_out")
+    if golden is None or torch_out is None:
+        return
+    _g = globals()
+    _normalize, _pcc_fn, _target = _g.get("_normalize_out"), _g.get("comp_pcc"), _g.get("PCC_TARGET")
+    if _normalize is None or _pcc_fn is None or _target is None:
+        return
+    import torch as _torch
+
+    try:
+        golden = _normalize(golden)
+    except Exception:
+        return
+    if not (isinstance(golden, _torch.Tensor) and isinstance(torch_out, _torch.Tensor)):
+        return
+    if tuple(golden.shape) != tuple(torch_out.shape):
+        print(
+            f"[bringup] captured golden shape {tuple(golden.shape)} != reference "
+            f"{tuple(torch_out.shape)}; fidelity not checked",
+            flush=True,
+        )
+        return
+    _ok, _pcc = _pcc_fn(golden.to(_torch.float32), torch_out.to(_torch.float32), _target)
+    print(f"[bringup] captured-golden fidelity pcc={_pcc}", flush=True)
+    if not _ok:
+        import pytest as _pytest
+
+        _pytest.fail(
+            f"the reference forward does not reproduce the captured output for "
+            f"{_g.get('COMPONENT_NAME', '?')}: fidelity pcc={_pcc} below {_target}. The inputs "
+            f"this test rebuilt do not drive the module the way the captured forward did, so any "
+            f"PCC measured against this reference would not describe the real computation."
+        )
+'''
+
+
+_INJECTION_MARKER_V1 = "# CAPTURE_LOADER_INJECTED_V1"
+
+
+_CAPTURED_SHORT_CIRCUIT_BLOCK = """
+    # CAPTURE_LOADER_INJECTED_V1
+    _captured = _maybe_load_captured(COMPONENT_NAME)
+    if _captured is not None:
+        _cap_args, _cap_kwargs, _cap_output = _captured
+        # Keep EVERY captured kwarg, including the cache. These used to be dropped by name because
+        # live cache objects carry dtypes that don't round-trip through torch.save/load, which cost
+        # a dtype mismatch inside attention. But dropping them means the reference runs without the
+        # state the real forward had, so the number the test reports describes a computation the
+        # model never performed. The dtype problem is fixed at its cause in the shared preparer,
+        # and anything the live module still rejects is retried without it.
+        kwargs, primary = _captured_kwargs_and_primary(torch_module, _cap_args, _cap_kwargs)
+        _CAPTURED_STATE["golden_out"] = _cap_output
+        return torch_module, kwargs, primary
+"""
+
+
+def _capture_loader_defined_names() -> "list[str]":
+    """The function names `CAPTURE_LOADER_SOURCE` defines, read off the source
+    itself rather than typed out here -- renaming a helper in the constant must
+    not silently disable the idempotency guard in `inject_capture_loader`."""
+    import re as _re
+
+    return _re.findall(r"^def (\w+)\(", CAPTURE_LOADER_SOURCE, _re.M)
+
+
+_CAPTURE_LOADER_ANCHOR = "def _build_torch_reference():"
+
+
+def inject_capture_loader(src: str) -> str:
+    """Ensure a generated PCC test DEFINES the capture-loader helpers it calls.
+
+    `_PCC_TEST_TEMPLATE` calls `_captured_submodule_path(COMPONENT_NAME)` inside
+    `_build_torch_reference`, but the template never emitted the definition --
+    it arrived only when `upgrade_test_to_use_captured_inputs` happened to run
+    and all of its string anchors happened to match. When any anchor drifted,
+    that function returned False without writing, leaving a test that calls an
+    undefined name: every generated test then died with `NameError` before a
+    single PCC comparison ran. Emitting the definition at template-render time
+    makes the test self-contained, so it no longer depends on a later patch pass
+    landing. Injection is idempotent, so the two callers cannot double-define.
+
+    A `conftest.py` cannot supply these: the sharded test imports its sibling by
+    path, so conftest injection never reaches it. They must be IN the file.
+    """
+    defined = _capture_loader_defined_names()
+    if defined and all(f"def {name}(" in src for name in defined):
+        return src
+    if _CAPTURE_LOADER_ANCHOR not in src:
+        return src
+    return src.replace(
+        _CAPTURE_LOADER_ANCHOR,
+        CAPTURE_LOADER_SOURCE.lstrip() + "\n\n" + _CAPTURE_LOADER_ANCHOR,
+        1,
+    )
+
+
+def upgrade_test_to_use_captured_inputs(test_path: Path) -> bool:
+    """Idempotently inject the captured-inputs short-circuit into a
+    generated PCC test file. Returns True if the file was modified."""
+    if not test_path.is_file():
+        return False
+    src = test_path.read_text(errors="ignore")
+    if _INJECTION_MARKER_V1 in src:
+        return False
+
+    if _CAPTURE_LOADER_ANCHOR not in src:
+        return False
+    src = inject_capture_loader(src)
+
+    resolved_marker = 'print(f"[bringup] resolved torch submodule via `{resolved_path}`")'
+    if resolved_marker not in src:
+        guard_marker = '"`_CANDIDATE_SUBMODULE_PATHS`."\n        )'
+        if guard_marker in src:
+            src = src.replace(
+                guard_marker,
+                guard_marker + "\n" + _CAPTURED_SHORT_CIRCUIT_BLOCK.rstrip("\n"),
+                1,
+            )
+        else:
+            return False
+    else:
+        src = src.replace(
+            resolved_marker,
+            resolved_marker + "\n" + _CAPTURED_SHORT_CIRCUIT_BLOCK.rstrip("\n"),
+            1,
+        )
+
+    test_path.write_text(src)
+    return True
+
+
+def upgrade_test_to_set_l1_small_size(
+    test_path: Path,
+    *,
+    l1_small_size: int = 24576,
+) -> bool:
+    """Idempotently rewrite a stale `device_params=[{}]` parametrize on a
+    generated PCC test to inject `l1_small_size=<N>`. Returns True if the
+    file was modified.
+
+    Background. The scaffolder used to emit
+        @pytest.mark.parametrize("device_params", [{}], indirect=True)
+    on every generated PCC test. The empty dict opens the device with
+    `l1_small_size=0`, which makes the FIRST `ttnn.conv2d` /
+    `ttnn.max_pool2d` raise `TT_FATAL: bank size is 0 B`. The autofilled
+    stub then falls back to torch-on-host for that op — correct, but
+    turns a 30-second PCC test into a 5-15 minute one. On SAM2-hiera-
+    small (observed 2026-05-22) this blew past the 10-minute pre-flight
+    pytest budget without ever completing a single test, leaving the
+    auto-iterate loop with no signal to act on.
+
+    The scaffolder templates in `bringup_loop.py` now default to
+    `l1_small_size=24576`, but ALL existing scaffolded test files (e.g.
+    from prior `up` runs or from someone resuming a demo created with
+    the old template) still carry the broken `[{}]` form. Without an
+    in-place fixer those stale files would silently keep blowing the
+    budget forever — the user's only recovery is to `rm -rf` the demo
+    dir and re-scaffold from scratch.
+
+    This helper backfills the kwarg so a single re-run of `up` or
+    `promote` repairs every stale demo. It is invoked from
+    `upgrade_all_tests_in_demo`, which runs once per auto-iterate
+    pre-flight."""
+    if not test_path.is_file():
+        return False
+    src = test_path.read_text(errors="ignore")
+    old = '@pytest.mark.parametrize("device_params", [{}], indirect=True)'
+    if old not in src:
+        return False
+    new = f'@pytest.mark.parametrize("device_params", ' f'[{{"l1_small_size": {int(l1_small_size)}}}], indirect=True)'
+    src = src.replace(old, new)
+    test_path.write_text(src)
+    return True
+
+
+def upgrade_all_tests_in_demo(demo_dir: Path) -> List[Tuple[str, bool]]:
+    """Apply `upgrade_test_to_use_captured_inputs` AND
+    `upgrade_test_to_set_l1_small_size` to every PCC test in the demo
+    and return per-test outcomes.
+
+    A test counts as 'modified' if EITHER upgrader changed it — the
+    auto-iterate banner prints whichever number is non-zero. We chain
+    both upgraders because they edit DIFFERENT parts of the file
+    (captured-inputs short-circuit vs the parametrize header) and are
+    both idempotent on their own."""
+    out: List[Tuple[str, bool]] = []
+    pcc_dir = demo_dir / "tests" / "pcc"
+    if not pcc_dir.is_dir():
+        return out
+    for tp in sorted(pcc_dir.glob("test_*.py")):
+        modified_any = False
+        try:
+            if upgrade_test_to_use_captured_inputs(tp):
+                modified_any = True
+        except Exception as exc:
+            print(f"  [capture] upgrade failed for {tp.name}: {exc}", file=sys.stderr)
+        try:
+            if upgrade_test_to_set_l1_small_size(tp):
+                modified_any = True
+                print(
+                    f"  [capture] {tp.name}: backfilled "
+                    f"l1_small_size=24576 on stale [{{}}] device_params "
+                    f"(prevents conv2d CPU-fallback storm)."
+                )
+        except Exception as exc:
+            print(
+                f"  [capture] l1_small_size upgrade failed for " f"{tp.name}: {exc}",
+                file=sys.stderr,
+            )
+        out.append((tp.name, modified_any))
+    return out
