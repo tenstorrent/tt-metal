@@ -117,6 +117,67 @@ def load_mlp_layer(ckpt_dir, layer_idx):
     )
 
 
+def load_moe_layer(ckpt_dir, layer_idx):
+    """Qwen3.5-MoE layer weights — router + fused experts + gated shared expert.
+
+    Output keys match exactly the ``layers.<i>.mlp`` substate Qwen36MoE consumes:
+      ``gate.weight`` (router), ``experts.gate_up_proj`` / ``experts.down_proj``
+      (fused 3D nn.Parameters — no ``.weight`` suffix), ``shared_expert.{gate,up,down}_proj.weight``,
+      ``shared_expert_gate.weight``.
+    """
+    return load_layer_weights(
+        ckpt_dir,
+        layer_idx,
+        [
+            "gate",
+            ("experts.gate_up_proj", False),
+            ("experts.down_proj", False),
+            "shared_expert.gate_proj",
+            "shared_expert.up_proj",
+            "shared_expert.down_proj",
+            "shared_expert_gate",
+        ],
+        search_prefix="mlp.",
+    )
+
+
+def torch_moe_reference(moe_state, x, top_k, norm_topk_prob=True):
+    """Reference forward for a Qwen3.5-MoE layer (matches HF modeling_qwen3_5_moe).
+
+    moe_state: the load_moe_layer(...) dict. x: [S, H] float32. Returns [S, H].
+    router (fp32 softmax -> topk -> sum-normalize) + routed SwiGLU experts + gated
+    shared expert: out = experts + sigmoid(shared_gate(x)) * shared_mlp(x).
+    """
+    import torch.nn.functional as F
+
+    gate_up = moe_state["experts.gate_up_proj"].float()  # [E, 2I, H]
+    down = moe_state["experts.down_proj"].float()  # [E, H, I]
+    gate_w = moe_state["gate.weight"].float()  # [E, H]
+
+    logits = x @ gate_w.T
+    probs = torch.softmax(logits, dim=-1)
+    top_v, top_i = torch.topk(probs, top_k, dim=-1)
+    if norm_topk_prob:
+        top_v = top_v / top_v.sum(dim=-1, keepdim=True)
+
+    S, H = x.shape
+    out = torch.zeros(S, H)
+    for s in range(S):
+        for j in range(top_k):
+            e = int(top_i[s, j])
+            g, u = (x[s : s + 1] @ gate_up[e].T).chunk(2, dim=-1)
+            h = F.silu(g) * u
+            out[s] += top_v[s, j] * (h @ down[e].T)[0]
+
+    sg = moe_state["shared_expert.gate_proj.weight"].float()
+    su = moe_state["shared_expert.up_proj.weight"].float()
+    sd = moe_state["shared_expert.down_proj.weight"].float()
+    s_gate = moe_state["shared_expert_gate.weight"].float()  # [1, H]
+    shared = (F.silu(x @ sg.T) * (x @ su.T)) @ sd.T
+    shared = torch.sigmoid(x @ s_gate.T) * shared
+    return out + shared
+
+
 # --------------------------------------------------------------------------- #
 # PCC helpers
 # --------------------------------------------------------------------------- #
