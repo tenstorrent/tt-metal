@@ -18,6 +18,7 @@
 #include <tt-metalium/mesh_event.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <context/metal_context.hpp>
+#include "impl/context/metal_env_impl.hpp"
 #include <umd/device/chip_helpers/sysmem_manager.hpp>
 #include <umd/device/chip_helpers/sysmem_buffer.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
@@ -296,7 +297,7 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
     // Clear completed barrier events to avoid unbounded growth of the barrier queue.
     while (!barrier_events_.empty()) {
         auto& event = barrier_events_.front();
-        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        if (!event.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
             barrier_events_.pop_front();
             continue;
         }
@@ -420,21 +421,22 @@ std::shared_ptr<PinnedMemory> PinnedMemory::Create(
     return pinned_memory;
 }
 
-experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& /* mesh_device */) {
+experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& mesh_device) {
+    auto& env = mesh_device.impl().metal_env();
     // Use UMD Cluster to determine IOMMU and NOC mapping support and arch
-    bool iommu_enabled = MetalContext::instance().get_cluster().is_iommu_enabled();
+    bool iommu_enabled = env.get_cluster().is_iommu_enabled();
     if (!iommu_enabled) {
         return experimental::MemoryPinningParameters{0u, 0u, false, false};
     }
 
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = env.get_hal();
     experimental::MemoryPinningParameters params{};
     params.max_pins = hal.get_max_pinned_memory_count();
     params.max_total_pin_size = hal.get_total_pinned_memory_size();
     // Ideally use a 64-bit addresses through the NOC, but otherwise use the iATU to translate 36-bit addresses to 64
     // bit addresses.
     params.can_map_to_noc = true;
-    params.supports_read_only = MetalContext::instance().get_cluster().is_read_only_page_pinning_supported();
+    params.supports_read_only = env.get_cluster().is_read_only_page_pinning_supported();
     return params;
 }
 
