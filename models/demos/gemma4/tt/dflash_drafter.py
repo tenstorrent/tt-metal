@@ -766,14 +766,24 @@ class DFlashFusedDecoder:
         # rows (positions == row index; rows >= ctx_len masked) then the block
         win_len = self.ctx_len - self.win_first
         ctx_positions = torch.arange(self.win_first, self.win_first + self.cap)
-        h = ttnn.from_torch(
-            ctx_positions.clamp(min=0).reshape(1, -1).to(torch.int64),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.uint32,
-            mesh_mapper=self._mapper,
-        )
-        ttnn.copy_host_to_device_tensor(h, self.ctx_pos)
-        h.deallocate(True)
+        if not self.ctx_cache:
+            # ctx_pos feeds the NON-cached body's rope gathers only; the cached
+            # path bakes rope at commit time and never reads it.
+            h = ttnn.from_torch(
+                ctx_positions.clamp(min=0).reshape(1, -1).to(torch.int64),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+                mesh_mapper=self._mapper,
+            )
+            ttnn.copy_host_to_device_tensor(h, self.ctx_pos)
+            h.deallocate(True)
+        # The drafter masks depend only on (win_len, start - win_first): with a
+        # FULL window both advance in lockstep, so in steady state (any prompt
+        # longer than cap -- e.g. every long-context run) the masks are
+        # STATIONARY and the torch.where builds + two uploads are skipped.
+        _mask_key = (win_len, start - self.win_first)
+        if getattr(self, "_mask_key", None) == _mask_key:
+            return
         qpos = torch.arange(start, start + K + 1)[:, None]
         kpos = torch.cat([ctx_positions, torch.arange(start, start + K + 1)])[None, :]
         kvalid = torch.cat([torch.arange(self.cap) < win_len, torch.ones(K + 1, dtype=torch.bool)])[None, :]
@@ -791,6 +801,7 @@ class DFlashFusedDecoder:
             )
             ttnn.copy_host_to_device_tensor(h, dev)
             h.deallocate(True)
+        self._mask_key = _mask_key
 
     def _upload_ctx(self):
         h = ttnn.from_torch(
@@ -993,6 +1004,7 @@ class DFlashFusedDecoder:
                 ttnn.assign(v_new, self.ctx_v[li])
                 k_new.deallocate(True)
                 v_new.deallocate(True)
+        self._mask_key = None  # fresh generation: ramp state differs, rebuild masks
         # Fresh seed: the next replay's start-of-body merge must be a no-op
         # (identity), not the previous generation's stale commit map.
         h = ttnn.from_torch(
