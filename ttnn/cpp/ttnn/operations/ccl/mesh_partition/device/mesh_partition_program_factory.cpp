@@ -139,29 +139,28 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
         },
         program_factory);
 
-    // The operation key includes tensor specs, partition attributes and participating coordinates.
-    // Work splits and slice offsets are invariant for this coordinate on subsequent hits.
-    std::vector<ttnn::prim::SliceTileArgRange> tile_args;
-    if (std::holds_alternative<ttnn::prim::SliceTileProgramFactory>(program_factory)) {
-        const auto start_offset =
-            ttnn::operations::data_movement::get_tiled_start_offset(tensor_args.input_tensor, slice_attrs.slice_start);
-        const auto scalars = ttnn::prim::slice_tile_dynamic_args(
-            slice_attrs, slice_tensor_args, tensor_return_value, start_offset, 0, 1);
-        for (const auto& arg : scalars) {
-            TT_FATAL(!arg.is_common && arg.kernel_idx <= 1, "Cached tile scalar must target reader/writer cores");
-            if (tile_args.empty() || tile_args.back().kernel_idx != arg.kernel_idx ||
-                tile_args.back().core != arg.core ||
-                tile_args.back().first_arg + tile_args.back().values.size() != arg.arg_idx) {
-                tile_args.push_back({arg.kernel_idx, arg.core, arg.arg_idx, {}});
+    // Each coordinate owns a distinct ProgramImpl. The workload key includes tensor specs,
+    // partition attributes and coordinates, so the descriptor's scalar work split is invariant.
+    // Record only active address slots; standalone Slice retains its dynamic scalar restoration.
+    std::vector<CoreCoord> reader_address_cores;
+    std::vector<CoreCoord> writer_address_cores;
+    const auto collect_address_cores = [&](uint32_t kernel_idx, std::vector<CoreCoord>& cores) {
+        const auto& args = GetRuntimeArgs(program, kernel_idx);
+        for (uint32_t x = 0; x < args.size(); ++x) {
+            for (uint32_t y = 0; y < args[x].size(); ++y) {
+                if (args[x][y].size() != 0 && args[x][y][0] != 0) {
+                    cores.push_back({x, y});
+                }
             }
-            tile_args.back().values.push_back(arg.value);
         }
-        for (const auto& range : tile_args) {
-            if (range.kernel_idx == 1) {
-                TT_FATAL(
-                    range.first_arg == 1 && range.values.size() == 2,
-                    "Cached tile writer plan must contain num_tiles and start_id");
-            }
+    };
+    const bool tiled = std::holds_alternative<ttnn::prim::SliceTileProgramFactory>(program_factory);
+    const bool rm = std::holds_alternative<ttnn::prim::SliceRmProgramFactory>(program_factory) ||
+                    std::holds_alternative<ttnn::prim::SliceRmStrideProgramFactory>(program_factory);
+    if (tiled || rm) {
+        collect_address_cores(1, writer_address_cores);
+        if (rm) {
+            collect_address_cores(0, reader_address_cores);
         }
     }
     return {
@@ -169,7 +168,8 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
         shared_variables_t{
             .slice_program_factory = program_factory,
             .slice_attributes = std::move(slice_attrs),
-            .tile_args = std::move(tile_args)}};
+            .reader_address_cores = std::move(reader_address_cores),
+            .writer_address_cores = std::move(writer_address_cores)}};
 }
 
 void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
@@ -192,16 +192,33 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
             return cached_workload.shared_variables.at(range);
         }();
 
-        // Re-apply this coord's per-dispatch state to the cached Program, through the same patch the
-        // slice op uses -- addresses only. CB total_size/page_size are not re-applied on a hit, so any
-        // sizing that varies across calls must be in compute_program_hash().
-        ttnn::prim::patch_slice_program_addresses(
-            program,
-            shared_variables.slice_program_factory,
-            shared_variables.slice_attributes,
-            slice_tensor_args,
-            tensor_return_value,
-            shared_variables.tile_args.empty() ? nullptr : &shared_variables.tile_args);
+        const bool tiled =
+            std::holds_alternative<ttnn::prim::SliceTileProgramFactory>(shared_variables.slice_program_factory);
+        const bool rm =
+            std::holds_alternative<ttnn::prim::SliceRmProgramFactory>(shared_variables.slice_program_factory) ||
+            std::holds_alternative<ttnn::prim::SliceRmStrideProgramFactory>(shared_variables.slice_program_factory);
+        if (tiled || rm) {
+            const auto patch_addresses = [&](uint32_t kernel_idx, const auto& cores, uint32_t address) {
+                auto& args = GetRuntimeArgs(program, kernel_idx);
+                for (const auto& core : cores) {
+                    args.at(core.x).at(core.y).at(0) = address;
+                }
+            };
+            patch_addresses(1, shared_variables.writer_address_cores, tensor_return_value.buffer()->address());
+            if (tiled) {
+                GetCommonRuntimeArgs(program, 0).at(0) = tensor_args.input_tensor.buffer()->address();
+            } else {
+                patch_addresses(0, shared_variables.reader_address_cores, tensor_args.input_tensor.buffer()->address());
+            }
+        } else {
+            // CB-bound sharded RM keeps its existing address-only helper.
+            ttnn::prim::patch_slice_program_addresses(
+                program,
+                shared_variables.slice_program_factory,
+                shared_variables.slice_attributes,
+                slice_tensor_args,
+                tensor_return_value);
+        }
     }
 }
 

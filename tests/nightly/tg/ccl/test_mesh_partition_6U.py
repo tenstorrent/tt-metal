@@ -121,3 +121,25 @@ def test_mesh_partition_cached_slice_args(mesh_device):
             check(traced_output)
         finally:
             ttnn.release_trace(mesh_device, trace_id)
+
+        # Re-enter eager dispatch after trace retargeting, queue distinct fresh buffers, and
+        # keep all allocations alive so allocator reuse cannot hide a stale address.
+        entries_after_trace = mesh_device.num_program_cache_entries()
+        queued = []
+        for offset in (1, 2):
+            next_host = host_input + offset
+            next_input = ttnn.from_torch(
+                next_host,
+                dtype=ttnn.bfloat16,
+                layout=layout,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            next_output = ttnn.mesh_partition(next_input, dim=dim, cluster_axis=axis)
+            retained_tensors.extend((next_input, next_output))
+            queued.append((next_output, torch.chunk(next_host, group_size, dim=dim)))
+        ttnn.synchronize_device(mesh_device)
+        assert mesh_device.num_program_cache_entries() == entries_after_trace
+        for actual_output, expected_shards in queued:
+            check(actual_output)
