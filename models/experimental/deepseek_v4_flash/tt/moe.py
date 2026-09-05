@@ -384,8 +384,8 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
     contract wants — no host-side scatter and no per-step host->device copy. It is held as
     bfloat16 because that is the only dtype :func:`ttnn.embedding` gathers from; every
     expert id is exact there (E <= 256), and ``fused_experts`` reads bf16-encoded ids
-    directly. That leaves the table at ``[vocab, k]`` instead of the ``[vocab, E]`` one-hot
-    it used to expand to — for a 128k vocab, 1.5 MB instead of 64 MB.
+    directly. The table is ``[vocab, k]`` (1.5 MB at a 128k vocab), not a
+    ``[vocab, E]`` one-hot (64 MB).
     """
 
     def __init__(

@@ -6,11 +6,8 @@
 
 The model runs on machines that want different values for the same knob -- an
 8-chip P150 host and a 32-chip Galaxy differ in pipeline depth, KV budget and
-how far the weight prefetcher should run ahead. Those values used to be module
-constants and ``os.environ`` reads scattered across ``tt/``, which made "what is
-this machine actually running with?" unanswerable without grepping. They now
-live in ``configs/system_configs.yaml`` as named profiles, and this module loads
-one.
+how far the weight prefetcher should run ahead. Named profiles in
+``configs/system_configs.yaml`` hold those values; this module loads one.
 
 What belongs here: anything a *different machine* would want set differently.
 What does not: model geometry (hidden size, layer/expert counts, head dims),
