@@ -526,6 +526,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             and is_harmony
         )
 
+    def _overrides_prefill_capture(self):
+        """Whether a subclass replaces _capture_trace_prefill (see the warmup-less deferral gate)."""
+        return type(self)._capture_trace_prefill is not Generator._capture_trace_prefill
+
     def _uses_prefetcher(self):
         """Whether any model instance drives the DRAM prefetcher.
 
@@ -1040,6 +1044,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # compiled its MoE dispatch can no longer be trace-captured, and compiling decode before any
             # prefill deadlocks in the MoE combine. It keeps main's late decode compile.
             and not self._will_row_shard_prefill(tokens, sampling_params)
+            # Excluded: models that customise the capture step. Deferred recording prepares through the
+            # base helper and records later, which skips whatever a _capture_trace_prefill override does
+            # between its compile pass and its capture.
+            and not self._overrides_prefill_capture()
         ):
             # Models that skip prefill warmup (GPT-OSS sets warmup_prefill=False everywhere) would otherwise
             # capture their prefill trace part way through this call and then compile the whole decode graph
