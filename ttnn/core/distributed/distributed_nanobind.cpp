@@ -517,24 +517,6 @@ void py_module(nb::module_& mod) {
                     >>> logical_core = ttnn.CoreCoord(0, 0)
                     >>> worker_core = device.worker_core_from_logical_core(logical_core)
                     >>> print(f"Worker core: x={worker_core.x}, y={worker_core.y}")
-            )doc")
-        .def(
-            "worker_core_from_logical_core_at",
-            &MeshDevice::worker_core_from_logical_core_at,
-            nb::arg("mesh_coordinate"),
-            nb::arg("logical_core"),
-            R"doc(
-                Convert a logical worker-core coordinate using the device selected by a mesh coordinate.
-
-                Unlike ``worker_core_from_logical_core``, this method does not require every device in
-                the mesh to have the same logical-to-virtual mapping.
-
-                Args:
-                    mesh_coordinate (MeshCoordinate): The coordinate of the device in the mesh.
-                    logical_core (CoreCoord): The logical worker-core coordinate to convert.
-
-                Returns:
-                    CoreCoord: The virtual NoC coordinate for the selected device.
             )doc");
 
     // Per-device optimal DRAM-bank-to-logical-worker assignment. Bound as an overload of the same
@@ -1434,6 +1416,36 @@ void py_module(nb::module_& mod) {
 
             Returns:
                 int: Hop count on the selected NOC.
+        )doc");
+    m_experimental.def(
+        "worker_core_from_logical_core",
+        [](MeshDevice& mesh_device, const MeshCoordinate& mesh_coord, const CoreCoord& logical_core) {
+            return tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+                &mesh_device, mesh_coord, logical_core);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("mesh_coord"),
+        nb::arg("logical_core"),
+        R"doc(
+            Virtual NoC coordinate of a logical worker core on the device at ``mesh_coord``.
+
+            Unlike ``MeshDevice.worker_core_from_logical_core``, this does not require every device in
+            the mesh to share a logical-to-virtual mapping, so it is exact on a heterogeneously
+            harvested mesh.
+
+            Experimental API; may change.
+
+            Args:
+                mesh_device (MeshDevice): Mesh device.
+                mesh_coord (MeshCoordinate): Coordinate of the chip to query.
+                logical_core (CoreCoord): Logical worker-core coordinate on that chip.
+
+            Returns:
+                CoreCoord: The virtual NoC coordinate for the selected device.
+
+            Raises:
+                RuntimeError: If ``mesh_coord`` is outside the mesh's shape, or names a device this
+                    rank does not drive.
         )doc");
     ttnn::pipeline_module::bind_blitz_decode_pipeline(m_experimental);
     ttnn::pipeline_module::bind_pipeline_builder(m_experimental);

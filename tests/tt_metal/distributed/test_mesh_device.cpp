@@ -172,18 +172,19 @@ TEST_F(MeshDevice2x4Test, GetOptimalDramBankToLogicalWorkerAssignmentPerDevice) 
     }
 }
 
-TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreAtUsesSelectedDevice) {
+TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreUsesSelectedDevice) {
     const CoreCoord logical_core{0, 0};
     for (const auto& mesh_coordinate : MeshCoordinateRange(mesh_device_->shape())) {
         auto* physical_device = mesh_device_->impl().get_device(mesh_coordinate);
         ASSERT_NE(physical_device, nullptr);
         EXPECT_EQ(
-            mesh_device_->worker_core_from_logical_core_at(mesh_coordinate, logical_core),
+            tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+                mesh_device_.get(), mesh_coordinate, logical_core),
             physical_device->worker_core_from_logical_core(logical_core));
     }
 
-    EXPECT_ANY_THROW(
-        mesh_device_->worker_core_from_logical_core_at(MeshCoordinate{mesh_device_->shape()[0], 0}, logical_core));
+    EXPECT_ANY_THROW(tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+        mesh_device_.get(), MeshCoordinate{mesh_device_->shape()[0], 0}, logical_core));
 }
 
 TEST(GetWorkerNocHopDistanceAPI, UnitMeshes) {

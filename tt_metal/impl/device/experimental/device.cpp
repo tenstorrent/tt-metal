@@ -8,6 +8,7 @@
 #include <tt_stl/assert.hpp>
 #include "tt_metal/impl/device/device_impl.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
 
 namespace tt::tt_metal::experimental::Device {
 
@@ -71,6 +72,26 @@ uint32_t get_worker_noc_hop_distance(
         device = local_devices.front();
     }
     return get_worker_noc_hop_distance(device, logical_src, logical_dst, noc);
+}
+
+CoreCoord worker_core_from_logical_core(
+    distributed::MeshDevice* mesh_device,
+    const distributed::MeshCoordinate& mesh_coord,
+    const CoreCoord& logical_core) {
+    TT_FATAL(mesh_device != nullptr, "MeshDevice pointer cannot be null");
+    const auto& mesh_device_impl = mesh_device->impl();
+    TT_FATAL(
+        mesh_device_impl.is_local(mesh_coord),
+        "worker_core_from_logical_core: MeshCoordinate {} maps to a device this rank does not drive. The "
+        "logical-to-virtual worker mapping is read from that chip's SoC descriptor, which is available only for "
+        "local devices.",
+        mesh_coord);
+
+    auto& metal_context = MetalContext::instance(mesh_device_impl.get_context_id());
+    const auto physical_chip_id = metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(
+        mesh_device_impl.get_fabric_node_id(mesh_coord));
+    return metal_context.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+        physical_chip_id, logical_core, CoreType::WORKER);
 }
 
 }  // namespace tt::tt_metal::experimental::Device
