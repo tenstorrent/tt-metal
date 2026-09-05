@@ -455,7 +455,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 5
+      timeout: 4
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -564,7 +564,40 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and sp_only" -xvs
+      # BOTH axes pinned. main added tp_shard_kv (sp_only|tp_sharded) and this branch added use_trace
+      # (notrace|traced); a selector naming only one matches two cases and silently doubles the job.
+      # sp_only matches main's scope -- tp_sharded has no CI job on either side. notrace is the arm that
+      # also asserts per-layer PCC (impossible under capture); the traced arm is its own job below.
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and sp_only and notrace" -xvs
+    '
+  test_type: glm_chunked_accuracy
+  test_tags: [glm_5_2, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 36
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  sp_config: sc1
+
+
+# TRACED twin of the accuracy job above. It asserts FEWER checks than its untraced twin, by construction:
+# both modes assert the KVPE and DSA indexer-K CACHE PCCs (read back after the run), but the per-layer
+# decoder-output PCC needs return_intermediates=True -- a host readback in the middle of forward() -- and
+# a read inside begin_trace_capture() is a hard TT_FATAL. So per-layer PCC rides the notrace arm only,
+# and this job is what proves the captured/replayed forward produces the same caches as the eager one.
+# Locally traced and untraced agree EXACTLY on both caches at L10 (KVPE 0.998829, indexer-K 0.999756).
+- name: "(GLM-5.2-744B) chunked prefill accuracy code_debug 55k@5k, traced"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
+    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and sp_only and traced" -xvs
     '
   test_type: glm_chunked_accuracy
   test_tags: [glm_5_2, transformer]
@@ -587,14 +620,50 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and sp_only and notrace" -xvs
     '
   test_type: glm_chunked
   test_tags: [glm_5_2, transformer]
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 58
+      # 44, down from the 58 #51968 set: run 33743294300 / job 100612454398 measured this job end to end
+      # at 13.2 min (total_test_time 794.6 s), so 58 was 4.4x the measured wall time and 44 is still 3.3x.
+      # Trimmed to fit the traced twin below into a models/bh_sc1_high_power budget that main leaves with
+      # zero headroom (166 used of 166). If a tp_sharded or cold-cache run ever needs more than 44, raise
+      # this back and take the room from the traced twin instead -- that one measured 6.5 min.
+      timeout: 44
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  sp_config: sc1
+
+
+# TRACED twin of the perf job above: identical config except the use_trace axis, so the two are directly
+# comparable and each is gated against its own baseline table / band (glm_chunked_perf_gate). Traced
+# replays one captured chunk forward instead of re-dispatching every op from host, so it needs less wall
+# time than its untraced twin (CI measured 0.64-0.70 s/chunk traced vs ~1.68 s/chunk untraced).
+- name: "(GLM-5.2-744B) chunked prefill perf code_debug 55k@5k, traced"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
+    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and sp_only and traced" -xvs
+    '
+  test_type: glm_chunked
+  test_tags: [glm_5_2, transformer]
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      # 15, not the untraced twin's 58: run 33743294300 / job 100612454484 measured this job end to end
+      # at 6.5 min (total_test_time 389.8 s), so this is ~2.3x the measured wall time. Replay is where the
+      # saving is -- 0.64-0.70 s/chunk traced vs ~1.68 s/chunk untraced -- and weight load dominates the
+      # rest. bh_sc1_high_power is a contended budget; do not pad this without a measurement.
+      timeout: 15
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -813,6 +882,12 @@
   # A full 8x4 Blackhole-Galaxy Fabric2D XY-torus gate. Runs the 8-rank axis ring at
   # 55K and 512K global rows, then the 32-rank snake ring: exact-output accuracy plus
   # perf at matched per-device and matched global volume.
+  #
+  # The traced gate measures the 8-rank axis-ring shapes again through a captured ttnn trace, with the
+  # cache slot and active gather extent read from metadata tensors on-device rather than from host
+  # runtime arguments. Only it can catch a regression in that path -- a trace replay never re-runs the
+  # host runtime-arg patch the scalar form depends on. It shares this job because the fabric bring-up
+  # dominates the step, so a separate job would roughly double the cost of the same coverage.
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -825,6 +900,7 @@
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_8x4_whole_mesh_ring_accuracy -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_ci_perf -q || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
       exit $rc
     '
   test_type: high_bw_all_gather_perf

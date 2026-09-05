@@ -45,6 +45,8 @@ enum CompileTimeArg : uint32_t {
     kOutputBankOwnedSchedule,
     kNumDramBanks,
     kPrefetchPackets,
+    // Trace-safe cache-slot select, appended last so main's arg order is untouched.
+    kHasSlotMetadata,
     kNumFixedCompileTimeArgs,
 };
 
@@ -72,6 +74,7 @@ constexpr uint32_t mesh_cols = get_compile_time_arg_val(kMeshCols);
 constexpr bool partial_readiness_enabled = get_compile_time_arg_val(kPartialReadinessEnabled);
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
+constexpr bool has_slot_metadata = get_compile_time_arg_val(kHasSlotMetadata);
 
 static_assert(!partial_readiness_enabled || num_inputs == 1, "partial readiness requires one gathered input");
 static_assert(
@@ -197,12 +200,14 @@ void kernel_main() {
         // Use the data CB as temporary metadata scratch. It is empty at this point and avoids
         // a separate tiny-CB read race on the all-gather worker cores.
         CircularBuffer cb_meta(cb_output_id);
-        const uint32_t slot_id =
-            trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, slot_id_addr, cb_meta.get_write_ptr());
-        const uint32_t cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx;
-        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-            input_batch_base[input_idx] = cache_batch_idx * input_batch_head_count[input_idx] *
-                                          input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
+        if constexpr (has_slot_metadata) {
+            const uint32_t slot_id =
+                trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, slot_id_addr, cb_meta.get_write_ptr());
+            const uint32_t cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx;
+            for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+                input_batch_base[input_idx] = cache_batch_idx * input_batch_head_count[input_idx] *
+                                              input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
+            }
         }
         const uint32_t kv_actual = trace_metadata::read_metadata_scalar_u32(
             meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
