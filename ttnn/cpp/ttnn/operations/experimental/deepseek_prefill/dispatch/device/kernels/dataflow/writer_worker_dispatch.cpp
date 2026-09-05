@@ -432,9 +432,15 @@ void kernel_main() {
                     uint32_t meta_addr =
                         metadata_scratch_addr + (local_count % meta_scratch_slots) * aligned_metadata_page_size;
                     volatile tt_l1_ptr int32_t* meta = reinterpret_cast<volatile tt_l1_ptr int32_t*>(meta_addr);
-                    meta[0] = (int32_t)linearized_mesh_coord;
-                    meta[1] = (int32_t)token_idx;
-                    meta[2] = (int32_t)k;
+                    // Any new routing field must be added to this initializer AND
+                    // DISPATCH_METADATA_FIELDS (dispatch.hpp) bumped with it — the constant is what
+                    // sizes the metadata rows and scale-tail offsets everywhere else (validator,
+                    // Python init_helpers, torch reference). A missing bump fails compilation here.
+                    const int32_t routing_fields[DISPATCH_METADATA_FIELDS] = {
+                        (int32_t)linearized_mesh_coord, (int32_t)token_idx, (int32_t)k};
+                    for (uint32_t f = 0; f < DISPATCH_METADATA_FIELDS; f++) {
+                        meta[f] = routing_fields[f];
+                    }
 #ifdef FP8_SCALED
                     // Copy this token's fp32 scale words (bit-for-bit) into the metadata tail so the
                     // routed buffer can be dequantized downstream. token_t indexes the scales CB.
@@ -442,7 +448,7 @@ void kernel_main() {
                         tt_l1_ptr uint32_t* src_scales =
                             reinterpret_cast<tt_l1_ptr uint32_t*>(scales_read_ptr + token_t * aligned_scales_page_size);
                         for (uint32_t w = 0; w < num_scale_words; w++) {
-                            meta[3 + w] = (int32_t)src_scales[w];
+                            meta[DISPATCH_METADATA_FIELDS + w] = (int32_t)src_scales[w];
                         }
                     }
 #endif
@@ -523,9 +529,15 @@ void kernel_main() {
                     // the cross-device scratch slot, then written to the sender's c_6 slot.
                     volatile tt_l1_ptr int32_t* meta =
                         reinterpret_cast<volatile tt_l1_ptr int32_t*>(xdev_metadata_scratch_addr);
-                    meta[0] = (int32_t)linearized_mesh_coord;
-                    meta[1] = (int32_t)token_idx;
-                    meta[2] = (int32_t)k;
+                    // Any new routing field must be added to this initializer AND
+                    // DISPATCH_METADATA_FIELDS (dispatch.hpp) bumped with it — the constant is what
+                    // sizes the metadata rows and scale-tail offsets everywhere else (validator,
+                    // Python init_helpers, torch reference). A missing bump fails compilation here.
+                    const int32_t routing_fields[DISPATCH_METADATA_FIELDS] = {
+                        (int32_t)linearized_mesh_coord, (int32_t)token_idx, (int32_t)k};
+                    for (uint32_t f = 0; f < DISPATCH_METADATA_FIELDS; f++) {
+                        meta[f] = routing_fields[f];
+                    }
 #ifdef FP8_SCALED
                     // Same scale-tail copy as the local path; the full aligned_metadata_page_size
                     // (which already accounts for the scale fields) is sent to the sender's c_6 slot.
@@ -533,7 +545,7 @@ void kernel_main() {
                         tt_l1_ptr uint32_t* src_scales =
                             reinterpret_cast<tt_l1_ptr uint32_t*>(scales_read_ptr + token_t * aligned_scales_page_size);
                         for (uint32_t w = 0; w < num_scale_words; w++) {
-                            meta[3 + w] = (int32_t)src_scales[w];
+                            meta[DISPATCH_METADATA_FIELDS + w] = (int32_t)src_scales[w];
                         }
                     }
 #endif
