@@ -100,15 +100,24 @@ class DFlashDrafter:
 
         tp = mesh_config.tp if mesh_config else 1
         self.tp = tp
+        # GEMMA4_DFLASH_REPLICATED=1: run the (tiny, 5-layer) drafter fully
+        # REPLICATED -- every device computes the whole drafter redundantly.
+        # Kills the ~10 per-iteration allreduces TP costs here (the drafter is
+        # far too small for sharding to pay), and leaves the fabric to the
+        # target -- the precondition for any draft/verify overlap later. Costs
+        # ~3 GB/device of replicated drafter weights. The tied lm_head STAYS
+        # vocab-sharded (replicating 262k x H is 2.7 GB and the on-device
+        # sampler consumes sharded logits anyway).
+        self.replicated = _os.environ.get("GEMMA4_DFLASH_REPLICATED", "0") == "1"
         assert self.n_kv_heads % tp == 0, f"dflash drafter: kv heads {self.n_kv_heads} % tp {tp} != 0"
         assert self.n_heads % tp == 0, f"dflash drafter: q heads {self.n_heads} % tp {tp} != 0"
-        self.local_heads = self.n_heads // tp
-        self.local_kv = self.n_kv_heads // tp
+        self.local_heads = self.n_heads if self.replicated else self.n_heads // tp
+        self.local_kv = self.n_kv_heads if self.replicated else self.n_kv_heads // tp
 
         is_mesh = hasattr(mesh_device, "shape")
         self._replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
-        col = mesh_config.column_parallel(mesh_device) if tp > 1 else None
-        row = mesh_config.row_parallel(mesh_device) if tp > 1 else None
+        col = mesh_config.column_parallel(mesh_device) if (tp > 1 and not self.replicated) else None
+        row = mesh_config.row_parallel(mesh_device) if (tp > 1 and not self.replicated) else None
 
         sd = {}
         with safe_open(str(Path(drafter_path) / "model.safetensors"), framework="pt") as f:
@@ -124,7 +133,11 @@ class DFlashDrafter:
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mapper if mapper is not None else self._replicate,
-                cache_file_name=get_cache_file_name(tensor_cache_path, f"dflash_{name}"),
+                # Namespace the tensor cache by mode: replicated and sharded
+                # loads of the same weight must never share a cache file.
+                cache_file_name=get_cache_file_name(
+                    tensor_cache_path, f"dflash_{'rep_' if self.replicated else ''}{name}"
+                ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
@@ -166,12 +179,16 @@ class DFlashDrafter:
         embed_w = target_embed_weight_loader()  # [vocab, H] torch (raw, unscaled)
         self._embed_w_host = embed_w  # host reference for noise-row gathers
         self.vocab = embed_w.shape[0]
+        # lm_head stays VOCAB-SHARDED even when the drafter runs replicated:
+        # a replicated 262k x H head is 2.7 GB/device, and the on-device
+        # sampler consumes sharded logits (its own tiny top-1 gather).
+        col_lm = mesh_config.column_parallel(mesh_device) if tp > 1 else None
         self.lm_head = ttnn.as_tensor(
             embed_w.transpose(0, 1).contiguous().unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
             device=mesh_device,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=col if col is not None else self._replicate,
+            mesh_mapper=col_lm if col_lm is not None else self._replicate,
             cache_file_name=get_cache_file_name(tensor_cache_path, "dflash_lm_head"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -192,7 +209,6 @@ class DFlashDrafter:
         self._mask_rows = None
         # Greedy on-device argmax (softcap is monotonic -> argmax-invariant);
         # GEMMA4_DFLASH_HOST_ARGMAX=1 reverts to the full-vocab host readback.
-        import os as _os
 
         self._host_argmax = _os.environ.get("GEMMA4_DFLASH_HOST_ARGMAX", "0") == "1"
 
@@ -289,6 +305,114 @@ class DFlashDrafter:
         rot.deallocate(True)
         return out
 
+    def project_ctx_kv(self, raw_rows, cos_rows, sin_rows):
+        """Project RAW fc/context rows into per-layer roped K and V.
+
+        The ctx K/V cache-append path: each committed row is projected ONCE at
+        commit time (hidden_norm -> k/v proj -> k_norm -> rope at its absolute
+        position) instead of the whole context being re-projected every
+        iteration. Returns [(k, v)] per layer, k/v: [1, local_kv, R, hd].
+        """
+        R = raw_rows.shape[2]
+        hn = self._rms(raw_rows, self.hidden_norm_w)
+        out = []
+        for lyr in self.layers:
+            k = ttnn.linear(hn, lyr["k_proj"], compute_kernel_config=self._ckc)
+            v = ttnn.linear(hn, lyr["v_proj"], compute_kernel_config=self._ckc)
+            k = ttnn.transpose(ttnn.reshape(k, (1, R, self.local_kv, self.head_dim)), 1, 2)
+            v = ttnn.transpose(ttnn.reshape(v, (1, R, self.local_kv, self.head_dim)), 1, 2)
+            k = self._rms(k, lyr["k_norm"])
+            k = self._apply_rope(k, cos_rows, sin_rows)
+            out.append((k, v))
+        hn.deallocate(True)
+        return out
+
+    def block_forward_cached(self, x, ctx_k, ctx_v, cos_blk, sin_blk, mask_full_tt, mask_slide_tt, ctx_rows):
+        """block_forward with PRE-CACHED per-layer context K/V (roped).
+
+        Removes the per-iteration ctx work entirely: no hidden_norm/rms over
+        cap rows, no k/v projections over cap, no ctx rope gathers -- the
+        measured ~12 ms/iter ctx share at cap 2048 plus the shared prologue.
+        ctx_k/ctx_v: lists of [1, local_kv, cap, hd] persistent caches.
+        """
+        K1 = x.shape[2]
+        scale = 1.0 / math.sqrt(self.head_dim)
+        for li, lyr in enumerate(self.layers):
+            resid = x
+            xn = self._rms(x, lyr["in_norm"])
+            q = ttnn.linear(xn, lyr["q_proj"], compute_kernel_config=self._ckc)
+            q = ttnn.transpose(ttnn.reshape(q, (1, K1, self.local_heads, self.head_dim)), 1, 2)
+            q = self._rms(q, lyr["q_norm"])
+            q = self._apply_rope(q, cos_blk, sin_blk)
+            k_blk = ttnn.linear(xn, lyr["k_proj"], compute_kernel_config=self._ckc)
+            v_blk = ttnn.linear(xn, lyr["v_proj"], compute_kernel_config=self._ckc)
+            xn.deallocate(True)
+
+            def _heads(t, n_rows):
+                return ttnn.transpose(ttnn.reshape(t, (1, n_rows, self.local_kv, self.head_dim)), 1, 2)
+
+            k_blk = self._rms(_heads(k_blk, K1), lyr["k_norm"])
+            k_blk = self._apply_rope(k_blk, cos_blk, sin_blk)
+            k = ttnn.concat([ctx_k[li], k_blk], dim=2)
+            v = ttnn.concat([ctx_v[li], _heads(v_blk, K1)], dim=2)
+            k_blk.deallocate(True)
+            v_blk.deallocate(True)
+            if self.local_kv != self.local_heads:
+                k = ttnn.repeat_interleave(k, self.local_heads // self.local_kv, dim=1)
+                v = ttnn.repeat_interleave(v, self.local_heads // self.local_kv, dim=1)
+            scores = ttnn.matmul(q, ttnn.transpose(k, 2, 3), compute_kernel_config=self._ckc)
+            scores = ttnn.multiply(scores, scale)
+            scores = ttnn.add(scores, mask_slide_tt if lyr["sliding"] else mask_full_tt)
+            probs = ttnn.softmax(scores, dim=-1, compute_kernel_config=self._ckc, numeric_stable=True)
+            scores.deallocate(True)
+            attn = ttnn.matmul(probs, v, compute_kernel_config=self._ckc)
+            probs.deallocate(True)
+            k.deallocate(True)
+            v.deallocate(True)
+            q.deallocate(True)
+            attn = ttnn.reshape(ttnn.transpose(attn, 1, 2), (1, 1, K1, self.local_heads * self.head_dim))
+            o = ttnn.linear(attn, lyr["o_proj"], compute_kernel_config=self._ckc)
+            attn.deallocate(True)
+            if self.tp > 1 and not self.replicated:
+                o = ccl_allreduce(o, self.mesh_config, self.ccl_manager)
+            x = ttnn.add(resid, o)
+            o.deallocate(True)
+            resid.deallocate(True)
+
+            resid = x
+            xn = self._rms(x, lyr["post_norm"])
+            gate = ttnn.linear(xn, lyr["gate"], compute_kernel_config=self._ckc)
+            up = ttnn.linear(xn, lyr["up"], compute_kernel_config=self._ckc)
+            xn.deallocate(True)
+            act = ttnn.multiply(ttnn.silu(gate), up)
+            gate.deallocate(True)
+            up.deallocate(True)
+            mlp = ttnn.linear(act, lyr["down"], compute_kernel_config=self._ckc)
+            act.deallocate(True)
+            if self.tp > 1 and not self.replicated:
+                mlp = ccl_allreduce(mlp, self.mesh_config, self.ccl_manager)
+            x = ttnn.add(resid, mlp)
+            mlp.deallocate(True)
+            resid.deallocate(True)
+
+        # identical id-producing tail to block_forward
+        h = self._rms(x, self.final_norm_w)
+        x.deallocate(True)
+        h_drafts = h[:, :, 1:, :]
+        h.deallocate(True)
+        logits = ttnn.linear(h_drafts, self.lm_head, compute_kernel_config=self._ckc)
+        h_drafts.deallocate(True)
+        sampler = getattr(self, "_sampler", None)
+        if sampler is not None:
+            tt_tokens, _lp = sampler.sample(logits, enable_trace=False)
+            logits.deallocate(True)
+            return tt_tokens
+        if self.tp > 1:
+            logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
+        ids = ttnn.argmax(logits[:, :, :, : self.vocab], dim=-1)
+        logits.deallocate(True)
+        return ids
+
     def block_forward(self, x, h_ctx, cos_ctx, sin_ctx, cos_blk, sin_blk, mask_full_tt, mask_slide_tt, ctx_rows):
         """The dFlash block-draft graph (trace-capturable; no host round trips).
 
@@ -344,7 +468,7 @@ class DFlashDrafter:
             attn = ttnn.reshape(ttnn.transpose(attn, 1, 2), (1, 1, K1, self.local_heads * self.head_dim))
             o = ttnn.linear(attn, lyr["o_proj"], compute_kernel_config=self._ckc)
             attn.deallocate(True)
-            if self.tp > 1:
+            if self.tp > 1 and not self.replicated:
                 o = ccl_allreduce(o, self.mesh_config, self.ccl_manager)
             x = ttnn.add(resid, o)
             o.deallocate(True)
@@ -360,7 +484,7 @@ class DFlashDrafter:
             up.deallocate(True)
             mlp = ttnn.linear(act, lyr["down"], compute_kernel_config=self._ckc)
             act.deallocate(True)
-            if self.tp > 1:
+            if self.tp > 1 and not self.replicated:
                 mlp = ccl_allreduce(mlp, self.mesh_config, self.ccl_manager)
             x = ttnn.add(resid, mlp)
             mlp.deallocate(True)
@@ -495,6 +619,30 @@ class DFlashFusedDecoder:
         self.out_draft = None
         self.out_vidx = None
         self.fc_prev = ttnn.from_torch(z(1, 1, self.P_v, H, dtype=torch.bfloat16), **mkT)
+        # ── ctx K/V CACHE-APPEND (GEMMA4_DFLASH_CTX_CACHE, default on) ──
+        # Per drafter layer, persistent roped ctx K/V [1, local_kv, cap, hd].
+        # Committed rows are projected ONCE at commit (project_ctx_kv on
+        # fc_prev at their absolute positions) and merged with the SAME
+        # merge_idx row map; block_forward_cached then skips ALL per-iteration
+        # ctx work (measured ~12 ms/iter at cap 2048, plus the shared
+        # hidden_norm/rope prologue).
+        self.ctx_cache = _os.environ.get("GEMMA4_DFLASH_CTX_CACHE", "1") == "1"
+        self.ctx_k = None
+        self.ctx_v = None
+        if self.ctx_cache:
+            kvshape = (1, drafter.local_kv, ctx_cap, drafter.head_dim)
+            self.ctx_k = [ttnn.from_torch(z(*kvshape, dtype=torch.bfloat16), **mkT) for _ in drafter.layers]
+            self.ctx_v = [ttnn.from_torch(z(*kvshape, dtype=torch.bfloat16), **mkT) for _ in drafter.layers]
+        # [1, P_v] absolute positions of fc_prev's rows (host-refreshed per
+        # iteration in step(); zeros at capture where the identity merge makes
+        # the commit a no-op).
+        self.commit_pos = ttnn.from_torch(
+            torch.zeros(1, self.P_v, dtype=torch.int64),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._mapper,
+        )
         self.merge_idx = ttnn.from_torch(
             torch.arange(ctx_cap, dtype=torch.int64).reshape(1, ctx_cap),
             device=self.mesh_device,
@@ -664,26 +812,63 @@ class DFlashFusedDecoder:
         # each ctx row to [ctx_dev | fc_prev] (identity / window-shift / commit
         # rows), refreshed per iteration by step(). At capture merge_idx is
         # identity, so compile + capture are no-ops here (idempotent).
-        src = ttnn.concat([self.ctx_dev, self.fc_prev], dim=2)  # [1,1,cap+P_v,H]
-        src2d = ttnn.reshape(src, (self.cap + self.P_v, d.hidden))
-        merged = ttnn.embedding(self.merge_idx, src2d, layout=ttnn.TILE_LAYOUT)  # [1,cap,H]
-        merged4 = ttnn.reshape(merged, (1, 1, self.cap, d.hidden))
-        ttnn.assign(merged4, self.ctx_dev)
-        for t in (merged4, merged, src2d, src):
-            try:
-                t.deallocate(True)
-            except Exception:
-                pass
+        if self.ctx_cache:
+            # commit: project the PREVIOUS replay's fc rows at their absolute
+            # positions and gather-merge into every layer's roped K/V cache.
+            cos_c = ttnn.unsqueeze_to_4D(ttnn.embedding(self.commit_pos, d._cos_2d, layout=ttnn.TILE_LAYOUT))
+            sin_c = ttnn.unsqueeze_to_4D(ttnn.embedding(self.commit_pos, d._sin_2d, layout=ttnn.TILE_LAYOUT))
+            kv_new = d.project_ctx_kv(self.fc_prev, cos_c, sin_c)
+            cos_c.deallocate(True)
+            sin_c.deallocate(True)
+            hd = d.head_dim
+            for li, (k_new, v_new) in enumerate(kv_new):
+                for cache, new in ((self.ctx_k[li], k_new), (self.ctx_v[li], v_new)):
+                    for h_i in range(d.local_kv):
+                        src = ttnn.concat([cache[:, h_i : h_i + 1, :, :], new[:, h_i : h_i + 1, :, :]], dim=2)
+                        src2d = ttnn.reshape(src, (self.cap + self.P_v, hd))
+                        m = ttnn.embedding(self.merge_idx, src2d, layout=ttnn.TILE_LAYOUT)
+                        m4 = ttnn.reshape(m, (1, 1, self.cap, hd))
+                        dst = cache if d.local_kv == 1 else None
+                        if dst is None:
+                            raise NotImplementedError("ctx cache merge assumes local_kv == 1 per device")
+                        ttnn.assign(m4, dst)
+                        for t in (m4, m, src2d, src):
+                            try:
+                                t.deallocate(True)
+                            except Exception:
+                                pass
+                k_new.deallocate(True)
+                v_new.deallocate(True)
+        else:
+            src = ttnn.concat([self.ctx_dev, self.fc_prev], dim=2)  # [1,1,cap+P_v,H]
+            src2d = ttnn.reshape(src, (self.cap + self.P_v, d.hidden))
+            merged = ttnn.embedding(self.merge_idx, src2d, layout=ttnn.TILE_LAYOUT)  # [1,cap,H]
+            merged4 = ttnn.reshape(merged, (1, 1, self.cap, d.hidden))
+            ttnn.assign(merged4, self.ctx_dev)
+            for t in (merged4, merged, src2d, src):
+                try:
+                    t.deallocate(True)
+                except Exception:
+                    pass
         cos_blk = ttnn.unsqueeze_to_4D(ttnn.embedding(self.blk_pos, d._cos_2d, layout=ttnn.TILE_LAYOUT))
         sin_blk = ttnn.unsqueeze_to_4D(ttnn.embedding(self.blk_pos, d._sin_2d, layout=ttnn.TILE_LAYOUT))
         noise = ttnn.concat([self.anchor_row, d._mask_rows], dim=2)
-        h_ctx = d._rms(self.ctx_dev, d.hidden_norm_w)
-        hd = d.head_dim
-        cos_ctx = ttnn.reshape(ttnn.embedding(self.ctx_pos, d._cos_2d, layout=ttnn.TILE_LAYOUT), (1, 1, self.cap, hd))
-        sin_ctx = ttnn.reshape(ttnn.embedding(self.ctx_pos, d._sin_2d, layout=ttnn.TILE_LAYOUT), (1, 1, self.cap, hd))
-        draft_ids = d.block_forward(
-            noise, h_ctx, cos_ctx, sin_ctx, cos_blk, sin_blk, self.mask_full, self.mask_slide, self.cap
-        )  # [1,1,1,K] uint32
+        if self.ctx_cache:
+            draft_ids = d.block_forward_cached(
+                noise, self.ctx_k, self.ctx_v, cos_blk, sin_blk, self.mask_full, self.mask_slide, self.cap
+            )  # [1,1,1,K] uint32
+        else:
+            h_ctx = d._rms(self.ctx_dev, d.hidden_norm_w)
+            hd = d.head_dim
+            cos_ctx = ttnn.reshape(
+                ttnn.embedding(self.ctx_pos, d._cos_2d, layout=ttnn.TILE_LAYOUT), (1, 1, self.cap, hd)
+            )
+            sin_ctx = ttnn.reshape(
+                ttnn.embedding(self.ctx_pos, d._sin_2d, layout=ttnn.TILE_LAYOUT), (1, 1, self.cap, hd)
+            )
+            draft_ids = d.block_forward(
+                noise, h_ctx, cos_ctx, sin_ctx, cos_blk, sin_blk, self.mask_full, self.mask_slide, self.cap
+            )  # [1,1,1,K] uint32
         flat = ttnn.reshape(draft_ids, (1, K))
         vx = ttnn.concat([self.anchor_tok, flat], dim=-1)  # [1, K+1] uint32
         # sharded verify logits when the sampling module can consume them
@@ -782,6 +967,32 @@ class DFlashFusedDecoder:
         self.win_first = n - keep
         self.ctx_len = n
         self._upload_ctx()
+        if self.ctx_cache:
+            # One-time seed of the per-layer roped ctx K/V caches from the
+            # freshly uploaded raw ctx (row r holds absolute position
+            # win_first + r; dead rows beyond the live window are masked by the
+            # additive masks, their rope position is clamped and harmless).
+            d = self.drafter
+            cp = torch.arange(self.win_first, self.win_first + self.cap, dtype=torch.int64).clamp(min=0)
+            h = ttnn.from_torch(
+                cp.reshape(1, self.cap), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper
+            )
+            ttnn.copy_host_to_device_tensor(h, self.ctx_pos)
+            h.deallocate(True)
+            cos = ttnn.reshape(
+                ttnn.embedding(self.ctx_pos, d._cos_2d, layout=ttnn.TILE_LAYOUT), (1, 1, self.cap, d.head_dim)
+            )
+            sin = ttnn.reshape(
+                ttnn.embedding(self.ctx_pos, d._sin_2d, layout=ttnn.TILE_LAYOUT), (1, 1, self.cap, d.head_dim)
+            )
+            kv = d.project_ctx_kv(self.ctx_dev, cos, sin)
+            cos.deallocate(True)
+            sin.deallocate(True)
+            for li, (k_new, v_new) in enumerate(kv):
+                ttnn.assign(k_new, self.ctx_k[li])
+                ttnn.assign(v_new, self.ctx_v[li])
+                k_new.deallocate(True)
+                v_new.deallocate(True)
         # Fresh seed: the next replay's start-of-body merge must be a no-op
         # (identity), not the previous generation's stale commit map.
         h = ttnn.from_torch(
@@ -993,6 +1204,13 @@ class DFlashFusedDecoder:
         )
         ttnn.copy_host_to_device_tensor(h, self.merge_idx)
         h.deallocate(True)
+        if self.ctx_cache:
+            # positions of fc_prev's rows for the NEXT replay's roped commit
+            # (pre-advance start: row j holds position start + j).
+            cp = torch.arange(self.start, self.start + self.P_v, dtype=torch.int64).reshape(1, self.P_v)
+            h = ttnn.from_torch(cp, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper)
+            ttnn.copy_host_to_device_tensor(h, self.commit_pos)
+            h.deallocate(True)
         self.ctx_len = self.start + produced
         accepted = [self.anchor] if False else drafts[:acc]
         self.anchor = bonus
