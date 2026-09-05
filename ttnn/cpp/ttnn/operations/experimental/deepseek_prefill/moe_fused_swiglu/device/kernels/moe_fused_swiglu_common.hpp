@@ -65,6 +65,9 @@ constexpr uint32_t MBOX_HSEND_DONE = 5;
 // single-signal scatter path lets the writer emit one completion only after this and its own gate
 // payload are both complete, halving the destination atomic fan-in without merging CB ownership.
 constexpr uint32_t MBOX_UP_SCATTER_DONE = 6;
+// Writer -> reader, same core: the writer's half of this block's x sticks (X_SPLIT, block 0) has
+// landed in cb_x_in. Monotone block sequence (gb + 1).
+constexpr uint32_t MBOX_X_HALF_DONE = 7;
 
 // ---------------------------------------------------------------------------
 // The mailbox handshake. The reader fills words 0..2 and then stamps MAGIC into word 3; the writer
@@ -204,6 +207,32 @@ inline uint32_t slice_assigned(uint32_t t, uint32_t cap, uint32_t row) {
     const uint32_t w = slice_workers(t, cap);
     return (row < w) ? (t / w) : 0;
 }
+
+// ---------------------------------------------------------------------------
+// Full-row `down` schedule for PARTIAL blocks (m_eff < M_BLOCK).
+//
+// The full-M schedule (one complete H token tile-row per round, assembled on diagonal core (r, r))
+// generalises to any block whose reduce-scatter slice `a = t / w` divides HN_PAD: worker r's slice
+// [r*a, (r+1)*a) of the m-major [m_eff, HN_PAD] block then lies INSIDE token tile-row (r*a)/HN_PAD
+// at hidden offset (r*a)%HN_PAD, and HN_PAD/a workers assemble each row. The block then runs m_eff
+// H-row rounds instead of HGROUPS hidden-block rounds (11 rounds of 12 tiles -> 2 rounds of 64 at
+// m_eff=2, same bytes, a fifth of the round overhead). Grid-uniform, like everything derived from
+// (m_eff, HN_PAD, KGROUPS). SINGLE SOURCE OF TRUTH for all three kernels.
+inline bool mrow_partial_ok(uint32_t m_eff, uint32_t hn_pad, uint32_t kgroups) {
+    const uint32_t t = m_eff * hn_pad;
+    const uint32_t a = t / slice_workers(t, kgroups);
+    return (hn_pad % a) == 0;
+}
+
+// Workers per token tile-row under that schedule (1 for a full block).
+inline uint32_t mrow_workers_per_row(uint32_t m_eff, uint32_t hn_pad, uint32_t kgroups) {
+    const uint32_t t = m_eff * hn_pad;
+    return hn_pad / (t / slice_workers(t, kgroups));
+}
+
+// Payload-free cb_h slots pushed after the m_eff rounds so every block returns cb_h to its base
+// (the writer derives landing addresses from the base): m_eff + pad == 0 (mod DEPTH_H).
+inline uint32_t mrow_pad_slots(uint32_t m_eff, uint32_t depth_h) { return (depth_h - (m_eff % depth_h)) % depth_h; }
 
 // Tile-rows that core `my_col` injects into the x row-multicast for a block of `m_eff` tile-rows.
 // Round `t`'s rotating injector is column `t % hgroups`, so this counts t in [0, m_eff) with

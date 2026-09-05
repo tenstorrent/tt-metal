@@ -89,6 +89,7 @@ constexpr uint32_t GU_CHUNK_W = HN_PAD / GU_CHUNKS;
 constexpr uint32_t ELTWISE_BLK = CT(ELTWISE_BLK);
 constexpr uint32_t DEST_LIMIT = CT(DEST_LIMIT);
 constexpr uint32_t GATHER_PAGES = CT(GATHER_PAGES);  // the WHOLE landing CB, in tiles
+constexpr uint32_t MROW_PARTIAL = CT(MROW_PARTIAL);
 
 constexpr uint32_t cb_x_in = CT(CB_X_IN);
 constexpr uint32_t cb_x_tiles = CT(CB_X_TILES);
@@ -419,10 +420,13 @@ void kernel_main() {
             // shape and trip count below is derived from it, so count 128 does HALF the gate/up matmul,
             // reduce and `down` work of count 256 instead of the same amount.
             const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, block_idx, M_BLOCK, M_EFF_MIN);
-            const bool wd_mrow = WD_MROW_ROUNDS && (m_eff == M_BLOCK);
+            const bool wd_mrow =
+                WD_MROW_ROUNDS &&
+                ((m_eff == M_BLOCK) || (MROW_PARTIAL && moe_fused_swiglu::mrow_partial_ok(m_eff, HN_PAD, KGROUPS)));
+            const uint32_t mrow_pad = (wd_mrow && !wd_mgroup) ? moe_fused_swiglu::mrow_pad_slots(m_eff, DEPTH_H) : 0;
             // The reader's twin, from the same grid-uniform inputs.
-            h_cursor += wd_mrow ? ((wd_mgroup ? MGROUP_ROWS : KGROUPS) * HID_T + (wd_mgroup ? 0u : HID_T))
-                                : (HGROUPS * m_eff * HN_PAD);
+            h_cursor +=
+                wd_mrow ? ((wd_mgroup ? MGROUP_ROWS : m_eff) * HID_T + mrow_pad * HID_T) : (HGROUPS * m_eff * HN_PAD);
             while (h_cursor >= H_CAP) {
                 h_cursor -= H_CAP;
             }
@@ -699,9 +703,9 @@ void kernel_main() {
                         // writer issue row r while compute works on the next W_down matmul.
                         out_tiles_buf.push_back(out_ec_max);
                     }
-                    if (!wd_mgroup) {
+                    for (uint32_t p = 0; p < mrow_pad; ++p) {
                         h_buf.wait_front(HID_T);
-                        h_buf.pop_front(HID_T);  // ordinary path's payload-free alignment slot
+                        h_buf.pop_front(HID_T);  // the reader's payload-free alignment slots
                     }
                     wd_buf.pop_front(WD_RESIDENT_TILES);
                 } else if constexpr (WD_PACKED) {

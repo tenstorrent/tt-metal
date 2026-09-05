@@ -11,6 +11,8 @@
 
 #include <tt_stl/assert.hpp>
 
+#include <cstdlib>
+
 namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::geometry {
 namespace {
 
@@ -68,7 +70,31 @@ std::optional<ScatterPlan> scatter_plan(uint32_t m_block, uint32_t m_eff_min, ui
     return plan;
 }
 
+uint32_t env_u32(const char* name, uint32_t fallback) {
+    const char* value = std::getenv(name);
+    if (value == nullptr || *value == '\0') {
+        return fallback;
+    }
+    return static_cast<uint32_t>(std::strtoul(value, nullptr, 10));
+}
+
 }  // namespace
+
+Knobs Knobs::from_env() {
+    Knobs knobs;
+    knobs.acc_bf16 = env_u32("MOE_FUSED_SWIGLU_ACC_BF16", knobs.acc_bf16 ? 1u : 0u) != 0;
+    knobs.depth_x = env_u32("MOE_FUSED_SWIGLU_DEPTH_X", knobs.depth_x);
+    knobs.depth_h = env_u32("MOE_FUSED_SWIGLU_DEPTH_H", knobs.depth_h);
+    knobs.hack_ahead = env_u32("MOE_FUSED_SWIGLU_HACK_AHEAD", knobs.hack_ahead);
+    knobs.wd_mrow_rounds = env_u32("MOE_FUSED_SWIGLU_WD_MROW", knobs.wd_mrow_rounds ? 1u : 0u) != 0;
+    knobs.gu_chunks = env_u32("MOE_FUSED_SWIGLU_GU_CHUNKS", knobs.gu_chunks);
+    knobs.gu_sbh = env_u32("MOE_FUSED_SWIGLU_GU_SBH", knobs.gu_sbh);
+    knobs.mrow_partial = env_u32("MOE_FUSED_SWIGLU_MROW_PARTIAL", knobs.mrow_partial ? 1u : 0u) != 0;
+    knobs.x_split = env_u32("MOE_FUSED_SWIGLU_X_SPLIT", knobs.x_split ? 1u : 0u) != 0;
+    knobs.wg_after_xmcast = env_u32("MOE_FUSED_SWIGLU_WG_AFTER_X", knobs.wg_after_xmcast ? 1u : 0u) != 0;
+    knobs.wd_early = env_u32("MOE_FUSED_SWIGLU_WD_EARLY", knobs.wd_early ? 1u : 0u) != 0;
+    return knobs;
+}
 
 Blocking::Blocking(
     uint32_t hgroups_,
@@ -83,7 +109,8 @@ Blocking::Blocking(
     uint32_t l1_budget_,
     uint32_t out_tile_,
     bool enable_phase_alias_,
-    bool x_is_rm_) :
+    bool x_is_rm_,
+    Knobs knobs_) :
     hgroups(hgroups_),
     kgroups(kgroups_),
     num_cores(hgroups_ * kgroups_),
@@ -92,23 +119,27 @@ Blocking::Blocking(
     emb_t(emb_ / TILE),
     hid_t(hidden_ / TILE),
     m_t_max(m_t_max_),
-    m_eff_min(pow2_ceil(OUT_SUBBLOCK_H_GU)),
+    m_eff_min(pow2_ceil(knobs_.gu_sbh)),
     w_tile(w_tile_),
     bfp8_tile(bfp8_tile_),
     bf16_tile(bf16_tile_),
     x_stick(x_stick_ == 0 ? bfp8_tile_ : x_stick_),
     out_tile(out_tile_ == 0 ? bfp8_tile_ : out_tile_),
+    knobs(knobs_),
+    acc_bf16(knobs_.acc_bf16),
+    acc_tile(knobs_.acc_bf16 ? bf16_tile_ : bfp8_tile_),
     enable_phase_alias(enable_phase_alias_),
     x_is_rm(x_is_rm_),
     l1_budget(l1_budget_) {
     TT_FATAL(kgroups >= 2, "moe_fused_swiglu: grid must be at least two rows tall");
     TT_FATAL(emb % TILE == 0 && hidden % TILE == 0, "moe_fused_swiglu: embedding and hidden must be tile-aligned");
     TT_FATAL(pow2_ceil(M_BLOCK) == M_BLOCK, "moe_fused_swiglu: M_BLOCK must be a power of two");
+    TT_FATAL(knobs.depth_h <= SEM_H_RDY_CELLS, "moe_fused_swiglu: depth_h exceeds the H flag cells");
     TT_FATAL(m_eff_min <= M_BLOCK, "moe_fused_swiglu: gate/up subblock height exceeds M_BLOCK");
 
     std::tie(kr_sizes, kr_starts) = split(emb_t, kgroups);
     kr_pad = *std::max_element(kr_sizes.begin(), kr_sizes.end());
-    gu_chunks_target = GU_CHUNKS;
+    gu_chunks_target = knobs.gu_chunks;
 
     const auto choice = choose_hn_pad();
     hn_pad = choice.hn_pad;
@@ -129,7 +160,7 @@ Blocking::Blocking(
             hn_sizes[x] = hn_starts[x] >= hid_t ? 0 : std::min(hn_pad, hid_t - hn_starts[x]);
         }
     }
-    wd_mrow_rounds = WD_MROW_ROUNDS && kgroups == M_BLOCK;
+    wd_mrow_rounds = knobs.wd_mrow_rounds && kgroups == M_BLOCK;
 
     std::tie(ec_sizes, ec_starts) = split(emb_t, num_cores);
     ec_max = *std::max_element(ec_sizes.begin(), ec_sizes.end());
@@ -158,27 +189,27 @@ Blocking::Blocking(
         out_subblock_h_dn *= 2;
     }
     TT_FATAL(
-        M_BLOCK % OUT_SUBBLOCK_H_GU == 0 && M_BLOCK % out_subblock_h_dn == 0,
+        M_BLOCK % knobs.gu_sbh == 0 && M_BLOCK % out_subblock_h_dn == 0,
         "moe_fused_swiglu: M_BLOCK must divide both subblock heights");
 
     max_m_blocks = (m_t_max + M_BLOCK - 1) / M_BLOCK;
-    depth_x = max_m_blocks > 1 ? DEPTH_X : 1;
+    depth_x = max_m_blocks > 1 ? knobs.depth_x : 1;
     depth_w = W_RESIDENT ? 1 : DEPTH_W;
     wd_ahead = std::max(1u, std::min(WD_AHEAD, hgroups));
-    depth_h = DEPTH_H;
-    hack_ahead = std::max(1u, std::min(HACK_AHEAD, depth_h - 1));
+    depth_h = knobs.depth_h;
+    hack_ahead = std::max(1u, std::min(knobs.hack_ahead, depth_h - 1));
     wd_resident = WD_RESIDENT;
     depth_wd = wd_resident ? hgroups : min_depth_wd();
 
     if (wd_mgroups && depth_h > 2 && l1_bytes(true, out_tile, enable_phase_alias) > l1_budget) {
         depth_h = 2;
-        hack_ahead = std::max(1u, std::min(HACK_AHEAD, depth_h - 1));
+        hack_ahead = std::max(1u, std::min(knobs.hack_ahead, depth_h - 1));
     }
     if (wd_mgroups && l1_bytes(true, out_tile, enable_phase_alias) > l1_budget) {
         wd_mgroups = false;
         wd_ec_max = ec_max;
-        depth_h = DEPTH_H;
-        hack_ahead = std::max(1u, std::min(HACK_AHEAD, depth_h - 1));
+        depth_h = knobs.depth_h;
+        hack_ahead = std::max(1u, std::min(knobs.hack_ahead, depth_h - 1));
     }
     if (wd_mrow_rounds && l1_bytes(true, out_tile, enable_phase_alias) > l1_budget) {
         wd_mrow_rounds = false;
@@ -212,7 +243,7 @@ Blocking::Blocking(
     }
     if (depth_h > 2 && l1_bytes(x_is_rm, out_tile, enable_phase_alias) > l1_budget) {
         depth_h = 2;
-        hack_ahead = std::max(1u, std::min(HACK_AHEAD, depth_h - 1));
+        hack_ahead = std::max(1u, std::min(knobs.hack_ahead, depth_h - 1));
     }
     wd_split = wd_resident && depth_wd == hgroups ? std::min(8u, WD_SPLIT) : 0;
     if (wd_split != 0 && hgroups > NOC_MAX_TRANSACTION_ID) {
@@ -238,7 +269,7 @@ Blocking::HnChoice Blocking::choose_hn_pad() const {
             return da == db ? a < b : da < db;
         });
         for (const uint32_t chunk_count : chunks) {
-            if (candidate % chunk_count != 0 || OUT_SUBBLOCK_H_GU * (candidate / chunk_count) > DEST_LIMIT) {
+            if (candidate % chunk_count != 0 || knobs.gu_sbh * (candidate / chunk_count) > DEST_LIMIT) {
                 continue;
             }
             auto plan = scatter_plan(M_BLOCK, m_eff_min, candidate, kgroups);
@@ -315,14 +346,14 @@ std::vector<CbView> Blocking::cb_layout(
         {CB_H, depth_h * h_fast, bfp8_tile, FormatKey::Bfp8},
         {CB_IDX_SCRATCH, 1, idx_page, FormatKey::U32},
         {CB_COUNTS_SCRATCH, 1, counts_page, FormatKey::U32},
-        {CB_GATHER_GATE, gather_pages, bfp8_tile, FormatKey::Bfp8},
-        {CB_GATHER_UP, gather_pages, bfp8_tile, FormatKey::Bfp8},
+        {CB_GATHER_GATE, gather_pages, acc_tile, FormatKey::Acc},
+        {CB_GATHER_UP, gather_pages, acc_tile, FormatKey::Acc},
         {CB_SLICE_GATE, slice_pages, bf16_tile, FormatKey::Bf16},
         {CB_SLICE_UP, slice_pages, bf16_tile, FormatKey::Bf16},
         {CB_H_SLICE, slice_pages, bfp8_tile, FormatKey::Bfp8},
         {CB_OUT_TILES, DEPTH_OUT * out_block, output_tile, FormatKey::Out},
-        {CB_GATE_ACC, gu, bfp8_tile, FormatKey::Bfp8},
-        {CB_UP_ACC, gu, bfp8_tile, FormatKey::Bfp8},
+        {CB_GATE_ACC, gu, acc_tile, FormatKey::Acc},
+        {CB_UP_ACC, gu, acc_tile, FormatKey::Acc},
         {CB_GATE_SILU, slice_pages, bf16_tile, FormatKey::Bf16},
         {CB_H_LOCAL, std::max(gu, h_fast), bfp8_tile, FormatKey::Bfp8},
         {CB_OUT_INTERM, out_interm, bf16_tile, FormatKey::Bf16},
@@ -342,7 +373,8 @@ uint32_t Blocking::phase_cb_alias_pages(uint32_t requested_out_tile) const {
 
 bool Blocking::phase_cb_alias(uint32_t requested_out_tile) const {
     const uint32_t output_tile = requested_out_tile == 0 ? bfp8_tile : requested_out_tile;
-    if (output_tile != bfp8_tile) {
+    // The alias group shares one page size; a bf16 landing CB cannot share pages with a bfp8 output.
+    if (output_tile != bfp8_tile || acc_bf16) {
         return false;
     }
     const auto layout = cb_layout(true, requested_out_tile, 64, 64);
@@ -419,7 +451,8 @@ std::string Blocking::describe() const {
     stream << hgroups << 'x' << kgroups << " grid, emb " << emb << ", hidden " << hidden << ": kr_pad " << kr_pad
            << ", hn_pad " << hn_pad << ", gu_chunks " << gu_chunks << ", ec_max " << ec_max << ", depth_wd " << depth_wd
            << ", depth_x " << depth_x << ", depth_h " << depth_h << ", wd_split " << wd_split << ", wd_mrow "
-           << (wd_mrow_rounds && wd_resident);
+           << (wd_mrow_rounds && wd_resident) << ", hack_ahead " << hack_ahead << ", acc "
+           << (acc_bf16 ? "bf16" : "bfp8");
     return stream.str();
 }
 

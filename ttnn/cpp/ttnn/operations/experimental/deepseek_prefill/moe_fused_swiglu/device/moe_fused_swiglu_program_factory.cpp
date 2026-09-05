@@ -16,6 +16,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "moe_fused_swiglu_geometry.hpp"
 
@@ -92,9 +93,35 @@ void append(std::vector<uint32_t>& destination, const Range& source) {
     destination.insert(destination.end(), source.begin(), source.end());
 }
 
+// Extra -D defines for all three kernels, for A/B experiments: MOE_FUSED_SWIGLU_DEFINES="A=1,B=2".
+void append_env_defines(KernelDescriptor::Defines& defines) {
+    const char* value = std::getenv("MOE_FUSED_SWIGLU_DEFINES");
+    if (value == nullptr) {
+        return;
+    }
+    std::string_view rest(value);
+    while (!rest.empty()) {
+        const size_t comma = rest.find(',');
+        const std::string_view item = rest.substr(0, comma);
+        rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
+        if (item.empty()) {
+            continue;
+        }
+        const size_t eq = item.find('=');
+        const std::string name(item.substr(0, eq));
+        const std::string val(eq == std::string_view::npos ? std::string_view("1") : item.substr(eq + 1));
+        defines.emplace_back(name, val);
+    }
+}
+
 DataFormat format_for(
-    geo::FormatKey key, DataFormat weight_format, DataFormat output_format, DataFormat activation_format) {
+    geo::FormatKey key,
+    DataFormat weight_format,
+    DataFormat output_format,
+    DataFormat activation_format,
+    DataFormat acc_format) {
     switch (key) {
+        case geo::FormatKey::Acc: return acc_format;
         case geo::FormatKey::Bfp8: return DataFormat::Bfp8_b;
         case geo::FormatKey::Bf16: return DataFormat::Float16_b;
         case geo::FormatKey::Weight: return weight_format;
@@ -149,6 +176,10 @@ std::vector<uint32_t> make_reader_ct(
         phase_alias,
         geo::H_ROUND_NOC1_MASK,
         geo::SCATTER_ONE_SIGNAL,
+        blocking.knobs.wg_after_xmcast ? 1u : 0u,
+        blocking.knobs.wd_early ? 1u : 0u,
+        blocking.knobs.mrow_partial ? 1u : 0u,
+        blocking.knobs.x_split ? 1u : 0u,
         activation_page,
         activation_slice,
         counts_page,
@@ -156,6 +187,7 @@ std::vector<uint32_t> make_reader_ct(
         num_global_experts,
         weight_tile,
         bfp8_tile,
+        blocking.acc_tile,
         geo::MAILBOX_MAGIC,
         blocking.wd_ahead,
         blocking.m_eff_min,
@@ -199,6 +231,10 @@ std::vector<uint32_t> make_reader_ct(
 
 std::vector<uint32_t> make_writer_ct(
     const geo::Blocking& blocking,
+    const OperationArguments& operation_arguments,
+    bool activations_are_row_major,
+    uint32_t activation_page,
+    uint32_t activation_slice,
     uint32_t experts_per_chip,
     bool phase_alias,
     bool direct_write,
@@ -231,8 +267,17 @@ std::vector<uint32_t> make_writer_ct(
         geo::SEM_PHASE_FREE,
         geo::SEM_HROW_FREE,
         phase_alias,
+        blocking.knobs.wd_early ? 1u : 0u,
+        blocking.knobs.mrow_partial ? 1u : 0u,
+        blocking.knobs.x_split ? 1u : 0u,
+        activations_are_row_major ? 0u : 1u,
+        operation_arguments.m_tiles,
+        activation_page,
+        activation_slice,
+        operation_arguments.read_x_at_offset,
         weight_tile,
         bfp8_tile,
+        blocking.acc_tile,
         output_tile,
         geo::MAILBOX_MAGIC,
         blocking.m_eff_min,
@@ -265,6 +310,7 @@ std::vector<uint32_t> make_writer_ct(
         geo::CB_H_LOCAL,
         geo::CB_H,
         geo::CB_MAILBOX_WRITER,
+        geo::CB_X_IN,
     };
 }
 
@@ -282,7 +328,7 @@ std::vector<uint32_t> make_compute_ct(
         blocking.kgroups,
         blocking.hid_t,
         activations_are_row_major ? 0u : 1u,
-        geo::OUT_SUBBLOCK_H_GU,
+        blocking.knobs.gu_sbh,
         blocking.out_subblock_h_dn,
         geo::OUT_SUBBLOCK_H_DN_MAX,
         geo::MAILBOX_MAGIC,
@@ -299,6 +345,7 @@ std::vector<uint32_t> make_compute_ct(
         geo::DEST_LIMIT,
         blocking.gather_pages,
         blocking.depth_h,
+        blocking.knobs.mrow_partial ? 1u : 0u,
         geo::CB_X_IN,
         geo::CB_X_TILES,
         geo::CB_X_STAGE,
@@ -363,7 +410,9 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         l1_max - geo::L1_CB_RESERVE,
         output_tile,
         /*enable_phase_alias_=*/true,
-        activations_are_row_major);
+        activations_are_row_major,
+        geo::Knobs::from_env());
+    const DataFormat acc_format = blocking.acc_bf16 ? DataFormat::Float16_b : DataFormat::Bfp8_b;
 
     const bool direct_write = tensor_arguments.expert_region_offsets.has_value();
     const Tensor& start_tensor = direct_write ? *tensor_arguments.expert_region_offsets : tensor_arguments.counts;
@@ -383,6 +432,23 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         l1_need,
         blocking.l1_budget,
         blocking.describe());
+    if (std::getenv("MOE_FUSED_SWIGLU_LOG_L1") != nullptr) {
+        log_info(
+            tt::LogOp,
+            "moe_fused_swiglu: CB L1 {} of {} bytes ({} free), {}",
+            l1_need,
+            blocking.l1_budget,
+            blocking.l1_budget - l1_need,
+            blocking.describe());
+        for (const auto& allocation : blocking.cb_allocations(
+                 activations_are_row_major, output_tile, idx_page, counts_page, /*aliases_enabled=*/true)) {
+            std::string views;
+            for (const auto& view : allocation.views) {
+                views += fmt::format(" cb{}:{}x{}", view.index, view.pages, view.page_size);
+            }
+            log_info(tt::LogOp, "  alloc {} bytes:{}", allocation.total_size, views);
+        }
+    }
 
     for (const auto& allocation : blocking.cb_allocations(
              activations_are_row_major, output_tile, idx_page, counts_page, /*aliases_enabled=*/true)) {
@@ -393,7 +459,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         for (const auto& view : allocation.views) {
             cb_descriptor.format_descriptors.push_back(CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(view.index),
-                .data_format = format_for(view.format, weight_format, output_format, activation_format),
+                .data_format = format_for(view.format, weight_format, output_format, activation_format, acc_format),
                 .page_size = view.page_size,
             });
         }
@@ -468,6 +534,10 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
 
     auto writer_ct = make_writer_ct(
         blocking,
+        operation_arguments,
+        activations_are_row_major,
+        tensor_arguments.activations.buffer()->page_size(),
+        activation_slice,
         experts_per_chip,
         phase_alias,
         direct_write,
@@ -478,7 +548,10 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         wg,
         wd);
     for (auto* buffer :
-         {tensor_arguments.w_ups[0].buffer(), tensor_return_value.buffer(), tensor_arguments.w_downs[0].buffer()}) {
+         {tensor_arguments.w_ups[0].buffer(),
+          tensor_return_value.buffer(),
+          tensor_arguments.w_downs[0].buffer(),
+          tensor_arguments.activations.buffer()}) {
         TensorAccessorArgs(buffer).append_to(writer_ct);
     }
     auto compute_ct = make_compute_ct(blocking, experts_per_chip, activations_are_row_major);
@@ -489,6 +562,8 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         dataflow_defines.emplace_back("MOE_FUSED_SWIGLU_STAGE_PROFILE", "1");
         compute_defines.emplace_back("MOE_FUSED_SWIGLU_STAGE_PROFILE", "1");
     }
+    append_env_defines(dataflow_defines);
+    append_env_defines(compute_defines);
 
     KernelDescriptor reader_descriptor{
         .kernel_source = std::string(KERNEL_ROOT) + "/moe_fused_swiglu_reader.cpp",
@@ -577,7 +652,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             reader_descriptor.emplace_runtime_args(core, reader_args);
 
             KernelDescriptor::RTArgList writer_args;
-            writer_args.reserve(17 + 2 * kgroups + 4 + 2u * experts_per_chip);
+            writer_args.reserve(18 + 4 * kgroups + 4 + 2u * experts_per_chip);
             writer_args.push_back(0u);  // reserved runtime slot
             writer_args.push_back(tensor_arguments.w_ups[0].buffer());
             writer_args.push_back(tensor_return_value.buffer());
@@ -610,6 +685,15 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             for (const auto& w_down : tensor_arguments.w_downs) {
                 writer_args.push_back(w_down.buffer());
             }
+            // The KGROUPS diagonal cores (t, t): row aggregators of the full-row down schedule, by
+            // token tile-row (a partial block's slice may belong to a row other than this core's own).
+            for (uint32_t t = 0; t < kgroups; ++t) {
+                const auto [dvx, dvy] = virtual_core(device, t, t);
+                writer_args.push_back(dvx);
+                writer_args.push_back(dvy);
+            }
+            // x base for the writer's half of the block-0 stick read (X_SPLIT), appended last.
+            writer_args.push_back(tensor_arguments.activations.buffer());
             writer_descriptor.emplace_runtime_args(core, writer_args);
 
             compute_descriptor.emplace_runtime_args(

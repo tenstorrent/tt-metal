@@ -80,16 +80,19 @@ FORCE_INLINE Peer peer_at(uint32_t rt_peers, uint32_t r) {
 }
 
 // Weight streams
-//: One hidden-axis CHUNK of a gate/up block: this row's full K extent, `chunk_w` columns wide, at
-//: CB row stride `chunk_w`. Reads are ISSUED only — the caller owns the barrier. `read == false`
-//: reproduces the CB cycle with no DRAM traffic when weights are resident.
+//: One hidden-axis CHUNK of a gate/up block: K rows [k_lo, k_hi) of this row-group's extent,
+//: `chunk_w` columns wide, at CB row stride `chunk_w` from the CHUNK base (row k at k*chunk_w). Reads
+//: are ISSUED only — the caller owns the barrier. `read == false` reproduces the CB cycle with no DRAM
+//: traffic when weights are resident. The reader and the writer read complementary K ranges of the
+//: same chunk on their own NoCs (WG_SPLIT), so the range is explicit.
 template <class Runs, class Acc>
 FORCE_INLINE void read_weight_chunk(
     const Acc& acc,
     bool read,
     uint32_t chunk,
     uint32_t chunk_w,
-    uint32_t kr_rows,
+    uint32_t k_lo,
+    uint32_t k_hi,
     uint32_t kstart,
     uint32_t hstart,
     uint32_t hn_cols,
@@ -104,7 +107,7 @@ FORCE_INLINE void read_weight_chunk(
     if (!read || w == 0) {
         return;
     }
-    for (uint32_t k = 0; k < kr_rows; ++k) {
+    for (uint32_t k = k_lo; k < k_hi; ++k) {
         Runs::read(
             acc,
             (kstart + k) * hid_t,

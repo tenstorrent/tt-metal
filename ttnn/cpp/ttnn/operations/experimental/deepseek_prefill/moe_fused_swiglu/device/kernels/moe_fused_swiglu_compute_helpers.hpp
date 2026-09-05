@@ -198,9 +198,11 @@ ALWI void add_silu_elementwise(
     PACK(TTI_SEMWAIT(
         p_stall::STALL_TDMA | p_stall::STALL_CFG, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO));
     PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+#ifndef MOE_DEBUG_NO_SILU  // A/B attribution: identity activation (h = gate * up)
     for (uint32_t tile = 0; tile < tiles; ++tile) {
         silu_tile_pack(tile);
     }
+#endif
     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
     for (uint32_t tile = 0; tile < tiles; ++tile) {
         pack_tile(tile, out_cb);

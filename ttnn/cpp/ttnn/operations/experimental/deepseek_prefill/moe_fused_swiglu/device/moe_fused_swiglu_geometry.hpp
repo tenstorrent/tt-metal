@@ -73,15 +73,17 @@ inline constexpr uint32_t SEM_GO = 4;
 inline constexpr uint32_t SEM_DATA = 5;
 inline constexpr uint32_t SEM_HSLICE = 6;
 inline constexpr uint32_t SEM_XSTAGED = 7;
+// Four per-slot H VALID flag cells (8..11), so DEPTH_H may go up to 4.
 inline constexpr uint32_t SEM_H_RDY_BASE = 8;
-inline constexpr uint32_t SEM_H_FREE = 11;
-inline constexpr uint32_t SEM_WDSPLIT = 12;
-inline constexpr uint32_t SEM_PHASE_FREE = 13;
-inline constexpr uint32_t SEM_HROW_FREE = 14;
-inline constexpr uint32_t SEM_COUNT = 15;
+inline constexpr uint32_t SEM_H_RDY_CELLS = 4;
+inline constexpr uint32_t SEM_H_FREE = 12;
+inline constexpr uint32_t SEM_WDSPLIT = 13;
+inline constexpr uint32_t SEM_PHASE_FREE = 14;
+inline constexpr uint32_t SEM_HROW_FREE = 15;
+inline constexpr uint32_t SEM_COUNT = 16;
 inline constexpr uint32_t NUM_DEVICE_SEMAPHORES = 16;
 
-enum class FormatKey : uint8_t { Bfp8, Bf16, Weight, Out, U32, XIn };
+enum class FormatKey : uint8_t { Bfp8, Bf16, Weight, Out, U32, XIn, Acc };
 
 struct CbView {
     uint32_t index;
@@ -99,6 +101,37 @@ struct ScatterPlan {
     uint32_t slice_pages = 0;
     uint32_t gather_pages = 0;
     std::vector<uint32_t> sizes;
+};
+
+// Experiment knobs, read from the environment by Knobs::from_env() so an A/B needs no rebuild.
+// Every default reproduces the shipped constants above.
+struct Knobs {
+    // gate/up partials (CB_GATE_ACC/CB_UP_ACC) and the reduce-scatter landing CBs
+    // (CB_GATHER_*) in bf16 instead of bfp8. MOE_FUSED_SWIGLU_ACC_BF16=1
+    bool acc_bf16 = false;
+    // 1, not the constant's 2: the second resident-x slot measured as free to drop at every M (the
+    // row-major prefetch lands in cb_x_in, and the reader reaches the next block's multicast only
+    // after its own phase 2), and it is 244 KB -- what pays for the bf16 intermediates.
+    uint32_t depth_x = 1;                  // MOE_FUSED_SWIGLU_DEPTH_X
+    uint32_t depth_h = DEPTH_H;            // MOE_FUSED_SWIGLU_DEPTH_H
+    uint32_t hack_ahead = HACK_AHEAD;      // MOE_FUSED_SWIGLU_HACK_AHEAD
+    bool wd_mrow_rounds = WD_MROW_ROUNDS;  // MOE_FUSED_SWIGLU_WD_MROW
+    uint32_t gu_chunks = GU_CHUNKS;        // MOE_FUSED_SWIGLU_GU_CHUNKS
+    // gate/up output sub-block HEIGHT (in0 rows reused per in1 load). MOE_FUSED_SWIGLU_GU_SBH
+    uint32_t gu_sbh = OUT_SUBBLOCK_H_GU;
+    // Full-row down schedule also for partial blocks (m_eff < M_BLOCK). Measured perf-neutral at
+    // M=64/128 (DRAM-bound) and it inherits the full-row bfp8 pack error, so off. MOE_FUSED_SWIGLU_MROW_PARTIAL
+    bool mrow_partial = false;
+    // Block 0, row-major x: the WRITER reads the odd sticks of this core's x row on NoC1 while the
+    // reader reads the even ones on NoC0 (the writer is idle until x is staged anyway). The rows that
+    // lose NoC0 arbitration stage x in 12-16 us instead of 5, and everything downstream waits for it.
+    bool x_split = false;  // MOE_FUSED_SWIGLU_X_SPLIT (measured: +5..+7%, NoC1 reads lose)
+    // Issue W_gate chunk 0 after the x row-multicast loop instead of before it. MOE_FUSED_SWIGLU_WG_AFTER_X
+    bool wg_after_xmcast = false;
+    // Issue the resident W_down batch (both NoCs) at the very start of block 0 instead of after the
+    // gate/up streams, so DRAM is busy from the first microsecond. MOE_FUSED_SWIGLU_WD_EARLY
+    bool wd_early = false;  // measured: +6..+16% at every M (the batch competes with x and gate/up)
+    static Knobs from_env();
 };
 
 class Blocking {
@@ -119,7 +152,8 @@ public:
         uint32_t l1_budget_,
         uint32_t out_tile_,
         bool enable_phase_alias_,
-        bool x_is_rm_);
+        bool x_is_rm_,
+        Knobs knobs_ = {});
 
     std::vector<CbView> cb_layout(
         bool input_is_rm, uint32_t requested_out_tile, uint32_t idx_page, uint32_t counts_page) const;
@@ -180,6 +214,9 @@ public:
     uint32_t bf16_tile;
     uint32_t x_stick;
     uint32_t out_tile;
+    Knobs knobs;
+    bool acc_bf16;
+    uint32_t acc_tile;
     bool enable_phase_alias;
     bool x_is_rm;
     uint32_t l1_budget;
