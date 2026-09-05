@@ -136,7 +136,7 @@ def test_l1_client_labels_cover_all_subport_ranges():
 
 
 def test_quasar_capture_produces_quasar_metrics_per_op():
-    df = make_capture(QUASAR_CAPTURE_TYPES, "QUASAR_NEO{}_TRISC1", 4)
+    df = make_capture(QUASAR_CAPTURE_TYPES, "QUASAR_NEO{}", 4)
     stats = compute_perf_counter_metrics(df, "quasar", total_compute_cores=4)["per_op_stats"]
     for metric in QUASAR_EXPECTED_METRICS:
         assert metric in stats, metric
@@ -145,7 +145,7 @@ def test_quasar_capture_produces_quasar_metrics_per_op():
 
 
 def test_quasar_capture_produces_quasar_metrics_device_only():
-    df = make_capture(QUASAR_CAPTURE_TYPES, "QUASAR_NEO{}_TRISC1", 4)
+    df = make_capture(QUASAR_CAPTURE_TYPES, "QUASAR_NEO{}", 4)
     agg_metrics, _ = compute_device_only_metrics(df, "quasar")
     for metric in QUASAR_EXPECTED_METRICS:
         assert metric in agg_metrics, metric
@@ -206,7 +206,7 @@ def test_l1_client_carry_rates_scale_by_lane_count():
             "record time": 1,
             "core_x": 1,
             "core_y": 1,
-            "risc_type": "QUASAR_NEO0_TRISC1",
+            "risc_type": "QUASAR_NEO0",
             "counter type": name,
             "value": 100,
             "ref cnt": 10000,
@@ -227,7 +227,7 @@ def test_l1_client_carry_rates_scale_by_lane_count():
 def test_absent_l1_noc_counters_give_nan_not_zero():
     # Quasar has no L1_0_* NOC/grant counters; efficiency metrics that need them must be NaN, not 0.
     quasar_only = {n for n in QUASAR_CAPTURE_TYPES if n.startswith("L1_CLIENT_")}
-    df = make_capture([n for n in QUASAR_CAPTURE_TYPES if n not in quasar_only], "QUASAR_NEO{}_TRISC1", 1)
+    df = make_capture([n for n in QUASAR_CAPTURE_TYPES if n not in quasar_only], "QUASAR_NEO{}", 1)
     agg, _ = compute_device_only_metrics(df, "quasar")
     for metric in ("Unpacker L1 Efficiency", "Packer L1 Efficiency", "NOC vs Compute Balance"):
         if metric in agg:
