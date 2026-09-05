@@ -292,6 +292,10 @@ class DFlashDrafter:
         # padded vocab == real vocab (no invalid tail to mask). A/B knob.
         self._use_shard_argmax = _os.environ.get("GEMMA4_DFLASH_SHARD_ARGMAX", "0") == "1"
         self._sa_cache = {}
+        # flash-decode drafter attention (replaces the explicit repeat_interleave/
+        # matmul/softmax chain; keys zero-padded to a 64-multiple, masked out)
+        self._use_sdpa = _os.environ.get("GEMMA4_DFLASH_SDPA", "0") == "1"
+        self._sdpa_zpad = None
         # lm_head stays VOCAB-SHARDED even when the drafter runs replicated:
         # a replicated 262k x H head is 2.7 GB/device, and the on-device
         # sampler consumes sharded logits (its own tiny top-1 gather).
@@ -450,6 +454,30 @@ class DFlashDrafter:
         """
         K1 = x.shape[2]
         scale = 1.0 / math.sqrt(self.head_dim)
+        use_sdpa = self._use_sdpa
+        if use_sdpa:
+            # keys padded to a k_chunk multiple; pad columns arrive NEG from the
+            # mask builder. Masks are H-repeated once per iteration (h-major
+            # rows, the packed-verify contract).
+            S_k = ctx_rows + K1
+            padn = (-S_k) % 64
+            if padn and self._sdpa_zpad is None:  # compile-pass one-time alloc
+                self._sdpa_zpad = ttnn.from_torch(
+                    torch.zeros(1, self.local_kv, padn, self.head_dim, dtype=torch.bfloat16),
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=self._replicate,
+                )
+            mf_r = ttnn.repeat(mask_full_tt, ttnn.Shape([1, 1, self.local_heads, 1]))
+            ms_r = ttnn.repeat(mask_slide_tt, ttnn.Shape([1, 1, self.local_heads, 1]))
+            sdpa_pc = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+                q_chunk_size=32,
+                k_chunk_size=64,
+                exp_approx_mode=False,
+                max_cores_per_head_batch=16,
+            )
         for li, lyr in enumerate(self.layers):
             resid = x
             xn = self._rms(x, lyr["in_norm"])
@@ -466,24 +494,50 @@ class DFlashDrafter:
 
             k_blk = self._rms(_heads(k_blk, K1), lyr["k_norm"])
             k_blk = self._apply_rope(k_blk, cos_blk, sin_blk)
-            k = ttnn.concat([ctx_k[li], k_blk], dim=2)
-            v = ttnn.concat([ctx_v[li], _heads(v_blk, K1)], dim=2)
-            k_blk.deallocate(True)
-            v_blk.deallocate(True)
-            if self.local_kv != self.local_heads:
-                k = ttnn.repeat_interleave(k, self.local_heads // self.local_kv, dim=1)
-                v = ttnn.repeat_interleave(v, self.local_heads // self.local_kv, dim=1)
-            scores = ttnn.matmul(q, ttnn.transpose(k, 2, 3), compute_kernel_config=self._ckc)
-            scores = ttnn.multiply(scores, scale)
-            scores = ttnn.add(scores, mask_slide_tt if lyr["sliding"] else mask_full_tt)
-            probs = ttnn.softmax(scores, dim=-1, compute_kernel_config=self._ckc, numeric_stable=True)
-            scores.deallocate(True)
-            attn = ttnn.matmul(probs, v, compute_kernel_config=self._ckc)
-            probs.deallocate(True)
-            k.deallocate(True)
-            v.deallocate(True)
-            q.deallocate(True)
-            attn = ttnn.reshape(ttnn.transpose(attn, 1, 2), (1, 1, K1, self.local_heads * self.head_dim))
+            if use_sdpa:
+                tail = [self._sdpa_zpad] if padn else []
+                k = ttnn.concat([ctx_k[li], k_blk] + tail, dim=2)
+                v = ttnn.concat([ctx_v[li], _heads(v_blk, K1)] + tail, dim=2)
+                k_blk.deallocate(True)
+                v_blk.deallocate(True)
+                q_rm = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
+                qp = ttnn.to_layout(ttnn.reshape(q_rm, (1, 1, self.local_heads * K1, self.head_dim)), ttnn.TILE_LAYOUT)
+                a = ttnn.transformer.scaled_dot_product_attention_decode(
+                    qp,
+                    k,
+                    v,
+                    is_causal=False,
+                    attn_mask=ms_r if lyr["sliding"] else mf_r,
+                    scale=scale,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    program_config=sdpa_pc,
+                )
+                k.deallocate(True)
+                v.deallocate(True)
+                q.deallocate(True)
+                a_rm = ttnn.to_layout(a, ttnn.ROW_MAJOR_LAYOUT)
+                a.deallocate(True)
+                a4 = ttnn.permute(ttnn.reshape(a_rm, (1, self.local_heads, K1, self.head_dim)), (0, 2, 1, 3))
+                attn = ttnn.to_layout(ttnn.reshape(a4, (1, 1, K1, self.local_heads * self.head_dim)), ttnn.TILE_LAYOUT)
+            else:
+                k = ttnn.concat([ctx_k[li], k_blk], dim=2)
+                v = ttnn.concat([ctx_v[li], _heads(v_blk, K1)], dim=2)
+                k_blk.deallocate(True)
+                v_blk.deallocate(True)
+                if self.local_kv != self.local_heads:
+                    k = ttnn.repeat_interleave(k, self.local_heads // self.local_kv, dim=1)
+                    v = ttnn.repeat_interleave(v, self.local_heads // self.local_kv, dim=1)
+                scores = ttnn.matmul(q, ttnn.transpose(k, 2, 3), compute_kernel_config=self._ckc)
+                scores = ttnn.multiply(scores, scale)
+                scores = ttnn.add(scores, mask_slide_tt if lyr["sliding"] else mask_full_tt)
+                probs = ttnn.softmax(scores, dim=-1, compute_kernel_config=self._ckc, numeric_stable=True)
+                scores.deallocate(True)
+                attn = ttnn.matmul(probs, v, compute_kernel_config=self._ckc)
+                probs.deallocate(True)
+                k.deallocate(True)
+                v.deallocate(True)
+                q.deallocate(True)
+                attn = ttnn.reshape(ttnn.transpose(attn, 1, 2), (1, 1, K1, self.local_heads * self.head_dim))
             o = ttnn.linear(attn, lyr["o_proj"], compute_kernel_config=self._ckc)
             attn.deallocate(True)
             if self.tp > 1 and not self.replicated:
@@ -508,6 +562,9 @@ class DFlashDrafter:
             mlp.deallocate(True)
             resid.deallocate(True)
 
+        if use_sdpa:
+            mf_r.deallocate(True)
+            ms_r.deallocate(True)
         # identical id-producing tail to block_forward
         h = self._rms(x, self.final_norm_w)
         x.deallocate(True)
@@ -917,6 +974,9 @@ class DFlashFusedDecoder:
         self.ctx_pos = ttnn.from_torch(torch.zeros(1, ctx_cap, dtype=torch.int64), **mkU0)
         self.anchor_row = ttnn.from_torch(z(1, 1, 1, H, dtype=torch.bfloat16), **mkT)
         S = ctx_cap + K + 1
+        if drafter._use_sdpa:
+            S += (-S) % 64  # keys are zero-padded to a k_chunk multiple (masked NEG)
+        self._dmask_w = S
         self.mask_full = ttnn.from_torch(z(1, 1, K + 1, S, dtype=torch.bfloat16), **mkT)
         self.mask_slide = ttnn.from_torch(z(1, 1, K + 1, S, dtype=torch.bfloat16), **mkT)
         mkU = dict(device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper)
@@ -1047,13 +1107,20 @@ class DFlashFusedDecoder:
         kpos = torch.cat([ctx_positions, torch.arange(start, start + K + 1)])[None, :]
         kvalid = torch.cat([torch.arange(self.cap) < win_len, torch.ones(K + 1, dtype=torch.bool)])[None, :]
         vis_full = kvalid.expand(K + 1, -1)
-        mf = torch.where(vis_full, 0.0, float("-inf")).to(torch.bfloat16)
+        # -1e9, not -inf: equivalent under the explicit softmax path and
+        # REQUIRED by the SDPA drafter branch (flash kernels NaN on -inf)
+        mf = torch.where(vis_full, 0.0, -1e9).to(torch.bfloat16)
         w = self.drafter.sliding_window
         if w:
             vis_s = vis_full & (qpos - kpos < w) & (kpos - qpos < w)
-            ms = torch.where(vis_s, 0.0, float("-inf")).to(torch.bfloat16)
+            ms = torch.where(vis_s, 0.0, -1e9).to(torch.bfloat16)
         else:
             ms = mf
+        padn = self._dmask_w - mf.shape[1]
+        if padn:
+            neg = torch.full((K + 1, padn), -1e9, dtype=torch.bfloat16)
+            mf = torch.cat([mf, neg], dim=1)
+            ms = torch.cat([ms, neg], dim=1) if ms is not mf else mf
         for host, dev in ((mf, self.mask_full), (ms, self.mask_slide)):
             h = ttnn.from_torch(
                 host.unsqueeze(0).unsqueeze(0), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=self._mapper
@@ -1437,7 +1504,7 @@ class DFlashFusedDecoder:
         # boundary, plus the [P_v] write-idx vector.
         if self.pv_slide_ring:
             ring, W = self.pv_slide_ring, self.target.hf_config.sliding_window
-            NEG = float("-inf")
+            NEG = -1e9  # NOT -inf: the flash SDPA NaNs on -inf additive masks
             top = start + P_v - 1
             jr = torch.arange(ring)
             d = torch.remainder(top - jr, ring)
