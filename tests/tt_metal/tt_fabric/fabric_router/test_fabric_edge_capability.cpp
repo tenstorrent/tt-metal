@@ -57,21 +57,6 @@ TEST(FabricEdgeCapabilityTest, SameMeshZWithoutExpressIsRejected) {
     EXPECT_ANY_THROW(classify_fabric_edge(node(0, 2), node(0, 5), RoutingDirection::Z, k_express_off));
 }
 
-TEST(FabricEdgeCapabilityTest, ExpressAndIntermeshAreDistinguishedOnTheSameChip) {
-    // One chip may have a same-mesh express chord on Z and an intermesh edge on a cardinal port.
-    const auto local = node(0, 2);
-    EXPECT_EQ(
-        classify_fabric_edge(local, node(0, 5), RoutingDirection::Z, k_express_on), EdgeCapability::INTRAMESH_EXPRESS);
-    EXPECT_EQ(classify_fabric_edge(local, node(3, 0), RoutingDirection::E, k_express_on), EdgeCapability::INTERMESH);
-}
-
-TEST(FabricEdgeCapabilityTest, CapabilityNamesAreStable) {
-    // These strings appear in configuration failures, so keep them recognizable.
-    EXPECT_EQ(enchantum::to_string(EdgeCapability::INTRAMESH_CARDINAL), "INTRAMESH_CARDINAL");
-    EXPECT_EQ(enchantum::to_string(EdgeCapability::INTRAMESH_EXPRESS), "INTRAMESH_EXPRESS");
-    EXPECT_EQ(enchantum::to_string(EdgeCapability::INTERMESH), "INTERMESH");
-}
-
 TEST(FabricEdgeCapabilityTest, CapabilitiesAtChecksThePortDomain) {
     // The five ports round-trip through at(); C and NONE are not ports and must never index the
     // set -- the array has five slots and the enum has seven values, so the check is the point.

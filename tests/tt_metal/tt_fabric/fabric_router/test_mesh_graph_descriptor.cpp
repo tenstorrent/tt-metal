@@ -2551,9 +2551,6 @@ TEST(MeshGraphDescriptorTests, ExpressLinks8x4) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto";
 
-    EXPECT_NO_THROW(
-        tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string()));
-
     tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
     const auto& intra = mesh_graph.get_intra_mesh_connectivity();
     ASSERT_EQ(intra.size(), 1u);
@@ -2622,9 +2619,6 @@ TEST(MeshGraphDescriptorTests, ExpressLinks32x4) {
     const std::filesystem::path desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_32x4_mesh_graph_descriptor.textproto";
-
-    EXPECT_NO_THROW(
-        tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string()));
 
     tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
     const auto& intra = mesh_graph.get_intra_mesh_connectivity();
