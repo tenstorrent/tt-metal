@@ -31,13 +31,8 @@ PERF_COUNTER_MARKER_ID = "9090"
 
 
 def schedule_perf_counter_passes(requested_groups, max_groups_per_pass=PERF_COUNTER_MAX_GROUPS_PER_PASS):
-    """Partition requested counter groups into capture passes (replays of the workload).
-
-    Two hardware/firmware constraints per pass:
-      - at most ONE L1 bank (l1_0..l1_4 share a single count-time mux)
-      - at most max_groups_per_pass groups (BRISC firmware .text fit)
-    Returns a list of passes, each an ordered list of group names.
-    """
+    """Split counter groups into passes: at most one L1 bank (shared mux) and max_groups_per_pass groups
+    (BRISC firmware fit) per pass. Returns a list of passes, each an ordered list of group names."""
     seen = list(dict.fromkeys(g.lower() for g in requested_groups))  # dedup, preserve order
     l1 = [g for g in seen if g in PERF_COUNTER_L1_GROUPS]
     non_l1 = [g for g in seen if g not in PERF_COUNTER_L1_GROUPS]
@@ -55,6 +50,11 @@ def schedule_perf_counter_passes(requested_groups, max_groups_per_pass=PERF_COUN
     return [p for p in passes if p]
 
 
+def arch_l1_groups(is_blackhole):
+    """L1 counter groups an architecture has: Blackhole's 2-NOC L1 exposes banks 2-4 as well."""
+    return ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4"] if is_blackhole else ["l1_0", "l1_1"]
+
+
 def perf_counter_groups_to_bitfield(groups):
     """OR the PROFILE_PERF_COUNTERS_* bits for a list of group names."""
     bits = 0
@@ -64,11 +64,7 @@ def perf_counter_groups_to_bitfield(groups):
 
 
 def merge_perf_counter_device_logs(pass_csvs, out_csv):
-    """Merge per-pass device profiler CSVs into one.
-
-    Every pass replayed the same workload, so pass 0's log is kept whole (zones plus its counter
-    rows) and later passes contribute only their perf-counter rows.
-    """
+    """Merge per-pass device logs: pass 0 whole, later passes contribute only their perf-counter rows."""
     merged = list(Path(pass_csvs[0]).read_text().splitlines(keepends=True))
     for extra in pass_csvs[1:]:
         for line in Path(extra).read_text().splitlines(keepends=True):
@@ -347,7 +343,8 @@ def main():
 
     # Schedule and validate once, in the outer capture process; the inner --no-capture-tool run
     # only honors the TT_METAL_PROFILE_PERF_COUNTERS mask it inherits via env.
-    if options.perf_counter_groups and not options.noCapture:
+    inherited_mask = options.noCapture and "TT_METAL_PROFILE_PERF_COUNTERS" in os.environ
+    if options.perf_counter_groups and not inherited_mask:
         # Detect device arch: Blackhole has L1 banks 2-4 (2-NOC), WH/GS only 0-1.
         declared_arch = next(
             (os.environ.get(v) for v in ("TT_METAL_DEVICE_ARCH", "TT_ARCH_NAME", "ARCH_NAME") if os.environ.get(v)),
@@ -363,9 +360,14 @@ def main():
             except Exception:
                 logger.debug("Failed to detect device arch via ttnn")
         is_blackhole = declared_arch is not None and declared_arch.strip().lower() == "blackhole"
+        if declared_arch is None and any(g.lower() == "all" for g in options.perf_counter_groups):
+            raise ValueError(
+                "Cannot resolve counter group 'all' without the device architecture (detection failed); "
+                "set TT_METAL_DEVICE_ARCH or ARCH_NAME, or list the groups explicitly."
+            )
 
         # Resolve requested group names; "all" expands to the arch's full set.
-        arch_l1 = ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4"] if is_blackhole else ["l1_0", "l1_1"]
+        arch_l1 = arch_l1_groups(is_blackhole)
         resolved = []
         for group in options.perf_counter_groups:
             g = group.lower()
@@ -401,6 +403,10 @@ def main():
                 f"  pass {i + 1}: {', '.join(p)}  (bitfield {perf_counter_groups_to_bitfield(p)})"
                 for i, p in enumerate(passes)
             )
+            if options.noCapture:
+                raise ValueError(
+                    f"--no-capture-tool cannot replay the workload; these groups need {len(passes)} passes:\n{plan}"
+                )
             if not options.perf_counter_multipass:
                 raise ValueError(
                     f"Requested counter groups {resolved} need {len(passes)} capture passes "
@@ -547,10 +553,15 @@ def main():
                         copyfile(device_log, snap)
                         pass_logs.append(snap)
                     else:
-                        logger.warning(f"Device log missing after perf-counter pass {i + 1}: {device_log}")
-                if pass_logs:
-                    merge_perf_counter_device_logs(pass_logs, device_log)
-                    logger.info(f"Merged {len(pass_logs)} perf-counter pass logs into {device_log}")
+                        logger.error(f"Device log missing after perf-counter pass {i + 1}: {device_log}")
+                if len(pass_logs) != len(pass_bitfields):
+                    logger.error(
+                        f"Only {len(pass_logs)}/{len(pass_bitfields)} perf-counter passes produced a device log; "
+                        "not merging a partial capture"
+                    )
+                    sys.exit(4)
+                merge_perf_counter_device_logs(pass_logs, device_log)
+                logger.info(f"Merged {len(pass_logs)} perf-counter pass logs into {device_log}")
             else:
                 run_workload(envVars)
 

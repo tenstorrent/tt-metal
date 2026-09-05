@@ -8,6 +8,7 @@ from tracy.__main__ import (
     PERF_COUNTER_L1_GROUPS,
     PERF_COUNTER_MAX_GROUPS_PER_PASS,
     merge_perf_counter_device_logs,
+    arch_l1_groups,
     perf_counter_groups_to_bitfield,
     schedule_perf_counter_passes,
 )
@@ -75,3 +76,8 @@ def test_merge_keeps_pass0_whole_and_appends_only_counter_rows(tmp_path):
     assert lines[3:] == ["0,1,1,BRISC,9090,115,43,7", "0,1,1,TRISC_0,9090,116,44,7"]
     assert sum("4096" in line for line in lines) == 1
     assert sum(line.startswith("PCIe") for line in lines) == 1
+
+
+def test_arch_l1_groups():
+    assert arch_l1_groups(True) == ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4"]
+    assert arch_l1_groups(False) == ["l1_0", "l1_1"]

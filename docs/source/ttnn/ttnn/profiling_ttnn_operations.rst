@@ -138,7 +138,7 @@ To capture performance counters alongside profiling data, use the ``python -m tr
 
 ..  code-block:: sh
 
-    python -m tracy --profiler-capture-perf-counters=fpu,pack,unpack,l1_0,instrn \
+    python -m tracy --profiler-capture-perf-counters=all --perf-counter-multipass \
         -m "pytest your_test.py -x -v"
 
 Available counter groups:
@@ -151,7 +151,7 @@ Available counter groups:
 - ``instrn`` — per-thread instruction availability, stalls, and issue counts
 - ``all`` — all of the above (recommended starting point)
 
-**Note**: ``l1_0`` and ``l1_1`` share a hardware mux and cannot be captured simultaneously in a single ``python -m tracy`` run. To capture both, run them in separate passes. Automatic two-pass capture and merge is supported by the model-log wrapper (``process_model_log.run_device_profiler``).
+**Note**: the BRISC firmware fits the readout code for 3 counter groups per run and the L1 banks share one mux, so ``all`` needs several passes. Without ``--perf-counter-multipass`` the run stops and prints the pass plan; with it the workload is replayed once per pass and the device logs are merged.
 
 Blackhole-only groups: ``l1_2``, ``l1_3``, ``l1_4`` (additional NOC ring ports).
 
