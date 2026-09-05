@@ -406,7 +406,7 @@ models:
   demo:
     bh_galaxy: 470
     bh_sc1: 488
-    bh_sc1_high_power: 166
+    bh_sc1_high_power: 171
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
