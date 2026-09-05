@@ -76,15 +76,55 @@ def _make_input(torch_chunk, dtype, layout, mesh_device, mesh_mapper):
     )
 
 
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        pytest.param(
-            (1, 1), marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="mesh-1x1"), id="1x1"
-        ),
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("metadata", [False, True], ids=["scalar", "metadata"])
+def test_update_padded_kv_cache_fresh_buffers(mesh_device, metadata):
+    """Fresh input/cache allocations and changing slot/start must hit one program and copy exact bytes."""
+    live_buffers = []
+    entries = None
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    for iteration, (slot, start) in enumerate(((0, 0), (1, 32), (0, 64))):
+        cache = init_kvpe_cache(
+            kvpe_cache_head_dim=KVPE_HEAD_DIM,
+            mesh_device=mesh_device,
+            seq_len=256,
+            mesh_shape=list(mesh_device.shape),
+            sp_axis=0,
+            num_kvpe_cache_layers=2,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        host = torch.full((1, 1, 32, KVPE_HEAD_DIM), iteration + 1, dtype=torch.bfloat16)
+        src = _make_input(host, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh_device, mapper)
+        live_buffers.append((cache, src))
+        if metadata:
+            _update_kv(
+                cache,
+                src,
+                slot_idx=slot,
+                kv_actual_global=start,
+                layer_idx=0,
+                num_layers=1,
+                cluster_axis=0,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_device=mesh_device,
+            )
+        else:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                cache, src, slot_idx=slot, kv_actual_global=start, layer_idx=0, num_layers=1, cluster_axis=0
+            )
+        result = ttnn.to_torch(cache, mesh_composer=composer).reshape(2, 1, 256, KVPE_HEAD_DIM)
+        assert torch.equal(result[slot : slot + 1, :, start : start + 32], host)
+        if entries is None:
+            entries = mesh_device.num_program_cache_entries()
+        else:
+            assert (
+                mesh_device.num_program_cache_entries() == entries
+            ), "fresh allocations or runtime controls recompiled"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_scaled_fp8_packed_row(mesh_device):
     """The update op preserves the complete 656-byte mixed-format row as one FP8-typed stream."""

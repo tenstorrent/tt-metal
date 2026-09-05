@@ -690,9 +690,11 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    // Default adapter behaviour: patch operand buffer-binding addresses on cache hits.
-    descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output);
+    tensor_return_value_t& /*output*/) {
+    // Only argument 0 of each worker changes with the operands; CBs and work splits are static.
+    // Resolve the two addresses once, then fetch each kernel argument matrix once per program.
+    const uint32_t input_address = tensor_args.input.buffer()->address();
+    const uint32_t cache_address = tensor_args.cache.buffer()->address();
     // The writer's per-call common runtime args are raw scalars (not Buffer* bindings), so the
     // buffer-binding fast path would leave them stale across calls. Patch BOTH on every cached
     // program: metadata path -> arg 8 = slot_idx tensor's raw DRAM address, arg 9 = kv_actual_global
@@ -713,6 +715,20 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
     const uint32_t arg10 = tensor_args.valid_global.has_value() ? tensor_args.valid_global->buffer()->address()
                                                                 : args.valid_global.value_or(0);
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        const auto patch_address = [&](uint32_t kernel, uint32_t address) {
+            auto& runtime_args = GetRuntimeArgs(program, kernel);
+            for (auto& column : runtime_args) {
+                for (auto& core_args : column) {
+                    // create_descriptor gives exactly these three args to every worker; other cores are empty.
+                    if (core_args.size() != 0) {
+                        TT_FATAL(core_args.size() == 3, "update_padded_kv_cache worker expects three runtime args");
+                        core_args[0] = address;
+                    }
+                }
+            }
+        };
+        patch_address(kReaderKernelHandle, input_address);
+        patch_address(kWriterKernelHandle, cache_address);
         auto& writer_common = GetCommonRuntimeArgs(program, kWriterKernelHandle);
         TT_FATAL(
             kArg10 < writer_common.size(), "update_padded_kv_cache writer is missing its per-call common runtime args");

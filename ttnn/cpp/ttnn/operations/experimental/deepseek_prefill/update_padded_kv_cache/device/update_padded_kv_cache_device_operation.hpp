@@ -82,10 +82,8 @@ struct UpdatePaddedKvCacheDeviceOperation {
         using tensor_return_value_t = UpdatePaddedKvCacheDeviceOperation::tensor_return_value_t;
     };
 
-    // Wraps the ProgramDescriptor factory so the default adapter patches buffer bindings on cache
-    // hits, and override_runtime_arguments additionally patches the per-call common runtime args the
-    // buffer-binding fast path would leave stale: the slot_idx/kv_actual_global tensors' raw DRAM
-    // addresses (metadata path) or slot_idx/kv_actual_global scalars (scalar path).
+    // Use the descriptor adapter for construction, then patch the two operand addresses directly
+    // on cache hits. Per-call common args carry metadata buffer addresses or scalar slot/offset values.
     struct MeshWorkloadFactory {
         using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
             DescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<ProgramFactory>;
