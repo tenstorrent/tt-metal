@@ -872,6 +872,12 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         iterations = int(os.environ.get("DS_PERF_HOST_ITERS", "20"))
         assert warmups >= 1 and iterations >= 1
         use_trace = os.environ.get("DS_PERF_HOST_TRACE", "0") == "1"
+        profile_mode = os.environ.get("DS_PERF_HOST_PROFILE", "")
+        python_profiler = None
+        if profile_mode == "cprofile":
+            import cProfile
+
+            python_profiler = cProfile.Profile()
         samples = []
         for start in starts:
             trace_id = None
@@ -887,14 +893,26 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             try:
                 for iteration in range(-warmups, iterations):
                     ttnn.synchronize_device(mesh_device)
+                    measured_zone = iteration >= 0 and profile_mode == "tracy"
+                    if measured_zone:
+                        ttnn.start_tracy_zone(__file__, f"MLA_FORWARD_{iteration}", 0)
+                    if python_profiler is not None and iteration >= 0:
+                        python_profiler.enable()
                     begin = time.perf_counter_ns()
                     if use_trace:
                         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
                     else:
                         output = _one_forward(start)
                     submitted = time.perf_counter_ns()
+                    if python_profiler is not None and iteration >= 0:
+                        python_profiler.disable()
+                    if measured_zone:
+                        ttnn.stop_tracy_zone()
+                        ttnn.start_tracy_zone(__file__, f"MLA_FINISH_{iteration}", 0)
                     ttnn.synchronize_device(mesh_device)
                     completed = time.perf_counter_ns()
+                    if measured_zone:
+                        ttnn.stop_tracy_zone()
                     if not use_trace:
                         ttnn.deallocate(output)
                     if iteration >= 0:
@@ -914,6 +932,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         report = {
             "git": _git_head(),
             "execution": "trace_replay" if use_trace else "untraced",
+            "profile_mode": profile_mode,
             "variant": variant.name,
             "scenario": scenario,
             "case": _profile_case_id(attn_mode, kv_cache_format),
@@ -929,6 +948,8 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             },
         }
         path = os.path.join(_output_dir(subdir), f"host{'_trace' if use_trace else ''}_{scenario}.json")
+        if python_profiler is not None:
+            python_profiler.dump_stats(os.path.join(_output_dir(subdir), f"host_{scenario}.pstats"))
         with open(path, "w") as f:
             json.dump(report, f, indent=2)
         logger.info(f"{report['execution']} host timing: {report['medians_ms']}; samples: {path}")

@@ -182,6 +182,7 @@ void enqueue_mesh_workload(
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
     [[maybe_unused]] bool program_cache_hit = false) {
+    ZoneScopedN("HostProfile::enqueue_wrapper");
     // Generate and set runtime_id for all programs (always, for dispatcher)
     auto runtime_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
     for (auto& [_, program] : workload.get_programs()) {
@@ -190,6 +191,7 @@ void enqueue_mesh_workload(
 
     // Inspector: emit debug entry with tensor parameters
     if (tt::tt_metal::experimental::inspector::IsEnabled()) {
+        ZoneScopedN("HostProfile::inspector");
         auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
 
         std::vector<tt::tt_metal::TensorSpec> spec_copies;
@@ -266,10 +268,14 @@ void handle_mesh_adapter_cache_hit(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     const ProgramCacheKey& program_key) {
-    if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
-        mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
-    } else {
-        mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+    ZoneScopedN("HostProfile::cache_hit");
+    {
+        ZoneScopedN("HostProfile::validate_cache_hit");
+        if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
+            mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+        } else {
+            mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+        }
     }
 
     auto& cached_program_factory = program_cache.get(program_key);
@@ -283,12 +289,15 @@ void handle_mesh_adapter_cache_hit(
         using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
         auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
 
-        if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
-            WorkloadFactory::apply_descriptor(
-                cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
-        } else {
-            WorkloadFactory::override_runtime_arguments(
-                cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+        {
+            ZoneScopedN("HostProfile::runtime_arguments");
+            if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
+                WorkloadFactory::apply_descriptor(
+                    cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+            } else {
+                WorkloadFactory::override_runtime_arguments(
+                    cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+            }
         }
 
         enqueue_mesh_workload<mesh_device_operation_t>(
@@ -396,6 +405,7 @@ void launch_operation_with_adapter(
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     ttnn::MeshDevice* mesh_device) {
+    ZoneScopedN("HostProfile::launch_adapter");
     // Skip if operation should be skipped
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
         if (mesh_device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
@@ -411,6 +421,7 @@ void launch_operation_with_adapter(
 
     auto is_program_cache_enabled = program_cache.is_enabled();
     if (is_program_cache_enabled) {
+        ZoneScopedN("HostProfile::cache_key_and_lookup");
         // Use device_operation's compute_program_hash if available
         program_key.hash =
             mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
@@ -492,11 +503,13 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
+    ZoneScopedN("HostProfile::device_operation");
     std::vector<std::reference_wrapper<const Tensor>> input_tensors;
     ttsl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
 
     const auto operation_name = detail::get_operation_name<device_operation_t>(operation_attributes);
+    ZoneText(operation_name.data(), operation_name.size());
     tt::tt_metal::GraphTracker::instance().track_function_start(operation_name, operation_attributes, input_tensors);
 
     for (const auto& input_tensor_ref : input_tensors) {
@@ -513,7 +526,10 @@ typename device_operation_t::tensor_return_value_t launch(
         }
     }
 
-    auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    auto tensor_return_value = [&] {
+        ZoneScopedN("HostProfile::create_outputs");
+        return device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    }();
 
     ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
 
@@ -531,6 +547,7 @@ typename device_operation_t::tensor_return_value_t launch(
     }
 
     if (!input_tensors.empty()) [[likely]] {
+        ZoneScopedN("HostProfile::output_topologies");
         std::vector<tt::tt_metal::TensorTopology> custom_topologies;
         if constexpr (requires {
                           {

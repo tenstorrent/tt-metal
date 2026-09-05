@@ -2816,6 +2816,7 @@ void update_program_dispatch_commands(
     ProgramBinaryStatus program_binary_status,
     std::pair<bool, int> unicast_go_signal_update,
     uint8_t cq_id) {
+    ZoneScopedN("HostProfile::patch_dispatch_commands");
     TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
     MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
 

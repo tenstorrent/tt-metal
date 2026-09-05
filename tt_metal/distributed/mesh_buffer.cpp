@@ -8,6 +8,7 @@
 #include <mesh_coord.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <vector>
+#include <tracy/Tracy.hpp>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
@@ -194,6 +195,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     const DeviceLocalBufferConfig& device_local_config,
     MeshDevice* mesh_device,
     std::optional<DeviceAddr> address) {
+    ZoneScopedN("HostProfile::mesh_buffer_create");
     validate_mesh_buffer_config(mesh_buffer_config, *mesh_device);
 
     const DeviceAddr device_local_size = std::visit(
@@ -390,6 +392,7 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
 }
 
 void MeshBuffer::deallocate() {
+    ZoneScopedN("HostProfile::mesh_buffer_deallocate");
     // Guard against double reporting to Inspector if deallocate() was called explicitly and then again in the
     // destructor.
     if (!std::holds_alternative<DeallocatedState>(state_)) {

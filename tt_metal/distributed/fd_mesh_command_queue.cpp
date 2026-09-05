@@ -569,7 +569,10 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             static_cast<uint8_t>(this->id()));
 
         const auto& local_devices = mesh_device_->impl().get_local_devices(device_range);
-        sub_device_recorder.record(local_devices, program.get_runtime_id(), sub_device_id);
+        {
+            ZoneScopedN("HostProfile::record_sub_devices");
+            sub_device_recorder.record(local_devices, program.get_runtime_id(), sub_device_id);
+        }
         this->write_program_commands_to_devices(
             local_devices, program_cmd_seq, dispatch_metadata.stall_first, dispatch_metadata.stall_before_program);
         if (!covers_entire_mesh) {
@@ -1251,6 +1254,7 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program) {
+    ZoneScopedN("HostProfile::write_commands_to_devices");
     for (auto* device : devices) {
         program_dispatch::write_program_command_sequence(
             program_cmd_seq, device->sysmem_manager(), id_, stall_first, stall_before_program);
