@@ -123,7 +123,7 @@ void track_program_l1(GraphTracker& tracker, detail::ProgramImpl& program, const
     }
     // Scratchpads stack on the same program-scope L1 region as the dataflow buffers, one region per
     // binding: kernels may only share a scratchpad spec across disjoint cores.
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance(extract_context_id(device)).hal();
     for (uint32_t core_type = 0; core_type < hal.get_programmable_core_type_count(); core_type++) {
         for (const auto& [_, kernel] : program.get_kernels(core_type)) {
             for (const auto& scratchpad : kernel->scratchpad_binding_handles()) {
