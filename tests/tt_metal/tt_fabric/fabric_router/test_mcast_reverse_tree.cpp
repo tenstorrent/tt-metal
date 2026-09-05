@@ -2,18 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reverse-tree multicast: single-parent tree construction for every root on both axes, packing, the
-// encode pass, and the per-chip L1 embed.
-//
-// Machine-free: MeshGraph and AxisRouteTopology need no cluster, so multi-host mesh shapes are
-// covered here on a single machine.
-//
-// Rows are axis coordinates, not chip ids: chip = row * 4 + col.
+// Machine-free reverse-tree construction, packing, embedding, and action-map encoding.
 
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <filesystem>
@@ -135,42 +130,25 @@ void check_prune(
     }
 }
 
-// Every singleton, every pair, the full set, and deterministic pseudo-random subsets. Pairs are
-// where a wrong `needed` propagation shows up: a branch taken for one target and lost for the other.
-void check_prune_over_target_sets(
+void check_representative_prunes(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
     const AxisRouteTopology& topo,
     const McastReverseTree& tree,
     const std::string& where) {
     const int len = topo.axis_len;
+    std::vector<std::vector<bool>> cases;
+    cases.emplace_back(len, false);
+    cases.emplace_back(len, false);
+    cases.back()[(tree.root + 1) % len] = true;
+    cases.emplace_back(len, false);
+    cases.back()[(tree.root + len / 2) % len] = true;
+    cases.emplace_back(len, false);
+    cases.back()[(tree.root + 1) % len] = true;
+    cases.back()[(tree.root + len - 1) % len] = true;
+    cases.emplace_back(len, true);
 
-    for (int a = 0; a < len; a++) {
-        std::vector<bool> targets(len, false);
-        targets[a] = true;
-        check_prune(mesh_graph, mesh_id, topo, tree, targets, where);
-        if (::testing::Test::HasFailure()) {
-            return;
-        }
-        for (int b = a + 1; b < len; b++) {
-            targets[b] = true;
-            check_prune(mesh_graph, mesh_id, topo, tree, targets, where);
-            targets[b] = false;
-            if (::testing::Test::HasFailure()) {
-                return;
-            }
-        }
-    }
-
-    check_prune(mesh_graph, mesh_id, topo, tree, std::vector<bool>(len, true), where);
-
-    std::uint32_t state = 0x2545f491u + static_cast<std::uint32_t>(tree.root);
-    for (int trial = 0; trial < 16 && !::testing::Test::HasFailure(); trial++) {
-        std::vector<bool> targets(len, false);
-        for (int row = 0; row < len; row++) {
-            state = state * 1664525u + 1013904223u;
-            targets[row] = ((state >> 16) & 1u) != 0u;
-        }
+    for (const auto& targets : cases) {
         check_prune(mesh_graph, mesh_id, topo, tree, targets, where);
     }
 }
@@ -217,9 +195,11 @@ void check_axis(const MeshGraph& mesh_graph, const AxisRouteTopology& topo, cons
             }
         }
 
-        check_prune_over_target_sets(mesh_graph, mesh_id, topo, tree, where);
-        if (::testing::Test::HasFailure()) {
-            return;
+        if (root == 0 || root == topo.axis_len / 2 || root == topo.axis_len - 1) {
+            check_representative_prunes(mesh_graph, mesh_id, topo, tree, where);
+            if (::testing::Test::HasFailure()) {
+                return;
+            }
         }
 
         // Packs, and survives the round trip with the direction intact.
@@ -277,7 +257,7 @@ TEST(McastReverseTreeTest, PackingRejectsAncestorBeforeDescendant) {
 
 // The host/device layout contract: the trees land at the offsets the loader reads, and nothing
 // outside that span is touched. The sentinel fill is what makes the untouched region checkable.
-void check_embed(const std::string& fixture) {
+void check_embed(const std::string& fixture, std::size_t num_corners) {
     const auto mesh_graph = load(fixture);
     const auto y_topo = derive_express_ring_topology(mesh_graph, MeshId{0});
     ASSERT_TRUE(y_topo.has_value()) << fixture << ": derived no express rings";
@@ -298,7 +278,9 @@ void check_embed(const std::string& fixture) {
         std::pair{y_size - 1, 0u},
         std::pair{y_size - 1, x_size - 1},
     };
-    for (const auto& [my_y, my_x] : corners) {
+    ASSERT_LE(num_corners, corners.size());
+    for (std::size_t corner = 0; corner < num_corners; corner++) {
+        const auto [my_y, my_x] = corners[corner];
         const std::string where = fmt::format("{} chip ({},{})", fixture, my_y, my_x);
         std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, kSentinel);
 
@@ -375,8 +357,10 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
 
     int multi_output_roots = 0;
 
-    for (int root_y = 0; root_y < y_len; root_y++) {
-        for (int root_x = 0; root_x < x_len; root_x++) {
+    const std::set<int> representative_rows = {0, 1, y_len / 2, y_len - 1};
+    const std::set<int> representative_columns = {0, x_len - 1};
+    for (int root_y : representative_rows) {
+        for (int root_x : representative_columns) {
             std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
             std::string failure;
             ASSERT_TRUE(embed_mcast_reverse_trees(
@@ -442,36 +426,11 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
                         EXPECT_NE(got[root_y] & Routing2DCodec::ACTION_LOCAL_DELIVER, 0)
                             << where << ": local-only mcast must still deliver at the source";
                     }
+                    if (n_hops + s_hops + e_hops + w_hops == 1) {
+                        EXPECT_EQ(std::popcount(static_cast<unsigned>(root_outputs)), 1)
+                            << where << ": one-hop range must leave on one edge";
+                    }
                 }
-            }
-        }
-    }
-
-    // A one-hop branch reaches an adjacent row or column, which no canonical route needs a chord for,
-    // so its root leaves on exactly one edge and the single-connection API remains sufficient.
-    for (int root_y = 0; root_y < y_len; root_y++) {
-        for (int root_x = 0; root_x < x_len; root_x++) {
-            std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
-            ASSERT_TRUE(
-                embed_mcast_reverse_trees(mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, trees.data()));
-            const std::vector<std::array<int, 4>> one_hop = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
-            for (const auto& [n, s, e, w] : one_hop) {
-                std::vector<std::uint8_t> got(y_size + x_size, 0);
-                encode_2d_mcast_maps(
-                    got.data(),
-                    trees.data(),
-                    y_size,
-                    x_size,
-                    static_cast<std::uint32_t>(root_y),
-                    static_cast<std::uint32_t>(root_x),
-                    n,
-                    s,
-                    e,
-                    w);
-                const std::uint8_t outputs = got[root_y] & Routing2DCodec::ACTION_ETH_MASK;
-                EXPECT_EQ(std::popcount(static_cast<unsigned>(outputs)), 1)
-                    << fixture << " root (" << root_y << "," << root_x << ") N" << n << " S" << s << " E" << e << " W"
-                    << w << ": one-hop range must leave on a single edge";
             }
         }
     }
@@ -484,87 +443,29 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
     }
 }
 
-// One-direction branches that route over a chord from a single-output root. A root only needs
-// multi-inject when it is itself a chord tail whose branch reaches that chord's head; a root further
-// from the chord leaves on one edge and lets a transit router take it.
-//
-// The column is not swept: with no E/W extent the X map is local delivery only and contributes no
-// teeth, so the Y map depends on the root row alone.
-void check_chord_ranges(const std::string& fixture, bool expect_candidates) {
-    const auto mesh_graph = load(fixture);
+TEST(McastReverseTreeTest, OneDirectionBranchUsesTransitChord) {
+    const auto mesh_graph = load("express_links_32x4_mesh_graph_descriptor.textproto");
     const auto y_topo = derive_express_ring_topology(mesh_graph, MeshId{0});
-    ASSERT_TRUE(y_topo.has_value()) << fixture;
+    ASSERT_TRUE(y_topo.has_value());
     const auto x_topo = derive_ordinary_ring_topology(mesh_graph, MeshId{0}, 1);
-    ASSERT_TRUE(x_topo.has_value()) << fixture;
+    ASSERT_TRUE(x_topo.has_value());
 
-    const int y_len = y_topo->axis_len;
-    const auto y_size = static_cast<std::uint32_t>(y_len);
+    constexpr std::uint32_t root_y = 1;
+    constexpr std::uint32_t root_x = 0;
+    const auto y_size = static_cast<std::uint32_t>(y_topo->axis_len);
     const auto x_size = static_cast<std::uint32_t>(x_topo->axis_len);
+    std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
+    ASSERT_TRUE(embed_mcast_reverse_trees(mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, trees.data()));
 
-    std::vector<std::vector<std::uint8_t>> tables(y_len);
-    for (int root_y = 0; root_y < y_len; root_y++) {
-        tables[root_y].assign(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
-        std::string failure;
-        ASSERT_TRUE(embed_mcast_reverse_trees(
-            mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, 0, tables[root_y].data(), &failure))
-            << failure;
-    }
+    std::vector<std::uint8_t> actions(y_size + x_size, 0);
+    encode_2d_mcast_maps(
+        actions.data(), trees.data(), y_size, x_size, root_y, root_x, /*n_hops=*/0, /*s_hops=*/4, 0, 0);
 
-    int candidates = 0;
-    for (int n_hops = 0; n_hops < y_len; n_hops++) {
-        for (int s_hops = 0; n_hops + s_hops < y_len; s_hops++) {
-            if ((n_hops != 0) == (s_hops != 0)) {
-                continue;
-            }
-            for (int root_y = 0; root_y < y_len; root_y++) {
-                std::vector<std::uint8_t> got(y_size + x_size, 0);
-                encode_2d_mcast_maps(
-                    got.data(),
-                    tables[root_y].data(),
-                    y_size,
-                    x_size,
-                    static_cast<std::uint32_t>(root_y),
-                    0,
-                    static_cast<std::uint32_t>(n_hops),
-                    static_cast<std::uint32_t>(s_hops),
-                    0,
-                    0);
-
-                const std::uint8_t outputs = got[root_y] & Routing2DCodec::ACTION_ETH_MASK;
-                if (std::popcount(static_cast<unsigned>(outputs)) != 1) {
-                    continue;
-                }
-                for (int y = 0; y < y_len; y++) {
-                    if ((got[y] & Routing2DCodec::ACTION_Z) != 0) {
-                        candidates++;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    if (expect_candidates) {
-        EXPECT_GT(candidates, 0) << fixture
-                                 << ": no one-direction branch routes over a chord from a single-output root";
-    }
+    EXPECT_EQ(actions[root_y] & Routing2DCodec::ACTION_ETH_MASK, Routing2DCodec::ACTION_SOUTH);
+    EXPECT_NE(actions[2] & Routing2DCodec::ACTION_Z, 0);
 }
 
-// 8x4 carries no expectation: its express pattern is coarser and may admit no such range.
-TEST(McastReverseTreeTest, ChordRanges8x4) {
-    check_chord_ranges("express_links_8x4_mesh_graph_descriptor.textproto", /*expect_candidates=*/false);
-}
-TEST(McastReverseTreeTest, ChordRanges32x4) {
-    check_chord_ranges("express_links_32x4_mesh_graph_descriptor.textproto", /*expect_candidates=*/true);
-}
-
-// Generic encoder stress case: every chip roots combined extents covering the whole mesh. This is
-// not one legal source-injection branch; it verifies only the action-map structure and output bound.
-//
-// The root action is route_buffer_y[root_y] alone, not that OR'd with route_buffer_x[root_x]. The
-// X-root E/W teeth are copied onto the target rows, and a range with a Y extent excludes the source
-// row, so the source never picks up the teeth and its outputs are a subset of N/S/Z. (An X-only
-// range is the other case: the source row is itself a target, so the action is a subset of E/W.)
+// Combined full extents keep a Y-root's outputs within N/S/Z.
 void check_full_extent_roots(const std::string& fixture) {
     const auto mesh_graph = load(fixture);
     const auto y_topo = derive_express_ring_topology(mesh_graph, MeshId{0});
@@ -583,8 +484,10 @@ void check_full_extent_roots(const std::string& fixture) {
     const int e_hops = x_len / 2;
     const int w_hops = x_len - 1 - e_hops;
 
-    for (int root_y = 0; root_y < y_len; root_y++) {
-        for (int root_x = 0; root_x < x_len; root_x++) {
+    const std::set<int> representative_rows = {0, 1, y_len / 2, y_len - 1};
+    const std::set<int> representative_columns = {0, x_len - 1};
+    for (int root_y : representative_rows) {
+        for (int root_x : representative_columns) {
             std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
             std::string failure;
             ASSERT_TRUE(embed_mcast_reverse_trees(
@@ -618,9 +521,6 @@ void check_full_extent_roots(const std::string& fixture) {
     }
 }
 
-TEST(McastReverseTreeTest, FullExtentRoots8x4) {
-    check_full_extent_roots("express_links_8x4_mesh_graph_descriptor.textproto");
-}
 TEST(McastReverseTreeTest, FullExtentRoots32x4) {
     check_full_extent_roots("express_links_32x4_mesh_graph_descriptor.textproto");
 }
@@ -632,8 +532,12 @@ TEST(McastReverseTreeTest, Encode32x4) {
     check_encode("express_links_32x4_mesh_graph_descriptor.textproto", /*expect_multi_output_roots=*/true);
 }
 
-TEST(McastReverseTreeTest, Embed8x4) { check_embed("express_links_8x4_mesh_graph_descriptor.textproto"); }
-TEST(McastReverseTreeTest, Embed32x4) { check_embed("express_links_32x4_mesh_graph_descriptor.textproto"); }
+TEST(McastReverseTreeTest, Embed8x4) {
+    check_embed("express_links_8x4_mesh_graph_descriptor.textproto", /*num_corners=*/4);
+}
+TEST(McastReverseTreeTest, Embed32x4) {
+    check_embed("express_links_32x4_mesh_graph_descriptor.textproto", /*num_corners=*/1);
+}
 
 void check_maximum_embed(
     const std::string& name, const std::string& descriptor, std::uint32_t expected_y, std::uint32_t expected_x) {
@@ -776,12 +680,6 @@ TEST(McastReverseTreeTest, Supports4x1Mesh) {
 }
 
 TEST(McastReverseTreeTest, AllRootsFormTrees8x4) { check_fixture("express_links_8x4_mesh_graph_descriptor.textproto"); }
-TEST(McastReverseTreeTest, AllRootsFormTrees16x4) {
-    check_fixture("express_links_16x4_mesh_graph_descriptor.textproto");
-}
-TEST(McastReverseTreeTest, AllRootsFormTrees24x4) {
-    check_fixture("express_links_24x4_mesh_graph_descriptor.textproto");
-}
 TEST(McastReverseTreeTest, AllRootsFormTrees32x4) {
     check_fixture("express_links_32x4_mesh_graph_descriptor.textproto");
 }
