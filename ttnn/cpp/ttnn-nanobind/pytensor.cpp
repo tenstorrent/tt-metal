@@ -223,6 +223,53 @@ RowMajorHostBuffer convert_block_float_to_logical_row_major(const HostBuffer& bu
     return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
 }
 
+RowMajorHostBuffer convert_to_row_major_host_buffer(
+    const Tensor& tt_tensor, const ttnn::distributed::MeshToTensor& mesh_composer);
+
+// Derives a default composer from the tensor's recorded distribution topology: every
+// distribution axis spanning more than one device must be a `Shard` placement; the
+// composer then concatenates the shards along those dims. Returns nullopt when the
+// topology does not unambiguously describe a concatenation (replicated or unrecorded
+// distributions), leaving the caller to fail loudly.
+std::optional<RowMajorHostBuffer> compose_from_recorded_topology(
+    const Tensor& tt_tensor, const tt::tt_metal::distributed::MeshShape& mesh_shape) {
+    using tt::tt_metal::distributed::MeshComposerConfig;
+    using tt::tt_metal::distributed::MeshMapperConfig;
+
+    const auto& topology = tt_tensor.tensor_topology();
+    const auto& distribution_shape = topology.distribution_shape();
+    const auto& placements = topology.placements();
+    if (distribution_shape.mesh_size() <= 1 || distribution_shape.dims() != placements.size()) {
+        return std::nullopt;
+    }
+
+    const int tensor_rank = static_cast<int>(tt_tensor.tensor_spec().logical_shape().rank());
+    if (tensor_rank < 1) {
+        return std::nullopt;
+    }
+    ttsl::SmallVector<int> dims;
+    dims.reserve(placements.size());
+    for (size_t axis = 0; axis < placements.size(); ++axis) {
+        if (const auto* shard = std::get_if<MeshMapperConfig::Shard>(&placements[axis])) {
+            if (shard->dim < 0 || shard->dim >= tensor_rank) {
+                return std::nullopt;
+            }
+            dims.push_back(shard->dim);
+        } else if (distribution_shape[axis] <= 1) {
+            // A single-device axis contributes exactly one shard; concatenating a single
+            // chunk is an identity, so any valid dim works as a placeholder.
+            dims.push_back(dims.empty() ? 0 : dims.front());
+        } else {
+            // A replicated axis spanning multiple devices cannot be expressed as a concatenation.
+            return std::nullopt;
+        }
+    }
+
+    const auto composer = ttnn::distributed::MeshToTensor::create(
+        mesh_shape, MeshComposerConfig{.dims = std::move(dims), .mesh_shape_override = distribution_shape});
+    return convert_to_row_major_host_buffer(tt_tensor, composer);
+}
+
 // Converts a TT tensor to a RowMajorHostBuffer.
 //
 // If `padded_output` is true, the returned buffer will be padded to the tile size.
@@ -292,6 +339,12 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
     const auto& storage = tt_tensor.host_storage();
     std::vector<HostBuffer> buffers;
     storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+    if (buffers.size() > 1) {
+        // No composer was supplied: fall back to the distribution recorded in the tensor topology.
+        if (auto composed = compose_from_recorded_topology(tt_tensor, storage.buffer().shape())) {
+            return *composed;
+        }
+    }
     TT_FATAL(
         buffers.size() == 1,
         "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
