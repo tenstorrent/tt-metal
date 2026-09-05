@@ -459,6 +459,8 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  * @note On the unpack thread, pair with @ref _llk_unpack_matmul_init_ (T0); on the pack thread, pair with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_math_matmul_tile_ or @ref _llk_math_matmul_block_ runs the configured matmul with matching template args.
+ * @note ENABLE_DIRECT_INDEXING programs 3 addrmod slots (ADDR_MOD_0..2) instead of the 6 (ADDR_MOD_0..5) the
+ * counter-driven path needs, leaving ADDR_MOD_3..7 free for other ops in a fused kernel.
  */
 
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_DIRECT_INDEXING = false, bool ENABLE_2X_FORMAT = false>
