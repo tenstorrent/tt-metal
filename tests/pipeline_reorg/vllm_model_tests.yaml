@@ -129,6 +129,30 @@
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
+# 31B tp=8 on the BH LoudBox. Unlike 12B, 31B keeps the gated (traced
+# sequential prefill) default — it is immune to the 12B 1x8 wedge and this is
+# the config validated by the full benchmark sweep on the link-exact emulated
+# LoudBox (rc=0, b32 identity byte-equal, 17.4 tok/s/u b32@4k). Serving knobs
+# mirror the 31B QB2 leg. First run on a fresh cache needs mlperf-write-access
+# and may take two dispatches (the 31B bfp8 conversion is resumable but can
+# exceed the 20 min server gate in one shot; warm thereafter).
+- name: "Gemma4-31B tp=8"
+  model: google/gemma-4-31B-it
+  coherence-test: true
+  server-timeout: 20
+  benchmark-timeout: 5
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 40
+      tier: 1
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
 - name: "Gemma4-26B-A4B"
   model: google/gemma-4-26B-A4B-it
   coherence-test: true
