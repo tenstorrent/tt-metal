@@ -2816,7 +2816,10 @@ void update_program_dispatch_commands(
     ProgramBinaryStatus program_binary_status,
     std::pair<bool, int> unicast_go_signal_update,
     uint8_t cq_id) {
-    ZoneScopedN("HostProfile::patch_dispatch_commands");
+    ZoneNamedN(__tracy_scoped_zone, "HostProfile::patch_dispatch_commands", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                   return enabled;
+               }()));
     TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
     MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
 

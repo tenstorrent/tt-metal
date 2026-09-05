@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -23,7 +24,10 @@
 namespace tt::tt_metal::distributed {
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
-    ZoneScopedN("HostProfile::EnqueueMeshWorkload");
+    ZoneNamedN(__tracy_scoped_zone, "HostProfile::EnqueueMeshWorkload", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                   return enabled;
+               }()));
     // Short-circuit for inactive MeshDevices (no-op)
     if (mesh_cq.device()->get_view().get_devices().empty()) {
         return;
@@ -116,7 +120,10 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 
     auto& ctx = tt::tt_metal::MetalContext::instance();
     if (ctx.rtoptions().get_fast_dispatch()) {
-        ZoneScopedN("HostProfile::prepare_mesh_workload");
+        ZoneNamedN(__tracy_scoped_zone, "HostProfile::prepare_mesh_workload", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                       return enabled;
+                   }()));
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);

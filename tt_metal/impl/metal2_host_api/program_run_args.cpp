@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -858,7 +859,10 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
 
 void UpdateTensorArgs(
     Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args, bool skip_validation) {
-    ZoneScopedN("HostProfile::UpdateTensorArgs");
+    ZoneNamedN(__tracy_scoped_zone, "HostProfile::UpdateTensorArgs", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                   return enabled;
+               }()));
     log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
 
     detail::ProgramImpl& program_impl = program.impl();
@@ -1155,7 +1159,10 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
 }
 
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
-    ZoneScopedN("HostProfile::UpdateProgramRunArgs");
+    ZoneNamedN(__tracy_scoped_zone, "HostProfile::UpdateProgramRunArgs", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                   return enabled;
+               }()));
     log_debug(tt::LogMetal, "Updating ProgramRunArgs (partial fast-path)");
 
     detail::ProgramImpl& program_impl = program.impl();

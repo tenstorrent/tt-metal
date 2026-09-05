@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <concepts>
 #include <exception>
 #include <optional>
@@ -182,7 +183,10 @@ void enqueue_mesh_workload(
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
     [[maybe_unused]] bool program_cache_hit = false) {
-    ZoneScopedN("HostProfile::enqueue_wrapper");
+    ZoneNamedN(__tracy_scoped_zone, "HostProfile::enqueue_wrapper", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                   return enabled;
+               }()));
     // Generate and set runtime_id for all programs (always, for dispatcher)
     auto runtime_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
     for (auto& [_, program] : workload.get_programs()) {
@@ -191,7 +195,10 @@ void enqueue_mesh_workload(
 
     // Inspector: emit debug entry with tensor parameters
     if (tt::tt_metal::experimental::inspector::IsEnabled()) {
-        ZoneScopedN("HostProfile::inspector");
+        ZoneNamedN(__tracy_scoped_zone, "HostProfile::inspector", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                       return enabled;
+                   }()));
         auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
 
         std::vector<tt::tt_metal::TensorSpec> spec_copies;
@@ -268,9 +275,15 @@ void handle_mesh_adapter_cache_hit(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     const ProgramCacheKey& program_key) {
-    ZoneScopedN("HostProfile::cache_hit");
+    ZoneNamedN(__tracy_scoped_zone, "HostProfile::cache_hit", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                   return enabled;
+               }()));
     {
-        ZoneScopedN("HostProfile::validate_cache_hit");
+        ZoneNamedN(__tracy_scoped_zone, "HostProfile::validate_cache_hit", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                       return enabled;
+                   }()));
         if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
             mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
         } else {
@@ -290,7 +303,10 @@ void handle_mesh_adapter_cache_hit(
         auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
 
         {
-            ZoneScopedN("HostProfile::runtime_arguments");
+            ZoneNamedN(__tracy_scoped_zone, "HostProfile::runtime_arguments", ([] {
+                           static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                           return enabled;
+                       }()));
             if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
                 WorkloadFactory::apply_descriptor(
                     cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
@@ -405,7 +421,10 @@ void launch_operation_with_adapter(
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     ttnn::MeshDevice* mesh_device) {
-    ZoneScopedN("HostProfile::launch_adapter");
+    ZoneNamedN(__tracy_scoped_zone, "HostProfile::launch_adapter", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                   return enabled;
+               }()));
     // Skip if operation should be skipped
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
         if (mesh_device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
@@ -421,7 +440,10 @@ void launch_operation_with_adapter(
 
     auto is_program_cache_enabled = program_cache.is_enabled();
     if (is_program_cache_enabled) {
-        ZoneScopedN("HostProfile::cache_key_and_lookup");
+        ZoneNamedN(__tracy_scoped_zone, "HostProfile::cache_key_and_lookup", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                       return enabled;
+                   }()));
         // Use device_operation's compute_program_hash if available
         program_key.hash =
             mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
@@ -503,7 +525,10 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    ZoneScopedN("HostProfile::device_operation");
+    ZoneNamedN(__tracy_scoped_zone, "HostProfile::device_operation", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                   return enabled;
+               }()));
     std::vector<std::reference_wrapper<const Tensor>> input_tensors;
     ttsl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
@@ -527,7 +552,10 @@ typename device_operation_t::tensor_return_value_t launch(
     }
 
     auto tensor_return_value = [&] {
-        ZoneScopedN("HostProfile::create_outputs");
+        ZoneNamedN(__tracy_scoped_zone, "HostProfile::create_outputs", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                       return enabled;
+                   }()));
         return device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     }();
 
@@ -547,7 +575,10 @@ typename device_operation_t::tensor_return_value_t launch(
     }
 
     if (!input_tensors.empty()) [[likely]] {
-        ZoneScopedN("HostProfile::output_topologies");
+        ZoneNamedN(__tracy_scoped_zone, "HostProfile::output_topologies", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                       return enabled;
+                   }()));
         std::vector<tt::tt_metal::TensorTopology> custom_topologies;
         if constexpr (requires {
                           {

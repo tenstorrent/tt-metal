@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <tt_stl/fmt.hpp>
 #include "fd_mesh_command_queue.hpp"
 
@@ -570,7 +571,10 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
         const auto& local_devices = mesh_device_->impl().get_local_devices(device_range);
         {
-            ZoneScopedN("HostProfile::record_sub_devices");
+            ZoneNamedN(__tracy_scoped_zone, "HostProfile::record_sub_devices", ([] {
+                           static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                           return enabled;
+                       }()));
             sub_device_recorder.record(local_devices, program.get_runtime_id(), sub_device_id);
         }
         this->write_program_commands_to_devices(
@@ -1254,7 +1258,10 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program) {
-    ZoneScopedN("HostProfile::write_commands_to_devices");
+    ZoneNamedN(__tracy_scoped_zone, "HostProfile::write_commands_to_devices", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                   return enabled;
+               }()));
     for (auto* device : devices) {
         program_dispatch::write_program_command_sequence(
             program_cmd_seq, device->sysmem_manager(), id_, stall_first, stall_before_program);

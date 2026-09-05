@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <host_api.hpp>
 #include <mesh_buffer.hpp>
 #include <mesh_coord.hpp>
@@ -195,7 +196,10 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     const DeviceLocalBufferConfig& device_local_config,
     MeshDevice* mesh_device,
     std::optional<DeviceAddr> address) {
-    ZoneScopedN("HostProfile::mesh_buffer_create");
+    ZoneNamedN(__tracy_scoped_zone, "HostProfile::mesh_buffer_create", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                   return enabled;
+               }()));
     validate_mesh_buffer_config(mesh_buffer_config, *mesh_device);
 
     const DeviceAddr device_local_size = std::visit(
@@ -392,7 +396,10 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
 }
 
 void MeshBuffer::deallocate() {
-    ZoneScopedN("HostProfile::mesh_buffer_deallocate");
+    ZoneNamedN(__tracy_scoped_zone, "HostProfile::mesh_buffer_deallocate", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                   return enabled;
+               }()));
     // Guard against double reporting to Inspector if deallocate() was called explicitly and then again in the
     // destructor.
     if (!std::holds_alternative<DeallocatedState>(state_)) {

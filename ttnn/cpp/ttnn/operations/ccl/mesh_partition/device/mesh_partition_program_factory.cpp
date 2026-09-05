@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "mesh_partition_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -36,7 +37,10 @@ auto compute_slice_parameters(
     const MeshPartitionDeviceOperation::operation_attributes_t& operation_attributes,
     const MeshPartitionDeviceOperation::tensor_args_t& tensor_args,
     const ttnn::MeshCoordinate& mesh_coordinate) {
-    ZoneScopedN("HostProfile::partition_compute_slice_params");
+    ZoneNamedN(__tracy_scoped_zone, "HostProfile::partition_compute_slice_params", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                   return enabled;
+               }()));
     const auto& input_tensor = tensor_args.input_tensor;
 
     const uint32_t cluster_size = detail::get_cluster_axis_size(input_tensor, operation_attributes.cluster_axis);

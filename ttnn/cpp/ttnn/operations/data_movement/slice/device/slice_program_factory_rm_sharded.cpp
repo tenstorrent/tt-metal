@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
@@ -358,7 +359,10 @@ void patch_slice_program_addresses(
     const SliceParams& operation_attributes,
     const SliceInputs& tensor_args,
     Tensor& output) {
-    ZoneScopedN("HostProfile::slice_patch_addresses");
+    ZoneNamedN(__tracy_scoped_zone, "HostProfile::slice_patch_addresses", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                   return enabled;
+               }()));
     // Height-sharded RM is CB-bound: the reader args are all keyed, so only the two sharded CB
     // addresses move. CBs are matched positionally -- src0, then c_16.
     if (std::holds_alternative<SliceRmShardedProgramFactory>(factory)) {
@@ -407,7 +411,10 @@ void patch_slice_program_addresses(
                                                         tensor_args.input, operation_attributes.slice_start)
                                                   : 0u;
                 const auto per_core = [&] {
-                    ZoneScopedN("HostProfile::slice_build_dynamic_args");
+                    ZoneNamedN(__tracy_scoped_zone, "HostProfile::slice_build_dynamic_args", ([] {
+                                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
+                                   return enabled;
+                               }()));
                     return slice_tile_dynamic_args(
                         operation_attributes, tensor_args, output, start_offset, kReaderKernelIdx, kWriterKernelIdx);
                 }();
