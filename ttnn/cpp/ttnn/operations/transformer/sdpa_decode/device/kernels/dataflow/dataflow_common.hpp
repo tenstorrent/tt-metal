@@ -304,6 +304,57 @@ void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos)
     cb_mask.push_back(total_read_tiles);
 }
 
+/*
+ * Speculative multi-position causal mask for ONE k-chunk.
+ *
+ * generate_mask() builds the mask for the last chunk from a single scalar cur_pos and then
+ * copy_tile-broadcasts row-tile 0 to every other row-tile, because in the legacy layout all
+ * PNHt row-tiles of a batch row share one causal bound. In spec mode each row-tile j is a
+ * different speculative candidate with its own bound pos_vec[j] — pos_vec being THIS batch
+ * row's group of PNHt bounds, already sliced out of the [B*PNHt] cur_pos vector by the
+ * caller — so there is no broadcast:
+ * every row-tile is generated from its own bound. The mask is still uniform WITHIN a
+ * row-tile (all 32 q-rows of candidate j share bound pos_vec[j]), which is exactly what
+ * fill_tile_partial produces, so that helper is used unchanged.
+ *
+ * chunk_start_pos is the chunk's absolute first KV position (k_chunk * k_chunk_size). For
+ * each (row-tile j, column-tile i) the tile covers absolute positions
+ * [chunk_start_pos + 32*i, chunk_start_pos + 32*i + 31]:
+ *   - bound at or past the tile's last position -> all-zero tile (fully visible)
+ *   - bound before the tile's first position    -> all -inf tile (fully masked)
+ *   - otherwise                                 -> partial cut inside the tile
+ *
+ * Unlike the legacy single-shot mask, this is called once per masked chunk and the compute
+ * kernel POPS the block after applying it (add_block_inplace<true>), so several masked
+ * chunks can be served through the single-buffered mask CB.
+ */
+template <uint32_t cb_mask_in, uint32_t PNHt>
+void generate_mask_spec_multi_pos(uint32_t Sk_chunk_t, uint32_t chunk_start_pos, const uint32_t* pos_vec) {
+    constexpr uint32_t NEG_INF = 0xFF80FF80;
+    constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
+    const uint32_t total_tiles = PNHt * Sk_chunk_t;
+
+    CircularBuffer cb_mask(cb_mask_in);
+    cb_mask.reserve_back(total_tiles);
+
+    for (uint32_t j = 0; j < PNHt; ++j) {
+        const uint32_t bound = pos_vec[j];
+        for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
+            const uint32_t tile_id = j * Sk_chunk_t + i;
+            const uint32_t tile_first_pos = chunk_start_pos + i * 32;
+            if (bound >= tile_first_pos + 31) {
+                fill_tile<tile_bytes>(cb_mask_in, tile_id, 0);
+            } else if (bound < tile_first_pos) {
+                fill_tile<tile_bytes>(cb_mask_in, tile_id, NEG_INF);
+            } else {
+                fill_tile_partial<tile_bytes>(cb_mask_in, tile_id, bound - tile_first_pos, NEG_INF);
+            }
+        }
+    }
+
+    cb_mask.push_back(total_tiles);
+}
+
 template <uint32_t cb_mask_in, uint32_t PNHt>
 void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t window_start) {
     Noc noc;

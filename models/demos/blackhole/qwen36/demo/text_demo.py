@@ -1,21 +1,46 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qwen3.5/3.6 end-to-end text generation test on Blackhole (P150 / P150x4).
+"""Qwen3.5/3.6 end-to-end text generation on Blackhole (P150 / P150x4).
 
-A single parametrized test covering prefill + decode across ISLs from 128 up to 256k
-(single-user) and batched serving (B=8/B=32, multi-device TP) up to 64k.
+One parametrized test: prefill + decode, ISL 128–256k (single-user) and batched
+serving (B=8/B=32, multi-device TP) up to 64k.
 
-Run all:      pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s
-Run 128:      pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128"
-Run batched:  MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "b8"
+GDN prefill uses the fast fused path by default (no env vars): chunk-parallel
+phase-split (PREP across the grid + V-block SCAN), fp32 o/state, and flat
+token-major q/k/v with in-kernel L2-norm (skips head-split relayouts + host
+l2_norm — the bulk of preprocessing). Bench/debug opt-outs:
+  QWEN_GDN_PHASED=0    monolithic single-kernel fused op (no phase split).
+  QWEN_GDN_FLAT_QKV=0  head-split q/k/v + host l2_norm.
 
-GDN prefill runs the fast fused path by DEFAULT — no env vars needed: chunk-parallel phase-split
-(PREP fanned across the grid + V-block SCAN), fp32 o output, fp32 state, and flat token-major q/k/v
-with in-kernel L2-norm (eliminates the head-split relayouts + host l2_norm — the bulk of the
-preprocessing cost). Two opt-out flags exist only for benchmarking/debug:
-  QWEN_GDN_PHASED=0    fall back to the monolithic single-kernel fused op (no phase split).
-  QWEN_GDN_FLAT_QKV=0  fall back to head-split q/k/v + host l2_norm (no flat token-major reads).
+Single-user TP decode uses MTP speculative decode by default (draft K tokens
+via the built-in MTP head, verify in one traced chunk forward, commit the
+accepted prefix), lossless either way.
+Greedy (QWEN35_TEMP unset/0) is token-identical to plain decode
+(tests/test_spec_lossless.py, tests/test_spec_determinism.py). Temperature > 0
+(with QWEN35_TOP_K / QWEN35_TOP_P) uses exact speculative rejection sampling
+from the same distribution as plain decode (tt/spec_sampling.py). Needs an MTP
+head. QWEN35_REP_PENALTY and QWEN35_NO_REPEAT_NGRAM are not wired into spec and
+fall back to plain decode. Knobs:
+  QWEN36_SPEC=0           plain single-token decode (baseline).
+  QWEN36_SPEC_DRAFT_LEN   override K (greedy default: 11 up to a 4k prompt, 7
+                          above; sampling: K=7 at every length — deep drafts
+                          also pay the u < p(d) rejection test and stop earning
+                          back the drafter's cost).
+  QWEN35_SEED             host RNG seed for spec sampling (unset = random;
+                          effective seed is logged for replay).
+  QWEN35_PRESENCE_PENALTY vLLM presence penalty (float >= 0, default 0):
+                          subtract from the logit of every GENERATED token
+                          (prompt excluded) before temperature / top-k / top-p.
+                          Wired into spec: the penalty lands on the target rows
+                          the accept test uses, so acceptance stays lossless
+                          w.r.t. the penalized distribution and does not force
+                          plain decode (unlike a repetition penalty). The plain
+                          path (QWEN36_SPEC=0) applies it on device via the
+                          shared sampler (TTPenalties, inside the traced step),
+                          so a penalized plain run is still a full-speed
+                          on-device-sampler baseline.
+  QWEN36_SPEC_TIMING=1    per-iteration phase breakdown ([SPEC_TIMING] logs).
 """
 
 import hashlib
@@ -374,8 +399,137 @@ def _should_use_chunked_trace(model):
     )
 
 
+def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks, sampling=None):
+    """MTP speculative decode (default single-user TP path; QWEN36_SPEC=0 opts out): draft -> traced verify -> slot commit via SpeculativeDecoder.
+    Returns (tokens, perf_dict) like _run_tp_generation. Lossless: greedy (sampling=None) matches plain decode; SpecSamplingParams samples the target distribution via rejection sampling.
+    Verify (fully-batched GDN, hybrid decode-SDPA) and reseed shapes are the defaults in gdn/tp.py and spec_decode.py, not configurable here.
+    """
+    from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
+
+    T = token_ids.shape[1]
+    # Draft width so T=K+1 fits fused verify SDPA (spec_multi_pos_tiles: T in L1 groups of 4, KV once per group).
+    # Other K hits legacy B=T verify (KV T times, different near-tie rounding) and is avoided.
+    # Greedy: K=11 (<=4k, T=12=3x4) / K=7 elsewhere (T=8=2x4); sampling always K=7 (accepted depth also pays u < p(d)). QWEN36_SPEC_DRAFT_LEN overrides (None defers to SpeculativeDecoder, default 3).
+    draft_len = (
+        None if os.environ.get("QWEN36_SPEC_DRAFT_LEN") else ((11 if T <= 4096 else 7) if sampling is None else 7)
+    )
+    # Sampling summary, so a sweep log says which trajectory it measured. An unset seed is drawn by
+    # SpecSampler; the resolved value is what generate() and the accept line below print.
+    if sampling is None:
+        _samp = "greedy"
+    else:
+        _samp = (
+            f"temp={sampling.temperature} top_k={sampling.top_k} top_p={sampling.top_p} "
+            f"presence={sampling.presence_penalty} "
+            f"seed={'random' if sampling.seed is None else sampling.seed}"
+        )
+    logger.info(
+        f"[TP SPEC] T={T} -> K={draft_len if draft_len is not None else os.environ['QWEN36_SPEC_DRAFT_LEN']}"
+        f"{'' if draft_len is not None else ' (QWEN36_SPEC_DRAFT_LEN)'}"
+        f" sampling={_samp}"
+        " (generate() logs the resolved K + reseed mode)"
+    )
+    num_blocks = ((num_blocks + 31) // 32) * 32
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+
+    kv_cache_shape = [num_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
+    page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+    prompt_ids = token_ids[0, :T].tolist()
+
+    # spec decode captures no separate prefill trace (eager); keep the key present for the CI JSON.
+    profiler.start("compile_prefill")
+    profiler.end("compile_prefill")
+
+    # Warmup (compile prefill/verify/decode/MTP programs; results discarded).
+    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+    signpost("compile_decode")
+    profiler.start("compile_decode")
+    SpeculativeDecoder(model, page_table, draft_len=draft_len, sampling=sampling).generate(
+        prompt_ids, min(6, max_generated_tokens)
+    )
+    profiler.end("compile_decode")
+    model.free_kv_caches()
+
+    # Timed run. generate() records dec.prefill_time (TTFT) and dec.decode_time (spec loop) internally.
+    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+    dec = SpeculativeDecoder(model, page_table, draft_len=draft_len, sampling=sampling)
+    signpost("inference_prefill")
+    profiler.start("inference_prefill")
+    generated = dec.generate(prompt_ids, max_generated_tokens)
+    profiler.end("inference_prefill")
+    signpost("inference_decode")
+    profiler.start("inference_decode")
+    profiler.end("inference_decode")  # real decode timing comes from dec.decode_time below
+    # Per-depth accept / conditional accept / histogram (and, when sampling, the sampling line):
+    # host-only log lines, so they sit outside the timed windows but before the caches are freed.
+    dec.log_stats(prefix="TP SPEC")
+    model.free_kv_caches()
+    profiler.end("run")
+
+    ttft = dec.prefill_time
+    decode_tok_s = (len(generated) / dec.decode_time) if dec.decode_time > 0 else 0.0
+    if dec.sampler is None:
+        _samp_done = "greedy"
+    else:  # the sampler's own seed, so an unset QWEN35_SEED still logs the value that ran
+        _sp = dec.sampler.params
+        _samp_done = (
+            f"temp={_sp.temperature} top_k={_sp.top_k} top_p={_sp.top_p} "
+            f"presence={_sp.presence_penalty} seed={dec.sampler.seed}"
+        )
+    logger.info(
+        f"[TP SPEC] accept={dec.accept_rate():.2f}/{dec.K} "
+        f"-> {dec.accept_rate() + 1:.2f} committed/iter over {dec.iters} iters; "
+        f"ttft={ttft:.2f}s decode={decode_tok_s:.2f} tok/s sampling={_samp_done} "
+        "(compare vs a QWEN36_SPEC=0 run)"
+    )
+    return generated, {"ttft_s": ttft, "decode_tok_s": decode_tok_s, "profiler": profiler}
+
+
 def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks):
     """TP generation: traced chunk-outer prefill + paged decode. Returns (tokens, perf_dict)."""
+    # Sampling knobs, read once for spec routing below and plain-decode _pick().
+    _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
+    _rep_pen = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
+    _no_repeat = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
+    _top_k = int(os.environ.get("QWEN35_TOP_K", "0") or 0)
+    _top_p = float(os.environ.get("QWEN35_TOP_P", "1.0") or 1.0)
+    # Presence penalty (vLLM): subtracted from every already-generated token's logit before temperature.
+    # Wired into both paths: spec penalizes the verify rows the accept test uses; plain _pick() penalizes the sampled row.
+    _presence = float(os.environ.get("QWEN35_PRESENCE_PENALTY", "0.0") or 0.0)
+    # Host RNG seed for spec sampling; unset = SpecSampler draws one and logs it (replayable).
+    _seed = int(os.environ["QWEN35_SEED"]) if os.environ.get("QWEN35_SEED") else None
+
+    # Spec decode is the default; QWEN36_SPEC=0 opts out. Temp 0 accepts the greedy argmax prefix; temp > 0
+    # runs exact speculative rejection sampling. Repetition penalty / no-repeat-ngram are not wired into spec
+    # and fall through to plain decode; presence penalty is (it penalizes the verify rows), so it does not.
+    _spec_req = os.environ.get("QWEN36_SPEC", "1") != "0"
+    if _spec_req:
+        if model.mtp is not None and _rep_pen == 1.0 and _no_repeat == 0:
+            from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSamplingParams
+
+            sampling = (
+                SpecSamplingParams(
+                    temperature=_temp,
+                    top_k=_top_k,
+                    top_p=_top_p,
+                    presence_penalty=_presence,
+                    seed=_seed,
+                )
+                if _temp > 0
+                else None
+            )
+            logger.info("[TP] MTP speculative decode (default path; QWEN36_SPEC=0 opts out)")
+            return _run_tp_spec_generation(
+                model, tokenizer, token_ids, max_generated_tokens, num_blocks, sampling=sampling
+            )
+        logger.info(
+            f"[TP] spec decode unavailable (mtp={model.mtp is not None}, rep={_rep_pen}, "
+            f"no_repeat={_no_repeat}); it needs an MTP head, and a repetition penalty / "
+            "no-repeat-ngram is not wired into the spec path. Using plain decode."
+        )
+    else:
+        logger.info("[TP] QWEN36_SPEC=0 -> plain single-token decode (spec-decode baseline)")
     vocab = model.args.vocab_size
     T = token_ids.shape[1]
 
@@ -401,19 +555,19 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     profiler.end("compile_prefill")
     logger.info(f"[TP] prefill chunk-trace captured in {time.time() - t_cap:.1f}s")
 
-    _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
-    _rep_pen = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
-    _no_repeat = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
-    _top_k = int(os.environ.get("QWEN35_TOP_K", "0") or 0)
-    _top_p = float(os.environ.get("QWEN35_TOP_P", "1.0") or 1.0)
     generated = []
 
     def _pick(vec):
         v = vec.float()
-        if _rep_pen != 1.0 and generated:
+        # Both penalties act on the set of tokens generated SO FAR (prompt excluded), before
+        # temperature, so they share the one index build.
+        if generated and (_rep_pen != 1.0 or _presence > 0.0):
             idx = torch.tensor(sorted(set(generated)))
-            s = v[idx]
-            v[idx] = torch.where(s > 0, s / _rep_pen, s * _rep_pen)
+            if _rep_pen != 1.0:
+                s = v[idx]
+                v[idx] = torch.where(s > 0, s / _rep_pen, s * _rep_pen)
+            if _presence > 0.0:
+                v[idx] -= _presence
         if _no_repeat > 0 and len(generated) >= _no_repeat - 1:
             prefix = tuple(generated[-(_no_repeat - 1) :]) if _no_repeat > 1 else ()
             n = _no_repeat
@@ -456,7 +610,9 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     def _read(out):
         return _pick(model.process_output_decode(out, B=1, S=1).reshape(-1)[:vocab])
 
-    # On-device sampling when sampler exists, temp>0, no rep-penalty/no-repeat (not wired on device); else greedy/host.
+    # On-device sampling when sampler exists, temp>0, and no rep / no-repeat penalty (neither is wired into this demo's device sampler); else greedy/host.
+    # Presence penalty is: TTPenalties subtracts it from OUTPUT-token logits, and sample() counts the new token in the same op stream
+    # so the folded trace replays the update every step with no per-step host call.
     _ondev_sample = model.sampling is not None and _temp > 0 and _rep_pen == 1.0 and _no_repeat == 0
     if _ondev_sample:
         from models.common.sampling.generator import SamplingParams, format_sampling_params
@@ -465,13 +621,22 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         # No explicit seed: a seed would bake a fixed value into the folded trace → same
         # token every step. Unseeded, the device RNG self-advances each replay (varied tokens).
         _sp = format_sampling_params(
-            SamplingParams(temperature=_temp, top_k=_top_k, top_p=_top_p),
+            SamplingParams(temperature=_temp, top_k=_top_k, top_p=_top_p, presence_penalty=_presence),
             _sbatch,
         )
         model.sampling.apply_prefill_state(sampling_params=_sp, prompt_tokens=None, empty_slots=[0])
+        if _presence > 0.0:
+            # prompt_tokens=None on purpose: presence looks at the OUTPUT only. The first token was
+            # sampled on host by _pick(), so seed it into the output state the penalty reads. The
+            # pre-capture warm pass below counts a phantom token on top of this, so the same reset
+            # is repeated right after it — that later one is the load-bearing one.
+            model.sampling.reset_output_state(torch.tensor([[nxt]], dtype=torch.int64))
 
-    # On-device per-shard argmax+max for pure greedy (skips full-vocab gather/readback)
-    _greedy = (not eager) and (not _ondev_sample) and _temp == 0 and _rep_pen == 1.0 and _no_repeat == 0
+    # On-device per-shard argmax+max for pure greedy (skips full-vocab gather/readback). Any penalty
+    # rules it out: the device argmax would never see the penalized row _pick() builds.
+    _greedy = (
+        (not eager) and (not _ondev_sample) and _temp == 0 and _rep_pen == 1.0 and _no_repeat == 0 and _presence == 0.0
+    )
     model._ondev_argmax = _greedy
     _per_shard = vocab // model.num_devices
 
@@ -585,7 +750,12 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         if _ondev_sample:
             # Warm sampling kernels + advance the seed to SKIP before capture, so the trace self-advances the RNG each replay.
             model.sampling.seed_manager.get_new_values([0])
+            # Warm pass must EXECUTE the penalty-counting chain (scatter_add/tilize/add/slice/gt) so those programs are cached before capture; compiling inside the window fails ("Cannot load new binaries during trace capture").
             model.sampling.sample(_warm_logits, enable_trace=False)
+            if _presence > 0.0:
+                # Warm pass counted a phantom token: wipe output counts and re-seed with the real first token BEFORE begin_trace_capture.
+                # reset_output_tokens writes the persistent count/mask buffers in place (no realloc); once the trace holds those addresses and replays the counting update, nothing may reset them.
+                model.sampling.reset_output_state(torch.tensor([[nxt]], dtype=torch.int64))
         trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
         tt_logits = _decode_fwd()
         # Fold per-shard argmax+max into trace for tiny readback when greedy
