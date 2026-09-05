@@ -1,0 +1,508 @@
+diff --git a/tt_metal/fabric/topology_solver_sat.cpp b/tt_metal/fabric/topology_solver_sat.cpp
+index 4f0cbae09a9..9345415c4b6 100644
+--- a/tt_metal/fabric/topology_solver_sat.cpp
++++ b/tt_metal/fabric/topology_solver_sat.cpp
+@@ -1148,16 +1148,62 @@ inline bool topology_sat_solve_minimize_groups(
+ 
+     const bool profile = !quiet_mode;
+ 
++    // HYBRID (TT_TOPO_SAT_GIMSATUL=1): delegate each heavy SAT solve to the external gimsatul binary while our
++    // CaDiCaL keeps driving descent/decode. `assumption` (a counter/cap literal, 0 = none) is baked into gimsatul's
++    // CNF as a temporary hard unit (gimsatul has no assume()); on kSat our val() reflects gimsatul's model so
++    // count_occupied()/decode work unchanged. Returns 0 (unknown, e.g. binary missing) -> native fallback below.
++    const bool use_gimsatul = topology_sat_env_long("TT_TOPO_SAT_GIMSATUL", 0) != 0;
++    const int gimsatul_threads = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_GIMSATUL_THREADS", 32));
++    // TT_TOPO_SAT_GIM_FIRST=1: gimsatul does only the FIRST (warm feasible) solve; the descent then runs on native
++    // incremental CaDiCaL, warm-started from gimsatul's model via phase hints. gim_active is flipped off after the
++    // warm solve. (Without it, every solve is delegated to gimsatul -- re-export + cold re-solve per descent step.)
++    const bool gim_first_only = topology_sat_env_long("TT_TOPO_SAT_GIM_FIRST", 0) != 0;
++    bool gim_active = use_gimsatul;
++    auto delegated_solve = [&](int assumption, int native_budget) -> int {
++        if (gim_active) {
++            std::vector<int> units;
++            if (assumption != 0) {
++                units.push_back(assumption);
++            }
++            const int st = solver.gimsatul_solve(gimsatul_threads, units);
++            if (st != 0) {
++                return st;  // gimsatul returned a verdict (kSat/kUnsat)
++            }
++            // st == 0 (no binary / parse fail) -> fall through to the native solve
++        }
++        if (assumption != 0) {
++            solver.assume(assumption);
++        }
++        return (native_budget > 0) ? solver.solve_limited(native_budget) : solver.solve();
++    };
++
+     // EXPERIMENT mode 3 (HardCapOnly): skip the warm feasible solve AND the descent -- go straight to a single
+     // cold all-or-nothing hard-cap solve at hard_cap_k. Tests whether the warm-start (mode 1) actually matters.
+     if (min_mode == TopoMinMode::HardCapOnly && hard_cap_k > 0 && hard_cap_k < num_present) {
+         topology_sat_add_all_or_nothing_tightening(solver, occ, used_per_group);
+         const int bound = atmost_lit(hard_cap_k);
+-        const auto t_hc = std::chrono::steady_clock::now();
+-        if (bound != 0) {
+-            solver.assume(bound);
++        // EXPERIMENT hook: dump the HOST-CAP-INCLUSIVE CNF. write_dimacs ignores assumptions, so bake the atmost
++        // bound in as a HARD unit clause first -- otherwise the dumped CNF would silently drop the host cap and be
++        // trivially SAT. This lets an external one-shot solver (gimsatul) attempt the full with-host-min problem.
++        if (const char* dp = std::getenv("TT_TOPO_SAT_DUMP_DIMACS");
++            dp != nullptr && dp[0] != '\0' && solver.num_variables() > 5000) {
++            if (bound != 0) {
++                solver.add(bound);
++                solver.add(0);
++            }
++            const bool okw = solver.write_dimacs(dp);
++            log_info(
++                tt::LogFabric,
++                "[topo-sat] TT_TOPO_SAT_DUMP_DIMACS hardcap(occupied<={}) -> {} ({}), {} vars, {} clauses (wrapper count)",
++                hard_cap_k,
++                dp,
++                okw ? "ok" : "FAILED",
++                solver.num_variables(),
++                solver.num_clauses());
++            return false;
+         }
+-        const int st = solver.solve();
++        const auto t_hc = std::chrono::steady_clock::now();
++        const int st = delegated_solve(bound, 0);
+         bool ok = false;
+         if (st == TopologySatSolver::kSat) {
+             best_k_out = count_occupied();
+@@ -1214,7 +1260,7 @@ inline bool topology_sat_solve_minimize_groups(
+     }
+ 
+     auto t_warm = std::chrono::steady_clock::now();
+-    if (solver.solve() != TopologySatSolver::kSat) {  // step 1: warm feasible model
++    if (delegated_solve(0, 0) != TopologySatSolver::kSat) {  // step 1: warm feasible model
+         if (profile) {
+             log_debug(
+                 tt::LogFabric,
+@@ -1234,6 +1280,12 @@ inline bool topology_sat_solve_minimize_groups(
+             best_k_out,
+             num_present);
+     }
++    // HYBRID gimsatul-first: gimsatul did the heavy warm feasible solve; hand its model to CaDiCaL as phase hints
++    // and run the rest of the descent/lock on native incremental CaDiCaL (learned-clause reuse across steps).
++    if (gim_active && gim_first_only) {
++        solver.phase_hint_from_last_gimsatul_model();
++        gim_active = false;
++    }
+ 
+     const size_t floor = std::max<size_t>(k_floor, 1);
+     // TT_TOPO_SAT_SKIP_DESCENT: skip the one-host-at-a-time soft descent and rely on the direct k_min hard-cap
+@@ -1248,9 +1300,8 @@ inline bool topology_sat_solve_minimize_groups(
+         if (bound == 0) {
+             break;
+         }
+-        solver.assume(bound);
+         auto t_iter = std::chrono::steady_clock::now();
+-        const int st = (conflict_cap > 0) ? solver.solve_limited(conflict_cap) : solver.solve();
++        const int st = delegated_solve(bound, conflict_cap);
+         ++iter;
+         if (st == TopologySatSolver::kSat) {
+             best_k_out = count_occupied();  // may drop by more than one
+@@ -1288,10 +1339,7 @@ inline bool topology_sat_solve_minimize_groups(
+         topology_sat_add_all_or_nothing_tightening(solver, occ, used_per_group);
+         const int bound = atmost_lit(hard_cap_k);
+         auto t_lock = std::chrono::steady_clock::now();
+-        if (bound != 0) {
+-            solver.assume(bound);
+-        }
+-        const int st = (hard_conflict_cap > 0) ? solver.solve_limited(hard_conflict_cap) : solver.solve();
++        const int st = delegated_solve(bound, hard_conflict_cap);
+         if (st == TopologySatSolver::kSat) {
+             best_k_out = count_occupied();
+             topology_sat_decode_hard_solution(solver, enc, best_mapping_out);
+@@ -2493,6 +2541,25 @@ bool topology_sat_search(
+             }
+             return false;
+         }
++        // EXPERIMENT hook: dump the encoded CNF to DIMACS (TT_TOPO_SAT_DUMP_DIMACS=path) to feed an external
++        // parallel / clause-sharing solver (gimsatul, plingeling, ...). Gated on size so it captures the big
++        // inter-mesh solve, not the tiny intra-mesh per-stage ones. Dumps then stops (returns false).
++        // Only for the BASE-embedding experiment (NO_MINHOST): otherwise a min-host run's hardcap dump (in
++        // solve_minimize_groups) would be clobbered by this base-solve fallback writing the same path.
++        if (const char* dp = std::getenv("TT_TOPO_SAT_DUMP_DIMACS");
++            dp != nullptr && dp[0] != '\0' && solver.num_variables() > 5000 &&
++            std::getenv("TT_TOPO_SAT_NO_MINHOST") != nullptr) {
++            const bool ok = solver.write_dimacs(dp);
++            log_info(
++                tt::LogFabric,
++                "[topo-sat-profile] DUMP_DIMACS: wrote CNF to {} ({}), {} vars, {} clauses",
++                dp,
++                ok ? "ok" : "FAILED",
++                solver.num_variables(),
++                solver.num_clauses());
++            state.error_message = "TT_TOPO_SAT_DUMP_DIMACS: dumped CNF, skipping solve";
++            return false;
++        }
+         // TT_TOPO_SAT_BASE_WARMHINT=1: phase-hint a greedy adjacency-walk embedding before the solve (Goal 1).
+         if (topology_sat_env_long("TT_TOPO_SAT_BASE_WARMHINT", 0) != 0) {
+             const auto t_wh = std::chrono::steady_clock::now();
+@@ -2680,6 +2747,16 @@ bool topology_sat_search(
+ 
+         if (constraint_data.minimize_same_rank_groups_used) {
+             TopologySatSolver solver;
++            // ABLATION: apply Goal-1 solver knobs (fastsat/seed) in CONFIGURING state (BEFORE encode) so they can
++            // be measured WITH the host cap on. target/phase must be set before any clause is added (setting them
++            // post-encode aborts CaDiCaL), so this must precede topology_sat_encode_hard_constraints.
++            if (topology_sat_env_long("TT_TOPO_SAT_FASTSAT", 0) != 0) {
++                (void)solver.set_option("target", 2);
++                (void)solver.set_option("phase", 1);
++            }
++            if (const long g1_seed = topology_sat_env_long("TT_TOPO_SAT_SEED", -1); g1_seed >= 0) {
++                (void)solver.set_option("seed", static_cast<int>(g1_seed));
++            }
+             TopologySatHardEncoding enc;
+             auto t_min_enc = std::chrono::steady_clock::now();
+             const bool min_enc_ok = topology_sat_encode_hard_constraints(
+@@ -2899,10 +2976,17 @@ bool topology_sat_search_n(
+         return false;
+     }
+ 
++    // EXPERIMENT (Story 3): seed applied to BOTH enumeration modes (incremental + from-scratch) so a seed-variance
++    // sweep is fair. Must be set pre-encode (CONFIGURING state). -1 (default) leaves CaDiCaL's default seed.
++    const long enum_seed = topology_sat_env_long("TT_TOPO_SAT_SEED", -1);
++
+     // One CaDiCaL::Solver for the whole enumeration: encode once, then add blocking clauses and solve() in a loop.
+     // (No full re-encode / new solver per model.)
+     TopologySatSolver solver;
+     solver.configure_for_blocking_clause_enumeration();
++    if (enum_seed >= 0) {
++        (void)solver.set_option("seed", static_cast<int>(enum_seed));
++    }
+     TopologySatHardEncoding enc;
+     // Top-level phase attribution for the enumeration path (encode / minimal-host prime / enumerate loop). The scoped
+     // timer emits search_n.total on every return; the manual subtotals below split it. DEBUG only, quiet_mode silent.
+@@ -2927,9 +3011,85 @@ bool topology_sat_search_n(
+         topology_sat_add_shape_clause_or_unsat(solver, enc, forbid_clause);
+     }
+ 
++    // EXPERIMENT (Story 3, TT_TOPO_SAT_ENUM_FROMSCRATCH=1): from-scratch enumeration -- the control for measuring the
++    // benefit of incremental state reuse. Instead of ONE persistent solver reused across solutions (the loop below),
++    // rebuild a FRESH solver + re-encode + replay ALL prior blocking clauses each solution, then do a mode-3 hardcap
++    // solve. No learned-clause / phase / VSIDS carryover. Same result set, different cost. Compares vs the incremental
++    // path (default). Uses the same solve_minimize_groups(mode 3) per step -- run with TT_TOPO_SAT_MIN_MODE=3.
++    if (topology_sat_env_long("TT_TOPO_SAT_ENUM_FROMSCRATCH", 0) != 0) {
++        // Always-on confirmation marker (survives quiet_mode) so experiments can PROVE this path ran.
++        log_info(
++            tt::LogFabric,
++            "[topo-sat] ENUM path = FROM-SCRATCH (fresh solver + replay blocks per solution), seed={}",
++            enum_seed);
++        size_t fs_max_cap = 0;
++        for (const auto& g : constraint_data.same_rank_groups) {
++            fs_max_cap = std::max(fs_max_cap, g.size());
++        }
++        const size_t fs_k_floor = (fs_max_cap > 0) ? (graph_data.n_target + fs_max_cap - 1) / fs_max_cap : 1;
++        const size_t fs_hard_cap_k = constraint_data.max_same_rank_groups_used;
++        const int fs_descent_budget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_DESCENT_BUDGET", 20'000));
++        const int fs_lock_budget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_LOCK_BUDGET", 0));
++        const auto t_fs = std::chrono::steady_clock::now();
++        while (all_mappings_out.size() < max_solutions) {
++            TopologySatSolver fs_solver;
++            if (enum_seed >= 0) {
++                (void)fs_solver.set_option("seed", static_cast<int>(enum_seed));
++            }
++            TopologySatHardEncoding fs_enc;
++            if (!topology_sat_encode_hard_constraints(
++                    fs_solver, graph_data, constraint_data, fs_enc, validation_mode, quiet_mode)) {
++                break;
++            }
++            // Replay the initial forbidden shapes + every solution already found (deterministic encode => same var
++            // numbering => blocking clauses reconstruct exactly).
++            for (const auto& shape_key : initial_forbidden_shape_keys) {
++                std::vector<int> fc;
++                topology_sat_build_shape_blocking_clause(fs_enc, shape_key, fc);
++                topology_sat_add_shape_clause_or_unsat(fs_solver, fs_enc, fc);
++            }
++            for (const auto& m : all_mappings_out) {
++                topology_sat_add_blocking_clause_for_mapping(fs_solver, fs_enc, m, unique_shapes);
++            }
++            std::vector<int> fs_mapping;
++            size_t fs_best_k = 0;
++            bool fs_met = false;
++            const bool ok = topology_sat_solve_minimize_groups(
++                graph_data, fs_solver, fs_enc, constraint_data, fs_descent_budget, fs_k_floor, fs_mapping, fs_best_k,
++                fs_hard_cap_k, fs_lock_budget, &fs_met, /*make_cap_permanent=*/false, quiet_mode);
++            if (!ok || fs_mapping.empty()) {
++                break;
++            }
++            all_mappings_out.push_back(std::move(fs_mapping));
++            if (!quiet_mode) {
++                log_info(
++                    tt::LogFabric,
++                    "topology_sat_search_n[fromscratch]: found {} solution(s) so far (max={}), {:.1f} ms elapsed",
++                    all_mappings_out.size(),
++                    max_solutions,
++                    topology_sat_elapsed_ms(t_fs));
++            }
++        }
++        if (!all_mappings_out.empty()) {
++            state.mapping = all_mappings_out.back();
++            std::fill(state.used.begin(), state.used.end(), false);
++            for (int gi : state.mapping) {
++                if (gi >= 0 && static_cast<size_t>(gi) < state.used.size()) {
++                    state.used[static_cast<size_t>(gi)] = true;
++                }
++            }
++        }
++        return !all_mappings_out.empty();
++    }
++
+     // Drive the solve heartbeat's "progress to first solution" / enumeration counters (see TopologySatSolver).
+     solver.set_solution_progress(0, static_cast<std::int64_t>(max_solutions));
+     solver.set_progress_phase("enumerate");
++    // Always-on confirmation marker (survives quiet_mode) so experiments can PROVE the incremental path ran.
++    log_info(
++        tt::LogFabric,
++        "[topo-sat] ENUM path = INCREMENTAL (one solver reused + blocking clauses), seed={}",
++        enum_seed);
+ 
+     // Minimal-host occupancy objective (same strategy as the single solve): PRIME the solver with the warm descent
+     // + full-packing lock and make the achieved cap PERMANENT (unit clause), so every enumerated solution occupies
+diff --git a/tt_metal/fabric/topology_solver_sat_solver.cpp b/tt_metal/fabric/topology_solver_sat_solver.cpp
+index d6e9e6085c5..e28a973d9ce 100644
+--- a/tt_metal/fabric/topology_solver_sat_solver.cpp
++++ b/tt_metal/fabric/topology_solver_sat_solver.cpp
+@@ -7,8 +7,11 @@
+ #include <atomic>
+ #include <chrono>
+ #include <cstdint>
++#include <cstdio>
+ #include <cstdlib>
++#include <cstring>
+ #include <memory>
++#include <unistd.h>
+ #include <string>
+ #include <string_view>
+ 
+@@ -212,7 +215,15 @@ struct TopologySatSolver::Impl {
+     }
+ };
+ 
+-TopologySatSolver::TopologySatSolver() : impl_(std::make_unique<Impl>()) {}
++TopologySatSolver::TopologySatSolver() : impl_(std::make_unique<Impl>()) {
++    // Turn on the faithful DIMACS tee when a dump is requested OR the gimsatul hybrid is active (it exports the tape
++    // to feed gimsatul). Production (neither set) pays nothing.
++    const char* dp = std::getenv("TT_TOPO_SAT_DUMP_DIMACS");
++    const char* gm = std::getenv("TT_TOPO_SAT_GIMSATUL");
++    if ((dp != nullptr && dp[0] != '\0') || (gm != nullptr && gm[0] != '\0' && gm[0] != '0')) {
++        dump_record_ = true;
++    }
++}
+ 
+ void TopologySatSolver::configure_for_blocking_clause_enumeration() {
+     // Only valid in CONFIGURING state (before the first non-config add()).
+@@ -225,6 +236,114 @@ bool TopologySatSolver::set_option(const std::string& name, int value) { return
+ 
+ void TopologySatSolver::set_cancel_flag(std::atomic<bool>* flag) { impl_->set_cancel(flag); }
+ 
++bool TopologySatSolver::write_dimacs(const std::string& path) {
++    log_info(
++        tt::LogFabric, "[topo-sat] write_dimacs tee: record={} tape_clauses~={}", dump_record_, num_clauses_);
++    // Faithful export from our own clause tape (CaDiCaL::write_dimacs drops post-solve incremental clauses).
++    if (!dump_record_) {
++        return impl_->solver.write_dimacs(path.c_str()) == nullptr;  // fallback (base encode only)
++    }
++    FILE* f = std::fopen(path.c_str(), "w");
++    if (f == nullptr) {
++        return false;
++    }
++    std::fprintf(f, "p cnf %d %zu\n", next_var_ < 0 ? 0 : next_var_, num_clauses_);
++    for (const int lit : dump_tape_) {
++        if (lit == 0) {
++            std::fputs("0\n", f);
++        } else {
++            std::fprintf(f, "%d ", lit);
++        }
++    }
++    std::fclose(f);
++    return true;
++}
++
++int TopologySatSolver::gimsatul_solve(int threads, const std::vector<int>& assumption_units) {
++    have_gimsatul_model_ = false;
++    const char* bin = std::getenv("TT_TOPO_SAT_GIMSATUL_BIN");
++    if (bin == nullptr || bin[0] == '\0' || !dump_record_) {
++        return 0;  // no binary / no tape -> unknown; caller falls back to native solve
++    }
++    const std::string base = std::string("/tmp/tt_gimsatul_") + std::to_string(static_cast<long>(::getpid()));
++    const std::string cnf = base + ".cnf";
++    const std::string out = base + ".out";
++    // Write the faithful CNF (recorded tape) + the assumption units (gimsatul has no assume()).
++    FILE* f = std::fopen(cnf.c_str(), "w");
++    if (f == nullptr) {
++        return 0;
++    }
++    std::fprintf(f, "p cnf %d %zu\n", next_var_ < 0 ? 0 : next_var_, num_clauses_ + assumption_units.size());
++    for (const int lit : dump_tape_) {
++        if (lit == 0) {
++            std::fputs("0\n", f);
++        } else {
++            std::fprintf(f, "%d ", lit);
++        }
++    }
++    for (const int u : assumption_units) {
++        std::fprintf(f, "%d 0\n", u);
++    }
++    std::fclose(f);
++
++    const std::string cmd =
++        std::string(bin) + " " + cnf + " --threads=" + std::to_string(threads) + " > " + out + " 2>/dev/null";
++    (void)std::system(cmd.c_str());
++
++    FILE* r = std::fopen(out.c_str(), "r");
++    if (r == nullptr) {
++        std::remove(cnf.c_str());
++        return 0;
++    }
++    int status = 0;
++    gimsatul_model_.assign(static_cast<size_t>(next_var_ < 0 ? 0 : next_var_) + 1, 0);
++    static thread_local std::vector<char> buf(1 << 16);
++    while (std::fgets(buf.data(), static_cast<int>(buf.size()), r) != nullptr) {
++        const char* line = buf.data();
++        if (line[0] == 's') {
++            if (std::strstr(line, "UNSATISFIABLE") != nullptr) {
++                status = kUnsat;
++            } else if (std::strstr(line, "SATISFIABLE") != nullptr) {
++                status = kSat;
++            }
++        } else if (line[0] == 'v') {
++            const char* p = line + 1;
++            char* end = nullptr;
++            for (long v = std::strtol(p, &end, 10); p != end; v = std::strtol(p, &end, 10)) {
++                p = end;
++                if (v == 0) {
++                    break;
++                }
++                const long a = v < 0 ? -v : v;
++                if (a >= 1 && a < static_cast<long>(gimsatul_model_.size())) {
++                    gimsatul_model_[static_cast<size_t>(a)] = (v < 0) ? -1 : 1;
++                }
++            }
++        }
++    }
++    std::fclose(r);
++    std::remove(cnf.c_str());
++    std::remove(out.c_str());
++    if (status == kSat) {
++        have_gimsatul_model_ = true;
++    }
++    return status;
++}
++
++void TopologySatSolver::phase_hint_from_last_gimsatul_model() {
++    if (!have_gimsatul_model_) {
++        return;
++    }
++    for (size_t v = 1; v < gimsatul_model_.size(); ++v) {
++        const signed char s = gimsatul_model_[v];
++        if (s > 0) {
++            impl_->phase(static_cast<int>(v));
++        } else if (s < 0) {
++            impl_->phase(-static_cast<int>(v));
++        }
++    }
++}
++
+ TopologySatSolver::~TopologySatSolver() = default;
+ 
+ TopologySatSolver::TopologySatSolver(TopologySatSolver&&) noexcept = default;
+@@ -243,6 +362,9 @@ void TopologySatSolver::add(int lit) {
+     } else {
+         ++num_literals_;
+     }
++    if (dump_record_) {
++        dump_tape_.push_back(lit);
++    }
+     impl_->add(lit);
+ }
+ 
+@@ -252,9 +374,15 @@ void TopologySatSolver::phase(int lit) { impl_->phase(lit); }
+ 
+ void TopologySatSolver::unphase(int lit) { impl_->unphase(lit); }
+ 
+-int TopologySatSolver::solve() { return impl_->solve(); }
++int TopologySatSolver::solve() {
++    have_gimsatul_model_ = false;  // a native solve supersedes any prior gimsatul model
++    return impl_->solve();
++}
+ 
+-int TopologySatSolver::solve_limited(int max_conflicts) { return impl_->solve_limited(max_conflicts); }
++int TopologySatSolver::solve_limited(int max_conflicts) {
++    have_gimsatul_model_ = false;
++    return impl_->solve_limited(max_conflicts);
++}
+ 
+ void TopologySatSolver::set_progress_phase(std::string_view phase) { impl_->set_progress_phase(phase); }
+ 
+@@ -262,6 +390,22 @@ void TopologySatSolver::set_solution_progress(std::int64_t found, std::int64_t t
+     impl_->set_solution_progress(found, target);
+ }
+ 
+-int TopologySatSolver::val(int lit) const { return impl_->val(lit); }
++int TopologySatSolver::val(int lit) const {
++    // If a gimsatul model is live, answer from it (matches CaDiCaL val semantics: return `lit` if the literal is
++    // satisfied, `-lit` if falsified, 0 if unassigned).
++    if (have_gimsatul_model_) {
++        const long a = lit < 0 ? -static_cast<long>(lit) : static_cast<long>(lit);
++        if (a >= 1 && a < static_cast<long>(gimsatul_model_.size())) {
++            const signed char s = gimsatul_model_[static_cast<size_t>(a)];
++            if (s == 0) {
++                return 0;
++            }
++            const bool lit_true = (lit > 0) ? (s > 0) : (s < 0);
++            return lit_true ? lit : -lit;
++        }
++        return 0;
++    }
++    return impl_->val(lit);
++}
+ 
+ }  // namespace tt::tt_fabric::detail
+diff --git a/tt_metal/fabric/topology_solver_sat_solver.hpp b/tt_metal/fabric/topology_solver_sat_solver.hpp
+index f26377e8dfb..e04eafac49e 100644
+--- a/tt_metal/fabric/topology_solver_sat_solver.hpp
++++ b/tt_metal/fabric/topology_solver_sat_solver.hpp
+@@ -75,6 +75,23 @@ struct TopologySatSolver {
+     // Used by the parallel seed portfolio so the first thread to hit SAT cancels the rest. nullptr = no cancel.
+     void set_cancel_flag(std::atomic<bool>* flag);
+ 
++    // Write the current CNF to a DIMACS file (experiment hook: feed an external parallel/clause-sharing solver).
++    // Returns true on success. Variable numbering matches declare_one_more_variable() so a model round-trips.
++    bool write_dimacs(const std::string& path);
++
++    // HYBRID: solve the current formula (+ `assumption_units` baked in as temporary hard units, since gimsatul has
++    // no assumption API) with the external gimsatul binary (path from TT_TOPO_SAT_GIMSATUL_BIN), `threads` workers.
++    // Returns kSat / kUnsat / 0 (unknown, e.g. no binary -> caller should fall back to CaDiCaL). On kSat, val()
++    // returns gimsatul's model until the next solve()/solve_limited(). Requires the clause tee (auto-enabled when
++    // TT_TOPO_SAT_GIMSATUL is set). Lets our solver keep driving descent/decode/enumeration while delegating the
++    // heavy SAT search. See ONESHOT_EXTERNAL_SAT_EXPERIMENT.md.
++    int gimsatul_solve(int threads, const std::vector<int>& assumption_units);
++
++    // HYBRID warm-start: after gimsatul_solve() found a model, bias CaDiCaL's decision phases toward it, so a
++    // subsequent NATIVE incremental descent starts from gimsatul's feasible solution (gimsatul does the heavy first
++    // solve; CaDiCaL does the cheap incremental tightening, reusing its own learned clauses). No-op if no model.
++    void phase_hint_from_last_gimsatul_model();
++
+     static constexpr int kSat = 10;
+     static constexpr int kUnsat = 20;
+ 
+@@ -84,6 +101,16 @@ private:
+     int next_var_ = 0;
+     std::size_t num_clauses_ = 0;
+     std::size_t num_literals_ = 0;
++    // EXPERIMENT: faithful DIMACS tee. CaDiCaL::write_dimacs drops clauses added incrementally after a solve()
++    // (e.g. the occupancy/host-cap clauses built in solve_minimize_groups), so when dump_record_ is on we record
++    // every literal add()'ed and emit DIMACS from this tape instead. Enabled only when TT_TOPO_SAT_DUMP_DIMACS is
++    // set, so production pays nothing.
++    bool dump_record_ = false;
++    std::vector<int> dump_tape_;
++    // HYBRID: when a gimsatul_solve() found a model, val() answers from it (per-var sign: +1 true, -1 false, 0 unset)
++    // instead of CaDiCaL, until the next native solve()/solve_limited() clears it.
++    bool have_gimsatul_model_ = false;
++    std::vector<signed char> gimsatul_model_;
+ };
+ 
+ // Internal SAT function declarations — implemented in topology_solver_sat.cpp.
