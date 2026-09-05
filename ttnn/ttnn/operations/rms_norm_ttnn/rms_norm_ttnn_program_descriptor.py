@@ -39,6 +39,24 @@ Knob map (all tunable parameters, none inlined):
     CB_COMBINE_FLAT_DEPTH   page depth of the combine CBs that carry ONE compact
                             tile per round and are therefore FLAT in BLOCK_ROWS
                             (see D27)
+    COMBINE_TREE_F0_MIN / _MAX
+                            the level-0 fan-in BAND the slot tree's arity is
+                            derived in -- f0 is the largest DIVISOR of
+                            GROUP_SIZE in it that both tree gates admit
+                            (Refinement 1 lever 1; measured table at the
+                            constants)
+    COMBINE_TREE_MIN_DELETED_FOLD_TILES
+                            the tree's cost gate, on root fold-tiles deleted
+                            per round (see D28)
+    COMBINE_NOC_RESIDENT / COMBINE_NOC_STREAMED
+                            which NoC carries the combine, chosen per plan on
+                            `native_in` -- NOC_0 (with a reader/writer SWAP)
+                            when x is a resident shard, NOC_1 when the reader
+                            still streams x from DRAM (Refinement 1 lever 2)
+    CB_R_DEPTH              ring depth of a STREAMED cb_residual_tiles.
+                            0 = follow CB_X_DEPTH, which is byte-identical to
+                            Phase 0 and is where it is parked (Refinement 1
+                            lever 4; measured null)
     ROW_RESIDENT_MIN_ROWS_PER_CORE
                             tile-rows a core must own before the ROW_RESIDENT
                             regime is taken at a SHALLOWER depth than STREAM
@@ -53,6 +71,11 @@ Knob map (all tunable parameters, none inlined):
   derived helpers (one source of truth each; both L1 solves call them)
     _cb_block_mult()        which CBs scale with BLOCK_ROWS * WT_CHUNK, and at what
                             depth -- never re-spelled inline
+    _residual_depth()       the residual ring's depth (CB_R_DEPTH or CB_X_DEPTH),
+                            read by both L1 solves AND the CB table
+    _combine_tree_arity()   (f0, f1) or None -- THE one place the tree is decided
+    _combine_noc()          the combine's NoC, read by the host mcast wire AND by
+                            both data-movement kernel configs
     scaler_pages            page count of cb_scaler (2 when PARTIAL_W, else 1)
     reduce_acc_via_add      the chosen reduce datapath (D7); also decides what the
                             reader fills cb_scaler with

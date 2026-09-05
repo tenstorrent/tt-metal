@@ -139,3 +139,144 @@
   spec), `test_rms_norm_ttnn_debug.py` (19), `test_rms_norm_ttnn_matrix.py` (227),
   `test_rms_norm_ttnn_perf.py` (72, incl. the structural seed-parity gate). Whole directory:
   **455 passed, 1 skipped**.
+
+---
+
+## Refinement 1 — The width-sharded decode combine round
+
+- **Date**: 2026-09-05
+- **Type**: perf. **No SUPPORTED / EXCLUSIONS change** — `verify_supported`'s categories are
+  untouched by construction (nothing in the registry declarations was edited).
+
+- **What was done** — all four named levers implemented and measured on device; nothing
+  reverted. `Reused:` the existing combine dataflow, its CBs, its semaphores and all three
+  kernels — **no kernel source changed except one stale comment**. `Added:` four host-side
+  derived rules in `rms_norm_ttnn_program_descriptor.py`, each with one source of truth.
+
+  1. **Lever 1 — combine-tree arity (`COMBINE_TREE_F0` → a band).** The level-0 fan-in was
+     the constant `4`; it is now **derived**: the largest *divisor* of `GROUP_SIZE` in the
+     measured band `[COMBINE_TREE_F0_MIN, _MAX] = [4, 10]` that both of D28's existing gates
+     admit, with the cap as a ragged fallback for a group no divisor covers.
+     `_combine_tree_candidates` / `_combine_tree_arity` are the only place it is decided;
+     the two gates (`f1 >= 2`, `deleted >= 18`) are untouched. The sweep (whole-op device
+     kernel ns, on top of lever 2, median of 5):
+
+     | `G` | flat | f0=4 | f0=5 | f0=6 | f0=8 | f0=10 | f0=15/16/32 | rule picks |
+     |---:|---:|---:|---:|---:|---:|---:|---:|---|
+     | 28 | **5699** | 6004 | — | 6081 | 6018 | 5987 | — | flat (every tree loses) |
+     | 30 | 5058 | 5051 | 4981 | 4981 | 5056 | *4787* | 5264 | `(6,5)` |
+     | 32 | 5253 | 4979 | — | 4991 | **4736** | 5133 | 5201 | `(8,4)` |
+     | 40 | 5402 | 5064 | — | 4927 | 4941 | **4789** | — | `(10,4)` |
+     | 64 | 6695 | 5498 | — | 5362 | **5047** | 5363 | 5754 / 6436 | `(8,8)` |
+
+     Two mechanisms, both visible: a **larger `f0` unloads the root** (its ingress is `f1-1`
+     remote writes and its fold is `f1` pages, and the root is also the finalizer and the
+     multicast sender), but **an exact divisor beats a bigger ragged `f0`** — at `G=32`,
+     `f0=8` (8×4, exact) is 4736 while `f0=10` (10×4, ragged) is 5133, *same `f1`*, 8.4%
+     apart. Past ~10 the level-0 gatherer becomes the new serial bottleneck.
+     The derived shape is also never larger in L1 and at `G=64` is **32 KB/core smaller**
+     (rings `4+16` → `8+8` pages).
+  2. **Lever 2 — which NoC carries the combine.** New `COMBINE_NOC_RESIDENT` /
+     `COMBINE_NOC_STREAMED`, chosen per plan by `_combine_noc(plan.native_in)` and read by
+     BOTH the host mcast wire (five de-duplicated `McastConfig` call sites) and the two
+     data-movement `KernelDescriptor` configs. On a `native_in` plan x is an aliased
+     resident shard, so the reader carries no activation traffic and the combine takes
+     **NOC_0**; the reader moves to NOC_1 in the same step. Gated **out** on streamed plans.
+  3. **Lever 3 — `GATHER_FACES`.** Re-swept `{2, 3, 4}` on top of the new tree and the new
+     NoC. 2 still wins and the loss is **monotone in the byte count** on every geometry
+     (A 5709 / 5976 / 6325; C 4983 / 5142 / 5336; B 6573 / 6641 / 6827; the 8- and 9-core
+     groups likewise). Unchanged — the D13/D27 scoping survives the re-measurement.
+  4. **Lever 4 — Lamp L-RES-DEPTH (`CB_R_DEPTH`).** *The lamp's premise is false on its own
+     target*, and that is a host-side fact rather than an argument: on `(1,1,32,5120)`
+     WIDTH `[32,160]` `(8,4)` with `gamma_bias_residual` the residual carries the input's
+     shard spec, so `native_residual` holds and `cb_residual_tiles` is
+     `cb_descriptor_from_sharded_tensor` — dumped from the built descriptor as **5 pages,
+     exactly the shard**, an alias that costs no arena L1 and to which no depth is applied.
+     There is no second double-buffered stream to shrink. The knob was still **built and
+     kept**, parked at its byte-identical default (`CB_R_DEPTH = 0` = follow `CB_X_DEPTH`),
+     with `_residual_depth()` as the single source both L1 solves and the CB table read, and
+     **measured** on the plans where it IS live (a streamed interleaved residual):
+     `(1,1,32,5120)` 10281 / 10469 / 10378 and `(1,1,8192,5120)` 669877 / 667814 / 668641 ns
+     at depth follow / 1 / 2 — a null inside ±0.3%. Parked, not reverted.
+
+- **Perf achieved** — harness-native numbers, `run_safe_pytest.sh --profile` on the three
+  target golden cells, blackhole p150b, AICLK 1350 MHz = the reference clock (scale 1.0000):
+
+  | case | ceiling | Phase 0 | Refinement 1 | ratio |
+  |---|---:|---:|---:|---:|
+  | `(1,1,32,5120)` W `[32,160]` `(8,4)` **`gamma_bias_residual`**, `fp32_dest=True` | 6555 | 6882 (1.050) | **6420** | **0.979 ✅** |
+  | `(1,1,32,5120)` W `[32,160]` `(8,4)` `gamma` | 5267 | 5339 (1.014) | **4807** | **0.913 ✅** |
+  | `(1,1,32,7168)` W `[32,256]` `(7,4)` `gamma` | 5481 | 5812 (1.060) | 5766 | 1.052 ❌ |
+
+  **2 of the 3 named misses now meet their ceilings; the perf-group miss count goes 3 → 1.**
+  Whole-op A/B in one process (Phase-0 constants vs shipped, min of 2 reps × median of 5):
+
+  | geometry | before | after | speedup |
+  |---|---:|---:|---:|
+  | `(1,1,32,8192)` W `[32,128]` `(8,8)` 64c | 5871 | 5075 | **1.157x** |
+  | `(1,1,32,7040)` W `[32,128]` `(11,5)` 55c | 5624 | 5201 | **1.081x** |
+  | `(1,1,32,5120)` W `[32,128]` `(10,4)` 40c | 5108 | 4764 | **1.072x** |
+  | `(1,1,32,5120)` W `[32,160]` `(8,4)` 32c gamma | 5019 | 4765 | 1.053x |
+  | `(1,1,32,5120)` W `[32,160]` `(8,4)` 32c gbr | 6632 | 6313 | 1.051x |
+  | `(1,1,8192,1024)` BLOCK `[1024,128]` `(8,8)` 64c | 24418 | 23565 | 1.036x |
+  | `(1,1,32,5632)` W `[32,128]` `(11,4)` 44c | 5218 | 5101 | 1.023x |
+  | `(1,1,7168,1024)` BLOCK `[896,128]` 64c gbr | 33676 | 33013 | 1.020x |
+  | `(1,1,32,1024)` W 8c / `(1,1,32,4800)` W 30c | 3719 / 5036 | 3681 / 5019 | 1.010x / 1.003x |
+  | `(1,1,32,2304)` W 9c | 4399 | 4413 | 0.997x (noise; no rule fires) |
+  | every INTERLEAVED case (row split + width split, incl. all three prefill gbr) | — | — | **0.999–1.006x — unchanged, as gated** |
+
+- **Accuracy achieved**: PCC ≥ 0.999983 on every geometry above, at every variant swept —
+  comfortably inside the perf cells' soft `pcc_threshold = 0.9995`. The two `fp32_dest_acc_en
+  =True` operand cases measure 0.999988 and 0.999990. Nothing about the numerics moved: the
+  combine sums the same partials in the same order, only the tree's *shape* and the NoC
+  underneath it changed.
+
+- **Golden test progress**: unchanged by construction (a perf refinement adds no axis value).
+  Slices run: WIDTH_SHARDED loose **103 pass / 3 pre-existing harness `CoreRange.end_coord`
+  failures**, BLOCK+HEIGHT_SHARDED loose **204 pass / 4 same**, cartesian
+  WIDTH_SHARDED × `gamma_bias_residual` × BFLOAT8_B **340 pass**. The 7 failures are exactly
+  the 7 loose cells Phase 0 already attributed to that harness defect.
+
+- **Issues encountered**:
+  1. **A one-sided NoC move HANGS.** Setting the writer to NOC_0 while leaving the reader
+     there timed out `(1,1,32,4800)` WIDTH 30c with two physical cores never finishing:
+     `DM_DEDICATED_NOC` gives each RISC its own engine, so two kernels on one engine is not
+     sharing, it is a collision. The lever is a **swap** of both kernels; `_combine_noc_swapped`
+     carries the finding.
+  2. **The NoC lever must be gated, not global.** On the interleaved width split it measured
+     **9044 → 13550 ns (0.667x)** — there the reader carries every activation byte and NOC_0
+     is the arch's `preferred_noc_for_dram_read`. Hence the `native_in` predicate.
+  3. **The nanobind `NOC` enum's aliases do not compare equal to themselves.**
+     `ttnn.NOC.NOC_0 == ttnn.NOC.RISCV_0_default` is `False` despite both being value 0.
+     Every comparison in the op and in the new test goes through `.value`.
+  4. **Seed parity moved on exactly one geometry, with a measurement.** The derived arity
+     reshapes the tree rings at `G = 64`, which the RM BAND width shard in
+     `test_program_is_structurally_the_seeds` hits. Per the queue's own rule the test now
+     carries a **one-directional allowance** (this op may never spend MORE L1 in those two
+     rings than the seed) and masks `TREE_F0`/`TREE_F1` in the writer/compute CT lists;
+     everything else is still asserted identical. The justifying measurement is in the test:
+     `f0=4` 24035 / 24096 (no_gamma) and 24061 / 23992 (gamma) vs `f0=8` 23919 / 23836 and
+     23839 / 23869 — 4/4 reps favour the derived shape, plus 32 KB/core of L1 returned.
+  5. **`CB_R_DEPTH` at a non-default value perturbs the L1 solve on `native_residual` plans**
+     (the solve prices a residual ring that the allocation then aliases away), which showed
+     as a 33.0 → 36.2 µs regression on the 64-core BLOCK shard at `CB_R_DEPTH = 1`. Harmless
+     at the shipped default; recorded at the constant so the next turner sees it first.
+
+- **Where the last case's time actually goes** (permanent per-stage zones, `(1,1,32,7168)`
+  WIDTH 28c, flat combine, NOC_0; medians, occupancy not payload): kernel 5381 ns, of which
+  the **root's chain is 4130 ns (77%)** — `writer_gather_wait` 1040 + `compute_root_fused`
+  1914 (fold 28 partials, then the rsqrt) + `writer_mcast_send` 1176. Every other core spends
+  it waiting (`writer_gather_ship` 2426 + `writer_mcast_recv` 1861). Forcing the tree on there
+  shortens the root chain to 3483 ns but adds ~1900 ns of level-0 gatherer work in series
+  (`compute_tree_fold_l0` 1110 + `writer_tree_forward` 550 + `writer_gather_zero` 256), which
+  is why the gate keeps it flat and why *no arity* wins at `G = 28`.
+
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_combine_knobs.py`
+    (132 cells) — the measured arity per group size, the two kernel-side tree invariants
+    swept over every group 2..120, the `CB_R_DEPTH` byte-identical default, and that the
+    combine's NoC choice is a swap of *both* kernels gated on a resident x. All host-side;
+    nothing dispatches. These decisions are invisible to a numerical test, which is exactly
+    why they need pinning.
+  - `test_rms_norm_ttnn_perf.py::test_program_is_structurally_the_seeds` extended with the
+    documented, measured tree-ring allowance (above).

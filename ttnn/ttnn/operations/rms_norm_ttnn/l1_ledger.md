@@ -42,7 +42,7 @@ Only after all six was a budget predicate introduced.
 | `SP` | `scaler_pages` | `∈ {1, 2}` | `2` iff `kernel_partial_w != 0` |
 | `G` | `group_size` | `1 ≤ G ≤ WIDTH_SPLIT_MAX_GROUP_CORES (16)` on the interleaved width split; `= shard grid extent` on a WIDTH/BLOCK shard, itself `≤ grid.x * grid.y` | `_auto_width_split` / `_plan_placement` |
 | `GS` | `GATHER_SLOTS` | `= G + G%2 ≤ G+1` | D22's pairwise DEST walk needs an even window |
-| `f0`, `f1` | combine-tree fan-ins | `f0 = 4`; `f1 = ceil(G/f0) ≥ 2`; `f0*f1 ≥ G` | `_combine_tree_arity`; returns `None` (flat) when `f1 < 2` or too few fold tiles are deleted |
+| `f0`, `f1` | combine-tree fan-ins | `f0` = the largest **divisor** of `G` in the measured band `[COMBINE_TREE_F0_MIN, _MAX] = [4, 10]` that both gates admit (the cap itself as a ragged fallback); `f1 = ceil(G/f0) ≥ 2`; `f0*f1 ≥ G` | `_combine_tree_arity`; returns `None` (flat) when no candidate has `f1 ≥ 2` and deletes enough fold tiles. Refinement 1 lever 1 made `f0` derived; it never enlarges the two rings (`f0 + f1` is minimised near `sqrt`-ish arities), and at `G = 64` it SHRINKS them from `4 + 16` to `8 + 8` pages = 32 KB/core given back |
 | `bt` | `tile_size(input.dtype)` | `∈ {1088 (bf8b), 2048 (bf16), 4096 (fp32)}` | dtype ∈ SUPPORTED |
 | `gt`, `bit` | `tile_size(weight.dtype)`, `tile_size(bias.dtype)` | same set; **independent of `bt` and of each other** | operand dtype ∈ SUPPORTED |
 | `st`, `ft` | `tile_size(bf16)` = 2048, `tile_size(fp32)` = 4096 | constants | — |
@@ -229,6 +229,13 @@ ROW_RESIDENT matters more in this op than it did in the seed.
 
 Cross-core total per row-block: `G · 4096` B up (or `(f0 + f1) · 4096` B with the tree, spread
 across `f1` cores) + `4096` B multicast to `G−1` receivers.
+
+Refinement 1 lever 2 changes **which NoC** those bytes ride, never how many there are. On a
+`native_in` plan the reader has no activation stream at all (x is an aliased resident shard), so the
+whole combine moves to **NOC_0** and the reader takes NOC_1 — a swap of both kernels, because the
+two data-movement RISCs must not share one engine. On a streamed plan the reader owns every
+activation byte and NOC_0 stays its; see `_combine_noc`. Byte counts in every row above are
+unaffected.
 
 ### The one line that matters
 

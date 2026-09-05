@@ -167,7 +167,7 @@ both in full:
 
 ---
 
-### [ ] Refinement 1 — The width-sharded decode combine round
+### [x] Refinement 1 — The width-sharded decode combine round
 
 **Type**: perf
 
@@ -232,6 +232,37 @@ each case's soft `pcc_threshold = 0.9995` still holds, the golden suite is green
 config-spanning guard set (one representative per distinct kernel path × layout × placement:
 interleaved TILE, interleaved ROW_MAJOR, HEIGHT shard, WIDTH shard, BLOCK shard, RM BAND,
 degenerate rank) nor on `test_program_is_structurally_the_seeds`.
+
+**Outcome**: **two of the three land; the perf-group miss count goes 3 → 1.** Harness-native
+(`--profile`, AICLK 1350 MHz = the reference clock, scale 1.0000):
+`(1,1,32,5120)` `gamma_bias_residual` **6882 → 6420 ns** (ratio 1.050 → **0.979 ✅**);
+`(1,1,32,5120)` `gamma` **5339 → 4807 ns** (1.014 → **0.913 ✅**);
+`(1,1,32,7168)` `gamma` **5812 → 5766 ns** (1.060 → **1.052**, still a miss).
+All four levers landed and none was reverted: (1) `f0` is now DERIVED — the largest divisor of
+`GROUP_SIZE` in the measured `[4,10]` band that D28's two gates admit — worth 1.05–1.16x at
+`G ∈ {32, 40, 44, 55, 64}` and 32 KB/core of L1 back at `G = 64`; (2) the combine moves to
+**NOC_0 (both kernels swapped)** whenever x is a resident shard, gated out on streamed plans
+where it measured 0.667x; (3) `GATHER_FACES = 2` re-confirmed, monotone in bytes; (4)
+`CB_R_DEPTH` built and parked at its byte-identical default after its premise was falsified on
+its own target (that residual is a zero-copy shard alias, so no ring exists to shrink) and
+measured null (±0.3%) where a ring does exist. Every interleaved case is 0.999–1.006x — unchanged,
+as gated. PCC ≥ 0.999983 everywhere, against the soft 0.9995.
+
+**What still binds the last case, measured**: `(1,1,32,7168)` at 28 cores is **root-serialised,
+not knob-limited**. Its permanent per-stage zones put **4130 ns of a 5381 ns kernel (77%) on the
+ROOT alone** — `writer_gather_wait` 1040 + `compute_root_fused` 1914 (fold 28 partials, then the
+single rsqrt) + `writer_mcast_send` 1176 — with every other core simply waiting. `G = 28` is also
+the one group where *no* tree arity pays: forcing the tree on cuts the root chain to 3483 ns but
+adds ~1900 ns of level-0 gatherer work in series, so the gate correctly keeps it flat. **What I
+would try next, and did not**: (a) **Refinement 2 exactly as filed** — spreading the finalize off
+the root is the only lever that attacks `compute_root_fused`, which is the single largest term
+here, and it is a scheme-change that this knob-turn phase is explicitly told not to pack in;
+(b) eliding the multicast **pre-handshake** when the combine runs exactly one round
+(`num_blocks == 1`, which is every `BLOCK_ROWS == 1` decode shape) — `writer_mcast_send` is
+866–1176 ns and `mcast_pipe` documents `PRE_HANDSHAKE = false` as a supported fire-and-forget
+mode, but it changes a synchronisation contract rather than turning a knob, so it belongs with
+Refinement 2's transport work and not here. Not filed as a follow-up: the trailing perf rounds
+re-derive the breakdown from scratch, and this record is where the finding lives.
 
 ---
 
