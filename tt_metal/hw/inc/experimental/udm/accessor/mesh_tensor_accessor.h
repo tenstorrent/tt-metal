@@ -239,6 +239,9 @@ public:
 #endif
     }
 
+    // No num_contiguous_pages(): a global page id maps to (grid, local page), so a run would have
+    // to clamp at the grid boundary. Not designed yet.
+
     // ==================== Getters ====================
 
     const MeshDSpec<Rank>& mesh_dspec() const { return mesh_dspec_; }
