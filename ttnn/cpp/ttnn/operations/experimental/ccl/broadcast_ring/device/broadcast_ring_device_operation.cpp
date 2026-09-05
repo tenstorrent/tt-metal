@@ -61,7 +61,8 @@ Tensor broadcast_ring(
     uint32_t broadcast_num_tiles,
     bool use_l1_relay,
     uint32_t num_slots,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer) {
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& multi_device_global_semaphore) {
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(num_devices > 1, "broadcast_ring needs >1 device along cluster_axis, got {}", num_devices);
     if (persistent_output_buffer.has_value()) {
@@ -85,7 +86,8 @@ Tensor broadcast_ring(
             broadcast_offset_tiles,
             broadcast_num_tiles,
             use_l1_relay,
-            num_slots),
+            num_slots,
+            multi_device_global_semaphore),
         BroadcastRingInputs{.input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer});
 }
 

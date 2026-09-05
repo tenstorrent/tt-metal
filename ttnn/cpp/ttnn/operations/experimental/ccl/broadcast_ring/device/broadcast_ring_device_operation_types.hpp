@@ -8,7 +8,9 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tuple>
+#include <vector>
 
 namespace ttnn::prim {
 
@@ -36,6 +38,12 @@ struct BroadcastRingParams {
     // L1-relay credit window: number of recv-buffer slots (chunks in flight). 0 = auto. Deeper = more
     // pipeline overlap at the cost of L1 (slots * chunk * page_size). Ignored unless use_l1_relay.
     uint32_t num_slots = 0;
+    // Caller-owned global semaphores {recv, cred_fwd, cred_bwd} (rotated ping-pong by the caller). The op
+    // uses these instead of creating its own, so under tracing -- where the program factory runs once at
+    // capture -- each call still gets its own semaphore rather than a single baked one shared by every
+    // replay. Empty falls back to the op creating them internally (untraced use). Excluded from the cache
+    // key (below): the semaphore is a runtime arg refreshed by override_runtime_arguments.
+    std::vector<tt::tt_metal::GlobalSemaphore> multi_device_global_semaphore;
 
     BroadcastRingParams(
         uint32_t sender_ring_index_,
@@ -49,7 +57,8 @@ struct BroadcastRingParams {
         uint32_t broadcast_offset_tiles_ = 0,
         uint32_t broadcast_num_tiles_ = 0,
         bool use_l1_relay_ = false,
-        uint32_t num_slots_ = 0) :
+        uint32_t num_slots_ = 0,
+        std::vector<tt::tt_metal::GlobalSemaphore> multi_device_global_semaphore_ = {}) :
         sender_ring_index(sender_ring_index_),
         cluster_axis(cluster_axis_),
         num_links(num_links_),
@@ -61,7 +70,8 @@ struct BroadcastRingParams {
         broadcast_offset_tiles(broadcast_offset_tiles_),
         broadcast_num_tiles(broadcast_num_tiles_),
         use_l1_relay(use_l1_relay_),
-        num_slots(num_slots_) {}
+        num_slots(num_slots_),
+        multi_device_global_semaphore(std::move(multi_device_global_semaphore_)) {}
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "sender_ring_index",

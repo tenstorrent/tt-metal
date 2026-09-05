@@ -229,4 +229,12 @@ void kernel_main() {
     if constexpr (opens_any) {
         fabric_connection.close();
     }
+
+    // Trace-safety: zero my data_ready + credit sems at exit so the next call/replay starts from a clean
+    // count. The op bakes these once at capture, so without a reset the counts accumulate across replayed
+    // calls and the wait_min targets are satisfied by stale values -> reads stale data. Mirrors
+    // all_gather's reader reset (minimal_default_reader.cpp).
+    noc_semaphore_set(data_ready, 0);
+    noc_semaphore_set(my_cred_fwd, 0);
+    noc_semaphore_set(my_cred_bwd, 0);
 }

@@ -7,6 +7,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <vector>
 
 namespace ttnn {
 
@@ -32,6 +34,9 @@ ttnn::Tensor broadcast_ring(
     uint32_t num_slots = 0,     // L1-relay credit window (recv-buffer slots); 0 = auto. Tuning knob.
     // Caller-owned output buffer (same shape as input). Required under tracing: a fresh per-call output is
     // clobbered on trace replay, so pass a persistent buffer for a stable baked address.
-    const std::optional<ttnn::Tensor>& persistent_output_buffer = std::nullopt);
+    const std::optional<ttnn::Tensor>& persistent_output_buffer = std::nullopt,
+    // Caller-owned ping-pong global semaphores {recv, cred_fwd, cred_bwd}. Required under tracing so each
+    // call gets its own semaphore instead of one baked into the single captured program (see the op).
+    const std::vector<tt::tt_metal::GlobalSemaphore>& multi_device_global_semaphore = {});
 
 }  // namespace ttnn

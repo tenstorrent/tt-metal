@@ -33,14 +33,30 @@ BroadcastRingProgramFactory::cached_mesh_workload_t BroadcastRingProgramFactory:
     // Per-chunk recv credits (upstream increments, this device waits) + a readiness barrier. Global
     // semaphores so a neighbour on another device can atomic-inc them over the fabric. The L1-relay path
     // needs two more (cred_fwd/cred_bwd): the backward slot-free credit for its bounded L1 recv buffer.
-    auto recv_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-    auto barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    // Prefer caller-owned ping-pong semaphores {recv, cred_fwd, cred_bwd}: baking our own in this program
+    // factory (which runs once at trace capture) would share a single semaphore across every replayed call.
+    // override_runtime_arguments refreshes their addresses per call. Fall back to internal creation for
+    // untraced/standalone use.
+    const auto& caller_sems = operation_attributes.multi_device_global_semaphore;
+    const bool have_caller_sems = !caller_sems.empty();
+    auto recv_semaphore = have_caller_sems
+                              ? caller_sems[0]
+                              : ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    auto barrier_semaphore = have_caller_sems
+                                 ? caller_sems[0]
+                                 : ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     std::optional<tt::tt_metal::GlobalSemaphore> cred_fwd_semaphore, cred_bwd_semaphore;
     if (operation_attributes.use_l1_relay) {
-        cred_fwd_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-        cred_bwd_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+        cred_fwd_semaphore = have_caller_sems
+                                 ? caller_sems[1]
+                                 : ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+        cred_bwd_semaphore = have_caller_sems
+                                 ? caller_sems[2]
+                                 : ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     }
-    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
+    if (!have_caller_sems) {
+        tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
+    }
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program =
@@ -404,9 +420,10 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
 
 void BroadcastRingProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const BroadcastRingParams& /*operation_attributes*/,
+    const BroadcastRingParams& operation_attributes,
     const BroadcastRingInputs& tensor_args,
     Tensor& tensor_return_value) {
+    const auto& sems = operation_attributes.multi_device_global_semaphore;
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared = cached_workload.shared_variables.at(range);
         auto& rt_by_core = tt::tt_metal::GetRuntimeArgs(program, shared.relay_kernel_id);
@@ -414,6 +431,16 @@ void BroadcastRingProgramFactory::override_runtime_arguments(
             auto& rt = rt_by_core[core.x][core.y];
             rt[0] = tensor_args.input_tensor.buffer()->address();
             rt[1] = tensor_return_value.buffer()->address();
+            // Refresh the caller's ping-pong semaphore each call so a cached program picks up the rotated
+            // semaphore (rt layout: [2]=recv, [5]=downstream recv (same global-sem offset), [6]/[7]=creds).
+            if (!sems.empty()) {
+                rt[2] = static_cast<uint32_t>(sems[0].address());
+                rt[5] = static_cast<uint32_t>(sems[0].address());
+                if (operation_attributes.use_l1_relay) {
+                    rt[6] = static_cast<uint32_t>(sems[1].address());
+                    rt[7] = static_cast<uint32_t>(sems[2].address());
+                }
+            }
         }
     }
 }

@@ -63,6 +63,7 @@ class CCLManager:
         self.np_fused_ping_pong_idx = [0, 0]
         self.sr_ping_pong_idx = [0, 0]
         self.barrier_idx = [0, 0]
+        self.bcast_ping_pong_idx = [0, 0]
         self.barrier_fused_idx = [0, 0]
 
     def _init_subdevice(self):
@@ -113,6 +114,13 @@ class CCLManager:
         self.sr_ping_pong_semaphores = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(sr_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(sr_n_sems)],
+        }
+
+        # broadcast_ring semaphores: recv + cred_fwd + cred_bwd per set, 2 sets for ping pong
+        bcast_n_sems = 3 * 2
+        self.bcast_ping_pong_semaphores = {
+            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(bcast_n_sems)],
+            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(bcast_n_sems)],
         }
 
         # Initialize barrier semaphore
@@ -292,6 +300,17 @@ class CCLManager:
         current_idx = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
         return self._ping_pong_buffer_cache[cache_key][current_idx]
+
+    def get_broadcast_ping_pong_semaphore(self, mesh_axis):
+        """The 3 ping-pong global semaphores (recv, cred_fwd, cred_bwd) for one broadcast_ring call.
+        Rotated per call so back-to-back broadcasts on the same axis don't share a semaphore. Passing
+        caller-owned globals (rather than the op creating its own inside its program factory) is what
+        keeps them correct under tracing: the op's create() runs only once at capture, so an internal
+        semaphore would be baked and shared across every replayed call. Mirrors get_rs_ping_pong_semaphore."""
+        cur_idx = self.bcast_ping_pong_idx[mesh_axis]
+        n_sems = 3
+        self.bcast_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
+        return self.bcast_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
     def get_rs_ping_pong_semaphore(self, mesh_axis):
         """

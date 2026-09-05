@@ -6,8 +6,10 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
 #include "broadcast_ring.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
@@ -58,7 +60,8 @@ void bind_broadcast_ring(nb::module_& mod) {
         nb::arg("broadcast_num_tiles") = 0,
         nb::arg("use_l1_relay") = false,
         nb::arg("num_slots") = 0,
-        nb::arg("persistent_output_buffer") = nb::none());
+        nb::arg("persistent_output_buffer") = nb::none(),
+        nb::arg("multi_device_global_semaphore") = std::vector<tt::tt_metal::GlobalSemaphore>{});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

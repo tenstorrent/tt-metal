@@ -192,4 +192,10 @@ void kernel_main() {
     if constexpr (forwards) {
         fabric_connection.close();
     }
+
+    // Trace-safety: zero my recv-sem at exit so the next call/replay starts from a clean count. The op's
+    // program factory bakes the semaphore once at capture, so without this the count accumulates across
+    // replayed calls and wait_min(chunk+1) is satisfied by a stale value -> reads stale data. Mirrors
+    // all_gather's reader reset (minimal_default_reader.cpp).
+    noc_semaphore_set(recv_sem, 0);
 }
