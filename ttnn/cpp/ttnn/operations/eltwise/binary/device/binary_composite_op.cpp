@@ -477,8 +477,21 @@ Tensor prelu(const Tensor& input_a, const Tensor& input_b, const std::optional<M
         b = ttnn::reshape(input_b, ttnn::Shape(reshape));
     }
 
-    Tensor result = ttnn::where(ttnn::ltz(input_a, output_mem_config), ttnn::multiply(input_a, b), input_a);
-    return result;
+    // x < 0 ? x * w : x, which is the scalar prelu kernel with the weight read
+    // from a second tile rather than from a compile-time argument. binary_ng
+    // carries the broadcast of the reshaped weight, so the reshape above is the
+    // only shape work left here.
+    return ttnn::detail::invoke_binary_ng(
+        input_a,
+        b,
+        binary::BinaryOpType::PRELU,
+        std::nullopt,
+        output_mem_config,
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt);
 }
 
 // REMAINDER result = input − (other * floor(input/other))
