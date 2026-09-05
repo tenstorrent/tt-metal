@@ -20,11 +20,12 @@ audio/video rotary clock. Reordering the same references is a different request.
 
 Two properties separate this from ``fl2va``:
 
-* **A reference never binds the target geometry.** Every reference is prepared at its
-  own resolution -- 2048 px short edge for an image with no area cap, the 768 px canvas
-  of its own aspect ratio for a video -- with its own aspect-normalized spatial grid. One
-  2048x2048 reference contributes 4096 vision tokens to the text stream *and* 4096 video
-  condition rows, so a ref2va packed sequence runs 1.2x-3.0x t2va's.
+* **A reference never binds the target geometry.** An image is resized by
+  ``reference_resize_mode`` (default ``match``: area-match the target canvas, never
+  upscale); a video onto the 768 px canvas of its own aspect ratio. Each keeps its own
+  aspect-normalized spatial grid. A 2048x2048 reference (the Hugging Face
+  ``diffusers`` policy) contributes 4096 vision tokens to the text stream *and* 4096
+  video condition rows, so a ref2va packed sequence runs 1.2x-3.0x t2va's.
 * **A video reference packs its soundtrack rows immediately before its own video rows**,
   sharing one rotary origin, as the generated audio and video do.
 
@@ -60,9 +61,8 @@ from .packing import (
     resolve_canvas_size,
 )
 
-# A reference image is resized to a 2048 px short edge -- upscaling included -- and
-# both axes rounded to a multiple of 32 independently. There is NO area cap, so a
-# 4:1 reference is 8192x2048, i.e. 65536 patches to the conditioner.
+# Short-edge cap used by ``max`` (downscale only) and ``diffusers`` (always, including
+# upscaling). ``match`` ignores this and area-matches the target canvas instead.
 MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE = 2048
 
 # The conditioner sees a reference video at 2 fps and Qwen3-VL merges every two of
@@ -345,18 +345,36 @@ def build_ref2va_packed_sequence(
     )
 
 
-def resolve_reference_image_size(width: int, height: int) -> tuple[int, int]:
-    """``(height, width)`` a reference image is encoded at: 2048 px short edge, axes to a multiple of 32.
+def resolve_reference_image_size(
+    width: int,
+    height: int,
+    *,
+    mode: str = "match",
+    target_width: int | None = None,
+    target_height: int | None = None,
+) -> tuple[int, int]:
+    """``(height, width)`` a reference image is encoded at, axes rounded to a multiple of 32.
 
-    Upscaling is intended and, unlike the target canvas, there is **no area cap** --
-    so a 4:1 reference is 8192x2048.
+    ``match`` (default) scales down so the pixel area matches the target canvas, never
+    upscaling. ``max`` caps the short edge at 2048 without upscaling. ``diffusers``
+    always sets the short edge to 2048, upscaling included -- Hugging Face Diffusers.
     """
     if width <= 0 or height <= 0:
         raise ValueError(f"a reference image must have a positive size, got {width}x{height}")
     if width > 4 * height or height > 4 * width:
         raise ValueError(f"a reference image must be within 1:4 and 4:1, got {width}x{height}")
 
-    scale = MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE / min(width, height)
+    if mode == "match":
+        if target_width is None or target_height is None:
+            raise ValueError("match requires the target canvas (target_width and target_height)")
+        scale = min(1.0, math.sqrt((target_width * target_height) / (width * height)))
+    elif mode == "max":
+        scale = min(1.0, MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE / min(width, height))
+    elif mode == "diffusers":
+        scale = MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE / min(width, height)
+    else:
+        raise ValueError(f"reference_resize_mode must be 'match', 'max', or 'diffusers', got {mode!r}")
+
     multiple = MINIMAX_H3_CANVAS_MULTIPLE
     return (
         max(multiple, round(height * scale / multiple) * multiple),

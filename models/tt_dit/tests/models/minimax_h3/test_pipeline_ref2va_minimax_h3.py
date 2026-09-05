@@ -156,9 +156,10 @@ def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
 
 
 # Per-case padded sequence length, asserted so a case cannot silently drift off its probed shape.
-# `mixed` measured 89856 e2e (a host estimate says 90112); one_image / video_with_sound are from the
-# ref2va warm-latency measurements. If a case's assert trips, its message prints the actual length.
-_EXPECTED_PADDED_LEN = {"one_image": 46080, "video_with_sound": 81664, "mixed": 89856}
+# `one_image` / `mixed` drop 6144 rows vs the old 2048-short-edge encode: match keeps the 1024
+# fractal at 1024. `video_with_sound` is unchanged. If a case's assert trips, its message prints
+# the actual length.
+_EXPECTED_PADDED_LEN = {"one_image": 39936, "video_with_sound": 81664, "mixed": 83968}
 
 
 @pytest.mark.timeout(10800)

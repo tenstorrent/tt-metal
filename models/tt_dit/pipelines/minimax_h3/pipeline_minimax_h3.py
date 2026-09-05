@@ -1753,11 +1753,16 @@ class MiniMaxH3Pipeline:
         aspect_ratio: tuple[float, float] = (16, 9),
         height: int | None = None,
         width: int | None = None,
+        reference_resize_mode: str = "match",
         num_inference_steps: int = 50,
         seed: int = 0,
         on_event: PipelineEventCallback | None = None,
     ) -> MiniMaxH3Output:
         """`image` and/or `last_image` select `fl2va`; `references` selects `ref2va`; neither `t2va`.
+
+        `reference_resize_mode` applies to ref2va image references only: `match` (default)
+        area-matches the target canvas without upscaling, `max` caps the short edge at 2048
+        without upscaling, `diffusers` is Hugging Face Diffusers' always-2048-short-edge policy.
 
         Note that `fl2va` at a given seed does **not** reproduce `t2va` at that seed, even with a
         keyframe that contributes nothing: the conditioning noise is the first draw off the request
@@ -1780,6 +1785,7 @@ class MiniMaxH3Pipeline:
                 aspect_ratio=aspect_ratio,
                 height=height,
                 width=width,
+                reference_resize_mode=reference_resize_mode,
                 num_inference_steps=num_inference_steps,
                 seed=seed,
                 on_event=on_event,
@@ -1913,6 +1919,7 @@ class MiniMaxH3Pipeline:
         aspect_ratio: tuple[float, float],
         height: int | None,
         width: int | None,
+        reference_resize_mode: str,
         num_inference_steps: int,
         seed: int,
         on_event: PipelineEventCallback,
@@ -1937,7 +1944,14 @@ class MiniMaxH3Pipeline:
         if height % 32 or width % 32:
             raise ValueError(f"canvas {height}x{width} must be a multiple of 32 on both axes")
 
-        prepared, num_frames = prepare_references(references, num_frames, self.audio_sampling_rate)
+        prepared, num_frames = prepare_references(
+            references,
+            num_frames,
+            self.audio_sampling_rate,
+            reference_resize_mode=reference_resize_mode,
+            target_height=height,
+            target_width=width,
+        )
         latent_height, latent_width = height // ratio, width // ratio
         num_audio_latents = audio_latent_num_frames(num_frames)
         num_latent_frames = video_latent_num_frames(num_frames)
@@ -1945,7 +1959,8 @@ class MiniMaxH3Pipeline:
         self._log(
             f"ref2va {width}x{height}, {num_frames} frames ({num_frames / MINIMAX_H3_FPS:.2f} s), "
             f"{num_latent_frames} latent frames, {num_audio_latents} audio latents, "
-            f"{num_inference_steps} steps, references=[{kinds}]"
+            f"{num_inference_steps} steps, reference_resize_mode={reference_resize_mode}, "
+            f"references=[{kinds}]"
         )
 
         # 2. Text, plus one vision block per image reference and one per merged frame pair of a video.
