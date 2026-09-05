@@ -460,7 +460,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 /**
  * @brief Build a physical multi-mesh adjacency graph from physical system descriptor and physical grouping descriptor
  *
- * Creates a PhysicalMultiMeshGraph with:
+ * Places each MGD mesh instance with adjacency-guided DFS
+ * (PhysicalGroupingDescriptor::solve_adjacency_guided_placement), then splits the PSD ASIC graph
+ * into per-mesh adjacency graphs. Creates a PhysicalMultiMeshGraph with:
  * - Mesh-level adjacency graph (AdjacencyGraph<MeshId>) representing inter-mesh connectivity
  * - Map of mesh IDs to their internal adjacency graphs (AdjacencyGraph<AsicID>)
  *
@@ -481,9 +483,10 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 /**
  * @brief Build a physical multi-mesh adjacency graph using multiple MGDs (one PSD, one PGD)
  *
- * For each MGD, collects valid MESH groupings (same as the single-MGD build), then merges results.
- * With multiple MGD files in one process, ensure PGD/MGD keys remain consistent (each descriptor may need distinct
- * instance names when \c DistributedContext::subcontext_id() uniquifies names per split rank).
+ * For each MGD, collects valid MESH groupings (same as the single-MGD build), then runs one
+ * adjacency-guided DFS over the merged mesh graph. With multiple MGD files in one process, ensure
+ * PGD/MGD keys remain consistent (each descriptor may need distinct instance names when
+ * \c DistributedContext::subcontext_id() uniquifies names per split rank).
  *
  * @param mesh_graph_descriptors  Const reference to the caller's `std::vector` (the container is not copied;
  *                                only a reference is passed). Elements are the loaded MGDs in order.
