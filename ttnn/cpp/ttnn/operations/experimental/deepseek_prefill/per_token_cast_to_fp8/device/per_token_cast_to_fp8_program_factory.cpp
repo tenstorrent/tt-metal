@@ -329,10 +329,12 @@ void apply_io_overrides(
     const uint32_t src_addr = tensor_args.input_tensor.buffer()->address();
     const uint32_t dst_e4m3_addr = output_e4m3.buffer()->address();
     const uint32_t dst_scale_addr = output_scale.buffer()->address();
+    auto& reader_args_by_core = tt::tt_metal::GetRuntimeArgs(cached_program.program, shared.reader_kernel_id);
+    auto& writer_args_by_core = tt::tt_metal::GetRuntimeArgs(cached_program.program, shared.writer_kernel_id);
     for (const auto& core : shared.all_cores_vec) {
-        auto& reader_args = tt::tt_metal::GetRuntimeArgs(cached_program.program, shared.reader_kernel_id, core);
+        auto& reader_args = reader_args_by_core[core.x][core.y];
         reader_args[0] = src_addr;
-        auto& writer_args = tt::tt_metal::GetRuntimeArgs(cached_program.program, shared.writer_kernel_id, core);
+        auto& writer_args = writer_args_by_core[core.x][core.y];
         writer_args[0] = dst_e4m3_addr;
         writer_args[1] = dst_scale_addr;
     }

@@ -460,3 +460,31 @@ def test_token_count_aware_cast_back(device, label, counts, scales_from_metadata
         atol=1e-3,
         label=f"token-count-aware cast back {label} metadata={scales_from_metadata} out={output_dtype}",
     )
+
+
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("round_scale", [False, True])
+def test_cast_to_fp8_cache_hit_fresh_buffers(device, input_layout, round_scale):
+    """Rebind both output buffers and the input on cache hits for both layout paths."""
+    live_buffers = []
+    entries = None
+    for seed in (11, 29, 43):
+        x = torch.randn((32, 512), generator=torch.Generator().manual_seed(seed), dtype=torch.bfloat16)
+        src = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=input_layout, device=device)
+        quantized, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+            src, round_scale_to_power_of_two=round_scale
+        )
+        restored = ttnn.experimental.deepseek_prefill.per_token_cast_back(quantized, scales, output_dtype=ttnn.float32)
+        live_buffers.append((src, quantized, scales, restored))
+        assert_quality(
+            ttnn.to_torch(restored).float(),
+            x.float(),
+            pcc_threshold=0.999,
+            rtol=0.15,
+            atol=1e-3,
+            label="fresh-buffer round trip",
+        )
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "fresh buffers recompiled"
