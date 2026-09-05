@@ -17,30 +17,45 @@ import ttnn
             {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "trace_region_size": 1540000},
             ttnn.Topology.Ring,
         ),
+        (
+            (8, 4),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "trace_region_size": 1540000},
+            ttnn.Topology.Linear,
+        ),
     ],
     indirect=["mesh_device", "device_params"],
-    ids=["ring", "line", "galaxy_ring"],
+    ids=["ring", "line", "galaxy_ring", "galaxy_tp_linear"],
 )
-@pytest.mark.parametrize("in_dim, out_dim", [(2, 3), (3, 2)], ids=["height_to_width", "width_to_height"])
+@pytest.mark.parametrize(
+    "in_dim, out_dim",
+    [(2, 3), (3, 2), (1, 2), (2, 1)],
+    ids=["height_to_width", "width_to_height", "heads_to_sequence", "sequence_to_heads"],
+)
 @pytest.mark.parametrize("num_links", [1, 2])
 @pytest.mark.parametrize("persistent", [False, True], ids=["allocated", "persistent"])
 def test_all_to_all_async_generic_cache_arguments(mesh_device, topology, in_dim, out_dim, num_links, persistent):
+    parent_mesh_device = mesh_device
+    parent_mesh_device.quiesce_devices()
+    parent_mesh_device.clear_program_cache()
     if tuple(mesh_device.shape) == (8, 4):
-        mesh_device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
+        mesh_device = mesh_device.create_submesh(
+            ttnn.MeshShape(1, 4) if topology == ttnn.Topology.Linear else ttnn.MeshShape(8, 1)
+        )
     cluster_axis = 0 if tuple(mesh_device.shape)[1] == 1 else 1
     try:
         _run_all_to_all_cache_arguments(mesh_device, topology, in_dim, out_dim, num_links, persistent, cluster_axis)
     finally:
         # Cached workloads own global semaphores on the submesh. Release them before
         # the next parameterized case opens another child of the same parent mesh.
-        ttnn.synchronize_device(mesh_device)
-        mesh_device.disable_and_clear_program_cache()
+        parent_mesh_device.quiesce_devices()
+        mesh_device.clear_program_cache()
 
 
 def _run_all_to_all_cache_arguments(mesh_device, topology, in_dim, out_dim, num_links, persistent, cluster_axis):
     torch.manual_seed(0)
     # Keep all inputs and outputs alive to force different addresses on cache hits.
-    goldens = [torch.rand([1, 1, 256, 512], dtype=torch.bfloat16) for _ in range(3)]
+    shape = [1, 8 if 1 in (in_dim, out_dim) else 1, 256, 512]
+    goldens = [torch.rand(shape, dtype=torch.bfloat16) for _ in range(3)]
     inputs = [
         ttnn.from_torch(
             value,
@@ -51,8 +66,9 @@ def _run_all_to_all_cache_arguments(mesh_device, topology, in_dim, out_dim, num_
         )
         for value in goldens
     ]
+    assert len({tensor.buffer_address() for tensor in inputs}) == len(inputs)
     output_shape = list(goldens[0].shape)
-    output_shape[out_dim] //= 8
+    output_shape[out_dim] //= mesh_device.get_num_devices()
     persistent_outputs = (
         [
             ttnn.from_torch(
