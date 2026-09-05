@@ -534,7 +534,7 @@ typename device_operation_t::tensor_return_value_t launch(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
 
     const auto operation_name = detail::get_operation_name<device_operation_t>(operation_attributes);
-    ZoneText(operation_name.data(), operation_name.size());
+    ZoneTextV(__tracy_scoped_zone, operation_name.data(), operation_name.size());
     tt::tt_metal::GraphTracker::instance().track_function_start(operation_name, operation_attributes, input_tensors);
 
     for (const auto& input_tensor_ref : input_tensors) {
