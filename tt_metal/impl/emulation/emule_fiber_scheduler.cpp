@@ -24,6 +24,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <limits>
 #include <mutex>
 #include <sstream>
@@ -54,6 +57,10 @@ struct Fiber {
     std::unique_ptr<ThreadCommonCtx> owned_ctx;
     std::function<void()> entry;
     FiberIdentity id{};
+    uint64_t trace_id = 0;
+    std::atomic<uint64_t> last_event_sequence{0};
+    std::atomic<uint64_t> last_event_timestamp_ns{0};
+    std::atomic<uint64_t> park_started_ns{0};
     FiberState state = FiberState::Ready;
     const void* park_key = nullptr;
     Fiber* park_link = nullptr;     // intrusive parked-list
@@ -111,6 +118,89 @@ bool poll_tag_is_fresh(uint64_t resumes, uint64_t stamp, uint64_t staleness) {
 
 }  // namespace
 
+struct TraceEvent {
+    uint64_t sequence = 0;
+    uint64_t timestamp_ns = 0;
+    uint64_t fiber_id = 0;
+    uint64_t scheduler_generation = 0;
+    uint64_t spawn_generation = 0;
+    uint64_t program_id = 0;
+    uint64_t object = 0;
+    uint64_t a = 0;
+    uint64_t b = 0;
+    uint64_t c = 0;
+    uint64_t d = 0;
+    const char* kernel_src = nullptr;
+    uint32_t chip_id = 0;
+    uint32_t logical_x = 0;
+    uint32_t logical_y = 0;
+    uint16_t kind = 0;
+    uint16_t worker = UINT16_MAX;
+    uint16_t home = UINT16_MAX;
+    uint16_t threadpool_size = 0;
+    uint8_t phys_x = 0;
+    uint8_t phys_y = 0;
+    uint8_t proc_id = 0;
+};
+
+struct TraceSlot {
+    std::atomic<uint64_t> committed_sequence{0};
+    TraceEvent event{};
+};
+
+struct TraceRecorder {
+    static constexpr uint64_t kWritersClosed = uint64_t{1} << 63;
+    static constexpr uint64_t kWriterCountMask = ~kWritersClosed;
+
+    std::atomic<bool> active{false};
+    std::atomic<uint64_t> writer_state{kWritersClosed};
+    std::atomic<uint64_t> next_sequence{1};
+    std::atomic<uint64_t> wrapped_events{0};
+    std::atomic<uint64_t> dropped_events{0};
+    std::unique_ptr<std::atomic<uint64_t>[]> write_indices;
+    std::vector<std::unique_ptr<TraceSlot[]>> rings;
+    std::filesystem::path directory;
+    size_t budget_bytes = 0;
+    size_t capacity_per_shard = 0;
+    unsigned worker_shards = 0;
+
+    bool admit_writer() {
+        uint64_t state = writer_state.load(std::memory_order_relaxed);
+        for (;;) {
+            if ((state & kWritersClosed) != 0) {
+                return false;
+            }
+            if (writer_state.compare_exchange_weak(
+                    state, state + 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                return true;
+            }
+        }
+    }
+
+    void release_writer() { writer_state.fetch_sub(1, std::memory_order_release); }
+
+    void close_and_drain_writers() {
+        writer_state.fetch_or(kWritersClosed, std::memory_order_acq_rel);
+        while ((writer_state.load(std::memory_order_acquire) & kWriterCountMask) != 0) {
+            std::this_thread::yield();
+        }
+    }
+
+    void reset() {
+        active.store(false, std::memory_order_release);
+        close_and_drain_writers();
+        rings.clear();
+        write_indices.reset();
+        directory.clear();
+        budget_bytes = 0;
+        capacity_per_shard = 0;
+        worker_shards = 0;
+        next_sequence.store(1, std::memory_order_relaxed);
+        wrapped_events.store(0, std::memory_order_relaxed);
+        dropped_events.store(0, std::memory_order_relaxed);
+    }
+};
+
 struct FiberSchedulerImpl {
     std::mutex mu_;
     std::condition_variable cv_;                       // workers wait here for ready fibers
@@ -143,7 +233,7 @@ struct FiberSchedulerImpl {
     unsigned cb_poll_waiters_ = 0;       // as socket_poll_waiters_, but for CB probes (peer-fed)
     std::exception_ptr first_eptr_;
 
-    std::atomic<uint64_t> progress_{0};      // fiber completions + published pages (tier 2)
+    std::atomic<uint64_t> progress_{0};      // fiber completions + completed work units (tier 2)
     std::atomic<uint64_t> resumptions_{0};   // swap-ins (tier 2 livelock signal)
 
     // Raw-L1-store lost-wakeup recovery watermarks (guarded by mu_; per-run — reset
@@ -191,10 +281,17 @@ struct FiberSchedulerImpl {
     std::condition_variable done_cv_;        // run_until_idle waits here for run completion
     uint64_t generation_ = 0;                // bumped per program (under mu_); workers detect a new run
     bool shutdown_ = false;                  // set by ~FiberScheduler to drain the pool
+    uint64_t next_fiber_id_ = 1;
+    TraceRecorder trace_;
 
     void worker_main(unsigned w);            // persistent outer loop (one per pool thread)
     void inner_loop(unsigned w);             // per-program body; runs until active_==0 / abort
     void install_fiber(Fiber* f);
+    void configure_trace();
+    void trace_event(
+        EmuleTraceEventKind kind, const void* object, uint64_t a = 0, uint64_t b = 0, uint64_t c = 0, uint64_t d = 0);
+    std::vector<TraceEvent> copy_trace_events() const;
+    void write_trace_artifacts_locked(const std::string& reason);
     bool any_ready() const {                 // any runnable fiber in any worker's queue?
         for (const auto& q : ready_) {
             if (!q.empty()) return true;
@@ -268,6 +365,7 @@ struct FiberSchedulerImpl {
         }
         f->in_ready = true;
         ready_[f->home].push_back(f);
+        trace_event(EmuleTraceEventKind::Enqueue, f, f->trace_id, f->home, ready_[f->home].size());
     }
     // Wake EVERY parked fiber to re-check its predicate; spurious-wake-safe. pre: mu_ held.
     void release_all_parked() {
@@ -287,6 +385,7 @@ struct FiberSchedulerImpl {
     // Release the quiescence-deferred set back to ready (spin release, or quiescence). pre: mu_ held.
     void release_quiescence_deferred() {
         for (Fiber* f : quiescence_deferred_) {
+            trace_event(EmuleTraceEventKind::QuiescenceRelease, f, f->trace_id, f->home);
             enqueue_ready(f);
         }
         quiescence_deferred_.clear();
@@ -309,6 +408,177 @@ struct FiberSchedulerImpl {
     std::atomic<bool> run_active_{false};
 };
 
+static const char* trace_kind_name(EmuleTraceEventKind kind) {
+    switch (kind) {
+        case EmuleTraceEventKind::Diagnostic: return "diagnostic";
+        case EmuleTraceEventKind::Spawn: return "spawn";
+        case EmuleTraceEventKind::Enqueue: return "enqueue";
+        case EmuleTraceEventKind::Dequeue: return "dequeue";
+        case EmuleTraceEventKind::Run: return "run";
+        case EmuleTraceEventKind::Yield: return "yield";
+        case EmuleTraceEventKind::Park: return "park";
+        case EmuleTraceEventKind::Wake: return "wake";
+        case EmuleTraceEventKind::Repoll: return "repoll";
+        case EmuleTraceEventKind::QuiescenceDefer: return "quiescence_defer";
+        case EmuleTraceEventKind::QuiescenceRelease: return "quiescence_release";
+        case EmuleTraceEventKind::Finish: return "finish";
+        case EmuleTraceEventKind::Fault: return "fault";
+        case EmuleTraceEventKind::Progress: return "progress";
+        case EmuleTraceEventKind::SemaphoreWaitBegin: return "semaphore_wait_begin";
+        case EmuleTraceEventKind::SemaphoreWaitSatisfied: return "semaphore_wait_satisfied";
+        case EmuleTraceEventKind::SemaphoreSet: return "semaphore_set";
+        case EmuleTraceEventKind::SemaphoreIncrement: return "semaphore_increment";
+        case EmuleTraceEventKind::SemaphoreDecrement: return "semaphore_decrement";
+        case EmuleTraceEventKind::SemaphoreMaskedUpdate: return "semaphore_masked_update";
+        case EmuleTraceEventKind::CbReserveBegin: return "cb_reserve_begin";
+        case EmuleTraceEventKind::CbReserveSatisfied: return "cb_reserve_satisfied";
+        case EmuleTraceEventKind::CbWaitBegin: return "cb_wait_begin";
+        case EmuleTraceEventKind::CbWaitSatisfied: return "cb_wait_satisfied";
+        case EmuleTraceEventKind::CbPush: return "cb_push";
+        case EmuleTraceEventKind::CbPop: return "cb_pop";
+        case EmuleTraceEventKind::CbPoll: return "cb_poll";
+        case EmuleTraceEventKind::NocIssue: return "noc_issue";
+        case EmuleTraceEventKind::NocPublish: return "noc_publish";
+        case EmuleTraceEventKind::FabricIssue: return "fabric_issue";
+        case EmuleTraceEventKind::FabricPublish: return "fabric_publish";
+        case EmuleTraceEventKind::WatchdogFreeze: return "watchdog_freeze";
+    }
+    return "unknown";
+}
+
+static std::string json_escape(const char* text) {
+    if (!text) {
+        return {};
+    }
+    std::ostringstream out;
+    for (const unsigned char ch : std::string(text)) {
+        switch (ch) {
+            case '"': out << "\\\""; break;
+            case '\\': out << "\\\\"; break;
+            case '\n': out << "\\n"; break;
+            case '\r': out << "\\r"; break;
+            case '\t': out << "\\t"; break;
+            default:
+                if (ch < 0x20) {
+                    out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << unsigned(ch) << std::dec;
+                } else {
+                    out << ch;
+                }
+        }
+    }
+    return out.str();
+}
+
+void FiberSchedulerImpl::configure_trace() {
+    const char* dir = std::getenv("TT_EMULE_TRACE_DIR");
+    if (!dir || !*dir) {
+        trace_.reset();
+        return;
+    }
+    const unsigned workers = pool_.empty() ? static_cast<unsigned>(env_size("TT_EMULE_FIBER_WORKERS", 64)) : K_;
+    if (trace_.active.load(std::memory_order_acquire) && trace_.directory == dir && trace_.worker_shards == workers) {
+        return;
+    }
+    trace_.reset();
+    trace_.directory = dir;
+    trace_.budget_bytes = env_size("TT_EMULE_TRACE_MB", 256) * 1024u * 1024u;
+    trace_.worker_shards = workers;
+    const size_t shard_count = static_cast<size_t>(workers) + 1;
+    trace_.capacity_per_shard = std::max<size_t>(1, trace_.budget_bytes / shard_count / sizeof(TraceSlot));
+    trace_.write_indices = std::make_unique<std::atomic<uint64_t>[]>(shard_count);
+    trace_.rings.reserve(shard_count);
+    for (size_t i = 0; i < shard_count; ++i) {
+        trace_.write_indices[i].store(0, std::memory_order_relaxed);
+        trace_.rings.push_back(std::make_unique<TraceSlot[]>(trace_.capacity_per_shard));
+    }
+    trace_.writer_state.store(0, std::memory_order_release);
+    trace_.active.store(true, std::memory_order_release);
+}
+
+void FiberSchedulerImpl::trace_event(
+    EmuleTraceEventKind kind, const void* object, uint64_t a, uint64_t b, uint64_t c, uint64_t d) {
+    if (!trace_.active.load(std::memory_order_relaxed)) {
+        return;
+    }
+    if (!trace_.admit_writer()) {
+        trace_.dropped_events.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    const size_t shard = (t_impl == this && t_worker < trace_.worker_shards) ? t_worker : trace_.worker_shards;
+    const uint64_t write = trace_.write_indices[shard].fetch_add(1, std::memory_order_relaxed);
+    if (write >= trace_.capacity_per_shard) {
+        trace_.wrapped_events.fetch_add(1, std::memory_order_relaxed);
+    }
+    TraceSlot& slot = trace_.rings[shard][write % trace_.capacity_per_shard];
+    slot.committed_sequence.store(0, std::memory_order_relaxed);
+    TraceEvent event;
+    event.sequence = trace_.next_sequence.fetch_add(1, std::memory_order_relaxed);
+    event.timestamp_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+    event.scheduler_generation = generation_;
+    event.object = reinterpret_cast<uintptr_t>(object);
+    event.a = a;
+    event.b = b;
+    event.c = c;
+    event.d = d;
+    event.kind = static_cast<uint16_t>(kind);
+    event.worker = (t_impl == this) ? static_cast<uint16_t>(t_worker) : UINT16_MAX;
+    event.threadpool_size = static_cast<uint16_t>(trace_.worker_shards);
+    Fiber* context_fiber = t_current;
+    if (!context_fiber && object &&
+        (kind == EmuleTraceEventKind::Spawn || kind == EmuleTraceEventKind::Enqueue ||
+         kind == EmuleTraceEventKind::Dequeue || kind == EmuleTraceEventKind::QuiescenceRelease)) {
+        context_fiber = const_cast<Fiber*>(static_cast<const Fiber*>(object));
+    }
+    if (context_fiber) {
+        event.fiber_id = context_fiber->trace_id;
+        event.spawn_generation = context_fiber->spawn_gen;
+        event.program_id = context_fiber->id.program_id;
+        event.kernel_src = context_fiber->id.kernel_src;
+        event.chip_id = context_fiber->id.chip_id;
+        event.logical_x = context_fiber->id.logical_x;
+        event.logical_y = context_fiber->id.logical_y;
+        event.phys_x = context_fiber->id.phys_x;
+        event.phys_y = context_fiber->id.phys_y;
+        event.proc_id = context_fiber->id.proc_id;
+        event.home = static_cast<uint16_t>(context_fiber->home);
+    }
+    slot.event = event;
+    slot.committed_sequence.store(event.sequence, std::memory_order_release);
+    if (context_fiber) {
+        context_fiber->last_event_timestamp_ns.store(event.timestamp_ns, std::memory_order_relaxed);
+        context_fiber->last_event_sequence.store(event.sequence, std::memory_order_release);
+    }
+    trace_.release_writer();
+}
+
+std::vector<TraceEvent> FiberSchedulerImpl::copy_trace_events() const {
+    std::vector<TraceEvent> events;
+    if (!trace_.active.load(std::memory_order_acquire)) {
+        return events;
+    }
+    const size_t shard_count = trace_.rings.size();
+    events.reserve(shard_count * trace_.capacity_per_shard);
+    for (size_t shard = 0; shard < shard_count; ++shard) {
+        for (size_t i = 0; i < trace_.capacity_per_shard; ++i) {
+            const TraceSlot& slot = trace_.rings[shard][i];
+            const uint64_t committed = slot.committed_sequence.load(std::memory_order_acquire);
+            if (committed == 0) {
+                continue;
+            }
+            const TraceEvent event = slot.event;
+            if (event.sequence == committed) {
+                events.push_back(event);
+            }
+        }
+    }
+    std::sort(events.begin(), events.end(), [](const TraceEvent& lhs, const TraceEvent& rhs) {
+        return lhs.sequence < rhs.sequence;
+    });
+    return events;
+}
+
 // ---- the makecontext trampoline (first entry of a fiber) ----
 static void fiber_trampoline() {
     Fiber* f = t_current;                    // set by the worker before swap-in
@@ -317,9 +587,11 @@ static void fiber_trampoline() {
         f->entry();
     } catch (...) {
         f->eptr = std::current_exception();
+        impl->trace_event(EmuleTraceEventKind::Fault, f, f->trace_id);
     }
     impl->mu_.lock();                        // re-lock so the worker loop resumes mu_-held
     impl->retire_poll_tags(f);               // a fiber that exits mid-poll must not leak its tally
+    impl->trace_event(EmuleTraceEventKind::Finish, f, f->trace_id);
     f->state = FiberState::Done;
     swapcontext(&f->ctx, &t_sched);          // -> worker loop (never returns here)
 }
@@ -412,6 +684,7 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
                     break;
                 }
                 release_quiescence_deferred();
+                trace_event(EmuleTraceEventKind::Repoll, nullptr, parked_.size(), quiescence_deferred_.size());
                 release_all_parked();
                 cv_.notify_all();
                 ++barren_releases_;         // provisional; cleared next round if anything moved
@@ -451,6 +724,7 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
                     uint64_t p = progress_.load(std::memory_order_relaxed);
                     if (p != last_deadlock_repoll_progress_) {
                         last_deadlock_repoll_progress_ = p;
+                        trace_event(EmuleTraceEventKind::Repoll, nullptr, parked_.size(), p);
                         release_all_parked();
                         cv_.notify_all();
                         --idle_;
@@ -482,6 +756,7 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
         }
         Fiber* f = ready_[w].front();
         ready_[w].pop_front();
+        trace_event(EmuleTraceEventKind::Dequeue, f, f->trace_id, w, ready_[w].size());
         f->in_ready = false;  // off the queue; enqueue_ready may admit it again
         // A queue entry is a HINT: drop one no longer Ready, since the next wake re-enqueues it.
         if (f->state != FiberState::Ready) {
@@ -491,6 +766,7 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
         ++running_;
         t_current = f;
         install_fiber(f);
+        trace_event(EmuleTraceEventKind::Run, f, f->trace_id, w, f->own_resumes.load(std::memory_order_relaxed) + 1);
         resumptions_.fetch_add(1, std::memory_order_relaxed);
         f->own_resumes.fetch_add(1, std::memory_order_relaxed);
         mu_.unlock();
@@ -527,9 +803,15 @@ static void park_current(FiberSchedulerImpl* p, const void* key, bool is_socket)
     p->retire_poll_tags(f);  // a parking fiber is no longer spin-polling
     f->park_key = key;
     f->wait_is_socket = is_socket;
+    f->park_started_ns.store(
+        static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count()),
+        std::memory_order_relaxed);
     Fiber*& head = p->parked_[key];          // inserts nullptr if absent
     f->park_link = head;
     head = f;
+    p->trace_event(EmuleTraceEventKind::Park, key, f->trace_id, is_socket ? 1 : 0, f->home, p->parked_.size());
     swapcontext(&f->ctx, &t_sched);          // -> worker loop (mu_ held); resumes mu_-UNLOCKED
 }
 
@@ -615,6 +897,7 @@ void FiberScheduler::quiescence_park() {
     // As in park_current: a deferred fiber is not resumed, so its tags would stop ageing.
     p_->retire_poll_tags(f);
     p_->quiescence_deferred_.push_back(f);
+    p_->trace_event(EmuleTraceEventKind::QuiescenceDefer, f, f->trace_id, f->home, p_->quiescence_deferred_.size());
     swapcontext(&f->ctx, &t_sched);          // -> worker loop (mu_ held); resumes mu_-UNLOCKED
 }
 
@@ -630,6 +913,7 @@ void FiberScheduler::wake(const void* key) {
         f->park_link = nullptr;
         f->park_key = nullptr;
         f->state = FiberState::Ready;
+        p_->trace_event(EmuleTraceEventKind::Wake, key, f->trace_id, f->home, t_current ? t_current->trace_id : 0);
         p_->enqueue_ready(f);  // back to its pinned worker
         f = nx;
     }
@@ -640,15 +924,19 @@ void FiberScheduler::wake(const void* key) {
 void FiberScheduler::yield() {
     Fiber* f = t_current;
     p_->mu_.lock();
+    p_->trace_event(EmuleTraceEventKind::Yield, f, f->trace_id, f->home);
     f->state = FiberState::Ready;
     p_->enqueue_ready(f);  // back to its pinned worker (== this worker)
     p_->cv_.notify_all();
     swapcontext(&f->ctx, &t_sched);          // mu_ held -> worker loop; resumes mu_-UNLOCKED
 }
 
-void FiberScheduler::note_publish(unsigned pages) {
-    p_->progress_.fetch_add(pages ? pages : 1, std::memory_order_relaxed);
+void FiberScheduler::note_progress(unsigned units) {
+    const uint64_t old = p_->progress_.fetch_add(units, std::memory_order_relaxed);
+    p_->trace_event(EmuleTraceEventKind::Progress, nullptr, units, old, old + units);
 }
+
+void FiberScheduler::note_publish(unsigned pages) { note_progress(pages ? pages : 1); }
 
 // ---- register / run ----
 
@@ -679,7 +967,10 @@ void FiberScheduler::spawn(std::function<void()> entry, std::unique_ptr<ThreadCo
     f->state = FiberState::Ready;
 
     std::lock_guard<std::mutex> g(p_->mu_);
+    p_->configure_trace();
+    f->trace_id = p_->next_fiber_id_++;
     f->spawn_gen = p_->spawn_gen_;      // stamp the dispatch generation (runner keepalive reclaim)
+    p_->trace_event(EmuleTraceEventKind::Spawn, f.get(), f->trace_id, f->spawn_gen, id.program_id, id.chip_id);
     p_->all_.push_back(std::move(f));   // home + ready-queue placement happens in run_until_idle
 }
 
@@ -717,6 +1008,374 @@ static std::string emule_park_op_name(const Fiber* f) {
         }
     }
     return {};
+}
+
+static const char* fiber_state_name(FiberState state) {
+    switch (state) {
+        case FiberState::Ready: return "ready";
+        case FiberState::Running: return "running";
+        case FiberState::Parked: return "parked";
+        case FiberState::QuiescenceDeferred: return "quiescence_deferred";
+        case FiberState::Done: return "done";
+    }
+    return "unknown";
+}
+
+struct StackCandidate {
+    uintptr_t address = 0;
+    std::string module;
+    std::string symbol;
+    uintptr_t offset = 0;
+};
+
+static std::vector<StackCandidate> stack_candidates(const Fiber* fiber) {
+    std::vector<StackCandidate> result;
+    if (!fiber || !fiber->map_base || fiber->map_bytes == 0) {
+        return result;
+    }
+    const uintptr_t rsp = static_cast<uintptr_t>(fiber->ctx.uc_mcontext.gregs[REG_RSP]);
+    const uintptr_t lo = reinterpret_cast<uintptr_t>(fiber->map_base);
+    const uintptr_t hi = lo + fiber->map_bytes;
+    if (rsp < lo || rsp >= hi) {
+        return result;
+    }
+    const size_t max_words = env_size("TT_EMULE_TRACE_STACK_WORDS", 4096);
+    const uintptr_t scan_hi = std::min<uintptr_t>(hi, rsp + max_words * sizeof(uintptr_t));
+    for (uintptr_t cursor = rsp; cursor + sizeof(uintptr_t) <= scan_hi && result.size() < 32;
+         cursor += sizeof(uintptr_t)) {
+        const uintptr_t address = *reinterpret_cast<const uintptr_t*>(cursor);
+        if (address == 0) {
+            continue;
+        }
+        Dl_info info{};
+        if (!dladdr(reinterpret_cast<void*>(address), &info) || !info.dli_fname) {
+            continue;
+        }
+        StackCandidate candidate;
+        candidate.address = address;
+        candidate.module = info.dli_fname;
+        candidate.offset = info.dli_fbase ? address - reinterpret_cast<uintptr_t>(info.dli_fbase) : 0;
+        if (info.dli_sname) {
+            int status = 0;
+            char* demangled = abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, &status);
+            candidate.symbol = (status == 0 && demangled) ? demangled : info.dli_sname;
+            std::free(demangled);
+        }
+        result.push_back(std::move(candidate));
+    }
+    return result;
+}
+
+void FiberSchedulerImpl::write_trace_artifacts_locked(const std::string& reason) {
+    if (!trace_.active.load(std::memory_order_acquire)) {
+        return;
+    }
+    trace_.close_and_drain_writers();
+    const auto events = copy_trace_events();
+    trace_.active.store(false, std::memory_order_release);
+    std::error_code ec;
+    std::filesystem::create_directories(trace_.directory, ec);
+    if (ec) {
+        return;
+    }
+
+    {
+        std::ofstream out(trace_.directory / "events.jsonl");
+        for (const auto& event : events) {
+            out << "{\"sequence\":" << event.sequence << ",\"timestamp_ns\":" << event.timestamp_ns << ",\"kind\":\""
+                << trace_kind_name(static_cast<EmuleTraceEventKind>(event.kind)) << "\",\"fiber_id\":" << event.fiber_id
+                << ",\"scheduler_generation\":" << event.scheduler_generation
+                << ",\"spawn_generation\":" << event.spawn_generation << ",\"program_id\":" << event.program_id
+                << ",\"chip_id\":" << event.chip_id << ",\"logical_core\":[" << event.logical_x << ","
+                << event.logical_y << "]"
+                << ",\"physical_core\":[" << unsigned(event.phys_x) << "," << unsigned(event.phys_y) << "]"
+                << ",\"proc_id\":" << unsigned(event.proc_id) << ",\"home_worker\":" << event.home
+                << ",\"current_worker\":" << event.worker << ",\"threadpool_size\":" << event.threadpool_size
+                << ",\"kernel\":\"" << json_escape(event.kernel_src) << "\""
+                << ",\"object\":" << event.object << ",\"a\":" << event.a << ",\"b\":" << event.b
+                << ",\"c\":" << event.c << ",\"d\":" << event.d;
+            const auto kind = static_cast<EmuleTraceEventKind>(event.kind);
+            if (kind == EmuleTraceEventKind::SemaphoreWaitBegin ||
+                kind == EmuleTraceEventKind::SemaphoreWaitSatisfied) {
+                out << ",\"current\":" << event.a << ",\"wanted\":" << event.b << ",\"relation\":\""
+                    << (event.c == static_cast<uint64_t>(EmuleSemaphoreWaitRelation::Minimum) ? "minimum" : "exact")
+                    << "\",\"l1_offset\":" << event.d;
+            } else if (
+                kind == EmuleTraceEventKind::SemaphoreSet || kind == EmuleTraceEventKind::SemaphoreIncrement ||
+                kind == EmuleTraceEventKind::SemaphoreDecrement || kind == EmuleTraceEventKind::SemaphoreMaskedUpdate) {
+                out << ",\"old_value\":" << event.a << ",\"new_value\":" << event.b << ",\"operand\":" << event.c;
+            } else if (
+                kind == EmuleTraceEventKind::CbReserveBegin || kind == EmuleTraceEventKind::CbReserveSatisfied ||
+                kind == EmuleTraceEventKind::CbWaitBegin || kind == EmuleTraceEventKind::CbWaitSatisfied) {
+                out << ",\"cb_id\":" << event.a << ",\"requested_pages\":" << event.b;
+            } else if (kind == EmuleTraceEventKind::CbPush || kind == EmuleTraceEventKind::CbPop) {
+                out << ",\"pages\":" << event.a << ",\"old_occupied\":" << event.b << ",\"new_occupied\":" << event.c
+                    << ",\"capacity\":" << event.d;
+            } else if (kind == EmuleTraceEventKind::NocIssue || kind == EmuleTraceEventKind::NocPublish) {
+                out << ",\"transfer_source\":" << event.a << ",\"transfer_destination\":" << event.b
+                    << ",\"byte_count\":" << event.c << ",\"transfer_metadata\":" << event.d;
+            } else if (kind == EmuleTraceEventKind::FabricIssue || kind == EmuleTraceEventKind::FabricPublish) {
+                out << ",\"source_chip\":" << event.a << ",\"destination_chip\":" << event.b
+                    << ",\"destination_noc_address\":" << event.c
+                    << ",\"byte_count\":" << static_cast<uint32_t>(event.d)
+                    << ",\"send_type\":" << static_cast<uint32_t>(event.d >> 32);
+            }
+            out << "}\n";
+        }
+    }
+
+    std::unordered_map<uint64_t, const TraceEvent*> latest_semaphore_publication;
+    std::unordered_map<uint64_t, const TraceEvent*> latest_cb_push;
+    std::unordered_map<uint64_t, const TraceEvent*> latest_cb_pop;
+    for (const auto& event : events) {
+        const auto kind = static_cast<EmuleTraceEventKind>(event.kind);
+        if (kind == EmuleTraceEventKind::SemaphoreSet || kind == EmuleTraceEventKind::SemaphoreIncrement ||
+            kind == EmuleTraceEventKind::SemaphoreDecrement || kind == EmuleTraceEventKind::SemaphoreMaskedUpdate ||
+            kind == EmuleTraceEventKind::NocPublish || kind == EmuleTraceEventKind::FabricPublish) {
+            latest_semaphore_publication[event.object] = &event;
+        }
+        if (kind == EmuleTraceEventKind::CbPush) {
+            latest_cb_push[event.object] = &event;
+        } else if (kind == EmuleTraceEventKind::CbPop) {
+            latest_cb_pop[event.object] = &event;
+        }
+    }
+    const auto latest_publication_for = [&](const Fiber* fiber) -> const TraceEvent* {
+        const ThreadCommonCtx* ctx = fiber->owned_ctx.get();
+        if (ctx && ctx->sem_wait_active) {
+            const auto it = latest_semaphore_publication.find(reinterpret_cast<uintptr_t>(ctx->sem_wait_host_addr));
+            return it == latest_semaphore_publication.end() ? nullptr : it->second;
+        }
+        if (ctx && ctx->cb_wait_active) {
+            const auto& publications = ctx->cb_wait_is_reserve ? latest_cb_pop : latest_cb_push;
+            const auto it = publications.find(reinterpret_cast<uintptr_t>(ctx->cb_wait_host_addr));
+            return it == publications.end() ? nullptr : it->second;
+        }
+        const uintptr_t object = reinterpret_cast<uintptr_t>(fiber->park_key);
+        const TraceEvent* latest = nullptr;
+        const auto consider = [&](const auto& publications) {
+            const auto it = publications.find(object);
+            if (it != publications.end() && (!latest || it->second->sequence > latest->sequence)) {
+                latest = it->second;
+            }
+        };
+        consider(latest_semaphore_publication);
+        consider(latest_cb_push);
+        consider(latest_cb_pop);
+        return latest;
+    };
+    const uint64_t snapshot_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+
+    {
+        std::ofstream out(trace_.directory / "stall-snapshot.json");
+        out << "{\"reason\":\"" << json_escape(reason.c_str()) << "\""
+            << ",\"threadpool_size\":" << K_ << ",\"active_workers\":" << W_
+            << ",\"scheduler_generation\":" << generation_
+            << ",\"progress\":" << progress_.load(std::memory_order_relaxed)
+            << ",\"resumptions\":" << resumptions_.load(std::memory_order_relaxed) << ",\"running_count\":" << running_
+            << ",\"idle_workers\":" << idle_ << ",\"trace\":{\"budget_bytes\":" << trace_.budget_bytes
+            << ",\"event_size\":" << sizeof(TraceEvent) << ",\"slot_size\":" << sizeof(TraceSlot)
+            << ",\"capacity_per_shard\":" << trace_.capacity_per_shard << ",\"shards\":" << trace_.rings.size()
+            << ",\"wrapped_events\":" << trace_.wrapped_events.load(std::memory_order_relaxed)
+            << ",\"dropped_events\":" << trace_.dropped_events.load(std::memory_order_relaxed)
+            << "},\"ready_queues\":[";
+        for (size_t worker = 0; worker < ready_.size(); ++worker) {
+            if (worker) {
+                out << ",";
+            }
+            out << "{\"worker\":" << worker << ",\"fiber_ids\":[";
+            for (size_t i = 0; i < ready_[worker].size(); ++i) {
+                if (i) {
+                    out << ",";
+                }
+                out << ready_[worker][i]->trace_id;
+            }
+            out << "]}";
+        }
+        out << "],\"worker_states\":[";
+        for (unsigned worker = 0; worker < K_; ++worker) {
+            if (worker) {
+                out << ",";
+            }
+            const Fiber* running_fiber = nullptr;
+            for (const auto& owned : all_) {
+                if (owned->state == FiberState::Running && owned->home == worker) {
+                    running_fiber = owned.get();
+                    break;
+                }
+            }
+            const char* state = worker >= W_                                          ? "inactive"
+                                : running_fiber                                       ? "running"
+                                : (worker < ready_.size() && !ready_[worker].empty()) ? "ready"
+                                                                                      : "idle";
+            out << "{\"worker\":" << worker << ",\"state\":\"" << state << "\""
+                << ",\"running_fiber\":" << (running_fiber ? std::to_string(running_fiber->trace_id) : "null") << "}";
+        }
+        out << "],\"fibers\":[";
+        bool first_fiber = true;
+        for (const auto& owned : all_) {
+            const Fiber* fiber = owned.get();
+            if (!first_fiber) {
+                out << ",";
+            }
+            first_fiber = false;
+            const bool running = fiber->state == FiberState::Running;
+            const ThreadCommonCtx* ctx = running ? nullptr : fiber->owned_ctx.get();
+            out << "{\"fiber_id\":" << fiber->trace_id << ",\"state\":\"" << fiber_state_name(fiber->state) << "\""
+                << ",\"home_worker\":" << fiber->home << ",\"current_worker\":"
+                << (fiber->state == FiberState::Running ? std::to_string(fiber->home) : "null")
+                << ",\"threadpool_size\":" << K_ << ",\"chip_id\":" << fiber->id.chip_id << ",\"logical_core\":["
+                << fiber->id.logical_x << "," << fiber->id.logical_y << "]"
+                << ",\"physical_core\":[" << unsigned(fiber->id.phys_x) << "," << unsigned(fiber->id.phys_y) << "]"
+                << ",\"proc_id\":" << unsigned(fiber->id.proc_id) << ",\"kernel\":\""
+                << json_escape(fiber->id.kernel_src) << "\""
+                << ",\"spawn_generation\":" << fiber->spawn_gen << ",\"program_id\":" << fiber->id.program_id
+                << ",\"wait_key\":" << reinterpret_cast<uintptr_t>(fiber->park_key) << ",\"wait_duration_ns\":"
+                << (fiber->state == FiberState::Parked
+                        ? snapshot_ns - fiber->park_started_ns.load(std::memory_order_relaxed)
+                        : 0)
+                << ",\"own_resumptions\":" << fiber->own_resumes.load(std::memory_order_relaxed)
+                << ",\"latest_event_sequence\":" << fiber->last_event_sequence.load(std::memory_order_acquire)
+                << ",\"latest_event_timestamp_ns\":" << fiber->last_event_timestamp_ns.load(std::memory_order_relaxed)
+                << ",\"faulted\":" << (!running && fiber->eptr ? "true" : "false");
+            if (ctx && ctx->sem_wait_active) {
+                const uint32_t current =
+                    static_cast<const std::atomic<uint32_t>*>(ctx->sem_wait_host_addr)->load(std::memory_order_acquire);
+                const bool minimum = ctx->sem_wait_relation == EmuleSemaphoreWaitRelation::Minimum;
+                const bool satisfied = minimum ? current >= ctx->sem_wait_want : current == ctx->sem_wait_want;
+                const auto producer =
+                    latest_semaphore_publication.find(reinterpret_cast<uintptr_t>(ctx->sem_wait_host_addr));
+                out << ",\"semaphore_wait\":{\"host_address\":" << reinterpret_cast<uintptr_t>(ctx->sem_wait_host_addr)
+                    << ",\"l1_offset\":" << ctx->sem_wait_l1_offset << ",\"current\":" << current
+                    << ",\"wanted\":" << ctx->sem_wait_want << ",\"relation\":\"" << (minimum ? "minimum" : "exact")
+                    << "\""
+                    << ",\"status\":\"" << (satisfied ? "satisfied" : "starved") << "\""
+                    << ",\"missing_producer\":" << (producer == latest_semaphore_publication.end() ? "true" : "false");
+                if (producer != latest_semaphore_publication.end()) {
+                    out << ",\"last_producer_sequence\":" << producer->second->sequence
+                        << ",\"last_producer_fiber\":" << producer->second->fiber_id << ",\"last_producer_kind\":\""
+                        << trace_kind_name(static_cast<EmuleTraceEventKind>(producer->second->kind)) << "\"";
+                }
+                out << "}";
+            }
+            if (ctx && ctx->cb_wait_active && ctx->cbs) {
+                const auto& cb = ctx->cbs[ctx->cb_wait_id];
+                const auto& publications = ctx->cb_wait_is_reserve ? latest_cb_pop : latest_cb_push;
+                const auto producer = publications.find(reinterpret_cast<uintptr_t>(ctx->cb_wait_host_addr));
+                out << ",\"cb_wait\":{\"cb_id\":" << ctx->cb_wait_id << ",\"requested_pages\":" << ctx->cb_wait_pages
+                    << ",\"side\":\"" << (ctx->cb_wait_is_reserve ? "reserve" : "front") << "\""
+                    << ",\"capacity\":" << cb.num_pages << ",\"page_size\":" << cb.page_size
+                    << ",\"occupied\":" << cb.occupied.load(std::memory_order_relaxed)
+                    << ",\"received_compute\":" << cb.received_compute.load(std::memory_order_relaxed)
+                    << ",\"acked\":" << cb.acked.load(std::memory_order_relaxed)
+                    << ",\"missing_producer\":" << (producer == publications.end() ? "true" : "false");
+                if (producer != publications.end()) {
+                    out << ",\"last_producer_sequence\":" << producer->second->sequence
+                        << ",\"last_producer_fiber\":" << producer->second->fiber_id << ",\"last_producer_kind\":\""
+                        << trace_kind_name(static_cast<EmuleTraceEventKind>(producer->second->kind)) << "\"";
+                }
+                out << "}";
+            }
+            out << "}";
+        }
+        out << "],\"deferred_fiber_ids\":[";
+        for (size_t i = 0; i < quiescence_deferred_.size(); ++i) {
+            if (i) {
+                out << ",";
+            }
+            out << quiescence_deferred_[i]->trace_id;
+        }
+        out << "],\"fault_precedence\":\"captured kernel exception outranks stall\"}\n";
+    }
+
+    {
+        std::ofstream json(trace_.directory / "stacks.json");
+        std::ofstream text(trace_.directory / "stacks.txt");
+        json << "{\"running_context_note\":\"running fibers expose identity and last saved context; no signals used\","
+             << "\"fibers\":[";
+        bool first = true;
+        for (const auto& owned : all_) {
+            const Fiber* fiber = owned.get();
+            const uintptr_t rip = static_cast<uintptr_t>(fiber->ctx.uc_mcontext.gregs[REG_RIP]);
+            const uintptr_t rsp = static_cast<uintptr_t>(fiber->ctx.uc_mcontext.gregs[REG_RSP]);
+            const auto candidates =
+                fiber->state == FiberState::Running ? std::vector<StackCandidate>{} : stack_candidates(fiber);
+            if (!first) {
+                json << ",";
+            }
+            first = false;
+            json << "{\"fiber_id\":" << fiber->trace_id << ",\"state\":\"" << fiber_state_name(fiber->state) << "\""
+                 << ",\"kernel\":\"" << json_escape(fiber->id.kernel_src) << "\""
+                 << ",\"saved_rip\":" << rip << ",\"saved_rsp\":" << rsp << ",\"candidates\":[";
+            text << "fiber " << fiber->trace_id << " " << fiber_state_name(fiber->state)
+                 << " kernel=" << (fiber->id.kernel_src ? fiber->id.kernel_src : "") << " RIP=0x" << std::hex << rip
+                 << " RSP=0x" << rsp << std::dec << "\n";
+            for (size_t i = 0; i < candidates.size(); ++i) {
+                if (i) {
+                    json << ",";
+                }
+                const auto& candidate = candidates[i];
+                json << "{\"address\":" << candidate.address << ",\"module\":\""
+                     << json_escape(candidate.module.c_str()) << "\""
+                     << ",\"symbol\":\"" << json_escape(candidate.symbol.c_str()) << "\""
+                     << ",\"module_offset\":" << candidate.offset << "}";
+                text << "  0x" << std::hex << candidate.address << std::dec << " " << candidate.module << "+0x"
+                     << std::hex << candidate.offset << std::dec;
+                if (!candidate.symbol.empty()) {
+                    text << " " << candidate.symbol;
+                }
+                text << "\n";
+            }
+            json << "]}";
+        }
+        json << "]}\n";
+    }
+
+    {
+        std::ofstream dot(trace_.directory / "wait-for.dot");
+        dot << "digraph emule_wait_for {\n  rankdir=LR;\n";
+        for (const auto& owned : all_) {
+            const Fiber* fiber = owned.get();
+            if (fiber->state != FiberState::Parked) {
+                continue;
+            }
+            const uintptr_t object = reinterpret_cast<uintptr_t>(fiber->park_key);
+            dot << "  f" << fiber->trace_id << " [shape=box,label=\"fiber " << fiber->trace_id << "\\n"
+                << json_escape(fiber->id.kernel_src) << "\"];\n"
+                << "  o" << object << " [shape=ellipse,color=red,label=\"wait 0x" << std::hex << object << std::dec
+                << "\"];\n"
+                << "  f" << fiber->trace_id << " -> o" << object << " [color=red];\n";
+            const TraceEvent* producer = latest_publication_for(fiber);
+            if (!producer) {
+                dot << "  m" << fiber->trace_id << " [shape=diamond,color=red,label=\"missing producer\"];\n"
+                    << "  o" << object << " -> m" << fiber->trace_id << " [color=red];\n";
+            } else {
+                dot << "  p" << producer->fiber_id << " [shape=box,color=green,label=\"producer " << producer->fiber_id
+                    << "\"];\n"
+                    << "  o" << object << " -> p" << producer->fiber_id << " [color=green];\n";
+            }
+        }
+        dot << "}\n";
+    }
+
+    {
+        std::ofstream summary(trace_.directory / "summary.txt");
+        summary << "reason: " << reason << "\n"
+                << "K: " << K_ << "\n"
+                << "events retained: " << events.size() << "\n"
+                << "wrapped events: " << trace_.wrapped_events.load(std::memory_order_relaxed) << "\n"
+                << "dropped events: " << trace_.dropped_events.load(std::memory_order_relaxed) << "\n";
+        for (const auto& owned : all_) {
+            const Fiber* fiber = owned.get();
+            if (fiber->state == FiberState::Parked) {
+                summary << "fiber " << fiber->trace_id << " " << (fiber->id.kernel_src ? fiber->id.kernel_src : "")
+                        << " -> wait 0x" << std::hex << reinterpret_cast<uintptr_t>(fiber->park_key) << std::dec;
+                summary << (latest_publication_for(fiber) ? " -> last producer\n" : " -> missing producer\n");
+            }
+        }
+    }
 }
 
 uint64_t FiberScheduler::begin_spawn_generation() {
@@ -834,9 +1493,24 @@ std::string FiberSchedulerImpl::dump_parked() {
                 auto base = reinterpret_cast<uintptr_t>(ctx->bridge_l1);
                 auto k = reinterpret_cast<uintptr_t>(key);
                 if (k >= base) {
-                    std::snprintf(buf, sizeof(buf), "L1 sem @ 0x%lx (cur=%u)",
-                                  (unsigned long)(k - base),
-                                  *reinterpret_cast<const volatile uint32_t*>(key));
+                    if (ctx->sem_wait_active && ctx->sem_wait_host_addr == key) {
+                        const uint32_t cur = static_cast<const std::atomic<uint32_t>*>(ctx->sem_wait_host_addr)
+                                                 ->load(std::memory_order_acquire);
+                        const bool minimum = ctx->sem_wait_relation == EmuleSemaphoreWaitRelation::Minimum;
+                        const bool satisfied = minimum ? cur >= ctx->sem_wait_want : cur == ctx->sem_wait_want;
+                        std::snprintf(
+                            buf,
+                            sizeof(buf),
+                            "L1 sem @ 0x%x (cur=%u want=%u %s; %s)",
+                            ctx->sem_wait_l1_offset,
+                            cur,
+                            ctx->sem_wait_want,
+                            satisfied ? "SATISFIED" : "starved",
+                            minimum ? "minimum" : "exact");
+                    } else {
+                        const uint32_t cur = *reinterpret_cast<const volatile uint32_t*>(key);
+                        std::snprintf(buf, sizeof(buf), "L1 sem @ 0x%lx (cur=%u)", (unsigned long)(k - base), cur);
+                    }
                     name = buf;
                 }
             }
@@ -915,6 +1589,7 @@ void FiberSchedulerImpl::stop_watchdog() {
 
 void FiberSchedulerImpl::watchdog() {
     const auto interval = std::chrono::milliseconds(250);
+    const auto repoll_observation = std::chrono::seconds(1);
     const uint64_t window = env_size("TT_EMULE_FIBER_PROGRESS_WINDOW", 200000);
     const auto backstop = std::chrono::seconds(env_size("TT_EMULE_FIBER_WATCHDOG_SEC", 120));
     // Parked time measures the HOST; still finite, since a run nobody pumps must not read as success.
@@ -923,6 +1598,9 @@ void FiberSchedulerImpl::watchdog() {
     uint64_t last_resump = resumptions_.load();
     auto last_advance = std::chrono::steady_clock::now();
     bool was_parked = host_wait_parked_.load(std::memory_order_acquire);
+    bool repoll_used = false;
+    bool observing_repoll = false;
+    std::chrono::steady_clock::time_point repoll_deadline{};
     while (run_active_.load(std::memory_order_acquire)) {
         {
             // Interruptible sleep: wake immediately when run_until_idle clears run_active_
@@ -938,6 +1616,9 @@ void FiberSchedulerImpl::watchdog() {
         if (parked != was_parked) {
             was_parked = parked;
             last_advance = std::chrono::steady_clock::now();  // the host gap starts (or ends) here
+            if (parked) {
+                observing_repoll = false;  // host-wait time retains its independent backstop
+            }
         }
         uint64_t p = progress_.load();
         uint64_t r = resumptions_.load();
@@ -945,21 +1626,64 @@ void FiberSchedulerImpl::watchdog() {
             last_progress = p;
             last_resump = r;
             last_advance = std::chrono::steady_clock::now();
+            repoll_used = false;
+            observing_repoll = false;
             continue;
         }
+        const auto now = std::chrono::steady_clock::now();
         // Fast livelock trip: many resumptions, zero progress. Never while parked (counters are frozen).
         bool livelock = !parked && (r - last_resump) > window;
-        bool wall = (std::chrono::steady_clock::now() - last_advance) > (parked ? host_backstop : backstop);
-        if (livelock || wall) {
+        if (observing_repoll && !livelock && now < repoll_deadline) {
+            last_resump = r;
+            continue;
+        }
+        const bool repoll_starved = observing_repoll && !parked && now >= repoll_deadline;
+        bool wall = (now - last_advance) > (parked ? host_backstop : backstop);
+        if (livelock || repoll_starved || wall) {
+            if (!livelock && !repoll_starved && wall && !parked && !repoll_used) {
+                bool released = false;
+                {
+                    std::lock_guard<std::mutex> g(mu_);
+                    if (!parked_.empty()) {
+                        release_all_parked();
+                        cv_.notify_all();
+                        released = true;
+                    }
+                }
+                if (released) {
+                    const auto repoll_started = std::chrono::steady_clock::now();
+                    repoll_used = true;
+                    observing_repoll = true;
+                    repoll_deadline = repoll_started + repoll_observation;
+                    last_resump = r;
+                    continue;
+                }
+            }
+            {
+                std::lock_guard<std::mutex> g(mu_);
+                trace_event(
+                    EmuleTraceEventKind::WatchdogFreeze,
+                    nullptr,
+                    livelock ? 1 : 0,
+                    repoll_starved ? 1 : 0,
+                    wall ? 1 : 0,
+                    parked ? 1 : 0);
+                write_trace_artifacts_locked(
+                    livelock         ? "watchdog livelock"
+                    : parked         ? "watchdog host-wait backstop"
+                    : repoll_starved ? "watchdog starvation after re-poll"
+                                     : "watchdog wall-clock backstop");
+            }
             std::fprintf(
                 stderr,
                 "[EMULE] fiber engine: no global progress (%s) — suspected %s.\n%s",
                 livelock ? "resumption window"
                 : parked ? "host-wait backstop, TT_EMULE_HOST_WAIT_WATCHDOG_SEC"
                          : "wall-clock backstop",
-                livelock ? "livelock / wake-cycle"
-                : parked ? "the host never pumped this parked run again"
-                         : "lost wakeup / hang",
+                livelock         ? "livelock / wake-cycle"
+                : parked         ? "the host never pumped this parked run again"
+                : repoll_starved ? "starvation after parked-fiber re-poll"
+                                 : "lost wakeup / hang",
                 [this] {
                     std::lock_guard<std::mutex> g(mu_);
                     return dump_parked();
@@ -988,12 +1712,12 @@ void FiberScheduler::launch_and_wait(bool initial) {
             p_->pool_.emplace_back([this, i] { p_->worker_main(i); });
         }
     }
-
     unsigned W = 0;
     {   // Publish counters + progress, W_, the ready queues, and ++generation_ in ONE mu_ critical
         // section, so a worker released for a generation never pairs a new W_ with a stale generation_.
         // See tt-emule docs/fiber-engine.md §9.4 (the workers_done_ overshoot / done_cv_ wedge it avoids).
         std::lock_guard<std::mutex> g(p_->mu_);
+        p_->configure_trace();
         // `initial` means "a program was just registered", not "the registry is empty".
         const bool resuming = initial && p_->launched_watermark_ > 0;
         // Reset outcome flags BEFORE either early return: a stale host_wait_ reports a run that is gone.
@@ -1149,6 +1873,7 @@ void FiberScheduler::teardown_and_throw() {
             reason = p_->stall_reason_.empty() ? "EMULE fiber engine: quiescent deadlock — all workers idle, fibers "
                                                  "parked, none runnable."
                                                : p_->stall_reason_;
+            p_->write_trace_artifacts_locked(reason);
         }
         p_->stall_reason_.clear();
         p_->ready_.clear();
@@ -1183,6 +1908,16 @@ static uint64_t host_wait_no_progress_limit() {
 }
 
 uint64_t FiberScheduler::host_wait_stall_limit() { return host_wait_no_progress_limit(); }
+
+void FiberScheduler::trace_event(
+    EmuleTraceEventKind kind, const void* object, uint64_t a, uint64_t b, uint64_t c, uint64_t d) {
+    p_->trace_event(kind, object, a, b, c, d);
+}
+
+void FiberScheduler::flush_trace_for_test(const std::string& reason) {
+    std::lock_guard<std::mutex> g(p_->mu_);
+    p_->write_trace_artifacts_locked(reason);
+}
 
 RunOutcome FiberScheduler::run_persistent() {
     p_->persistent_ = true;
