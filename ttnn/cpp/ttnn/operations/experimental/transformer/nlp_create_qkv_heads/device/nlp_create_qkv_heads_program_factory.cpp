@@ -34,10 +34,9 @@ constexpr uint32_t kShardedQStartAddrIdx = 7;    // q_base_addr + remote_q_head_
 constexpr uint32_t kShardedKVBaseAddrIdx = 15;   // k_base_addr on the reader, v_base_addr on the writer
 constexpr uint32_t kShardedKVStartAddrIdx = 16;  // ..._base_addr + remote_kv_head_start_idx * head_size
 
-// Single source of truth for the Interleaved factory's per-core work split.  create_descriptor() and
-// override_runtime_arguments() both walk `cores` in this order, so the core -> runtime-arg-slot
-// mapping cannot drift; it also carries the reader/writer kernel indices, which shift when the
-// transpose_k_heads compute kernels are present.
+// Single source of truth for the Interleaved factory's per-core work split at creation.
+// It also carries the reader/writer kernel indices, which shift when transpose_k_heads
+// compute kernels are present; the cache-hit hook uses these indices in that case.
 struct InterleavedWorkSplit {
     std::vector<CoreCoord> cores;
     CoreRangeSet all_cores;
@@ -646,7 +645,15 @@ void NlpCreateHeadsDeviceOperation::Interleaved::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     auto& output = tensor_return_value;
     const Tensor& input_tensor = tensor_args.input_tensor_q;
-    const auto split = build_interleaved_work_split(operation_attributes, input_tensor);
+    // Without a transpose compute kernel, the reader/writer are always slots 0/1.
+    // Their populated runtime-argument rows already identify the active cores, so
+    // avoid rebuilding the hash-invariant work split on this common cache-hit path.
+    const uint32_t reader_kernel_idx =
+        operation_attributes.transpose_k_heads
+            ? build_interleaved_work_split(operation_attributes, input_tensor).reader_kernel_idx
+            : 0;
+    auto& reader_matrix = GetRuntimeArgs(program, reader_kernel_idx);
+    auto& writer_matrix = GetRuntimeArgs(program, reader_kernel_idx + 1);
 
     const uint32_t in0_addr = input_tensor.buffer()->address();
     const bool read_from_input_tensor_kv = tensor_args.input_tensor_kv.has_value();
@@ -655,16 +662,21 @@ void NlpCreateHeadsDeviceOperation::Interleaved::override_runtime_arguments(
     const uint32_t k_addr = std::get<1>(output).buffer()->address();
     const uint32_t v_addr = std::get<2>(output).buffer()->address();
 
-    for (const CoreCoord& core : split.cores) {
-        auto& reader_args = GetRuntimeArgs(program, split.reader_kernel_idx, core);
-        reader_args[kInterleavedReaderIn0AddrIdx] = in0_addr;
-        if (read_from_input_tensor_kv) {
-            reader_args[kInterleavedReaderIn1AddrIdx] = in1_addr;
+    for (size_t x = 0; x < reader_matrix.size(); ++x) {
+        for (size_t y = 0; y < reader_matrix[x].size(); ++y) {
+            auto& reader_args = reader_matrix[x][y];
+            if (reader_args.size() == 0) {
+                continue;
+            }
+            reader_args[kInterleavedReaderIn0AddrIdx] = in0_addr;
+            if (read_from_input_tensor_kv) {
+                reader_args[kInterleavedReaderIn1AddrIdx] = in1_addr;
+            }
+            auto& writer_args = writer_matrix.at(x).at(y);
+            writer_args[kInterleavedWriterQAddrIdx] = q_addr;
+            writer_args[kInterleavedWriterKAddrIdx] = k_addr;
+            writer_args[kInterleavedWriterVAddrIdx] = v_addr;
         }
-        auto& writer_args = GetRuntimeArgs(program, split.writer_kernel_idx, core);
-        writer_args[kInterleavedWriterQAddrIdx] = q_addr;
-        writer_args[kInterleavedWriterKAddrIdx] = k_addr;
-        writer_args[kInterleavedWriterVAddrIdx] = v_addr;
     }
 }
 
