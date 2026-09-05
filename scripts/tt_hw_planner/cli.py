@@ -2813,6 +2813,34 @@ def _find_demo_dir_safe(model_id: str) -> Optional[Path]:
         return None
 
 
+def _reconcile_overlays_onto_scaffolded_demo(model_id: str) -> None:
+    """Re-hang this model's overlays onto the demo THIS run scaffolded.
+
+    Overlays are applied before scaffold (`_cmd_up_isolated`), so they replay at
+    the paths they were captured against. When routing moves a model's demo, those
+    paths name a directory no run reads and the prior graduations vanish silently.
+    This is the first point where the real demo dir is known AND the scaffolder has
+    finished writing, so it is the only safe moment to correct them.
+
+    Best-effort: a bring-up must not fail because a stale overlay could not be
+    moved."""
+    demo_dir = _find_demo_dir_safe(model_id)
+    if demo_dir is None:
+        return
+    try:
+        from .overlay_manager import reconcile_for
+
+        n, _files = reconcile_for(model_id, demo_dir)
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"  [overlay] reconcile skipped: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return
+    if n:
+        print(f"  [overlay] re-hung {n} overlay file(s) onto {demo_dir.name} (demo moved since capture)")
+
+
 def _exit_if_hf_weight_failure(model_id: str, captured_output: str) -> None:
     """Short-circuit the bring-up flow if captured pytest output shows
     an HF weight download/load failure.
@@ -9903,6 +9931,8 @@ def _cmd_up_core_impl(args) -> int:
         else:
             print(f"  autofill failed: {exc} — aborting.", file=sys.stderr)
             return 2
+
+    _reconcile_overlays_onto_scaffolded_demo(MODEL)
 
     banner(f"Step 5/6  Build the runnable pytest invocation (prepare)")
     auto_on = getattr(args, "auto", False)

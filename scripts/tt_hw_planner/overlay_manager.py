@@ -817,6 +817,176 @@ def apply_for(model_id: str) -> Tuple[int, List[str]]:
     return len(applied), applied
 
 
+def _demo_relative_suffix(rel_path: str, demo_name: str) -> Optional[str]:
+    """The part of ``rel_path`` that sits INSIDE a demo directory called
+    ``demo_name``, or None when the path names no such directory.
+
+    Splitting on the demo's own directory name is what makes the re-hang
+    layout-agnostic: it never has to know that a demo used to live under
+    ``models/tt_transformers/demo/`` and now lives under ``models/demos/``,
+    only that both end in the directory the model was scaffolded into."""
+    parts = [p for p in rel_path.replace("\\", "/").split("/") if p]
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i] == demo_name:
+            tail = parts[i + 1 :]
+            return "/".join(tail) if tail else None
+    return None
+
+
+_PATCH_PATH_HEADERS = ("diff --git ", "--- ", "+++ ", "rename from ", "rename to ")
+
+
+def _repath_patch(patch_text: str, old_rel: str, new_rel: str) -> str:
+    """Rewrite a unified diff's path HEADERS onto ``new_rel``. ``git apply`` takes its
+    target from these lines, so re-keying the index alone would still write to the
+    old location.
+
+    Deliberately scoped to header lines: a stub's own body legitimately references
+    shared library modules that live under the prefix being moved away from (an
+    ADAPT stub importing a canonical layer, for instance), and a blanket replace
+    would rewrite a working import into a module that does not exist."""
+    out: List[str] = []
+    for line in patch_text.splitlines(keepends=True):
+        if line.startswith(_PATCH_PATH_HEADERS):
+            line = line.replace(old_rel, new_rel)
+        out.append(line)
+    return "".join(out)
+
+
+def _repath_stored_patch(model_id: str, meta: dict, old_rel: str, new_rel: str) -> dict:
+    """Rewrite the stored patch so its BODY, its filename and the index key all name
+    the same path, returning the updated index metadata.
+
+    Re-keying the index alone is not enough, and the gap is a trap: ``apply_for``
+    takes its target from the patch body, so a stale body sends the NEXT run's files
+    back to the old location, while ``reconcile_for`` sees an already-correct key,
+    no-ops, and reports nothing. The snapshots would be stranded again silently --
+    the exact failure this function exists to end. Reuses ``_patch_filename`` so the
+    renamed file follows the same convention ``store_patch`` writes."""
+    md = _model_dir(model_id)
+    out = dict(meta)
+    old_file = md / str(meta.get("patch_file") or "")
+    if not old_file.is_file():
+        return out
+    try:
+        text = _repath_patch(old_file.read_text(), old_rel, new_rel)
+        new_file = md / _patch_filename(new_rel)
+        new_file.write_text(text)
+        if new_file != old_file:
+            old_file.unlink()
+        out["patch_file"] = new_file.name
+        out["sha256"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    except OSError as exc:
+        print(
+            f"[overlay] reconcile_for({model_id}): re-hung {new_rel} but could not "
+            f"re-path its stored patch: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+    return out
+
+
+def reconcile_for(model_id: str, demo_dir: Path) -> Tuple[int, List[str]]:
+    """Re-hang this model's overlay files under ``demo_dir`` — the demo the CURRENT
+    run scaffolded — and re-key the index so the next run records the right paths.
+
+    ``apply_for`` runs BEFORE scaffold, so it can only replay each patch at the path
+    it was captured against. That is correct until the demo moves: registering a
+    family backend, or changing a template, relocates the scaffold output (e.g. out
+    of ``models/tt_transformers/demo/<slug>/`` and into ``models/demos/<slug>/``).
+    From then on the patches land in a directory no run reads, and the failure is
+    silent in the worst way -- the run reports a healthy overlay count while the live
+    demo has no ``.last_good_*`` snapshots, so every component looks ungraduated and
+    prior work is redone from scratch.
+
+    Reconciling after scaffold is the first moment the real demo location is knowable.
+    It also lands AFTER the scaffolder has emitted its fresh stubs, which is required:
+    restoring a graduated stub before scaffold would just be overwritten, and the
+    gate deliberately refuses to count a snapshot that sits next to a regressed
+    torch-wrapper stub.
+
+    Returns ``(count_rehung, rehung_rel_paths)``."""
+    import shutil
+
+    idx = _load_index(model_id)
+    if not idx:
+        return 0, []
+    root = _repo_root()
+    try:
+        demo_rel = Path(demo_dir).resolve().relative_to(root.resolve())
+    except ValueError:
+        # Say so rather than reporting a silent 0: a demo resolved outside the active
+        # repo means the demo-dir and repo-root discovery disagree, which is a real
+        # misconfiguration the operator wants to see, not "nothing to do".
+        print(
+            f"[overlay] reconcile_for({model_id}): demo {demo_dir} is outside the active "
+            f"repo {root} — cannot re-hang overlays; prior graduations may not be seen",
+            file=sys.stderr,
+        )
+        return 0, []
+    demo_name = demo_rel.name
+    rehung: List[str] = []
+    remapped: Dict[str, dict] = {}
+    for rel, meta in idx.items():
+        suffix = _demo_relative_suffix(rel, demo_name)
+        new_rel = f"{demo_rel.as_posix()}/{suffix}" if suffix else rel
+        if new_rel == rel:
+            remapped[rel] = meta
+            continue
+        if new_rel in idx:
+            # The correct path is ALREADY registered (a later capture recorded it),
+            # so that entry is authoritative. Retire the stale duplicate instead of
+            # letting it overwrite the good entry's metadata in the re-keyed index.
+            try:
+                (root / rel).unlink()
+            except OSError:
+                pass
+            continue
+        src = root / rel
+        dst = root / new_rel
+        moved = False
+        try:
+            if src.is_file():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                # Drop the stale copy, or the end-of-run capture re-records it and
+                # the next run inherits the same dead prefix.
+                src.unlink()
+                moved = True
+            else:
+                patch_text = (_model_dir(model_id) / meta["patch_file"]).read_text()
+                rc, err = _git_apply(_repath_patch(patch_text, rel, new_rel))
+                if rc == 0:
+                    moved = True
+                else:
+                    print(
+                        f"[overlay] reconcile_for({model_id}): could not re-hang {rel} "
+                        f"under {demo_rel.as_posix()}: {err.strip()}",
+                        file=sys.stderr,
+                    )
+            if moved:
+                rehung.append(new_rel)
+                meta = _repath_stored_patch(model_id, meta, rel, new_rel)
+        except OSError as exc:
+            print(
+                f"[overlay] reconcile_for({model_id}): could not re-hang {rel}: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            remapped[rel] = meta
+            continue
+        remapped[new_rel] = meta
+    if remapped != idx:
+        # Also covers the retire-a-stale-duplicate case, where nothing was re-hung
+        # but the index still has to lose the dead key.
+        _save_index(model_id, remapped)
+        print(
+            f"[overlay] reconcile_for({model_id}): re-hung {len(rehung)} overlay file(s) "
+            f"under {demo_rel.as_posix()} (the demo this run scaffolded) and re-keyed the index",
+            file=sys.stderr,
+        )
+    return len(rehung), rehung
+
+
 def revert_for(model_id: str) -> Tuple[int, List[str]]:
     idx = _load_index(model_id)
     reverted: List[str] = []
