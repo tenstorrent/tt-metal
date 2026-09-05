@@ -73,6 +73,11 @@ struct SourceInjectProgram {
     bool is_target;
 };
 
+enum class SourceInjectCoverage {
+    Any,
+    ExpressFanout,
+};
+
 template <typename Visitor>
 bool visit_candidate_branches(const tt_metal::distributed::MeshShape& mesh_shape, Visitor&& visitor) {
     const uint32_t y_size = mesh_shape[0];
@@ -401,11 +406,16 @@ std::vector<eth_chan_directions> attempted_directions(const SourceInjectCandidat
     return attempted;
 }
 
-void run_source_inject_test(BaseFabricFixture* fixture) {
+void run_source_inject_test(BaseFabricFixture* fixture, SourceInjectCoverage coverage) {
     const auto candidate = select_candidate(fixture);
     if (!candidate.has_value()) {
         GTEST_SKIP() << "No source this rank can open has a legal multicast branch with connectable root "
                         "outputs and at least one verifiable target";
+    }
+    if (coverage == SourceInjectCoverage::ExpressFanout) {
+        ASSERT_TRUE(candidate->express) << "The selected mesh does not have express routing enabled";
+        ASSERT_TRUE(candidate_exercises_z_fanout(candidate.value()))
+            << "No source-injection branch with combined cardinal and Z fanout was selected";
     }
 
     auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
@@ -642,6 +652,20 @@ void run_source_inject_test(BaseFabricFixture* fixture) {
 
 }  // namespace
 
-TEST_F(Fabric2DFixture, TestMeshMulticastSourceInjectApis) { run_source_inject_test(this); }
+TEST_F(Fabric2DFixture, TestMeshMulticastSourceInjectApis) { run_source_inject_test(this, SourceInjectCoverage::Any); }
+
+class FabricExpress2DTorusXYFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() {
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
+    }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+// Hardware coverage for an express-capable MGD. The fixture name deliberately does not match the
+// broad Fabric2D*Fixture CI filters; workflows that provide an express MGD must select it explicitly.
+TEST_F(FabricExpress2DTorusXYFixture, TestMeshMulticastSourceInjectApis) {
+    run_source_inject_test(this, SourceInjectCoverage::ExpressFanout);
+}
 
 }  // namespace tt::tt_fabric::fabric_router_tests
