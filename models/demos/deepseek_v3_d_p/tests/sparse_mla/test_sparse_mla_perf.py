@@ -714,7 +714,7 @@ PERF_CASES = [
 @pytest.mark.parametrize("variant", list(VARIANTS), indirect=True, ids=list(VARIANTS))
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test — skip on CI")
 @pytest.mark.timeout(0)
-def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_format, config_only):
+def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_format, config_only, monkeypatch):
     if PERF_SKIP_REASON:
         pytest.skip(PERF_SKIP_REASON)
 
@@ -873,6 +873,19 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         assert warmups >= 1 and iterations >= 1
         use_trace = os.environ.get("DS_PERF_HOST_TRACE", "0") == "1"
         profile_mode = os.environ.get("DS_PERF_HOST_PROFILE", "")
+        if profile_mode == "tracy":
+            from ttnn.decorators import FastOperation
+
+            original_call = FastOperation.__call__
+
+            def profiled_call(operation, *args, **kwargs):
+                ttnn.start_tracy_zone(__file__, f"PY_TTNN::{operation.python_fully_qualified_name}", 0)
+                try:
+                    return original_call(operation, *args, **kwargs)
+                finally:
+                    ttnn.stop_tracy_zone()
+
+            monkeypatch.setattr(FastOperation, "__call__", profiled_call)
         python_profiler = None
         if profile_mode == "cprofile":
             import cProfile
