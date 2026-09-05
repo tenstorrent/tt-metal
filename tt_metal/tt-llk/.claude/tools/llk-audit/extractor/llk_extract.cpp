@@ -35,6 +35,11 @@
 //                   *_RMW field aliases (see MacroPass) — name + full text (args
 //                   included). This is how the TTI_*/SEM*/... primitives, which
 //                   the AST erases, are recovered
+//   opcode_values   TT_OP_* expansions written in LLK source: an opcode VALUE
+//                   bound for a MOP slot or a replay buffer, NOT an instruction
+//                   issued at that line. A SEPARATE family so the instruction-
+//                   consuming checks can never read one as an issued instruction;
+//                   only mop-replay reads it (see MacroPass)
 //
 // Each fact carries its enclosing function name and a file:line:offset. The
 // offset lets the Python side reason about ordering ("does a guard follow the
@@ -178,11 +183,24 @@ public:
             return;
         }
         llvm::StringRef nm = II->getName();
-        // Denylist encoding-constant / internal expansion macros: TT_OP_* are the
-        // opcode-VALUE constants (not an issued instruction) and INSTRUCTION_WORD
-        // is expanded INSIDE the real instruction macros — both otherwise get
-        // recorded mislocated at their #define site and add noise.
-        if (nm.starts_with("TT_OP_") || nm == "INSTRUCTION_WORD")
+        // INSTRUCTION_WORD is pure encoding plumbing expanded inside the real
+        // instruction macros — never a fact of its own.
+        if (nm == "INSTRUCTION_WORD")
+        {
+            return;
+        }
+        // TT_OP_* is an opcode VALUE, not an issued instruction: it is destined for
+        // a MOP slot or a replay buffer and executes where the expander issues it.
+        // Two rules follow. (1) Drop the NESTED expansions — a TT_OP_*/TT_OP token
+        // coming from inside another macro's replacement list spells at its #define
+        // site in ckernel_ops.h, not at a use site (this is what the bare `TT_OP`
+        // encoding helper always is). (2) Emit the source-written ones under their
+        // OWN family, so no instruction-consuming checker can read an opcode value
+        // as an instruction issued at that line — the exact recall error the
+        // mop-replay check exists to prevent. Keep the prefix in step with
+        // registry.is_mop_word(), which selects the same words on the Python side.
+        const bool opcodeValue = nm.starts_with("TT_OP");
+        if (opcodeValue && (NameTok.getLocation().isMacroID() || nm == "TT_OP"))
         {
             return;
         }
@@ -200,7 +218,7 @@ public:
         {
             return;
         }
-        f.family = "macro";
+        f.family = opcodeValue ? "opcode_value" : "macro";
         f.name   = II->getName().str();
         f.text   = srcText(S, Range);
         S.facts.push_back(std::move(f));
