@@ -19,6 +19,7 @@ from llkaudit.checks.cb_sync import CbSync
 from llkaudit.checks.cfg_word_overlap import CfgWordOverlap
 from llkaudit.checks.mailbox_sync import MailboxSync
 from llkaudit.checks.mmio_race import MmioRace
+from llkaudit.checks.mop_replay import MopReplay
 from llkaudit.checks.noc_atomic_exit import NocAtomicExit
 from llkaudit.checks.noc_l1_invalidate import NocL1Invalidate
 from llkaudit.checks.noc_read_barrier import NocReadBarrier
@@ -64,6 +65,17 @@ def macro(file, off, name, text, func=""):
         "name": name,
         "text": text,
     }
+
+
+def opcode_value(file, off, name, text, func=""):
+    """A `TT_OP_*` word as the EXTRACTOR files it — its own family, never "macro".
+
+    Building these as `macro` facts is what let the unattributed-word hint pass its
+    tests while being dead on every real fact base; the family is the contract.
+    """
+    f = macro(file, off, name, text, func)
+    f["family"] = registry.OPCODE_VALUE_FAMILY
+    return f
 
 
 def call(file, off, name, text=None, func="", arg0="", recv="", recv_type="", argc=-1):
@@ -3755,6 +3767,386 @@ def test_cli_degraded_note_appended():
     assert "degraded" in d and any(
         "CAPTURE-HOLE-XYZ" in n for n in d["degraded"]
     ), d.get("degraded")
+
+
+# --- mop-replay: a word's SLOT, not its line ---------------------------------
+_MR_F = "tt_llk_wormhole_b0/llk_lib/llk_math_matmul.h"
+
+
+def _mr(facts):
+    return MopReplay().run(FactBase("wormhole", facts))
+
+
+def _hints(out):
+    return sorted(f.hint for f in out)
+
+
+@case
+def test_mop_end_op_flip_is_recalled_with_the_wrap_note():
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                120,
+                "set_end_op",
+                text="tmp.set_end_op",
+                func="configure_mop",
+                arg0="TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)",
+                argc=1,
+            ),
+        ]
+    )
+    assert _hints(out) == ["MOP_SLOTTED_SRC_FLIP"], out
+    assert out[0].kind == "END_OP0", out[0].kind
+    # the wrap-around adjacency is the thing a textual reading gets wrong
+    assert "next outer iteration's START_OP" in out[0].detail, out[0].detail
+
+
+@case
+def test_mop_last_inner_loop_instr_flip_slot():
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                130,
+                "set_last_inner_loop_instr",
+                text="tmp.set_last_inner_loop_instr",
+                func="configure_mop",
+                arg0="TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_0, 0)",
+                argc=1,
+            ),
+        ]
+    )
+    assert _hints(out) == ["MOP_SLOTTED_SRC_FLIP"], out
+    assert out[0].kind == "LOOP1_LAST", out[0].kind
+
+
+@case
+def test_mop_clr_none_is_not_a_flip():
+    """CLR_NONE flips nothing — it must not be reported as handing a bank back."""
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                140,
+                "set_start_op",
+                text="tmp.set_start_op",
+                func="configure_mop",
+                arg0="TT_OP_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD)",
+                argc=1,
+            ),
+        ]
+    )
+    assert _hints(out) == ["MOP_SLOTTED_WORD"], out
+    assert out[0].kind == "START_OP", out[0].kind
+
+
+@case
+def test_replay_record_defaults_to_noexec_and_a_literal_index_is_resolved():
+    out = _mr(
+        [
+            fn("_llk_math_matmul_", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                150,
+                "record",
+                text="lltt::record",
+                func="_llk_math_matmul_",
+                arg0="0",
+                argc=2,
+            ),
+        ]
+    )
+    assert _hints(out) == ["REPLAY_RECORD_NOEXEC"], out
+
+
+@case
+def test_replay_record_noexec_beats_the_exec_substring():
+    """ "NoExec" CONTAINS "Exec" — the negative form must be tested first."""
+    out = _mr(
+        [
+            fn("_llk_math_matmul_", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                150,
+                "record",
+                text="lltt::record<lltt::NoExec>",
+                func="_llk_math_matmul_",
+                arg0="4",
+                argc=2,
+            ),
+        ]
+    )
+    assert _hints(out) == ["REPLAY_RECORD_NOEXEC"], out
+
+
+@case
+def test_replay_record_exec_is_not_flagged_noexec():
+    out = _mr(
+        [
+            fn("_llk_math_matmul_", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                150,
+                "record",
+                text="lltt::record<lltt::Exec>",
+                func="_llk_math_matmul_",
+                arg0="0",
+                argc=2,
+            ),
+        ]
+    )
+    assert out == [], out
+
+
+@case
+def test_replay_record_dependent_exec_is_unresolved():
+    out = _mr(
+        [
+            fn("load_replay_buf", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                150,
+                "record",
+                text="lltt::record<lltt::ExecBool(Exec)>",
+                func="load_replay_buf",
+                arg0="start",
+                argc=2,
+            ),
+        ]
+    )
+    assert "REPLAY_RECORD_EXEC_UNRESOLVED" in _hints(out), out
+
+
+@case
+def test_replay_symbolic_index_is_unresolved():
+    out = _mr(
+        [
+            fn("_llk_math_matmul_", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                160,
+                "replay",
+                text="lltt::replay",
+                func="_llk_math_matmul_",
+                arg0="ckernel::math::replay_buf_offset",
+                argc=2,
+            ),
+        ]
+    )
+    assert _hints(out) == ["REPLAY_INDEX_UNRESOLVED"], out
+    assert "32" in out[0].detail, out[0].detail
+
+
+@case
+def test_generic_record_outside_lltt_is_not_recalled():
+    """`record` is a generic method name — gate it on the lltt namespace."""
+    out = _mr(
+        [
+            fn("some_helper", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                170,
+                "record",
+                text="tracer.record",
+                func="some_helper",
+                arg0="0",
+                argc=1,
+            ),
+        ]
+    )
+    assert out == [], out
+
+
+@case
+def test_unattributed_opcode_value_flip_is_recalled():
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            opcode_value(
+                _MR_F,
+                180,
+                "TT_OP_SETRWC",
+                "TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)",
+                func="configure_mop",
+            ),
+        ]
+    )
+    assert _hints(out) == ["MOP_WORD_SLOT_UNATTRIBUTED"], out
+    assert "Src bank flip" in out[0].detail, out[0].detail
+
+
+@case
+def test_unattributed_opcode_value_sync_is_recalled():
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            opcode_value(
+                _MR_F,
+                190,
+                "TT_OP_SEMPOST",
+                "TT_OP_SEMPOST(ckernel::semaphore::MATH_PACK)",
+                func="configure_mop",
+            ),
+        ]
+    )
+    assert _hints(out) == ["MOP_WORD_SLOT_UNATTRIBUTED"], out
+    assert "sync/wait" in out[0].detail, out[0].detail
+
+
+@case
+def test_arithmetic_opcode_value_is_not_recalled_here():
+    """Scoped to flips/sync — instruction-latency widens its own enumeration."""
+    out = _mr(
+        [
+            fn("sfpu_kernel", _MR_F, 100, 200),
+            opcode_value(
+                _MR_F,
+                195,
+                "TT_OP_SFPMAD",
+                "TT_OP_SFPMAD(0,1,2,3,0)",
+                func="sfpu_kernel",
+            ),
+        ]
+    )
+    assert out == [], out
+
+
+@case
+def test_issued_instruction_is_not_an_unattributed_word():
+    """A TTI_/TT_ form IS issued at its line; only TT_OP_* values are slotted."""
+    out = _mr(
+        [
+            fn("_llk_math_matmul_", _MR_F, 100, 200),
+            macro(
+                _MR_F,
+                198,
+                "TTI_SETRWC",
+                "TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)",
+                func="_llk_math_matmul_",
+            ),
+        ]
+    )
+    assert out == [], out
+
+
+@case
+def test_mop_replay_is_registered_in_all():
+    from llkaudit.checks import ALL
+
+    assert "mop-replay" in ALL, sorted(ALL)
+    assert ALL["mop-replay"].blind_spots, "every check must declare blind_spots"
+
+
+@case
+def test_mop_replay_hints_are_documented_in_the_skill_and_readme():
+    """The tool and the skills must name the SAME hints, or an agent handed a
+    finding cannot look up what to do with it. Skips (does not fail) if a doc is
+    not alongside the tool, so a vendored copy of the tool still tests clean."""
+    import re
+
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "llkaudit", "checks", "mop_replay.py")).read()
+    hints = sorted(set(re.findall(r'"(MOP_[A-Z_]+|REPLAY_[A-Z_]+)"', src)))
+    assert hints, "no hints found in mop_replay.py"
+    docs = [
+        os.path.join(here, "README.md"),
+        os.path.join(here, "..", "..", "skills", "race-audit-all", "SKILL.md"),
+    ]
+    for d in docs:
+        if not os.path.exists(d):
+            continue
+        text = open(d).read()
+        missing = [h for h in hints if h not in text]
+        assert not missing, f"{os.path.basename(d)} does not name: {missing}"
+
+
+@case
+def test_replay_hex_literal_index_is_resolved():
+    """A hex index pins the slot just as a decimal one does."""
+    out = _mr(
+        [
+            fn("_llk_math_matmul_", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                165,
+                "replay",
+                text="lltt::replay",
+                func="_llk_math_matmul_",
+                arg0="0x10",
+                argc=2,
+            ),
+        ]
+    )
+    assert out == [], out
+
+
+@case
+def test_opcode_value_filed_as_a_macro_is_not_recalled():
+    """The family IS the contract. A `TT_OP_*` word the extractor filed under
+    "macro" is invisible to this check by design — the instruction-consuming
+    checks own that family, and an opcode value must never reach them."""
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            macro(
+                _MR_F,
+                180,
+                "TT_OP_SETRWC",
+                "TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)",
+                func="configure_mop",
+            ),
+        ]
+    )
+    assert out == [], out
+
+
+@case
+def test_extractor_files_opcode_values_under_the_checkers_family():
+    """Extractor/checker sync, the axis a hint-NAME check cannot see.
+
+    `is_mop_word()` selects `TT_OP_*`; if the C++ MacroPass denylists that prefix
+    outright (as it once did) the unattributed-word hint is structurally DEAD — it
+    passes every hermetic test and returns 0 on every real fact base, which reads
+    as an all-clear. Assert the two sides still agree. Skips (does not fail) if the
+    extractor is not alongside, so a vendored copy of the Python tier tests clean."""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src_path = os.path.join(here, "extractor", "llk_extract.cpp")
+    if not os.path.exists(src_path):
+        return
+    src = open(src_path).read()
+    assert (
+        f'"{registry.OPCODE_VALUE_FAMILY}"' in src
+    ), f"extractor never files facts under {registry.OPCODE_VALUE_FAMILY}"
+    # The prefix the checker selects must not be dropped wholesale by the macro pass.
+    assert (
+        f'nm.starts_with("{registry.OPCODE_VALUE_PREFIX}")' not in src
+    ), "extractor denylists the very prefix is_mop_word() matches -> dead hint"
+
+
+@case
+def test_opcode_value_never_earns_an_instruction_role():
+    """Defense in depth for the same thesis: even if an opcode value reached a
+    macro-consuming path, it must not classify as an issued instruction — every
+    consumer of a role reasons about the fact's own LINE, which is exactly what a
+    MOP/replay word does not have."""
+    for name in ("TT_OP_STALLWAIT", "TT_OP_MVMUL", "TT_OP_UNPACR", "TT_OP_MOP"):
+        assert registry.classify_macro(name) is None, name
+    # the issued forms still classify
+    assert registry.classify_macro("TTI_STALLWAIT") == "stall"
+    assert registry.classify_macro("TTI_MVMUL") == "consumer_math"
+
+
+@case
+def test_is_mop_word_is_anchored_not_a_substring():
+    assert registry.is_mop_word("TT_OP_SETRWC")
+    assert not registry.is_mop_word("TTI_SETRWC")
+    # a name that merely CONTAINS the token is not an opcode-value macro
+    assert not registry.is_mop_word("MY_TT_OP_WRAPPER")
+    assert not registry.is_mop_word("")
 
 
 def main():

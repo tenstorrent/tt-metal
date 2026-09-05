@@ -171,10 +171,19 @@ GPR_WRITE_KINDS = {"regfile_gpr"}
 # Consumers must be genuine instruction macros; require a TTI_/TT_ prefix so that
 # address macros (TENSIX_MOP_CFG_BASE) are never mistaken for a MOP run.
 INSTR_PREFIXES = ("TTI_", "TT_")  # a genuine Tensix instruction macro
+#: An opcode VALUE, not an issued instruction — it shares the `TT_` prefix but is
+#: destined for a MOP slot / replay buffer and executes where the expander issues
+#: it. It must never earn an instruction ROLE (stall / ordered_write / consumer_*),
+#: because every consumer of those roles reasons about the fact's own LINE.
+OPCODE_VALUE_PREFIX = "TT_OP_"
+#: Extractor fact family carrying those words. Kept OUT of the "macro" family so
+#: the instruction-consuming checks cannot see one at all; only mop-replay reads
+#: it. Must match `f.family` in extractor/llk_extract.cpp's MacroPass.
+OPCODE_VALUE_FAMILY = "opcode_value"
 
 
 def _instr(name: str) -> bool:
-    return name.startswith(INSTR_PREFIXES)
+    return name.startswith(INSTR_PREFIXES) and not is_mop_word(name)
 
 
 def is_thread_config_write(macro_name: str) -> bool:
@@ -254,6 +263,155 @@ DRAIN_CALLS = {
     "mop_sync": "mop_sync",  # drains in-flight MOPs
     "tensix_sync": "tensix_sync",  # drains the whole Tensix thread
 }
+
+# --- MOP Expander / Replay Expander: a word's SLOT, not its line --------------
+# A `TT_OP_*` value is an opcode VALUE installed into a MOP slot or a replay
+# buffer and issued by an expander, so its execution position, its repeat count
+# and its neighbours come from the MOP/replay program, never from source order.
+# Both expanders sit in the frontend (MOP first, then Replay, then the Wait
+# Gate): a MOP may emit REPLAY, but a REPLAY expansion may not contain MOP.
+
+#: Replay buffer depth per Tensix thread, in instructions. The expander indexes
+#: it as `(Index + i) % REPLAY_BUF_SIZE`, so an over-long load wraps and
+#: overwrites its own earlier entries (see ckernel_structs.h REPLAY_BUF_SIZE).
+REPLAY_BUF_SIZE = 32
+
+#: ckernel_template (MOP template 1) slot setters -> the expander slot filled.
+#: Per outer iteration the expander issues START_OP, then the inner loop, then
+#: END_OP0/END_OP1 — so an END_OP is immediately followed by the NEXT outer
+#: iteration's START_OP, an adjacency that exists nowhere in the source text.
+#: LOOP0_LAST / LOOP1_LAST override the LAST inner iteration (LOOP0_LAST when it
+#: is also the last outer iteration, LOOP1_LAST when it is not), so the executed
+#: stream is not uniform across iterations.
+MOP_SLOT_SETTERS = {
+    "set_start_op": "START_OP",
+    "set_end_op": "END_OP0",
+    "set_end_ops": "END_OP0/END_OP1",
+    "set_loop_op0": "LOOP_OP0",
+    "set_loop_op1": "LOOP_OP1",
+    "set_last_inner_loop_instr": "LOOP1_LAST",
+    "set_last_outer_loop_instr": "LOOP0_LAST",
+}
+
+#: Replay Expander entry points. A record LOADS the following `Count`
+#: instructions into the buffer and issues them only when Exec is set; both
+#: `lltt::record` and `load_replay_buf` default to NoExec, i.e. the instructions
+#: written after the call do NOT execute there.
+REPLAY_RECORD_CALLS = ("record", "load_replay_buf")
+#: `replay` issues an expansion inline; `replay_insn` BUILDS the REPLAY word for
+#: a MOP slot, so its expansion happens wherever that slot is issued.
+REPLAY_EXPAND_CALLS = ("replay", "replay_insn")
+#: A bare `record` / `replay` is too generic to match on the callee name alone
+#: (cf. KNOWN_GAPS X4); require the lltt namespace or the ckernel wrapper name.
+_REPLAY_CALL_QUALIFIERS = ("lltt", "load_replay_buf")
+
+#: Matrix-Unit ops whose clear/CLR operand hands a Src bank back to the
+#: unpackers (`MatrixUnit.Src?Bank ^= 1`), per CLEARDVALID's functional model.
+SRC_FLIP_OP_SUBSTR = (
+    "SETRWC",
+    "MVMUL",
+    "ELWADD",
+    "ELWSUB",
+    "ELWMUL",
+    "GAPOOL",
+    "GMPOOL",
+    "DOTPV",
+)
+#: A real clear selector. `CLR_NONE` deliberately excluded — it flips nothing.
+SRC_FLIP_CLR_TOKENS = ("CLR_A", "CLR_B", "CLR_AB")
+
+#: Opcode-value words whose SLOT changes another audit's verdict: a Src bank
+#: flip, an inter-thread sync op (balance is per MOP ITERATION, not per source
+#: line), or a wait. Deliberately NOT every `TT_OP_*` — an arithmetic word only
+#: matters to instruction-latency, which widens its own enumeration instead.
+MOP_WORD_SYNC_SUBSTR = (
+    "SEMPOST",
+    "SEMWAIT",
+    "SEMGET",
+    "SEMINIT",
+    "ATGETM",
+    "ATRELM",
+    "STALLWAIT",
+)
+
+
+def mop_slot_of(fact: dict):
+    """Return (slot, word_text) for a MOP slot-setter call, else (None, None).
+
+    `word_text` is the instruction word being installed (arg0 source text); it
+    is what executes at `slot`, not at this call's line.
+    """
+    if fact.get("family") != "call":
+        return None, None
+    slot = MOP_SLOT_SETTERS.get(fact.get("name", ""))
+    if not slot:
+        return None, None
+    return slot, fact.get("arg0", "")
+
+
+def replay_op_of(fact: dict):
+    """Return (op, exec_mode) for a Replay Expander call, else (None, None).
+
+    `op` is "record" (Load=1) or "expand" (Load=0). `exec_mode` applies to a
+    record only: "NOEXEC" (the default — the following instructions are captured
+    but not issued here), "EXEC", or "UNRESOLVED" when the Exec template
+    argument is itself dependent (`lltt::ExecBool(Exec)` inside a wrapper).
+    """
+    if fact.get("family") != "call":
+        return None, None
+    name = fact.get("name", "")
+    text = fact.get("text", "") or ""
+    if not any(q in text for q in _REPLAY_CALL_QUALIFIERS):
+        return None, None
+    if name in REPLAY_RECORD_CALLS:
+        return "record", _record_exec_mode(text)
+    if name in REPLAY_EXPAND_CALLS:
+        return "expand", ""
+    return None, None
+
+
+def _record_exec_mode(text: str) -> str:
+    """Exec mode of a record call from its callee source text.
+
+    Order matters: "NoExec" CONTAINS "Exec", so the negative form is tested
+    first, and a dependent `ExecBool(...)` argument is unresolvable either way.
+    """
+    if "NoExec" in text:
+        return "NOEXEC"
+    if "ExecBool" in text:
+        return "UNRESOLVED"
+    if "Exec" in text:
+        return "EXEC"
+    if "<" not in text:
+        return "NOEXEC"  # no explicit template argument -> lltt/ckernel default
+    return "UNRESOLVED"
+
+
+def is_mop_word(macro_name: str) -> bool:
+    """True if `macro_name` is an opcode-VALUE macro (`TT_OP_*`) rather than an
+    issued instruction — the form that gets slotted into a MOP or a replay
+    buffer. Anchored, not a substring test.
+
+    This is the Python half of a contract with the extractor: it selects the same
+    prefix the C++ MacroPass files under `OPCODE_VALUE_FAMILY`. If one side stops
+    matching what the other emits, the hint goes silently dead — enforced by a
+    test, since a name-level tool/skill sync check cannot see it.
+    """
+    return (macro_name or "").startswith(OPCODE_VALUE_PREFIX)
+
+
+def mop_word_flips_src(text: str) -> bool:
+    """True if a slotted word hands a Src bank back / flips the bank pointer.
+
+    A flip in an END_OP lands immediately before the next iteration's START_OP,
+    which is what makes a textual reading of the flip's position wrong.
+    """
+    up = (text or "").upper()
+    if "CLEARDVALID" in up:
+        return True
+    if not any(t in up for t in SRC_FLIP_OP_SUBSTR):
+        return False
+    return any(t in up for t in SRC_FLIP_CLR_TOKENS)
 
 
 def classify_macro(name: str):
