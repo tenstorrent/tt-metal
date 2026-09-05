@@ -223,8 +223,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         Caching: pass either a pre-built ``cache`` :class:`WeightCache` or a
         ``cache_dir`` (the model builds ``WeightCache(cache_dir)`` and owns the
-        per-layer ``layers.N`` / head namespacing internally, so callers no longer
-        repeat the ``WeightCache(...).sub("layers.N")`` dance). ``None`` for both
+        per-layer ``layers.N`` / head namespacing internally). ``None`` for both
         disables caching (every weight is converted from the checkpoint).
 
         ``require_cache=True`` asserts the converted-tile cache is fully populated:
@@ -2293,15 +2292,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
     def decode_sampled_burst(self, first_token_id: int, start_pos: int, n_steps: int) -> list[int]:
         """Unsupported while the per-step packet arrives over the H2D socket.
 
-        This used to decode ``n_steps`` tokens with greedy sampling done on device,
-        re-injecting each sampled id into idx 0 of submesh 0's fused ``pkt`` buffer
-        between replays. That feedback was an *eager* write into ``pkt``, which the
-        in-trace ``recv_async_h2d`` at the head of every submesh-0 trace now
-        overwrites with the host's packet — so the sampled token would never reach
-        ``embed_tokens``.
+        The in-trace ``recv_async_h2d`` at the head of every submesh-0 trace overwrites
+        idx 0 of the fused ``pkt`` buffer with the host packet. An on-device sampled
+        token written into that slot would never reach ``embed_tokens``.
 
-        Restoring it means splitting the packet: keep the host-fed positions on the
-        socket and read the token from a separate device-written buffer.
+        To restore bursts, keep host-fed positions on the socket and read the token
+        from a separate device-written buffer.
         """
         raise NotImplementedError(
             "on-device sampled bursts are incompatible with the in-trace H2D packet "
