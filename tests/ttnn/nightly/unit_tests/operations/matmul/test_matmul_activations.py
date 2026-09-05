@@ -90,8 +90,8 @@ def find_max_subblock(out_block_h, out_block_w):
     return best_h, best_w, max_product
 
 
-# Limits for each activation, folded over the two shapes, both data types and both
-# packer_l1_acc settings. Each is the most permissive value the budget gives over
+# One set of limits per activation, shared by the two shapes, both data types and
+# both packer_l1_acc settings. Each is the most permissive value the budget gives over
 # those cases, so no case is held tighter than predicted; the trailing comment
 # gives the full range, widest spread 1.88x. The last field says whether the
 # device evaluates the activation exactly, with comparison and selection only,
@@ -105,10 +105,10 @@ def find_max_subblock(out_block_h, out_block_w):
     "activation, atol, frobenius_threshold, pcc_threshold, evaluated_exactly",
     [
         # activation                atol      frob       pcc    exact      derived atol      frobenius            pcc
-        (None, 7.9688, 0.0724, 0.99901, True),  # 4.23..7.97   0.0650..0.0845  0.99803..0.99884
+        (None, 7.9688, 0.0724, 0.99901, True),  # 4.23..7.97   0.0557..0.0724  0.99902..0.99942
         # String-based activations
-        ("relu", 7.9688, 0.0719, 0.99857, True),  # 4.23..7.97   0.0650..0.0845  0.99803..0.99884
-        ("relu6", 7.9688, 0.1254, 0.99446, True),  # 4.23..7.97   0.0650..0.0845  0.99803..0.99884
+        ("relu", 7.9688, 0.0719, 0.99857, True),  # 4.23..7.97   0.0557..0.0719  0.99858..0.99915
+        ("relu6", 7.9688, 0.1254, 0.99446, True),  # 4.23..7.97   0.0884..0.1254  0.99446..0.99734
         ("silu", 8.4736, 0.0857, 0.99798, False),  # 4.59..8.47   0.0664..0.0857  0.99798..0.99880
         ("gelu", 8.3088, 0.0856, 0.99798, False),  # 4.56..8.31   0.0663..0.0855  0.99799..0.99880
         ("tanh", 3.8539, 0.2356, 0.98959, False),  # 3.14..3.85   0.1696..0.2356  0.98959..0.99461
@@ -275,7 +275,7 @@ def test_matmul_with_fused_activations(
 
 
 # One shape, one data type and one packer_l1_acc setting here, so each row holds
-# the limits for exactly its own case with nothing folded in. rtol is 0.0045 for
+# the limits for exactly its own case, shared with nothing else. rtol is 0.0045 for
 # the two clamps and 0.0358 for the two fitted polynomials, matching
 # _RTOL_BY_OUTPUT_FORMAT for a bfloat16 output.
 @pytest.mark.parametrize(
@@ -776,7 +776,7 @@ def run_test_matmul_dram_sharded_with_bias_and_activation(
 @pytest.mark.parametrize(
     "has_bias, activation, atol, rtol, frobenius_threshold, pcc_threshold",
     [
-        # Limits folded over the two shapes and both packer_l1_acc settings,
+        # Limits shared by the two shapes and both packer_l1_acc settings,
         # widest spread 1.46x, on atol between K = 4096 and K = 8192. The 32 bit
         # accumulator puts rtol at its floor everywhere except selu and softplus,
         # which take their 16 bit polynomial branch whatever the accumulator is.
@@ -877,7 +877,7 @@ def test_matmul_dram_sharded_with_bias_and_activation(
 @pytest.mark.parametrize(
     "activation, fidelity, packer_l1_acc, atol, rtol, frobenius_threshold, pcc_threshold",
     [
-        # One shape and one setting each, so nothing is folded into these limits.
+        # One shape and one setting each, so no row's limits are shared with another case.
         # HiFi2 makes the whole budget about three times smaller than LoFi, since
         # it consumes the right hand operand's full mantissa instead of 4 of its
         # 7 bits, which is why tanh reaches 0.992 here.
@@ -930,19 +930,26 @@ def test_special_activation_combinations(
     )
 
 
-# Limits folded over the three shapes. The inputs here are scaled by 0.1, so the
+# Limits shared by the three shapes. The inputs here are scaled by 0.1, so the
 # products are a hundredth the size of the other tests' and every absolute limit
 # scales with them.
 #
 # gelu_fast and tanh_fast replace the fitted polynomial with a handful of straight
-# line segments, whose error is absolute and so does not shrink with the output.
-# At this input scale that error is the whole budget, which is why their limits
-# are an order of magnitude looser than accurate gelu's and tanh's. gelu_fast is
-# the one entry in this file whose fold exceeds 2x (its pcc runs 0.947 at K = 2048
-# to 0.975 at K = 4096, a 2.11x spread in the distance from 1); it is left folded
-# because the spread comes entirely from the segment error bound, the single
-# quantity in the budget that is estimated rather than derived, so splitting it
-# would give false precision.
+# line segments, which miss the true function by a fixed absolute amount. Unlike
+# every other term in the budget, that segment error does not shrink when the
+# output does. At this input scale the output is small, so the segment error is
+# several times the matmul's own typical error, and it sets both tensor wide
+# limits: an order of magnitude looser here than for accurate gelu and tanh. atol
+# only doubles, because it is set by the worst single element rather than a
+# typical one, and there the matmul's own error is comparable.
+#
+# gelu_fast is the one entry in this file whose predictions spread more than 2x
+# across the shapes sharing a limit: its pcc runs 0.947 at K = 2048 to 0.975 at
+# K = 4096, a 2.11x spread in 1 - pcc. The three shapes still share
+# one limit, because that spread comes entirely from the segment error bound, the
+# single quantity in the budget measured from the implementation instead of worked
+# out from a format width or a written algorithm, so a PCC per shape would give
+# a false impression of precision.
 @pytest.mark.parametrize(
     "activation, atol, rtol, frobenius_threshold, pcc_threshold",
     [
