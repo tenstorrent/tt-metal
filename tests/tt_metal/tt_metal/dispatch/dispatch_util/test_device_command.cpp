@@ -6,6 +6,8 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <stdexcept>
+#include <string_view>
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include <utility>
 #include <vector>
@@ -15,6 +17,9 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "tt_metal/impl/program/program_config_command_generator.hpp"
+#include "tt_metal/impl/program/program_command_sequence.hpp"
+#include "tt_metal/impl/program/program_command_sequence_writer.hpp"
 
 namespace tt::tt_metal {
 
@@ -24,6 +29,210 @@ class DeviceCommandTest : public ::testing::Test {
 protected:
     MetalContext& ctx_ = MetalContext::instance();
 };
+
+class RecordingCommandQueueManager {
+public:
+    void* issue_queue_reserve(uint32_t size_bytes, uint32_t) {
+        issue_queue_reserve_sizes.push_back(size_bytes);
+        return nullptr;
+    }
+
+    uint32_t get_issue_queue_write_ptr(uint32_t) const { return issue_queue_write_ptr; }
+
+    void cq_write(const void*, uint32_t size_bytes, uint32_t write_ptr) {
+        cq_write_sizes.push_back(size_bytes);
+        cq_write_ptrs.push_back(write_ptr);
+    }
+
+    void issue_queue_push_back(uint32_t size_bytes, uint32_t) {
+        issue_queue_push_sizes.push_back(size_bytes);
+    }
+
+    void fetch_queue_reserve_back(uint32_t) { ++fetch_queue_reserve_count; }
+
+    void fetch_queue_write(uint32_t size_bytes, uint32_t, bool = false) {
+        fetch_queue_write_sizes.push_back(size_bytes);
+    }
+
+    static constexpr uint32_t issue_queue_write_ptr = 0x1000;
+    std::vector<uint32_t> issue_queue_reserve_sizes;
+    std::vector<uint32_t> cq_write_sizes;
+    std::vector<uint32_t> cq_write_ptrs;
+    std::vector<uint32_t> issue_queue_push_sizes;
+    size_t fetch_queue_reserve_count = 0;
+    std::vector<uint32_t> fetch_queue_write_sizes;
+};
+
+TEST_F(DeviceCommandTest, CPU_ProgramConfigBatchingSplitsAtPrefetchEntryLimit) {
+    constexpr uint32_t max_prefetch_command_size = 131072;
+    const uint32_t pcie_alignment = ctx_.hal().get_alignment(HalMemType::HOST);
+    const uint32_t l1_alignment = ctx_.hal().get_alignment(HalMemType::L1);
+    constexpr uint32_t transfer_size = 60000;
+    constexpr uint32_t transfer_address_stride = 70000;
+    constexpr uint32_t transfer_count = 4;
+
+    std::array<std::vector<uint8_t>, transfer_count> transfer_payloads;
+    program_dispatch::BatchedTransfers batched_transfers;
+    auto& transfers_for_destination = batched_transfers[{/*noc_xy_addr=*/0x1234, /*num_mcast_dests=*/1}];
+    for (uint32_t transfer_index = 0; transfer_index < transfer_count; ++transfer_index) {
+        transfer_payloads[transfer_index].resize(transfer_size);
+        const uint32_t start_address = transfer_index * transfer_address_stride;
+        transfers_for_destination.emplace(
+            start_address,
+            std::vector<program_dispatch::Transfer>{program_dispatch::Transfer{
+                .start = start_address,
+                .data = ttsl::Span<const uint8_t>(
+                    transfer_payloads[transfer_index].data(), transfer_payloads[transfer_index].size())}});
+    }
+
+    DeviceCommandCalculator calculator(pcie_alignment, l1_alignment);
+    program_dispatch::BatchedTransferGenerator generator(program_dispatch::ProgramConfigCommandOptions{
+        .pcie_alignment = pcie_alignment,
+        .l1_alignment = l1_alignment,
+        .max_prefetch_command_size = max_prefetch_command_size,
+        .watcher_assert_enabled = false});
+    generator.construct_commands(batched_transfers, calculator);
+    ASSERT_EQ(generator.command_count(), 2);
+
+    ProgramCommandSequence program_commands(ctx_);
+    generator.assemble_commands(program_commands, program_commands.program_config_buffer_command_sequences);
+    ASSERT_EQ(program_commands.program_config_buffer_command_sequences.size(), generator.command_count());
+
+    std::vector<uint32_t> command_sizes;
+    for (const HostMemDeviceCommand& command : program_commands.program_config_buffer_command_sequences) {
+        EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
+        EXPECT_LE(command.size_bytes(), max_prefetch_command_size);
+        command_sizes.push_back(command.size_bytes());
+    }
+    EXPECT_EQ(program_commands.get_program_config_buffer_size(), calculator.write_offset_bytes());
+
+    constexpr uint32_t command_queue_id = 7;
+    constexpr bool stall_first = false;
+    constexpr bool stall_before_program = false;
+    constexpr bool send_binary = false;
+    const program_dispatch::queue_write_detail::ProgramCommandWritePlan write_plan =
+        program_dispatch::queue_write_detail::make_program_command_write_plan(
+            program_commands,
+            stall_first,
+            stall_before_program,
+            send_binary,
+            max_prefetch_command_size);
+    ASSERT_FALSE(write_plan.one_shot);
+
+    RecordingCommandQueueManager manager;
+    program_dispatch::queue_write_detail::write_program_command_sequence_to_queue(
+        program_commands,
+        manager,
+        command_queue_id,
+        stall_first,
+        stall_before_program,
+        send_binary,
+        write_plan);
+
+    EXPECT_EQ(manager.issue_queue_reserve_sizes, command_sizes);
+    EXPECT_EQ(manager.cq_write_sizes, command_sizes);
+    EXPECT_EQ(
+        manager.cq_write_ptrs,
+        std::vector<uint32_t>(command_sizes.size(), RecordingCommandQueueManager::issue_queue_write_ptr));
+    EXPECT_EQ(manager.issue_queue_push_sizes, command_sizes);
+    EXPECT_EQ(manager.fetch_queue_reserve_count, command_sizes.size());
+    EXPECT_EQ(manager.fetch_queue_write_sizes, command_sizes);
+}
+
+TEST_F(DeviceCommandTest, CPU_OneShotPlanCountsBothStallPlacements) {
+    constexpr uint32_t stall_command_size = 16;
+    constexpr uint32_t max_prefetch_command_size = 131072;
+    constexpr uint32_t command_queue_id = 7;
+    constexpr bool stall_first = true;
+    constexpr bool stall_before_program = true;
+    constexpr bool send_binary = false;
+
+    ProgramCommandSequence program_commands(ctx_);
+    program_commands.stall_command_sequences[program_commands.current_stall_seq_idx] =
+        HostMemDeviceCommand(ctx_, stall_command_size);
+    const program_dispatch::queue_write_detail::ProgramCommandWritePlan write_plan =
+        program_dispatch::queue_write_detail::make_program_command_write_plan(
+            program_commands,
+            stall_first,
+            stall_before_program,
+            send_binary,
+            max_prefetch_command_size);
+    ASSERT_TRUE(write_plan.one_shot);
+    ASSERT_EQ(write_plan.fetch_size, 2 * stall_command_size);
+
+    RecordingCommandQueueManager manager;
+    program_dispatch::queue_write_detail::write_program_command_sequence_to_queue(
+        program_commands,
+        manager,
+        command_queue_id,
+        stall_first,
+        stall_before_program,
+        send_binary,
+        write_plan);
+
+    EXPECT_EQ(manager.issue_queue_reserve_sizes, std::vector<uint32_t>{write_plan.fetch_size});
+    EXPECT_EQ(manager.cq_write_sizes, (std::vector<uint32_t>{stall_command_size, stall_command_size}));
+    EXPECT_EQ(
+        manager.cq_write_ptrs,
+        (std::vector<uint32_t>{
+            RecordingCommandQueueManager::issue_queue_write_ptr,
+            RecordingCommandQueueManager::issue_queue_write_ptr + stall_command_size}));
+    EXPECT_EQ(manager.issue_queue_push_sizes, std::vector<uint32_t>{write_plan.fetch_size});
+    EXPECT_EQ(manager.fetch_queue_reserve_count, 1);
+    EXPECT_EQ(manager.fetch_queue_write_sizes, std::vector<uint32_t>{write_plan.fetch_size});
+}
+
+TEST_F(DeviceCommandTest, CPU_ProgramConfigBatchingRejectsOversizedTransfer) {
+    constexpr uint32_t max_prefetch_command_size = 50000;
+    constexpr uint32_t transfer_size = 60000;
+    const uint32_t pcie_alignment = ctx_.hal().get_alignment(HalMemType::HOST);
+    const uint32_t l1_alignment = ctx_.hal().get_alignment(HalMemType::L1);
+
+    std::vector<uint8_t> transfer_payload(transfer_size);
+    program_dispatch::BatchedTransfers batched_transfers;
+    batched_transfers[{/*noc_xy_addr=*/0x1234, /*num_mcast_dests=*/1}].emplace(
+        0,
+        std::vector<program_dispatch::Transfer>{program_dispatch::Transfer{
+            .start = 0, .data = ttsl::Span<const uint8_t>(transfer_payload.data(), transfer_payload.size())}});
+
+    DeviceCommandCalculator calculator(pcie_alignment, l1_alignment);
+    program_dispatch::BatchedTransferGenerator generator(program_dispatch::ProgramConfigCommandOptions{
+        .pcie_alignment = pcie_alignment,
+        .l1_alignment = l1_alignment,
+        .max_prefetch_command_size = max_prefetch_command_size,
+        .watcher_assert_enabled = false});
+    try {
+        generator.construct_commands(batched_transfers, calculator);
+        FAIL() << "Expected an oversized program-configuration transfer to be rejected";
+    } catch (const std::runtime_error& error) {
+        EXPECT_NE(std::string_view(error.what()).find("single program-configuration transfer"), std::string_view::npos);
+    }
+}
+
+TEST_F(DeviceCommandTest, CPU_CommandContextSurvivesMove) {
+    constexpr uint32_t transfer_size = 17;
+    const uint32_t l1_alignment = ctx_.hal().get_alignment(HalMemType::L1);
+
+    DeviceCommandCalculator calculator(ctx_);
+    calculator.add_dispatch_write_packed_large(/*num_sub_cmds=*/1, transfer_size);
+
+    HostMemDeviceCommand original_command(ctx_, calculator.write_offset_bytes());
+    HostMemDeviceCommand moved_command(std::move(original_command));
+    std::vector<CQDispatchWritePackedLargeSubCmd> subcommands(1);
+    std::array<uint8_t, transfer_size> payload{};
+    const std::vector<ttsl::Span<const uint8_t>> data_collection{
+        ttsl::Span<const uint8_t>(payload.data(), payload.size())};
+    std::vector<uint8_t*> data_collection_locations;
+    moved_command.add_dispatch_write_packed_large(
+        CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_CBS_SEMS_CRTAS,
+        l1_alignment,
+        static_cast<uint16_t>(subcommands.size()),
+        subcommands,
+        data_collection,
+        &data_collection_locations);
+
+    EXPECT_EQ(moved_command.size_bytes(), moved_command.write_offset_bytes());
+}
 
 TEST_F(DeviceCommandTest, CPU_AddDispatchWait) {
     DeviceCommandCalculator calculator(ctx_);
