@@ -14,6 +14,7 @@
 #include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_log.h"
+#include "sfpu/ckernel_sfpu_rounding_ops.h"
 
 using namespace sfpi;
 
@@ -208,6 +209,77 @@ inline void calculate_sfpu_binary_div(
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+// Tensor/tensor float floor_div: Markstein quotient then floor in one pass.
+// The residual is computed in fp32 LRegs before floor, so it is required even
+// when DEST is bf16: unlike DIV, the integer after floor cannot recover a 1-ulp
+// shortfall that would have been invisible after a bf16 store.
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
+inline void calculate_sfpu_binary_floor_div(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+
+        sfpi::vFloat r = sfpu_reciprocal_iter<2>(in1);
+        sfpi::vFloat result = in0 * r;
+        v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
+            sfpi::vFloat e = in0 - result * in1;
+            result = result + e * r;
+        }
+        v_endif;
+
+        v_if(in1 == 0) {
+            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+            v_else {
+                result = std::numeric_limits<float>::infinity();
+                result = sfpi::copysgn(result, in0);
+            }
+            v_endif;
+        }
+        v_endif;
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = _floor_body_(result);
+        sfpi::dst_reg++;
+    }
+}
+
+// SCALAR_RHS_ONCE: dest 1 = scalar, even dests = LHS, dest 3 = reciprocal.
+constexpr std::uint32_t kScalarFloorDivRecipDst = 3;
+
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
+inline void calculate_sfpu_store_scalar_recip(
+    const std::uint32_t dst_index_in0, const std::uint32_t /*dst_index_in1*/, const std::uint32_t dst_index_out) {
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    sfpi::vFloat s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    sfpi::vFloat r = sfpu_reciprocal_iter<2>(s);
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = r;
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
+inline void calculate_sfpu_binary_floor_div_scalar(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+    sfpi::vFloat r = sfpi::dst_reg[kScalarFloorDivRecipDst * dst_tile_size_sfpi];
+
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vFloat result = in0 * r;
+        v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
+            sfpi::vFloat e = in0 - result * in1;
+            result = result + e * r;
+        }
+        v_endif;
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = _floor_body_(result);
         sfpi::dst_reg++;
     }
 }
