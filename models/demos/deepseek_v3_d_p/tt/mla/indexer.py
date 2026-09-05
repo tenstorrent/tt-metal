@@ -410,7 +410,7 @@ class TtIndexer:
                 name="indexer_topk_indices",
                 shape=[1, 1, self.active_seq_len_local, self.index_topk_capacity],
                 dtype=ttnn.uint32,
-                layout=ttnn.TILE_LAYOUT,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
             )
         self._upload_weights(idx_host)
         # DS block-cyclic uses the interleaved rotary_embedding_indexed op, but DS weights emit the
@@ -503,9 +503,7 @@ class TtIndexer:
         )
 
     def _tp_all_gather(self, t, dim):
-        """All-gather across the TP axis → the TP-seq-shards reassembled to the SP block's full rows,
-        replicated on TP. tp=1: no-op. (Spike helper for TP×SP query parallelism: regathers the top-k
-        indices that were computed on TP-seq-sharded query rows back to the [1,1,S/sp,k] contract.)"""
+        """Gather TP-sequence shards into [1,1,S/sp,k], replicated across TP."""
         if self.tp_factor == 1:
             return t
         assert dim == 2, "TtIndexer only regathers TP-split sequence rows"
@@ -900,24 +898,12 @@ class TtIndexer:
         # ranked. topk_large_indices also requires valid_length <= T, which valid_pos satisfies.
         topk_valid_length = valid_pos
         idx = ttnn.experimental.topk_large_indices(logits, k=self.index_topk_capacity, valid_length=topk_valid_length)
-        # TP×SP: topk ran on the TP-seq-sharded rows ([1,1,S/(sp·tp),k]); regather over TP back to the
-        # [1,1,S/sp,k] contract so sparse_sdpa/mla.py are unchanged. (Redundant TP-round-trip for GLM's
-        # head→seq reshard, which re-splits it; correct regardless. tp=1: no-op.)
+        # TP×SP: restore the [1,1,S/sp,k] sparse-SDPA contract after top-k runs on TP-sequence shards.
         if tpsp:
-            # Regather the TP-seq-sharded top-k indices back to [1,1,S/sp,k]. topk_large_indices emits
-            # ROW_MAJOR uint32, and an all-gather on a ROW_MAJOR tensor is routed by use_composite_all_gather
-            # to composite_all_gather -> all_broadcast, whose multicast over a partial cluster-axis line of a
-            # 2D (SP×TP) mesh DEADLOCKS the fabric (erisc routers stall in run_receiver_channel_step; device
-            # unrecoverable, system_memory_manager.cpp TIMEOUT). Gather in TILE layout so it takes the NATIVE
-            # minimal all-gather instead — the tile-aligned gather dim keeps it off the composite path, and
-            # the native path handles this TP cluster-axis correctly (as _tp_rs_ag does, and as the canonical
-            # top-k-index gather in tt_sampling.py does). Round-trip RM->TILE->gather->RM.
+            # The dedicated gather supports ROW_MAJOR uint32 on a partial axis of the 2D mesh.
             idx_local = idx
-            idx_tiled = ttnn.to_layout(idx, ttnn.TILE_LAYOUT)
-            idx_gathered = self._tp_all_gather(idx_tiled, dim=2)  # native all-gather over TP; [1,1,S/sp,k] TILE
-            idx = ttnn.to_layout(idx_gathered, ttnn.ROW_MAJOR_LAYOUT)
+            idx = self._tp_all_gather(idx_local, dim=2)  # [1,1,S/sp,k] ROW_MAJOR
             ttnn.deallocate(idx_local)
-            ttnn.deallocate(idx_tiled)
             # high_bw_all_gather returns a fresh wrapper around model-owned scratch; do not
             # deallocate its backing buffer on the hot path.
         return idx
