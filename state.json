@@ -464,9 +464,9 @@
       "note": "dirty mergeable_state (conflict), detailed review from scardozaTT since 2026-07-27 unaddressed"
     },
     "42536": {
-      "date": "2026-08-26",
-      "type": "codeowners_ping",
-      "note": "reviewer-blocked (metalium-developers-infra pending since May), CI validated by nsextonTT"
+      "date": "2026-09-05",
+      "type": "codeowners",
+      "reason": "re-ping, ~10 days since last ping, still dirty, no human reviewer approval"
     },
     "51544": {
       "date": "2026-08-26",
@@ -548,6 +548,11 @@
       "last_ping": "2026-09-05",
       "type": "reviewer-blocked",
       "note": "no human review since Feb 2026, nudged for maintainer attention"
+    },
+    "23230": {
+      "date": "2026-09-05",
+      "type": "author_checkin",
+      "reason": "no reviewer activity, failing RTL Sim CI test, mergeable_state unknown"
     }
   },
   "backlog_cursor": {
@@ -855,6 +860,11 @@
   },
   "run_history": [
     {
+      "run_id": "33984003691",
+      "date": "2026-09-05",
+      "note": "3rd run today - Task1/2 no new actionable issues found (reviewed 55541,55539,55526,55511,55505,55508,55551); Task5 reconfirmed 55424/55435 unchanged; Task6 nudged 23230 (author checkin) and 42536 (codeowners re-ping); Task8 updated monthly summary #55015"
+    },
+    {
       "run_id": "33966219841",
       "date": "2026-09-05",
       "summary": "Second run same day. Investigated Task1/2 candidates (no fresh actionable issues found beyond earlier run). Reviewed 7 tracked repo-assist PRs (no state changes). Task6: reviewed stale-PR cluster from page-4 (22706,36227,38008,35249,35515), nudged #38008 (fabric-test CI PR, no human review since Feb). Updated monthly summary issue #55015."
@@ -898,36 +908,6 @@
       "run_id": "33577512816",
       "date": "2026-09-02",
       "summary": "Task1: labeled #55105 (bug, polygamma fp32 underflow from post-accumulation scale), #55106 (bug, LLK dest->src bank-wait drain gap, has open fix PR #55107), #55114 (feature-request, Metal2.0 conditional resource binding, has open fix PR #55100). Task2: commented on #55105 confirming root cause against current source. Task5: spot-checked tracked PRs 54792/54858/54932/54666/53690 - all unchanged (pre-checks green or CI green, still blocked on maintainer PR-Gate approval / review / merge decision), no new build-artifact runs found. No new fix PRs opened this run (candidates already covered by existing open PRs). Monthly summary #55015 already current as of prior run today; no update needed this run."
-    },
-    {
-      "run_id": 33508514354,
-      "date": "2026-09-01",
-      "summary": "Labeled #55052 and #54968 as bug (confirmed reproducible defects). Reconciled PR-number mapping for softshrink/hardsigmoid/ttsim_md (previously stored under issue-number keys). #54901 closed by maintainer (softshrink undefined for negative lambda). #54932 and #54862 unchanged, still blocked/pending. Updated monthly summary issue #55015. No new fix PR opened this run (candidates were LLK/HW-dependent, already assigned to maintainers)."
-    },
-    {
-      "run_id": "33425337510",
-      "date": "2026-08-31T18:34Z",
-      "summary": "Labeled+commented #54969 (LLK perf-counter semaphore reuse bug). Labeled #54968 (ND sanity failure, assigned). Task5: found #54848 closed (perf objection, dropped), #54690 merged; re-verified #54792/#54858 (pre-checks green, still PR-Gate blocked) and #53690 (CI green, awaiting maintainer merge). Task6: nudged #40858/#36582/#35578 (author-blocked). Updated Monthly Activity issue #51865."
-    },
-    {
-      "run_id": "33328034543",
-      "date": "2026-08-31",
-      "summary": "Verified & labeled+commented on #54883 (gelu_bw fp32) and #54882 (tanh_bw fp32), both bug-confirmed against current source, no fix PR (needs HW validation). Re-checked 3 tracked PRs (#54792,#54848,#54858) - unchanged action_required. Updated Monthly Activity issue #51865."
-    },
-    {
-      "run": "2026-08-29T??Z",
-      "run_id": "33284714326",
-      "summary": "Fixed memory mis-key (#54847->#54848). Opened PR fixing #54857 (Quasar softplus boundary). Labeled #54855/#54853/#54854. Re-verified tracked PRs #54666/#54690/#54792/#54246/#54848 - no state changes needing new action. Updated monthly summary #51865."
-    },
-    {
-      "run_id": "33268229974",
-      "date": "2026-08-29T18:33Z",
-      "summary": "Task3: Fixed #54847 (ttnn.floor_div scalar off-by-one on exact multiples) via new PR - confirmed root cause against current binary_composite_op.cpp (fp32 host-reciprocal rounds down for most divisors), replaced with direct ttnn::divide matching tensor-tensor overload's approach; commented on issue linking PR. Task8: updated Monthly Activity issue #51865 with new run entry and suggested-action for #54847."
-    },
-    {
-      "run_id": "33238750681",
-      "date": "2026-08-29T06:38Z",
-      "summary": "Task1/2: labeled #54759 (bug, layernorm FUSED_PRE_ADD define typo, confirmed against current layernorm.cpp/layernorm_sharded.cpp); reviewed fresh issues 54810-54739, all else already covered. Task5: re-verified 7 tracked PRs unchanged, #54792 still blocked action_required. Task6: codeowners-pinged 51895 and 50827, author-nudged 51761. Task8: updated Monthly Activity issue #51865."
     }
   ],
   "no_action_reviewed": [
