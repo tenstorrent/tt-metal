@@ -29,6 +29,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <optional>
+#include <array>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -36,6 +37,7 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
@@ -1459,6 +1461,53 @@ inline ProgramSpec MakeGen1SpecWithRTAs(const NodeCoord& /*node*/, size_t num_pe
     // kernels[1] has no varargs (defaults)
 
     return spec;
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_ResolvedKernelRuntimeArgsFollowMoveAndRetargeting) {
+    std::array<uint32_t, 2> dispatch_common{101, 102};
+    std::array<uint32_t, 2> dispatch_unique{201, 202};
+    KernelRuntimeArgsAccessor accessor;
+    {
+        Program program;
+        const CoreCoord core{0, 0};
+        const auto kernel_id = CreateKernelFromString(program, "void kernel_main() {}", core, ComputeConfig{});
+        SetCommonRuntimeArgs(program, kernel_id, {1, 2});
+        SetRuntimeArgs(program, kernel_id, core, {3, 4});
+        accessor = KernelRuntimeArgsAccessor(program, kernel_id);
+        EXPECT_EQ(accessor.common_runtime_args()[0], 1u);
+        EXPECT_EQ(accessor.runtime_args()[0][0][0], 3u);
+
+        Program moved_program = std::move(program);
+        EXPECT_EQ(&accessor.common_runtime_args(), &GetCommonRuntimeArgs(moved_program, kernel_id));
+        EXPECT_EQ(&accessor.runtime_args(), &GetRuntimeArgs(moved_program, kernel_id));
+
+        // Model dispatch retargeting without enqueue/device execution. Replacing the outer
+        // matrix also detects an accessor that retained per-core RuntimeArgsData addresses.
+        auto kernel = moved_program.impl().get_kernel(kernel_id);
+        kernel->common_runtime_args_data() = RuntimeArgsData{dispatch_common.data(), dispatch_common.size()};
+        std::vector<std::vector<RuntimeArgsData>> replacement_matrix{
+            {RuntimeArgsData{dispatch_unique.data(), dispatch_unique.size()}}};
+        kernel->runtime_args_data().swap(replacement_matrix);
+        accessor.common_runtime_args()[1] = 103;
+        accessor.runtime_args()[0][0][1] = 203;
+        EXPECT_EQ(dispatch_common[1], 103u);
+        EXPECT_EQ(dispatch_unique[1], 203u);
+    }
+    // The resolved accessor owns the Program implementation after its public wrapper dies.
+    EXPECT_EQ(accessor.common_runtime_args()[0], 101u);
+    EXPECT_EQ(accessor.runtime_args()[0][0][0], 201u);
+    accessor.runtime_args()[0][0][0] = 204;
+    EXPECT_EQ(dispatch_unique[0], 204u);
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_ResolvedKernelRuntimeArgsRejectInvalidAndMetal2Programs) {
+    KernelRuntimeArgsAccessor empty;
+    EXPECT_ANY_THROW(empty.common_runtime_args());
+    EXPECT_ANY_THROW(empty.runtime_args());
+    Program legacy;
+    EXPECT_ANY_THROW((KernelRuntimeArgsAccessor(legacy, KernelHandle{12345})));
+    Program metal2 = MakeProgramFromSpec(*mesh_device_, MakeMinimalGen1ValidProgramSpec());
+    EXPECT_ANY_THROW((KernelRuntimeArgsAccessor(metal2, KernelHandle{0})));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgsSucceeds_ZeroRTAs) {

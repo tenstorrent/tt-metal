@@ -5,6 +5,7 @@
 #pragma once
 
 #include <initializer_list>
+#include <memory>
 #include <string>
 #include <variant>
 #include <vector>
@@ -46,6 +47,7 @@ class GlobalSemaphore;
 class CoreRange;
 class CoreRangeSet;
 class MeshTensor;
+class Kernel;
 
 // ==================================================
 //                  HOST API: Device management
@@ -641,6 +643,29 @@ std::vector<std::vector<RuntimeArgsData>>& GetRuntimeArgs(const Program& program
  */
 // clang-format on
 RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id);
+
+/**
+ * Resolved runtime-argument access for a legacy kernel. Keeps its Program implementation and
+ * Kernel alive across Program moves/destruction. Each access validates the legacy API contract
+ * and fetches the current runtime storage, including dispatch-command retargeting.
+ *
+ * Returned references have the same lifetime/invalidation rules as GetRuntimeArgs and
+ * GetCommonRuntimeArgs: do not retain payload pointers across compilation or enqueue.
+ * Concurrent mutation requires the same external synchronization as those APIs.
+ */
+class KernelRuntimeArgsAccessor {
+public:
+    KernelRuntimeArgsAccessor() = default;
+    KernelRuntimeArgsAccessor(const Program& program, KernelHandle kernel_id);
+
+    std::vector<std::vector<RuntimeArgsData>>& runtime_args() const;
+    RuntimeArgsData& common_runtime_args() const;
+
+private:
+    void validate() const;
+    std::shared_ptr<const detail::ProgramImpl> program_;
+    std::shared_ptr<Kernel> kernel_;
+};
 
 // clang-format off
 /**

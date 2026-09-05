@@ -1882,6 +1882,31 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
     return program.impl().get_kernel(kernel_id)->common_runtime_args_data();
 }
 
+KernelRuntimeArgsAccessor::KernelRuntimeArgsAccessor(const Program& program, KernelHandle kernel_id) {
+    ValidateLegacyRuntimeArgsAPI(program, "KernelRuntimeArgsAccessor");
+    kernel_ = program.impl().get_kernel(kernel_id);
+    TT_FATAL(kernel_ != nullptr, "KernelRuntimeArgsAccessor: kernel {} does not exist in the Program", kernel_id);
+    program_ = program.impl().shared_from_this();
+}
+
+void KernelRuntimeArgsAccessor::validate() const {
+    TT_FATAL(program_ != nullptr && kernel_ != nullptr, "KernelRuntimeArgsAccessor is not initialized");
+    TT_FATAL(
+        !program_->has_metal2_registry(),
+        "KernelRuntimeArgsAccessor cannot be used with a Program created from a Metal 2.0 ProgramSpec. "
+        "Use experimental::SetProgramRunArgs or experimental::UpdateProgramRunArgs instead.");
+}
+
+std::vector<std::vector<RuntimeArgsData>>& KernelRuntimeArgsAccessor::runtime_args() const {
+    validate();
+    return kernel_->runtime_args_data();
+}
+
+RuntimeArgsData& KernelRuntimeArgsAccessor::common_runtime_args() const {
+    validate();
+    return kernel_->common_runtime_args_data();
+}
+
 namespace experimental::lightmetal {
 
 // This is nop if compile time define not set.
