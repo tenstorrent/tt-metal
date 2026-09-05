@@ -638,13 +638,422 @@ class TestImportGraphUnit:
         report = _make_report(mock_graph)
         conn, cursor = _import_to_db(report, tmp_path)
 
-        cursor.execute("SELECT operation_name, error_type, error_message FROM errors")
-        rows = cursor.fetchall()
+        cursor.execute("SELECT operation_id, name FROM operations")
+        operations = cursor.fetchall()
+        assert len(operations) == 1, f"the unfinished op must be recorded, got {operations}"
+        operation_id, name = operations[0]
+        assert name == "ttnn::bad_op"
 
-        assert len(rows) == 1
-        assert rows[0][0] == "ttnn::bad_op"
-        assert rows[0][1] == "exception"
-        assert rows[0][2] == "Something went wrong"
+        cursor.execute("SELECT operation_id, operation_name, error_type, error_message FROM errors")
+        rows = cursor.fetchall()
+        assert rows == [
+            (operation_id, "ttnn::bad_op", "exception", "Something went wrong")
+        ], f"legacy error node must join the unfinished operation by operation_id, got {rows}"
+
+        conn.close()
+
+    def test_retried_operation_keeps_the_orphan_error(self, tmp_path):
+        """A completed failure of ttnn.conv2d must not suppress a later orphaned ttnn.conv2d error."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [2],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [3],
+                "duration_ns": 100,
+            },
+            {
+                "counter": 3,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        python_io = [
+            {
+                "name": "ttnn.conv2d",
+                "arguments": {},
+                "error": {"type": "RuntimeError", "message": "first failure"},
+            },
+            {
+                "name": "ttnn.conv2d",
+                "arguments": {},
+                "error": {"type": "RuntimeError", "message": "second failure"},
+            },
+        ]
+
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT operation_id, name FROM operations ORDER BY operation_id")
+        operations = cursor.fetchall()
+        assert len(operations) == 2, f"retried op must produce two rows, got {operations}"
+        first_id, first_name = operations[0]
+        second_id, second_name = operations[1]
+        assert first_name == second_name == "ttnn.conv2d"
+        assert first_id != second_id
+
+        cursor.execute(
+            "SELECT operation_id, operation_name, error_type, error_message FROM errors ORDER BY operation_id"
+        )
+        errors = cursor.fetchall()
+        assert errors == [
+            (first_id, "ttnn.conv2d", "RuntimeError", "first failure"),
+            (second_id, "ttnn.conv2d", "RuntimeError", "second failure"),
+        ], f"each failure must join its own operation_id, got {errors}"
+
+        conn.close()
+
+    def test_raising_operation_is_recorded_with_its_error(self, tmp_path):
+        """Issue #28836: an operation with no function_end is still imported, with its exception."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "tensor",
+                "params": {"tensor_id": "7", "shape": "[1, 1, 6400, 256]", "device_id": "0", "address": "1024"},
+                "connections": [2],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [],
+                "input_tensors": [1],
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        python_io = [
+            {
+                "name": "ttnn.conv2d",
+                "arguments": {"in_channels": "256"},
+                "input_tensor_ids": [7],
+                "error": {"type": "RuntimeError", "message": "Something went wrong"},
+            }
+        ]
+
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT operation_id, name FROM operations")
+        operations = cursor.fetchall()
+        assert len(operations) == 1, f"the raising operation must be recorded, got {operations}"
+        operation_id, name = operations[0]
+        assert name == "ttnn.conv2d"
+
+        cursor.execute("SELECT operation_id, operation_name, error_type, error_message FROM errors")
+        assert cursor.fetchall() == [(operation_id, "ttnn.conv2d", "RuntimeError", "Something went wrong")]
+
+        cursor.execute("SELECT value FROM operation_arguments WHERE operation_id = ?", (operation_id,))
+        assert cursor.fetchall() == [("256",)]
+        cursor.execute("SELECT tensor_id FROM input_tensors WHERE operation_id = ?", (operation_id,))
+        assert cursor.fetchall() == [(7,)]
+
+        conn.close()
+
+    def test_orphan_subgraph_excludes_report_capture_end(self, tmp_path):
+        """Orphan fallback must not wrap the report-level capture_end in a second pair."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "tensor",
+                "params": {"tensor_id": "7", "shape": "[1, 1, 6400, 256]", "device_id": "0", "address": "1024"},
+                "connections": [2],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [],
+                "input_tensors": [1],
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        python_io = [
+            {
+                "name": "ttnn.conv2d",
+                "arguments": {"in_channels": "256"},
+                "input_tensor_ids": [7],
+                "error": {"type": "RuntimeError", "message": "Something went wrong"},
+            }
+        ]
+
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT captured_graph FROM captured_graph")
+        rows = cursor.fetchall()
+        assert len(rows) == 1, f"expected one per-op graph, got {len(rows)}"
+        stored = json.loads(rows[0][0])
+        node_types = [node["node_type"] for node in stored]
+        assert node_types[0] == "capture_start", f"expected synthetic capture_start first, got {node_types}"
+        assert node_types[-1] == "capture_end", f"expected synthetic capture_end last, got {node_types}"
+        assert node_types.count("capture_start") == 1, f"duplicate capture_start: {node_types}"
+        assert node_types.count("capture_end") == 1, f"report capture_end leaked into the subgraph: {node_types}"
+        assert "function_start" in node_types, f"orphan function_start missing from subgraph: {node_types}"
+
+        conn.close()
+
+    def test_orphan_subgraph_keeps_inner_nodes(self, tmp_path):
+        """Stripping report boundaries must keep nodes captured after the orphan start."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [2],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "Conv2dDeviceOperation"},
+                "connections": [3],
+                "input_tensors": [],
+            },
+            {
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "Conv2dDeviceOperation"},
+                "connections": [4],
+            },
+            {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT captured_graph FROM captured_graph")
+        rows = cursor.fetchall()
+        assert len(rows) == 1, f"expected one per-op graph, got {len(rows)}"
+        stored = json.loads(rows[0][0])
+        node_types = [node["node_type"] for node in stored]
+        assert node_types == [
+            "capture_start",
+            "function_start",
+            "function_start",
+            "function_end",
+            "capture_end",
+        ], f"inner nodes dropped or report boundary kept: {node_types}"
+        assert stored[1]["params"]["name"] == "ttnn.conv2d"
+        assert stored[2]["params"]["name"] == "Conv2dDeviceOperation"
+        assert stored[3]["params"]["name"] == "Conv2dDeviceOperation"
+
+        conn.close()
+
+    def test_incomplete_operation_without_error_record_still_imported(self, tmp_path):
+        """Without a recorded exception the reason stays generic, but the operation is still listed."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.matmul"},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {"counter": 2, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT name FROM operations")
+        assert cursor.fetchall() == [("ttnn.matmul",)]
+
+        cursor.execute("SELECT error_type, error_message FROM errors")
+        error_type, error_message = cursor.fetchone()
+        assert error_type == "incomplete_operation"
+        assert "never completed" in error_message
+
+        conn.close()
+
+    def test_legacy_orphan_preserves_cpp_input_tensors(self, tmp_path):
+        """Older reports and C++-initiated captures have no python_io; C++ inputs still join."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "tensor",
+                "params": {"tensor_id": "77", "shape": "[1, 1, 32, 32]", "device_id": "0", "address": "1024"},
+                "connections": [2],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "Conv2dDeviceOperation"},
+                "connections": [],
+                "input_tensors": [1],
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT operation_id, name FROM operations")
+        operations = cursor.fetchall()
+        assert len(operations) == 1, f"the unfinished C++ op must be recorded, got {operations}"
+        operation_id, name = operations[0]
+        assert name == "Conv2dDeviceOperation"
+
+        cursor.execute(
+            "SELECT input_index, tensor_id FROM input_tensors WHERE operation_id = ? ORDER BY input_index",
+            (operation_id,),
+        )
+        assert cursor.fetchall() == [(0, 77)], "orphan import must resolve C++ input_tensors to tensor_id 77"
+
+        conn.close()
+
+    def test_aborted_function_end_is_reported_as_an_error(self, tmp_path):
+        """A C++-only capture has no python_io, so the abort marker is the only evidence of failure."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "Conv2dDeviceOperation"},
+                "connections": [2],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {
+                    "name": "Conv2dDeviceOperation",
+                    "aborted": "true",
+                    "abort_reason": "Statically allocated circular buffers in program 73 clash with L1 buffers",
+                },
+                "connections": [3],
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT name FROM operations")
+        assert cursor.fetchall() == [("Conv2dDeviceOperation",)]
+
+        cursor.execute("SELECT operation_name, error_type, error_message FROM errors")
+        assert cursor.fetchall() == [
+            (
+                "Conv2dDeviceOperation",
+                "aborted_operation",
+                "Statically allocated circular buffers in program 73 clash with L1 buffers",
+            )
+        ]
+
+        conn.close()
+
+    def test_abort_inside_an_operation_keeps_later_operations_visible(self, tmp_path):
+        """The point of closing the scope in C++: ops after the failure stay top level.
+
+        Before the guard the aborting scope stayed open, so ``ttnn.add`` was folded into the
+        failed ``ttnn.conv2d`` and vanished from the report.
+        """
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [2],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "Conv2dDeviceOperation"},
+                "connections": [3],
+                "input_tensors": [],
+            },
+            {
+                # No abort_reason: this is what ScopedTrackedFunction's destructor emits, since the
+                # exception message is out of reach during unwinding.
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "Conv2dDeviceOperation", "aborted": "true"},
+                "connections": [4],
+            },
+            {"counter": 4, "node_type": "function_end", "params": {"name": "ttnn.conv2d"}, "connections": [5]},
+            {
+                "counter": 5,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.add"},
+                "connections": [6],
+                "input_tensors": [],
+            },
+            {"counter": 6, "node_type": "function_end", "params": {"name": "ttnn.add"}, "connections": [7]},
+            {"counter": 7, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT name FROM operations ORDER BY operation_id")
+        assert cursor.fetchall() == [("ttnn.conv2d",), ("ttnn.add",)]
+
+        # The abort is attributed to the operation the report lists, and names the frame that died.
+        cursor.execute("SELECT operation_name, error_type, error_message FROM errors")
+        assert cursor.fetchall() == [
+            ("ttnn.conv2d", "aborted_operation", "Operation 'Conv2dDeviceOperation' was aborted by an exception")
+        ]
+
+        conn.close()
+
+    def test_python_recorded_error_wins_over_the_abort_marker(self, tmp_path):
+        """When Python recorded the exception, its type and message are the better diagnostic."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [2],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "Conv2dDeviceOperation"},
+                "connections": [3],
+                "input_tensors": [],
+            },
+            {
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "Conv2dDeviceOperation", "aborted": "true", "abort_reason": "CB/L1 clash"},
+                "connections": [4],
+            },
+            {"counter": 4, "node_type": "function_end", "params": {"name": "ttnn.conv2d"}, "connections": [5]},
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        python_io = [
+            {
+                "name": "ttnn.conv2d",
+                "arguments": {},
+                "error": {"type": "RuntimeError", "message": "TT_THROW @ program.cpp:1773"},
+            }
+        ]
+
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT operation_name, error_type, error_message FROM errors")
+        assert cursor.fetchall() == [("ttnn.conv2d", "RuntimeError", "TT_THROW @ program.cpp:1773")]
 
         conn.close()
 
@@ -3549,6 +3958,43 @@ class TestRecordPythonOperation:
         entry = g._python_io_data[0]
         assert entry["arguments"] == {}
 
+    def test_error_attaches_only_to_the_returned_record(self):
+        import ttnn.graph as g
+
+        first = g.record_python_operation("ttnn.add", (), {})
+        second = g.record_python_operation("ttnn.add", (), {})
+        g.record_python_operation_error(second, "RuntimeError", "boom")
+        assert "error" not in first
+        assert second["error"] == {"type": "RuntimeError", "message": "boom"}
+
+    def test_error_is_noop_when_no_current_record(self):
+        import ttnn.graph as g
+
+        first = g.record_python_operation("ttnn.add", (), {})
+        g.record_python_operation_error(None, "RuntimeError", "python_io setup failed")
+        assert "error" not in first
+
+    def test_append_then_populate_mutates_the_same_record(self):
+        import ttnn.graph as g
+
+        reserved = g.append_python_io_record("ttnn.add")
+        filled = g.record_python_operation("ttnn.add", (), {"bias": "1"}, record=reserved)
+        assert filled is reserved
+        assert len(g._python_io_data) == 1
+        assert reserved["arguments"]["bias"] == "1"
+
+    def test_populate_failure_keeps_the_reserved_record(self, expect_error):
+        import ttnn.graph as g
+
+        class Boom:
+            def __str__(self):
+                raise RuntimeError("stringify failed")
+
+        with expect_error(RuntimeError, "stringify failed"):
+            g.record_python_operation("ttnn.add", (Boom(),), {})
+        assert len(g._python_io_data) == 1
+        assert g._python_io_data[0]["name"] == "ttnn.add"
+
     def test_python_stack_trace_captured_when_enabled(self):
         import ttnn.graph as g
 
@@ -4190,6 +4636,74 @@ class TestPythonIONameMatching:
         assert values == ["1.0", "2.0"], f"Expected ordered matching, got {values}"
         conn.close()
 
+    def test_setup_failure_slot_does_not_take_the_next_same_name_record(self, tmp_path):
+        """A reserved empty/error slot must be consumed by the failed start, not by the next op."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": []},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.relu"},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.relu"},
+                "connections": [],
+                "duration_ns": 100,
+            },
+            {
+                "counter": 3,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.relu"},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.relu"},
+                "connections": [],
+                "duration_ns": 200,
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        python_io = [
+            {
+                "name": "ttnn.relu",
+                "arguments": {},
+                "input_tensor_ids": [],
+                "error": {"type": "RuntimeError", "message": "python_io setup failed"},
+            },
+            {"name": "ttnn.relu", "arguments": {"alpha": "ok"}, "input_tensor_ids": []},
+        ]
+
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT operation_id FROM operations ORDER BY operation_id")
+        first_id, second_id = (row[0] for row in cursor.fetchall())
+
+        cursor.execute("SELECT error_message FROM errors WHERE operation_id = ?", (first_id,))
+        assert cursor.fetchone() == ("python_io setup failed",)
+
+        cursor.execute("SELECT COUNT(*) FROM errors WHERE operation_id = ?", (second_id,))
+        assert cursor.fetchone() == (0,)
+
+        cursor.execute(
+            "SELECT value FROM operation_arguments WHERE operation_id = ? AND name = 'alpha'",
+            (second_id,),
+        )
+        assert cursor.fetchone() == ("ok",)
+        cursor.execute(
+            "SELECT COUNT(*) FROM operation_arguments WHERE operation_id = ? AND name = 'alpha'",
+            (first_id,),
+        )
+        assert cursor.fetchone() == (0,)
+        conn.close()
+
     def test_unmatched_python_io_ignored(self, tmp_path):
         """python_io records for non-existent ops should be silently ignored."""
         mock_graph = [
@@ -4415,6 +4929,244 @@ class TestFastOperationGraphTracking:
         )
         connected = c.fetchone()[0]
         assert connected >= 1, f"Expected at least 1 connected tensor ID, got {connected}"
+        conn.close()
+
+    def test_setup_failure_closes_scope_so_later_ops_stay_top_level(self, monkeypatch, expect_error):
+        """A Python-I/O setup failure must close its scope so later operations stay top-level."""
+        from ttnn.decorators import FastOperation
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("python_io setup failed")
+
+        monkeypatch.setattr(ttnn.graph, "record_python_operation", boom)
+
+        op = FastOperation(
+            python_fully_qualified_name="ttnn.dummy_setup_fail",
+            function=lambda *a, **k: None,
+            preprocess_golden_function_inputs=lambda x: x,
+            golden_function=None,
+            postprocess_golden_function_outputs=lambda x: x,
+            is_cpp_operation=True,
+            is_experimental=False,
+        )
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            with (
+                ttnn.manage_config("enable_fast_runtime_mode", True),
+                ttnn.manage_config("enable_logging", False),
+                ttnn.manage_config("enable_comparison_mode", False),
+            ):
+                with expect_error(RuntimeError, "python_io setup failed"):
+                    op()
+            assert ttnn.graph._operation_scope_depth.value == 0
+            ttnn.graph.track_function_start("ttnn.add")
+            ttnn.graph.track_function_end()
+        finally:
+            graph = ttnn.graph.end_graph_capture()
+
+        dummy_ends = [
+            n for n in graph if n["node_type"] == "function_end" and n["params"].get("name") == "ttnn.dummy_setup_fail"
+        ]
+        assert dummy_ends, "setup failure must still close the FastOperation scope"
+        add_starts = [n for n in graph if n["node_type"] == "function_start" and n["params"].get("name") == "ttnn.add"]
+        assert add_starts, "successor operation must appear in the capture"
+        assert add_starts[0]["stacking_level"] == 1, "ttnn.add must not be nested under the failed FastOperation setup"
+
+    def test_setup_failure_does_not_mark_earlier_same_name_record(self, monkeypatch, expect_error):
+        """A later record_python_operation failure must not rewrite an earlier success."""
+        from ttnn.decorators import FastOperation
+
+        original = ttnn.graph.record_python_operation
+        calls = {"n": 0}
+
+        def maybe_boom(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise RuntimeError("python_io setup failed")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(ttnn.graph, "record_python_operation", maybe_boom)
+
+        op = FastOperation(
+            python_fully_qualified_name="ttnn.dummy_setup_fail",
+            function=lambda *a, **k: None,
+            preprocess_golden_function_inputs=lambda x: x,
+            golden_function=None,
+            postprocess_golden_function_outputs=lambda x: x,
+            is_cpp_operation=True,
+            is_experimental=False,
+        )
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            with (
+                ttnn.manage_config("enable_fast_runtime_mode", True),
+                ttnn.manage_config("enable_logging", False),
+                ttnn.manage_config("enable_comparison_mode", False),
+            ):
+                op()
+                with expect_error(RuntimeError, "python_io setup failed"):
+                    op()
+            records = [r for r in ttnn.graph._python_io_data if r["name"] == "ttnn.dummy_setup_fail"]
+            assert len(records) == 2
+            assert "error" not in records[0]
+            assert records[1]["error"] == {"type": "RuntimeError", "message": "python_io setup failed"}
+        finally:
+            ttnn.graph.end_graph_capture()
+
+    def test_setup_failure_does_not_assign_next_same_name_record(self, monkeypatch, expect_error, tmp_path):
+        """A recording failure must not give the next same-name op's python_io to the failed start."""
+        from ttnn.decorators import FastOperation
+
+        original = ttnn.graph.record_python_operation
+        calls = {"n": 0}
+
+        def maybe_boom(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("python_io setup failed")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(ttnn.graph, "record_python_operation", maybe_boom)
+
+        op = FastOperation(
+            python_fully_qualified_name="ttnn.dummy_setup_fail",
+            function=lambda *a, **k: None,
+            preprocess_golden_function_inputs=lambda x: x,
+            golden_function=None,
+            postprocess_golden_function_outputs=lambda x: x,
+            is_cpp_operation=True,
+            is_experimental=False,
+        )
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            with (
+                ttnn.manage_config("enable_fast_runtime_mode", True),
+                ttnn.manage_config("enable_logging", False),
+                ttnn.manage_config("enable_comparison_mode", False),
+            ):
+                with expect_error(RuntimeError, "python_io setup failed"):
+                    op(tag="failed")
+                op(tag="ok")
+            python_io = [dict(r) for r in ttnn.graph._python_io_data if r["name"] == "ttnn.dummy_setup_fail"]
+        finally:
+            graph = ttnn.graph.end_graph_capture()
+
+        assert len(python_io) == 2
+        assert python_io[0]["error"] == {"type": "RuntimeError", "message": "python_io setup failed"}
+        assert "error" not in python_io[1]
+        assert python_io[1]["arguments"]["tag"] == "ok"
+
+        report = _make_report(graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
+        cursor.execute("SELECT operation_id FROM operations WHERE name = 'ttnn.dummy_setup_fail' ORDER BY operation_id")
+        ids = [row[0] for row in cursor.fetchall()]
+        assert len(ids) == 2
+        cursor.execute("SELECT error_message FROM errors WHERE operation_id = ?", (ids[0],))
+        assert cursor.fetchone() == ("python_io setup failed",)
+        cursor.execute("SELECT COUNT(*) FROM errors WHERE operation_id = ?", (ids[1],))
+        assert cursor.fetchone() == (0,)
+        cursor.execute(
+            "SELECT value FROM operation_arguments WHERE operation_id = ? AND name = 'tag'",
+            (ids[1],),
+        )
+        assert cursor.fetchone() == ("ok",)
+        conn.close()
+
+
+class TestUnwindAbandonedScopes:
+    """Issue #28836: a top-level operation closes the scopes an earlier failure left open.
+
+    An operation that throws from a call site with no scope guard never emits its
+    ``function_end``.  Everything captured afterwards then lands inside a scope that is
+    already dead, and the importer, which only lists top-level scopes as operations, drops it.
+    """
+
+    @staticmethod
+    def _capture_with_an_abandoned_scope():
+        """Capture the exact shape a failure leaves behind, without needing one to happen.
+
+        ``ttnn.conv2d`` dies inside an unguarded C++ scope, so that scope reports no end; the
+        decorator's ``finally`` still runs and closes it instead of its own, which is what
+        leaves ``ttnn.conv2d`` open.  The raw binding is the C++ entry point those call sites
+        use, so calling it here reproduces the leak faithfully.
+        """
+        from ttnn._ttnn.graph import track_function_start as cpp_track_function_start
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            ttnn.graph.track_function_start("ttnn.conv2d")
+            cpp_track_function_start("Conv2dDeviceOperation")
+            ttnn.graph.track_function_end()
+
+            ttnn.graph.track_function_start("ttnn.add")
+            ttnn.graph.track_function_end()
+        finally:
+            graph = ttnn.graph.end_graph_capture()
+        return graph
+
+    @staticmethod
+    def _nodes(graph, node_type, name):
+        return [n for n in graph if n["node_type"] == node_type and n["params"].get("name") == name]
+
+    def test_operation_after_a_failure_stays_top_level(self):
+        graph = self._capture_with_an_abandoned_scope()
+
+        (add_start,) = self._nodes(graph, "function_start", "ttnn.add")
+        assert add_start["stacking_level"] == 1, "ttnn.add must not be recorded as a child of the failed ttnn.conv2d"
+
+    def test_abandoned_scope_is_closed_as_aborted(self):
+        graph = self._capture_with_an_abandoned_scope()
+
+        (conv_end,) = self._nodes(graph, "function_end", "ttnn.conv2d")
+        assert conv_end["params"].get("aborted") == "true"
+        assert "ttnn.add" in conv_end["params"].get("abort_reason", ""), "the reason should name what closed the scope"
+
+    def test_balanced_capture_is_left_alone(self):
+        """Nothing is open when a top-level operation starts, so the unwind is a no-op."""
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            for name in ("ttnn.conv2d", "ttnn.add"):
+                ttnn.graph.track_function_start(name)
+                ttnn.graph.track_function_end()
+        finally:
+            graph = ttnn.graph.end_graph_capture()
+
+        aborted = [n for n in graph if (n["params"] or {}).get("aborted")]
+        assert aborted == [], f"a healthy capture must not report aborts, got {aborted}"
+
+    def test_failing_operation_and_its_successor_both_reach_the_report(self, device, tmp_path, expect_error):
+        """End to end: ttnn.to_dtype fails, and the operation after it is still in the report.
+
+        ``ttnn.to_dtype`` reads the tensor's host storage inside a tracked C++ scope with no
+        guard (``ttnn/core/tensor/tensor_ops.cpp:535-540``), so passing a device tensor throws
+        with that scope open — the same situation as the circular buffer / L1 clash from the
+        issue.
+        """
+        report_path = tmp_path / "report.json"
+        tt_input = ttnn.from_torch(torch.randn(1, 32), layout=ttnn.TILE_LAYOUT, device=device)
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            with expect_error(RuntimeError, "Expected Tensor with HostStorage"):
+                ttnn.to_dtype(tt_input, ttnn.float32)
+            ttnn.add(tt_input, tt_input)
+        finally:
+            ttnn.graph.end_graph_capture_to_file(str(report_path))
+
+        db_path = graph_report.import_report(report_path, tmp_path / "output")
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT name FROM operations ORDER BY operation_id")
+        names = [row[0] for row in cursor.fetchall()]
+        assert names == ["ttnn.to_dtype", "ttnn.add"], f"expected both operations in the report, got {names}"
+
+        cursor.execute("SELECT operation_name, error_type FROM errors")
+        assert cursor.fetchall() == [("ttnn.to_dtype", "RuntimeError")]
+
         conn.close()
 
 
