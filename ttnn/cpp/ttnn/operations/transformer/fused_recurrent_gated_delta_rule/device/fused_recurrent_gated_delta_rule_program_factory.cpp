@@ -17,6 +17,8 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
@@ -132,8 +134,14 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     compute.compile_time_args = compute_ct;
+    // Honor the caller's compute config (the public wrapper defaults it to HiFi4 / fp32 acc / exact).
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), attrs.compute_kernel_config);
     compute.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true, .math_approx_mode = false};
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
     compute.runtime_args.reserve(BH);
 
     auto* q_buf = in.q.buffer();
