@@ -660,8 +660,19 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
         run_args.kernel_run_args = {reader_run};
     }
 
+    // create_at changes only the coordinate's compile-time my_sp_coord: every program declares
+    // the same tensor specs, runtime-argument schema and core targets from shared mesh arguments.
+    // Validate the shared update once, then reuse that result across coordinates. Tensor addresses
+    // are still refreshed on every program; validate_runtime_args retains per-call scalar checks.
+    bool validated = false;
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        UpdateProgramRunArgs(program, run_args);
+        if (tensor_args.metadata.has_value()) {
+            // The metadata reader has no changing named args; its position is read on-device.
+            UpdateTensorArgs(program, run_args.tensor_args, /*skip_validation=*/validated);
+        } else {
+            UpdateProgramRunArgs(program, run_args, /*skip_validation=*/validated);
+        }
+        validated = true;
     }
 }
 
