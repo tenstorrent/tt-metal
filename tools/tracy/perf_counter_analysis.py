@@ -154,6 +154,11 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
                 else:
                     counter_type_name = COUNTER_TYPE_NAMES.get(counter_type_raw, f"UNKNOWN_{counter_type_raw}")
 
+                risc_type = event[EVENT_RISC_TYPE_IDX]
+                neo = meta_dict.get("neo")
+                if neo is not None and str(risc_type).startswith("QUASAR_"):
+                    # Quasar's DM0 reads all four NEOs; keep each NEO its own reader row.
+                    risc_type = f"QUASAR_NEO{neo}"
                 perf_counter_events.append(
                     {
                         "run_host_id": metadata["run_host_id"],
@@ -161,7 +166,7 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
                         "record time": event[EVENT_TIMESTAMP_IDX],
                         "core_x": event[EVENT_CORE_COORDS_IDX][0],
                         "core_y": event[EVENT_CORE_COORDS_IDX][1],
-                        "risc_type": event[EVENT_RISC_TYPE_IDX],
+                        "risc_type": risc_type,
                         "counter type": counter_type_name,  # Use human-readable name
                         "value": meta_dict.get("value", 0),
                         "ref cnt": meta_dict.get("ref cnt", 0),
