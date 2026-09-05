@@ -129,10 +129,24 @@ FactoryParameters get_factory_parameters(
     bool return_indices,
     uint32_t in_h,
     uint32_t in_w,
-    const Layout& output_layout) {
+    const Layout& output_layout,
+    bool single_reader_stream) {
     uint32_t multi_buffering_factor = 2;
-    bool split_reader = true;
+    bool split_reader = !single_reader_stream;
     TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
+    const bool is_quasar = tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR;
+    // SPMD threads per cluster (reader AND compute KernelSpecs — symmetric STRIDED pairs producer
+    // thread i with consumer thread i, giving each (DM, NEO) team a private lane). Gen1 stays 1.
+    // Any per-core stick count is legal: the reader deals sticks round-robin (stick i -> lane i % T)
+    // and each compute lane derives its own share (quotient, +1 for the first sticks % T lanes), so
+    // a remainder just leaves the tail lanes with one stick fewer -- or idle, for shapes with fewer
+    // sticks than lanes (a batch-1 global avg pool is 1 stick/core). The lane count never degrades.
+    // TILE output stays single-lane (deliberate gap, not a shape accident): the tiled-output path
+    // keeps a 32-stick tilize accumulation across sticks and sizes DFB_FAST_TILIZE at in_ntiles_c
+    // entries, neither of which is lane-aware -- at num_threads=4 it TT_FATALs on the DFB entry
+    // count for in_ntiles_c < 4 and hangs otherwise (seen on the ZeBu emulator, 2026-09-04).
+    const bool tiled_output = output_layout == Layout::TILE;
+    const uint32_t num_threads_per_cluster = is_quasar && !return_indices && !tiled_output ? 4 : 1;
 
     // For block float formats (BFLOAT8_B, BFLOAT4_B), convert to BFLOAT16 for buffer size calculations
     // since block float formats don't have a fixed datum size per element (they use block compression)
@@ -182,6 +196,7 @@ FactoryParameters get_factory_parameters(
     return FactoryParameters{
         .multi_buffering_factor = multi_buffering_factor,
         .split_reader = split_reader,
+        .num_threads_per_cluster = num_threads_per_cluster,
         .nbytes = nbytes,
         .index_nbytes = index_nbytes,
         .data_format = data_format,
@@ -239,7 +254,7 @@ PoolCBSizes calculate_pool_cb_sizes(
 
     // Scalar CB (coefficient of reduce)
     sizes.scalar_cb_pagesize = tt::tile_size(params.data_format);
-    sizes.scalar_cb_npages = params.multi_buffering_factor;
+    sizes.scalar_cb_npages = std::max(params.multi_buffering_factor, params.num_threads_per_cluster);
     sizes.has_second_scalar_cb = params.is_avg_pool && params.split_reader && !one_scalar_per_core;
 
     // Clear value CB (-inf for maxpool, 0 for avgpool)
@@ -256,7 +271,7 @@ PoolCBSizes calculate_pool_cb_sizes(
     sizes.in_cb_raw_size = in_cb_sz;
     uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
     sizes.in_cb_pagesize = params.nbytes * in_cb_page_padded;
-    sizes.in_cb_npages = params.multi_buffering_factor;
+    sizes.in_cb_npages = params.multi_buffering_factor * params.num_threads_per_cluster;
     sizes.has_split_reader = params.split_reader;
 
     // MPWI CBs (return_indices temporaries)

@@ -21,6 +21,7 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -131,6 +132,7 @@ void push_back_scalar_info_or_zero(
     std::vector<uint16_t>& config_vector,
     const std::vector<ScalarInfo>& scalars,
     uint32_t max_scalars_cnt,
+    uint32_t entries_per_core,
     uint32_t repeats) {
     for (uint32_t r = 0; r < repeats; ++r) {
         for (uint32_t j = 0; j < max_scalars_cnt; ++j) {
@@ -140,6 +142,8 @@ void push_back_scalar_info_or_zero(
                 config_vector.insert(config_vector.end(), {0, 0, 0});
             }
         }
+        // Zero tail up to the padded per-core row (never read: the reader stops at reader_nindices).
+        config_vector.insert(config_vector.end(), entries_per_core - 3 * max_scalars_cnt, 0);
     }
 }
 
@@ -191,7 +195,10 @@ Tensor create_scalar_config_tensor(
     }
 
     constexpr uint32_t entry_size = 3;
-    const uint32_t entries_per_core = entry_size * max_scalars_cnt;
+    // Pad each core's row to a multiple of 32 uint16 (64 B) so the L1 page can be viewed as
+    // num_threads (<= 4) 16 B-aligned entries by the reader's raw-view DFB (DFB_CONFIG); a 3-scalar
+    // row is only 18 B otherwise.
+    const uint32_t entries_per_core = tt::round_up(entry_size * max_scalars_cnt, 32u);
 
     TT_FATAL(
         entries_per_core != 0,
@@ -205,13 +212,14 @@ Tensor create_scalar_config_tensor(
         case TensorMemoryLayout::BLOCK_SHARDED: {
             for (const std::vector<ScalarInfo>& scalars : scalars_per_core) {
                 uint32_t repeats = config_tensor_in_dram ? 1 : num_shards_c;
-                push_back_scalar_info_or_zero(config_vector, scalars, max_scalars_cnt, repeats);
+                push_back_scalar_info_or_zero(config_vector, scalars, max_scalars_cnt, entries_per_core, repeats);
             }
             break;
         }
         case TensorMemoryLayout::WIDTH_SHARDED: {
             uint32_t repeats = config_tensor_in_dram ? 1 : num_shards_c;
-            push_back_scalar_info_or_zero(config_vector, scalars_per_core[0], max_scalars_cnt, repeats);
+            push_back_scalar_info_or_zero(
+                config_vector, scalars_per_core[0], max_scalars_cnt, entries_per_core, repeats);
             break;
         }
         default: break;
@@ -425,6 +433,19 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
     std::vector<std::vector<uint16_t>> top_left_indices =
         sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, setup.stride_w);
+    // Pad every core's index table to one uniform 32-multiple length so its L1 page splits into
+    // num_threads 16B-aligned DFB entries (see DFB_READER_INDICES). Tail zeros are never read
+    // (the num_segments header bounds all reads).
+    {
+        size_t max_len = 0;
+        for (const auto& v : top_left_indices) {
+            max_len = std::max(max_len, v.size());
+        }
+        const size_t padded_len = tt::round_up(max_len, static_cast<size_t>(32));
+        for (auto& v : top_left_indices) {
+            v.resize(padded_len, 0);
+        }
+    }
 
     auto* mesh_device = input.device();
     auto& cq = mesh_device->mesh_command_queue();
@@ -557,6 +578,22 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
+
+    // Output sticks owned by each core (mirrors the legacy per-core loop); the compute RTA. The lanes
+    // split it themselves (reader: stick i -> lane i % T; compute: quotient + 1 for the first
+    // sticks % T lanes), so no divisibility by the thread count is required.
+    const uint32_t total_out_nhw = in_n * out_h * out_w;
+    const auto out_nhw_for_core = [&](uint32_t core_i) -> uint32_t {
+        uint32_t total_out_nhw_processed = 0;
+        if (is_block_sharded) {
+            total_out_nhw_processed = (core_i / rectangular_x) * max_out_nhw_per_core;
+        } else if (!is_width_sharded) {
+            total_out_nhw_processed = core_i * max_out_nhw_per_core;
+        }
+        const uint32_t remaining_out_nhw =
+            total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
+        return std::min(max_out_nhw_per_core, remaining_out_nhw);
+    };
     FactoryParameters params = get_factory_parameters(
         num_shards_c,
         input.dtype(),
@@ -568,7 +605,18 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         return_indices,
         in_h,
         in_w,
-        output_layout);
+        output_layout,
+        // Symmetric lanes: one multi-threaded reader (not split readers) so STRIDED pairs reader
+        // thread i with compute thread i. MPWI keeps its asymmetric reader0/reader1 structure.
+        /*single_reader_stream=*/!return_indices);
+    // Host-side record of the lane count programmed (TT_LOGGER_LEVEL=Debug), observable without a
+    // kernel probe.
+    log_debug(
+        tt::LogOp,
+        "quasar pool2d: num_threads_per_cluster={} (max_out_nhw_per_core={}, ncores={})",
+        params.num_threads_per_cluster,
+        max_out_nhw_per_core,
+        ncores);
 
     // QSR: the reduce-col strided tilize consumes a full 32x32 (num_faces=4) SrcA tile (see the
     // num_faces_in_input_tile_for_cb=4 override below; the LLK asserts total_row_dim()==total_col_dim()==32).
@@ -759,21 +807,43 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         dfbs.push_back(local_dfb(
             DFB_IN_SCALAR_1, cb_sizes.scalar_cb_pagesize, cb_sizes.scalar_cb_npages, params.data_format, scalar_face));
     }
-    // clear value CB
-    dfbs.push_back(local_dfb(DFB_CLEAR_VALUE, cb_sizes.clear_value_cb_size, 1, params.data_format));
-    // raw input shard CB (borrowed input)
+    // clear value CB (one entry per reader thread: each lane fills and reads its own copy)
     dfbs.push_back(
-        borrowed_dfb(DFB_IN_SHARD, in_nbytes_c, input.shard_spec().value().shape[0], params.data_format, INPUT_TENSOR));
+        local_dfb(DFB_CLEAR_VALUE, cb_sizes.clear_value_cb_size, params.num_threads_per_cluster, params.data_format));
+    // raw input shard CB (borrowed input). Raw views only supply a base pointer (the kernel undoes
+    // the per-thread lane stagger with ptr - lane * entry_size), but striding validation still needs
+    // num_entries % num_threads, and shard heights (e.g. halo'd rows) divide by nothing — so view the
+    // shard as num_threads * k aligned-down entries instead of per-row pages. The TRISC-side stride of
+    // a STRIDED binding is entry_size * num_threads = the whole view per lane pass and must fit
+    // uint16_t L1 units (16 B), i.e. ~1 MB: k > 1 only for shards beyond that (e.g. the 112x112x64
+    // resnet stem held on a single cluster), where it keeps the stride in range at no kernel cost.
+    const auto raw_view_geometry = [&](uint32_t total_bytes) {
+        constexpr uint32_t k_max_stride_bytes = std::numeric_limits<uint16_t>::max() * 16u;
+        const uint32_t k = std::max(1u, tt::div_up(total_bytes, k_max_stride_bytes));
+        const uint32_t num_entries = params.num_threads_per_cluster * k;
+        const uint32_t entry_size = (total_bytes / num_entries) & ~15u;
+        return std::pair<uint32_t, uint32_t>{entry_size, num_entries};
+    };
+    const uint32_t in_shard_total_bytes = in_nbytes_c * input.shard_spec().value().shape[0];
+    const auto [in_shard_entry_size, in_shard_num_entries] = raw_view_geometry(in_shard_total_bytes);
+    dfbs.push_back(
+        borrowed_dfb(DFB_IN_SHARD, in_shard_entry_size, in_shard_num_entries, params.data_format, INPUT_TENSOR));
     // reader indices CB (borrowed L1 config tensor, or local scratch for DRAM path)
-    const uint32_t in_reader_indices_cb_pagesize = tt::round_up(top_left_indices[0].size(), 4);
     // RawUInt16 (not UInt16): the reader-indices DFB is a raw packed-uint16 index/config buffer, and Quasar
     // does not support the typed UInt16 DFB format (is_supported_quasar) — RawUInt16 is the raw 16-bit format
     // supported on Quasar (and WH/BH), semantically correct here.
     if (config_tensor_in_dram) {
-        dfbs.push_back(local_dfb(DFB_READER_INDICES, reader_indices_page_size, 1, tt::DataFormat::RawUInt16));
+        // Staging: one full-page slot per reader thread (each stages and reads back its own copy).
+        dfbs.push_back(local_dfb(
+            DFB_READER_INDICES, reader_indices_page_size, params.num_threads_per_cluster, tt::DataFormat::RawUInt16));
     } else {
+        // Raw view of the (padded) per-core page as num_threads aligned entries; kernel uses the base.
         dfbs.push_back(borrowed_dfb(
-            DFB_READER_INDICES, in_reader_indices_cb_pagesize, 1, tt::DataFormat::RawUInt16, READER_INDICES_TENSOR));
+            DFB_READER_INDICES,
+            reader_indices_page_size / params.num_threads_per_cluster,
+            params.num_threads_per_cluster,
+            tt::DataFormat::RawUInt16,
+            READER_INDICES_TENSOR));
     }
     // input CB(s). The second input stream (in_cb_1) only exists for the pool2d split-reader
     // (mpwi has a single input stream — reader1 is the writer face, not a second producer).
@@ -828,26 +898,40 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     }
 
     // output CB (borrowed output) + optional output index CB (borrowed output_idx)
-    dfbs.push_back(borrowed_dfb(
-        DFB_OUT,
-        cb_sizes.out_cb_pagesize,
-        cb_sizes.out_cb_npages,
-        params.output_data_format,
-        OUTPUT_TENSOR,
-        is_output_tiled ? std::nullopt : std::optional{pack_untilize_face},
-        is_output_tiled ? std::nullopt : pack_untilize_tile));
+    if (is_output_tiled || return_indices) {
+        // Compute packs into out_cb (tiles, or the mpwi row-major faces): keep the real page geometry.
+        dfbs.push_back(borrowed_dfb(
+            DFB_OUT,
+            cb_sizes.out_cb_pagesize,
+            cb_sizes.out_cb_npages,
+            params.output_data_format,
+            OUTPUT_TENSOR,
+            is_output_tiled ? std::nullopt : std::optional{pack_untilize_face},
+            is_output_tiled ? std::nullopt : pack_untilize_tile));
+    } else {
+        // Row-major pool2d output: compute packs each stick into the scratch DFB and the reader
+        // writes the output shard through DFB_OUT_SHARD, so out_cb is only the census self-loop
+        // binding below -- no kernel uses its pages. Its natural page count (sticks x 16-wide
+        // faces) need not divide the lane count (1 stick x 2 faces on a 32-channel width shard
+        // TT_FATALs the STRIDED entry check at num_threads=4), so give it the same lane-agnostic
+        // raw-view geometry as the other borrowed views (num_threads * k entries, base-only).
+        const auto [out_view_entry_size, out_view_num_entries] =
+            raw_view_geometry(cb_sizes.out_cb_pagesize * cb_sizes.out_cb_npages);
+        dfbs.push_back(
+            borrowed_dfb(DFB_OUT, out_view_entry_size, out_view_num_entries, params.output_data_format, OUTPUT_TENSOR));
+    }
     // [DEBUG scratch] local (non-borrowed) pack-untilize target, same spec as out_cb's RM view, so the
     // compute kernel can pack the reduced DEST into it and DPRINT the result in isolation (remove after).
     if (!return_indices) {
         // [DEBUG scratch 32x32] FULL-TILE pack target: face geometry {face_r_dim=16, num_faces=4} so the
         // pack reads DEST as a full 32x32 tile (not the narrow face_r_dim=1 pool output). Sized for one full
         // 32-row write: output_shard_width * out_nbytes * TILE_HEIGHT (page = FACE_WIDTH*nbytes face unit).
-        const uint32_t scratch_npages =
-            (output_shard_shape[1] / tt::constants::FACE_WIDTH) * tt::constants::TILE_HEIGHT;
+        const uint32_t scratch_npages = params.num_threads_per_cluster;
+        const uint32_t scratch_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
         const auto scratch_full_face = FaceGeometry{.face_r_dim = tt::constants::FACE_HEIGHT, .num_faces = 4};
         dfbs.push_back(local_dfb(
             DFB_SCRATCH_0,
-            cb_sizes.out_cb_pagesize,
+            scratch_pagesize,
             scratch_npages,
             params.output_data_format,
             std::optional{scratch_full_face},
@@ -856,7 +940,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         if (cb_sizes.has_split_reader) {
             dfbs.push_back(local_dfb(
                 DFB_SCRATCH_1,
-                cb_sizes.out_cb_pagesize,
+                scratch_pagesize,
                 scratch_npages,
                 params.output_data_format,
                 std::optional{scratch_full_face},
@@ -865,8 +949,11 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         // [DEBUG scratch->out] borrowed OUTPUT view (per-stick RM rows) that the DM readers write into
         // via NoC. page = output row bytes; npages = output sticks per core. Mirrors DFB_IN_SHARD.
         const uint32_t out_row_bytes = output_shard_shape[1] * params.nbytes;
+        // Same raw-view treatment as DFB_IN_SHARD (num_threads * k aligned-down entries, base-only use).
+        const uint32_t out_shard_total_bytes = out_row_bytes * output_shard_shape[0];
+        const auto [out_shard_entry_size, out_shard_num_entries] = raw_view_geometry(out_shard_total_bytes);
         dfbs.push_back(borrowed_dfb(
-            DFB_OUT_SHARD, out_row_bytes, output_shard_shape[0], params.output_data_format, OUTPUT_TENSOR));
+            DFB_OUT_SHARD, out_shard_entry_size, out_shard_num_entries, params.output_data_format, OUTPUT_TENSOR));
     }
     if (cb_sizes.has_out_idx) {
         TT_FATAL(output_tensors.size() == 2, "return_indices requires two outputs, got {}", output_tensors.size());
@@ -883,10 +970,19 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         TT_FATAL(config_mt != nullptr, "config tensor must be present when !one_scalar_per_core");
         constexpr tt::DataFormat config_df = tt::DataFormat::RawUInt32;
         const uint32_t max_config_tensor_size = max_out_nhw_per_core * 3 * sizeof(uint16_t);
+        // Lane-aware like DFB_READER_INDICES: the reader has num_threads producer threads, so a
+        // single entry fails the STRIDED entry check. DRAM path: one full-page staging slot per
+        // reader thread (each stages and reads its own copy at its write cursor). L1 path: raw view
+        // of the borrowed per-core page as num_threads * k entries; the kernel recovers the table
+        // base with ptr - lane * entry_size.
         if (config_tensor_in_dram) {
-            dfbs.push_back(local_dfb(DFB_CONFIG, max_config_tensor_size, 1, config_df));
+            // Slot holds one DRAM page (the reader's NoC read size); adjacent lane slots must not overlap.
+            const uint32_t config_slot_size =
+                tt::round_up(std::max(max_config_tensor_size, config_buffer_page_size), 16u);
+            dfbs.push_back(local_dfb(DFB_CONFIG, config_slot_size, params.num_threads_per_cluster, config_df));
         } else {
-            dfbs.push_back(borrowed_dfb(DFB_CONFIG, config_buffer_page_size, 1, config_df, CONFIG_TENSOR));
+            const auto [config_entry_size, config_num_entries] = raw_view_geometry(config_buffer_page_size);
+            dfbs.push_back(borrowed_dfb(DFB_CONFIG, config_entry_size, config_num_entries, config_df, CONFIG_TENSOR));
         }
     }
     spec.dataflow_buffers = std::move(dfbs);
@@ -959,14 +1055,12 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                 .accessor_name = "in_shard_cb",
                 .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
         } else {
+            // Gen2 forbids DM self-loops (program_spec.cpp): reader takes the producer face only;
+            // compute carries a never-constructed consumer binding to close the census.
             b.push_back(DFBBinding{
                 .dfb_spec_name = DFB_IN_SHARD,
                 .accessor_name = "in_shard_cb",
                 .endpoint_type = DFBEndpointType::PRODUCER});
-            b.push_back(DFBBinding{
-                .dfb_spec_name = DFB_IN_SHARD,
-                .accessor_name = "in_shard_cb",
-                .endpoint_type = DFBEndpointType::CONSUMER});
         }
         // Reader-indices CB: reader0=P / reader1=C when split (DRAM push -> wait), else self-loop.
         if (params.split_reader) {
@@ -979,10 +1073,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                 .dfb_spec_name = DFB_READER_INDICES,
                 .accessor_name = "reader_indices_cb",
                 .endpoint_type = DFBEndpointType::PRODUCER});
-            b.push_back(DFBBinding{
-                .dfb_spec_name = DFB_READER_INDICES,
-                .accessor_name = "reader_indices_cb",
-                .endpoint_type = DFBEndpointType::CONSUMER});
         }
         if (!one_scalar_per_core) {
             if (params.split_reader) {
@@ -995,10 +1085,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                     .dfb_spec_name = DFB_CONFIG,
                     .accessor_name = "config_cb",
                     .endpoint_type = DFBEndpointType::PRODUCER});
-                b.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_CONFIG,
-                    .accessor_name = "config_cb",
-                    .endpoint_type = DFBEndpointType::CONSUMER});
             }
         }
 
@@ -1085,10 +1171,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                     .dfb_spec_name = DFB_CLEAR_VALUE,
                     .accessor_name = "clear_value_cb",
                     .endpoint_type = DFBEndpointType::PRODUCER});
-                b.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_CLEAR_VALUE,
-                    .accessor_name = "clear_value_cb",
-                    .endpoint_type = DFBEndpointType::CONSUMER});
             }
             // [DEBUG scratch->DM] each reader consumes its own scratch CB (reader0->scratch_cb_0,
             // reader1->scratch_cb_1) so the DM core can read the compute-packed L1 (only DM-core L1 reads
@@ -1110,10 +1192,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                     .dfb_spec_name = DFB_OUT_SHARD,
                     .accessor_name = "out_shard_cb",
                     .endpoint_type = DFBEndpointType::PRODUCER});
-                b.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_OUT_SHARD,
-                    .accessor_name = "out_shard_cb",
-                    .endpoint_type = DFBEndpointType::CONSUMER});
             }
         }
         return b;
@@ -1167,6 +1245,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     KernelSpec reader0{
         .unique_id = READER0_KERNEL,
         .source = reader_path,
+        // Symmetric with compute: STRIDED pairs reader thread i with compute thread i (private lanes).
+        .num_threads = params.num_threads_per_cluster,
         .compiler_options = {.defines = reader0_defines},
         .dfb_bindings = make_reader_bindings(false),
         .tensor_bindings = make_reader_tensor_bindings(false),
@@ -1232,23 +1312,53 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     }
 
     Group<DFBBinding> compute_bindings;
-    compute_bindings.push_back(
-        DFBBinding{.dfb_spec_name = DFB_IN_0, .accessor_name = "in_cb_0", .endpoint_type = DFBEndpointType::CONSUMER});
+    compute_bindings.push_back(DFBBinding{
+        .dfb_spec_name = DFB_IN_0,
+        .accessor_name = "in_cb_0",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        .access_pattern = DFBAccessPattern::STRIDED});
     compute_bindings.push_back(DFBBinding{
         .dfb_spec_name = DFB_IN_SCALAR_0,
         .accessor_name = "in_scalar_cb_0",
-        .endpoint_type = DFBEndpointType::CONSUMER});
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        // Should be ALL (broadcast scalar), but ALL under-allocates consumer tile counters when
+        // consumer threads > producer threads (issue #54505); reader pushes one copy per thread instead.
+        .access_pattern = DFBAccessPattern::STRIDED});
     // pool2d split-reader compute consumes the second input + scalar streams (both DFBs exist
     // whenever has_second_input_cb; the kernel references them under #ifdef SPLIT_READER).
     if (has_second_input_cb) {
         compute_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFB_IN_1, .accessor_name = "in_cb_1", .endpoint_type = DFBEndpointType::CONSUMER});
+            .dfb_spec_name = DFB_IN_1,
+            .accessor_name = "in_cb_1",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::STRIDED});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_IN_SCALAR_1,
             .accessor_name = "in_scalar_cb_1",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            // Should be ALL — same workaround as in_scalar_cb_0 above (issue #54505).
+            .access_pattern = DFBAccessPattern::STRIDED});
     }
     if (!return_indices) {
+        // Census partners for the reader's raw-view DFBs: Gen2 forbids DM self-loops, so the
+        // single multi-threaded reader takes only the producer face and compute carries these
+        // never-constructed consumer bindings (no credit traffic ever flows on them).
+        if (!params.split_reader) {
+            for (const auto& [spec, name] : std::initializer_list<std::pair<DFBSpecName, const char*>>{
+                     {DFB_IN_SHARD, "census_in_shard"},
+                     {DFB_READER_INDICES, "census_reader_indices"},
+                     {DFB_CLEAR_VALUE, "census_clear_value"},
+                     {DFB_OUT_SHARD, "census_out_shard"}}) {
+                compute_bindings.push_back(DFBBinding{
+                    .dfb_spec_name = spec, .accessor_name = name, .endpoint_type = DFBEndpointType::CONSUMER});
+            }
+            if (!one_scalar_per_core) {
+                compute_bindings.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_CONFIG,
+                    .accessor_name = "census_config",
+                    .endpoint_type = DFBEndpointType::CONSUMER});
+            }
+        }
         // pool2d: compute produces output directly into the borrowed output DFB.  The
         // result stays resident (the DFB is borrowed from OUTPUT_TENSOR and sized to the
         // full output shard, so the producer never wraps), so there is no real consumer.
@@ -1256,82 +1366,106 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         // check (mirrors the mpwi writer-face self-loop on DFB_OUT); no kernel-side
         // pop is needed since the data is the final resident output.
         compute_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFB_OUT, .accessor_name = "out_cb", .endpoint_type = DFBEndpointType::PRODUCER});
+            .dfb_spec_name = DFB_OUT,
+            .accessor_name = "out_cb",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+            .access_pattern = DFBAccessPattern::STRIDED});
         compute_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFB_OUT, .accessor_name = "out_cb", .endpoint_type = DFBEndpointType::CONSUMER});
+            .dfb_spec_name = DFB_OUT,
+            .accessor_name = "out_cb",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::STRIDED});
         // [DEBUG scratch->DM] compute is PRODUCER of the per-reader scratch CB(s); the matching DM reader
         // is the CONSUMER (see make_reader_bindings), so it can wait_front + DPRINT the packed L1.
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_SCRATCH_0,
             .accessor_name = "scratch_cb_0",
-            .endpoint_type = DFBEndpointType::PRODUCER});
+            .endpoint_type = DFBEndpointType::PRODUCER,
+            .access_pattern = DFBAccessPattern::STRIDED});
         if (cb_sizes.has_split_reader) {
             compute_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFB_SCRATCH_1,
                 .accessor_name = "scratch_cb_1",
-                .endpoint_type = DFBEndpointType::PRODUCER});
+                .endpoint_type = DFBEndpointType::PRODUCER,
+                .access_pattern = DFBAccessPattern::STRIDED});
         }
         if (cb_sizes.has_pre_tilize) {
             compute_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFB_PRE_TILIZE,
                 .accessor_name = "pre_tilize_cb",
-                .endpoint_type = DFBEndpointType::PRODUCER});
+                .endpoint_type = DFBEndpointType::PRODUCER,
+                .access_pattern = DFBAccessPattern::STRIDED});
             compute_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFB_PRE_TILIZE,
                 .accessor_name = "pre_tilize_cb",
-                .endpoint_type = DFBEndpointType::CONSUMER});
+                .endpoint_type = DFBEndpointType::CONSUMER,
+                .access_pattern = DFBAccessPattern::STRIDED});
             compute_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFB_FAST_TILIZE,
                 .accessor_name = "fast_tilize_cb",
-                .endpoint_type = DFBEndpointType::PRODUCER});
+                .endpoint_type = DFBEndpointType::PRODUCER,
+                .access_pattern = DFBAccessPattern::STRIDED});
             compute_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFB_FAST_TILIZE,
                 .accessor_name = "fast_tilize_cb",
-                .endpoint_type = DFBEndpointType::CONSUMER});
+                .endpoint_type = DFBEndpointType::CONSUMER,
+                .access_pattern = DFBAccessPattern::STRIDED});
         }
     } else {
         // mpwi: compute consumes index/inc CBs (reader-produced), produces pack tmps + self-loops scratch idx.
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_CLEAR_VALUE,
             .accessor_name = "clear_value_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::ALL});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_IN_IDX, .accessor_name = "in_idx_cb", .endpoint_type = DFBEndpointType::CONSUMER});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_RIGHT_INC,
             .accessor_name = "right_inc_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::ALL});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_DOWN_LEFT,
             .accessor_name = "down_left_wrap_inc_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::ALL});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_UP_LEFT,
             .accessor_name = "up_left_wrap_inc_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::ALL});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_INTRA_RIGHT,
             .accessor_name = "intra_kernel_right_inc_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::ALL});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_INTRA_DOWN_LEFT,
             .accessor_name = "intra_kernel_down_left_wrap_inc_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::ALL});
         compute_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFB_PACK_TMP, .accessor_name = "pack_tmp_cb", .endpoint_type = DFBEndpointType::PRODUCER});
+            .dfb_spec_name = DFB_PACK_TMP,
+            .accessor_name = "pack_tmp_cb",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+            .access_pattern = DFBAccessPattern::STRIDED});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_PACK_IDX_TMP,
             .accessor_name = "pack_idx_tmp_cb",
-            .endpoint_type = DFBEndpointType::PRODUCER});
+            .endpoint_type = DFBEndpointType::PRODUCER,
+            .access_pattern = DFBAccessPattern::STRIDED});
         // compute_tmp_idx: self-loop accumulator on compute.
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_COMPUTE_TMP_IDX,
             .accessor_name = "compute_tmp_idx_cb",
-            .endpoint_type = DFBEndpointType::PRODUCER});
+            .endpoint_type = DFBEndpointType::PRODUCER,
+            .access_pattern = DFBAccessPattern::STRIDED});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_COMPUTE_TMP_IDX,
             .accessor_name = "compute_tmp_idx_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::STRIDED});
     }
 
     // Compute defines (REDUCE_OP / REDUCE_DIM, etc.) plus the conditional-binding gates the
@@ -1369,6 +1503,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,
         .source = std::filesystem::path{return_indices ? COMPUTE_MPWI_PATH : COMPUTE_POOL_PATH},
+        .num_threads = params.num_threads_per_cluster,
         .dfb_bindings = std::move(compute_bindings),
         .compile_time_args = compute_cta,
         .runtime_arg_schema = {.runtime_arg_names = compute_rta_names},
@@ -1404,27 +1539,13 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     KernelRunArgs reader1_run{.kernel = READER1_KERNEL};
     KernelRunArgs compute_run{.kernel = COMPUTE_KERNEL};
 
-    const uint32_t total_out_nhw = in_n * out_h * out_w;
     for (uint32_t core_i = 0; core_i < ncores; core_i++) {
         const uint32_t core_x_i = core_i % rectangular_x;
         const uint32_t core_y_i = core_i / rectangular_x;
         const NodeCoord node{core_x_i, core_y_i};
 
-        uint32_t total_out_nhw_processed;
-        uint32_t core_nhw_index;
-        if (is_block_sharded) {
-            total_out_nhw_processed = core_y_i * max_out_nhw_per_core;
-            core_nhw_index = core_y_i;
-        } else if (is_width_sharded) {
-            total_out_nhw_processed = 0;
-            core_nhw_index = 0;
-        } else {
-            total_out_nhw_processed = core_i * max_out_nhw_per_core;
-            core_nhw_index = core_i;
-        }
-        uint32_t remaining_out_nhw =
-            total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
-        uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, remaining_out_nhw);
+        const uint32_t core_nhw_index = is_block_sharded ? core_y_i : is_width_sharded ? 0 : core_i;
+        const uint32_t out_nhw_this_core = out_nhw_for_core(core_i);
 
         KernelRunArgs::RuntimeArgValues& reader0_rtas = reader0_run.runtime_arg_values;
         KernelRunArgs::RuntimeArgValues& reader1_rtas = reader1_run.runtime_arg_values;
