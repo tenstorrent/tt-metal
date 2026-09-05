@@ -6,11 +6,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "llrt/tt_cluster.hpp"
 #include "tt_metal/impl/device/device_impl.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
-#include "tt_metal/impl/context/metal_context.hpp"
 
 namespace tt::tt_metal::experimental::Device {
 
@@ -88,12 +85,7 @@ CoreCoord worker_core_from_logical_core(
         "logical-to-virtual worker mapping is read from that chip's SoC descriptor, which is available only for "
         "local devices.",
         mesh_coord);
-
-    auto& metal_context = MetalContext::instance(mesh_device_impl.get_context_id());
-    const auto physical_chip_id = metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(
-        mesh_device_impl.get_fabric_node_id(mesh_coord));
-    return metal_context.get_cluster().get_virtual_coordinate_from_logical_coordinates(
-        physical_chip_id, logical_core, CoreType::WORKER);
+    return mesh_device_impl.get_device(mesh_coord)->worker_core_from_logical_core(logical_core);
 }
 
 }  // namespace tt::tt_metal::experimental::Device
