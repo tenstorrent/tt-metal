@@ -91,7 +91,7 @@ enum PerfCounterType : std::uint16_t {
     WAITING_FOR_SFPU_IDLE_2,
     // L1 Bank 0 (mux=0, ports 0-7)
     L1_0_UNPACKER_0,
-    L1_0_UNPACKER_1_ECC_PACK1,  // port 1: WH only
+    L1_0_UNPACKER_1_ECC_PACK1,  // port 1 on both arches
     L1_0_TDMA_BUNDLE_0_RISC,
     L1_0_TDMA_BUNDLE_1_TRISC,
     L1_0_NOC_RING0_OUTGOING_0,
@@ -99,7 +99,7 @@ enum PerfCounterType : std::uint16_t {
     L1_0_NOC_RING0_INCOMING_0,
     L1_0_NOC_RING0_INCOMING_1,
     // L1 Bank 1 (mux=1, ports 8-15)
-    L1_1_TDMA_PACKER_2,  // port 8: WH only
+    L1_1_TDMA_PACKER_2,  // port 8 on both arches
     L1_1_EXT_UNPACKER_1,
     L1_1_EXT_UNPACKER_2,
     L1_1_EXT_UNPACKER_3,

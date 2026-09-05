@@ -224,7 +224,7 @@ The following metrics are automatically computed from raw counters. Each metric 
 - **L1 Unpacker/Packer Port Util (%)**: Fraction of cycles the unpacker or packer L1 port had a transaction.
 - **L1 TDMA Bundle Util (%)**: Average utilization of the two TDMA/RISC L1 ports.
 - **NOC Ring 0/1 Outgoing/Incoming Util (%)**: Average utilization of NOC channels on each ring.
-- **RISC Core L1 Util (%)**: RISC core L1 access utilization (Blackhole only, requires L1_1 group).
+- **L1 TDMA Packer Port Util (%)**: TDMA packer 2 L1 port utilization (port 8, requires L1_1 group).
 
 *L1 Backpressure*
 

@@ -115,7 +115,7 @@ COUNTER_TYPE_NAMES = {
     89: "L1_1_NOC_RING1_OUTGOING_1",
     90: "L1_1_NOC_RING1_INCOMING_0",
     91: "L1_1_NOC_RING1_INCOMING_1",
-    # Blackhole-specific L1 ports
+    # Reserved ordinals: Blackhole's former names for ports 1 and 8; nothing emits them now.
     92: "L1_0_UNIFIED_PACKER",
     93: "L1_1_RISC_CORE",
     # L1 Bank 0 grant counters
@@ -162,7 +162,7 @@ COUNTER_TYPE_NAMES = {
     129: "DEST_READ_GRANTED_2",
     130: "DEST_READ_GRANTED_3",
     131: "MATH_NOT_STALLED_DEST_WR_PORT",
-    # L1 Bank 4 req (BH only, mux position 4, misc ports 32-39)
+    # L1 Bank 4 req (BH only, mux position 4): ext packers 6-7 and tag-search packer 1 (ports 32-34)
     132: "L1_4_EXT_PACKER_6",
     133: "L1_4_EXT_PACKER_7",
     134: "L1_4_TAG_SEARCH_PACKER_1",
@@ -180,7 +180,7 @@ COUNTER_TYPE_NAMES = {
     145: "L1_4_MISC_PORT_5_GRANT",
     146: "L1_4_MISC_PORT_6_GRANT",
     147: "L1_4_MISC_PORT_7_GRANT",
-    # L1 Bank 2 (BH only, mux position 2, NOC Ring 2 ports 16-23)
+    # L1 Bank 2 (BH only, mux position 2): ext unpackers 4-7 (16-19), ring 0 ports 2-3 (20-23)
     148: "L1_2_EXT_UNPACKER_4",
     149: "L1_2_EXT_UNPACKER_5",
     150: "L1_2_EXT_UNPACKER_6",
@@ -197,7 +197,7 @@ COUNTER_TYPE_NAMES = {
     161: "L1_2_NOC_RING0_OUTGOING_3_GRANT",
     162: "L1_2_NOC_RING0_INCOMING_2_GRANT",
     163: "L1_2_NOC_RING0_INCOMING_3_GRANT",
-    # L1 Bank 3 (BH only, mux position 3, NOC Ring 3 ports 24-31)
+    # L1 Bank 3 (BH only, mux position 3): ring 1 ports 2-3 (24-27), ext packers 2-5 (28-31)
     164: "L1_3_NOC_RING1_OUTGOING_2",
     165: "L1_3_NOC_RING1_OUTGOING_3",
     166: "L1_3_NOC_RING1_INCOMING_2",
@@ -376,7 +376,7 @@ PERF_COUNTER_CSV_HEADERS = [
     "NOC Ring 1 Incoming Util Median (%)",
     "NOC Ring 1 Incoming Util Max (%)",
     "NOC Ring 1 Incoming Util Avg (%)",
-    # L1 Bank 0 port 1 (arch-specific)
+    # L1 Bank 0 port 1 (Wormhole only: the shared unpacker 1 / ECC / pack1 port)
     "L1 Packer Port Util Min (%)",
     "L1 Packer Port Util Median (%)",
     "L1 Packer Port Util Max (%)",
@@ -516,11 +516,11 @@ PERF_COUNTER_CSV_HEADERS = [
     "MOVE Idle Wait T0 Median (%)",
     "MOVE Idle Wait T0 Max (%)",
     "MOVE Idle Wait T0 Avg (%)",
-    # === RISC Core L1 util ===
-    "RISC Core L1 Util Min (%)",
-    "RISC Core L1 Util Median (%)",
-    "RISC Core L1 Util Max (%)",
-    "RISC Core L1 Util Avg (%)",
+    # === L1 TDMA packer port util ===
+    "L1 TDMA Packer Port Util Min (%)",
+    "L1 TDMA Packer Port Util Median (%)",
+    "L1 TDMA Packer Port Util Max (%)",
+    "L1 TDMA Packer Port Util Avg (%)",
     # === L1 composite metrics ===
     "L1 Total Bandwidth Util Min (%)",
     "L1 Total Bandwidth Util Median (%)",
@@ -768,7 +768,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "SFPU Idle Wait T1",
         "THCON Idle Wait T0",
         "MOVE Idle Wait T0",
-        "RISC Core L1 Util",
+        "L1 TDMA Packer Port Util",
         # L1 composite metrics
         "L1 Total Bandwidth Util",
         "L1 Read vs Write Ratio",
@@ -830,6 +830,10 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
                 print(f"{stat:<12} {ops_with_data:>15} {range_str:>30} {mean_str:>12}")
 
     print("\n" + "=" * 100 + "\n")
+
+
+def _is_blackhole(device_arch):
+    return "blackhole" in str(device_arch).lower()
 
 
 def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cores):
@@ -1071,7 +1075,10 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["Avg HF Cycles Per Instrn"] = _group_to_stat_dict(avg_hf)
 
     # === L1 Bank 0 ===
-    if has_counter("L1_0_UNPACKER_0"):
+    port1_is_unpacker = _is_blackhole(device_arch)
+    if has_counter("L1_0_UNPACKER_0") and port1_is_unpacker and has_counter("L1_0_UNPACKER_1_ECC_PACK1"):
+        per_op_stats["L1 Unpacker Port Util"] = compute_avg_channel_util("L1_0_UNPACKER_0", "L1_0_UNPACKER_1_ECC_PACK1")
+    elif has_counter("L1_0_UNPACKER_0"):
         per_op_stats["L1 Unpacker Port Util"] = compute_util_metric("L1_0_UNPACKER_0")
     if has_counter("L1_0_TDMA_BUNDLE_0_RISC") and has_counter("L1_0_TDMA_BUNDLE_1_TRISC"):
         per_op_stats["L1 TDMA Bundle Util"] = compute_avg_channel_util(
@@ -1086,10 +1093,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             "L1_0_NOC_RING0_INCOMING_0", "L1_0_NOC_RING0_INCOMING_1"
         )
 
-    # L1 Port 1 (arch-specific)
-    if has_counter("L1_0_UNIFIED_PACKER"):
-        per_op_stats["L1 Packer Port Util"] = compute_util_metric("L1_0_UNIFIED_PACKER")
-    elif has_counter("L1_0_UNPACKER_1_ECC_PACK1"):
+    # Wormhole's port 1 carries pack1 traffic; on Blackhole it is a second unpacker (counted above).
+    if not port1_is_unpacker and has_counter("L1_0_UNPACKER_1_ECC_PACK1"):
         per_op_stats["L1 Packer Port Util"] = compute_util_metric("L1_0_UNPACKER_1_ECC_PACK1")
 
     # L1 back-pressure metrics (from grant counters)
@@ -1185,12 +1190,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         if median_ratio > 0.1:
             ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
             per_op_stats["L1 Unpacker Backpressure"] = _group_to_stat_dict(ratio)
-    if has_counter("L1_0_UNIFIED_PACKER") and has_counter("L1_0_PORT1_GRANT"):
-        req = get_counter_series("L1_0_UNIFIED_PACKER")
-        grant = get_counter_series("L1_0_PORT1_GRANT")
-        ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
-        per_op_stats["L1 Packer Port Backpressure"] = _group_to_stat_dict(ratio)
-    elif has_counter("L1_0_UNPACKER_1_ECC_PACK1") and has_counter("L1_0_PORT1_GRANT"):
+    if not port1_is_unpacker and has_counter("L1_0_UNPACKER_1_ECC_PACK1") and has_counter("L1_0_PORT1_GRANT"):
         req = get_counter_series("L1_0_UNPACKER_1_ECC_PACK1")
         grant = get_counter_series("L1_0_PORT1_GRANT")
         ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
@@ -1240,15 +1240,15 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["THCON Idle Wait T0"] = compute_util_metric("WAITING_FOR_THCON_IDLE_0")
     if has_counter("WAITING_FOR_MOVE_IDLE_0"):
         per_op_stats["MOVE Idle Wait T0"] = compute_util_metric("WAITING_FOR_MOVE_IDLE_0")
-    if has_counter("L1_1_RISC_CORE"):
-        per_op_stats["RISC Core L1 Util"] = compute_util_metric("L1_1_RISC_CORE")
+    if has_counter("L1_1_TDMA_PACKER_2"):
+        per_op_stats["L1 TDMA Packer Port Util"] = compute_util_metric("L1_1_TDMA_PACKER_2")
 
     # === L1 composite metrics ===
     if has_counter("L1_0_UNPACKER_0") and has_counter("L1_0_NOC_RING0_OUTGOING_0"):
-        packer_key = "L1_0_UNIFIED_PACKER" if has_counter("L1_0_UNIFIED_PACKER") else "L1_0_UNPACKER_1_ECC_PACK1"
+        port1_key = "L1_0_UNPACKER_1_ECC_PACK1"
         port_keys = [
             "L1_0_UNPACKER_0",
-            packer_key,
+            port1_key,
             "L1_0_TDMA_BUNDLE_0_RISC",
             "L1_0_TDMA_BUNDLE_1_TRISC",
             "L1_0_NOC_RING0_OUTGOING_0",
@@ -1262,13 +1262,15 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["L1 Total Bandwidth Util"] = _group_to_stat_dict(ratio)
 
         # L1 Read vs Write Ratio
+        port1 = get_counter_series(port1_key)
         reads = (
             get_counter_series("L1_0_UNPACKER_0")
             + get_counter_series("L1_0_NOC_RING0_OUTGOING_0")
             + get_counter_series("L1_0_NOC_RING0_OUTGOING_1")
+            + (port1 if port1_is_unpacker else 0)
         )
         writes = (
-            get_counter_series(packer_key)
+            (0 if port1_is_unpacker else port1)
             + get_counter_series("L1_0_NOC_RING0_INCOMING_0")
             + get_counter_series("L1_0_NOC_RING0_INCOMING_1")
         )
@@ -1559,10 +1561,19 @@ def compute_device_only_metrics(
     eff_pivot["Avg HF Cycles Per Instrn"] = eff_pivot.apply(_avg_hf_cycles, axis=1)
 
     # L1 Bank 0 metrics
-    eff_pivot["L1 Unpacker Port Util"] = eff_pivot.apply(
-        lambda x: safe_div(x.get("value_L1_0_UNPACKER_0", 0), x.get("ref_cnt_L1_0_UNPACKER_0", 0)),
-        axis=1,
-    )
+    if _is_blackhole(device_arch):
+        eff_pivot["L1 Unpacker Port Util"] = eff_pivot.apply(
+            lambda x: safe_div(
+                (x.get("value_L1_0_UNPACKER_0", 0) + x.get("value_L1_0_UNPACKER_1_ECC_PACK1", 0)) / 2,
+                x.get("ref_cnt_L1_0_UNPACKER_0", 0),
+            ),
+            axis=1,
+        )
+    else:
+        eff_pivot["L1 Unpacker Port Util"] = eff_pivot.apply(
+            lambda x: safe_div(x.get("value_L1_0_UNPACKER_0", 0), x.get("ref_cnt_L1_0_UNPACKER_0", 0)),
+            axis=1,
+        )
     eff_pivot["L1 TDMA Bundle Util"] = eff_pivot.apply(
         lambda x: safe_div(
             (x.get("value_L1_0_TDMA_BUNDLE_0_RISC", 0) + x.get("value_L1_0_TDMA_BUNDLE_1_TRISC", 0)) / 2,
@@ -1599,14 +1610,12 @@ def compute_device_only_metrics(
         ),
         axis=1,
     )
-    # L1 Port 1 (arch-specific)
-    eff_pivot["L1 Packer Port Util"] = eff_pivot.apply(
-        lambda x: safe_div(
-            x.get("value_L1_0_UNIFIED_PACKER", x.get("value_L1_0_UNPACKER_1_ECC_PACK1", 0)),
-            x.get("ref_cnt_L1_0_UNIFIED_PACKER", x.get("ref_cnt_L1_0_UNPACKER_1_ECC_PACK1", 0)),
-        ),
-        axis=1,
-    )
+    # Wormhole's port 1 carries pack1 traffic; on Blackhole it is a second unpacker.
+    port1_is_unpacker = _is_blackhole(device_arch)
+    if not port1_is_unpacker:
+        eff_pivot["L1 Packer Port Util"] = eff_pivot.apply(
+            safe_util("value_L1_0_UNPACKER_1_ECC_PACK1", "ref_cnt_L1_0_UNPACKER_1_ECC_PACK1"), axis=1
+        )
 
     # L1 back-pressure
     def safe_backpressure(req0_key, req1_key, grant0_key, grant1_key):
@@ -1676,15 +1685,11 @@ def compute_device_only_metrics(
             safe_single_bp("value_L1_0_UNPACKER_0", "value_L1_0_UNPACKER_0_GRANT"),
             axis=1,
         )
-    packer_req_key = (
-        "value_L1_0_UNIFIED_PACKER"
-        if "value_L1_0_UNIFIED_PACKER" in eff_pivot.columns
-        else "value_L1_0_UNPACKER_1_ECC_PACK1"
-    )
-    eff_pivot["L1 Packer Port Backpressure"] = eff_pivot.apply(
-        safe_single_bp(packer_req_key, "value_L1_0_PORT1_GRANT"),
-        axis=1,
-    )
+    if not port1_is_unpacker:
+        eff_pivot["L1 Packer Port Backpressure"] = eff_pivot.apply(
+            safe_single_bp("value_L1_0_UNPACKER_1_ECC_PACK1", "value_L1_0_PORT1_GRANT"),
+            axis=1,
+        )
 
     # === Per-type instruction issue efficiency ===
     def safe_ratio(num_key, den_key):
@@ -1848,8 +1853,8 @@ def compute_device_only_metrics(
         safe_util("value_WAITING_FOR_MOVE_IDLE_0", "ref_cnt_WAITING_FOR_MOVE_IDLE_0"),
         axis=1,
     )
-    eff_pivot["RISC Core L1 Util"] = eff_pivot.apply(
-        safe_util("value_L1_1_RISC_CORE", "ref_cnt_L1_1_RISC_CORE"), axis=1
+    eff_pivot["L1 TDMA Packer Port Util"] = eff_pivot.apply(
+        safe_util("value_L1_1_TDMA_PACKER_2", "ref_cnt_L1_1_TDMA_PACKER_2"), axis=1
     )
 
     # === L1 composite metrics ===
@@ -1857,11 +1862,7 @@ def compute_device_only_metrics(
         """Sum of all 8 L1_0 port req counts / (8 * ref_cnt)."""
         ports = [
             "value_L1_0_UNPACKER_0",
-            (
-                "value_L1_0_UNIFIED_PACKER"
-                if "value_L1_0_UNIFIED_PACKER" in eff_pivot.columns
-                else "value_L1_0_UNPACKER_1_ECC_PACK1"
-            ),
+            "value_L1_0_UNPACKER_1_ECC_PACK1",
             "value_L1_0_TDMA_BUNDLE_0_RISC",
             "value_L1_0_TDMA_BUNDLE_1_TRISC",
             "value_L1_0_NOC_RING0_OUTGOING_0",
@@ -1877,13 +1878,15 @@ def compute_device_only_metrics(
 
     def l1_rw_ratio(x):
         """(read ports) / (write ports). Read = Unpacker + NOC Out, Write = Packer + NOC In."""
+        port1 = x.get("value_L1_0_UNPACKER_1_ECC_PACK1", 0)
         reads = (
             x.get("value_L1_0_UNPACKER_0", 0)
             + x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0)
             + x.get("value_L1_0_NOC_RING0_OUTGOING_1", 0)
+            + (port1 if port1_is_unpacker else 0)
         )
         writes = (
-            x.get("value_L1_0_UNIFIED_PACKER", x.get("value_L1_0_UNPACKER_1_ECC_PACK1", 0))
+            (0 if port1_is_unpacker else port1)
             + x.get("value_L1_0_NOC_RING0_INCOMING_0", 0)
             + x.get("value_L1_0_NOC_RING0_INCOMING_1", 0)
         )
@@ -2081,7 +2084,7 @@ def compute_device_only_metrics(
         "SFPU Idle Wait T1",
         "THCON Idle Wait T0",
         "MOVE Idle Wait T0",
-        "RISC Core L1 Util",
+        "L1 TDMA Packer Port Util",
         # L1 composite metrics
         "L1 Total Bandwidth Util",
         "L1 Read vs Write Ratio",
