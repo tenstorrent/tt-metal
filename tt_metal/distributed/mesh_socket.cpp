@@ -168,6 +168,7 @@ void MeshSocket::process_mesh_ids() {
     const auto& global_logical_bindings =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
 
+    Rank found_sender_rank{-1}, found_receiver_rank{-1};
     for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
         if (std::get<0>(mesh_id_and_host_rank) == config_.sender_mesh_id.value() ||
             std::get<0>(mesh_id_and_host_rank) == config_.receiver_mesh_id.value()) {
@@ -185,8 +186,16 @@ void MeshSocket::process_mesh_ids() {
             } else {
                 rank_translation_table_[rank] = rank;
             }
+            // Record the global ranks corresponding to the sender and receiver mesh IDs.
+            if (std::get<0>(mesh_id_and_host_rank) == config_.sender_mesh_id.value()) {
+                found_sender_rank = rank;
+            }
+            if (std::get<0>(mesh_id_and_host_rank) == config_.receiver_mesh_id.value()) {
+                found_receiver_rank = rank;
+            }
         }
     }
+    validate_device_ownership(found_sender_rank, found_receiver_rank, config_, false);
 }
 
 SocketConfig MeshSocket::populate_mesh_ids(
