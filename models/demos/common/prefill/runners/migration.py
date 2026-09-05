@@ -80,7 +80,25 @@ def _attach_migration_client():
     return client, cmd_q, table_q, resp_q
 
 
-def _deliver_local_device_map(device_map, rank: int, timeout_s: float = 30.0) -> None:
+# How long to wait for the co-located migration worker's shm queues; 0 (the default) waits forever, or set PREFILL_MIGRATION_ATTACH_WAIT_S to a positive number of seconds to bound it.
+_DEFAULT_MIGRATION_ATTACH_WAIT_S = 0.0
+_MIGRATION_ATTACH_HEARTBEAT_S = 15.0
+
+
+def _migration_attach_wait_s() -> float:
+    raw = os.environ.get("PREFILL_MIGRATION_ATTACH_WAIT_S")
+    if raw is None or raw.strip() == "":
+        return _DEFAULT_MIGRATION_ATTACH_WAIT_S
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            f"[migration] PREFILL_MIGRATION_ATTACH_WAIT_S={raw!r} is not a number; waiting indefinitely instead"
+        )
+        return _DEFAULT_MIGRATION_ATTACH_WAIT_S
+
+
+def _deliver_local_device_map(device_map, rank: int, timeout_s: float | None = None) -> None:
     mod = _import_migration_client()
 
     def _discover():
@@ -109,10 +127,20 @@ def _deliver_local_device_map(device_map, rank: int, timeout_s: float = 30.0) ->
                 )
         return trios, skipped
 
-    deadline = time.monotonic() + timeout_s
+    budget = _migration_attach_wait_s() if timeout_s is None else timeout_s
+    start = time.monotonic()
+    # None => no deadline: poll forever, but log so the wait is never mistaken for a hang.
+    deadline = start + budget if budget > 0 else None
+    last_log = start
     trios, skipped = _discover()
+    # Queues that exist but are not ours will NEVER become usable, so warn here (and in the heartbeat) since with no deadline the raise below is unreachable.
+    if skipped and not trios:
+        logger.warning(
+            f"[migration] {len(skipped)} local worker queue(s) present but NOT accessible by this user — "
+            f"likely stale shm from another user's run, which waiting will not clear:\n  " + "\n  ".join(skipped)
+        )
     while not trios:
-        if time.monotonic() >= deadline:
+        if deadline is not None and time.monotonic() >= deadline:
             if skipped:
                 details = "\n  ".join(skipped)
                 raise RuntimeError(
@@ -124,6 +152,15 @@ def _deliver_local_device_map(device_map, rank: int, timeout_s: float = 30.0) ->
                 "[migration] no local worker queues (/dev/shm/ep_*_{a,b}_cmd*) on this host -- is the "
                 "migration_endpoint/worker for THIS host running? (The /mig_ep* outward queues are the "
                 "master-only control channel, NOT the device-map queues.)"
+            )
+        now = time.monotonic()
+        if now - last_log >= _MIGRATION_ATTACH_HEARTBEAT_S:
+            last_log = now
+            bound = "no timeout" if deadline is None else f"{budget:.0f}s budget"
+            inaccessible = f", {len(skipped)} present but not ours" if skipped else ""
+            logger.info(
+                f"[migration] still waiting for local worker queues (/dev/shm/ep_*_{{a,b}}_cmd*) after "
+                f"{now - start:.0f}s ({bound}{inaccessible}) — is the migration layer up on this host yet?"
             )
         time.sleep(0.25)
         trios, skipped = _discover()
