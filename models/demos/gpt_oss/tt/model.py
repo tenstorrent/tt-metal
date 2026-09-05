@@ -229,11 +229,19 @@ class Model:
         # sampling_dp: number of independent sampling groups (one per mesh row for row-sharded users)
         self.sampling_dp = mesh_device.shape[0] if users_row_sharded else 1
         if self._supports_on_device_sampling:
-            # tt_ccl=None makes TTSampling fall back to ttnn.all_gather() which works on [4,8] meshes
+            # Greedy decode takes TTSampling's force-argmax path, which all-gathers the logits
+            # once and then argmaxes, instead of the top-k / top-p / temperature / RNG chain.
+            # That gather needs real semaphores, so hand it a SamplingCCL. Its handles are
+            # dedicated to sampling and never shared with the model's own CCLs; see that class
+            # for what sharing corrupts. SamplingCCL exposes no line_all_gather, so the regular
+            # top-k path still falls back to ttnn.all_gather() exactly as it did with tt_ccl=None.
+            from models.demos.gpt_oss.tt.ccl import SamplingCCL
+
+            self.sampling_ccl = SamplingCCL(mesh_device)
             self.sampling = SamplingGenerator(
                 args=self.args if hasattr(self, "args") else self._make_sampling_args(hf_config, mesh_device),
                 mesh_device=mesh_device,
-                tt_ccl=None,
+                tt_ccl=self.sampling_ccl,
             )
             # Hook reset_sampling_params to set prefill flag — Generator calls this
             # before prefill forward; tells _forward_layers_and_head to skip TP all-gather
@@ -263,7 +271,18 @@ class Model:
         args.sampling_all_gather_axis = 1
         args.num_devices = mesh_device.get_num_devices()
         args.is_galaxy = mesh_device.shape[0] > 1
-        args.model_config = {}  # No SAMPLING_AG_CONFIG → regular sampling path always used
+        # Greedy requests (k=1, p in {0.0, 1.0}, temp=1) take the single all-gather + argmax
+        # path; every other request still takes the regular sampling path. Topology is Linear
+        # rather than Ring: TTSampling only downgrades to Linear below 8 devices, and the gather
+        # axis here is 4 wide on mesh_2x4 and mesh_4x4, where a ring route is not available.
+        # TTSampling clamps num_links to what the submesh actually has.
+        args.model_config = {
+            "SAMPLING_AG_CONFIG": {
+                "allow_force_argmax": True,
+                "num_links": get_default_num_links(mesh_device),
+                "topology": ttnn.Topology.Linear,
+            }
+        }
         # sampling_dp: number of independent sampling groups (one per mesh row)
         # Only use row-sharded sampling when users_row_sharded is active
         args.sampling_dp = self.sampling_dp

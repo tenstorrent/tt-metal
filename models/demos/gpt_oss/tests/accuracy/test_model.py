@@ -8,6 +8,7 @@ Full model integration test with accuracy testing
 import os
 import pickle
 
+import pytest
 import torch
 from loguru import logger
 
@@ -142,14 +143,24 @@ def run_accuracy(
 def test_full_model_accuracy(mesh_device, device_params, reset_seeds, state_dict):
     """Test full model with accuracy testing using new abstractions"""
 
-    # Cache file for reference tokens
-    cache_dir = "models/demos/gpt_oss/tests/accuracy/"
-    os.makedirs(cache_dir, exist_ok=True)
-    cache_file = os.path.join(cache_dir, "reference_tokens.pkl")
-
     setup = TestFactory.setup_test(mesh_device, use_real_weights=True)
     config = setup["config"]
     mesh_config = setup["mesh_config"]
+
+    # Reference tokens are the reference model's own continuation, so they belong to one
+    # model. Key the cache by model_name: gpt-oss-20b and gpt-oss-120b answer the same
+    # prompt differently, and a shared file would score one model against the other's
+    # tokens and still report a number.
+    cache_dir = "models/demos/gpt_oss/tests/accuracy/"
+    os.makedirs(cache_dir, exist_ok=True)
+    model_name = setup["model_args"].model_name
+    cache_file = os.path.join(cache_dir, f"reference_tokens_{model_name}.pkl")
+    legacy_cache_file = os.path.join(cache_dir, "reference_tokens.pkl")
+    if not os.path.exists(cache_file) and os.path.exists(legacy_cache_file):
+        # The original unkeyed file predates this split. Keep reading it so the model it
+        # was generated for keeps its coverage until each model has its own file.
+        logger.warning(f"Using the unkeyed reference cache {legacy_cache_file} for {model_name}")
+        cache_file = legacy_cache_file
 
     # Try to load cached reference tokens first
     reference_tokens = None
@@ -170,6 +181,12 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds, state_dict
 
     # Generate reference tokens if not cached
     if reference_tokens is None:
+        if os.environ.get("CI") == "true":
+            pytest.skip(
+                f"No reference tokens for {model_name} at {cache_file}. Generating them loads the "
+                "reference model on the host, which does not fit in a CI job. Generate the file "
+                "on a machine that holds the weights and commit it."
+            )
         logger.info("Generating reference tokens (this may take a while)...")
 
         # Create reference model for comparison (use full model like demo)
