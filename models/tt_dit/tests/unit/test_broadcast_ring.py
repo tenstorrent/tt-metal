@@ -508,6 +508,9 @@ def test_broadcast_ring_reference_frame(mesh_device, sp_axis, tp_axis, device_pa
             for seqt in range(n_seq):
                 for et in range(e_tiles):
                     host[b, head, seqt * T : (seqt + 1) * T, et * T : (et + 1) * T] = val(b, head, seqt, et)
+    # val() exceeds bf16's exact-integer range (>256), so compare against the bf16-rounded golden, not
+    # the raw ints -- otherwise pure bf16 quantization (e.g. 1170 -> 1168) reads as a false mismatch.
+    host_bf16 = host.to(torch.bfloat16).float()
 
     shard_dims = [None, None]
     shard_dims[tp_axis] = 1  # heads
@@ -541,8 +544,8 @@ def test_broadcast_ring_reference_frame(mesh_device, sp_axis, tp_axis, device_pa
             for c in range(sp_factor):
                 for j in range(flen):
                     for et in range(e_tiles):
-                        got = round(out[b, head, (c * per_dev + off + j) * T, et * T].item())
-                        want = val(b, head, owner * per_dev + off + j, et)
+                        got = out[b, head, (c * per_dev + off + j) * T, et * T].item()
+                        want = host_bf16[b, head, (owner * per_dev + off + j) * T, et * T].item()
                         if got != want:
                             bad.append((b, head, c, off + j, et, got, want))
     assert not bad, f"broadcast_ring reference-frame mismatch ({len(bad)} tiles), first: {bad[0]}"
