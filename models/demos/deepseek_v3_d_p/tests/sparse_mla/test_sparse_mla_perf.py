@@ -113,6 +113,8 @@ report, runs DS_PERF_HOST_WARMUPS (default 3) warmups per start, then records DS
 (default 20) ordinary forwards. host_<scenario>.json contains every host submission and synchronized
 completion duration in milliseconds, plus medians and workload metadata. Output deallocation and
 the initial synchronization are outside the timing window; compilation is excluded by warmup.
+Set DS_PERF_HOST_TRACE=1 alongside DS_PERF_HOST=1 to time trace replay instead, with compilation
+and capture excluded. The traced samples are written to host_trace_<scenario>.json.
 
 NOTE: warm/long leave the cached prefix of both block-cyclic caches zero-filled rather than populating it
 with earlier chunks — only op shapes/timing matter here, not values, and those come from the full `total`
@@ -864,33 +866,54 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         return mla.forward(tt_x, rope, kvpe_cache, actual_start=start, index_kv_cache=index_kv_cache)
 
     if host_perf:
-        # Ordinary dispatch only: compile and warm outside the measured window. Keep
+        # Compile and warm outside the measured window. Keep
         # outputs alive until completion and exclude deallocation from both timings.
         warmups = int(os.environ.get("DS_PERF_HOST_WARMUPS", "3"))
         iterations = int(os.environ.get("DS_PERF_HOST_ITERS", "20"))
         assert warmups >= 1 and iterations >= 1
+        use_trace = os.environ.get("DS_PERF_HOST_TRACE", "0") == "1"
         samples = []
         for start in starts:
-            for iteration in range(-warmups, iterations):
-                ttnn.synchronize_device(mesh_device)
-                begin = time.perf_counter_ns()
+            trace_id = None
+            trace_output = None
+            if use_trace:
                 output = _one_forward(start)
-                submitted = time.perf_counter_ns()
                 ttnn.synchronize_device(mesh_device)
-                completed = time.perf_counter_ns()
                 ttnn.deallocate(output)
-                if iteration >= 0:
-                    samples.append(
-                        {
-                            "start": start,
-                            "iteration": iteration,
-                            "host_submission_ms": (submitted - begin) / 1e6,
-                            "host_completion_ms": (completed - begin) / 1e6,
-                        }
-                    )
+                trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                trace_output = _one_forward(start)
+                ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+                ttnn.synchronize_device(mesh_device)
+            try:
+                for iteration in range(-warmups, iterations):
+                    ttnn.synchronize_device(mesh_device)
+                    begin = time.perf_counter_ns()
+                    if use_trace:
+                        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                    else:
+                        output = _one_forward(start)
+                    submitted = time.perf_counter_ns()
+                    ttnn.synchronize_device(mesh_device)
+                    completed = time.perf_counter_ns()
+                    if not use_trace:
+                        ttnn.deallocate(output)
+                    if iteration >= 0:
+                        samples.append(
+                            {
+                                "start": start,
+                                "iteration": iteration,
+                                "host_submission_ms": (submitted - begin) / 1e6,
+                                "host_completion_ms": (completed - begin) / 1e6,
+                            }
+                        )
+            finally:
+                if trace_id is not None:
+                    ttnn.release_trace(mesh_device, trace_id)
+                if trace_output is not None:
+                    ttnn.deallocate(trace_output)
         report = {
             "git": _git_head(),
-            "execution": "untraced",
+            "execution": "trace_replay" if use_trace else "untraced",
             "variant": variant.name,
             "scenario": scenario,
             "case": _profile_case_id(attn_mode, kv_cache_format),
@@ -905,10 +928,10 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
                 for key in ("host_submission_ms", "host_completion_ms")
             },
         }
-        path = os.path.join(_output_dir(subdir), f"host_{scenario}.json")
+        path = os.path.join(_output_dir(subdir), f"host{'_trace' if use_trace else ''}_{scenario}.json")
         with open(path, "w") as f:
             json.dump(report, f, indent=2)
-        logger.info(f"Untraced host timing: {report['medians_ms']}; samples: {path}")
+        logger.info(f"{report['execution']} host timing: {report['medians_ms']}; samples: {path}")
         return
 
     forwards = []  # one {runtime_id -> {...}} per measured trace replay (device-collapsed to critical path)
