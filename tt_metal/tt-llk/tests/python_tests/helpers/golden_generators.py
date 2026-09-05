@@ -3803,6 +3803,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuLeInt: self._le_int,
                 MathOperation.SfpuGeInt: self._ge_int,
                 MathOperation.SfpuXlogy: self._xlogy,
+                MathOperation.SfpuLogaddexp: self._logaddexp,
                 MathOperation.SfpuElwrsub: self._rsub,
                 MathOperation.SfpuElwpow: self._pow,
                 MathOperation.SfpuElwRightShift: self._right_shift,
@@ -4130,6 +4131,13 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         )
         res = xf * torch.log(yf)
         return res.to(x.dtype) if isinstance(x, torch.Tensor) else res.item()
+
+    def _logaddexp(self, t1, t2):
+        # logaddexp(a, b) = log(exp(a) + exp(b)), finite for any finite pair. Computed
+        # in fp32 to mirror the SFPU kernel's fused max(a,b) + log1p(exp(-|a-b|)) form,
+        # which never overflows an intermediate.
+        wide = self._wide_dtype(t1)
+        return torch.logaddexp(t1.to(wide), t2.to(wide)).to(t1.dtype)
 
     def _rsub(self, t1, t2):
         # rsub(a, b) = b - a. The kernel computes in1 - in0, i.e. src2 - src1.
