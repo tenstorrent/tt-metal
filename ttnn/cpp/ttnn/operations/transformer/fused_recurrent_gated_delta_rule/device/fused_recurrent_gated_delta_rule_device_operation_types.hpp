@@ -32,7 +32,7 @@ struct FusedRecurrentGatedDeltaRuleParams {
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
-// All device-op input tensors are fp32, TILE layout, DRAM interleaved.
+// All device-op input tensors are fp32, TILE layout, interleaved (DRAM or L1).
 // Head-split, L2-norm, q-scale, exp(g)->decay and the per-token tile layout are done host-side;
 // the compute kernel does only the pure recurrence.
 //   q, k : [BH*T, 1, K]   (q already scaled by `scale`; both already L2-normalized over K)

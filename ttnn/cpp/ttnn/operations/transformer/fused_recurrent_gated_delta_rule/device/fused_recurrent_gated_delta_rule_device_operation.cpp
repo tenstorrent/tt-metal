@@ -39,7 +39,7 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
     const uint32_t K = attrs.key_dim;
     const uint32_t V = attrs.val_dim;
 
-    // Tensor contract: fp32 TILE DRAM-interleaved, all on q's device, exact logical shapes. The
+    // Tensor contract: fp32 TILE interleaved (DRAM or L1), all on q's device, exact logical shapes. The
     // reader/writer index pages as [BH*T,1,K] / [BH*T,1,V] / [BH*T,1,1] / [BH,K,V]; a mismatch
     // would read past the buffer instead of failing, so every dim is checked here.
     auto* device = in.q.device();
@@ -49,10 +49,7 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
             "fused_recurrent_gated_delta_rule: {} must be allocated on device",
             name);
         TT_FATAL(t.device() == device, "fused_recurrent_gated_delta_rule: {} must be on the same device as q", name);
-        TT_FATAL(
-            t.buffer()->buffer_type() == BufferType::DRAM,
-            "fused_recurrent_gated_delta_rule: {} must be in DRAM",
-            name);
+        // DRAM or L1 is fine (the kernels address pages through TensorAccessor); sharding is not.
         TT_FATAL(!t.is_sharded(), "fused_recurrent_gated_delta_rule: {} must be interleaved, not sharded", name);
         TT_FATAL(t.layout() == Layout::TILE, "fused_recurrent_gated_delta_rule: {} must be TILE layout", name);
         TT_FATAL(
