@@ -76,13 +76,7 @@ RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapp
     // topology instead of aborting init.
     this->axis_topologies_.resize(intra_mesh_connectivity.size());
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < intra_mesh_connectivity.size(); mesh_id_val++) {
-        const auto shape = mesh_graph.get_mesh_shape(MeshId{mesh_id_val});
         for (int axis = 0; axis < 2; axis++) {
-            // A degenerate axis has nothing to route along; leave it null rather than fabricate a
-            // one-element cycle that next_row() would be asked to step through.
-            if (static_cast<int>(shape[axis]) < 2) {
-                continue;
-            }
             this->axis_topologies_[mesh_id_val][axis] =
                 std::make_unique<AxisRouteTopology>(derive_axis_topology(mesh_graph, MeshId{mesh_id_val}, axis));
         }

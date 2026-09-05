@@ -14,7 +14,6 @@
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 
@@ -104,6 +103,18 @@ std::vector<Pattern> read_patterns(const MeshGraph& mesh_graph, MeshId mesh_id, 
     }
     std::sort(patterns.begin(), patterns.end(), [](const Pattern& a, const Pattern& b) { return a.step < b.step; });
     return patterns;
+}
+
+bool has_realized_express_edges(const MeshGraph& mesh_graph, MeshId mesh_id) {
+    const auto& connectivity = mesh_graph.get_intra_mesh_connectivity()[*mesh_id];
+    for (const auto& edges_by_destination : connectivity) {
+        for (const auto& [_, edge] : edges_by_destination) {
+            if (edge.port_direction == RoutingDirection::Z) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 // Whether the axis closes at the mesh level. Only an ORDINARY end edge counts: a chord may also join
@@ -339,6 +350,9 @@ std::optional<AxisRouteTopology> derive_express_ring_topology(const MeshGraph& m
     if (patterns.empty()) {
         return std::nullopt;  // no express links: base routing is unchanged
     }
+    if (!has_realized_express_edges(mesh_graph, mesh_id)) {
+        return std::nullopt;  // the selected FabricConfig downgraded this descriptor to base routing
+    }
     TT_FATAL(
         axis == 0,
         "AxisRouteTopology: mesh M{} declares express links along dimension {}; this cut supports dimension 0 only",
@@ -357,26 +371,16 @@ std::optional<AxisRouteTopology> derive_express_ring_topology(const MeshGraph& m
     // wrap, which the overlay declares and which only decides which blocks exist.
     const bool wraps = axis_wraps(mesh_graph, mesh_id, axis, len);
 
-    // Closing a ring needs either the ordinary axis wrap, which joins the ends of a single pattern's
-    // class, or a second pattern whose blocks merge with the first into one cycle. With neither, this
-    // mesh has no express decomposition: it routes on the base grid and the declared chords go unused.
-    //
-    // This is a configuration outcome, not a malformed descriptor, so it degrades rather than throws.
-    // Connectivity is built from the effective fabric type, which a supplied FabricConfig replaces
-    // outright (mesh_graph.cpp), and get_fabric_type() maps everything that is not an explicit torus
-    // request to FabricType::MESH. A RING-declared axis therefore has no wrap edges whenever the
-    // control plane is constructed at a non-torus config -- which every caller does at least once
-    // before any torus config is selected, since the config change is what rebuilds the control plane.
-    if (!wraps && patterns.size() != 2) {
-        log_warning(
-            tt::LogFabric,
-            "Mesh M{} declares express links but its dim-{} axis has no end wrap under the current fabric "
-            "config, and one pattern cannot close a ring on its own. Express routing is off for this mesh; "
-            "it routes on the base grid. Select a torus fabric config along that axis to enable it.",
-            *mesh_id,
-            axis);
-        return std::nullopt;
-    }
+    // Closing a protected cycle needs either the ordinary axis wrap, which joins the ends of a
+    // single pattern's class, or a second pattern whose blocks merge with the first into one cycle.
+    // A plain FABRIC_2D downgrade has no realized Z edges and returned above; reaching this point
+    // means the selected configuration retained express connectivity and therefore must support it.
+    TT_FATAL(
+        wraps || patterns.size() == 2,
+        "AxisRouteTopology: mesh M{} realizes express links on dim {} but has neither an ordinary end wrap nor two "
+        "patterns that can close a protected cycle",
+        *mesh_id,
+        axis);
 
     for (auto& pattern : patterns) {
         pattern.wraps = pattern.declared_wrap.value_or(wraps);
