@@ -132,6 +132,89 @@ def test_broadcast_ring_wholeshard(
     assert not bad, f"broadcast_ring whole-shard mismatch on {len(bad)} device-shards, first: {bad[0]}"
 
 
+# Exact production kv layout: [2b, nh_local, seq, head_dim] -- heads(dim1)->tp, seq(dim2)->sp, head_dim
+# on dim3. SR transformer is dim=5120/num_heads=40 -> head_dim=128 (4 E-tiles), 10 heads/device at tp=4.
+# This is the shape sparse_attention actually feeds; the tests above use different dims/layout.
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
+    [
+        pytest.param((4, 8), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x8_ring"),
+        pytest.param((4, 32), 1, 0, ring_params_8k, ttnn.Topology.Ring, id="bh_4x32_ring"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("sender", [pytest.param(5, id="owner5"), pytest.param(-1, id="owner_last")])
+@pytest.mark.parametrize("use_l1_relay", [pytest.param(False, id="dram"), pytest.param(True, id="l1")])
+def test_broadcast_ring_production_layout(mesh_device, sp_axis, tp_axis, device_params, topology, sender, use_l1_relay):
+    tp_factor, sp_factor = tuple(mesh_device.shape)
+    n_batch = 2  # k|v stacked on the unsharded batch dim, as sparse_attention does
+    nh_local = 10  # 40 heads / tp=4
+    head_dim_tiles = 4  # head_dim 128 / 32
+    per_dev = 8  # seq tiles per device -> 2*10*8*4 = 640 pages/device, chunk64 -> 10 chunks
+    chunk_size_tiles = 64
+    owner = sender if sender >= 0 else sp_factor - 1
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    wsd_id = ttnn.SubDeviceId(0)
+    mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([crs])], 0)
+    mesh_device.load_sub_device_manager(mgr)
+    mesh_device.set_sub_device_stall_group([wsd_id])
+
+    n_heads = nh_local * tp_factor
+    n_seq = per_dev * sp_factor
+    torch.manual_seed(0)
+    host = torch.randn(n_batch, n_heads, n_seq * T, head_dim_tiles * T, dtype=torch.float32).to(torch.bfloat16).float()
+    shard_dims = [None, None]
+    shard_dims[tp_axis] = 1  # heads
+    shard_dims[sp_axis] = 2  # seq
+    rm = ttnn.from_torch(
+        host.to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+    tt_in = ttnn.to_layout(rm, ttnn.TILE_LAYOUT)
+
+    tt_out = ttnn.experimental.broadcast_ring(
+        tt_in,
+        sender_ring_index=owner,
+        cluster_axis=sp_axis,
+        topology=topology,
+        subdevice_id=wsd_id,
+        num_links=2,
+        chunk_size_tiles=chunk_size_tiles,
+        use_l1_relay=use_l1_relay,
+    )
+    ttnn.synchronize_device(mesh_device, sub_device_ids=[wsd_id])
+    out = ttnn.to_torch(
+        ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    ).float()
+
+    # Every sp device must hold the owner's seq shard, tile-for-tile, for its own heads and batch.
+    bad = []
+    for b in range(n_batch):
+        for h in range(n_heads):
+            golden = host[b, h, owner * per_dev * T : (owner + 1) * per_dev * T, :]
+            for c in range(sp_factor):
+                block = out[b, h, c * per_dev * T : (c + 1) * per_dev * T, :]
+                if not torch.equal(block, golden):
+                    first_bad = next(
+                        (
+                            st
+                            for st in range(per_dev)
+                            if not torch.equal(block[st * T : (st + 1) * T, :], golden[st * T : (st + 1) * T, :])
+                        ),
+                        -1,
+                    )
+                    bad.append((b, h, c, first_bad))
+    if bad:
+        logger.info(f"[prod_layout] {len(bad)} shards wrong; first few (batch,head,ring,first_bad_tile): {bad[:8]}")
+    assert not bad, f"broadcast_ring production-layout mismatch on {len(bad)} shards, first: {bad[0]}"
+
+
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
     [
