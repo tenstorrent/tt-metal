@@ -12,9 +12,11 @@ import pytest
 import torch
 
 import ttnn
-from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.llm_runtime.config import PagedKVCacheConfig, PageTableLayout, TraceConfig, WarmupConfig
 from models.common.llm_runtime.execution import EagerExecutor, TracedExecutor
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
+from models.common.llm_runtime.warmup import _build_plan
+from models.common.models import llama3_executor as llama3_family_executor
 from models.common.models.llama3_8b import executor as llama_executor
 from models.common.models.llama3_8b import generator as llama_generator
 from models.common.models.llama3_8b import model as llama_model
@@ -72,6 +74,10 @@ def _runtime_config():
         model_cache_path="cache",
         max_prefill_chunk_size=2048,
         trace_prefill_supported_seq_lens=(128, 1024),
+        supports_batched_prefill=True,
+        disable_batched_prefill=False,
+        max_prefill_batch_size=32,
+        batched_prefill_batched_extract=True,
         can_enable_trace=lambda sequence_length, num_cached_tokens=0: (
             num_cached_tokens == 0 and sequence_length in (128, 1024)
         ),
@@ -90,6 +96,86 @@ def _config(mode="none", *, num_blocks=None):
         ),
         device_sampling_enabled=False,
     )
+
+
+@pytest.mark.parametrize(
+    ("runtime_disabled", "device_sampling_enabled", "diagnostic_override", "expected_disabled"),
+    [
+        (False, False, False, False),
+        (True, False, False, True),
+        (False, True, False, True),
+        (True, True, False, True),
+        (False, True, True, False),
+        (True, True, True, False),
+    ],
+)
+def test_executor_resolves_batched_prefill_policy(
+    monkeypatch, runtime_disabled, device_sampling_enabled, diagnostic_override, expected_disabled
+):
+    runtime_config = _runtime_config()
+    runtime_config.disable_batched_prefill = runtime_disabled
+    base_config = _config()
+    config = llama_executor.Llama3ExecutorConfig(
+        trace=base_config.trace,
+        warmup=base_config.warmup,
+        paged_kv_cache=base_config.paged_kv_cache,
+        device_sampling_enabled=device_sampling_enabled,
+        allow_batched_prefill_with_device_sampling_for_diagnostics=diagnostic_override,
+    )
+    model = _model()
+    if device_sampling_enabled:
+
+        class _Sampling:
+            def decode_forward(self):
+                raise AssertionError("construction-policy test must not execute sampling")
+
+        class _SamplingState:
+            def __init__(self, sampling, **_kwargs):
+                self.sampling = sampling
+                self.seed_manager = SimpleNamespace()
+
+            def create_state(self):
+                return SimpleNamespace(seed_state=SimpleNamespace(capacity=32))
+
+            def admit(self, *args, **kwargs):
+                return None
+
+            def decode_forward(self, *args, **kwargs):
+                return None
+
+            def release(self, *args, **kwargs):
+                return None
+
+        monkeypatch.setattr(llama3_family_executor, "Sampling1D", _Sampling)
+        monkeypatch.setattr(llama3_family_executor, "SamplingState1D", _SamplingState)
+        sampler = _Sampling()
+        sampler.config = SimpleNamespace(
+            is_resolved=lambda: True,
+            allow_force_argmax=True,
+            max_batch_size=32,
+            max_top_k=32,
+        )
+        model.sampling = sampler
+
+    executor = llama_executor.Llama3Executor(model, runtime_config, config)
+
+    assert executor.prefill_runtime.config.supports_batched_prefill is True
+    assert executor.prefill_runtime.config.disable_batched_prefill is expected_disabled
+    assert executor.prefill_runtime.config.max_prefill_batch_size == 32
+    assert executor.prefill_runtime.config.batched_prefill_batched_extract is True
+
+
+def test_executor_rejects_batched_prefill_diagnostic_override_without_device_sampling(expect_error):
+    base_config = _config()
+
+    with expect_error(ValueError, "requires device_sampling_enabled"):
+        llama_executor.Llama3ExecutorConfig(
+            trace=base_config.trace,
+            warmup=base_config.warmup,
+            paged_kv_cache=base_config.paged_kv_cache,
+            device_sampling_enabled=False,
+            allow_batched_prefill_with_device_sampling_for_diagnostics=True,
+        )
 
 
 @pytest.mark.parametrize("mode", ["none", "decode_only", "all"])
@@ -133,6 +219,9 @@ def test_model_owned_executor_constructs_exact_composition(mode):
                 "empty_slots",
                 "kv_cache",
                 "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
                 "execution",
             ),
         ),
@@ -145,6 +234,9 @@ def test_model_owned_executor_constructs_exact_composition(mode):
                 "page_table",
                 "kv_cache",
                 "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
                 "reset_batch",
                 "execution",
             ),
@@ -158,13 +250,25 @@ def test_model_owned_executor_constructs_exact_composition(mode):
                 "empty_slots",
                 "kv_cache",
                 "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
                 "execution",
             ),
         ),
         (
             "decode_forward",
             ("self", "tokens", "start_pos", "page_table"),
-            ("kv_cache", "sampling_params", "reset_batch", "read_from_device", "execution"),
+            (
+                "kv_cache",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+                "reset_batch",
+                "read_from_device",
+                "execution",
+            ),
         ),
         ("read_decode_output", ("self", "tt_out"), ("async_read",)),
         ("process_decode_output_host", ("self", "tt_out"), ("is_tokens",)),
@@ -292,19 +396,58 @@ def test_model_owned_executor_validates_cache_then_omits_it_from_execution():
     for target, expected_names in (
         (
             execution.compile_prefill,
-            ("tokens", "page_table", "prompt_lens", "start_pos", "empty_slots", "sampling_params"),
+            (
+                "tokens",
+                "page_table",
+                "prompt_lens",
+                "start_pos",
+                "empty_slots",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+            ),
         ),
         (
             execution.compile_decode,
-            ("tokens", "start_pos", "page_table", "sampling_params", "reset_batch"),
+            (
+                "tokens",
+                "start_pos",
+                "page_table",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+                "reset_batch",
+            ),
         ),
         (
             execution.prefill_forward,
-            ("tokens", "page_table", "prompt_lens", "start_pos", "empty_slots", "sampling_params"),
+            (
+                "tokens",
+                "page_table",
+                "prompt_lens",
+                "start_pos",
+                "empty_slots",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+            ),
         ),
         (
             execution.decode_forward,
-            ("tokens", "start_pos", "page_table", "sampling_params", "reset_batch", "read_from_device"),
+            (
+                "tokens",
+                "start_pos",
+                "page_table",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+                "reset_batch",
+                "read_from_device",
+            ),
         ),
     ):
         assert target.call_count == 1
@@ -442,12 +585,6 @@ def test_vllm_capacity_resolution_reconfigures_existing_runtime_owners_before_al
     assert executor.prefill_runtime.config.page_table_layout is executor.page_table_layout
     assert executor.decode_runtime.config.page_table_layout is executor.page_table_layout
     assert executor.warmup.config.page_table_layout is executor.page_table_layout
-    assert (
-        executor.prefill_runtime.config.page_table_layout_ceiling
-        is executor.decode_runtime.config.page_table_layout_ceiling
-        is executor.warmup.config.page_table_layout_ceiling
-        is executor.page_table_layout
-    )
 
     def fake_allocate():
         assert executor._runtime_configuration_sealed
@@ -531,7 +668,7 @@ def test_model_owned_cleanup_is_ordered_best_effort_retryable_and_idempotent(exp
         def __init__(self, name):
             self.name = name
 
-        def cleanup(self):
+        def cleanup(self, *args):
             calls.append(self.name)
             if self.name in failures:
                 raise RuntimeError(self.name)
@@ -551,6 +688,8 @@ def test_model_owned_cleanup_is_ordered_best_effort_retryable_and_idempotent(exp
     executor.program_compiler = _Owner("program")
     executor.config = SimpleNamespace(device_sampling_enabled=True)
     executor.model = SimpleNamespace(sampling=_Owner("sampling"))
+    executor.sampling_state_controller = _Owner("sampling-state")
+    executor.sampling_state = object()
     executor.kv_cache_manager = _Owner("kv")
 
     with expect_error(RuntimeError, "reader") as raised:
@@ -563,6 +702,7 @@ def test_model_owned_cleanup_is_ordered_best_effort_retryable_and_idempotent(exp
         "decode-external",
         "trace",
         "program",
+        "sampling-state",
         "sampling",
         "kv",
     ]
@@ -644,6 +784,7 @@ class _FakeLane:
         self.model_args = llm.runtime_config
         self.mesh_device = llm.model.config.mesh_device
         self.cache_path = llm.runtime_config.model_cache_path
+        self._request_state_fields = ("prompt_tokens", "output_tokens", "slot_remap")
         self.config = config
         self.paged_kv_cache_config = config.paged_kv_cache
         self.already_warmed_up_prefill = False
@@ -653,7 +794,11 @@ class _FakeLane:
         self.cleanup_calls += 1
 
 
-def test_generator_constructs_model_owned_lane_configs(monkeypatch):
+@pytest.mark.parametrize("device_sampling_enabled", (False, True), ids=("sampling-off", "sampling-on"))
+def test_generator_constructs_model_owned_lane_configs_with_exact_decode_coverage(
+    monkeypatch,
+    device_sampling_enabled,
+):
     executor_calls = []
     monkeypatch.setattr(llama_generator, "_create_submeshes", lambda mesh, dp: [_Mesh(), _Mesh()])
 
@@ -688,14 +833,26 @@ def test_generator_constructs_model_owned_lane_configs(monkeypatch):
             n_layers=1,
             tt_data_parallel=2,
             trace_mode="all",
-            device_sampling_enabled=True,
+            device_sampling_enabled=device_sampling_enabled,
         )
     )
 
     assert isinstance(generator.target, LaneGroupExecutor)
     assert len(executor_calls) == 2
     assert all(isinstance(config, llama_executor.Llama3ExecutorConfig) for _, config in executor_calls)
-    assert all(not config.warmup.include_decode_top_k for _, config in executor_calls)
+    assert all(config.warmup.include_decode_top_k is device_sampling_enabled for _, config in executor_calls)
+    for _, executor_config in executor_calls:
+        plan = _build_plan(
+            warmup=executor_config.warmup,
+            layout=PageTableLayout(block_size=32, raw_capacity_width=32, prefill_width=64, decode_width=32),
+            prefill_sequence_lengths=(128,),
+            lane_batch_size=2,
+            allow_force_argmax=True,
+            can_sample_on_device=device_sampling_enabled,
+        )
+        assert [case.sampling_path for case in plan.decode] == (
+            ["logits", "argmax", "topk"] if device_sampling_enabled else ["logits"]
+        )
     assert isinstance(generator._adapter.config, llama_generator.VLLMAdapterConfig)
     assert vars(generator._adapter) == {"config": generator._adapter.config}
     assert generator._adapter.config.trace.mode == "all"
@@ -731,6 +888,7 @@ class _RecordingTarget:
     def __init__(self, *, traceable_prefill=True):
         self.calls = []
         self.traceable_prefill = traceable_prefill
+        self._request_state_fields = ("prompt_tokens", "output_tokens", "slot_remap")
 
     def _record(self, name, arguments):
         arguments = {key: value for key, value in arguments.items() if key != "self"}
@@ -758,6 +916,9 @@ class _RecordingTarget:
         empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
         kv_cache: Any = None,  # ↓ Borrowed resources
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         execution: EagerExecutor | TracedExecutor | None = None,  # ↓ Internal dispatch
     ) -> str:
         return self._record("prefill_forward", locals())
@@ -770,6 +931,9 @@ class _RecordingTarget:
         *,
         kv_cache: Any = None,  # ↓ Borrowed resources
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         reset_batch: bool = False,  # ↓ State transition
         read_from_device: bool = True,  # ↓ Output policy
         execution: EagerExecutor | TracedExecutor | None = None,  # ↓ Internal dispatch
