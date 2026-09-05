@@ -1672,12 +1672,32 @@ std::vector<Tensor> prod_bw(
     }
 
     if (all_dimensions) {
-        Tensor temp = ttnn::multiply(
-            prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
-        Tensor fill_tensor = ttnn::fill_first_val_into_tensor<::bfloat16>(
-            temp, temp.dtype(), temp.layout(), temp.device(), output_memory_config);
-        Tensor all_dimension_result = ttnn::multiply(
-            ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);
+        // #54551 : gérer les zéros dans le gradient de prod global.
+        // reciprocal(0) = inf et prod * inf = NaN. dy/dx_i = prod_{j != i} x_j :
+        //   - 0 zéro    : prod_result * reciprocal(input)
+        //   - 1 zéro    : prod_nz (produit des non-zéros) au zéro, 0 ailleurs
+        //   - >=2 zéros : 0 partout
+        Tensor is_zero = ttnn::eqz(input, output_memory_config);
+        Tensor input_nz = ttnn::where(is_zero, 1.0f, input, output_memory_config);
+        Tensor prod_nz = ttnn::prod(input_nz, dim, keepdim, output_memory_config);
+
+        Tensor prod_result_full = ttnn::fill_first_val_into_tensor<::bfloat16>(
+            prod_result, prod_result.dtype(), prod_result.layout(), prod_result.device(), output_memory_config);
+        Tensor prod_nz_full = ttnn::fill_first_val_into_tensor<::bfloat16>(
+            prod_nz, prod_nz.dtype(), prod_nz.layout(), prod_nz.device(), output_memory_config);
+
+        Tensor zeros = ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_memory_config);
+        Tensor grad_no_zero = ttnn::multiply(
+            prod_result_full, ttnn::reciprocal(input, output_memory_config), std::nullopt, output_memory_config);
+        Tensor grad_one_zero = ttnn::where(is_zero, prod_nz_full, zeros, output_memory_config);
+
+        Tensor prod_grad = ttnn::where(
+            ttnn::eqz(prod_result_full, output_memory_config),
+            ttnn::where(ttnn::eqz(prod_nz_full, output_memory_config), zeros, grad_one_zero, output_memory_config),
+            grad_no_zero,
+            output_memory_config);
+
+        Tensor all_dimension_result = ttnn::multiply(prod_grad, grad, std::nullopt, output_memory_config);
         grad_tensor.emplace_back(all_dimension_result);
         return grad_tensor;
     }
@@ -1714,12 +1734,22 @@ std::vector<Tensor> prod_bw(
             }
         }
     }
-    Tensor reciprocal_input = ttnn::reciprocal(input, output_memory_config);
-    Tensor temp = ttnn::multiply(
-        prod_result,
-        (*dim == 1 || *dim == 0 || *dim == -4 || *dim == -3) ? grad : updated_grad,
-        std::nullopt,
+    // #54551 : gradient de prod sûr (gère les zéros), le long de dim.
+    Tensor is_zero = ttnn::eqz(input, output_memory_config);
+    Tensor input_nz = ttnn::where(is_zero, 1.0f, input, output_memory_config);
+    Tensor prod_nz = ttnn::prod(input_nz, dim, keepdim, output_memory_config);
+    Tensor zeros = ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_memory_config);
+    Tensor grad_no_zero = ttnn::multiply(
+        prod_result, ttnn::reciprocal(input, output_memory_config), std::nullopt, output_memory_config);
+    Tensor grad_one_zero = ttnn::where(is_zero, prod_nz, zeros, output_memory_config);
+    Tensor prod_grad = ttnn::where(
+        ttnn::eqz(prod_result, output_memory_config),
+        ttnn::where(ttnn::eqz(prod_nz, output_memory_config), zeros, grad_one_zero, output_memory_config),
+        grad_no_zero,
         output_memory_config);
+
+    Tensor reciprocal_input = prod_grad;
+    Tensor temp = (*dim == 1 || *dim == 0 || *dim == -4 || *dim == -3) ? grad : updated_grad;
     if (temp.layout() == Layout::ROW_MAJOR) {
         temp = ttnn::operations::unary_backward::change_layout_to_tile(temp, output_memory_config);
     }
