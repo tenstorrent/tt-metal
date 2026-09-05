@@ -284,15 +284,51 @@ _PARITY_IDS = [
 ]
 
 
-def _cb_signature(descriptor):
+# --- Refinement 1, lever 1: the ONE sanctioned divergence, and its measurement ----
+#
+# The seed pins the combine slot tree's level-0 fan-in at the constant 4.  Refinement 1
+# DERIVES it -- the largest divisor of GROUP_SIZE in the measured [4,10] band that the
+# tree's two gates admit -- so on a group the rule shapes differently, the two gather
+# rings (cb_partials_gathered = f0 pages, cb_gather_l1 = f1 pages) and the writer's
+# TREE_F0 / TREE_F1 compile-time args legitimately differ from the seed's.
+#
+# The queue's rule for this is explicit: "a faster program for an operand-free
+# configuration is allowed, but only with a MEASUREMENT, never with an argument".  The
+# measurement, on the one geometry in this parity set the rule reshapes -- the ROW_MAJOR
+# BAND width shard, whose auto grid is 64 cores (blackhole p150b, in-process profiler,
+# median of 3, two reps, whole-op DEVICE KERNEL DURATION):
+#
+#     f0                     no_gamma            gamma
+#     4 (the seed's, 4x16)   24035 / 24096 ns    24061 / 23992 ns
+#     8 (derived,     8x8)   23919 / 23836 ns    23839 / 23869 ns   ~1.007x, 4/4 reps
+#
+# ... and the derived shape is also strictly SMALLER in L1: (8 + 8) ring pages against
+# the seed's (4 + 16), i.e. 32 KB per core given back.  On the TILE width shard at the
+# same group size the same change measures 5498 -> 5047 ns (1.089x).
+#
+# So the two tree rings are compared with an ALLOWANCE rather than for equality, and the
+# allowance is one-directional: this op may never spend MORE L1 there than the seed.
+# Every other CB, and every other writer CT arg, is still asserted IDENTICAL.
+_TREE_RING_CBS = (11, 17)  # cb_partials_gathered, cb_gather_l1
+_TREE_WRITER_CT = (16, 17)  # TREE_F0, TREE_F1 in rms_norm_ttnn_writer.cpp
+_TREE_COMPUTE_CT = (17, 18)  # TREE_F0, TREE_F1 in rms_norm_ttnn_compute.cpp
+
+
+def _cb_signature(descriptor, drop=()):
     out = {}
     for cb in descriptor.cbs:
         fd = cb.format_descriptors[0]
         # `data_format` is a C++ enum the binding cannot convert back to Python,
         # so it is not read here.  (total_size, page_size) already pins the page
         # count AND the element width, which is what the blocking decision is.
+        if fd.buffer_index in drop:
+            continue
         out[fd.buffer_index] = (cb.total_size, fd.page_size)
     return out
+
+
+def _tree_ring_bytes(descriptor):
+    return sum(cb.total_size for cb in descriptor.cbs if cb.format_descriptors[0].buffer_index in _TREE_RING_CBS)
 
 
 @pytest.mark.parametrize("shape, layout, memory_layout, shard", _PARITY_CASES, ids=_PARITY_IDS)
@@ -323,19 +359,32 @@ def test_program_is_structurally_the_seeds(device, shape, layout, memory_layout,
     seed = seed_descriptor(x, out, gamma=g, epsilon=1e-12, compute_kernel_config=cfg)
     mine = ttnn_descriptor(x, out, weight=g, epsilon=1e-12, compute_kernel_config=cfg, program_config=_PC_NONE)
 
-    assert _cb_signature(mine) == _cb_signature(seed), (
+    assert _cb_signature(mine, drop=_TREE_RING_CBS) == _cb_signature(seed, drop=_TREE_RING_CBS), (
         "the CB set diverged from the seed's -- that is the whole L1 footprint and the whole "
         "blocking decision, so a difference here means the operand-aware budget solved a "
         "configuration that supplies no operand differently"
     )
-    # The writer takes no operand at all, so not one of its args may move.
-    assert list(mine.kernels[1].compile_time_args) == list(
-        seed.kernels[1].compile_time_args
+    assert _tree_ring_bytes(mine) <= _tree_ring_bytes(seed), (
+        "the derived combine-tree arity may reshape the two gather rings (measured, see "
+        "_TREE_RING_CBS above) but it may never make them cost MORE L1 than the seed's"
+    )
+
+    # The writer takes no operand at all, so not one of its args may move -- except
+    # TREE_F0 / TREE_F1, which the derived arity owns (see _TREE_WRITER_CT above).
+    def _mask_writer(args):
+        return [a for i, a in enumerate(args) if i not in _TREE_WRITER_CT]
+
+    assert _mask_writer(list(mine.kernels[1].compile_time_args)) == _mask_writer(
+        list(seed.kernels[1].compile_time_args)
     ), "the writer takes no operand; not one of its CT args may move"
+
     # The compute kernel's four new args are appended AFTER the seed's 19, and it
     # carries no accessor block, so the seed's list is a plain prefix.
-    seed_compute = list(seed.kernels[2].compile_time_args)
-    my_compute = list(mine.kernels[2].compile_time_args)
+    def _mask_compute(args):
+        return [a for i, a in enumerate(args) if i not in _TREE_COMPUTE_CT]
+
+    seed_compute = _mask_compute(list(seed.kernels[2].compile_time_args))
+    my_compute = _mask_compute(list(mine.kernels[2].compile_time_args)[: len(seed.kernels[2].compile_time_args)])
     assert my_compute[: len(seed_compute)] == seed_compute, (
         f"the compute kernel's new CT args must be APPENDED, not inserted "
         f"(seed n={len(seed_compute)}, mine n={len(my_compute)})"
