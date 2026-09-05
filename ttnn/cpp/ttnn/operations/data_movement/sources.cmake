@@ -189,6 +189,7 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     gather/device/gather_program_factory.cpp
     gather/tosa/gather_tosa.cpp
     concat/device/concat_tiled_unaligned_program_factory.cpp
+    common/synthesize_output_shard_spec.cpp
 )
 
 set(TTNN_OP_DATA_MOVEMENT_API_HEADERS
