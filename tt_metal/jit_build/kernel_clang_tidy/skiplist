@@ -6,11 +6,13 @@
 # suppresses clang-diagnostic-* findings, which is the point: the SFPI headers
 # emit parse noise we cannot act on here.
 #
-# Exclusion-only by design. The translation units are the firmware wrappers
+# Exclusion-only, same shape as tt-umd's .codechecker.skiplist. Note that an
+# allow-list keyed on kernels/ would analyze nothing at all: the translation
+# units are the firmware wrappers
 # (tt_metal/hw/firmware/src/.../{trisck,brisck,ncrisck,idle_erisck}.cc) with the
-# kernel #included into them, so an allow-list keyed on kernels/ would skip
-# every TU and analyze nothing. Anything not listed here is analyzed, which
-# fails open for in-repo code as new device directories appear.
+# kernel #included into them, so no TU path contains kernels/. Anything not
+# listed here is analyzed, which fails open for in-repo code as new device
+# directories appear.
 
 # Upstream toolchain: pinned SFPI release and the host libc/libstdc++ used for
 # the analysis parse. Not fixable in this repo.

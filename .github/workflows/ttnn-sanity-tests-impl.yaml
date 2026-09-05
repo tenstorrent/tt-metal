@@ -332,32 +332,23 @@ jobs:
         if: ${{ inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') }}
         continue-on-error: true
         run: |
-          find_bin() {
-            for v in 21 20 19 18 17 ""; do
-              cand="$1${v:+-$v}"
-              if command -v "$cand" >/dev/null 2>&1; then command -v "$cand"; return; fi
-            done
-          }
-          tidy_bin=$(find_bin clang-tidy)
-          clang_bin=$(find_bin clang)
-          if [ -z "$tidy_bin" ] || [ -z "$clang_bin" ]; then
-            apt-get update || true
-            apt-get install -y clang-tidy clang || true
-            tidy_bin=$(find_bin clang-tidy)
-            clang_bin=$(find_bin clang)
-          fi
+          # The ci-test image is not the dev image, so the toolchain may be absent.
+          command -v clang-tidy-20 >/dev/null 2>&1 || { apt-get update || true; apt-get install -y clang-tidy-20 clang-20 || true; }
+          # Unversioned names, so CodeChecker resolves the binaries itself
+          # (ClangSA.analyzer_binary() is consulted even when only clang-tidy
+          # runs, and None crashes compilation-db parsing).
+          for tool in clang clang++ clang-tidy; do
+            update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100 || true
+          done
           if command -v uv >/dev/null 2>&1; then
             uv pip install codechecker==6.27.1 || true
           else
             pip3 install codechecker==6.27.1 || pip install codechecker==6.27.1 || true
           fi
           tidy_ready=false
-          # CodeChecker's compilation-db parser needs a clangsa binary configured
-          # even when only clang-tidy runs (ClangSA.analyzer_binary() is consulted
-          # unconditionally and None crashes entry parsing).
-          if [ -n "$tidy_bin" ] && [ -n "$clang_bin" ] && command -v CodeChecker >/dev/null 2>&1; then
+          if command -v clang-tidy >/dev/null 2>&1 && command -v clang >/dev/null 2>&1 \
+             && command -v CodeChecker >/dev/null 2>&1; then
             tidy_ready=true
-            echo "CC_ANALYZER_BIN=clang-tidy:${tidy_bin};clangsa:${clang_bin}" >> "$GITHUB_ENV"
           else
             echo "::warning::clang-tidy/clang/CodeChecker unavailable; kernel clang-tidy will be skipped."
           fi

@@ -177,8 +177,12 @@ Two artifacts per group: `kernel-clang-tidy-<group>` (compile_commands.json,
 summary, plists) and `kernel-clang-tidy-html-<group>` (browsable report).
 Gotcha found while wiring this: CodeChecker's compilation-db parser consults
 `ClangSA.analyzer_binary()` unconditionally, so a `clang` binary must be
-resolvable (we pass both via `CC_ANALYZER_BIN=clang-tidy:…;clangsa:…`) even
-though only clang-tidy runs.
+resolvable even though only clang-tidy runs. Handled the way
+`tt-umd`'s `code-analysis.yaml` does it — `update-alternatives` symlinks for
+`clang`, `clang++` and `clang-tidy` so CodeChecker resolves them natively,
+rather than detecting versioned binaries and passing `CC_ANALYZER_BIN`. The
+`apt-get` fallback stays because these legs run in the ci-test image, not the
+dev image tt-umd uses, so the toolchain is not guaranteed present.
 
 The dedicated caller is `.github/workflows/kernel-clang-tidy.yaml` (structured
 after `code-coverage.yaml`): build → run the ttnn sanity suite on hardware via
@@ -264,12 +268,14 @@ effect: with it set, CodeChecker returns an empty checker list
 replaced `HeaderFilterRegex`. Two reasons the skiplist is the better mechanism
 here: it also drops `clang-diagnostic-*` findings, which a header filter
 structurally cannot (hence the SFPI and glibc parse noise in earlier reports),
-and it keeps scope in one reviewable file. The list is exclusion-only —
-upstream SFPI, host libc, and the generated JIT glue in the kernel cache —
-because the translation units are the firmware wrappers under
-`tt_metal/hw/firmware/src/`, not files under `kernels/`; an allow-list keyed on
-`kernels/` would skip every TU and analyze nothing. Exclusion-only also fails
-open as new in-repo device directories appear.
+and it keeps scope in one reviewable file. The list is exclusion-only — the
+same shape as tt-umd's `.codechecker.skiplist` — covering upstream SFPI, host
+libc, and the generated JIT glue in the kernel cache. Worth knowing why an
+allow-list is not an option here: the translation units are the firmware
+wrappers under `tt_metal/hw/firmware/src/`, with kernels `#include`d into them,
+so no TU path contains `kernels/` and an allow-list keyed on it would analyze
+nothing at all. Exclusion-only also fails open as new in-repo device
+directories appear.
 
 **Check options** go through `--checker-config
 clang-tidy:<checker>:<option>=<value>`, not through a config file. Forwarding
