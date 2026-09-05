@@ -18,6 +18,9 @@ void kernel_main() {
     constexpr uint32_t cb_compute_output_id = get_named_compile_time_arg_val("cb_compute_output_id");
     constexpr uint32_t tile_granularity = get_named_compile_time_arg_val("tile_granularity");
     constexpr uint32_t ring_size = get_named_compile_time_arg_val("ring_size");
+    constexpr uint32_t input_tensor_B = get_named_compile_time_arg_val("input_tensor_B");
+    constexpr uint32_t slice_C = get_named_compile_time_arg_val("slice_C");
+    constexpr uint32_t fuse_op = get_named_compile_time_arg_val("fuse_op");
 
     uint32_t arg_idx = 0;
     uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
@@ -39,94 +42,106 @@ void kernel_main() {
 
     // Ring step outermost, batches inside, mirroring the reader and writer: every (batch, channel)
     // unit this worker owns is reduced within each ring step.
-    constexpr uint32_t ring_size_by_2 = ring_size / 2;
-    uint32_t num_iters = ring_size_by_2 + 1;
-    for (uint32_t i = 0; i < num_iters; ++i) {
-        // State machine for control variables
-        bool even_chunks, odd_chunks, reduce_even_chunks, reduce_odd_chunks, reduce_output;
-        if (i == 0) {
-            even_chunks = direction;     // process the even chunks (half the tensor slice)
-            odd_chunks = !direction;     // process the odd chunks (other half of tensor slice)
-            reduce_even_chunks = false;  // (input_tensor + interm_tensor) or (input_tensor)
-            reduce_odd_chunks = false;   // (input_tensor + interm_tensor) or (input_tensor)
-            reduce_output = false;  // (input_tensor + interm_tensor + output_tensor) or (input_tensor + interm_tensor)
-        } else if (i == ring_size_by_2) {
-            even_chunks = direction;
-            odd_chunks = !direction;
-            reduce_even_chunks = even_chunks;
-            reduce_odd_chunks = odd_chunks;
-            reduce_output = true;
-        } else if (i == 1) {
-            even_chunks = true;
-            odd_chunks = true;
-            reduce_even_chunks = direction;
-            reduce_odd_chunks = !direction;
-            reduce_output = false;
-        } else {
-            even_chunks = true;
-            odd_chunks = true;
-            reduce_even_chunks = even_chunks;
-            reduce_odd_chunks = odd_chunks;
-            reduce_output = false;
-        }
+    // Fused with a batched producer (fuse_op, B > 1): one ring traversal per batch, so the reduce-scatter
+    // of batch b overlaps the matmul producing batch b+1, which is what the fused op batches for. In every
+    // other case a single traversal carries all of the worker's units, one ring step at a time.
+    constexpr uint32_t num_traversals = (fuse_op && input_tensor_B > 1) ? input_tensor_B : 1;
+    for (uint32_t t = 0; t < num_traversals; ++t) {
+        // Units of this traversal: the worker's whole range, or its intersection with batch t.
+        const uint32_t t_unit_start =
+            num_traversals == 1 ? unit_start : (unit_start > t * slice_C ? unit_start : t * slice_C);
+        const uint32_t t_unit_end =
+            num_traversals == 1 ? unit_end : (unit_end < (t + 1) * slice_C ? unit_end : (t + 1) * slice_C);
+        constexpr uint32_t ring_size_by_2 = ring_size / 2;
+        uint32_t num_iters = ring_size_by_2 + 1;
+        for (uint32_t i = 0; i < num_iters; ++i) {
+            // State machine for control variables
+            bool even_chunks, odd_chunks, reduce_even_chunks, reduce_odd_chunks, reduce_output;
+            if (i == 0) {
+                even_chunks = direction;     // process the even chunks (half the tensor slice)
+                odd_chunks = !direction;     // process the odd chunks (other half of tensor slice)
+                reduce_even_chunks = false;  // (input_tensor + interm_tensor) or (input_tensor)
+                reduce_odd_chunks = false;   // (input_tensor + interm_tensor) or (input_tensor)
+                reduce_output =
+                    false;  // (input_tensor + interm_tensor + output_tensor) or (input_tensor + interm_tensor)
+            } else if (i == ring_size_by_2) {
+                even_chunks = direction;
+                odd_chunks = !direction;
+                reduce_even_chunks = even_chunks;
+                reduce_odd_chunks = odd_chunks;
+                reduce_output = true;
+            } else if (i == 1) {
+                even_chunks = true;
+                odd_chunks = true;
+                reduce_even_chunks = direction;
+                reduce_odd_chunks = !direction;
+                reduce_output = false;
+            } else {
+                even_chunks = true;
+                odd_chunks = true;
+                reduce_even_chunks = even_chunks;
+                reduce_odd_chunks = odd_chunks;
+                reduce_output = false;
+            }
 
-        for (uint32_t u = unit_start; u < unit_end; ++u) {
-            uint32_t tiles_read = start_tiles_read;
-            uint32_t total_tiles_to_read = start_tiles_to_read;
+            for (uint32_t u = t_unit_start; u < t_unit_end; ++u) {
+                uint32_t tiles_read = start_tiles_read;
+                uint32_t total_tiles_to_read = start_tiles_to_read;
 
-            while (tiles_read < total_tiles_to_read) {
-                const auto [is_even_chunk, tiles_to_read] =
-                    reduce_scatter_common::chunk_ring_parity<tile_granularity>(tiles_read, total_tiles_to_read);
+                while (tiles_read < total_tiles_to_read) {
+                    const auto [is_even_chunk, tiles_to_read] =
+                        reduce_scatter_common::chunk_ring_parity<tile_granularity>(tiles_read, total_tiles_to_read);
 
-                if ((is_even_chunk && !even_chunks) || (!is_even_chunk && !odd_chunks) || tiles_to_read == 0) {
-                    // Skip this chunk
-                    tiles_read += tiles_to_read;
-                } else {
-                    const bool reduce_interm =
-                        (is_even_chunk && reduce_even_chunks) || (!is_even_chunk && reduce_odd_chunks);
+                    if ((is_even_chunk && !even_chunks) || (!is_even_chunk && !odd_chunks) || tiles_to_read == 0) {
+                        // Skip this chunk
+                        tiles_read += tiles_to_read;
+                    } else {
+                        const bool reduce_interm =
+                            (is_even_chunk && reduce_even_chunks) || (!is_even_chunk && reduce_odd_chunks);
 
-                    if (reduce_interm) {
-                        // If reduce_output, add 3 tensors. Else add 2 tensors.
-                        if (reduce_output) {
-                            cb_interm2.wait_front(tile_granularity);
-                        }
-                        cb_input.wait_front(tile_granularity);
-                        cb_interm.wait_front(tile_granularity);
-
-                        tile_regs_acquire();  // acquire DST registers for MATH thread, resets DST to 0
-                        if (reduce_output) {
-                            copy_init(cb_interm2_id);
-                            for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
-                                copy_tile(cb_interm2_id, tile_id, tile_id);  // load DST
+                        if (reduce_interm) {
+                            // If reduce_output, add 3 tensors. Else add 2 tensors.
+                            if (reduce_output) {
+                                cb_interm2.wait_front(tile_granularity);
                             }
-                            add_init(cb_interm_id, cb_input_id, true);  // DST = srcA + srcB + DST
-                        } else {
-                            add_init(cb_interm_id, cb_input_id, false);  // DST = srcA + srcB
-                        }
-                        for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
-                            add_tiles(cb_interm_id, cb_input_id, tile_id, tile_id, tile_id);
-                        }
-                        tile_regs_commit();  // release lock on DST by MATH thread, signal the PACK thread
+                            cb_input.wait_front(tile_granularity);
+                            cb_interm.wait_front(tile_granularity);
 
-                        if (reduce_output) {
-                            cb_interm2.pop_front(tile_granularity);
-                        }
-                        cb_input.pop_front(tile_granularity);
-                        cb_interm.pop_front(tile_granularity);
+                            tile_regs_acquire();  // acquire DST registers for MATH thread, resets DST to 0
+                            if (reduce_output) {
+                                copy_init(cb_interm2_id);
+                                for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
+                                    copy_tile(cb_interm2_id, tile_id, tile_id);  // load DST
+                                }
+                                add_init(cb_interm_id, cb_input_id, true);  // DST = srcA + srcB + DST
+                            } else {
+                                add_init(cb_interm_id, cb_input_id, false);  // DST = srcA + srcB
+                            }
+                            for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
+                                add_tiles(cb_interm_id, cb_input_id, tile_id, tile_id, tile_id);
+                            }
+                            tile_regs_commit();  // release lock on DST by MATH thread, signal the PACK thread
 
-                        cb_compute_output.reserve_back(tile_granularity);
-                        tile_regs_wait();  // acquire lock on DST for PACK thread
-                        for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
-                            pack_tile(tile_id, cb_compute_output_id, tile_id);  // pack results from DST registers
-                                                                                // to output circular buffers
-                        }
-                        tile_regs_release();  // release lock on DST by PACK thread
-                        cb_compute_output.push_back(tile_granularity);
-                    }
-                    tiles_read += tiles_to_read;
+                            if (reduce_output) {
+                                cb_interm2.pop_front(tile_granularity);
+                            }
+                            cb_input.pop_front(tile_granularity);
+                            cb_interm.pop_front(tile_granularity);
 
-                }  // if skip or process
-            }  // while total_tiles_to_read
-        }  // for units
-    }  // for num_iters
+                            cb_compute_output.reserve_back(tile_granularity);
+                            tile_regs_wait();  // acquire lock on DST for PACK thread
+                            for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
+                                pack_tile(tile_id, cb_compute_output_id, tile_id);  // pack results from DST registers
+                                                                                    // to output circular buffers
+                            }
+                            tile_regs_release();  // release lock on DST by PACK thread
+                            cb_compute_output.push_back(tile_granularity);
+                        }
+                        tiles_read += tiles_to_read;
+
+                    }  // if skip or process
+                }  // while total_tiles_to_read
+            }  // for units
+        }  // for num_iters
+    }  // for traversals
 }

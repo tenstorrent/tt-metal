@@ -126,7 +126,8 @@ std::unordered_map<std::string, uint32_t> get_ring_writer_named_compile_args(
     const uint32_t slice_C,
     const uint32_t slice_Ht,
     const uint32_t slice_Wt,
-    const uint32_t normalized_dim) {
+    const uint32_t normalized_dim,
+    const bool fuse_op) {
     if (normalized_dim == 0) {
         return {
             {"my_chip_id", ring_index},
@@ -161,6 +162,7 @@ std::unordered_map<std::string, uint32_t> get_ring_writer_named_compile_args(
         {"slice_Ht", slice_Ht},
         {"slice_Wt", slice_Wt},
         {"dim", normalized_dim},
+        {"fuse_op", fuse_op},
     };
 }
 
@@ -174,7 +176,8 @@ std::unordered_map<std::string, uint32_t> get_ring_compute_named_compile_args(
     const uint32_t input_tensor_B,
     const uint32_t slice_B,
     const uint32_t slice_C,
-    const uint32_t normalized_dim) {
+    const uint32_t normalized_dim,
+    const bool fuse_op) {
     if (normalized_dim == 0) {
         return {
             {"cb_input_id", input_cb_index},
@@ -194,6 +197,7 @@ std::unordered_map<std::string, uint32_t> get_ring_compute_named_compile_args(
         {"ring_size", ring_size},
         {"input_tensor_B", input_tensor_B},
         {"slice_C", slice_C},
+        {"fuse_op", fuse_op},
     };
 }
 
@@ -377,6 +381,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     TT_FATAL(ring_size % 2 == 0, "reduce_scatter_minimal_async ring implementation doesn't support odd ring size");
 
     bool fuse_op = fused_op_signaler.has_value();
+    // Fused with a batched producer, the ring kernels make one traversal per batch so each batch's
+    // reduce-scatter overlaps the matmul producing the next; every worker then has to hold a share of
+    // every batch, which the page-major split gives and the unit-major split does not.
 
     // op hyperparams
     // Get worker cores
@@ -495,6 +502,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
     const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
+    const bool per_batch_traversals = fuse_op && input_tensor_B > 1;
     const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;
     const uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
     const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
@@ -702,7 +710,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         slice_C,
         slice_Ht,
         slice_Wt,
-        normalized_dim);
+        normalized_dim,
+        fuse_op);
     if (normalized_dim != 0) {
         // Staging-layout switch consumed by the unified ring writer. The chunk-paged sizing args are
         // only read by that branch, but must always be present for the kernel to compile.
@@ -760,7 +769,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
             input_tensor_B,
             slice_B,
             slice_C,
-            normalized_dim)};
+            normalized_dim,
+            fuse_op)};
 
     std::string compute_kernel_path = normalized_dim == 0
                                           ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
@@ -816,6 +826,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                             num_workers,
                             input_tensor_B,
                             slice_C,
+                            /*allow_unit_major=*/!per_batch_traversals,
                             output_batch_num_pages,
                             output_channel_num_pages,
                             slice_Wt,
@@ -824,15 +835,18 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
                 // for dim 0 scatters we process each slice in batches
                 // for all other dims we process each slice in the (batch, channel) units this worker owns,
-                // all of them inside every ring step
+                // all of them inside every ring step -- or, fused with a batched producer, one batch's units
+                // per traversal
                 uint32_t tiles_per_worker_per_repeat = start_tiles_to_read - start_tiles_read;
-                uint32_t num_repeats = (normalized_dim == 0) ? slice_B : (unit_end - unit_start);
+                uint32_t num_repeats =
+                    (normalized_dim == 0) ? slice_B : (per_batch_traversals ? slice_C : (unit_end - unit_start));
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(ttnn::experimental::ccl::reduce_scatter_default_chunks_per_sync(
                         topology, tiles_per_worker_per_repeat, num_repeats, tile_granularity));
-                if (!chunks_per_sync.has_value() && normalized_dim != 0) {
+                if (!chunks_per_sync.has_value() && normalized_dim != 0 && !fuse_op) {
                     // The dims 1-3 kernels carry the worker's whole share of the slice per step; see the
-                    // constant's comment for why their default interval is capped and dim 0's is not.
+                    // constant's comment for why their default interval is capped and dim 0's and the fused
+                    // path's are not.
                     chunks_per_sync_val =
                         std::min(chunks_per_sync_val, ttnn::experimental::ccl::RING_UNIT_STEP_MAX_CHUNKS_PER_SYNC);
                 }

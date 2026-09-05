@@ -55,7 +55,9 @@ uint32_t reduce_scatter_default_chunks_per_sync(
 // (bf16, 2 links): 4 was never worse than the uncapped default and beat it by 6.5% at 8M elements (16
 // chunks per step) and by ~1% at 16M-24M (32-48 chunks per step). An interval of 1 loses 5-21% on
 // steps of 8-48 chunks to the per-chunk waits. The dim 0 kernels, which split a step between the two
-// directions chunk by chunk, prefer the longer interval by 1.5-2% at 24M and are not capped.
+// directions chunk by chunk, prefer the longer interval by 1.5-2% at 24M and are not capped; nor is
+// the fused matmul path, where the cap cost 2.9% on a 40-chunk step at B = 1 (855.5 vs 832.6 us,
+// main 831.4) and the uncapped default matched main.
 constexpr uint32_t RING_UNIT_STEP_MAX_CHUNKS_PER_SYNC = 4;
 
 // Sizing for the chunk-paged "contiguous" intermediate used by the ring reduce-scatter fast path.
@@ -168,7 +170,9 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> reduce_scatter_get_tile_offse
 //
 //   page-major (unit_start=0, unit_end=U)
 //       Every worker visits every unit and takes a fraction of the pages inside each. Used when the
-//       units do not divide evenly among the workers, or for a single worker.
+//       units do not divide evenly among the workers, for a single worker, or when the caller asks for
+//       it (allow_unit_major=false: the fused path traverses the ring once per batch and needs every
+//       worker on every batch).
 //
 // Either way a worker moves total_slice_pages / num_workers tiles per step, the same share the dim 0
 // kernels give their workers, and balance is identical between the two forms.
@@ -186,6 +190,7 @@ ReduceScatterWorkerSplit reduce_scatter_get_worker_split(
     uint32_t num_workers,
     uint32_t input_tensor_B,
     uint32_t slice_C,
+    bool allow_unit_major,
     uint32_t output_batch_num_pages,
     uint32_t output_channel_num_pages,
     uint32_t slice_Wt,

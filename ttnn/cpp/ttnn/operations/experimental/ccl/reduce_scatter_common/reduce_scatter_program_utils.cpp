@@ -322,6 +322,7 @@ ReduceScatterWorkerSplit reduce_scatter_get_worker_split(
     uint32_t num_workers,
     uint32_t input_tensor_B,
     uint32_t slice_C,
+    bool allow_unit_major,
     uint32_t output_batch_num_pages,
     uint32_t output_channel_num_pages,
     uint32_t slice_Wt,
@@ -332,8 +333,8 @@ ReduceScatterWorkerSplit reduce_scatter_get_worker_split(
     // Whole units per worker, when they divide evenly. Balance is then identical to the page-major
     // split, and each worker enters the per-channel loop num_units/num_workers times rather than
     // num_units times, each time with a full channel of pages.
-    const bool unit_major =
-        normalized_dim != 0 && num_workers > 1 && num_units >= num_workers && num_units % num_workers == 0;
+    const bool unit_major = allow_unit_major && normalized_dim != 0 && num_workers > 1 && num_units >= num_workers &&
+                            num_units % num_workers == 0;
     if (unit_major) {
         return {
             /*unit_start=*/worker_id * num_units / num_workers,
