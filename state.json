@@ -1,6 +1,6 @@
 {
   "last_run": "2026-09-05",
-  "run_id": 33950174365,
+  "run_id": "33966219841",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -543,6 +543,11 @@
     "34371": {
       "date": "2026-09-02",
       "note": "author nudge (dirty mergeable_state, only Copilot auto-review, no human review yet)"
+    },
+    "38008": {
+      "last_ping": "2026-09-05",
+      "type": "reviewer-blocked",
+      "note": "no human review since Feb 2026, nudged for maintainer attention"
     }
   },
   "backlog_cursor": {
@@ -850,6 +855,11 @@
   },
   "run_history": [
     {
+      "run_id": "33966219841",
+      "date": "2026-09-05",
+      "summary": "Second run same day. Investigated Task1/2 candidates (no fresh actionable issues found beyond earlier run). Reviewed 7 tracked repo-assist PRs (no state changes). Task6: reviewed stale-PR cluster from page-4 (22706,36227,38008,35249,35515), nudged #38008 (fabric-test CI PR, no human review since Feb). Updated monthly summary issue #55015."
+    },
+    {
       "run_id": 33950174365,
       "date": "2026-09-05",
       "summary": "Labeled #55553 and #55509 as performance monitoring; corrected stale memory entry for clamp output_tensor fix (actual PR is #55424, closing issue #55334, not PR #55334 which never existed); confirmed issue #55551 already covered by external PR #55552, no duplicate; reviewed PR #55435 RTL Sim CI failure - inconclusive, details_url looks like broken/placeholder infra link, PR Gate still action_required; reviewed several fresh maintainer-assigned issues (#55539,#55526,#55511,#55529,#55519) - already well-triaged, no repo-assist action needed; updated monthly summary issue #55015."
@@ -935,7 +945,10 @@
     55526,
     55511,
     55529,
-    55519
+    55519,
+    "22706: 2026-09-05 already nudged 2026-08-05, author (jbedichekTT) still hasnt addressed changes-requested review; no new activity, skip re-nudge",
+    "36227: 2026-09-05 approved by yieldthought 2026-05-05, mergeable_state unknown, low priority docs PR, no action needed",
+    "35515: 2026-09-05 already nudged 2026-08-09 for rebase (behind main), still dirty; independent repro comment posted 2026-08-15 supporting fix; not yet 3+ days new signal, monitor next run"
   ],
   "resolved": {
     "52673": {
