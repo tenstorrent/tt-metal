@@ -28,6 +28,8 @@ static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
 
 constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
 
+static constexpr std::size_t MAX_CHANNEL_BUFFER_SLOTS = UINT8_MAX / 2;
+
 // Magic values for ethernet channel directions
 enum eth_chan_magic_values : std::uint8_t {
     INVALID_DIRECTION = 0xDD,
