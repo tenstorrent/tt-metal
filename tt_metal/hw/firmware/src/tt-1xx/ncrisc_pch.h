@@ -11,7 +11,9 @@
 //   api/dataflow/dataflow_api.h
 // See brisc_pch.h for why: dataflow_api.h gates four data-format APIs behind
 // __has_include("chlkc_descriptors.h"), a per-kernel generated header that is
-// absent where the shared PCH is built.
+// absent where the shared PCH is built. As there, DPRINT makes the descriptors
+// reachable through kernel_profiler.hpp regardless; the PCH build then fails
+// loudly (no "-I."/"-I.." roots) and compiles fall back to plain parsing.
 //
 // Everything from kernel_includes.hpp onwards is also left out: that is the
 // generated per-kernel body and the conditional includes that follow it. Note

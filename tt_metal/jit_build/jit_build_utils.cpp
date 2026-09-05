@@ -108,6 +108,18 @@ std::vector<std::string> build_gpp_argv(
             args.push_back(out_path);
             args.push_back(src);
             break;
+        case GppAction::PrecompileHeader:
+            // -x c++-header must precede the input for GCC to emit a PCH. The -MF pins
+            // down the .d that the -MMD in the base cflags would otherwise derive from
+            // -o; ensure_pch merges it into each consuming kernel's .d.
+            args.push_back("-x");
+            args.push_back("c++-header");
+            args.push_back("-o");
+            args.push_back(out_path);
+            args.push_back(src);
+            args.push_back("-MF");
+            args.push_back(dep_path);
+            break;
     }
     return args;
 }

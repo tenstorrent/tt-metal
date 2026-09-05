@@ -58,8 +58,9 @@ constexpr uint32_t get_ct_arg() {
 
 #endif  // TT_METAL_COMPILE_TIME_ARGS_H
 
-// Outside the guard on purpose: the named-argument API has to stay re-includable,
-// so that a translation unit which includes this header before
-// KERNEL_COMPILE_TIME_ARG_MAP is defined still picks the API up afterwards. See
-// named_compile_time_args.h.
-#include "api/named_compile_time_args.h"
+// The named-argument API lives in api/named_compile_time_args.h, which every
+// definer of KERNEL_COMPILE_TIME_ARG_MAP includes itself, directly after the
+// #define -- the generated map header and the emulator wrapper both do. This
+// header deliberately does not tail-include it: under TT_METAL_JIT_PCH this
+// header sits inside the precompiled prelude, where the macro does not exist
+// yet, so an include from here could only ever bake in the disabled state.
