@@ -74,18 +74,21 @@ def test_mesh_partition_cached_slice_args(mesh_device):
     import torch
 
     cases = [
-        (ttnn.TILE_LAYOUT, 2, 0),
-        (ttnn.TILE_LAYOUT, 2, 1),
-        (ttnn.TILE_LAYOUT, 2, None),
-        (ttnn.TILE_LAYOUT, 3, 1),
-        (ttnn.TILE_LAYOUT, 1, 0),
-        (ttnn.ROW_MAJOR_LAYOUT, 2, 0),
+        (ttnn.TILE_LAYOUT, 2, 0, [1, 4, 64, 128]),
+        (ttnn.TILE_LAYOUT, 2, 1, [1, 4, 64, 128]),
+        (ttnn.TILE_LAYOUT, 2, None, [1, 4, 64, 128]),
+        (ttnn.TILE_LAYOUT, 3, 1, [1, 4, 64, 128]),
+        (ttnn.TILE_LAYOUT, 1, 0, [1, 4, 64, 128]),
+        (ttnn.ROW_MAJOR_LAYOUT, 2, 0, [1, 4, 64, 128]),
+        # Three/six output tiles or rows exercise a partial active-core run and idle slots.
+        (ttnn.TILE_LAYOUT, 2, 0, [1, 1, 32, 96]),
+        (ttnn.ROW_MAJOR_LAYOUT, 2, 0, [1, 1, 3, 128]),
     ]
-    for case_index, (layout, dim, axis) in enumerate(cases):
+    for case_index, (layout, dim, axis, base_shape) in enumerate(cases):
         group_size = mesh_device.get_num_devices() if axis is None else mesh_device.shape[axis]
         retained_tensors = []
         for repeat in range(3):
-            shape = [1, 4, 64, 128]
+            shape = list(base_shape)
             shape[dim] *= group_size
             shape[2] *= 1 + repeat % 2
             torch.manual_seed(case_index * 10 + repeat)

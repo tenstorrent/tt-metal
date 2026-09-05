@@ -141,26 +141,40 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
 
     // Each coordinate owns a distinct ProgramImpl. The workload key includes tensor specs,
     // partition attributes and coordinates, so the descriptor's scalar work split is invariant.
-    // Record only active address slots; standalone Slice retains its dynamic scalar restoration.
-    std::vector<CoreCoord> reader_address_cores;
-    std::vector<CoreCoord> writer_address_cores;
-    const auto collect_address_cores = [&](uint32_t kernel_idx, std::vector<CoreCoord>& cores) {
-        const auto& args = GetRuntimeArgs(program, kernel_idx);
+    // All interleaved factories bind addresses at slot 0; tiled readers use common slot 0.
+    // Compress consecutive active cores in each matrix row, without retaining payload pointers.
+    const auto collect_address_runs = [](const tt::tt_metal::KernelRuntimeArgsAccessor& accessor) {
+        std::vector<shared_variables_t::AddressRun> runs;
+        const auto& args = accessor.runtime_args();
         for (uint32_t x = 0; x < args.size(); ++x) {
-            for (uint32_t y = 0; y < args[x].size(); ++y) {
-                if (args[x][y].size() != 0 && args[x][y][0] != 0) {
-                    cores.push_back({x, y});
+            for (uint32_t y = 0; y < args[x].size();) {
+                if (args[x][y].size() == 0 || args[x][y][0] == 0) {
+                    ++y;
+                    continue;
                 }
+                const uint32_t begin = y++;
+                while (y < args[x].size() && args[x][y].size() != 0 && args[x][y][0] != 0) {
+                    ++y;
+                }
+                runs.push_back({x, begin, y});
             }
         }
+        return runs;
     };
     const bool tiled = std::holds_alternative<ttnn::prim::SliceTileProgramFactory>(program_factory);
     const bool rm = std::holds_alternative<ttnn::prim::SliceRmProgramFactory>(program_factory) ||
                     std::holds_alternative<ttnn::prim::SliceRmStrideProgramFactory>(program_factory);
+    std::optional<shared_variables_t::AddressPlan> address_plan;
     if (tiled || rm) {
-        collect_address_cores(1, writer_address_cores);
+        address_plan.emplace(shared_variables_t::AddressPlan{
+            .reader = tt::tt_metal::KernelRuntimeArgsAccessor(program, 0),
+            .writer = tt::tt_metal::KernelRuntimeArgsAccessor(program, 1),
+            .reader_runs = {},
+            .writer_runs = {},
+            .common_reader_address = tiled});
+        address_plan->writer_runs = collect_address_runs(address_plan->writer);
         if (rm) {
-            collect_address_cores(0, reader_address_cores);
+            address_plan->reader_runs = collect_address_runs(address_plan->reader);
         }
     }
     return {
@@ -168,8 +182,7 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
         shared_variables_t{
             .slice_program_factory = program_factory,
             .slice_attributes = std::move(slice_attrs),
-            .reader_address_cores = std::move(reader_address_cores),
-            .writer_address_cores = std::move(writer_address_cores)}};
+            .address_plan = std::move(address_plan)}};
 }
 
 void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
@@ -178,42 +191,38 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     static const bool profile_phases = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
-    const auto slice_tensor_args = [&] {
-        ZoneNamedN(mesh_partition_setup, "HostProfile::mesh_partition_setup", profile_phases);
-        return SliceOp::tensor_args_t{
-            .input = tensor_args.input_tensor,
-            .start_tensor = std::nullopt,
-            .end_tensor = std::nullopt,
-            .preallocated_output = std::nullopt};
-    }();
-    for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_variables = [&]() -> auto& {
-            ZoneNamedN(mesh_partition_lookup, "HostProfile::mesh_partition_coordinate_lookup", profile_phases);
-            return cached_workload.shared_variables.at(range);
-        }();
-
-        const bool tiled =
-            std::holds_alternative<ttnn::prim::SliceTileProgramFactory>(shared_variables.slice_program_factory);
-        const bool rm =
-            std::holds_alternative<ttnn::prim::SliceRmProgramFactory>(shared_variables.slice_program_factory) ||
-            std::holds_alternative<ttnn::prim::SliceRmStrideProgramFactory>(shared_variables.slice_program_factory);
-        if (tiled || rm) {
-            const auto patch_addresses = [&](uint32_t kernel_idx, const auto& cores, uint32_t address) {
-                auto& args = GetRuntimeArgs(program, kernel_idx);
-                for (const auto& core : cores) {
-                    args.at(core.x).at(core.y).at(0) = address;
+    // Distributed buffers have a common virtual address across coordinates. Resolve these
+    // once per invocation, while each owning accessor retrieves its coordinate's live storage.
+    const uint32_t input_address = tensor_args.input_tensor.buffer()->address();
+    const uint32_t output_address = tensor_return_value.buffer()->address();
+    for (auto& [range, shared_variables] : cached_workload.shared_variables) {
+        if (shared_variables.address_plan) {
+            const auto& plan = *shared_variables.address_plan;
+            const auto patch_addresses = [&](const auto& accessor, const auto& runs, uint32_t address) {
+                auto& args = accessor.runtime_args();
+                for (const auto& run : runs) {
+                    auto& row = args.at(run.x);
+                    for (uint32_t y = run.y_begin; y < run.y_end; ++y) {
+                        row.at(y).at(0) = address;
+                    }
                 }
             };
-            patch_addresses(1, shared_variables.writer_address_cores, tensor_return_value.buffer()->address());
-            if (tiled) {
-                GetCommonRuntimeArgs(program, 0).at(0) = tensor_args.input_tensor.buffer()->address();
+            ZoneNamedN(mesh_partition_addresses, "HostProfile::mesh_partition_address_plan", profile_phases);
+            patch_addresses(plan.writer, plan.writer_runs, output_address);
+            if (plan.common_reader_address) {
+                plan.reader.common_runtime_args().at(0) = input_address;
             } else {
-                patch_addresses(0, shared_variables.reader_address_cores, tensor_args.input_tensor.buffer()->address());
+                patch_addresses(plan.reader, plan.reader_runs, input_address);
             }
         } else {
             // CB-bound sharded RM keeps its existing address-only helper.
+            const SliceOp::tensor_args_t slice_tensor_args{
+                .input = tensor_args.input_tensor,
+                .start_tensor = std::nullopt,
+                .end_tensor = std::nullopt,
+                .preallocated_output = std::nullopt};
             ttnn::prim::patch_slice_program_addresses(
-                program,
+                cached_workload.workload.get_programs().at(range),
                 shared_variables.slice_program_factory,
                 shared_variables.slice_attributes,
                 slice_tensor_args,

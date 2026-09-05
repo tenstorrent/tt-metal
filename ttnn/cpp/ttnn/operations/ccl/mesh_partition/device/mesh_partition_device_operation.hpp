@@ -14,6 +14,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
@@ -48,9 +49,20 @@ struct MeshPartitionDeviceOperation {
         struct shared_variables_t {
             prim::SliceDeviceOperation::program_factory_t slice_program_factory;
             prim::SliceParams slice_attributes;
-            // Stable coordinates only; runtime argument storage can move during enqueue/trace creation.
-            std::vector<CoreCoord> reader_address_cores;
-            std::vector<CoreCoord> writer_address_cores;
+            struct AddressRun {
+                uint32_t x;
+                uint32_t y_begin;
+                uint32_t y_end;
+            };
+            struct AddressPlan {
+                tt::tt_metal::KernelRuntimeArgsAccessor reader;
+                tt::tt_metal::KernelRuntimeArgsAccessor writer;
+                // Only indices are retained: enqueue/trace can retarget the live argument payloads.
+                std::vector<AddressRun> reader_runs;
+                std::vector<AddressRun> writer_runs;
+                bool common_reader_address;
+            };
+            std::optional<AddressPlan> address_plan;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
