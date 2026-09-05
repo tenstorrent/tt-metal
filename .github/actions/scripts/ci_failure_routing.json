@@ -1,0 +1,25 @@
+{
+  "_comment": "Routing for the generic CI-failure Jira adapter (MINFRA-1611). A failure is matched against `routes` in order; the first whose stated fields all match wins, and an omitted field is a wildcard. `default` applies when nothing matches. AI/IP release-test failures are NOT routed here -- those are filed per test by file_rtl_sim_jira.py onto the RELEASE board.",
+  "min_confidence": 0.6,
+  "default": {
+    "project": "MINFRA",
+    "issue_type": "Bug",
+    "triage_assignee": null,
+    "labels": ["ci-failure", "ai-summary"]
+  },
+  "routes": [
+    {
+      "_note": "infrastructure faults are not a code owner's problem",
+      "error_layer": "infra",
+      "project": "MINFRA",
+      "issue_type": "Bug",
+      "labels": ["ci-failure", "ai-summary", "infra"]
+    },
+    {
+      "category": "model",
+      "project": "MINFRA",
+      "issue_type": "Bug",
+      "labels": ["ci-failure", "ai-summary", "models"]
+    }
+  ]
+}
