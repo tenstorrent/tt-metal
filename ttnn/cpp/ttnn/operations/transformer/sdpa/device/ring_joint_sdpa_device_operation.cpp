@@ -360,6 +360,24 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensor_args.slot_id.has_value() == tensor_args.kv_actual_isl.has_value(),
         "metadata tensors slot_id and kv_actual_isl must be supplied together, or neither supplied");
+    if (tensor_args.has_metadata()) {
+        // The readers fetch element [0] of each tensor through a TensorAccessor at kernel start; a tensor of
+        // another dtype, layout, size or device is read as garbage on-device, so reject it here instead.
+        auto validate_meta = [&input_tensor_q](const Tensor& meta, const char* name) {
+            TT_FATAL(meta.storage_type() == StorageType::DEVICE, "metadata tensor {} must be on device", name);
+            TT_FATAL(meta.dtype() == DataType::UINT32, "metadata tensor {} must be UINT32", name);
+            TT_FATAL(meta.layout() == Layout::ROW_MAJOR, "metadata tensor {} must be ROW_MAJOR", name);
+            TT_FATAL(
+                meta.logical_volume() == 1,
+                "metadata tensor {} must hold exactly one element, got {}",
+                name,
+                meta.logical_volume());
+            TT_FATAL(
+                meta.device() == input_tensor_q.device(), "metadata tensor {} must be on the same device as Q", name);
+        };
+        validate_meta(tensor_args.slot_id.value(), "slot_id");
+        validate_meta(tensor_args.kv_actual_isl.value(), "kv_actual_isl");
+    }
 
     if (tensor_args.attention_sink.has_value()) {
         const auto& attention_sink = tensor_args.attention_sink.value();

@@ -42,6 +42,8 @@ def dense_sp_attention(
     layer_idx=0,
     num_layers=1,
     write_chunk=True,
+    slot_id=None,
+    kv_actual_isl_tensor=None,
 ):
     """Write this chunk's K/V into the chunked-KV cache (unless already written), then ring_joint
     cache-read over the prefix.
@@ -53,8 +55,31 @@ def dense_sp_attention(
     kv_actual         prefix length already in the cache before this chunk (drives on-device rotation)
     logical_n         total valid prefix length (q attends causally over [0:logical_n])
     write_chunk       when False, skip the cache write and only read (the per-layer seam is the writer)
+    slot_id, kv_actual_isl_tensor
+                      trace-safe read: 1-element uint32 device scalars holding the user slot and kv_actual,
+                      read by the kernels at start, so a captured trace re-targets them in place between
+                      replays. Both or neither. The host slot / kv_actual are then NOT passed (a host
+                      kv_actual_isl would re-enable per-dispatch host patching) and logical_n is a placeholder
+                      (cache_global): the kernels derive the real length as kv_actual_isl[0] + chunk.
     -> out            [1, n_q_local, chunk_local, head_dim]    block-cyclic over the chunk
     """
+    if (slot_id is None) != (kv_actual_isl_tensor is None):
+        raise ValueError("slot_id and kv_actual_isl_tensor must be passed together")
+    if slot_id is not None:
+        slot_kwargs = dict(
+            slot_id=slot_id,
+            kv_actual_isl_tensor=kv_actual_isl_tensor,
+            kv_cache_num_layers=num_layers,
+            kv_cache_layer_idx=layer_idx,
+        )
+        logical_n = cache_global
+    else:
+        # Fold the layer into the cache batch index, matching update_padded_kv_cache's write
+        # (batch_idx = slot_idx*num_layers + layer_idx). The cache packs all layers user-major in the
+        # batch dim; passing slot_idx alone made every dense layer read layer 0's cache (L0 correct by
+        # coincidence, L1+ read stale L0 K/V -> wrong attn_out -> residual corruption -> KV-PCC crater).
+        slot_kwargs = dict(kv_cache_batch_idx=slot_idx * num_layers + layer_idx, kv_actual_isl=kv_actual)
+
     if write_chunk:
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             cache_k,
@@ -105,12 +130,7 @@ def dense_sp_attention(
         is_causal=True,
         scale=scale,
         is_balanced=False,
-        # Fold the layer into the cache batch index, matching update_padded_kv_cache's write
-        # (batch_idx = slot_idx*num_layers + layer_idx). The cache packs all layers user-major in the
-        # batch dim; passing slot_idx alone made every dense layer read layer 0's cache (L0 correct by
-        # coincidence, L1+ read stale L0 K/V -> wrong attn_out -> residual corruption -> KV-PCC crater).
-        kv_cache_batch_idx=slot_idx * num_layers + layer_idx,
-        kv_actual_isl=kv_actual,
+        **slot_kwargs,
     )
     return out
 

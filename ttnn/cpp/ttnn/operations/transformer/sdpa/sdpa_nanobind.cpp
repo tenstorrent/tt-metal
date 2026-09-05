@@ -57,7 +57,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v) {
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v,
+    const std::optional<ttnn::Tensor>& slot_id,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
+    std::optional<uint32_t> kv_cache_num_layers,
+    std::optional<uint32_t> kv_cache_layer_idx) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -93,7 +97,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         attention_sink,
         sliding_window_size,
         persistent_output_buffer_joint_k,
-        persistent_output_buffer_joint_v);
+        persistent_output_buffer_joint_v,
+        slot_id,
+        kv_actual_isl_tensor,
+        kv_cache_num_layers,
+        kv_cache_layer_idx);
     return outputs;
 }
 
@@ -645,6 +653,15 @@ void bind_sdpa(nb::module_& mod) {
                 gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.
             persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
                 gathered joint V tensor [b x nhv x L x dv]. Allocated internally when omitted.
+            slot_id (ttnn.Tensor, optional): Trace-safe metadata: 1-element uint32 ROW_MAJOR DRAM tensor
+                (replicated across the mesh) holding the cache-user slot, read on-device. Must be passed
+                together with kv_actual_isl_tensor. Defaults to None.
+            kv_actual_isl_tensor (ttnn.Tensor, optional): Trace-safe metadata: same form, holding the prior
+                valid global KV length before this chunk. Defaults to None.
+            kv_cache_num_layers (int, optional): Metadata path only: layers per user in a (user, layer)-major
+                cache; the readers compute the cache slot as slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx
+                (mirrors update_padded_kv_cache). Defaults to 1.
+            kv_cache_layer_idx (int, optional): Metadata path only: this call's layer. Defaults to 0.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -656,6 +673,12 @@ void bind_sdpa(nb::module_& mod) {
         dimension is treated as valid. When kv_actual_isl is provided, the chunked path switches
         to KV-pad-aware rotation: logical_n remains the total valid KV length after this iteration,
         while kv_actual_isl marks the prior valid cache length before the current chunk.
+
+        Metadata (trace-safe) path: pass slot_id and kv_actual_isl_tensor instead of the host
+        kv_cache_batch_idx / kv_actual_isl (omit both host scalars). The cache slot and the prior
+        valid length are then read on-device at kernel start, so a captured trace re-targets them by
+        updating the two tensors in place between replays; logical_n becomes a placeholder equal to
+        the gathered capacity (every kernel derives the real length as kv_actual_isl[0] + chunk).
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -700,7 +723,11 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("attention_sink") = nb::none(),
         nb::arg("sliding_window_size") = nb::none(),
         nb::arg("persistent_output_buffer_joint_k").noconvert() = nb::none(),
-        nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none());
+        nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none(),
+        nb::arg("slot_id").noconvert() = nb::none(),
+        nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
+        nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
@@ -734,6 +761,15 @@ void bind_sdpa(nb::module_& mod) {
             kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
                 When passed, enables KV-pad-aware rotation and derives current valid tokens as
                 logical_n - kv_actual_isl.
+            slot_id (ttnn.Tensor, optional): Trace-safe metadata: 1-element uint32 ROW_MAJOR DRAM tensor
+                (replicated across the mesh) holding the cache-user slot, read on-device. Must be passed
+                together with kv_actual_isl_tensor; omit the host kv_cache_batch_idx / kv_actual_isl and pass
+                logical_n as the gathered capacity. Defaults to None.
+            kv_actual_isl_tensor (ttnn.Tensor, optional): Trace-safe metadata: same form, holding the prior
+                valid global KV length before this chunk. Defaults to None.
+            kv_cache_num_layers (int, optional): Metadata path only: layers per user in a (user, layer)-major
+                cache; slot = slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults to 1.
+            kv_cache_layer_idx (int, optional): Metadata path only: this call's layer. Defaults to 0.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor):
