@@ -1009,10 +1009,15 @@ def test_high_bw_all_gather_selected_batch_prefix(mesh_device):
 
 
 @run_for_blackhole("selected-prefix coverage requires Blackhole Galaxy")
-@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{**_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_XY), "trace_region_size": 1540000}],
+    indirect=True,
+)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("submesh_shape", [(8, 1), (2, 1)], ids=["ring_8x1", "line_2x1"])
-def test_high_bw_all_gather_galaxy_selected_batch_prefix(mesh_device, submesh_shape):
+@pytest.mark.parametrize("traced", [False, True])
+def test_high_bw_all_gather_galaxy_selected_batch_prefix(mesh_device, submesh_shape, traced):
     # Parent/submesh allocators overlap physical L1. Release cached semaphore allocations
     # before each ownership handoff, including when numerical validation fails.
     mesh_device.quiesce_devices()
@@ -1020,60 +1025,57 @@ def test_high_bw_all_gather_galaxy_selected_batch_prefix(mesh_device, submesh_sh
     # get_axis_topology rejects wrap for a two-device axis even on physical TORUS_XY.
     rank_line = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape), ttnn.MeshCoordinate(0, 0))
     try:
-        _run_high_bw_all_gather_selected_batch_prefix(rank_line, 0)
+        _run_high_bw_all_gather_selected_batch_prefix(rank_line, 0, traced=traced)
     finally:
         mesh_device.quiesce_devices()
         rank_line.clear_program_cache()
 
 
-def _run_high_bw_all_gather_selected_batch_prefix(rank_line, cluster_axis):
+def _run_high_bw_all_gather_selected_batch_prefix(rank_line, cluster_axis, traced=False):
     axis_size = rank_line.shape[cluster_axis]
     local_rows, active_local_rows, width = 1024, 512, 576
-    torch.manual_seed(0)
-    host_input = torch.rand((2, 1, local_rows * axis_size, width), dtype=torch.bfloat16)
-    device_input = _make_tensor(
-        rank_line,
-        host_input,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.ShardTensor2dMesh(
+    controls = ((0, active_local_rows // 2), (1, active_local_rows), (0, active_local_rows // 2))
+    inputs, outputs = [], []
+    # Keep distinct data and allocations alive across every control update and trace replay.
+    for dispatch in range(len(controls)):
+        torch.manual_seed(dispatch)
+        host_input = torch.rand((2, 1, local_rows * axis_size, width), dtype=torch.bfloat16)
+        device_input = _make_tensor(
             rank_line,
-            dims=(2, None) if cluster_axis == 0 else (None, 2),
-            mesh_shape=tuple(rank_line.shape),
-        ),
-    )
-    persistent_output = _make_tensor(
-        rank_line,
-        torch.zeros((1, 1, local_rows * axis_size, width), dtype=torch.bfloat16),
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.ReplicateTensorToMesh(rank_line),
-    )
+            host_input,
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.ShardTensor2dMesh(
+                rank_line,
+                dims=(2, None) if cluster_axis == 0 else (None, 2),
+                mesh_shape=tuple(rank_line.shape),
+            ),
+        )
+        persistent_output = _make_tensor(
+            rank_line,
+            torch.zeros((1, 1, local_rows * axis_size, width), dtype=torch.bfloat16),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.ReplicateTensorToMesh(rank_line),
+        )
+        inputs.append(device_input)
+        outputs.append(persistent_output)
 
-    cache_entries_after_first = None
-    # Start smaller and grow the logical extent. This proves the cached program is compiled for the
-    # worst-case slab rather than the first active prefix. Return to the first slot and extent to
-    # check that repeated cache hits refresh both controls while reusing the owned semaphores.
-    for batch_index, rows_this_call in (
-        (0, active_local_rows // 2),
-        (1, active_local_rows),
-        (0, active_local_rows // 2),
-    ):
+    def run(index):
+        batch_index, rows_this_call = controls[index]
         ttnn.experimental.high_bw_all_gather(
-            device_input,
+            inputs[index],
             dim=2,
-            output_tensor=persistent_output,
+            output_tensor=outputs[index],
             cluster_axis=cluster_axis,
             num_links=_NUM_LINKS,
             input_batch_index=batch_index,
             gathered_dim_size=rows_this_call * axis_size,
         )
-        ttnn.synchronize_device(rank_line)
-        if cache_entries_after_first is None:
-            cache_entries_after_first = rank_line.num_program_cache_entries()
-        else:
-            assert rank_line.num_program_cache_entries() == cache_entries_after_first
 
+    def check(index):
+        batch_index, rows_this_call = controls[index]
+        device_input, persistent_output = inputs[index], outputs[index]
         # Runtime extents transfer only the valid prefix from every rank, but retain the
         # maximum-size output's rank stride. This makes the output safe to reuse as an
         # address-indexed cache without moving its later-rank pages on every call.
@@ -1089,6 +1091,55 @@ def _run_high_bw_all_gather_selected_batch_prefix(rank_line, cluster_axis):
                 assert torch.equal(
                     actual[:, :, start : start + rows_this_call, :], expected[:, :, start : start + rows_this_call, :]
                 )
+
+    for index in range(len(controls)):
+        run(index)
+        if index == 0:
+            entries = rank_line.num_program_cache_entries()
+        assert rank_line.num_program_cache_entries() == entries
+    ttnn.synchronize_device(rank_line)
+    for index in range(len(controls)):
+        check(index)
+    if traced:
+        trace_id = ttnn.begin_trace_capture(rank_line, cq_id=0)
+        for index in range(len(controls)):
+            run(index)
+        ttnn.end_trace_capture(rank_line, trace_id, cq_id=0)
+        try:
+            for replay in range(2):
+                # Trace must perform fresh writes, not merely leave eager results intact.
+                uploads = []
+                for index in range(len(controls)):
+                    torch.manual_seed(100 + replay * len(controls) + index)
+                    uploads.append(
+                        ttnn.from_torch(
+                            torch.rand((2, 1, local_rows * axis_size, width), dtype=torch.bfloat16),
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            mesh_mapper=ttnn.ShardTensor2dMesh(
+                                rank_line,
+                                dims=(2, None) if cluster_axis == 0 else (None, 2),
+                                mesh_shape=tuple(rank_line.shape),
+                            ),
+                        )
+                    )
+                    ttnn.copy_host_to_device_tensor(uploads[-1], inputs[index])
+                    uploads.append(
+                        ttnn.from_torch(
+                            torch.full((1, 1, local_rows * axis_size, width), -1, dtype=torch.bfloat16),
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(rank_line),
+                        )
+                    )
+                    ttnn.copy_host_to_device_tensor(uploads[-1], outputs[index])
+                ttnn.synchronize_device(rank_line)
+                ttnn.execute_trace(rank_line, trace_id, cq_id=0, blocking=True)
+                for index in range(len(controls)):
+                    check(index)
+            assert rank_line.num_program_cache_entries() == entries
+        finally:
+            ttnn.release_trace(rank_line, trace_id)
 
 
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")

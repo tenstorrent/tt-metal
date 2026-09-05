@@ -8,6 +8,8 @@
 
 #include "ttnn/device_operation.hpp"
 
+#include <array>
+
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -15,7 +17,9 @@ namespace ttnn::operations::experimental::high_bw_all_gather {
 
 struct HighBwAllGatherUnicastFactory {
     struct shared_variables_t {
-        std::vector<tt::tt_metal::CoreCoord> worker_cores;
+        // Slice-order destinations and direction receive counts are fixed at program creation.
+        std::vector<std::array<tt::tt_metal::CoreCoord, 2>> destinations;
+        std::array<uint32_t, 2> receive_counts{};
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
         // Kernel identity is stable; runtime-argument backing storage is resolved afresh per call.
@@ -35,7 +39,15 @@ struct HighBwAllGatherUnicastFactory {
         bool output_bank_owned_schedule{};
     };
 
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+    struct workload_state_t {
+        // Accessors retain kernel identity across workload moves; never cache runtime payload pointers.
+        std::vector<shared_variables_t> programs;
+        // Programs in a group have identical slice geometry determinants, but retain their own
+        // destination cores, receive counts, accessors, and semaphore owners.
+        std::vector<std::vector<size_t>> control_groups;
+    };
+
+    using cached_mesh_workload_t = ttnn::device_operation::CachedMeshWorkload<workload_state_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
         const HighBwAllGatherParams& operation_attributes,
