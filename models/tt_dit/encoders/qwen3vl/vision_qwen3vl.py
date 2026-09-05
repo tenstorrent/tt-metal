@@ -410,7 +410,7 @@ def _gather_hidden(x: ttnn.Tensor, p: VisionParallel) -> ttnn.Tensor:
     if not p.tp:
         return x
     x, added = _with_batch_axis(x)
-    x = p.ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True)
+    x = p.ccl_manager.all_gather(x, dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True)
     return _drop_batch_axis(x, added)
 
 
@@ -424,9 +424,7 @@ def _row_parallel_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn.Ten
     if not p.tp:
         return linear.forward(x)
     x, added = _with_batch_axis(x)
-    out = p.ccl_manager.all_gather_persistent_buffer(
-        linear.forward(x), dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True
-    )
+    out = p.ccl_manager.all_gather(linear.forward(x), dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True)
     return _drop_batch_axis(out, added)
 
 
@@ -456,7 +454,7 @@ def _row_parallel_seq_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn
     # shard. Gather it back on the same sequence axis (dim 1 here) to reconstruct the full reduced
     # sequence, then drop the pad rows.
     out = linear.forward(x, reduce_scatter_dim=-2)
-    out = p.ccl_manager.all_gather_persistent_buffer(out, dim=1, mesh_axis=p.tp_axis, use_hyperparams=True)
+    out = p.ccl_manager.all_gather(out, dim=1, mesh_axis=p.tp_axis, use_hyperparams=True)
     if npad:
         out = out[:, :rows, :]
     return _drop_batch_axis(out, added)
@@ -854,8 +852,8 @@ class Qwen3VlVisionAttention(Module):
             raise ValueError(msg)
         # Consecutive same-shape gathers land in the two halves of the ping-pong buffer pair, so the
         # v gather does not clobber k.
-        k = ccl.all_gather_persistent_buffer(k, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
-        v = ccl.all_gather_persistent_buffer(v, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
+        k = ccl.all_gather(k, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
+        v = ccl.all_gather(v, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
         cu_window = ttnn.from_torch(
             torch.tensor(cu_seqlens, dtype=torch.int32),
             device=self.mesh_device,
@@ -1180,8 +1178,6 @@ class Qwen3VlVisionModel(Module):
             return x
         if self._p.sp:
             x, added = _with_batch_axis(x)
-            x = self._p.ccl_manager.all_gather_persistent_buffer(
-                x, dim=-2, mesh_axis=self._p.sp_axis, use_hyperparams=True
-            )
+            x = self._p.ccl_manager.all_gather(x, dim=-2, mesh_axis=self._p.sp_axis, use_hyperparams=True)
             x = _drop_batch_axis(x, added)
         return ttnn.clone(x)

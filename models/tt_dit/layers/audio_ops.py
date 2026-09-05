@@ -167,7 +167,7 @@ def all_gather_channel(ccl_manager, x: ttnn.Tensor, parallel_config, *, dim: int
     axis = channel_axis(parallel_config)
     if axis is None:
         return x
-    return ccl_manager.all_gather_persistent_buffer(x, dim=dim, mesh_axis=axis)
+    return ccl_manager.all_gather(x, dim=dim, mesh_axis=axis, use_hyperparams=False)
 
 
 def gather_channel_to_full(ccl_manager, x_BTC: ttnn.Tensor, parallel_config) -> ttnn.Tensor:
@@ -268,7 +268,7 @@ def _t_neighbor_pad(
     if isinstance(parallel_config, AudioTParallelConfig):
         # Two-axis halo: one call per mesh axis (distinct pad dims required).
         sem0 = ccl_manager.get_np_ping_pong_semaphore(parallel_config.axis0.mesh_axis)
-        x_BTC = ccl_manager.neighbor_pad_persistent_buffer(
+        x_BTC = ccl_manager.neighbor_pad(
             x_BTC,
             dims=[1],
             pad_left=[pad_left],
@@ -279,7 +279,7 @@ def _t_neighbor_pad(
             num_links=[num_links],
         )
         sem1 = ccl_manager.get_np_ping_pong_semaphore(parallel_config.axis1.mesh_axis)
-        return ccl_manager.neighbor_pad_persistent_buffer(
+        return ccl_manager.neighbor_pad(
             x_BTC,
             dims=[1],
             pad_left=[pad_left],
@@ -291,7 +291,7 @@ def _t_neighbor_pad(
         )
 
     sem = ccl_manager.get_np_ping_pong_semaphore(parallel_config.mesh_axis)
-    return ccl_manager.neighbor_pad_persistent_buffer(
+    return ccl_manager.neighbor_pad(
         x_BTC,
         dims=[1],
         pad_left=[pad_left],
@@ -558,10 +558,10 @@ def _depthwise_tap_conv1d(
 def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
     """All-gather the T-sharded tensor to full T on every chip."""
     if isinstance(parallel_config, AudioTParallelConfig):
-        x = ccl_manager.all_gather_persistent_buffer(x, dim=1, mesh_axis=parallel_config.axis1.mesh_axis)
-        x = ccl_manager.all_gather_persistent_buffer(x, dim=1, mesh_axis=parallel_config.axis0.mesh_axis)
+        x = ccl_manager.all_gather(x, dim=1, mesh_axis=parallel_config.axis1.mesh_axis, use_hyperparams=False)
+        x = ccl_manager.all_gather(x, dim=1, mesh_axis=parallel_config.axis0.mesh_axis, use_hyperparams=False)
     else:
-        x = ccl_manager.all_gather_persistent_buffer(x, dim=1, mesh_axis=parallel_config.mesh_axis)
+        x = ccl_manager.all_gather(x, dim=1, mesh_axis=parallel_config.mesh_axis, use_hyperparams=False)
     return x
 
 
@@ -690,12 +690,7 @@ def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cac
             x_BTC, tpad_image, mode=mode, mesh_device=mesh_device, parallel_config=parallel_config, cache=cache
         )
     M, inv = _tpad_mask(
-        mesh_device,
-        parallel_config,
-        x_BTC.get_dtype(),
-        local_T * parallel_config.factor,
-        tpad_image,
-        cache
+        mesh_device, parallel_config, x_BTC.get_dtype(), local_T * parallel_config.factor, tpad_image, cache
     )
     xm = ttnn.multiply(x_BTC, M)
     if mode == "zeros":

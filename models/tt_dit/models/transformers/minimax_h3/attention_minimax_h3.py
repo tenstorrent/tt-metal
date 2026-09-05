@@ -506,8 +506,8 @@ class MiniMaxH3Attention(Module):
         # which is the same condition WanAttention uses.
         matmul_parallel_config = self.parallel_config if self.use_fused_agmm else None
         if not self.use_fused_agmm and tp_factor > 1:
-            spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
-                spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis
+            spatial_1BND = self.ccl_manager.all_gather(
+                spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False
             )
 
         q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
@@ -620,8 +620,8 @@ class MiniMaxH3Attention(Module):
         # rebuilds the full inner_dim in canonical order for to_out -- fused into the matmul when
         # use_fused_agmm.
         if not self.use_fused_agmm and tp_factor > 1:
-            spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
-                spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis
+            spatial_1BND = self.ccl_manager.all_gather(
+                spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False
             )
 
         # The gated residual rides along in the matmul epilogue on the fused path; on the unfused

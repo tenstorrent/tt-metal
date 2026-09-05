@@ -174,13 +174,13 @@ def ref2va_references() -> list[MiniMaxH3Reference]:
     return references
 
 
-def read_user_input() -> tuple[str, list[MiniMaxH3Reference]] | None:
-    """A `(prompt, references)` request from interactively-entered text and media paths.
+def read_user_input() -> tuple[str, list[MiniMaxH3Reference], tuple[int, int], float, int] | None:
+    """A `(prompt, references, aspect_ratio, duration_s, num_steps)` request from interactively-entered text and media paths.
 
     None when ENABLE_USER_INPUT is unset or the entry is aborted, which stops the REPL loop.
     References are packed images-first, then audio, then videos.
     """
-    spec = read_user_reference_spec()
+    spec = read_user_reference_spec(REF2VA_ASPECT_RATIO, REF2VA_DURATION_S, NUM_INFERENCE_STEPS)
     if not spec:
         return None
     references: list[MiniMaxH3Reference] = []
@@ -191,7 +191,13 @@ def read_user_input() -> tuple[str, list[MiniMaxH3Reference]] | None:
         references.append(MiniMaxH3Reference(audio=waveform, sample_rate=sample_rate))
     for path in spec.get("video", []):
         references.append(reference_from_video_file(path))
-    return spec["prompt"], references
+    return (
+        spec["prompt"],
+        references,
+        (int(spec["aspect"][0]), int(spec["aspect"][1])),
+        float(spec["duration_s"]),
+        int(spec["num_steps"]),
+    )
 
 
 @pytest.mark.timeout(10800)
@@ -220,7 +226,7 @@ def test_ref2va_performance(mesh_device, reset_seeds):
     # `transformer_ref` (~62 GB) is SP-replicated without FSDP, which fills each 32 GB Blackhole chip
     # and OOMs the forward-pass activations. Shard the DiT over the 32-way SP axis to free per-chip DRAM.
     pipeline = MiniMaxH3Pipeline.create_pipeline(
-        mesh_device=mesh_device, weights_dir=weights, task="ref2va", dit_fsdp=True
+        mesh_device=mesh_device, weights_dir=weights, task="ref2va", dit_fsdp=True, trace_denoise=False
     )
 
     benchmark_profiler = BenchmarkProfiler()
@@ -265,9 +271,6 @@ def test_ref2va_performance(mesh_device, reset_seeds):
     run_user_ref_generations(
         pipeline,
         read_user_input,
-        aspect_ratio=aspect_ratio,
-        duration_s=duration_s,
-        num_inference_steps=NUM_INFERENCE_STEPS,
         seed=SEED,
     )
 
