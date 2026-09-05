@@ -129,6 +129,16 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
 
     // Staging CB: depth >= 2-3 chunks so receive(k+1) overlaps forward(k). Page = input aligned page.
     const uint32_t page_size = input_tensor.buffer()->aligned_page_size();
+    // The relay kernels pack 2 tiles per fabric packet. The device-side send path has NO size check
+    // (send_payload_without_header_from_address_impl asserts nothing; the payload lands at
+    // slot + sizeof(header)), so an oversized packet would silently spill into the next EDM slot ->
+    // data corruption. Validate here: fits bf16/bfp8 under the default 4352 B payload config; trips
+    // for fp32 pages or a smaller-than-default fabric config instead of corrupting.
+    TT_FATAL(
+        2 * page_size <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+        "broadcast_ring packs 2 tiles per fabric packet: 2 x page_size ({}) exceeds the fabric max payload ({})",
+        2 * page_size,
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
     const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
     // Broadcast only [bcast_offset, bcast_offset+bcast_count) of the sender's shard (0 num = whole shard);
     // the rest of the output is untouched. Cuts data moved when the caller needs a sub-range.
@@ -306,6 +316,13 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         std::nullopt);
 
     const uint32_t page_size = input_tensor.buffer()->aligned_page_size();
+    // Same 2-tiles-per-packet limit as create_at (see comment there): the device send path has no size
+    // check, so an oversized packet silently spills into the next EDM slot.
+    TT_FATAL(
+        2 * page_size <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+        "broadcast_ring packs 2 tiles per fabric packet: 2 x page_size ({}) exceeds the fabric max payload ({})",
+        2 * page_size,
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
     const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
     const uint32_t bcast_offset = operation_attributes.broadcast_offset_tiles;
     const uint32_t bcast_count =
