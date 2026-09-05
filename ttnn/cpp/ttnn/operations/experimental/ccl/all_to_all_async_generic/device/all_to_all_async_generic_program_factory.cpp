@@ -1096,6 +1096,8 @@ void AllToAllAsyncGenericProgram::override_runtime_arguments(
     const AllToAllAsyncGenericParams& /*operation_attributes*/,
     const AllToAllAsyncGenericInputs& tensor_args,
     Tensor& tensor_return_value) {
+    const auto input_address = tensor_args.input_tensor.buffer()->address();
+    const auto output_address = tensor_return_value.buffer()->address();
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         const auto& coord = coordinate_range.start_coord();
         TT_FATAL(
@@ -1106,17 +1108,23 @@ void AllToAllAsyncGenericProgram::override_runtime_arguments(
         auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
 
         auto& sender_reader_runtime_args = GetRuntimeArgs(program, shared_variables.sender_reader_kernel_id);
-        for (size_t core_id = 0; core_id < shared_variables.sender_worker_cores.size(); ++core_id) {
-            const auto& core = shared_variables.sender_worker_cores[core_id];
-            const auto writer_kernel_id =
-                shared_variables.sender_writer_kernel_ids[core_id % shared_variables.num_senders_per_link];
-            auto& sender_writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
-            auto& worker_sender_reader_runtime_args = sender_reader_runtime_args[core.x][core.y];
-            auto& worker_sender_writer_runtime_args = sender_writer_runtime_args[core.x][core.y];
-            worker_sender_reader_runtime_args[0] = tensor_args.input_tensor.buffer()->address();
-            worker_sender_writer_runtime_args[0] = tensor_return_value.buffer()->address();
-            worker_sender_writer_runtime_args[1] = shared_variables.init_barrier_semaphore.address();
-            worker_sender_writer_runtime_args[2] = shared_variables.final_barrier_semaphore.address();
+        const auto init_barrier_address = shared_variables.init_barrier_semaphore.address();
+        const auto final_barrier_address = shared_variables.final_barrier_semaphore.address();
+        // A writer kernel serves the same sender stream on every link. Resolve its
+        // argument matrix once and visit that stream's cores without rebuilding views.
+        for (size_t stream = 0; stream < shared_variables.num_senders_per_link; ++stream) {
+            auto& sender_writer_runtime_args =
+                GetRuntimeArgs(program, shared_variables.sender_writer_kernel_ids[stream]);
+            for (size_t core_id = stream; core_id < shared_variables.sender_worker_cores.size();
+                 core_id += shared_variables.num_senders_per_link) {
+                const auto& core = shared_variables.sender_worker_cores[core_id];
+                auto& reader_args = sender_reader_runtime_args[core.x][core.y];
+                auto& writer_args = sender_writer_runtime_args[core.x][core.y];
+                reader_args[0] = input_address;
+                writer_args[0] = output_address;
+                writer_args[1] = init_barrier_address;
+                writer_args[2] = final_barrier_address;
+            }
         }
     }
 }
