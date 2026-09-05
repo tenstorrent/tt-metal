@@ -243,23 +243,28 @@ autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
-    float dropout_probability) {
+    float dropout_probability,
+    std::optional<ttml::metal::AttentionMaskType> mask_type) {
     validate_qkv_shapes(query, key, value);
 
-    // Kernels support (1, 1, S, S) mask shape - same mask for all batches/heads
-    std::optional<ttnn::Tensor> mask_tensor = std::nullopt;
-    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal;
-    if (mask.has_value() && mask.value()) {
-        mask_tensor = mask.value()->get_value();
-        mask_type = ttml::metal::AttentionMaskType::Arbitrary;
+    const bool has_mask = mask.has_value() && mask.value();
+    // Default: Arbitrary when a mask is given, Causal otherwise (on-device mask generation).
+    const ttml::metal::AttentionMaskType resolved_mask_type = mask_type.value_or(
+        has_mask ? ttml::metal::AttentionMaskType::Arbitrary : ttml::metal::AttentionMaskType::Causal);
+    if ((resolved_mask_type == ttml::metal::AttentionMaskType::Arbitrary) != has_mask) {
+        throw std::invalid_argument(
+            "scaled_dot_product_attention: mask_type=Arbitrary requires a mask tensor, and a mask tensor requires "
+            "mask_type=Arbitrary (or unset).");
     }
+    // Kernels support (1, 1, S, S) mask shape - same mask for all batches/heads
+    const std::optional<ttnn::Tensor> mask_tensor = has_mask ? std::optional(mask.value()->get_value()) : std::nullopt;
 
     // ========== Forward Pass using sdpa_fw kernel ==========
     auto fw_result = ttml::metal::sdpa_fw(
         query->get_value(),
         key->get_value(),
         value->get_value(),
-        mask_type,
+        resolved_mask_type,
         mask_tensor,
         dropout_probability,
         /*return_intermediates=*/true);  // Need intermediates for backward pass
@@ -271,7 +276,7 @@ autograd::TensorPtr scaled_dot_product_attention(
 
     // ========== Register Backward Function using sdpa_bw kernel ==========
     ttml::autograd::GradFunction grad =
-        [query, key, value, mask_type, mask_tensor, out, attn_output, intermediates, dropout_probability]() {
+        [query, key, value, resolved_mask_type, mask_tensor, out, attn_output, intermediates, dropout_probability]() {
             auto grad_output = out->get_grad();
 
             // Call sdpa_bw kernel - returns [grad_Q, grad_K, grad_V]
@@ -285,7 +290,7 @@ autograd::TensorPtr scaled_dot_product_attention(
                 key->get_value(),
                 value->get_value(),
                 intermediates,
-                mask_type,
+                resolved_mask_type,
                 mask_tensor,
                 dropout_probability);
 

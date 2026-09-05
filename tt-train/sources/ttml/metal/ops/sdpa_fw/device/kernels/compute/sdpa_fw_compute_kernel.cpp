@@ -198,6 +198,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         // The per-n mask is unique (no reusable transformed tiles) and apply_mask_on_reg operates
         // on a single DST tile + scratch, which fits comfortably here. K is laid out col-major
         // in cb_key (uniform reader layout), so the K tile index is `feat*Sk_chunk_t + n`.
+        // AttentionMaskType::None: same matmul, but apply_mask_on_reg and cb_attn_mask pop are skipped.
         constexpr uint32_t matmul_accum_reg = 0U;
         for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
             matmul_init(cb_query, cb_key, /* transpose */ 1);

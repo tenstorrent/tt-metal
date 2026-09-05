@@ -15,16 +15,12 @@ void kernel_main() {
     const uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
     // Circular buffer indices
-    constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_7;    // Matmul row reduce tile
     constexpr uint32_t cb_grad_query = tt::CBIndex::c_13;       // Output: grad_Q
     constexpr uint32_t cb_u_scaler_output = tt::CBIndex::c_14;  // Output: u_scaler for KV kernel
 
     // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);  // query width in tiles
     constexpr uint32_t Ht = get_compile_time_arg_val(1);   // sequence length in tiles
-
-    // Generate helper tiles once at the start
-    generate_matmul_row_reduce_tile(cb_mat_mul_reduce);  // tile for matmul row reduce
 
 #ifdef CAUSAL_MASK
     // Generate causal mask tile ONCE - will be reused for every diagonal
