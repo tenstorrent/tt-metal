@@ -401,6 +401,9 @@ void kernel_main() {
             }
         }
 
+        // Drain the non-posted consumed_sem multicasts before the exit epilogue's
+        // NoC-idle check, as the receiver does before its own update_socket_config.
+        noc.async_atomic_barrier();
         update_socket_config(sender_socket);
         if (fabric_open) {
             fabric_connection.close();
