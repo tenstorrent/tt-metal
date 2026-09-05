@@ -355,3 +355,101 @@ def test_broadcast_ring_l1(
         logger.info(f"[bcast_ring_l1]   tp{r}: {grid_out[r]}  (per-line expects all {r * 10 + OWNER})")
     per_line = all(grid_out[r][c] == r * 10 + OWNER for r in range(tp_factor) for c in range(sp_factor))
     assert per_line, "L1-relay broadcast_ring did not deliver the sender shard to all ring devices"
+
+
+# --- reference-frame layout: the sparse_attention usage the op is actually fed --------------------
+# sparse_attention broadcasts kv=[2b, nh, N, E] sharded heads(dim1)->tp, seq(dim2)->sp, then slices a
+# seq sub-range (the reference frame) out on dim 2. That differs from the tests above in three ways at
+# once: broadcast dim is 2 (not the innermost), dim0 (2b) and dim3 (E) are > 1 tile, and sp can be 32.
+#
+# broadcast_offset_tiles/broadcast_num_tiles are a FLAT contiguous page range over the whole shard
+# (row-major, width tiles innermost), so a dim-2 sub-range can only be expressed when E/32==1 and
+# dim0*dim1==1. The "subrange" case below therefore fails (xfail: op limitation); the "wholeshard" case
+# broadcasts the whole owner shard and slices dim 2 on host -- correct, and what the pipeline should do.
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
+    [
+        pytest.param((4, 8), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x8_ring"),
+        pytest.param((4, 32), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x32_ring"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "mode",
+    [
+        pytest.param("wholeshard", id="wholeshard"),
+        pytest.param(
+            "subrange",
+            id="subrange",
+            marks=pytest.mark.xfail(
+                reason="broadcast_offset/num_tiles is a flat page range; a dim-2 sub-range across "
+                "dim0/E outer tiles is disjoint pages it cannot express",
+                strict=False,
+            ),
+        ),
+    ],
+)
+def test_broadcast_ring_reference_frame(mesh_device, sp_axis, tp_axis, device_params, topology, mode):
+    tp_factor, sp_factor = tuple(mesh_device.shape)
+    per_dev = 4  # seq tiles per device shard
+    e_tiles = 2  # dim3 (E) = 2 tiles, so E/32 > 1 (exposes the flat-page stride)
+    n_batch = 2  # dim0 (stacked k|v), so dim0 > 1
+    owner = sp_factor // 2
+    off, flen = 1, 2  # frame = owner seq tiles [off, off+flen), lives inside one shard
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    wsd_id = ttnn.SubDeviceId(0)
+    mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([crs])], 0)
+    mesh_device.load_sub_device_manager(mgr)
+    mesh_device.set_sub_device_stall_group([wsd_id])
+
+    # value(b, head, global_seq_tile, e_tile) is unique so a mis-addressed page is detectable.
+    def val(b, head, seqt, et):
+        return b * 100000 + head * 1000 + seqt * 10 + et
+
+    n_seq = sp_factor * per_dev
+    host = torch.zeros(n_batch, tp_factor, n_seq * T, e_tiles * T, dtype=torch.float32)
+    for b in range(n_batch):
+        for head in range(tp_factor):
+            for seqt in range(n_seq):
+                for et in range(e_tiles):
+                    host[b, head, seqt * T : (seqt + 1) * T, et * T : (et + 1) * T] = val(b, head, seqt, et)
+
+    shard_dims = [None, None]
+    shard_dims[tp_axis] = 1  # heads
+    shard_dims[sp_axis] = 2  # seq
+    rm = ttnn.from_torch(
+        host.to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+    tt_in = ttnn.to_layout(rm, ttnn.TILE_LAYOUT)
+
+    bcast_kwargs = dict(
+        sender_ring_index=owner, cluster_axis=sp_axis, topology=topology, subdevice_id=wsd_id, num_links=2
+    )
+    if mode == "subrange":
+        bcast_kwargs.update(broadcast_offset_tiles=off, broadcast_num_tiles=flen)
+    full = ttnn.experimental.broadcast_ring(tt_in, **bcast_kwargs)
+    ttnn.synchronize_device(mesh_device, sub_device_ids=[wsd_id])
+
+    out = ttnn.to_torch(
+        ttnn.to_layout(full, ttnn.ROW_MAJOR_LAYOUT),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    # Every sp device must hold the OWNER's frame tiles for its own tp head, across all batch/E tiles.
+    bad = []
+    for b in range(n_batch):
+        for head in range(tp_factor):
+            for c in range(sp_factor):
+                for j in range(flen):
+                    for et in range(e_tiles):
+                        got = round(out[b, head, (c * per_dev + off + j) * T, et * T].item())
+                        want = val(b, head, owner * per_dev + off + j, et)
+                        if got != want:
+                            bad.append((b, head, c, off + j, et, got, want))
+    assert not bad, f"broadcast_ring reference-frame mismatch ({len(bad)} tiles), first: {bad[0]}"
