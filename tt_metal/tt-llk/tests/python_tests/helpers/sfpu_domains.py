@@ -546,9 +546,14 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Lgamma: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=1.0, high=15.0)
     ),
-    # digamma: LUT fit on [0.01, 102]; keep positive to avoid the poles at x<=0
+    # digamma: LUT fit on [0.01, 102], with a recurrence below the floor and an
+    # asymptotic above the ceiling; keep positive to avoid the poles at x<=0.
+    # `low` deliberately sits under the LUT floor so the (0, 0.01) interval the
+    # public docstring promises ("supported for values greater than 0") is
+    # actually exercised — it was previously untested, which is how the
+    # small-x saturation in #51128 survived.
     MathOperation.Digamma: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.1, high=50.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=1e-6, high=50.0)
     ),
     # identity: pass-through; any range is valid
     MathOperation.Identity: OperandSpecs(
