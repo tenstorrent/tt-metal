@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -149,9 +150,14 @@ TEST(NamedCtArgMap, HeaderDefinesTheMacroAndIsIncludeGuarded) {
     EXPECT_NE(header.find("#pragma once"), std::string::npos);
     EXPECT_NE(header.find(R"(#define KERNEL_COMPILE_TIME_ARG_MAP {"cb_in0",1})"), std::string::npos);
     // The macro must be the whole body on one logical line: a stray newline inside the map would
-    // terminate the #define and silently truncate the arg list.
+    // terminate the #define and silently truncate the arg list. Everything after that line is the
+    // include that turns the macro into the get_named_compile_time_arg_val API -- performed here,
+    // in the generated header, because under TT_METAL_JIT_PCH the kernel's own include of
+    // compile_time_args.h re-includes as a no-op (the guard is already satisfied inside the PCH).
     const std::size_t define_pos = header.find("#define KERNEL_COMPILE_TIME_ARG_MAP");
-    EXPECT_EQ(header.find('\n', define_pos), header.size() - 1);
+    const std::size_t define_end = header.find('\n', define_pos);
+    ASSERT_NE(define_end, std::string::npos);
+    EXPECT_EQ(header.substr(define_end), "\n\n#include \"api/named_compile_time_args.h\"\n");
 }
 
 TEST(NamedCtArgMap, HeaderIsByteIdenticalForEqualMaps) {
@@ -197,6 +203,33 @@ TEST(NamedCtArgMap, HeaderNameIsRelativeSoItResolvesOnBothCompileHosts) {
     EXPECT_TRUE(NAMED_CT_ARG_MAP_HEADER.ends_with(".h"));
 }
 
+// Locate the real tt_metal/hw/inc tree, which real compiles carry as an absolute -I and the
+// generated map header needs to resolve its trailing #include "api/named_compile_time_args.h".
+// TT_METAL_HOME when set (as in CI), otherwise walk up from cwd, which covers running the test
+// binary from anywhere inside the repo or its build tree.
+std::filesystem::path find_hw_inc_dir() {
+    namespace fs = std::filesystem;
+    auto probe = [](fs::path base) -> fs::path {
+        std::error_code ec;
+        for (base = fs::absolute(base, ec); !base.empty(); base = base.parent_path()) {
+            const fs::path candidate = base / "tt_metal" / "hw" / "inc";
+            if (fs::exists(candidate / "api" / "named_compile_time_args.h", ec)) {
+                return candidate;
+            }
+            if (base == base.root_path()) {
+                break;
+            }
+        }
+        return {};
+    };
+    if (const char* home = std::getenv("TT_METAL_HOME")) {
+        if (const auto found = probe(home); !found.empty()) {
+            return found;
+        }
+    }
+    return probe(std::filesystem::current_path());
+}
+
 // End-to-end check of the delivery mechanism, in the directory layout the real compiles use: the
 // generated header sits in the per-kernel dir and the compiler runs with cwd = a per-target subdir,
 // reaching it through the "-I.." on every compile. Both the local build and the JIT compile server
@@ -207,6 +240,11 @@ TEST(NamedCtArgMap, HeaderNameIsRelativeSoItResolvesOnBothCompileHosts) {
 // toolchain: what is under test is name resolution and macro visibility, not code generation.
 TEST(NamedCtArgMap, ForceIncludedHeaderResolvesFromTargetSubdirAndDefinesTheMap) {
     namespace fs = std::filesystem;
+
+    const fs::path hw_inc = find_hw_inc_dir();
+    if (hw_inc.empty()) {
+        GTEST_SKIP() << "tt_metal/hw/inc not locatable (TT_METAL_HOME unset and cwd outside the repo)";
+    }
 
     const fs::path kernel_dir = fs::temp_directory_path() / "tt_named_ct_arg_map_test" / "kernel";
     const fs::path target_dir = kernel_dir / "ncrisc";
@@ -220,30 +258,28 @@ TEST(NamedCtArgMap, ForceIncludedHeaderResolvesFromTargetSubdirAndDefinesTheMap)
         ASSERT_TRUE(header.good());
     }
 
-    // Mirrors hw/inc/api/compile_time_args.h: build the lookup table from the macro and resolve a
-    // name at compile time, so a missing or malformed map fails the compile.
+    // Calls the real get_named_compile_time_arg_val API, which the generated header brings in via
+    // its trailing include of api/named_compile_time_args.h. Resolving names at compile time means
+    // a missing or malformed map -- or an undeclared API -- fails the compile.
     const fs::path src = kernel_dir / "consumer.cpp";
     {
         std::ofstream f(src);
-        f << "#include <string_view>\n#include <utility>\n#include <cstdint>\n"
-             "constexpr std::pair<std::string_view, uint32_t> named_args_map[] = {KERNEL_COMPILE_TIME_ARG_MAP};\n"
-             "constexpr uint32_t get_named_ct_arg(std::string_view name) {\n"
-             "    for (const auto& [n, v] : named_args_map) { if (n == name) { return v; } }\n"
-             "    return 0xFFFFFFFFu;\n"
-             "}\n"
-             "static_assert(get_named_ct_arg(\"cb_in0\") == 7);\n"
-             "static_assert(get_named_ct_arg(\"num_tiles\") == 64);\n";
+        f << "static_assert(get_named_compile_time_arg_val(\"cb_in0\") == 7);\n"
+             "static_assert(get_named_compile_time_arg_val(\"num_tiles\") == 64);\n"
+             "int main() { return 0; }\n";
         ASSERT_TRUE(f.good());
     }
 
     // -I. / -I.. and cwd = target dir replicate JitBuildEnv's include list and exec_command's
-    // working directory. The bare -include must resolve through -I.. alone.
+    // working directory; the absolute -I<hw/inc> replicates the include path every real compile
+    // carries. The bare -include must resolve through -I.. alone.
     const std::vector<std::string> args = {
         "c++",
         "-std=c++17",
         "-fsyntax-only",
         "-I.",
         "-I..",
+        "-I" + hw_inc.string(),
         "-include",
         std::string(NAMED_CT_ARG_MAP_HEADER),
         "../consumer.cpp"};
