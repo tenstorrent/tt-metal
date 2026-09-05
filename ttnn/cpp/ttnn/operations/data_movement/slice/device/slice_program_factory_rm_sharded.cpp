@@ -358,7 +358,8 @@ void patch_slice_program_addresses(
     const SliceDeviceOperation::program_factory_t& factory,
     const SliceParams& operation_attributes,
     const SliceInputs& tensor_args,
-    Tensor& output) {
+    Tensor& output,
+    const std::vector<tt::tt_metal::DynamicRuntimeArg>* cached_tile_args) {
     ZoneNamedN(__tracy_scoped_zone, "HostProfile::slice_patch_addresses", ([] {
                    static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
                    return enabled;
@@ -406,6 +407,27 @@ void patch_slice_program_addresses(
                 }
                 tt::tt_metal::apply_dynamic_runtime_args(program, dyn);
 
+                if (cached_tile_args != nullptr) {
+                    // MeshPartition retains the exact per-coordinate scalars. Reapply them even on
+                    // hits: cached Programs can share dispatch state across divergent coordinates.
+                    // Generated tile scalars are consecutive for each (kernel, core). Resolve the
+                    // runtime-argument view once per group, freshly on each invocation so dispatch
+                    // command retargeting is observed; no raw command pointers are retained.
+                    size_t index = 0;
+                    while (index < cached_tile_args->size()) {
+                        const auto& first = (*cached_tile_args)[index];
+                        auto& data = first.is_common ? GetCommonRuntimeArgs(program, first.kernel_idx)
+                                                     : GetRuntimeArgs(program, first.kernel_idx, first.core);
+                        do {
+                            const auto& arg = (*cached_tile_args)[index++];
+                            data.at(arg.arg_idx) = arg.value;
+                        } while (index < cached_tile_args->size() &&
+                                 (*cached_tile_args)[index].kernel_idx == first.kernel_idx &&
+                                 (*cached_tile_args)[index].core == first.core &&
+                                 (*cached_tile_args)[index].is_common == first.is_common);
+                    }
+                    return;
+                }
                 const uint32_t start_offset = std::is_same_v<Factory, SliceTileProgramFactory>
                                                   ? ttnn::operations::data_movement::get_tiled_start_offset(
                                                         tensor_args.input, operation_attributes.slice_start)

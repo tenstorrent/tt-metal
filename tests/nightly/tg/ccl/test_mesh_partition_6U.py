@@ -65,3 +65,59 @@ def test_mesh_partition_rm(
         output_memory_config,
         scheme="random",
     )
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1048576}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_mesh_partition_cached_slice_args(mesh_device):
+    """Retain coordinate-specific tile arguments across fresh buffers and cache/trace reuse."""
+    import torch
+
+    cases = [
+        (ttnn.TILE_LAYOUT, 2, 0),
+        (ttnn.TILE_LAYOUT, 2, 1),
+        (ttnn.TILE_LAYOUT, 2, None),
+        (ttnn.TILE_LAYOUT, 3, 1),
+        (ttnn.TILE_LAYOUT, 1, 0),
+        (ttnn.ROW_MAJOR_LAYOUT, 2, 0),
+    ]
+    for case_index, (layout, dim, axis) in enumerate(cases):
+        group_size = mesh_device.get_num_devices() if axis is None else mesh_device.shape[axis]
+        retained_tensors = []
+        for repeat in range(3):
+            shape = [1, 4, 64, 128]
+            shape[dim] *= group_size
+            shape[2] *= 1 + repeat % 2
+            torch.manual_seed(case_index * 10 + repeat)
+            host_input = torch.rand(shape, dtype=torch.bfloat16)
+            device_input = ttnn.from_torch(
+                host_input,
+                dtype=ttnn.bfloat16,
+                layout=layout,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            entries_before = mesh_device.num_program_cache_entries()
+            output = ttnn.mesh_partition(device_input, dim=dim, cluster_axis=axis)
+            ttnn.synchronize_device(mesh_device)
+            if repeat == 2:
+                assert mesh_device.num_program_cache_entries() == entries_before
+            # Keep previous allocations alive so a cache hit must patch genuinely different addresses.
+            retained_tensors.extend((device_input, output))
+            expected_shards = torch.chunk(host_input, group_size, dim=dim)
+
+            def check(actual_output):
+                for rank, local_output in enumerate(ttnn.get_device_tensors(actual_output)):
+                    partition = rank if axis is None else rank // 4 if axis == 0 else rank % 4
+                    assert torch.equal(ttnn.to_torch(local_output), expected_shards[partition])
+
+            check(output)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        traced_output = ttnn.mesh_partition(device_input, dim=dim, cluster_axis=axis)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        try:
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            check(traced_output)
+        finally:
+            ttnn.release_trace(mesh_device, trace_id)

@@ -139,27 +139,47 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
         },
         program_factory);
 
-    return {std::move(program), shared_variables_t{.slice_program_factory = program_factory}};
+    // The operation key includes tensor specs, partition attributes and participating coordinates.
+    // Work splits and slice offsets are invariant for this coordinate on subsequent hits.
+    std::vector<tt::tt_metal::DynamicRuntimeArg> tile_args;
+    if (std::holds_alternative<ttnn::prim::SliceTileProgramFactory>(program_factory)) {
+        const auto start_offset =
+            ttnn::operations::data_movement::get_tiled_start_offset(tensor_args.input_tensor, slice_attrs.slice_start);
+        tile_args = ttnn::prim::slice_tile_dynamic_args(
+            slice_attrs, slice_tensor_args, tensor_return_value, start_offset, 0, 1);
+    }
+    return {
+        std::move(program),
+        shared_variables_t{
+            .slice_program_factory = program_factory,
+            .slice_attributes = std::move(slice_attrs),
+            .tile_args = std::move(tile_args)}};
 }
 
 void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         auto& shared_variables = cached_workload.shared_variables.at(range);
 
-        // Get the mesh coordinate from the range (assuming single device per range)
-        auto mesh_coordinate = *range.begin();
-        auto [slice_attrs, slice_tensor_args] =
-            compute_slice_parameters(operation_attributes, tensor_args, mesh_coordinate);
+        const SliceOp::tensor_args_t slice_tensor_args{
+            .input = tensor_args.input_tensor,
+            .start_tensor = std::nullopt,
+            .end_tensor = std::nullopt,
+            .preallocated_output = std::nullopt};
 
         // Re-apply this coord's per-dispatch state to the cached Program, through the same patch the
         // slice op uses -- addresses only. CB total_size/page_size are not re-applied on a hit, so any
         // sizing that varies across calls must be in compute_program_hash().
         ttnn::prim::patch_slice_program_addresses(
-            program, shared_variables.slice_program_factory, slice_attrs, slice_tensor_args, tensor_return_value);
+            program,
+            shared_variables.slice_program_factory,
+            shared_variables.slice_attributes,
+            slice_tensor_args,
+            tensor_return_value,
+            shared_variables.tile_args.empty() ? nullptr : &shared_variables.tile_args);
     }
 }
 
