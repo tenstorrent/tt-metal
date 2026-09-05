@@ -70,12 +70,10 @@ on:
         required: false
         type: boolean
         default: false
-        description: "EXPERIMENT: capture the target group's runtime JIT kernel compiles with bear and run clang-tidy on them post-hoc. Non-blocking; findings are uploaded as an artifact. Default off, no overhead when disabled."
-      clang-tidy-target-group:
-        required: false
-        type: string
-        default: ""
-        description: "Exact matrix test-group name to capture + lint (e.g. 'ttnn eltwise group 1'). Required when enable-kernel-clang-tidy is true."
+        description: >-
+          EXPERIMENT: on every HW leg, capture that leg's runtime JIT kernel compiles and run clang-tidy on them
+          post-hoc via CodeChecker, uploading per-leg capture + HTML report artifacts. Non-blocking. The capture
+          defeats all kernel-compile caches, so legs run slower. Default off, no overhead when disabled.
     outputs:
       matrix:
         description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
@@ -326,12 +324,12 @@ jobs:
           fi
           echo "perf_ready=$perf_ready" >> "$GITHUB_OUTPUT"
 
-      # Kernel clang-tidy experiment (opt-in, non-blocking): lint the JIT kernel
-      # compiles of the one leg named '<clang-tidy-target-group> [<sku>]'.
+      # Kernel clang-tidy experiment (opt-in, non-blocking): every HW leg captures
+      # its own JIT kernel compiles and lints them, like collect-coverage does.
       # See tech_reports/code-indexing/kernel-clang-tidy.md.
       - name: Install clang-tidy + CodeChecker (kernel clang-tidy)
         id: kernel-tidy-tools
-        if: ${{ inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}
+        if: ${{ inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') }}
         continue-on-error: true
         run: |
           find_bin() {
@@ -421,7 +419,7 @@ jobs:
             # command into this leg's run log; every kernel-compile cache layer is
             # defeated so each compile (and its logged command) actually happens.
             # Details: tech_reports/code-indexing/kernel-clang-tidy.md.
-            KERNEL_TIDY_THIS="${{ inputs.enable-kernel-clang-tidy && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}"
+            KERNEL_TIDY_THIS="${{ inputs.enable-kernel-clang-tidy }}"
             if [ "$KERNEL_TIDY_THIS" = "true" ]; then
               echo "kernel clang-tidy capture ENABLED for '$TEST_GROUP_NAME'"
               export TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1
@@ -489,7 +487,7 @@ jobs:
       # Translate the captured SFPI-GCC compile commands for clang and run
       # clang-tidy through CodeChecker, exporting an HTML report. Non-blocking.
       - name: Run clang-tidy via CodeChecker on captured JIT kernel compiles (kernel clang-tidy)
-        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) && steps.kernel-tidy-tools.outputs.tidy_ready == 'true' }}
+        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') && steps.kernel-tidy-tools.outputs.tidy_ready == 'true' }}
         continue-on-error: true
         timeout-minutes: 45
         env:
@@ -523,6 +521,9 @@ jobs:
             --output /work/kernel_tidy/reports || echo "::warning::CodeChecker analyze reported failures (continuing)"
           CodeChecker parse /work/kernel_tidy/reports --export html --output /work/kernel_tidy_html \
             | tee -a /work/kernel_tidy/summary.txt || true
+          # Machine-readable counts for the aggregated index, shipped with the report.
+          CodeChecker parse /work/kernel_tidy/reports --export json \
+            --output /work/kernel_tidy_html/reports.json >/dev/null 2>&1 || true
           {
             echo '<details><summary>Kernel clang-tidy (prototype, non-blocking)</summary>'
             echo ''
@@ -534,7 +535,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload kernel clang-tidy capture (kernel clang-tidy)
-        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}
+        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') }}
         continue-on-error: true
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -546,7 +547,7 @@ jobs:
           retention-days: 14
 
       - name: Upload kernel clang-tidy HTML report (kernel clang-tidy)
-        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}
+        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') }}
         continue-on-error: true
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

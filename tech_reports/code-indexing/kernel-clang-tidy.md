@@ -158,8 +158,9 @@ every configuration.
 ## CI wiring (prototype)
 
 `.github/workflows/ttnn-sanity-tests-impl.yaml` has an opt-in experiment:
-callers pass `enable-kernel-clang-tidy: true` plus `clang-tidy-target-group:
-"<exact matrix group name>"`. That leg's pytest run gets
+callers pass `enable-kernel-clang-tidy: true` and **every** hardware leg
+captures and lints its own kernels, the same way `collect-coverage` applies to
+every leg. Each leg's pytest run gets
 `TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1` + `TT_LOGGER_LEVEL=info` (the logged
 compile commands land in the leg's run-with-log file), with all three
 kernel-compile cache layers defeated for that leg only (see the gotcha above:
@@ -180,17 +181,27 @@ resolvable (we pass both via `CC_ANALYZER_BIN=clang-tidy:…;clangsa:…`) even
 though only clang-tidy runs.
 
 The dedicated caller is `.github/workflows/kernel-clang-tidy.yaml` (structured
-after `code-coverage.yaml`): build → run one ttnn test group on hardware via
-`ttnn-sanity-tests-impl.yaml` with the experiment enabled → a publish job that
-downloads the `kernel-clang-tidy-html-*` artifact and pushes it to
+after `code-coverage.yaml`): build → run the ttnn sanity suite on hardware via
+`ttnn-sanity-tests-impl.yaml` with the experiment enabled on every leg → a
+publish job that downloads every `kernel-clang-tidy-html-*` artifact, stages
+them side by side, and pushes them to
 `tenstorrent/tt-metal-kernel-clang-tidy-results` gh-pages (on main, or when
 dispatched with `publish-html: true`). Launch with:
 
 ```sh
 gh workflow run kernel-clang-tidy.yaml --ref <branch> \
-  -f target-group='trace allocation tracker' -f enabled-skus=wh_n300_civ2 \
-  -f publish-html=true
+  -f enabled-skus=wh_n300_civ2 -f publish-html=true
 ```
+
+The per-leg reports cannot be merged into a single CodeChecker report:
+`CodeChecker parse --export html` reads the analyzed sources to render its
+report pages, and those (wheel-installed headers, generated files in the
+tt-metal-cache dir) exist only inside the leg's container. Exporting from the
+collected plists alone yields an index and statistics page with no report
+pages at all — measured, not assumed. So each leg exports its own HTML plus a
+`reports.json` (CodeChecker's JSON export), and
+`.github/scripts/utils/kernel_tidy_index.py` stages them into one site with a
+navigation index whose counts come from those JSON files.
 
 ### Why not the simulator legs?
 
@@ -220,6 +231,25 @@ abandoned; the tidy steps skip `sim_*` SKUs. Three independent blockers:
 
 ## Coverage and known gaps
 
+* **What limits the finding count.** The first all-hardware run should be read
+  with three suppressors in mind, because they explain a surprisingly small
+  number far better than "the kernels are clean". First, coverage is per-leg
+  JIT compiles: a single small group (`trace allocation tracker`) compiled
+  only **8** TUs, against ~2450 kernel sources in the tree — hence wiring
+  every leg. Second, `--dedupe kernel-role` (the default) lints one config per
+  (kernel, RISC target), so the same kernel under many compile-time-arg
+  configurations is analyzed once. Third, and most significant,
+  `HeaderFilterRegex` is `.*/(kernels|kernels_ng|kernels_dfb|test_kernels)/.*`
+  — clang-tidy check findings are reported only from files under those
+  directories. Kernel sources qualify (they are `#include`d into the
+  `trisck.cc`/`brisck.cc` wrappers, so clang treats them as headers), but the
+  LLK/ckernel/SFPU header stack where much device logic actually lives does
+  not, so check findings there are dropped. Compiler diagnostics
+  (`clang-diagnostic-*`) bypass header filters, which is why the errors seen
+  so far are mostly from those headers. Widening the regex is the next lever
+  and should be a deliberate, separate change — it will raise volume a lot,
+  and findings in `tt_metal/tt-llk` and the SFPI toolchain are not fixable in
+  this repo.
 * **Coverage = what the run compiled.** One test lints one test's kernels; a
   suite lints what the suite exercises. Kernels (or TRISC roles, or `#ifdef`
   branches) the run never compiled are not analyzed.
