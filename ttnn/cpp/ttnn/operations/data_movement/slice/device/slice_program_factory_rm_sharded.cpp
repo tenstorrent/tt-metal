@@ -432,15 +432,20 @@ void patch_slice_program_addresses(
                                                   ? ttnn::operations::data_movement::get_tiled_start_offset(
                                                         tensor_args.input, operation_attributes.slice_start)
                                                   : 0u;
-                const auto per_core = [&] {
+                {
                     ZoneNamedN(__tracy_scoped_zone, "HostProfile::slice_build_dynamic_args", ([] {
                                    static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
                                    return enabled;
                                }()));
-                    return slice_tile_dynamic_args(
-                        operation_attributes, tensor_args, output, start_offset, kReaderKernelIdx, kWriterKernelIdx);
-                }();
-                tt::tt_metal::apply_dynamic_runtime_args(program, per_core);
+                    apply_slice_tile_dynamic_args(
+                        program,
+                        operation_attributes,
+                        tensor_args,
+                        output,
+                        start_offset,
+                        kReaderKernelIdx,
+                        kWriterKernelIdx);
+                }
             }
         },
         factory);

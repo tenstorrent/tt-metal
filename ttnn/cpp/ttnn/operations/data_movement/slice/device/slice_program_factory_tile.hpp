@@ -35,4 +35,14 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> slice_tile_dynamic_args(
     uint32_t reader_kernel_idx,
     uint32_t writer_kernel_idx);
 
+// Recompute and apply the same scalars without materializing DynamicRuntimeArg entries.
+void apply_slice_tile_dynamic_args(
+    tt::tt_metal::Program& program,
+    const SliceParams& args,
+    const SliceInputs& tensor_args,
+    const Tensor& output,
+    uint32_t start_offset,
+    uint32_t reader_kernel_idx,
+    uint32_t writer_kernel_idx);
+
 }  // namespace ttnn::prim
