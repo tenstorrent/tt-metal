@@ -1001,6 +1001,30 @@ def test_high_bw_all_gather_512k_fabric_2d_line(mesh_device):
 def test_high_bw_all_gather_selected_batch_prefix(mesh_device):
     """One maximum-size output allocation can gather either cache slot and a shorter valid prefix."""
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    try:
+        _run_high_bw_all_gather_selected_batch_prefix(rank_line, cluster_axis)
+    finally:
+        mesh_device.quiesce_devices()
+        rank_line.clear_program_cache()
+
+
+@run_for_blackhole("selected-prefix coverage requires Blackhole Galaxy")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_high_bw_all_gather_galaxy_selected_batch_prefix(mesh_device):
+    # Parent/submesh allocators overlap physical L1. Release cached semaphore allocations
+    # before each ownership handoff, including when numerical validation fails.
+    mesh_device.quiesce_devices()
+    mesh_device.clear_program_cache()
+    rank_line = mesh_device.create_submesh(ttnn.MeshShape(8, 1), ttnn.MeshCoordinate(0, 0))
+    try:
+        _run_high_bw_all_gather_selected_batch_prefix(rank_line, 0)
+    finally:
+        mesh_device.quiesce_devices()
+        rank_line.clear_program_cache()
+
+
+def _run_high_bw_all_gather_selected_batch_prefix(rank_line, cluster_axis):
     axis_size = rank_line.shape[cluster_axis]
     local_rows, active_local_rows, width = 1024, 512, 576
     torch.manual_seed(0)
@@ -1026,8 +1050,13 @@ def test_high_bw_all_gather_selected_batch_prefix(mesh_device):
 
     cache_entries_after_first = None
     # Start smaller and grow the logical extent. This proves the cached program is compiled for the
-    # worst-case slab rather than the first active prefix.
-    for batch_index, rows_this_call in ((0, active_local_rows // 2), (1, active_local_rows)):
+    # worst-case slab rather than the first active prefix. Return to the first slot and extent to
+    # check that repeated cache hits refresh both controls while reusing the owned semaphores.
+    for batch_index, rows_this_call in (
+        (0, active_local_rows // 2),
+        (1, active_local_rows),
+        (0, active_local_rows // 2),
+    ):
         ttnn.experimental.high_bw_all_gather(
             device_input,
             dim=2,

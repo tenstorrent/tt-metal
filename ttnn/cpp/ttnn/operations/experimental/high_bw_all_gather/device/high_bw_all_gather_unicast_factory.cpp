@@ -940,10 +940,11 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
                                    ? derive_page_geometry(tensor_args.input_tensor, output_tensor, operation_attributes)
                                    : PageGeometry{};
 
+    // create_at installs the semaphore addresses once. shared_variables owns copies of those same
+    // GlobalSemaphore allocations for the cached workload's lifetime; neither buffer is replaced on
+    // a cache hit. Keep their runtime slots intact while refreshing every caller-owned tensor address.
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-        const uint32_t ready_addr = shared_vars.ready_sem.address();
-        const uint32_t data_valid_addr = shared_vars.data_valid_sem.address();
 
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
@@ -951,12 +952,8 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
             auto& reader_args = reader_args_by_core[core.x][core.y];
             reader_args.at(rt_arg_index(ReaderRtArg::InputAddress)) = input_addr;
             reader_args.at(rt_arg_index(ReaderRtArg::OutputAddress)) = output_addr;
-            reader_args.at(rt_arg_index(ReaderRtArg::ReadySemaphore)) = ready_addr;
-            reader_args.at(rt_arg_index(ReaderRtArg::DataValidSemaphore)) = data_valid_addr;
             auto& writer_args = writer_args_by_core[core.x][core.y];
             writer_args.at(rt_arg_index(WriterRtArg::OutputAddress)) = output_addr;
-            writer_args.at(rt_arg_index(WriterRtArg::ReadySemaphore)) = ready_addr;
-            writer_args.at(rt_arg_index(WriterRtArg::DataValidSemaphore)) = data_valid_addr;
         }
 
         if (!has_runtime_controls) {
