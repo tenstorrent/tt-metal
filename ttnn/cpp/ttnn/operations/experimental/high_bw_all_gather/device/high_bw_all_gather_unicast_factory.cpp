@@ -760,7 +760,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // All workers in a kernel read the same tensor addresses; keep these per-dispatch
     // values common instead of duplicating their patches across every worker core.
     tt::tt_metal::SetCommonRuntimeArgs(program, reader_kernel_id, {input_addr, output_addr});
-    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr});
+    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, data_valid_granularity});
 
     // Mux runtime args: one fabric connection per active direction per link, to that direction's neighbor. The
     // direction's workers all feed this one connection.
@@ -1075,6 +1075,9 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
                 reader_common->at(0) = input_addr;
                 reader_common->at(1) = output_addr;
                 writer_common->at(0) = output_addr;
+                if (has_runtime_controls) {
+                    writer_common->at(1) = data_valid_granularity;
+                }
             }
             if (!has_runtime_controls) {
                 continue;
@@ -1101,17 +1104,12 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
                     reader_args.at(rt_arg_index(ReaderRtArg::FinalCount)) = final_count;
                     reader_args.at(rt_arg_index(ReaderRtArg::InputPageStart)) = slice.input_page_start;
                     reader_args.at(rt_arg_index(ReaderRtArg::InputPageEnd)) = slice.input_page_end;
-                    reader_args.at(rt_arg_index(ReaderRtArg::OutputChunksPerStripe)) =
-                        page_geometry.output_chunks_per_stripe;
 
                     auto& writer_args = writer_args_by_core[core.x][core.y];
                     writer_args.at(rt_arg_index(WriterRtArg::SliceStart)) = slice.local_output_start;
                     writer_args.at(rt_arg_index(WriterRtArg::SliceCount)) = slice.slice_count;
                     writer_args.at(rt_arg_index(WriterRtArg::FinalStart)) = final_start;
                     writer_args.at(rt_arg_index(WriterRtArg::FinalCount)) = final_count;
-                    writer_args.at(rt_arg_index(WriterRtArg::OutputChunksPerStripe)) =
-                        page_geometry.output_chunks_per_stripe;
-                    writer_args.at(rt_arg_index(WriterRtArg::DataValidGranularity)) = data_valid_granularity;
                 }
             }
         }

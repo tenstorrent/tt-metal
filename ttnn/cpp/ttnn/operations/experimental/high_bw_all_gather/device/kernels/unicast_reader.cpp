@@ -79,7 +79,9 @@ void kernel_main() {
     const uint32_t input_page_id_end = get_arg_val<uint32_t>(arg_idx++);
     const address_t ready_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     const address_t data_valid_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_chunks_per_stripe = get_arg_val<uint32_t>(arg_idx++);
+    // Maximum placement stride is fixed by the cached tensor specs; active prefix only changes counts.
+    ++arg_idx;  // Reserved unique OutputChunksPerStripe slot; preserve following fabric argument offsets.
+    constexpr uint32_t output_chunks_per_stripe = static_output_chunks_per_stripe;
 
     auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);

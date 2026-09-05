@@ -78,10 +78,13 @@ void kernel_main() {
     const uint8_t data_valid_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // mirror core (data_valid_sem target)
     const uint8_t data_valid_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_granular_sends = get_arg_val<uint32_t>(arg_idx++);  // leading sends the downstream relays
-    const uint32_t data_valid_granularity = get_arg_val<uint32_t>(arg_idx++);
+    ++arg_idx;                                                             // Reserved unique DataValidGranularity slot.
+    const uint32_t data_valid_granularity = get_common_arg_val<uint32_t>(1);
     [[maybe_unused]] const uint8_t neighbor_dev_id = get_arg_val<uint32_t>(arg_idx++);
     [[maybe_unused]] const uint16_t neighbor_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_chunks_per_stripe = get_arg_val<uint32_t>(arg_idx++);
+    // Maximum placement stride is fixed by the cached tensor specs; active prefix only changes counts.
+    ++arg_idx;  // Reserved unique OutputChunksPerStripe slot; preserve following fabric argument offsets.
+    constexpr uint32_t output_chunks_per_stripe = static_output_chunks_per_stripe;
     [[maybe_unused]] size_t arg_for_fab = arg_idx;  // fabric connection args start here (non-mux path)
 
     // A direction with no neighbor (a line endpoint) relays nothing; no fabric/mux connection was appended.
