@@ -16,8 +16,9 @@ into every call). ``prefill_chunk`` / ``compile`` / ``gather_layer`` / ``kv_cach
 an optional cache arg that defaults to ``self.kv_cache``.
 
 Migration hooks (Gate 1–2 in ``PREFILL_MIGRATION_TESTING.md``): ``build_kv_chunk_table`` (via
-``tt/runners/kv_chunk_table.py``), ``kv_migration_base_address``, ``read_slot_kv``, and
-``set_layer_ack_channel``. Request-mode H2D delivers SP-sharded uint32 tokens; ``prefill_chunk``
+``tt/runners/kv_chunk_table.py``), ``kv_migration_base_address``, ``read_slot_kv``,
+``set_layer_ack_channel``, and ``set_layer_completion_sink``. Request-mode H2D delivers SP-sharded
+uint32 tokens; ``prefill_chunk``
 embeds them on the first rank (same path as ``make_chunk_input``).
 
 CHUNKED prefill is supported: the SP cache-backed RingJointSDPA path uses the block-cyclic packed KV
@@ -117,6 +118,7 @@ class TtPrefillRuntime:
         self.compiled = False
         self.kv_cache = None
         self._on_layer_complete = None  # set by set_layer_ack_channel (LayerAck inject)
+        self._layer_completion_sink = None  # set by set_layer_completion_sink (pipelined completions)
 
         self._build_model(state_dict)
         if config.owns_kv_cache:
@@ -296,7 +298,7 @@ class TtPrefillRuntime:
         skip_lm_head: bool = True,
         get_last_token: int = -1,
         chunk_size: Optional[int] = None,  # variable chunk length: which supported size this chunk is
-        request_id: int = -1,  # accepted for the common-runner contract; single-request prefill ignores it
+        request_id: int = -1,  # the completion sink's seq key; unused by the LayerAck-channel path
         d2h_service=None,  # accepted for the common-runner contract; this runtime uses host-callback LayerAcks
         record_dev=None,  # accepted for the common-runner contract; the D1H record path is unused here
     ) -> Optional[ttnn.Tensor]:
@@ -309,7 +311,8 @@ class TtPrefillRuntime:
 
         On the first rank ``input_tensor`` is SP-sharded uint32 tokens (``make_chunk_input`` / H2D);
         they are embedded here. Non-first ranks receive activations over D2D already embedded.
-        If a LayerAck channel is registered, the model bumps it once per layer via ``on_layer_complete``.
+        If a LayerAck channel or a completion sink is registered, the model reports each layer through
+        ``on_layer_complete``; the sink wins when both are set.
 
         Every SP chunk writes K/V. A chunked request, including actual_start == 0, then uses the
         cache-backed RingJointSDPA path; an equal-sized one-shot request uses the all-gather fallback.
@@ -337,6 +340,18 @@ class TtPrefillRuntime:
         else:
             x_embd = input_tensor
 
+        if self._layer_completion_sink is not None:
+            sink = self._layer_completion_sink
+
+            # Bound per call so the callback reads no mutable runtime state.
+            def on_layer_complete(layer_idx: int) -> None:
+                # The sink keys on request_id * num_layers + GLOBAL layer_idx, but the model enumerates
+                # only its own slice -- add this rank's offset (0 unless it owns one).
+                sink(self.config.first_layer_idx + layer_idx, request_id)
+
+        else:
+            on_layer_complete = self._on_layer_complete
+
         out = self.model.prefill_forward(
             x_embd,
             rot_mats_global=self.rope_indexed[chunk_size],  # per-size indexed rope (persistent; not deallocated)
@@ -346,7 +361,7 @@ class TtPrefillRuntime:
             get_last_token=get_last_token,
             skip_lm_head=skip_lm_head,
             indexed_rope=True,
-            on_layer_complete=self._on_layer_complete,
+            on_layer_complete=on_layer_complete,
         )
         if not self.config.is_last_rank:
             return out
@@ -366,6 +381,13 @@ class TtPrefillRuntime:
             layer_ack_channel.inject(1)
 
         self._on_layer_complete = on_layer_complete
+
+    def set_layer_completion_sink(self, sink) -> None:
+        """Register a per-layer completion sink for pipelined (multi-rank) prefill. Called once per layer as
+        ``sink(global_layer_idx, request_id)``; request_id is bound per ``prefill_chunk`` call so the sink
+        reads no mutable runtime state."""
+        assert self.compiled, "Call compile() before set_layer_completion_sink()"
+        self._layer_completion_sink = sink
 
     def kv_migration_base_address(self, kv_caches) -> int:
         """Stage KV base for the runner's device-map / stage-layout gather. The multi-config table
