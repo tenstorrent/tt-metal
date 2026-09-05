@@ -33,6 +33,7 @@ struct noc_traits_t<DataflowBuffer>;
 
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
+#include "internal/llk_metadata.h"
 #include "api/lock.h"
 #include "api/core_local_mem.h"
 #include <type_traits>
@@ -87,8 +88,21 @@ template <bool IsWrite, typename ReleaseFunc>
 //
 // Here my_dfb_name is a constexpr DFBBindingToken, auto-included in kernel_bindings_generated.h.
 //
+
+// Support for LLKOperandFrom.
+namespace binding_details {
+template <const auto& Token>
+struct LLKOperandExtractor;
+}
+
 struct DFBBindingToken {
     explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
+
+    // Binding token constructor when host supplies LLK metadata.
+    // See "Entry format metadata" in DataflowBufferSpec. LLKOperandFrom reads these via
+    // binding_details::LLKOperandExtractor (api/llk_operand_from_tokens.h). DM-only DFBs use the
+    // id-only constructor.
+    constexpr DFBBindingToken(uint16_t id, binding_details::LLKMetadata llk) noexcept : id_(id), llk_metadata_(llk) {}
 
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
 
@@ -99,7 +113,11 @@ struct DFBBindingToken {
     constexpr operator uint32_t() const noexcept { return id_; }
 
 private:
+    template <const auto& Token>
+    friend struct binding_details::LLKOperandExtractor;
+
     uint16_t id_;
+    binding_details::LLKMetadata llk_metadata_{};
 };
 
 // Compile-time handle for a CrossNode/PrefetcherPipe *relay* local DFB binding.

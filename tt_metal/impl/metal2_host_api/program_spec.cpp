@@ -22,10 +22,12 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "impl/kernels/kernel.hpp"
+#include "impl/metal2_host_api/llk_metadata.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
@@ -748,6 +750,85 @@ bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, con
     }
     const auto& vec = gen2_config.disable_dfb_implicit_sync_for;
     return std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
+}
+
+// Scratchpads do not pass through CB descriptor generation, so validate their LLK geometry here.
+// DFB geometry keeps its existing validation semantics in compute_num_faces_rc_dims.
+template <typename Id>
+void ValidateLlkTileAndFaceGeometry(
+    std::string_view kind,
+    const Id& unique_id,
+    const std::optional<Tile>& tile,
+    const std::optional<FaceGeometry>& face) {
+    if (!face.has_value()) {
+        return;
+    }
+    TT_FATAL(
+        face->face_r_dim > 0,
+        "{} '{}' has unpack_face_geometry_metadata.face_r_dim == 0; face_r_dim must be > 0",
+        kind,
+        unique_id);
+    TT_FATAL(
+        face->face_r_dim <= constants::FACE_HEIGHT,
+        "{} '{}' has unpack_face_geometry_metadata.face_r_dim ({}) which must be <= FACE_HEIGHT ({})",
+        kind,
+        unique_id,
+        face->face_r_dim,
+        constants::FACE_HEIGHT);
+    TT_FATAL(
+        face->num_faces > 0,
+        "{} '{}' has unpack_face_geometry_metadata.num_faces == 0; num_faces must be > 0",
+        kind,
+        unique_id);
+    const Tile resolved_tile = tile.value_or(Tile{});
+    const uint32_t num_faces_c_dim = std::min(resolved_tile.get_width() / constants::FACE_WIDTH, face->num_faces);
+    TT_FATAL(
+        face->num_faces % num_faces_c_dim == 0,
+        "{} '{}': num_faces ({}) must be divisible by num_faces_c_dim ({})",
+        kind,
+        unique_id,
+        face->num_faces,
+        num_faces_c_dim);
+    const uint32_t num_faces_r_dim = face->num_faces / num_faces_c_dim;
+    TT_FATAL(
+        num_faces_r_dim * face->face_r_dim <= resolved_tile.get_height(),
+        "{} '{}': face grid (num_faces_r_dim={} * face_r_dim={} = {} rows) exceeds tile height ({})",
+        kind,
+        unique_id,
+        num_faces_r_dim,
+        face->face_r_dim,
+        num_faces_r_dim * face->face_r_dim,
+        resolved_tile.get_height());
+}
+
+std::optional<LLKMetadata> LLKMetadataFromDfb(const DataflowBufferSpec& spec) {
+    if (!spec.data_format_metadata.has_value()) {
+        return std::nullopt;
+    }
+    const Tile tile = EffectiveLlkTile(spec.tile_format_metadata, spec.unpack_face_geometry_metadata);
+    return LLKMetadata{
+        .format = *spec.data_format_metadata,
+        .tile = tile,
+        .face_geometry = spec.unpack_face_geometry_metadata.value_or(FaceGeometryFromTile(tile))};
+}
+
+std::optional<LLKMetadata> LLKMetadataFromScratchpad(const ScratchpadSpec& spec) {
+    if (!spec.data_format_metadata.has_value()) {
+        return std::nullopt;
+    }
+    const Tile tile = EffectiveLlkTile(spec.tile_format_metadata, spec.unpack_face_geometry_metadata);
+    return LLKMetadata{
+        .format = *spec.data_format_metadata,
+        .tile = tile,
+        .face_geometry = spec.unpack_face_geometry_metadata.value_or(FaceGeometryFromTile(tile))};
+}
+
+LLKMetadata LLKMetadataFromTensorSpec(const TensorSpec& spec) {
+    const Tile& tile = spec.tile();
+    return LLKMetadata{
+        .format = datatype_to_dataformat_converter(spec.data_type()),
+        .tile = tile,
+        .face_geometry = FaceGeometryFromTile(tile)};
 }
 
 // ValidateProgramSpec: Semantic validation
@@ -1747,6 +1828,30 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
+    for (const auto& scratchpad : spec.scratchpads) {
+        const bool has_format = scratchpad.data_format_metadata.has_value();
+        const bool has_geometry =
+            scratchpad.tile_format_metadata.has_value() || scratchpad.unpack_face_geometry_metadata.has_value();
+        TT_FATAL(
+            has_format || !has_geometry,
+            "ScratchpadSpec '{}' has tile_format_metadata or unpack_face_geometry_metadata but no "
+            "data_format_metadata",
+            scratchpad.unique_id);
+        if (has_format) {
+            TT_FATAL(
+                tt::is_data_format_supported(scratchpad.data_format_metadata.value(), arch),
+                "ScratchpadSpec '{}' has data format '{}' which is not supported on architecture {}",
+                scratchpad.unique_id,
+                scratchpad.data_format_metadata.value(),
+                arch);
+        }
+        ValidateLlkTileAndFaceGeometry(
+            "ScratchpadSpec",
+            scratchpad.unique_id,
+            scratchpad.tile_format_metadata,
+            scratchpad.unpack_face_geometry_metadata);
+    }
+
     //////////////////////////////////
     // Validate SemaphoreSpecs
     //////////////////////////////////
@@ -2293,6 +2398,10 @@ struct ResolvedTensorParameter {
     // For now, since there are only two mutually exclusive possibilities, it's sufficient to
     // distinguish them with a boolean.
     bool runtime_field_is_page_size = false;
+
+    // Compile-time LLK metadata derived from the TensorParameter's spec, baked onto the binding token.
+    // Always present: a tensor has a dtype and a tile.
+    LLKMetadata llk_metadata;
 };
 
 // Resolve a TensorParameter's static layout into a CTA payload + an extra CRTA word
@@ -2372,7 +2481,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
         aligned_page_size,
         std::numeric_limits<uint32_t>::max());
 
-    ResolvedTensorParameter result;
+    ResolvedTensorParameter result{.llk_metadata = LLKMetadataFromTensorSpec(spec)};
     std::vector<uint32_t>& cta_payload = result.cta_payload;
 
     // Common header (always emitted, sharded or not):
@@ -2503,6 +2612,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
         handle.num_runtime_field_crta_words = resolved.extra_crta_words;
         handle.runtime_field_is_page_size = resolved.runtime_field_is_page_size;
+        handle.llk_metadata = resolved.llk_metadata;
 
         out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
         cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
@@ -2546,6 +2656,7 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         handle.accessor_name = binding.accessor_name;
         handle.size_bytes = scratchpad_spec->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
+        handle.llk_metadata = LLKMetadataFromScratchpad(*scratchpad_spec);
         // handle.allocated_address stays 0 until allocate_scratchpads runs.
         out.handles.push_back(std::move(handle));
         crta_word_index += 1;  // one address word per scratchpad binding
@@ -2565,7 +2676,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const KernelSpec& kernel_spec,
     const DFBNameToSlotMap& dfb_name_to_slot,
     const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
-    const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id) {
+    const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id,
+    const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
@@ -2576,14 +2688,14 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
             kernel_spec.unique_id,
             dfb_binding.dfb_spec_name,
             slot);
-        const bool is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
-        const uint8_t prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
-        out.emplace(
-            dfb_binding.accessor_name,
-            tt::tt_metal::DataflowBufferBindingHandle{
-                .logical_dfb_id = static_cast<uint16_t>(slot),
-                .is_relay = is_relay,
-                .prefetcher_pipe_id = prefetcher_pipe_id});
+        tt::tt_metal::DataflowBufferBindingHandle handle;
+        handle.logical_dfb_id = static_cast<uint16_t>(slot);
+        handle.is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
+        handle.prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
+        if (!handle.is_relay) {
+            handle.llk_metadata = LLKMetadataFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
+        }
+        out.emplace(dfb_binding.accessor_name, handle);
     }
     return out;
 }
@@ -3148,7 +3260,11 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
         // Make the local accessor name -> DFB device slot map for this kernel
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles = MakeDataflowBufferBindingHandles(
-            kernel_spec, dfb_name_to_slot, dfb_name_to_is_relay, dfb_name_to_prefetcher_pipe_id);
+            kernel_spec,
+            dfb_name_to_slot,
+            dfb_name_to_is_relay,
+            dfb_name_to_prefetcher_pipe_id,
+            collected.dfb_by_name);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
             MakeSemaphoreBindingHandles(kernel_spec, semaphore_binders, semaphore_name_to_id, semaphore_name_to_scope);
 
