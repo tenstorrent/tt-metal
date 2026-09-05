@@ -28,7 +28,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "block_name, pcc",
     [
         ("encoder", 0.999),
-        ("decoder", 0.997),
+        ("decoder", 0.999),
     ],
 )
 def test_vae_attention(
