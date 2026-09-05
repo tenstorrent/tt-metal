@@ -429,8 +429,8 @@ class RunTimeOptions {
     inline static bool trace_allocation_diagnostics_enabled_ = false;
     inline static bool trace_allocation_skip_program_cache_enabled_ = false;
 
-    // Disable shared memory tracking for tt-smi
-    bool shm_tracking_disabled = false;
+    // Keep per-allocation telemetry off by default; opt in with TT_METAL_SHM_TRACKING_DISABLED=0.
+    bool shm_tracking_disabled = true;
     bool shm_verbose = false;
 
     SanitizerSettings sanitizer_settings;

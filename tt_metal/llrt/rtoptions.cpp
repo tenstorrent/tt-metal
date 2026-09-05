@@ -1804,8 +1804,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_SHM_TRACKING_DISABLED
         // Disable shared memory tracking for tt-smi.
-        // Default: 0 (SHM tracking enabled)
-        // Usage: export TT_METAL_SHM_TRACKING_DISABLED=1
+        // Default: 1 (SHM tracking disabled to avoid per-allocation host overhead)
+        // Opt in: export TT_METAL_SHM_TRACKING_DISABLED=0
         case EnvVarID::TT_METAL_SHM_TRACKING_DISABLED: this->shm_tracking_disabled = is_env_enabled(value); break;
 
         // TT_METAL_SHM_VERBOSE
