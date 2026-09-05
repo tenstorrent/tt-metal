@@ -38,7 +38,8 @@ constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 5> pack_counters
      {PerfCounterType::AVAILABLE_MATH, 272}}};
 constexpr size_t NUM_PACK_COUNTERS = 5;
 
-// L1 bank 0 (MUX_CTRL[6:4] = 0): unpacker, TDMA bundles, ring0 NOC; port 1 = unified packer.
+// L1 bank 0 (MUX_CTRL[6:4] = 0): unpacker, TDMA bundles, ring0 NOC; port 1 = unpacker 1 (shares the Wormhole
+// enumerator).
 constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 16> l1_0_counters = {
     {{PerfCounterType::L1_0_UNPACKER_0, 0},
      {PerfCounterType::L1_0_UNPACKER_1_ECC_PACK1, 1},
@@ -59,7 +60,7 @@ constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 16> l1_0_counter
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_1_GRANT, 263}}};
 constexpr size_t NUM_L1_0_COUNTERS = 16;
 
-// L1 bank 1 (MUX_CTRL[6:4] = 1): RISC, ext unpacker, ring1 NOC; port 8 = RISC core.
+// L1 bank 1 (MUX_CTRL[6:4] = 1): RISC, ext unpacker, ring1 NOC; port 8 = TDMA packer 2.
 constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 16> l1_1_counters = {
     {{PerfCounterType::L1_1_TDMA_PACKER_2, 0},
      {PerfCounterType::L1_1_EXT_UNPACKER_1, 1},
@@ -80,7 +81,7 @@ constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 16> l1_1_counter
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_1_GRANT, 263}}};
 constexpr size_t NUM_L1_1_COUNTERS = 16;
 
-// L1 bank 2 (BH only, MUX_CTRL[6:4] = 2): NOC Ring 2 ports 16-23
+// L1 bank 2 (BH only, MUX_CTRL[6:4] = 2): ext unpackers 4-7 (ports 16-19), ring 0 ports 2-3 (ports 20-23)
 constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 16> l1_2_counters = {
     {{PerfCounterType::L1_2_EXT_UNPACKER_4, 0},
      {PerfCounterType::L1_2_EXT_UNPACKER_5, 1},
@@ -100,7 +101,7 @@ constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 16> l1_2_counter
      {PerfCounterType::L1_2_NOC_RING0_INCOMING_3_GRANT, 263}}};
 constexpr size_t NUM_L1_2_COUNTERS = 16;
 
-// L1 bank 3 (BH only, MUX_CTRL[6:4] = 3): NOC Ring 3 ports 24-31
+// L1 bank 3 (BH only, MUX_CTRL[6:4] = 3): ring 1 ports 2-3 (ports 24-27), ext packers 2-5 (ports 28-31)
 constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 16> l1_3_counters = {
     {{PerfCounterType::L1_3_NOC_RING1_OUTGOING_2, 0},
      {PerfCounterType::L1_3_NOC_RING1_OUTGOING_3, 1},
@@ -120,7 +121,7 @@ constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 16> l1_3_counter
      {PerfCounterType::L1_3_EXT_PACKER_5_GRANT, 263}}};
 constexpr size_t NUM_L1_3_COUNTERS = 16;
 
-// L1 bank 4 (BH only, MUX_CTRL[6:4] = 4): misc ports 32-39
+// L1 bank 4 (BH only, MUX_CTRL[6:4] = 4): ext packers 6-7 and tag-search packer 1 (ports 32-34)
 // Ports 35-39 of this group are tied off in hardware, so only the three live interfaces are captured.
 constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 6> l1_4_counters = {
     {{PerfCounterType::L1_4_EXT_PACKER_6, 0},
