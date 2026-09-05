@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+#
+# Host-side dependencies for the Kokoro-82M reference model and demo.
+# The plbert encoder runs on device (TTNN); these packages supply the host
+# KModel, voices, grapheme-to-phoneme, and WAV output.
+#
+# NOTE: misaki/kokoro import spacy transitively, which wants a numpy-2 ABI that
+# conflicts with the numpy 1.26 TTNN is built against. Use the espeak G2P path
+# (see demo/demo.py) and do not import the spaCy-backed misaki.en.
+kokoro>=0.9.0
+misaki>=0.9.0
+soundfile>=0.12.0
