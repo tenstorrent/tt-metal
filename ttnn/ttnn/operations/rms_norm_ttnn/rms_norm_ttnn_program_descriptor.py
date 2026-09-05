@@ -492,7 +492,7 @@ is priced in l1_ledger.md's "Deviations" table with its measurement:
       has exactly ONE gatherer: the other group_size - 1 members all write into the
       root's L1 and the root folds every page itself, so BOTH per-group_size terms land
       on one core while the rest of the group idles.  The tree interposes one level:
-      contiguous runs of COMBINE_TREE_F0 (= 4, measured) slots are folded IN PARALLEL by
+      contiguous runs of f0 (the measured `COMBINE_TREE_F0_MIN.._MAX` band) slots are folded IN PARALLEL by
       f1 = ceil(group_size / f0) different cores, which forward only their RAW sums (no
       finalize -- only the last level rsqrts), and the root folds f1 of those.  Root fold
       and root ingress both drop from group_size to max(f0, f1); the price is ONE extra
@@ -841,6 +841,35 @@ REDUCE_ACC_VIA_ADD_MIN_CALL_WT = 2
 # correctness constant, not a perf knob.  See D6.
 CB_ROW_STAT_DEPTH = 2
 
+# Ring depth of cb_residual_tiles when the residual is STREAMED (Refinement 1, Lamp
+# L-RES-DEPTH).  0 means "follow cb_x_depth", which is what the residual has always done
+# and is byte-identical to Phase 0; 1 or 2 pins it independently of the x stream.
+#
+# THE PREMISE THE LAMP WAS FILED ON IS FALSE ON ITS OWN TARGET, and that is a measured
+# host-side fact, not an argument: on `(1,1,32,5120)` WIDTH [32,160] (8,4) with
+# `gamma_bias_residual` -- the middle Refinement-1 case -- the residual carries the input's
+# shard spec, so `native_residual` holds and cb_residual_tiles is
+# `cb_descriptor_from_sharded_tensor`, an ALIAS of the resident shard.  Dumped from the
+# built descriptor: cb 1 (x) 5 pages, cb 20 (residual) 5 pages, both exactly the shard, so
+# neither costs a byte of the CB arena and NO depth is applied to either.  There is no
+# "second double-buffered activation stream" to shrink there.
+#
+# The knob is kept anyway, at its byte-identical default, because it IS live on the
+# STREAMED-residual plans (an interleaved input with a residual, where cb_residual_tiles is
+# a real `cb_x_depth * BLOCK_ROWS * WT_CHUNK` ring).  MEASURED there -- see the changelog:
+# depth 1 vs the tied depth on the interleaved gamma_bias_residual perf cases.
+CB_R_DEPTH = 0
+
+
+def _residual_depth(depth_x: int) -> int:
+    """The residual ring's depth -- ONE definition, read by both L1 solves AND the CB table.
+
+    They must agree page-for-page or BLOCK_ROWS is solved against a budget that does not
+    exist, which is exactly the class of bug `_cb_block_mult` was factored out to prevent.
+    """
+    return CB_R_DEPTH or depth_x
+
+
 # Largest WT_CHUNK at which pass A's `square` folds the width tiles straight into
 # DEST (DestAccumulation::PerRow) instead of packing every x^2 tile out to
 # cb_x_squared and having the reduce read them all back -- op_design.md Lamp L6(d).
@@ -881,18 +910,45 @@ CB_COMBINE_FLAT_DEPTH = 2
 # GROUP_SIZE - 1 members writes into the root's L1 and the root folds all GATHER_SLOTS
 # pages itself.  Both of those terms are linear in GROUP_SIZE and both land on ONE core.
 # The tree interposes a level of intermediate gatherers: level 0 folds contiguous runs of
-# COMBINE_TREE_F0 slots on f1 = ceil(GROUP_SIZE / f0) different cores IN PARALLEL, and only
+# f0 slots on f1 = ceil(GROUP_SIZE / f0) different cores IN PARALLEL, and only
 # those f1 raw sums travel to the root, which folds f1 of them.  So the root's ingress
 # fan-in and its fold both drop from GROUP_SIZE to max(f0, f1), at the price of ONE extra
 # NoC hop per round.
 #
-# COMBINE_TREE_F0 -- the level-0 fan-in.  4 is MEASURED, not chosen (isolated bench
-# perf_experiments/slot_tree_gather, blackhole p150b 1350 MHz, one fresh-cache profiled run
-# per variant, whole-combine device ns):
-#     GROUP_SIZE 32  flat 5424   f0=4 (4x8) 3744 = 1.45x   f0=8 (8x4) 3929 = 1.38x
-#                                f0=2 (2x16) 4061 = 1.34x  f0=6 (6x6) 3940 = 1.38x
-#     GROUP_SIZE 28  flat 5007   f0=4 (4x7) 3576 = 1.40x   f0=7 (7x4) 3970 = 1.26x
-#                                f0=2 (2x14) 3882 = 1.29x
+# COMBINE_TREE_F0_MIN / _MAX -- the level-0 fan-in BAND.  `f0` is not a constant: it is
+# the LARGEST DIVISOR of GROUP_SIZE inside this band that both gates admit, with the cap
+# itself as a ragged fallback for a group no divisor covers (see
+# `_combine_tree_candidates`).  Refinement 1 lever 1 swept it on the real op, on top of
+# the NOC_0 combine, one fresh in-process profiled measurement per cell (median of 5,
+# whole-op DEVICE KERNEL DURATION, blackhole p150b 1350 MHz):
+#
+#   G   flat   f0=4   f0=5   f0=6   f0=8   f0=10  f0=15/16/32   best
+#   28  5699   6004    --    6081   6018   5987      --         FLAT (every tree loses)
+#   30  5058   5051   4981   4981   5056   4787   5264 (15)     f0=10, then 6/5
+#   32  5253   4979    --    4991   4736   5133   5201 (16)     f0=8   (divisor)
+#   40  5402   5064    --    4927   4941   4789      --         f0=10  (divisor)
+#   64  6695   5498    --    5362   5047   5363   5754/6436     f0=8   (divisor)
+#
+# TWO effects, both visible in that table and both mechanical:
+#  (a) A LARGER f0 UNLOADS THE ROOT.  The root's ingress is f1 - 1 remote writes and its
+#      fold is f1 pages, so trading f1 down for f0 up moves work off the one core that is
+#      also the finalizer and the multicast sender.  f0=4 loses to the 6..10 band at every
+#      G >= 30.
+#  (b) BUT AN EXACT DIVISOR BEATS A BIGGER RAGGED f0.  At G=32, f0=8 (8x4, exact) is 4736
+#      while f0=10 (10x4, ragged 10+10+10+2) is 5133 -- SAME f1, 8.4% apart, so it is the
+#      ragged run and not the fan-in.  A ragged run makes one gatherer boot-zero its tail
+#      and gives the level-1 arrival a non-uniform set to wait on.
+# The CAP is measured too, in the same table: f0=15/16/32 lose at every G -- past ~10 the
+# level-0 gatherer becomes the serial bottleneck the tree was built to remove.  The FLOOR
+# keeps a degenerate divisor (G=34 -> 2) from being preferred over the ragged cap; f0=2
+# measured 5277/5384/6476 at G=32/40/64 on NOC_1, the worst arity in the whole sweep.
+#
+# ONE RECORDED MISS, deliberately left: at G=30 the best measured arity is f0=10 (4787),
+# but 30 - 10 - 3 = 17 fold tiles deleted, one below the threshold below, so the rule takes
+# f0=6 (4981) instead.  The threshold is NOT loosened to reach it: G=28 also deletes 17 and
+# there EVERY tree is a ~5% LOSS against the flat root, so 17 is a point where the sign
+# genuinely depends on the geometry and the conservative side is the one that protects a
+# pinned target.
 # TWO LEVELS, full stop: THREE and FOUR levels were measured at 7 cells and lost at 6 of
 # them (GROUP_SIZE 32: 3 levels 3870-3991 vs 2 levels 3744; 4 levels 4461).  A deeper tree
 # buys another fold division but pays another hop, and the hop is the expensive half.  So
@@ -947,7 +1003,8 @@ CB_COMBINE_FLAT_DEPTH = 2
 # that gathers a single member -- it deletes ZERO fold tiles and pays a pure hop (measured
 # 0.78x / 0.85x / 1.02x).  It falls out of `deleted >= 17` too; it is spelled separately
 # because it is an EXPRESSIBILITY floor (a one-member level is not a fold), not a cost one.
-COMBINE_TREE_F0 = 4
+COMBINE_TREE_F0_MIN = 4
+COMBINE_TREE_F0_MAX = 10
 COMBINE_TREE_MIN_DELETED_FOLD_TILES = 18
 
 # ---------------------------------------------------------------------------------------
@@ -1245,23 +1302,44 @@ CB_BIAS_STICKS = 22  # ROW_MAJOR bias only
 CB_BIAS_TILES = 23  # bias tiles (row 0 valid)
 
 
+def _combine_tree_candidates(group_size: int):
+    """The level-0 fan-ins to try, best-measured first.  See COMBINE_TREE_F0_MAX.
+
+    EXACT DIVISORS OF `group_size` FIRST, LARGEST DOWN, then the plain cap as a ragged
+    fallback for a group no divisor in the band can cover (34 = 2 x 17, 31 prime, ...).
+    Duplicates are dropped so the fallback never re-tries a divisor.
+    """
+    band = range(COMBINE_TREE_F0_MAX, COMBINE_TREE_F0_MIN - 1, -1)
+    ordered = [f for f in band if group_size % f == 0] + [COMBINE_TREE_F0_MAX]
+    seen, out = set(), []
+    for f in ordered:
+        if f not in seen:
+            seen.add(f)
+            out.append(f)
+    return out
+
+
 def _combine_tree_arity(group_size: int, rows_per_round: int):
     """(f0, f1) for the combine's two-level slot tree, or None to keep the FLAT root.
 
-    THE ONE PLACE THE TREE IS DECIDED (Perf 3 / D28).  Gated purely on the derived
-    quantities the mechanism is about -- the level-1 fan-in `f1` and the root fold-tiles
-    the tree deletes per round -- so it is blind to shape, dtype, layout and placement.
-    Both constants carry their measured brackets at their definitions above.
+    THE ONE PLACE THE TREE IS DECIDED (Perf 3 / D28, re-measured in Refinement 1).  Gated
+    purely on the derived quantities the mechanism is about -- the level-1 fan-in `f1` and
+    the root fold-tiles the tree deletes per round -- so it is blind to shape, dtype,
+    layout and placement.  Every constant carries its measured bracket above.
+
+    `f0` is DERIVED rather than fixed: the candidates are walked best-first and the first
+    one both gates admit is taken.  A group no candidate satisfies keeps the flat root.
     """
-    f0 = COMBINE_TREE_F0
-    f1 = _div_up(group_size, f0)
-    # EXPRESSIBILITY: a level that gathers one member is not a fold, it is a hop.
-    if f1 < 2:
-        return None
-    # COST: the fold-tiles taken off the root's critical path, against the one extra hop.
-    if rows_per_round * (group_size - f0 - f1) < COMBINE_TREE_MIN_DELETED_FOLD_TILES:
-        return None
-    return f0, f1
+    for f0 in _combine_tree_candidates(group_size):
+        f1 = _div_up(group_size, f0)
+        # EXPRESSIBILITY: a level that gathers one member is not a fold, it is a hop.
+        if f1 < 2:
+            continue
+        # COST: the fold-tiles taken off the root's critical path, against the extra hop.
+        if rows_per_round * (group_size - f0 - f1) < COMBINE_TREE_MIN_DELETED_FOLD_TILES:
+            continue
+        return f0, f1
+    return None
 
 
 def _combine_fixed_pages(plan, compact: bool, tree) -> int:
@@ -2553,7 +2631,7 @@ def create_program_descriptor(
                 has_gamma,
                 has_bias,
                 has_residual,
-                depth if dr0 is None else dr0,
+                _residual_depth(depth if dr0 is None else dr0),
                 block_rows,
             )
             per_row_bytes, combine_fixed = _f32_terms(compact)
@@ -2646,7 +2724,7 @@ def create_program_descriptor(
             # staging rings (D2).
             per_chunk_tile = (
                 bt * (1 + _norm_cb_depth(has_gamma, has_bias, 1) + depth_out)
-                + (bt * 2 * depth_x if has_residual else 0)
+                + (bt * (depth_x + _residual_depth(depth_x)) if has_residual else 0)
                 + _per_channel_bytes(0, 1)
                 + (rm_stage_rings * CB_RM_STAGE_DEPTH * bt if not is_tile else 0)
             )
@@ -2668,7 +2746,7 @@ def create_program_descriptor(
         # re-read x (and the residual) in pass B.  An L1 fallback, not a
         # parallelization.
         depth = depth_candidates[0]
-        mult = _cb_block_mult(depth, depth, has_gamma, has_bias, has_residual, depth, 1)
+        mult = _cb_block_mult(depth, depth, has_gamma, has_bias, has_residual, _residual_depth(depth), 1)
         per_chunk_tile_bytes = (
             bt * mult + _per_channel_bytes(1, 1) + (rm_stage_rings * CB_RM_STAGE_DEPTH * bt if not is_tile else 0)  # D2
         )
@@ -2804,7 +2882,8 @@ def create_program_descriptor(
         if native_residual:
             cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_RESIDUAL_TILES, residual))
         else:
-            cbs.append(_cb(CB_RESIDUAL_TILES, bt, cb_x_depth * block_rows * wt_chunk, input_tensor.dtype, all_cores))
+            r_depth = _residual_depth(cb_x_depth)
+            cbs.append(_cb(CB_RESIDUAL_TILES, bt, r_depth * block_rows * wt_chunk, input_tensor.dtype, all_cores))
         # cb_x_sum spans `row` x `width` at HOLD scope: it is the tensor pass A
         # squares and pass B normalizes, so it takes over cb_input_tiles' held
         # role.  Depth 1 is a whole ring revolution per FULL block, and only the

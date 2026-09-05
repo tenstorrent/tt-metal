@@ -1283,7 +1283,7 @@ void kernel_main() {
             // spends the idle cores.  MEASURED (isolated bench
             // perf_experiments/slot_tree_gather, blackhole p150b 1350 MHz, whole-combine
             // device ns, one fresh-cache profiled run per variant, at the op's pinned
-            // config; f0 = 4 is itself measured -- see COMBINE_TREE_F0):
+            // config; f0 is itself measured -- see COMBINE_TREE_F0_MIN/_MAX):
             //     GROUP_SIZE 32, 1 page/sender/round   flat 5424 -> 3744   1.45x
             //     GROUP_SIZE 28, 1 page/sender/round   flat 5007 -> 3576   1.40x
             //     GROUP_SIZE 32, 4 rounds              flat 13788 -> 11036 1.25x
