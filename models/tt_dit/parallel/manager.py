@@ -268,6 +268,31 @@ class CCLManager:
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
+    def get_broadcast_persistent_buffer(self, shape, dtype=ttnn.bfloat16, device_synchronize=True):
+        """Ping-pong persistent output buffers for broadcast_ring, cached by shape+dtype and SHARED across
+        every caller (all sr attention blocks). Two buffers alternate so one call never overwrites the slot
+        the previous call's consumer (the frame slice) is still reading -- a write-after-read hazard -- and
+        consecutive calls can overlap, the same reason the ag/rs buffers ping-pong. Under tracing a captured
+        trace bakes the op's output address, so a fresh per-call output would be clobbered on replay; the
+        shared persistent slots keep stable addresses without per-block duplication. Output shape == input."""
+        cache_key = ("bcast", tuple(shape), dtype)
+        if cache_key not in self._ping_pong_buffer_cache:
+            if device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
+            buffers = [
+                ttnn.allocate_tensor_on_device(
+                    ttnn.Shape(list(shape)), dtype, ttnn.TILE_LAYOUT, self.mesh_device, ttnn.DRAM_MEMORY_CONFIG
+                )
+                for _ in range(2)
+            ]
+            self._ping_pong_buffer_cache[cache_key] = buffers
+            self._ping_pong_buffer_indices[cache_key] = 0
+            if device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
+        current_idx = self._ping_pong_buffer_indices[cache_key]
+        self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
+        return self._ping_pong_buffer_cache[cache_key][current_idx]
+
     def get_rs_ping_pong_semaphore(self, mesh_axis):
         """
         Get semaphores for reduce scatter ping pong operations.
