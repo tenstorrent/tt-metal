@@ -189,7 +189,7 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # Traced and untraced get SEPARATE tables and SEPARATE margins, selected by mode in
 # `kimi_chunked_perf_gate` -- a traced baseline can never gate an untraced run or vice versa. The two
 # are different regimes, not a small delta: traced measures 0.6-0.95 s/chunk (a ramp, since chunk c
-# attends to KV[0:c*CHUNK]) while untraced is a flat ~1.04 s/chunk, host-dispatch bound so the op2op
+# attends to KV[0:c*CHUNK]) while untraced is a flat ~0.81 s/chunk, host-dispatch bound so the op2op
 # gap swamps the depth ramp entirely.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
@@ -216,9 +216,8 @@ KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # (55k / code_debug), 2026-08-21 on an 8x4 galaxy, with the routed experts folded into one program
-    # on a Fabric2D mesh. One run's per-chunk medians -- unlike the traced twin, a single run is thin
-    # evidence here, so re-cut this from a set of green runs the first time it disagrees.
+    # (55k / code_debug), 2026-09-01 on an 8x4 galaxy, per-chunk medians of run 33534897935/job
+    # 99949625303.
     #
     # WITHIN a run the untraced spread is huge -- per-chunk stddev reaches 0.33 s (~30%), because every
     # iteration re-dispatches every op from host and pays a fresh, variable op2op gap. The MEDIAN of the
@@ -228,7 +227,7 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     #
     # If this goes flaky, re-center on the median over several runs before widening. Widening to 10% is
     # the fallback after that -- a band that needs more than 10% is a regression, not noise.
-    (61, 11, 10): [1.043, 1.036, 1.037, 1.047, 1.044, 1.034, 1.034, 1.034, 1.046, 1.041, 1.044],
+    (61, 11, 10): [0.805, 0.808, 0.811, 0.816, 0.808, 0.806, 0.806, 0.805, 0.802, 0.823, 0.854],
 }
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
 # program, so the device is its only noise source; untraced re-dispatches from host every iteration and
