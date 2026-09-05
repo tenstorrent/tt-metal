@@ -1410,10 +1410,13 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
     constexpr uint32_t kWriterKernelIdx = 1;
     constexpr uint32_t kComputeKernelIdx = 2;
 
-    auto apply = [&](uint32_t kernel_idx,
-                     const CoreCoord& core,
-                     const std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>& args) {
-        auto& data = tt::tt_metal::GetRuntimeArgs(program, kernel_idx, core);
+    // Resolve each kernel once per invocation. These references remain local to this update, so
+    // dispatch relocation of RuntimeArgsData is respected on the next invocation.
+    auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
+    auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
+    auto& compute_args = tt::tt_metal::GetRuntimeArgs(program, kComputeKernelIdx);
+    auto apply = [](tt::tt_metal::RuntimeArgsData& data,
+                    const std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>& args) {
         for (uint32_t arg_idx = 0; arg_idx < static_cast<uint32_t>(args.size()); ++arg_idx) {
             const auto& slot = args[arg_idx];
             data[arg_idx] = std::holds_alternative<tt::tt_metal::Buffer*>(slot)
@@ -1424,9 +1427,9 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
 
     for (size_t i = 0; i < per_core.cores.size(); ++i) {
         const auto& core = per_core.cores[i];
-        apply(kReaderKernelIdx, core, per_core.reader[i]);
-        apply(kWriterKernelIdx, core, per_core.writer[i]);
-        apply(kComputeKernelIdx, core, per_core.compute[i]);
+        apply(reader_args.at(core.x).at(core.y), per_core.reader[i]);
+        apply(writer_args.at(core.x).at(core.y), per_core.writer[i]);
+        apply(compute_args.at(core.x).at(core.y), per_core.compute[i]);
     }
 
     // Re-point tensor-backed (globally-allocated) circular buffers at the CURRENT buffers, by CBIndex.
