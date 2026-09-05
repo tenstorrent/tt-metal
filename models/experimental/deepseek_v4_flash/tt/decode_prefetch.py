@@ -54,11 +54,11 @@ solvable -- ``matmul_decode`` takes its receiver grid from the buffer, so the re
 simply be anchored past the shared ring's last column, and sequential ``o_a`` on such a
 ring runs and is numerically correct.
 
-It is just slower. Streaming those weights measured a regression against the per-step
-DRAM->L1 copy it replaced, so they stay on the copy. The cause was not established; a
-32-receiver ring is half the width the senders fill on the shared ring, and its depth is
-capped at two pages because its page is a whole slab, but neither was measured to be the
-reason. Re-measure rather than re-derive before trying this again.
+Streaming those weights is slower than the per-step DRAM->L1 copy, so they stay
+on the copy. A 32-receiver ring is half the width the senders fill on the shared
+ring, and its depth is capped at two pages because its page is a whole slab;
+neither has been measured as the cause. Re-measure rather than re-derive before
+trying this again.
 """
 
 from typing import Optional

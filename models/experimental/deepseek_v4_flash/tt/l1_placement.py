@@ -4,12 +4,11 @@
 
 """L1-resident weight placement for two decoder layers per chip.
 
-The single source of truth for WEIGHT_PLACEMENT.md: which contiguous core range
-("zone") every non-expert decode weight lives in, how it is sharded there, and the
-resulting per-core L1 budget. Both resident layers stack their copy of each weight
-on the same zone with the same shard shape, so every layer shares one set of
-program / memory configs, exactly like ``DECODE_LAYOUTS`` does for the streamed
-path today.
+Which contiguous core range ("zone") every non-expert decode weight lives in, how
+it is sharded there, and the resulting per-core L1 budget. Both resident layers
+stack their copy of each weight on the same zone with the same shard shape, so
+every layer shares one set of program / memory configs, exactly like
+``DECODE_LAYOUTS`` does for the streamed path.
 
 Pure host-side data plus arithmetic -- importable without a device or ttnn. The
 ttnn conversions (``core_range_set`` / ``memory_config``) import ttnn lazily so a
