@@ -59,6 +59,11 @@ def matmul_decode(
     all_gather: bool = False,
     ring_size: int = 1,
     ring_gather: bool = False,
+    output_core_grid=None,
+    output_mcast_two_hub: bool = False,
+    rms_norm: bool = False,
+    rms_norm_gamma: Optional[float] = None,
+    rms_norm_epsilon: float = 1e-6,
 ) -> "OpDescriptor":
     """Create a ``matmul_decode`` op descriptor.
 
@@ -111,6 +116,13 @@ def matmul_decode(
     attrs.all_gather = all_gather
     attrs.ring_size = ring_size
     attrs.ring_gather = ring_gather
+    if output_core_grid is not None:
+        attrs.output_core_grid = output_core_grid
+    attrs.output_mcast_two_hub = output_mcast_two_hub
+    attrs.rms_norm = rms_norm
+    if rms_norm_gamma is not None:
+        attrs.rms_norm_gamma = rms_norm_gamma
+    attrs.rms_norm_epsilon = rms_norm_epsilon
 
     tensor_args = _prim.MatmulDecodeInputs(input_tensor_a, input_tensor_b)
 

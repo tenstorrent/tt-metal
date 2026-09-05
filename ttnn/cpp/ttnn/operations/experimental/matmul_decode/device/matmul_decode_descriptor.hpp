@@ -41,6 +41,11 @@ struct MatmulDecodeParams {
     uint32_t ring_size = 1;
     bool ring_gather = false;
     bool in0_row_major_height_sharded = false;
+    std::optional<tt::tt_metal::CoreRangeSet> output_core_grid = std::nullopt;
+    bool output_mcast_two_hub = false;
+    bool rms_norm = false;
+    std::optional<float> rms_norm_gamma = std::nullopt;
+    float rms_norm_epsilon = 1.0e-6F;
 };
 
 struct MatmulDecodeInputs {

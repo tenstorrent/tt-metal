@@ -108,7 +108,8 @@ template <
     uint32_t dst_capacity,
     PoolType reduce_type = PoolType::SUM,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, float scaler = 1.0f) {
+ALWI void mul_reduce_scalar_chunked_tile(
+    uint32_t icb0, uint32_t icb1, uint32_t ocb, float scaler = 1.0f, uint32_t tile_start = 0) {
     static_assert(reduce_type == PoolType::SUM, "Only SUM reduction is currently supported");
     static_assert(dst_capacity >= 2 && dst_capacity <= 8, "Chunked reduction requires 2 to 8 DST slots");
     static_assert(
@@ -124,7 +125,7 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
     fill_tile(accumulator, 0.0f);
 
     for (uint32_t batch = 0; batch < num_batches; ++batch) {
-        const uint32_t input_start = batch * batch_size;
+        const uint32_t input_start = tile_start + batch * batch_size;
         const uint32_t count = batch + 1 < num_batches ? batch_size : last_batch_size;
 
         // Each reduction consumes the UNPACK/MATH state. The caller provides

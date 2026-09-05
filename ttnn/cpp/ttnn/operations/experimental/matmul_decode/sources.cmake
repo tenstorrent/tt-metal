@@ -25,6 +25,7 @@ set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_KERNELS
     device/kernels/compute/compute_full_width_sharded.cpp
     device/kernels/compute/compute_partial_width_sharded.cpp
     device/kernels/dataflow/all_gather_local_output.hpp
+    device/kernels/dataflow/full_width_rms_norm_transport.hpp
     device/kernels/dataflow/reader_batched_width_sharded.cpp
     device/kernels/dataflow/reader_full_width_ring_gather.cpp
     device/kernels/dataflow/reader_full_width_sharded.cpp
@@ -32,6 +33,8 @@ set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_KERNELS
     device/kernels/dataflow/reader_partial_width_sharded.cpp
     device/kernels/dataflow/writer_batched_width_sharded.cpp
     device/kernels/dataflow/writer_full_width_all_gather.cpp
+    device/kernels/dataflow/writer_full_width_output_mcast.cpp
+    device/kernels/dataflow/writer_full_width_rms_norm.cpp
     device/kernels/dataflow/writer_partial_width_sharded.cpp
 )
 

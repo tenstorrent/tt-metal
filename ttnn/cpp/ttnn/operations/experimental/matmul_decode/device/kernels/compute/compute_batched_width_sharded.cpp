@@ -6,6 +6,10 @@
 
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
+#ifdef USE_CUSTOM_MM
+#include "api/compute/experimental/custom_mm.h"
+#include "api/compute/experimental/pack_block.h"
+#endif
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 
@@ -64,6 +68,49 @@ void kernel_main() {
 
     full_in0_cb.wait_front(full_in0_num_tiles);
 
+#ifdef USE_CUSTOM_MM
+    constexpr bool transpose = false;
+    constexpr bool split_acc = true;
+    constexpr bool dense_packing = true;
+    constexpr bool finalize = true;
+
+    static_assert(M_tiles == 1, "custom_mm batched path requires a single in0 tile row");
+    static_assert(K_tiles >= 2 && K_tiles <= 256 && K_tiles % 2 == 0);
+    static_assert(Nc_tiles >= 1 && Nc_tiles <= 16);
+    // Every custom_mm_block call needs an even kt_dim, which a batch split across a page boundary
+    // could not guarantee. The factory therefore only picks custom_mm when pages divide the slab on
+    // batch boundaries, so each batch is reduced whole inside the page that carries it -- no batch
+    // is ever left half summed and no packer L1 accumulation is needed.
+    static_assert(Bc % num_k_blocks == 0, "streamed custom_mm needs GCB pages to hold whole batches");
+    constexpr uint32_t batches_per_page = Bc / num_k_blocks;
+
+    custom_mm_block_init_short<transpose, split_acc, dense_packing>(full_in0_cb_id, in1_cb_id, out_cb_id, Nc_tiles);
+    pack_block_contiguous_init(out_cb_id);
+
+    out_cb.reserve_back(out_num_tiles);
+    for (uint32_t page = 0; page < num_k_blocks; ++page) {
+        in1_cb.wait_front(in1_page_tiles);
+        for (uint32_t i = 0; i < batches_per_page; ++i) {
+            const uint32_t bc_i = page * batches_per_page + i;
+            tile_regs_acquire();
+            // in1 is indexed within the page currently at the front of the CB.
+            custom_mm_block<finalize, false>(
+                full_in0_cb_id, in1_cb_id, bc_i * K_tiles, i * K_tiles * Nc_tiles, 0, K_tiles, Nc_tiles);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_block_contiguous(0, out_cb_id, Nc_tiles);
+            tile_regs_release();
+        }
+#ifdef ENABLE_GLOBAL_CB
+        // This page has been read in full; release the local alias and let the reader ack it.
+        in1_cb.pop_front(in1_page_tiles);
+        sync_cb.reserve_back(1);
+        sync_cb.push_back(1);
+#endif
+    }
+    custom_mm_block_uninit<dense_packing>();
+    out_cb.push_back(out_num_tiles);
+#else
     matmul_block_init(full_in0_cb_id, in1_cb_id, false, out_block_w, out_block_h, in0_block_w);
 
     out_cb.reserve_back(out_num_tiles);
@@ -117,5 +164,6 @@ void kernel_main() {
         pack_reconfig_l1_acc(0);
     }
     out_cb.push_back(out_num_tiles);
+#endif
     full_in0_cb.pop_front(full_in0_num_tiles);
 }

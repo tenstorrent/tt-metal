@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <algorithm>
+#include <string_view>
 #include <vector>
 
 namespace ttnn::operations::experimental::matmul_decode {
@@ -50,10 +51,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
              *mesh_dispatch_coordinate) == operation_attributes.mesh_coords->end())) {
         return {};
     }
-    log_warning(
-        tt::LogOp,
-        "matmul_decode is falling back to the general block matmul LLKs: partial-width sharding is not supported by "
-        "custom_mm");
     // Ring gather is opt-in (`ring_gather`) on the L1-resident weight path, matching the
     // full-width factory. The two-hub gather remains the default; GCB (prefetcher) stays on
     // it because the reader<->prefetcher handshake is baked into reader_partial_width_sharded.cpp.
@@ -264,17 +261,42 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         "divisible by it, because a GCB page is a whole number of K-rows of the weight slab",
         num_k_blocks,
         Kc_tiles);
-    // Streaming completes each partial tile across several pages, and the running sum lives in the
-    // partial CB because the packer accumulates into it. A block-float format cannot be read back
-    // and added to, so it has to be rejected rather than quietly dropping partial sums.
+    const uint32_t in1_k_block_tiles = Kc_tiles / num_k_blocks;
+    // Streaming issues one custom_mm_block per GCB page into the same DST tiles, so a page's share
+    // of Kc -- not just Kc itself -- has to be a legal kt_dim.
+    const bool use_custom_mm = device->arch() == tt::ARCH::BLACKHOLE && M_tiles == 1 &&
+                               is_custom_mm_in0_tile_height(inputA_tile_height) &&
+                               is_custom_mm_kt_dim(in1_k_block_tiles) && is_custom_mm_ct_dim(Nc_tiles);
+    if (!use_custom_mm) {
+        std::string_view reason;
+        if (device->arch() != tt::ARCH::BLACKHOLE) {
+            reason = "custom_mm is Blackhole-only";
+        } else if (!is_custom_mm_in0_tile_height(inputA_tile_height)) {
+            reason = "in0 tile height is not in {1, 2, 4, 8}";
+        } else if (M_tiles != 1) {
+            reason = "more than one in0 tile row is not contiguous for custom_mm";
+        } else if (!is_custom_mm_kt_dim(in1_k_block_tiles)) {
+            reason = num_k_blocks == 1
+                         ? "the per-core Kc block must contain an even number of tiles in [2, 256]"
+                         : "each streamed global_cb page must contain an even number of K tiles in [2, 256]";
+        } else {
+            reason = "the per-core output width exceeds 16 tiles";
+        }
+        log_warning(tt::LogOp, "matmul_decode is falling back to the general block matmul LLKs: {}", reason);
+    }
+    // Streaming completes each partial tile across several pages, and on the fallback path the
+    // running sum lives in the partial CB because the packer accumulates into it. A block-float
+    // format cannot be read back and added to, so it has to be rejected rather than quietly
+    // dropping partial sums. custom_mm is exempt: it chains the pages into DST and writes the
+    // partial CB once.
     TT_FATAL(
-        num_k_blocks == 1 || out_data_format == tt::DataFormat::Float32 ||
+        num_k_blocks == 1 || use_custom_mm || out_data_format == tt::DataFormat::Float32 ||
             out_data_format == tt::DataFormat::Float16_b || out_data_format == tt::DataFormat::Float16,
         "partial_width_sharded matmul_decode with global_cb_k_blocks={} accumulates partial sums in the partial CB, "
         "so the output dtype must be float32/bfloat16/float16, but it is {}",
         num_k_blocks,
         out_data_format);
-    const uint32_t in1_k_block_tiles = Kc_tiles / num_k_blocks;
+
     const uint32_t in1_slab_num_tiles = Kc_tiles * Nc_tiles;
     const uint32_t in1_slab_bytes = in1_slab_num_tiles * in1_tile_size;
     const uint32_t in1_page_num_tiles = in1_k_block_tiles * Nc_tiles;
@@ -663,6 +685,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     if (use_global_cb) {
         compute_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
     }
+    if (use_custom_mm) {
+        compute_kernel_desc.defines.emplace_back("USE_CUSTOM_MM", "1");
+    }
     log_debug(
         tt::LogOp,
         "M_tiles: {}, K_tiles: {}, Kc_tiles: {}, Nc_tiles: {}, K_blocks: {}",
@@ -672,7 +697,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         Nc_tiles,
         K_blocks);
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity = use_custom_mm ? MathFidelity::LoFi : MathFidelity::HiFi4,
         .math_approx_mode = false,
     };
     compute_kernel_desc.runtime_args.reserve(b_cores.size());
@@ -761,6 +786,25 @@ ProgramDescriptor create_descriptor_ring_gather_partial(
                                            : input_tensor_b.memory_config().shard_spec().value().shape[1];
     const uint32_t Kc_tiles = Kc / tt::constants::TILE_HEIGHT;
     const uint32_t Nc_tiles = Nc / tt::constants::TILE_WIDTH;
+
+    const bool use_custom_mm = device->arch() == tt::ARCH::BLACKHOLE && M_tiles == 1 &&
+                               is_custom_mm_in0_tile_height(inputA_tile_height) && is_custom_mm_kt_dim(Kc_tiles) &&
+                               is_custom_mm_ct_dim(Nc_tiles);
+    if (!use_custom_mm) {
+        std::string_view reason;
+        if (device->arch() != tt::ARCH::BLACKHOLE) {
+            reason = "custom_mm is Blackhole-only";
+        } else if (!is_custom_mm_in0_tile_height(inputA_tile_height)) {
+            reason = "in0 tile height is not in {1, 2, 4, 8}";
+        } else if (M_tiles != 1) {
+            reason = "more than one in0 tile row is not contiguous for custom_mm";
+        } else if (!is_custom_mm_kt_dim(Kc_tiles)) {
+            reason = "the per-core Kc block must contain an even number of tiles in [2, 256]";
+        } else {
+            reason = "the per-core output width exceeds 16 tiles";
+        }
+        log_warning(tt::LogOp, "matmul_decode is falling back to the general block matmul LLKs: {}", reason);
+    }
 
     const auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
     const auto inputB_core_range_set =
@@ -1070,9 +1114,12 @@ ProgramDescriptor create_descriptor_ring_gather_partial(
         {"cb_sync", CBIndex::c_6},
     };
     compute.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity = use_custom_mm ? MathFidelity::LoFi : MathFidelity::HiFi4,
         .math_approx_mode = false,
     };
+    if (use_custom_mm) {
+        compute.defines.emplace_back("USE_CUSTOM_MM", "1");
+    }
     compute.runtime_args.reserve(b_cores.size());
     for (uint32_t idx = 0; idx < b_cores.size(); idx++) {
         const uint32_t k_idx = idx / N_blocks;
