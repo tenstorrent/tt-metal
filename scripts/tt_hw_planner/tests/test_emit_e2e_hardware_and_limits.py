@@ -10,6 +10,7 @@ failing the enclosing scope and destroying a run whose work had already succeede
 These pin the three fixes and, as importantly, that a run WITHOUT a box behaves
 exactly as it did before."""
 import os
+from types import SimpleNamespace
 
 from scripts.tt_hw_planner.commands.emit_e2e import (
     _agent_mem_cap_bytes,
@@ -93,6 +94,286 @@ def _executable_source(fn) -> str:
                 if isinstance(first.value.value, str):
                     node.body = body[1:] or [ast.Pass()]
     return ast.unparse(tree)  # unparse drops comments
+
+
+def _chips_in_use_as_emit_e2e_derives_it(mesh_arg):
+    """Reproduce emit-e2e's own derivation, so these tests exercise the wiring rather
+    than a number the test chose."""
+    from scripts.tt_hw_planner.commands.emit_e2e import _parsed_mesh_chips
+
+    return _parsed_mesh_chips(mesh_arg) or 0
+
+
+def test_mesh_parser_separates_a_real_mesh_from_a_typo():
+    """`_mesh_chip_count` must keep its 1-chip floor (the topology guard depends on
+    it), while the new parser reports None so the hardware block can say "unknown"
+    instead of asserting a single-chip run the operator never asked for."""
+    from scripts.tt_hw_planner.commands.emit_e2e import _mesh_chip_count, _parsed_mesh_chips
+
+    # unchanged contract, as pinned by test_emit_e2e_parallelism
+    assert _mesh_chip_count(None) == 1
+    assert _mesh_chip_count("") == 1
+    assert _mesh_chip_count("2x2") == 4
+    assert _mesh_chip_count("1x8") == 8
+    assert _mesh_chip_count("garbage") == 1
+
+    # the new distinction: only a cleanly-declared mesh yields a count
+    assert _parsed_mesh_chips("2x2") == 4
+    assert _parsed_mesh_chips("2,2") == 4
+    assert _parsed_mesh_chips("1x1") == 1
+    assert _parsed_mesh_chips("2X2") == 4, "case is not what makes a mesh invalid"
+    assert _parsed_mesh_chips(" 2x2 ") == 4, "surrounding whitespace is fine"
+    # `.lower()` turns a typed X into the separator, so `2xX` produces an EMPTY token
+    # rather than a non-numeric one — which is why empties must be rejected.
+    for bad in (None, "", "garbage", "2xX", "-1x4", "0x4", "x", "2x", "2x2x"):
+        assert _parsed_mesh_chips(bad) is None, f"{bad!r} should be unparseable"
+
+
+def test_lenient_count_is_byte_identical_to_the_old_contract():
+    """Constraint 1: the topology guard and `optimize` both consume
+    `_mesh_chip_count`, so its every observable value must be unchanged — including
+    the odd ones the strict parser now rejects."""
+    from scripts.tt_hw_planner.commands.emit_e2e import _mesh_chip_count
+
+    expected = {
+        None: 1,
+        "": 1,
+        "garbage": 1,
+        "abc": 1,
+        "x": 1,
+        "2x2": 4,
+        "2,2": 4,
+        "2X2": 4,
+        " 2x2 ": 4,
+        "1x8": 8,
+        "4x2": 8,
+        "8x1": 8,
+        "32x1": 32,
+        "1x1": 1,
+        "1x1x1": 1,
+        "4": 4,
+        "7": 7,
+        "2xX": 2,  # lenient: the empty token is skipped
+        "2x": 2,
+        "2x2x": 4,
+        "0x4": 1,  # clamped by the floor
+        "-1x4": 1,
+    }
+    for value, want in expected.items():
+        assert _mesh_chip_count(value) == want, f"{value!r}: contract changed"
+
+
+def test_typo_mesh_does_not_claim_a_single_chip_run():
+    """The point of the split: a mistyped mesh must budget against the whole box
+    rather than silently asserting a 1-chip run."""
+    box = find_box("GalaxyBH")
+    block = _hardware_prompt_block(box, chips_in_use=_chips_in_use_as_emit_e2e_derives_it("nonsens"))
+    assert f"{box.chips} (all of the box)" in block
+    assert "opens 1 of the box's" not in block
+
+
+def test_mem_cap_uses_the_shared_host_ram_reader():
+    """Constraint 2: one place answers "how much RAM does this host have", so a cap
+    and the concurrency scaler cannot disagree about the box."""
+    import inspect
+
+    from scripts.tt_hw_planner._cli_helpers.adaptive_scheduler import host_total_ram_bytes
+    from scripts.tt_hw_planner.commands.emit_e2e import _agent_mem_cap_bytes
+
+    src = inspect.getsource(_agent_mem_cap_bytes)
+    assert "host_total_ram_bytes" in src
+    assert "SC_PHYS_PAGES" not in src, "must not read the machine a second way"
+    assert host_total_ram_bytes() > 0
+
+
+def test_shared_host_ram_reader_survives_missing_psutil(monkeypatch):
+    """psutil is imported lazily throughout this module because it may be absent; the
+    fallback must still produce a real number rather than 0."""
+    import builtins
+
+    from scripts.tt_hw_planner._cli_helpers import adaptive_scheduler as A
+
+    real_import = builtins.__import__
+
+    def _no_psutil(name, *a, **k):
+        if name == "psutil":
+            raise ImportError("psutil unavailable")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _no_psutil)
+    assert A.host_total_ram_bytes() > 0
+
+
+def test_single_chip_mesh_does_not_advertise_the_whole_box():
+    """The regression that mattered: `plan_parallelism` returns None for a 1-chip
+    mesh, so deriving the count from the ParallelConfig fell back to the whole box.
+    On a 32-chip box that advertised 32x the addressable memory."""
+    for box in HARDWARE:
+        if box.chips <= 1:
+            continue
+        used = _chips_in_use_as_emit_e2e_derives_it("1x1")
+        assert used == 1
+        block = _hardware_prompt_block(box, chips_in_use=used)
+        assert f"opens 1 of the box's {box.chips}" in block, f"{box.name}: 1-chip mesh not scoped"
+        assert f"{box.hbm_per_chip_gb:.0f} GB (1 x {box.hbm_per_chip_gb:.0f} GB)" in block
+        assert "NOT the box total" in block
+
+
+def test_no_mesh_given_still_means_whole_box():
+    """An absent --mesh is genuinely unknown, and must stay distinguishable from an
+    explicit single-chip mesh."""
+    for box in HARDWARE:
+        assert _chips_in_use_as_emit_e2e_derives_it(None) == 0
+        block = _hardware_prompt_block(box, chips_in_use=0)
+        assert f"{box.chips} (all of the box)" in block
+
+
+def test_every_box_and_mesh_through_emit_e2e_derivation():
+    """End-to-end over the real wiring: every box, every canonical mesh it declares,
+    with the chip count derived the way emit-e2e derives it from --mesh."""
+    import re
+
+    for box in HARDWARE:
+        for rows, cols in box.mesh_shapes:
+            for mesh_arg in (f"{rows}x{cols}", f"{rows},{cols}"):
+                used = _chips_in_use_as_emit_e2e_derives_it(mesh_arg)
+                assert used == rows * cols, f"{box.name} {mesh_arg}: chip count misderived"
+                block = _hardware_prompt_block(box, chips_in_use=used)
+                assert f"DRAM per chip: {box.hbm_per_chip_gb:.0f} GB" in block
+                if used == box.chips:
+                    assert f"available to this run: {box.total_hbm_gb:.0f} GB" in block
+                    assert "NOT the box total" not in block
+                else:
+                    m = re.search(r"available to THIS RUN: (\d+) GB", block)
+                    assert m, f"{box.name} {mesh_arg}: not run-scoped"
+                    assert float(m.group(1)) == used * box.hbm_per_chip_gb
+
+
+def _drive_phase_a(monkeypatch, tmp_path, *, box_name, mesh, demo=None, expect_rc=1):
+    """Run the REAL `_emit_e2e_phase_a` and return the prompt it actually built.
+
+    Asserting on source text only proves the expression is written down, not that it
+    reaches the builder. This drives the true call site instead. The builder is
+    stubbed to exit non-zero with no `tt/` present, which is the documented path that
+    returns before PHASE 3 — so no agent is spawned and no device is touched."""
+    from scripts.tt_hw_planner.commands import emit_e2e as E
+    from scripts.tt_hw_planner.parallelism import ParallelConfig
+
+    demo = demo if demo is not None else (tmp_path / "demo")
+    (demo / "_stubs").mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(tmp_path)  # `generated/<log>` is written relative to cwd
+
+    captured = {}
+
+    def _fake_agent(*, prompt, **_kw):
+        captured["prompt"] = prompt
+        return 1, ""  # rc!=0 with no tt/ dir -> returns before PHASE 3
+
+    monkeypatch.setattr(E, "_run_agent", _fake_agent)
+    # Keep this offline: both of these probe the model over the network otherwise.
+    monkeypatch.setattr(E, "_required_heads_block", lambda *_a, **_k: "")
+    chips = E._mesh_chip_count(mesh) if mesh else 1
+    monkeypatch.setattr(
+        E,
+        "_planned_parallelism",
+        lambda *_a, **_k: (ParallelConfig(tp=chips, dp=1) if chips > 1 else None),
+    )
+
+    args = SimpleNamespace(
+        model_id="vendor/some-model",
+        output=str(demo),
+        pcc_target=0.95,
+        box=box_name,
+        mesh=mesh,
+        batch=1,
+        all_tasks=False,
+        max_grade_rounds=0,
+        model="opus",
+        agent_bin="claude",
+        agent_timeout_s=60,
+    )
+    rc = E._emit_e2e_phase_a(args)
+    assert rc == expect_rc, f"phase A returned rc={rc}, expected {expect_rc}"
+    if expect_rc == 1:
+        # rc=1 is the stubbed builder's early return, which proves PHASE 3 never ran.
+        assert "prompt" in captured, "the builder was never invoked"
+    return captured.get("prompt", "")
+
+
+def test_real_phase_a_prompt_carries_each_box_and_mesh(monkeypatch, tmp_path):
+    """The end-to-end link: for every box and every canonical mesh, drive the actual
+    phase-A entry point and read the figures out of the prompt it handed the
+    builder."""
+    import re
+
+    for box in HARDWARE:
+        for rows, cols in box.mesh_shapes:
+            used = rows * cols
+            prompt = _drive_phase_a(monkeypatch, tmp_path, box_name=box.name, mesh=f"{rows}x{cols}")
+            assert f"HARDWARE — {box.name} ({box.chips}x {box.arch})" in prompt
+            assert f"DRAM per chip: {box.hbm_per_chip_gb:.0f} GB" in prompt
+            if used == box.chips:
+                assert f"available to this run: {box.total_hbm_gb:.0f} GB" in prompt
+            else:
+                m = re.search(r"available to THIS RUN: (\d+) GB", prompt)
+                assert m, f"{box.name} {rows}x{cols}: prompt not run-scoped"
+                assert float(m.group(1)) == used * box.hbm_per_chip_gb, f"{box.name} {rows}x{cols}"
+
+
+def test_real_phase_a_single_chip_mesh_is_scoped(monkeypatch, tmp_path):
+    """The exact regression, through the real entry point: a 1-chip mesh on a
+    multi-chip box must not advertise the box total."""
+    for box in HARDWARE:
+        if box.chips <= 1:
+            continue
+        prompt = _drive_phase_a(monkeypatch, tmp_path, box_name=box.name, mesh="1x1")
+        assert f"opens 1 of the box's {box.chips}" in prompt
+        assert f"THIS RUN: {box.hbm_per_chip_gb:.0f} GB" in prompt
+        assert f"available to this run: {box.total_hbm_gb:.0f} GB" not in prompt
+
+
+def test_real_phase_a_without_box_has_no_hardware_block(monkeypatch, tmp_path):
+    """Non-breaking guarantee, proven through the real call site rather than by
+    calling the helper directly."""
+    prompt = _drive_phase_a(monkeypatch, tmp_path, box_name=None, mesh="2x2")
+    assert "HARDWARE —" not in prompt
+    assert "DRAM per chip" not in prompt
+
+
+def test_guard_and_block_agree_on_the_same_run(monkeypatch, tmp_path):
+    """The guard and the hardware block must describe the SAME run. Proven through
+    behaviour rather than by grepping the source: a manifest that matches the mesh
+    passes the guard (no rc=2 abort), and the prompt that follows is scoped to that
+    same mesh rather than to the whole box."""
+    import json
+    import re
+
+    box = find_box("T3K")  # 8 chips, so a 4-chip mesh is a genuine partial
+    demo = tmp_path / "demo"
+    (demo / "_stubs").mkdir(parents=True, exist_ok=True)
+    (demo / "parallelism_manifest.json").write_text(json.dumps({"chips": 4, "tp": 4, "dp": 1, "mesh": [1, 4]}))
+
+    prompt = _drive_phase_a(monkeypatch, tmp_path, box_name=box.name, mesh="1x4", demo=demo)
+    # rc==1 from the stubbed builder (asserted inside the helper) proves the guard did
+    # not abort with rc=2 — the manifest and the mesh agreed.
+    m = re.search(r"available to THIS RUN: (\d+) GB", prompt)
+    assert m, "guard passed but the block was not run-scoped"
+    assert float(m.group(1)) == 4 * box.hbm_per_chip_gb
+    assert f"opens 4 of the box's {box.chips}" in prompt
+
+
+def test_guard_still_aborts_when_the_mesh_contradicts_the_manifest(monkeypatch, tmp_path):
+    """The new wiring must not have weakened the existing guard: a mesh that does not
+    match the graduated topology still aborts before any builder runs."""
+    import json
+
+    demo = tmp_path / "demo"
+    (demo / "_stubs").mkdir(parents=True, exist_ok=True)
+    (demo / "parallelism_manifest.json").write_text(json.dumps({"chips": 8, "tp": 8, "dp": 1, "mesh": [1, 8]}))
+
+    # rc=2 is the guard's abort, asserted directly rather than inferred.
+    prompt = _drive_phase_a(monkeypatch, tmp_path, box_name="T3K", mesh="1x4", demo=demo, expect_rc=2)
+    assert prompt == "", "the builder must not be invoked when the guard aborts"
 
 
 def test_partial_mesh_budgets_against_the_chips_actually_opened():
@@ -222,9 +503,16 @@ def test_no_board_figures_are_hardcoded_in_the_block():
 # --- the host-memory ceiling ---------------------------------------------------
 
 
+def _host_total() -> int:
+    """The same reader the cap uses, so the two cannot disagree about the box."""
+    from scripts.tt_hw_planner._cli_helpers.adaptive_scheduler import host_total_ram_bytes
+
+    return host_total_ram_bytes()
+
+
 def test_mem_cap_is_a_fraction_of_physical_ram():
     cap = _agent_mem_cap_bytes()
-    total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    total = _host_total()
     assert 0 < cap < total, "a cap must leave headroom for everything else on the box"
     assert cap == int(total * 0.7)
 
@@ -237,19 +525,19 @@ def test_mem_cap_is_disablable(monkeypatch):
 
 
 def test_mem_cap_fraction_is_tunable(monkeypatch):
-    total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    total = _host_total()
     monkeypatch.setenv("TT_HW_PLANNER_AGENT_MEM_FRACTION", "0.25")
     assert _agent_mem_cap_bytes() == int(total * 0.25)
 
 
 def test_mem_cap_survives_a_garbage_fraction(monkeypatch):
     monkeypatch.setenv("TT_HW_PLANNER_AGENT_MEM_FRACTION", "not-a-number")
-    total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    total = _host_total()
     assert _agent_mem_cap_bytes() == int(total * 0.7)
 
 
 def test_mem_cap_clamps_at_all_of_ram(monkeypatch):
-    total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    total = _host_total()
     monkeypatch.setenv("TT_HW_PLANNER_AGENT_MEM_FRACTION", "5")
     assert _agent_mem_cap_bytes() == total
 

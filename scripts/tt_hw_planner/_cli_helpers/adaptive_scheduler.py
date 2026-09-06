@@ -34,6 +34,34 @@ def psutil_mem_sampler() -> MemSample:
     return MemSample(available_frac=vm.available / vm.total, swap_used_frac=swap_frac)
 
 
+def host_total_ram_bytes() -> int:
+    """Total physical host RAM in bytes, or 0 when it cannot be determined.
+
+    Lives here because this module already owns "how much memory does the host have
+    and how much may an agent use" — the same question a per-agent memory ceiling
+    asks. Callers that need a budget should derive it from this rather than reading
+    the machine a second way, so the scheduler and any cap agree about the box.
+
+    psutil first, to match `psutil_mem_sampler`; ``os.sysconf`` as the fallback for
+    environments where psutil is unavailable (it is imported lazily above for exactly
+    that reason)."""
+    try:
+        import psutil
+
+        total = int(psutil.virtual_memory().total)
+        if total > 0:
+            return total
+    except Exception:  # noqa: BLE001 -- psutil absent or unreadable; fall through
+        pass
+    try:
+        import os
+
+        total = int(os.sysconf("SC_PAGE_SIZE")) * int(os.sysconf("SC_PHYS_PAGES"))
+        return total if total > 0 else 0
+    except (OSError, ValueError, AttributeError):
+        return 0
+
+
 class AdjustableSemaphore:
     """A semaphore whose permit ceiling can be raised or lowered at runtime.
 

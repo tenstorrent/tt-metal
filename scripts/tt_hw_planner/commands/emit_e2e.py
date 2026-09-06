@@ -1617,7 +1617,20 @@ def _emit_e2e_phase_a(args) -> int:
     from ..parallelism import read_parallelism_manifest
 
     _manifest = read_parallelism_manifest(demo_dir)
-    _mismatch = _topology_mismatch(_manifest, _pc, _mesh_chip_count(getattr(args, "mesh", None)))
+    # ONE derivation of "how many chips does --mesh ask for", shared by the topology
+    # guard and the hardware block so the two cannot describe different runs.
+    _mesh_arg = getattr(args, "mesh", None)
+    _given_chips = _mesh_chip_count(_mesh_arg)
+    # Distinguish "no/unparseable mesh" from an explicit 1x1: the hardware block must
+    # not claim a single-chip run because the operator mistyped the flag.
+    _declared_chips = _parsed_mesh_chips(_mesh_arg)
+    if _mesh_arg and _declared_chips is None:
+        print(
+            f"  ⚠ --mesh {_mesh_arg!r} is not a parseable mesh; treating the chip count as unknown "
+            f"for hardware budgeting (the topology guard still reads it as 1 chip)",
+            file=sys.stderr,
+        )
+    _mismatch = _topology_mismatch(_manifest, _pc, _given_chips)
     if _mismatch:
         print(sep)
         print(f"  ✗ EMIT-E2E ABORTED (topology guard) — {_mismatch}")
@@ -1693,7 +1706,12 @@ def _emit_e2e_phase_a(args) -> int:
         batch_note=_batch_note,
         hardware_note=_hardware_prompt_block(
             _resolve_box(getattr(args, "box", None)),
-            chips_in_use=(_pc.chips if _pc is not None else 0),
+            # From the mesh, NOT from _pc: plan_parallelism returns None for a
+            # single-chip mesh (and for any model it cannot probe), so reading _pc
+            # would fall back to the whole box and advertise up to 32x the memory the
+            # run can address. None means the mesh declared nothing usable — genuinely
+            # unknown, which is different from an explicit 1x1.
+            chips_in_use=(_declared_chips or 0),
         ),
         all_tasks=bool(getattr(args, "all_tasks", False)),
     )
@@ -1901,17 +1919,55 @@ def _fmt_tool(name: str, inp: dict) -> str:
         return name
 
 
-def _mesh_chip_count(mesh_arg) -> int:
+def _mesh_tokens(mesh_arg) -> list[str]:
+    """Split a ``--mesh`` value on either separator. ONE tokenizer, so the lenient
+    count and the strict parse below cannot disagree about where the boundaries are.
+
+    Note ``.lower()``: it means a typed ``X`` becomes the separator, so ``2xX`` yields
+    an empty token rather than a non-numeric one. That is why the strict parse rejects
+    empty tokens instead of relying on an int() failure."""
+    return [t.strip() for t in str(mesh_arg or "").lower().replace(",", "x").split("x")]
+
+
+def _parsed_mesh_chips(mesh_arg) -> int | None:
+    """Chips a ``--mesh`` string actually DECLARES, or None when it declares nothing
+    usable — absent, empty, or malformed (``2xX``, ``0x4``, a stray separator).
+
+    STRICT on purpose: callers use this to decide whether the topology is known at
+    all, so a typo must not read as a real chip count. `_mesh_chip_count` keeps the
+    lenient 1-chip floor that the topology guard relies on."""
     if not mesh_arg:
-        return 1
-    try:
-        prod = 1
-        for tok in str(mesh_arg).lower().replace(",", "x").split("x"):
-            if tok.strip():
-                prod *= int(tok.strip())
-        return max(prod, 1)
-    except Exception:
-        return 1
+        return None
+    tokens = _mesh_tokens(mesh_arg)
+    if not tokens or any(not t for t in tokens):
+        return None
+    prod = 1
+    for t in tokens:
+        try:
+            n = int(t)
+        except ValueError:
+            return None
+        if n <= 0:
+            return None
+        prod *= n
+    return prod
+
+
+def _mesh_chip_count(mesh_arg) -> int:
+    """Chips implied by ``--mesh``, floored at 1.
+
+    LENIENT and deliberately unchanged: empty segments are skipped and anything
+    unparseable reads as a single chip. The topology guard depends on that floor, so
+    this is not the place to get stricter — see `_parsed_mesh_chips`."""
+    prod = 1
+    for tok in _mesh_tokens(mesh_arg):
+        if not tok:
+            continue
+        try:
+            prod *= int(tok)
+        except ValueError:
+            return 1
+    return max(prod, 1)
 
 
 def _planned_parallelism(model_id: str, args):
@@ -2002,10 +2058,9 @@ def _agent_mem_cap_bytes() -> int:
         frac = _AGENT_MEM_FRACTION_DEFAULT
     if frac <= 0:
         return 0
-    try:
-        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-    except (OSError, ValueError, AttributeError):
-        return 0
+    from .._cli_helpers.adaptive_scheduler import host_total_ram_bytes
+
+    total = host_total_ram_bytes()
     if total <= 0:
         return 0
     return int(total * min(frac, 1.0))
