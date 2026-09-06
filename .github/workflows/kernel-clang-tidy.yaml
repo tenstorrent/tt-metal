@@ -118,16 +118,15 @@ jobs:
         id: merge
         run: |
           set -euo pipefail
-          mkdir -p /work/merged
-          # Flatten every leg's plists into one directory. Names are prefixed
-          # with the leg so identical translation units do not collide;
-          # CodeChecker deduplicates the findings themselves.
-          find /work/legs -name '*.plist' -print0 | while IFS= read -r -d '' p; do
-            rel=${p#/work/legs/}
-            cp "$p" "/work/merged/$(printf '%s' "${rel%.plist}" | tr '/ ' '__').plist"
-          done
-          n=$(find /work/merged -name '*.plist' | wc -l)
-          echo "merged $n plists from $(find /work/legs -maxdepth 1 -mindepth 1 -type d | wc -l) legs"
+          # Every TU re-reports the defects of the headers it includes, so the
+          # raw plists carry ~19x more diagnostics than there are distinct
+          # findings. parse is single-threaded and scales with that raw count,
+          # so drop the duplicates in parallel first.
+          if [ -n "$(find /work/legs -name '*.plist' -print -quit)" ]; then
+            python3 .github/scripts/utils/merge_kernel_tidy_plists.py /work/legs /work/merged
+          fi
+          n=$(find /work/merged -name '*.plist' 2>/dev/null | wc -l)
+          echo "$n deduplicated plists from $(find /work/legs -maxdepth 1 -mindepth 1 -type d | wc -l) legs"
           if [ "$n" -eq 0 ]; then
             echo "::warning::no plists found; nothing to consolidate."
             echo "merged=0" >> "$GITHUB_OUTPUT"

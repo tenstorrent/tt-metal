@@ -201,35 +201,52 @@ gh workflow run kernel-clang-tidy.yaml --ref <branch> \
 
 ### Consolidating the legs into one report
 
-`consolidate-report` flattens every leg's plists into a single directory and
-runs `CodeChecker parse --export html` once, so the published site is one
-genuine CodeChecker report: a sortable table with Severity, Checker name, File
-and Message columns, plus its own checker- and severity-statistics pages. No
-hand-written HTML and no per-leg navigation — leg provenance is deliberately
-dropped, since the same kernel code is analyzed on many legs and the reader
-only cares about the finding.
+`consolidate-report` merges every leg's plists and runs `CodeChecker parse
+--export html` once, so the published site is one genuine CodeChecker report: a
+sortable table with Severity, Checker name, File and Message columns, plus its
+own checker- and severity-statistics pages. No hand-written HTML and no per-leg
+navigation — leg provenance is deliberately dropped, since the same kernel code
+is analyzed on many legs and the reader only cares about the finding.
 
-CodeChecker deduplicates the merged reports itself. Measured on two legs:
-11,866 + 19,995 = 31,861 raw findings collapse to 20,103 (19,835 unique
-file/line/column/checker locations). The overlap is high because legs share
-dispatch, fabric and LLK code — of the 50 CRITICAL+HIGH findings across those
-two legs, only 29 are distinct.
+#### Why the merge deduplicates first
 
-The one requirement is that rendering needs the analyzed sources on the same
-absolute paths the legs used, which is why this job runs in the ci-test
-container with `setup-job` installing the wheel, rather than on a bare
-`ubuntu-latest`. Two roots cover everything: `/opt/venv/...` (16,829 of the
-19,835 unique findings, wheel-installed headers) and `/work/...` (3,006, the
-checkout). Nothing resolves into the per-leg tt-metal-cache, because the
-skiplist excludes generated JIT glue. Skip the sources and
-`--export html` silently produces `index.html` and `statistics.html` with
-**zero** finding pages — measured, not assumed, which is what an earlier
+The first consolidated run (33984801327) exhausted a 90-minute job timeout
+mid-render. Profiling the cause rather than trimming checkers:
+
+* Each TU is a firmware wrapper with the kernel `#include`d into it, so every TU
+  re-reports the defects of every header it pulls in, and every leg repeats that
+  again. On two legs, **370,060 raw diagnostics represent 19,863 distinct
+  findings — 18.7x redundancy.** Plists run 11 MB mean, 588 MB for two legs.
+* `CodeChecker parse` is single-threaded — there is no `--jobs` — and its cost
+  scales with the *raw* count, so ~95% of its runtime rediscovers findings it has
+  already seen. Of the 115s it took on those two legs, 33s was `plistlib` XML
+  parsing and 82s was CodeChecker's own per-diagnostic processing.
+
+`.github/scripts/utils/merge_kernel_tidy_plists.py` therefore drops duplicates
+before CodeChecker sees them, across all cores, keying on file, line, column,
+checker and message. The XML parse is embarrassingly parallel and the runner has
+64 cores, so the merge itself costs 3.8s and shrinks 588 MB to 31 MB. `parse`
+then drops from **115s to 6.7s, a 17x speedup, with zero findings lost or gained
+— the unique finding set is identical.** The saving grows with leg count, since
+cross-leg repetition is most of the redundancy.
+
+This is why no checker is disabled for volume: report size no longer drives CI
+cost, and the point of the report is a complete database of problems to fix.
+
+#### Rendering needs the sources
+
+Rendering needs the analyzed sources at the same absolute paths the legs used,
+which is why this job runs in the ci-test container with `setup-job` installing
+the wheel, rather than on a bare `ubuntu-latest`. Two roots cover everything:
+`/opt/venv/...` (16,829 of the 19,835 unique findings, wheel-installed headers)
+and `/work/...` (3,006, the checkout). Nothing resolves into the per-leg
+tt-metal-cache, because the skiplist excludes generated JIT glue. Skip the
+sources and `--export html` silently produces `index.html` and `statistics.html`
+with **zero** finding pages — measured, not assumed, which is what an earlier
 attempt to merge on `ubuntu-latest` got wrong.
 
-Plist filenames are prefixed with their leg on merge, since translation units
-are named after the firmware wrapper (`trisck.cc`, `brisck.cc`, …) and would
-otherwise collide across legs. Note the volume: plists run 15–16 MB each, so
-the merge input is roughly 560 MB per two legs.
+The JSON export runs before the render and uploads unconditionally: it is the
+machine-readable form of the same data, and it is what to point an agent at.
 
 ### Why not the simulator legs?
 
@@ -276,34 +293,10 @@ this domain:
 | `portability-simd-intrinsics` | SFPI *is* a SIMD intrinsics layer, by design. |
 | `clang-diagnostic-c++98-compat` | Device code is C++17/20. |
 
-A further thirteen are muted on measured volume rather than on principle. The
-first two-leg consolidated report carried 19,835 unique findings, of which these
-thirteen checkers accounted for 14,523 — 73% of the report from 2.7% of the
-enabled checkers, and none of it actionable in this repo:
-
-| Disabled | Findings | Reason |
-| --- | --- | --- |
-| `modernize-macro-to-enum` | 3,968 | Hardware register and address `#define`s, many consumed by asm or the preprocessor. |
-| `readability-magic-numbers` | 1,619 | Register offsets and bit positions. |
-| `misc-const-correctness` | 1,605 | Style; large diff, no defect signal. |
-| `modernize-use-trailing-return-type` | 1,182 | Pure style. tt-umd mutes it too. |
-| `readability-identifier-length` | 1,064 | Short names are the LLK house style. |
-| `bugprone-easily-swappable-parameters` | 822 | Structural observation, not a defect. |
-| `readability-uppercase-literal-suffix` | 690 | Style. |
-| `clang-diagnostic-sign-conversion` | 677 | Pervasive and deliberate in register arithmetic. |
-| `clang-diagnostic-unused-parameter` | 656 | Almost entirely the `#ifdef`-variant false positives. |
-| `misc-unused-parameters` | 636 | Same class as above. |
-| `clang-diagnostic-documentation` | 625 | Doc-comment formatting. |
-| `clang-diagnostic-unsafe-buffer-usage` | 552 | `-Wunsafe-buffer-usage` on C-style device code; no `std::span` here. |
-| `clang-diagnostic-old-style-cast` | 427 | C casts are deliberate for MMIO. |
-
-Muting them leaves 5,312 findings and preserves every CRITICAL (17) and HIGH
-(12). This matters for cost as well as for readability: `CodeChecker parse` is
-single-threaded with no `--jobs`, costs roughly 115s per 52 plists before any
-source rendering, and scales with finding count, so the first consolidated run
-(33984801327) exhausted a 90-minute job timeout mid-render and published
-nothing. Re-enable any of them by deleting the pair of lines from
-`codechecker.json`; the cost is roughly linear in the findings added back.
+One more is muted on volume: `modernize-use-trailing-return-type` (1,182
+findings on a two-leg sample) is pure style and tt-umd mutes it too. Nothing
+else is muted for volume — see [Report consolidation](#report-consolidation)
+for why finding count no longer drives CI cost.
 
 Everything else is on. This replaced an inherited 189-entry opt-out list (13
 families plus 176 individual checks) carried over from the `kernel_clang_tidy`
@@ -402,10 +395,10 @@ follow-up once the `--enable-all` volume is understood.
   (clang vs GCC, generic `rv32im` instead of the TT cpu model, address-space
   attributes `rvtt_l1_ptr`/`rvtt_reg_ptr` ignored). Fine for tidy checks;
   don't expect codegen-dependent diagnostics to be meaningful.
-* The `--disable` list is now partly measured: the thirteen volume-based entries
-  come from the per-checker distribution of the first `--enable-all` run, but
-  that run covered two legs, so the tail beyond them is still unmeasured.
-  Re-triage once an all-legs report lands. Note that finding *counts* cannot be
-  reproduced locally — the captured translation units reference wheel-installed
-  sources that exist only in the CI container, so a local analyze fails with
-  `no-sources`; the numbers above come from CI plists parsed locally.
+* The `--disable` list is deliberately short and is not a triage backlog: the
+  report is meant to be a complete database of problems, and deduplication —
+  not muting checkers — is what keeps it affordable. Note that finding *counts*
+  cannot be reproduced locally: the captured translation units reference
+  wheel-installed sources that exist only in the CI container, so a local
+  analyze fails with `no-sources`. The numbers here come from CI plists parsed
+  locally.
