@@ -1,29 +1,19 @@
-# CodeChecker review statuses for kernel (device) code analysis.
-# https://codechecker.readthedocs.io/en/latest/analyzer/user_guide/#review-status-config-file
+# CodeChecker review statuses for kernel (device) code analysis: mark specific
+# findings intentional rather than disabling a checker everywhere. Filters are
+# filepath (an fnmatch glob), checker_name (exact) and report_hash (prefix).
+# The schema key is $version, not version, which --help does not mention.
 #
-# A rule marks matching findings intentional rather than disabling the checker,
-# so it keeps reporting everywhere else in the tree. Filters are filepath (an
-# fnmatch glob against the absolute path recorded in the plist), checker_name
-# (exact) and report_hash (prefix); note the schema key is $version, not
-# version, which --help does not mention.
-#
-# Applied by the consolidate job at parse time rather than by the legs at
-# analyze time: parse reads this file straight out of the report directory, so
-# an exception can be added or withdrawn by re-running one job instead of
-# sixteen hardware legs. parse defaults --review-status to confirmed,unreviewed,
-# which is what drops these from both the HTML report and findings.json.
-#
-# The bar for a rule is that the finding is wrong about this code, not merely
-# unwelcome or numerous. Checkers whose findings are diffuse across the tree
-# cannot be scoped by path and do not belong here.
+# Applied by the consolidate job at parse time, so an exception costs one job
+# re-run rather than sixteen hardware legs. When a rule is warranted, and which
+# candidates were rejected, in
+# tech_reports/code-indexing/kernel-clang-tidy.md.
 
 $version: 1
 
 rules:
-  # Including a .cpp is how the JIT builds a kernel. jit_build emits
-  # kernel_includes.hpp and the chlkc_{math,pack,unpack}.cpp prologs, each of
-  # which pulls the kernel body in as a source file, and chlkc_list.h does the
-  # same in-repo. Right about the shape, wrong about this codebase.
+  # Including a .cpp is how the JIT builds a kernel: jit_build emits
+  # kernel_includes.hpp and the chlkc_{math,pack,unpack}.cpp prologs, each
+  # pulling the kernel body in as a source file. chlkc_list.h does it in-repo.
   - filters:
       filepath: "*/kernel_includes.hpp"
       checker_name: bugprone-suspicious-include

@@ -1,30 +1,13 @@
-# CodeChecker skip list for kernel (device) code analysis.
-# https://codechecker.readthedocs.io/en/latest/analyzer/user_guide/#skip
+# CodeChecker skip list for kernel (device) code analysis, used with
+# --drop-reports-from-skipped-files so these paths are dropped from both
+# analysis and reporting. Exclusion-only: anything not listed is analyzed.
+# Why not an allow-list, and why this rather than HeaderFilterRegex, in
+# tech_reports/code-indexing/kernel-clang-tidy.md.
 #
-# Used with --drop-reports-from-skipped-files, so these paths are excluded from
-# BOTH analysis and reporting. Unlike clang-tidy's HeaderFilterRegex this also
-# suppresses clang-diagnostic-* findings, which is the point: the SFPI headers
-# emit parse noise we cannot act on here.
-#
-# Exclusion-only, same shape as tt-umd's .codechecker.skiplist. Note that an
-# allow-list keyed on kernels/ would analyze nothing at all: the translation
-# units are the firmware wrappers
-# (tt_metal/hw/firmware/src/.../{trisck,brisck,ncrisck,idle_erisck}.cc) with the
-# kernel #included into them, so no TU path contains kernels/. Anything not
-# listed here is analyzed, which fails open for in-repo code as new device
-# directories appear.
+# The generated JIT glue under the kernel cache is analyzed on purpose. Do not
+# add it back without reading that report first.
 
 # Upstream toolchain: pinned SFPI release and the host libc/libstdc++ used for
 # the analysis parse. Not fixable in this repo.
 -/opt/tenstorrent/sfpi/*
 -/usr/*
-
-# The machine-generated JIT glue in the kernel cache (chlkc_*.cpp prologs, the
-# generated kernel_main() shim, chlkc_descriptors.h format tables) is analyzed
-# deliberately: a generator that emits bad code is still a bug worth filing.
-# Two consequences to expect in the report. Cache paths embed the kernel name
-# and two content hashes, so one generator defect appears once per kernel
-# variant rather than collapsing under deduplication; and the cache lives on the
-# test runner while only plists are uploaded, so these findings have no
-# browsable source in the rendered report. Both are accepted for now — see
-# tech_reports/code-indexing/kernel-clang-tidy.md.
