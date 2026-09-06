@@ -40,6 +40,8 @@
         "checker:modernize-use-trailing-return-type",
         "--disable",
         "checker:modernize-avoid-c-arrays",
+        "--disable",
+        "checker:performance-enum-size",
         "--checker-config",
         "clang-tidy:readability-function-cognitive-complexity:IgnoreMacros=false",
         "--checker-config",

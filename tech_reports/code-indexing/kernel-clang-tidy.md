@@ -319,6 +319,7 @@ this domain:
 | `hicpp-no-assembler` | Inline asm is pervasive in `tt_metal/hw/inc` and tt-llk; recorded at 242K hits under the previous flow. |
 | `portability-simd-intrinsics` | SFPI *is* a SIMD intrinsics layer, by design. |
 | `clang-diagnostic-c++98-compat` | Device code is C++17/20. |
+| `performance-enum-size` | Measured zero saving on every enum it flags that is actually stored; see below. |
 
 Two more are muted on volume. `modernize-use-trailing-return-type` (1,182
 findings) is pure style and tt-umd mutes it too.
@@ -352,6 +353,29 @@ include `<array>`, but several are conditional (`device_print.h` is DPRINT-gated
 `compile_time_args.h` is prolog-emitted only for named-arg kernels,
 `dataflow_buffer.h` guards its include with `__has_include`). Settling it needs
 `g++ -H` on a captured compile command in the CI container.
+
+`performance-enum-size` (88 findings) is disabled on a different basis again:
+not volume, and not that the advice is unwelcome, but that it buys nothing here.
+Of the 86 distinct enums it flags, 48 are never used as the type of a declared
+variable at all — they are constant namespaces whose values get assigned into
+explicitly sized fields elsewhere. Most of the remainder are template non-type
+parameters or `constexpr` values, which occupy no storage at runtime, or
+host-side classes under `tt_metal/api`. Around five are genuinely fields in
+device structs, and those measure out at zero. `EriscDynamicEntry` goes 24 B to
+24 B, because its neighbours are 8-byte-aligned `RiscTimestampV2` unions and the
+alignment padding absorbs the saving. `RouterStateManager` shrinks 32 B to 26 B
+only by moving `command` from offset 16 to 13, which breaks a host/device
+contract on a struct that documents both widths and pads the two fields 16 bytes
+apart so each side can write its own; preserving the offsets returns it to 32 B.
+
+The codebase already applies the underlying advice wherever it does pay. The
+launch message stores `volatile uint8_t mode` rather than the `dispatch_mode`
+enum type, `enum noc_mode : uint8_t` sits directly beside the unfixed
+`noc_index`, `DynamicStatistics` is a `uint8_t` bitmask, and the fabric packet
+header derives `HopMaskType` through `std::conditional_t` on hop count under
+`static_assert(sizeof(LowLatencyPacketHeaderT<0>) == 48)`. Layouts that matter
+here are hand-specified because they are ABI, and the enums this checker reaches
+are the ones that belong to no layout.
 
 Nothing else is muted for volume — see
 [Report consolidation](#report-consolidation) for why finding count no longer
