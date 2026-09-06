@@ -93,6 +93,7 @@ from .packing import (
     MINIMAX_H3_AUDIO_LATENTS_PER_SECOND,
     MINIMAX_H3_FPS,
     MINIMAX_H3_KEYFRAME_NOISE_AUG,
+    MINIMAX_H3_MAX_DURATION,
     MINIMAX_H3_TEXT_TAG,
     MINIMAX_H3_VIDEO_TAG,
     MiniMaxH3PackedSequence,
@@ -111,6 +112,7 @@ from .packing import (
     video_latent_num_frames,
 )
 from .packing_ref2va import (
+    MINIMAX_H3_MAX_REFERENCE_IMAGES,
     MiniMaxH3PreparedReference,
     MiniMaxH3Reference,
     build_ref2va_packed_sequence,
@@ -619,11 +621,12 @@ class MiniMaxH3Pipeline:
 
         # Construct host-side (device-free Parameters); weights load below / on first VAE use.
         self._host_log("building the Qwen3-VL text encoder")
+        self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self._text_encoder, self._text_config = build_minimax_h3_text_encoder(
             self.weights_dir / "text_encoder",
             mesh_device=self.mesh_device,
             parallel_config=self.encoder_parallel_config,
-            ccl_manager=self.ccl_manager,
+            ccl_manager=self.encoder_ccl_manager,
             is_fsdp=True,
             load_weights=False,
         )
@@ -636,7 +639,7 @@ class MiniMaxH3Pipeline:
             task=self.task,
             mesh_device=self.mesh_device,
             weight_loader=self._cache_submodel,
-            ccl_manager=self.ccl_manager,
+            ccl_manager=self.encoder_ccl_manager,
             # Encoder compute dtype (the ViT decoder ignores it). bf16 runs the taps=3 wave
             # 4.2x faster than fp32 (427 vs 1800 ms) and measures PCC 99.998% against the
             # reference on the real checkpoint -- within 0.0003% of the fp32 encoder --
@@ -995,7 +998,7 @@ class MiniMaxH3Pipeline:
                         tensor_parallel=ParallelFactor(mesh_axis=self.tp_axis, factor=self.tp_factor),
                         sequence_parallel=ParallelFactor(mesh_axis=self.sp_axis, factor=self.sp_factor),
                     ),
-                    ccl_manager=self.ccl_manager,
+                    ccl_manager=self.encoder_ccl_manager,
                 )
             else:
                 self._host_log("building the Qwen3-VL vision tower (replicated)")
@@ -1089,6 +1092,8 @@ class MiniMaxH3Pipeline:
                 vision_cu_seqlens(grid_thw),
                 sp_factor=self.sp_factor,
             )
+            path = "ring" if p_cu is None or len(p_cu) <= 2 else "windowed"
+            self._host_log(f"vision tower {path} attention, {p_patches.shape[0]} padded patches")
             sp_kw = {"mesh_axis": self.sp_axis, "shard_dim": 0} if self.sp_factor > 1 else {}
             merged, deepstack = tower.forward(
                 bf16_tensor(p_patches, device=self.mesh_device, **sp_kw),
@@ -1550,7 +1555,7 @@ class MiniMaxH3Pipeline:
                 # reach remote shards yet. Composes with the T-shard (batch axis 0, T axis 1).
                 stereo_split_axis=0,
                 parallel_config=audio_parallel,
-                ccl_manager=self.ccl_manager,
+                ccl_manager=self.encoder_ccl_manager,
                 # One step off the accurate default, measured at the production 5.17 s shape:
                 # full/tap 796 ms @ mean PCC 99.9989% -> weight/tap 565 ms @ 99.9785% -- 20x
                 # inside the encode gate (0.99 / rel RMSE 0.12). Not further: audio condition
@@ -2141,26 +2146,83 @@ class MiniMaxH3Pipeline:
         rate = self.audio_sampling_rate
         return torch.zeros(MINIMAX_H3_AUDIO_CHANNELS, int(seconds * rate), dtype=torch.float32), rate
 
-    def _warmup_video(self, num_frames: int = 5, size: int = 256) -> tuple[np.ndarray, float]:
-        return np.zeros((num_frames, size, size, 3), dtype=np.uint8), float(MINIMAX_H3_FPS)
+    def _warmup_video(self, num_frames: int, size: int = 256) -> np.ndarray:
+        # Sampled at 2 fps and merged in pairs, a video's block count -- the tower's grid_t -- scales
+        # with its frame count, so a served-length clip warms a representative windowed encode where a
+        # handful of frames would compile only a grid_t=1 toy.
+        return np.zeros((num_frames, size, size, 3), dtype=np.uint8)
 
     def _warmup_on_init(self) -> None:
         """Compile and (when tracing) capture every module a served request touches, per task: the
         keyframe encoder for t2va/fl2va, and the image, video and audio encoders for ref2va."""
         height, width = resolve_canvas_size(16, 9)
         num_frames = align_num_frames(round(5 * MINIMAX_H3_FPS))
-        if self.task == "ref2va":
-            waveform, sample_rate = self._warmup_audio()
-            video, fps = self._warmup_video()
-            references = [
-                MiniMaxH3Reference(image=self._warmup_image()),
-                MiniMaxH3Reference(video=video, fps=fps, audio=waveform, sample_rate=sample_rate),
-            ]
-            self.warmup(references=references, num_frames=num_frames, height=height, width=width, num_inference_steps=3)
-        else:
+        if self.task != "ref2va":
+            # A lone keyframe takes the tower's ring path; first+last takes the windowed path.
+            rung_requests = {
+                max(self.bucket_ladder): dict(
+                    image=self._warmup_image(),
+                    last_image=self._warmup_image(),
+                    num_frames=num_frames,
+                    height=height,
+                    width=width,
+                )
+            }
             self.warmup(
-                image=self._warmup_image(), num_frames=num_frames, height=height, width=width, num_inference_steps=3
+                image=self._warmup_image(),
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                num_inference_steps=3,
+                rung_requests=rung_requests,
             )
+            return
+
+        # Spread the encoder paths across the ladder binds, which all precede trace capture: the lone
+        # image below takes the tower's RING path, and the per-rung sets take its WINDOWED path while
+        # first-running the video and audio encoders. Forced onto a rung above its own packed length,
+        # each set pads up, so the assignment only has to keep the heaviest set off the smallest rung.
+        full_frames = align_num_frames(round(MINIMAX_H3_MAX_DURATION * MINIMAX_H3_FPS))
+        mid_frames = align_num_frames(round(10 * MINIMAX_H3_FPS))
+        waveform, sample_rate = self._warmup_audio(MINIMAX_H3_MAX_DURATION)
+        ladder = sorted(self.bucket_ladder, reverse=True)
+        video_audio = MiniMaxH3Reference(
+            video=self._warmup_video(full_frames),
+            fps=float(MINIMAX_H3_FPS),
+            audio=waveform,
+            sample_rate=sample_rate,
+        )
+        rung_requests = {
+            ladder[0]: dict(
+                references=[MiniMaxH3Reference(image=self._warmup_image()), video_audio],
+                num_frames=full_frames,
+                height=height,
+                width=width,
+            )
+        }
+        if len(ladder) > 1:
+            images = [MiniMaxH3Reference(image=self._warmup_image()) for _ in range(MINIMAX_H3_MAX_REFERENCE_IMAGES)]
+            rung_requests[ladder[1]] = dict(
+                references=images,
+                num_frames=num_frames,
+                height=height,
+                width=width,
+            )
+        if len(ladder) > 2:
+            rung_requests[ladder[2]] = dict(
+                references=[MiniMaxH3Reference(video=self._warmup_video(mid_frames), fps=float(MINIMAX_H3_FPS))],
+                num_frames=mid_frames,
+                height=height,
+                width=width,
+            )
+        self.warmup(
+            references=[MiniMaxH3Reference(image=self._warmup_image())],
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            num_inference_steps=3,
+            rung_requests=rung_requests,
+        )
 
     def warmup(
         self,
@@ -2217,6 +2279,9 @@ class MiniMaxH3Pipeline:
                 bucket = self._buckets.get(rung)
                 shrink = rung < natural and rung not in overrides
                 request = overrides.get(rung, shrunk if shrink else generation_kwargs)
+                # A rung the natural first run already warmed is skipped here, so an override mapped
+                # onto it never first-runs during the binds -- it would compile under the live traces
+                # of the capture loop. Keep coverage overrides on rungs above the natural packed length.
                 if bucket is None or not bucket.warm:
                     request = self._run_forced_fit(rung, prompt, request, shrink=shrink)
                     if request is None:
