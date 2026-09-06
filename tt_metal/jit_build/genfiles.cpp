@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <iterator>
+#include <tuple>
 // Blaze-only experimental named args (removal tracked by issue #50953): <map>/<set> below
 #include <map>
 #include <set>

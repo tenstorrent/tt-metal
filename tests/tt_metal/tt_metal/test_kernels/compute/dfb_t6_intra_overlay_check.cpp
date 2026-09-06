@@ -28,7 +28,10 @@
 //   [final_base ..)        mirrored DM TC0..N-1 after the INTRA series {cap, posted, acked}
 //   [done_idx]             scratch_done
 
+#include <cstdint>
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/common.h"          // for dummy_pack (TEN-4746 no-write pack ordering)
+#include "api/compute/tile_move_copy.h"  // for dummy_unpack (TEN-4746 unpack pop ordering)
 #include "api/debug/dprint.h"
 #include "ckernel_trisc_common.h"
 #include "dev_mem_map.h"
@@ -36,76 +39,81 @@
 
 namespace {
 // Host may pass fewer steps; a zero tile count ends the series.
-constexpr uint32_t max_steps = 4;
+constexpr std::uint32_t max_steps = 4;
 
-volatile uint32_t* scratch_ptr(uint32_t l1_address, uint32_t word_idx) {
-    return reinterpret_cast<volatile uint32_t*>(l1_address + MEM_L1_UNCACHED_BASE + word_idx * sizeof(uint32_t));
+volatile std::uint32_t* scratch_ptr(std::uint32_t l1_address, std::uint32_t word_idx) {
+    return reinterpret_cast<volatile std::uint32_t*>(
+        l1_address + MEM_L1_UNCACHED_BASE + word_idx * sizeof(std::uint32_t));
 }
 
 // A counter reads back a derived view rather than the credit total that was written:
 // tile_counters[].f.posted sits at the TILES_AVAILABLE offset and .f.acked at SPACE_AVAILABLE.
 // Sampling right after a push/pop returns the pre-update value, so each sample re-reads until the
 // value settles.
-uint32_t settled_capacity(uint32_t tc, uint32_t settle_reads) {
-    uint32_t value = 0;
-    for (uint32_t i = 0; i < settle_reads; i++) {
+std::uint32_t settled_capacity(std::uint32_t tc, std::uint32_t settle_reads) {
+    std::uint32_t value = 0;
+    for (std::uint32_t i = 0; i < settle_reads; i++) {
         value = ckernel::trisc::tile_counters[tc].f.buf_capacity;
     }
     return value;
 }
 
-uint32_t settled_posted(uint32_t tc, uint32_t settle_reads) {
-    uint32_t value = 0;
-    for (uint32_t i = 0; i < settle_reads; i++) {
+std::uint32_t settled_posted(std::uint32_t tc, std::uint32_t settle_reads) {
+    std::uint32_t value = 0;
+    for (std::uint32_t i = 0; i < settle_reads; i++) {
         value = ckernel::trisc::tile_counters[tc].f.posted;
     }
     return value;
 }
 
-uint32_t settled_acked(uint32_t tc, uint32_t settle_reads) {
-    uint32_t value = 0;
-    for (uint32_t i = 0; i < settle_reads; i++) {
+std::uint32_t settled_acked(std::uint32_t tc, std::uint32_t settle_reads) {
+    std::uint32_t value = 0;
+    for (std::uint32_t i = 0; i < settle_reads; i++) {
         value = ckernel::trisc::tile_counters[tc].f.acked;
     }
     return value;
 }
 
-void write_tc_triple(uint32_t l1_address, uint32_t tc, uint32_t base_idx, uint32_t settle_reads) {
+void write_tc_triple(std::uint32_t l1_address, std::uint32_t tc, std::uint32_t base_idx, std::uint32_t settle_reads) {
     *scratch_ptr(l1_address, base_idx + 0) = settled_capacity(tc, settle_reads);
     *scratch_ptr(l1_address, base_idx + 1) = settled_posted(tc, settle_reads);
     *scratch_ptr(l1_address, base_idx + 2) = settled_acked(tc, settle_reads);
 }
 
 void sample_mirrored_dm_tc_block(
-    uint32_t l1_address, uint32_t base_idx, uint32_t num_overlay_tcs, uint32_t words_per_tc, uint32_t settle_reads) {
-    for (uint32_t tc = 0; tc < num_overlay_tcs; tc++) {
+    std::uint32_t l1_address,
+    std::uint32_t base_idx,
+    std::uint32_t num_overlay_tcs,
+    std::uint32_t words_per_tc,
+    std::uint32_t settle_reads) {
+    for (std::uint32_t tc = 0; tc < num_overlay_tcs; tc++) {
         write_tc_triple(l1_address, tc, base_idx + tc * words_per_tc, settle_reads);
     }
 }
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t scratch_l1_address = get_arg(args::scratch_l1_address);
-    constexpr uint32_t scratch_magic = get_arg(args::scratch_magic);
-    constexpr uint32_t scratch_done = get_arg(args::scratch_done);
-    constexpr uint32_t handshake_ready = get_arg(args::handshake_ready);
-    constexpr uint32_t handshake_pushes_done = get_arg(args::handshake_pushes_done);
-    constexpr uint32_t settle_reads = get_arg(args::settle_reads);
-    constexpr uint32_t client_l_tc = get_arg(args::client_l_tc);
-    constexpr uint32_t num_overlay_tcs = get_arg(args::num_overlay_tcs);
-    constexpr uint32_t words_per_tc = get_arg(args::words_per_tc);
-    constexpr uint32_t ready_idx = get_arg(args::ready_idx);
-    constexpr uint32_t pushes_done_idx = get_arg(args::pushes_done_idx);
-    constexpr uint32_t num_steps_idx = get_arg(args::num_steps_idx);
-    constexpr uint32_t posted_base = get_arg(args::posted_base);
-    constexpr uint32_t acked_base = get_arg(args::acked_base);
-    constexpr uint32_t baseline_base = get_arg(args::baseline_base);
-    constexpr uint32_t final_base = get_arg(args::final_base);
-    constexpr uint32_t done_idx = get_arg(args::done_idx);
+    constexpr std::uint32_t scratch_l1_address = get_arg(args::scratch_l1_address);
+    constexpr std::uint32_t scratch_magic = get_arg(args::scratch_magic);
+    constexpr std::uint32_t scratch_done = get_arg(args::scratch_done);
+    constexpr std::uint32_t handshake_ready = get_arg(args::handshake_ready);
+    constexpr std::uint32_t handshake_pushes_done = get_arg(args::handshake_pushes_done);
+    constexpr std::uint32_t settle_reads = get_arg(args::settle_reads);
+    constexpr std::uint32_t client_l_tc = get_arg(args::client_l_tc);
+    constexpr std::uint32_t num_overlay_tcs = get_arg(args::num_overlay_tcs);
+    constexpr std::uint32_t words_per_tc = get_arg(args::words_per_tc);
+    constexpr std::uint32_t ready_idx = get_arg(args::ready_idx);
+    constexpr std::uint32_t pushes_done_idx = get_arg(args::pushes_done_idx);
+    constexpr std::uint32_t num_steps_idx = get_arg(args::num_steps_idx);
+    constexpr std::uint32_t posted_base = get_arg(args::posted_base);
+    constexpr std::uint32_t acked_base = get_arg(args::acked_base);
+    constexpr std::uint32_t baseline_base = get_arg(args::baseline_base);
+    constexpr std::uint32_t final_base = get_arg(args::final_base);
+    constexpr std::uint32_t done_idx = get_arg(args::done_idx);
 
-    const uint32_t step_tiles[max_steps] = {
+    const std::uint32_t step_tiles[max_steps] = {
         get_arg(args::step0), get_arg(args::step1), get_arg(args::step2), get_arg(args::step3)};
-    uint32_t num_steps = 0;
+    std::uint32_t num_steps = 0;
     while (num_steps < max_steps && step_tiles[num_steps] != 0) {
         num_steps++;
     }
@@ -130,14 +138,18 @@ void kernel_main() {
 
     // Whole series is issued before unpack pops, so ClientL tiles-available after step s must equal
     // the tiles pushed through step s. Twice that means the update was counted twice.
-    for (uint32_t step = 0; step < num_steps; step++) {
-        const uint32_t num_tiles = step_tiles[step];
+    for (std::uint32_t step = 0; step < num_steps; step++) {
+        const std::uint32_t num_tiles = step_tiles[step];
         WAYPOINT("PW");
         dfb.reserve_back(num_tiles);
         WAYPOINT("PWD");
+        // TEN-4746: pack only pushes here (no PACR since reserve_back), so order push_back after
+        // reserve_back with a no-write dummy pack -- it writes nothing, so the overlay TC sampling below
+        // is unaffected.
+        ckernel::dummy_pack(dfb::out);
         dfb.push_back(num_tiles);
         WAYPOINT("PPD");
-        const uint32_t posted = settled_posted(client_l_tc, settle_reads);
+        const std::uint32_t posted = settled_posted(client_l_tc, settle_reads);
         *scratch_ptr(scratch_l1_address, posted_base + step) = posted;
         DPRINT("PACK step{} push={} TC{} posted={}\n", step, num_tiles, client_l_tc, posted);
     }
@@ -156,14 +168,17 @@ void kernel_main() {
     }
     WAYPOINT("UPR");
 
-    for (uint32_t step = 0; step < num_steps; step++) {
-        const uint32_t num_tiles = step_tiles[step];
+    for (std::uint32_t step = 0; step < num_steps; step++) {
+        const std::uint32_t num_tiles = step_tiles[step];
         WAYPOINT("WT");
         dfb.wait_front(num_tiles);
         WAYPOINT("WTD");
+        // TEN-4746: unpack only pops here (no UNPACR since wait_front), so order pop_front after
+        // wait_front with a dummy unpack -- it reads nothing from L1, so the TC sampling is unaffected.
+        ckernel::dummy_unpack(dfb::out);
         dfb.pop_front(num_tiles);
         WAYPOINT("UPD");
-        const uint32_t acked = settled_acked(client_l_tc, settle_reads);
+        const std::uint32_t acked = settled_acked(client_l_tc, settle_reads);
         *scratch_ptr(scratch_l1_address, acked_base + step) = acked;
         DPRINT("UNPACK step{} pop={} TC{} acked={}\n", step, num_tiles, client_l_tc, acked);
     }
