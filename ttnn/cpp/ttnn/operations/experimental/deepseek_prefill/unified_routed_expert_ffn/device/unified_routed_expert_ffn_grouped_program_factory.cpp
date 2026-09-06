@@ -528,6 +528,19 @@ UnifiedRoutedExpertFfnGroupedProgramFactory::cached_program_t UnifiedRoutedExper
     // K-blocks the writer reads on NoC 1 (separate cadence from up_go/up_done).
     const uint32_t down_go_sem_id = down_split ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
     const uint32_t down_done_sem_id = down_split ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
+    // Split-read (R > 1): one in1 valid semaphore per slice-sender row of a column
+    // group (each core receives R-1 slices per K-block and must tell them apart).
+    // Per-core semaphore budget is 16; 9 are used above => R <= 7.
+    TT_FATAL(
+        R <= 7,
+        "grouped unified_routed_expert_ffn: rows per group R={} exceeds the semaphore budget (max 7); use more "
+        "row groups or the legacy path",
+        R);
+    std::vector<uint32_t> in1_valid_sem_ids;
+    in1_valid_sem_ids.reserve(R);
+    for (uint32_t r = 0; r < R; ++r) {
+        in1_valid_sem_ids.push_back(tt::tt_metal::CreateSemaphore(program, core_range_set, 0));
+    }
 
     // -------------------------- circular buffers --------------------------
     // Double-buffered DRAM-streamed inputs.
@@ -985,7 +998,8 @@ UnifiedRoutedExpertFfnGroupedProgramFactory::cached_program_t UnifiedRoutedExper
         // GRID_Y-1 cores at gy=1..GRID_Y-1 sharing the same gx. NoC
         // multicast destination rectangle is a single NoC column spanning
         // those receiver rows.
-        const bool is_in1_sender = (my_mt == 0);
+        // Split-read: every core reads (and multicasts) a slice of each weight block.
+        const bool is_in1_sender = true;
         const uint32_t group_row0 = my_group * R;
         const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, group_row0});
         // GRID_Y == 1: no receivers — point the unused receiver coords at the
@@ -1061,10 +1075,19 @@ UnifiedRoutedExpertFfnGroupedProgramFactory::cached_program_t UnifiedRoutedExper
             up_go_sem_id,
             up_done_sem_id,
         };
-        // Grouped: 30 = my_group, 31/32 = DOWN_SPLIT sems; the NoC table starts at 33.
+        // Grouped: 30 = my_group, 31/32 = DOWN_SPLIT sems, 33.. = R in1 valid sem ids,
+        // then the R (x, y) NoC coords of this column group's rows, then the M-row table.
         reader_args.push_back(my_group);
         reader_args.push_back(down_go_sem_id);
         reader_args.push_back(down_done_sem_id);
+        for (uint32_t r = 0; r < R; ++r) {
+            reader_args.push_back(in1_valid_sem_ids[r]);
+        }
+        for (uint32_t r = 0; r < R; ++r) {
+            const auto noc = device->worker_core_from_logical_core(CoreCoord{gx, group_row0 + r});
+            reader_args.push_back(static_cast<uint32_t>(noc.x));
+            reader_args.push_back(static_cast<uint32_t>(noc.y));
+        }
         // M-row NoC coord table: for our M-row (gy=my_mt), the NoC (x, y) of
         // each of the GRID_X cores (gx=0..GRID_X-1). Reader uses this per
         // phase-4 K-block (kb=0..K_down_tiles_padded-1) to find the sender's

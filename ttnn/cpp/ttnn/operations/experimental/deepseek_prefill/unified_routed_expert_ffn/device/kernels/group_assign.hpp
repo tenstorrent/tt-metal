@@ -102,4 +102,14 @@ inline void lpt_assign(
     }
 }
 
+// Split-read: the `total` tile-rows of a weight K-block are shared by the R rows of a
+// column group; row r reads rows [begin, end) (contiguous, all rows covered, sizes
+// differ by at most one).
+inline void slice_rows(uint32_t total, uint32_t R, uint32_t r, uint32_t& begin, uint32_t& end) {
+    const uint32_t base = total / R;
+    const uint32_t rem = total % R;
+    begin = r * base + (r < rem ? r : rem);
+    end = begin + base + (r < rem ? 1u : 0u);
+}
+
 }  // namespace group_assign

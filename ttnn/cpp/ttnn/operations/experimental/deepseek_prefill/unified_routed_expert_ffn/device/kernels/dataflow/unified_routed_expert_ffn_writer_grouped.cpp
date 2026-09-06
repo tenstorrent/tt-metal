@@ -255,6 +255,13 @@ void kernel_main() {
                 // `up` slice on NoC 1 into it, then signal up_done so the reader
                 // mcasts on NoC 0. Only a NoC-1 DRAM read here (fabric-safe); the
                 // reader owns cb_in1_up reserve/push.
+                // Split-read (group_rows > 1): this core reads only tile-rows [k_b, k_e) of
+                // each `up` block; the other rows arrive by multicast from the group peers.
+                uint32_t up_k_b = 0;
+                uint32_t up_k_e = in0_block_w_gu;
+                if constexpr (group_rows > 1) {
+                    group_assign::slice_rows(in0_block_w_gu, group_rows, my_mt, up_k_b, up_k_e);
+                }
                 if (is_up_sender) {
                     // The CB write pointer is PER-RISC and the reader owns push, so
                     // the writer's get_write_ptr never advances. Replicate the
@@ -267,17 +274,17 @@ void kernel_main() {
                     for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
                         ++up_seq;
                         up_go_sem.wait_min(up_seq);
-                        uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
+                        uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes +
+                                           up_k_b * per_core_N_gu * up_tile_bytes;
                         if constexpr (col_strided) {
-                            // Band mode: one contiguous run per block (see reader).
+                            // Band mode: one contiguous run per slice (see reader).
                             constexpr uint32_t run_tiles = N_gate_tiles_full / grid_x;
-                            const uint64_t src = up_bases.b[my_nt_gu] +
-                                                 static_cast<uint64_t>(kb * in0_block_w_gu * run_tiles) * up_tile_bytes;
-#ifndef SKIP_WEIGHT_READS
-                            noc_async_read(src, l1_w_up, in0_block_w_gu * run_tiles * up_tile_bytes, /*noc=*/1);
-#endif
+                            const uint64_t src =
+                                up_bases.b[my_nt_gu] +
+                                static_cast<uint64_t>((kb * in0_block_w_gu + up_k_b) * run_tiles) * up_tile_bytes;
+                            noc_async_read(src, l1_w_up, (up_k_e - up_k_b) * run_tiles * up_tile_bytes, /*noc=*/1);
                         } else {
-                            for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                            for (uint32_t k = up_k_b; k < up_k_e; ++k) {
                                 const uint32_t row = kb * in0_block_w_gu + k;
                                 const uint32_t col0 = my_nt_gu * per_core_N_gu;
                                 fast_il::Cursor<kNumDramBanks> uc;
@@ -285,10 +292,8 @@ void kernel_main() {
                                 for (uint32_t n = 0; n < per_core_N_gu; ++n) {
                                     // N-OOB hidden padding column left UNWRITTEN (never reduced).
                                     if (col0 + n < N_gate_tiles_full) {
-#ifndef SKIP_WEIGHT_READS
                                         noc_async_read(
                                             uc.addr(up_bases, up_tile_bytes), l1_w_up, up_tile_bytes, /*noc=*/1);
-#endif
                                     }
                                     uc.next();
                                     l1_w_up += up_tile_bytes;
@@ -317,12 +322,17 @@ void kernel_main() {
                     for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
                         ++down_seq;
                         down_go_sem.wait_min(down_seq);
-                        // The reader reads rows [0, k_split) of this block on NoC 0; the writer
-                        // takes rows [k_split, w_d) on NoC 1 (both NoCs busy in every phase).
-                        constexpr uint32_t k_split = in0_block_w_d / 2;
+                        // My slice of this block is tile-rows [k_b, k_e) (split-read); the reader
+                        // reads [k_b, k_mid) on NoC 0 and the writer [k_mid, k_e) on NoC 1.
+                        uint32_t k_b = 0;
+                        uint32_t k_e = in0_block_w_d;
+                        if constexpr (group_rows > 1) {
+                            group_assign::slice_rows(in0_block_w_d, group_rows, my_mt, k_b, k_e);
+                        }
+                        const uint32_t k_mid = k_b + (k_e - k_b) / 2;
                         uint32_t l1_w = down_cb_base + ((down_seq - 1) % kDownNumSlots) * down_slot_bytes +
-                                        k_split * per_core_N_d * down_tile_bytes;
-                        for (uint32_t k = k_split; k < in0_block_w_d; ++k) {
+                                        k_mid * per_core_N_d * down_tile_bytes;
+                        for (uint32_t k = k_mid; k < k_e; ++k) {
                             // K-block kb = the activated N-slice of column core kb, so the
                             // down-weight ROWS follow that core's column map (see reader).
                             const uint32_t row = group_assign::global_col(kb, k, in0_block_w_d, grid_x, col_strided);
@@ -333,9 +343,7 @@ void kernel_main() {
                                 if (row < K_down_tiles) {
                                     const uint64_t src = down_bases.b[my_nt_d] +
                                                          static_cast<uint64_t>(row * run_tiles) * down_tile_bytes;
-#ifndef SKIP_WEIGHT_READS
                                     noc_async_read(src, l1_w, run_tiles * down_tile_bytes, /*noc=*/1);
-#endif
                                 }
                                 l1_w += per_core_N_d * down_tile_bytes;
                             } else {
@@ -344,10 +352,8 @@ void kernel_main() {
                                 dc.start(row * N_down_tiles_full + col0);
                                 for (uint32_t n = 0; n < per_core_N_d; ++n) {
                                     if (row < K_down_tiles && col0 + n < N_down_tiles_full) {
-#ifndef SKIP_WEIGHT_READS
                                         noc_async_read(
                                             dc.addr(down_bases, down_tile_bytes), l1_w, down_tile_bytes, /*noc=*/1);
-#endif
                                     }
                                     dc.next();
                                     l1_w += down_tile_bytes;
