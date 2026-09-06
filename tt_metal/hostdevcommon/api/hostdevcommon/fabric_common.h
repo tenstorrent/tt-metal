@@ -544,7 +544,22 @@ struct fabric_aligned_connection_info_t {
     // 16-byte aligned semaphore address for flow control
     uint32_t worker_flow_control_semaphore;
     uint32_t padding_0[3];
+
+    // 16-byte aligned teardown semaphore. EDM increments it at the address the worker
+    // publishes in open_start()
+    uint32_t worker_teardown_semaphore;
+    uint32_t padding_1[3];
+
+    // 16-byte landing zone for the SenderChannelProducerCursor block read in open_start().
+    // sizeof(SenderChannelProducerCursor) == 16, see fabric_edm_types.hpp
+    uint32_t worker_producer_cursor[4];
 };
+
+// NOTE: Every field above is a NoC read/write target and must start on a 16-byte boundary
+static_assert(sizeof(fabric_aligned_connection_info_t) == 48, "Struct size mismatch!");
+static_assert(offsetof(fabric_aligned_connection_info_t, worker_flow_control_semaphore) % 16 == 0);
+static_assert(offsetof(fabric_aligned_connection_info_t, worker_teardown_semaphore) % 16 == 0);
+static_assert(offsetof(fabric_aligned_connection_info_t, worker_producer_cursor) % 16 == 0);
 
 struct tensix_fabric_connections_l1_info_t {
     static constexpr uint8_t MAX_FABRIC_ENDPOINTS = 16;
@@ -554,6 +569,9 @@ struct tensix_fabric_connections_l1_info_t {
     uint32_t padding_0[3];            // pad to 16-byte alignment
     fabric_aligned_connection_info_t read_write[MAX_FABRIC_ENDPOINTS];
 };
+
+// read_write[] entries are NoC-addressed, so the array must start 16-byte aligned
+static_assert(offsetof(tensix_fabric_connections_l1_info_t, read_write) % 16 == 0);
 
 enum class RouterCommand : std::uint32_t {
     // The main state where messages and credits are forwarded
