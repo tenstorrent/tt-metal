@@ -80,19 +80,42 @@ struct ProgramSpec {
     // Kernels that make up the Program
     Group<KernelSpec> kernels;
 
-    // Program-scope resources (allocated for the Program's execution lifetime)
-    // DFBs (local + cross-node), and semaphores
+    ////////////////////////////////////
+    // Program-scope resources
+    ////////////////////////////////////
+
+    // Program-scope resources are runtime-managed memory resouces.
+    // Their allocation is handled automatically, and they exist only during the
+    // Program's execution lifetime.
+
     Group<DataflowBufferSpec> dataflow_buffers;
     Group<CrossNodeDataflowBufferSpec> cross_node_dataflow_buffers;
     Group<SemaphoreSpec> semaphores;
     Group<ScratchpadSpec> scratchpads;
 
-    // Tensor parameter declarations
-    // Provides ids and layout specs for tensors the Program's kernels will operate on
-    // (The actual MeshTensors are supplied via ProgramRunArgs.)
+    ////////////////////////////////////
+    // Program parameters
+    ////////////////////////////////////
+
+    // Program parameters are user-managed memory resources. (User-controlled lifetime.)
+    // The ProgramSpec declares these resources as parameters.
+    // The actual resource objects are to supplied by the user as Program arguments at
+    // runtime (via ProgramRunArgs), prior to enqueueing the Program for execution.
+
+    // Tensor parameters
+    // Defines the IDs and layout specs for MeshTensors the Program's kernels will operate on
     Group<TensorParameter> tensor_parameters;
 
-    // WorkUnit specifications:
+    // GlobalSemaphore parameters
+    Group<GlobalSemaphoreParameter> global_semaphore_parameters;
+
+    // PrefetcherPipe parameters
+    Group<PrefetcherPipeParameter> prefetcher_pipe_parameters;
+
+    ////////////////////////////////////
+    // Work Units
+    ////////////////////////////////////
+
     // A valid ProgramSpec has at least one WorkUnitSpec.
     // Each kernel must be referenced by at least one WorkUnitSpec.
     Group<WorkUnitSpec> work_units;
