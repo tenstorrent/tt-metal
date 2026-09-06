@@ -25,7 +25,7 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
     const bool dump_biased = tensor_args.biased_scores.has_value();
 
     TT_FATAL(output_weights.dtype() == DataType::BFLOAT16, "Output weights tensor must be BFLOAT16");
-    TT_FATAL(output_weights.layout() == Layout::TILE, "Output weights tensor must be TILE layout");
+    const bool row_major_weights = output_weights.layout() == Layout::ROW_MAJOR;
     TT_FATAL(output_indices.dtype() == DataType::UINT16, "Output indices tensor must be UINT16");
     TT_FATAL(output_indices.layout() == Layout::TILE, "Output indices tensor must be TILE layout");
 
@@ -87,7 +87,7 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         cb_out_weights,
         program,
         all_cores,
-        output_weights.buffer()->page_size(),
+        tt::tile_size(weights_data_format),
         2 * n_activated_expert_tiles,
         weights_data_format);
     tt::tt_metal::create_cb(
@@ -292,6 +292,7 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
             .named_compile_args = compute_named_compile_time_args});
 
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
+        {"row_major_weights", static_cast<uint32_t>(row_major_weights)},
         {"cb_out_weights", cb_out_weights},
         {"cb_out_indices", cb_out_indices},
         {"cb_expert_index_template", cb_expert_index_template},

@@ -1058,6 +1058,7 @@ class TtMoEGatePrefill(LightweightModule):
             epsilon=1e-20,
             score_func=self.config.score_func,
             padding_config=padding_config,
+            weights_layout=ttnn.ROW_MAJOR_LAYOUT if self.config.n_activated_experts <= 32 else ttnn.TILE_LAYOUT,
         )
         # padding_config is memoized + owned by build_padding_config (reused across forwards/replays). Do
         # NOT deallocate it here even on the owns_padding_config path — freeing it breaks the next cache hit.

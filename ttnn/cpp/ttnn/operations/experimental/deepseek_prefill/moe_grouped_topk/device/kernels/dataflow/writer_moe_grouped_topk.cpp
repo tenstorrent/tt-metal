@@ -259,6 +259,7 @@ void kernel_main() {
     constexpr uint32_t cb_out_indices = get_named_compile_time_arg_val("cb_out_indices");
     constexpr uint32_t scores_page_size = get_named_compile_time_arg_val("scores_page_size");
     constexpr uint32_t weights_page_size = get_named_compile_time_arg_val("weights_page_size");
+    constexpr bool row_major_weights = get_named_compile_time_arg_val("row_major_weights") != 0;
     constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
     constexpr uint32_t cb_expert_index_template = get_named_compile_time_arg_val("cb_expert_index_template");
     constexpr uint32_t cb_in_scores = get_named_compile_time_arg_val("cb_in_scores");
@@ -395,8 +396,8 @@ void kernel_main() {
 
             for (uint32_t row = 0; row < tokens_per_tile; row++) {
                 uint32_t global_row = tile_start_row + row;
-                bool is_padded = (pad_side == 0) ? (global_row >= num_real_tokens)            // right-pad
-                                                 : (global_row < tokens - num_real_tokens);   // left-pad
+                bool is_padded = (pad_side == 0) ? (global_row >= num_real_tokens)           // right-pad
+                                                 : (global_row < tokens - num_real_tokens);  // left-pad
                 if (is_padded) {
                     overwrite_index_row_with_sentinel(idx_ptr, row, n_activated_experts, sentinel);
                 }
@@ -405,7 +406,28 @@ void kernel_main() {
 
         noc.async_write(out_indices_cb, indices_accessor, indices_page_size, {}, {.page_id = height_tile});
         out_weights_cb.wait_front(1);
-        noc.async_write(out_weights_cb, weights_accessor, weights_page_size, {}, {.page_id = height_tile});
+        if constexpr (row_major_weights) {
+            // Compute still packs a BF16 tile. Write each row's one or two face segments
+            // directly to the row-major output; no extra conversion program or scratch CB.
+            constexpr uint32_t seq_len = (seq_len_tiles - 1) * tile_height + remainder_tokens_per_tile;
+            const uint32_t first_row =
+                (height_tile / seq_len_tiles) * seq_len + (height_tile % seq_len_tiles) * tile_height;
+            const uint32_t tile_addr = out_weights_cb.get_read_ptr();
+            for (uint32_t row = 0; row < tokens_per_tile; ++row) {
+                const uint64_t row_noc_addr = weights_accessor.get_noc_addr(first_row + row);
+                for (uint32_t col = 0; col < n_activated_experts; col += columns_per_face) {
+                    constexpr uint32_t face_bytes = rows_per_face * columns_per_face * sizeof(uint16_t);
+                    const uint32_t face = (row / rows_per_face) * 2 + col / columns_per_face;
+                    const uint32_t source =
+                        tile_addr + face * face_bytes + (row % rows_per_face) * columns_per_face * sizeof(uint16_t);
+                    const uint32_t count =
+                        n_activated_experts - col < columns_per_face ? n_activated_experts - col : columns_per_face;
+                    noc_async_write(source, row_noc_addr + col * sizeof(uint16_t), count * sizeof(uint16_t));
+                }
+            }
+        } else {
+            noc.async_write(out_weights_cb, weights_accessor, weights_page_size, {}, {.page_id = height_tile});
+        }
         noc.async_writes_flushed();
         out_indices_cb.pop_front(1);
         out_weights_cb.pop_front(1);
