@@ -245,8 +245,30 @@ const m2::KernelSpecName KERNEL_OUT_DRAIN{"out_drain"};  // Program A: credit-on
 // that the orchestration function then moves into ProgramRunArgs; no logic changes. Namespace scope here
 // (ttnn::prim::qsr, with `using namespace tt::tt_metal` and `namespace m2 = ...experimental` active) so all
 // types resolve.
+// [#48552 / #55076] Multicast destination rectangle. Mirrors the fix already applied to the Quasar
+// matmul factories (matmul_multicore_reuse_mcast_2d_program_factory.cpp:4355-4367):
+//   * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so start/end are swapped.
+//   * Quasar (single NOC, non-torus): the rectangle must be ASCENDING regardless of NOC. reader_noc /
+//     writer_mcast_noc derive from preferred_noc_for_dram_*(arch), which returns NOC_1 on Quasar too,
+//     so the WH/BH swap degenerates the rectangle to [max..min] and the sender blocks forever on
+//     multicast acks.
+//
+// Observed before this fix, on the block-sharded 3x3 repro: the act-mcast rectangle reached the kernel
+// as start=(1,1) end=(0,1) (end_x < start_x). Confirmed twice over -- the reader's ring buffer reported
+// that rectangle (0xAD041001) and the NOC sanitizer independently flagged the same coords as
+// "Tensix core range w/ virtual coords 1-1-0-1 (multicast invalid range)". DM2 then hung inside
+// noc_async_write_multicast (waypoint NMLW) with the semaphore handshake already satisfied and the NOC
+// drained clean on entry, which starved compute of tilized activations and produced the 0x19
+// ERROR_TRISC MEM_READ_NO_RESPONSE downstream.
+//
+// This is the Quasar-only conv factory, so normalising unconditionally would be correct; the arch guard
+// is kept so the intent stays explicit and the WH/BH branch is greppable next to the matmul version.
 static std::array<uint32_t, 4> setup_mcast_args(
-    bool is_noc_0, uint32_t start_x, uint32_t start_y, uint32_t end_x, uint32_t end_y) {
+    tt::ARCH arch, bool is_noc_0, uint32_t start_x, uint32_t start_y, uint32_t end_x, uint32_t end_y) {
+    if (arch == tt::ARCH::QUASAR) {
+        return std::array<uint32_t, 4>{
+            std::min(start_x, end_x), std::min(start_y, end_y), std::max(start_x, end_x), std::max(start_y, end_y)};
+    }
     return is_noc_0 ? std::array<uint32_t, 4>{start_x, start_y, end_x, end_y}
                     : std::array<uint32_t, 4>{end_x, end_y, start_x, start_y};
 }
@@ -293,6 +315,7 @@ static void populate_reader_runtime_args(
                     CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
                     CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
                     mcast = setup_mcast_args(
+                        device->arch(),
                         reader_is_noc_0,
                         bottom_core_physical.x,
                         top_left_core_physical.y,
@@ -303,6 +326,7 @@ static void populate_reader_runtime_args(
                 } else {
                     CoreCoord core_physical = device->worker_core_from_logical_core(core);
                     mcast = setup_mcast_args(
+                        device->arch(),
                         reader_is_noc_0,
                         top_left_core_physical.x,
                         core_physical.y,
@@ -409,6 +433,7 @@ static void populate_writer_sender_runtime_args(
                     CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
                     TT_FATAL(core.x == 0, "Expected core.x to be 0 for sender in 2D mcast setup");
                     mcast = setup_mcast_args(
+                        device->arch(),
                         writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
                         top_left_core_plus_one_physical.x,
                         right_core_physical.y,
@@ -434,6 +459,7 @@ static void populate_writer_sender_runtime_args(
                     CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
                     TT_FATAL(core.y == 0, "Expected core.y to be 0 for sender in 2D mcast setup");
                     mcast = setup_mcast_args(
+                        device->arch(),
                         writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
                         top_core_physical.x,
                         top_left_core_plus_one_physical.y,
@@ -457,6 +483,7 @@ static void populate_writer_sender_runtime_args(
                 }
             } else {
                 std::array<uint32_t, 4> mcast = setup_mcast_args(
+                    device->arch(),
                     writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
                     top_left_core_physical.x,
                     top_left_core_physical.y,
@@ -1259,8 +1286,21 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // arise here.
 
     // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
-    const bool partials_cb_uses_output =
-        !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
+    //
+    // [option 2 — no partials/output alias on Quasar] On WH/BH the one-block matmul_partials CB is aliased
+    // onto the output allocation (borrowed) to save one output-block of L1, and metal1.0 placed it at the
+    // END of the output region via CBInfo::address_offset so the scratch overlaps only the block finalized
+    // last. The Metal-2.0 borrowed-DFB API (DataflowBufferSpec::borrowed_from) has no offset field — it can
+    // only place the borrowed view at OFFSET 0 (the start) of the output. Front placement makes the partials
+    // scratch clobber output block 0 the moment a several-block output advances to block 1, corrupting /
+    // deadlocking the multi-block height- and block-sharded convs (exactly the ones that don't match WH/BH).
+    // Rather than reintroduce an offset mechanism, give matmul_partials its OWN L1 DFB on Quasar: the DFB
+    // below then skips borrowed_from (own allocation), and the compute kernel takes its !partials_cb_uses_
+    // output path, which rewinds the dedicated partials ring (RESTORE_PARTIALS) between K-blocks and never
+    // touches OUT. Costs one output-block of L1 per compute node; a larger Quasar grid absorbs it. WH/BH keep
+    // the aliased+offset scheme (their CBDescriptor path still carries address_offset).
+    const bool partials_cb_uses_output = !is_conv_1d_depthwise_conv && !arch_is_quasar &&
+                                         get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
     log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
 
     const bool reader_indices_globally_allocated =
