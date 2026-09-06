@@ -1906,25 +1906,37 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
     Session pattern (DiffusionGemma precedent): prefill captures the residual
     taps (untraced -- traced prefill REPLAYS skip python-side hooks), the
     first decode call seeds the fused decoder (drafter ctx ingest + one-time
-    trace capture at this request's horizon), and every later decode call is
-    ONE fused draft+verify iteration returning the accepted prefix + bonus.
-    The runner-supplied per-token inputs are advisory: the fused decoder owns
-    the request's anchor/position state (asserted consistent each step).
+    trace capture at this request's horizon).
+
+    PERF: each vLLM decode step runs a tight INTERNAL loop of dFlash iterations
+    and commits a BLOCK of up to ``_SPEC_BLOCK`` tokens, so vLLM's ~135ms/iter
+    host overhead is amortized over the whole block (like DiffusionGemma's
+    256-token canvas) instead of one ~5-token iteration. This makes the server
+    decode rate device-bound and ~metal-parity (measured 31B P150X8: code
+    ~62 tok/s / prose ~47, vs metal demo 68/55 and baseline serving 26). The
+    runner-supplied per-token inputs are advisory: the fused decoder owns the
+    request's anchor/position state.
     """
 
     _SPEC_V = min(int(os.environ.get("GEMMA4_DFLASH_VERIFY", "7")), 15)
     _SPEC_N = _SPEC_V + 1
+    # Server BLOCK size: one vLLM decode step runs a tight INTERNAL loop of
+    # dFlash iterations and emits up to this many committed tokens. This
+    # amortizes vLLM's ~135ms/iter host overhead over a whole block (like
+    # DiffusionGemma's 256-token canvas), so the server rate becomes
+    # device-bound and matches the metal-demo speculation gain instead of
+    # paying the host overhead once per ~5-token iteration.
+    _SPEC_BLOCK = int(os.environ.get("GEMMA4_DFLASH_SERVE_BLOCK", "64"))
 
     model_capabilities = {
         **Gemma4ForCausalLM.model_capabilities,
-        # Async-capable: dFlash owns its decode state (advisory-input contract),
-        # so vLLM can reschedule the next step ahead with a placeholder token
-        # and dec.step still advances correctly -- the async data dependency is
-        # sidestepped. Overlap hides the ~80ms/iter vLLM engine loop behind the
-        # device forward. GEMMA4_SPEC_ASYNC=0 forces the sync path.
-        "supports_async_decode": os.environ.get("GEMMA4_SPEC_ASYNC", "0") != "0",
+        # Sync: one decode step is a self-contained internal loop, so there is
+        # nothing to overlap (async pipelining is a concurrency tool). The
+        # perf comes from amortizing host overhead over the block, not async.
+        "supports_async_decode": False,
         "supports_sample_on_device": True,  # decode returns TOKENS (host)
-        "output_tokens_per_step": _SPEC_N,
+        # A vLLM step commits up to _SPEC_BLOCK tokens (variable prefix, padded).
+        "output_tokens_per_step": _SPEC_BLOCK,
         "tt_spec_variable_output": True,
     }
 
@@ -2120,7 +2132,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             )
         # Refresh the verify page tables from vLLM's CURRENT per-request block
         # table when it CHANGES (the KV manager allocates a new block only every
-        # ~block_size tokens, so this is rare).
+        # ~block_size tokens).
         cur_pt = kwargs.get("page_table")
         if cur_pt is not None:
             row = cur_pt[:1] if cur_pt.dim() > 1 else cur_pt
@@ -2128,69 +2140,37 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             if prev is None or not torch.equal(prev, row):
                 dec.refresh_page_tables(row)
                 self._spec_last_pt = row.clone()
-        # SUBMIT ONLY: launch the fused trace non-blocking and return the device
-        # output. The readback + acceptance are deferred to process_decode_output_
-        # host + accept_spec_decode_output, which the runner calls at OUTPUT time
-        # -- after the vLLM engine loop, so async scheduling overlaps that loop
-        # with this device forward.
-        self._spec_exhausted = dec.start >= self._spec_budget_end
-        if not self._spec_exhausted:
-            dec.step_submit(first=self._spec_first_step)
-        self._spec_first_step = False
-        return dec._out[0]
-
-    def process_decode_output_host(self, tt_out, is_tokens=True, *_, **__):
-        # Read the (tiny) draft+posterior id block to host. Runs at output
-        # resolution, by which point the deferred device forward has finished,
-        # so this blocks only briefly. Returns a host [1, K+P_v] int tensor.
-        dec = self._spec_decoder
-        if dec is None or isinstance(tt_out, torch.Tensor):
-            # Session was torn down before this deferred step resolved (async
-            # release race), or the output is already host: pass through.
-            return tt_out if isinstance(tt_out, torch.Tensor) else torch.zeros(1, 1, dtype=torch.int32)
-        src = ttnn.get_device_tensors(tt_out)[0] if dec.drafter.tp > 1 else tt_out
-        return ttnn.to_torch(src).reshape(1, -1).to(torch.int32)
+        # BLOCK LOOP: run dFlash iterations back-to-back until this step's block
+        # of up to _SPEC_BLOCK tokens is filled (or EOS / horizon). This is the
+        # metal-demo tight loop, moved INSIDE one vLLM decode step so vLLM's
+        # per-step host overhead is amortized over the whole block instead of
+        # one ~5-token iteration -- the server rate then tracks the device-bound
+        # speculation gain.
+        eos = getattr(self.model[0].hf_config, "eos_token_id", 1)
+        eos_set = set(eos) if isinstance(eos, (list, tuple)) else {int(eos)}
+        vocab = dec.drafter.vocab
+        block = []
+        while len(block) < self._SPEC_BLOCK:
+            if dec.start >= self._spec_budget_end:
+                block.append(min(eos_set))
+                break
+            accepted, bonus, produced = dec.step(first=self._spec_first_step)
+            self._spec_first_step = False
+            self._spec_iters = getattr(self, "_spec_iters", 0) + 1
+            self._spec_tokens = getattr(self, "_spec_tokens", 0) + produced
+            committed = list(accepted) + [bonus]
+            committed = [t if 0 <= t < vocab else int(bonus if 0 <= bonus < vocab else 1) for t in committed]
+            block.extend(committed)
+            if eos_set & set(committed):
+                break
+        block = block[: self._SPEC_BLOCK]
+        out = torch.full((1, self._SPEC_BLOCK), -1, dtype=torch.int32)
+        out[0, : len(block)] = torch.tensor(block, dtype=torch.int32)
+        return out
 
     def read_decode_output(self, tt_out, async_read=False, *_, **__):
-        # The device output is read at output-resolution time (deferred), so
-        # there is nothing to read here; return no events so the controller
-        # overlaps the engine loop with the device forward.
+        # decode_forward returns the committed host block directly.
         return (tt_out, []) if async_read else tt_out
-
-    def accept_spec_decode_output(self, host_out):
-        """Runner hook (spec-variable): turn the read-back draft+posterior ids
-        into this step's committed token block [1, N] (accepted prefix + bonus,
-        padded to N with -1). Runs the greedy acceptance and advances the
-        fused decoder's state."""
-        dec = self._spec_decoder
-        if dec is None:
-            # Deferred step resolved after the session was released; the request
-            # is already finished, so emit a benign EOS block.
-            eos = getattr(self.model[0].hf_config, "eos_token_id", 1)
-            eos = eos[0] if isinstance(eos, (list, tuple)) else eos
-            out = torch.full((1, self._SPEC_N), -1, dtype=torch.int32)
-            out[0, 0] = int(eos)
-            return out
-        if self._spec_exhausted:
-            eos = getattr(self.model[0].hf_config, "eos_token_id", 1)
-            if isinstance(eos, (list, tuple)):
-                eos = eos[0]
-            logger.warning(
-                f"Gemma4DFlash: horizon ({self._spec_horizon} new tokens) exhausted "
-                f"at position {dec.start}; ending the request with EOS"
-            )
-            out = torch.full((1, self._SPEC_N), -1, dtype=torch.int32)
-            out[0, 0] = int(eos)
-            return out
-        ids = host_out.reshape(-1).tolist()
-        accepted, bonus, produced = dec.step_accept(ids)
-        self._spec_iters = getattr(self, "_spec_iters", 0) + 1
-        self._spec_tokens = getattr(self, "_spec_tokens", 0) + produced
-        row = list(accepted) + [bonus]
-        row = [t if 0 <= t < dec.drafter.vocab else int(bonus if 0 <= bonus < dec.drafter.vocab else 1) for t in row]
-        out = torch.full((1, self._SPEC_N), -1, dtype=torch.int32)
-        out[0, : len(row)] = torch.tensor(row, dtype=torch.int32)
-        return out
 
     # -- plugin lifecycle hooks (block-output contract) -----------------------
     def release_request(self, row: int) -> None:
