@@ -85,7 +85,7 @@
       "branch": "silencer/demote-precompiled-firmware-log",
       "pattern": "Using pre-compiled firmware from: {} - info log firing once per device (384-768x per job)",
       "status": "open-pr",
-      "note": "Awaiting maintainer review/merge."
+      "note": "Awaiting maintainer review/merge. Re-checked 2026-09-06: still open, no dispatch pending, nothing to reconcile."
     },
     {
       "branch": "silencer/dedupe-matmul-memconfig-mismatch-warning-77496cdc6bbbe3a9",
@@ -118,8 +118,8 @@
     {
       "branch": "silencer/demote-rotary-embedding-seqlen-mismatch-warning",
       "pattern": "rotary_embedding_llama sequence tile coverage mismatch warning fires every decode step (input_Ht < cos_Ht/sin_Ht by design)",
-      "status": "open-pr",
-      "note": "New PR opened this run. vllm-model-tests dispatched on branch (model=meta-llama/Llama-3.1-8B-Instruct). Awaiting validation."
+      "status": "stale-entry-removed",
+      "note": "Reconciled 2026-09-06: no open PR found on this branch (search_pull_requests returned 0 results) -- this entry is a stale duplicate of the same pattern already fully resolved via PR #54126 (see below). No action taken; removing from active tracking."
     },
     {
       "number": 52592,
@@ -316,5 +316,5 @@
       "note": "Validation run 33918361002 completed/failure (unrelated perf-tolerance test failure). Target DeprecationWarning confirmed absent from test-execution logs. Commented and marked ready for review (2026-09-05)."
     }
   ],
-  "backlog_cursor": "Phase A: no pending reconciliation this run (last was PR #55533, resolved 2026-09-05). Phase B: sampled blackhole-sanity-tests.yaml (stale, only Aug 9-13 data on main, inconclusive - skip re-sampling until fresher data appears) and t3000-perf-tests.yaml (runs through 2026-08-19; latest success run 32251268376, job t3k_DiT_QwenImage_model_perf_tests). Logger histogram: dominant signal was BuildKernels info 'compiled ... in ... ms' (876 lines) but this is already gated behind TT_METAL_LOG_KERNEL_COMPILE (off by default, deliberately opt-in per build.cpp comment) - not a new target. GHA-annotation warnings included pydantic 'class-based config deprecated' (2x) - fixed this run, PR opened on branch silencer/pydantic-class-config-deprecation (infra/data_collection/pydantic_models.py: PerfMetric/OpParam -> ConfigDict), pr-gate dispatched for validation. Other observed-but-not-actioned items in this log: pydantic 'model_name protected namespace' warning on OpTest was ALREADY fixed pre-existing (protected_namespaces=() present in current pydantic_models.py; log was stale Aug19 data). Various third-party (transformers/diffusers/huggingface_hub/node Buffer()) deprecation warnings are out-of-repo-control, not tt-metal source, skip. Next run: continue rotation through runtime-integration-tests, galaxy-integration-tests (not sampled recently); consider re-checking blackhole-sanity-tests/t3000-perf-tests once newer run data appears on main."
+  "backlog_cursor": "Phase A (2026-09-06): reconciled PR #55579 (pydantic ConfigDict fix). Its PR-Gate run (34023100528) succeeded but only exercises asan-build, which never imports infra/data_collection/pydantic_models.py (0 matches for the target string either way - not evidence). The workflow that would actually exercise it, '[internal] Infra tools unit tests' (run 34023100876), came back conclusion=action_required with 0 jobs run (gated pending approval) - never executed. Net: inconclusive by CI, but low-risk well-understood migration (mirrors sibling OpTest class already using ConfigDict) - commented outcome and marked ready for review. Also cleaned up a stale duplicate in_flight_prs entry for 'silencer/demote-rotary-embedding-seqlen-mismatch-warning' (no open PR found on that branch; superseded by already-resolved PR #54126). PR #51794 still open awaiting maintainer review, nothing to reconcile. Phase B: not reached this run due to full context budget spent on Phase A reconciliation/investigation (PR-gate run disambiguation, run listing, job log fetch+grep). Next run: continue rotation through runtime-integration-tests, galaxy-integration-tests (not sampled recently); consider re-checking blackhole-sanity-tests/t3000-perf-tests once newer run data appears on main."
 }
