@@ -13,8 +13,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.tt.ccl import ccl_cp_allgather, cp_degree
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
+from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_ROTARY_DIM, pack_global_kv_device
+from .kv_cache import paged_fill_cache
 from .operations import (
     PREFILL_SDPA_MAX_SEQ,
     apply_allreduce,
@@ -28,7 +31,15 @@ from .operations import (
     effective_block_size,
     prefill_sdpa_program_config,
     prefill_short_lived_memcfg,
+    qkv_projection_is_tied,
     split_qkv_heads_prefill,
+)
+from .ring_prefill import (
+    PackedRingKVCache,
+    ring_packed_prefill_attention,
+    ring_prefill_attention,
+    write_chunk_to_packed_ring_cache,
+    write_chunk_to_ring_cache,
 )
 from .weights import AttentionWeights
 
@@ -325,7 +336,7 @@ def flush_deferred_bounded_fills(layers):
             v_merged = _merge_bounded_boundary_fill(v_fill, pending["valid_seq_len"], pending["modulo"])
             k_merged = _zero_extend_ring_fill(k_merged, pending["modulo"])
             v_merged = _zero_extend_ring_fill(v_merged, pending["modulo"])
-            ttnn.experimental.paged_fill_cache(
+            paged_fill_cache(
                 pending["k_cache"],
                 k_merged,
                 pending["page_table"],
@@ -370,6 +381,13 @@ def _prefill_forward_single(
     chunk_start_idx=None,
     chunk_page_table=None,
     sliding_tail_in=None,
+    cp_attn_mask=None,
+    ring_kv_cache=None,
+    ring_max_seq_len=None,
+    ring_layer_idx=0,
+    ring_num_layers=1,
+    packed_global_rope=None,
+    packed_sliding_rope=None,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations.
 
@@ -421,7 +439,12 @@ def _prefill_forward_single(
     else:
         fill_page_table = chunk_page_table if is_chunked else page_table
 
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    # Global layers tie K and V to one projection, so the fused weight would otherwise carry
+    # (and the matmul would compute) the same K columns twice. Take the Q+K weight and let the
+    # split read V back off K's columns. tied_qkv reflects what the projection actually used,
+    # since it falls back to the full weight when wqk was not built.
+    kv_tied = qkv_projection_is_tied(weights, weights.is_global)
+    xqkv = apply_qkv_projection(hidden_states, weights, kv_tied=kv_tied)
 
     # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
     # #48861). o_proj / allreduce stay DRAM (CB clash with CCL).
@@ -433,16 +456,30 @@ def _prefill_forward_single(
         tp=tp,
         kv_replicated=weights.kv_replicated,
         memory_config=act_mc,
+        kv_tied=kv_tied,
     )
 
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc)
 
+    packed_global_ring = weights.is_global and isinstance(ring_kv_cache, PackedRingKVCache)
+    packed_sliding_ring = config.is_sliding and ring_kv_cache is not None
     if shared_kv is not None:
         tt_k.deallocate(True)
         tt_v.deallocate(True)
         tt_k, tt_v = shared_kv
+    elif weights.is_global and kv_tied:
+        # The tied projection is one semantic KV value. Normalize it once without
+        # gamma: this entire 512-wide result is V. K branches from this value;
+        # packed-only serving transforms just its active rotary quarter below.
+        tt_k.deallocate(True)
+        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc)
+        needs_canonical_k = not packed_global_ring and (kv_cache is not None or keep_kv)
+        if needs_canonical_k:
+            gamma = ttnn.reshape(weights.k_norm_weight, (1, 1, 1, config.head_dim))
+            tt_k = ttnn.multiply(tt_v, gamma, memory_config=act_mc)
+        else:
+            tt_k = None
     else:
-        # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
         tt_k = apply_per_head_norm(
             tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc
         )
@@ -453,11 +490,50 @@ def _prefill_forward_single(
     # the two rotary_embedding calls into one, but it adds concat+split device
     # kernels for no throughput benefit (RoPE is ~1% of the step), so Q and K are
     # rotated separately.
-    tt_q = apply_rope(tt_q, cos_cache, sin_cache, memory_config=act_mc)
-    if shared_kv is None:
-        tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
+    if packed_global_ring:
+        if packed_global_rope is None:
+            raise RuntimeError("packed global ring attention requires pre-gathered packed RoPE tensors")
+        q_cos, q_sin, _, _, trans_mat = packed_global_rope
+        q_full = tt_q
+        q_rotary = ttnn.slice(
+            q_full,
+            (0, 0, 0, 0),
+            tuple(q_full.shape)[:-1] + (GLOBAL_ROTARY_DIM,),
+            memory_config=act_mc,
+        )
+        q_nonrotary = ttnn.slice(
+            q_full,
+            (0, 0, 0, GLOBAL_ROTARY_DIM),
+            tuple(q_full.shape)[:-1] + (GLOBAL_HEAD_DIM,),
+            memory_config=act_mc,
+        )
+        q_rotated = ttnn.experimental.rotary_embedding_llama(
+            q_rotary, q_cos, q_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
+        )
+        tt_q = ttnn.concat((q_rotated, q_nonrotary), dim=-1, memory_config=act_mc)
+        for tensor in (q_full, q_rotary, q_nonrotary, q_rotated):
+            tensor.deallocate(True)
+    elif packed_sliding_ring:
+        if packed_sliding_rope is None:
+            raise RuntimeError("packed sliding ring attention requires pre-gathered adjacent RoPE tensors")
+        sliding_cos, sliding_sin, trans_mat = packed_sliding_rope
+        q_unrotated = tt_q
+        tt_q = ttnn.experimental.rotary_embedding_llama(
+            q_unrotated, sliding_cos, sliding_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
+        )
+        q_unrotated.deallocate(True)
+        if shared_kv is None:
+            k_unrotated = tt_k
+            tt_k = ttnn.experimental.rotary_embedding_llama(
+                k_unrotated, sliding_cos, sliding_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
+            )
+            k_unrotated.deallocate(True)
+    else:
+        tt_q = apply_rope(tt_q, cos_cache, sin_cache, memory_config=act_mc)
+        if shared_kv is None and tt_k is not None:
+            tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
 
-    if kv_cache is not None and shared_kv is None:
+    if kv_cache is not None and shared_kv is None and not packed_global_ring:
         k_cache, v_cache = kv_cache
         if page_table is not None:
             num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
@@ -613,7 +689,165 @@ def _prefill_forward_single(
     long_seq = seq_len >= PREFILL_SDPA_MAX_SEQ
     sliding_window = config.sliding_window if config.is_sliding else None
     sliding_tail_out = None
-    if sliding_chunked:
+    # Context parallel: this rank owns seq_len of the chunk's (seq_len * cp) tokens.
+    # Q stays sharded, K/V are gathered to the whole chunk, and the causal (+window)
+    # mask arrives as a CP-sharded tensor so each rank's absolute query offset is
+    # carried as DATA. That matters because the SDPA op takes its position offset as
+    # a Python scalar, which cannot vary per device within one mesh-wide program.
+    # Multi-chunk CP: the ring cache holds each rank's own tokens for every chunk, so
+    # it must be written from the PRE-gather (local) K/V, before use_cp_attention
+    # replaces them with the gathered copies below. Chunk 0 writes too — chunk 1 reads
+    # it as history — but attends via the mask path, since the chunked ring mode needs
+    # a complete predecessor Q group and chunk 0 has none.
+    cp = cp_degree(mesh_config)
+    use_ring = ring_kv_cache is not None and cp > 1
+    packed_kv = None
+    if use_ring:
+        if packed_global_ring:
+            packed_q = tt_q
+            packed_kv = pack_global_kv_device(
+                tt_v,
+                weights.k_norm_rotary_weight,
+                cos_cache,
+                sin_cache,
+                canonical_k=tt_k,
+                packed_rope_mats=packed_global_rope,
+                value_is_packed=True,
+                memory_config=act_mc,
+            )
+            write_chunk_to_packed_ring_cache(
+                ring_kv_cache.kv,
+                packed_kv,
+                mesh_config,
+                kv_actual_global=chunk_offset,
+                layer_idx=ring_layer_idx,
+                num_layers=ring_num_layers,
+                ccl_manager=ccl_manager,
+            )
+        else:
+            packed_q = None
+            write_chunk_to_ring_cache(
+                ring_kv_cache[0],
+                ring_kv_cache[1],
+                tt_k,
+                tt_v,
+                mesh_config,
+                kv_actual_global=chunk_offset,
+                layer_idx=ring_layer_idx,
+                num_layers=ring_num_layers,
+                ccl_manager=ccl_manager,
+            )
+    # Every chunk reads through the ring: chunks after the first need it, since the local shard
+    # alone holds a strided subset of the prefix, and chunk 0 takes the same path despite having
+    # no history so that both chunk kinds share one graph and a single captured trace serves the
+    # whole prefill.
+    use_ring_attention = use_ring
+    if use_ring_attention:
+        cp_ring_ckc = ttnn.init_device_compute_kernel_config(
+            tt_q.device().arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+        num_local_kv_heads_ring = tt_v.shape[1]
+        ring_logical_n = getattr(ccl_manager, "ring_logical_n_override", None) or (chunk_offset + seq_len * cp)
+        if packed_global_ring:
+            tt_sdpa = ring_packed_prefill_attention(
+                packed_q,
+                ring_kv_cache.kv,
+                mesh_device=tt_q.device(),
+                mesh_config=mesh_config,
+                ccl_manager=ccl_manager,
+                num_local_kv_heads=num_local_kv_heads_ring,
+                max_seq_len=ring_max_seq_len,
+                logical_n=ring_logical_n,
+                kv_actual_global=chunk_offset,
+                scale=1.0,
+                compute_kernel_config=cp_ring_ckc,
+                layer_idx=ring_layer_idx,
+                num_layers=ring_num_layers,
+            )
+            packed_kv.deallocate(True)
+        else:
+            tt_sdpa = ring_prefill_attention(
+                tt_q,
+                ring_kv_cache[0],
+                ring_kv_cache[1],
+                mesh_device=tt_q.device(),
+                mesh_config=mesh_config,
+                ccl_manager=ccl_manager,
+                num_local_kv_heads=num_local_kv_heads_ring,
+                head_dim=config.head_dim,
+                max_seq_len=ring_max_seq_len,
+                # logical_n sizes the ring gather at program-create time
+                # (compute_gather_valid_Ht = ceil(logical_n / chunk_global) slabs) and is
+                # re-patched per dispatch. A trace replay does neither, so a per-chunk value
+                # freezes the gather at the capturing chunk's history and later replays
+                # silently attend over a truncated prefix. Under trace we therefore size the
+                # gather to the FULL cache once and let the on-device kv_actual_isl metadata
+                # mask the not-yet-written tail, which is per-chunk and read from DRAM.
+                logical_n=ring_logical_n,
+                kv_actual_global=chunk_offset,
+                sliding_window=sliding_window,
+                scale=1.0,
+                compute_kernel_config=cp_ring_ckc,
+                layer_idx=ring_layer_idx,
+                num_layers=ring_num_layers,
+            )
+        tt_q.deallocate(True)
+        if shared_kv is None and not keep_kv:
+            if tt_k is not None:
+                tt_k.deallocate(True)
+            tt_v.deallocate(True)
+        tt_out = concat_heads(tt_sdpa, is_decode_mode=False)
+        tt_out = apply_output_projection(tt_out, weights)
+        tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
+        return tt_out, ((tt_k, tt_v) if keep_kv else None), None
+
+    use_cp_attention = cp_attn_mask is not None and not sliding_chunked and not need_cross_chunk
+    if use_cp_attention:
+        # This branch uses the NON-chunked SDPA, which silently returns wrong
+        # results once the shared/K sequence reaches PREFILL_SDPA_MAX_SEQ (32768).
+        # Under CP the K length is the whole chunk (cp * local), not the local
+        # length, so guard on the mask's key extent rather than on `long_seq`
+        # (which is computed from the local Q length and would under-report by cp).
+        # Failing loudly beats silent corruption: the chunked fallbacks below take a
+        # scalar position offset and cannot express a per-rank offset, so there is no
+        # correct path to fall through to yet.
+        cp_global_seq = cp_attn_mask.shape[-1]
+        if cp_global_seq >= PREFILL_SDPA_MAX_SEQ:
+            raise NotImplementedError(
+                f"Context-parallel prefill needs the whole chunk's K/V in one non-chunked SDPA, "
+                f"but the chunk is {cp_global_seq} tokens and that op is only correct below "
+                f"{PREFILL_SDPA_MAX_SEQ}. Use a smaller prefill chunk (the chunked/paged SDPA "
+                f"cannot be used under CP: it takes a scalar position offset and rejects attn_mask)."
+            )
+        # dim 2 is the sequence axis of [1, num_kv_heads, seq, head_dim].
+        tt_k = ccl_cp_allgather(tt_k, mesh_config, ccl_manager, dim=2)
+        tt_v = ccl_cp_allgather(tt_v, mesh_config, ccl_manager, dim=2)
+        cp_ckc = ttnn.init_device_compute_kernel_config(
+            tt_q.device().arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        # is_causal and sliding_window_size are both rejected alongside attn_mask;
+        # the mask has causality and the window baked in. Size the program config
+        # from the (smaller) local Q length so q_chunk <= Q.seq; chunk sizes and
+        # both sequence lengths are powers of two, so it still divides K.seq.
+        tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=False,
+            attn_mask=cp_attn_mask,
+            scale=1.0,
+            program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
+            compute_kernel_config=cp_ckc,
+        )
+    elif sliding_chunked:
         # Generator-level chunked prefill, sliding-window layer. The chunked
         # paged SDPA op has no window mask, so attend a SQUARE [tail | chunk]
         # slice: prepend the previous chunk's last ``sliding_window`` K/V tokens
@@ -873,6 +1107,13 @@ def prefill_forward(
     chunk_start_idx=None,
     chunk_page_table=None,
     sliding_tail_in=None,
+    cp_attn_mask=None,
+    ring_kv_cache=None,
+    ring_max_seq_len=None,
+    ring_layer_idx=0,
+    ring_num_layers=1,
+    packed_global_rope=None,
+    packed_sliding_rope=None,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -911,6 +1152,13 @@ def prefill_forward(
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
             sliding_tail_in=sliding_tail_in,
+            cp_attn_mask=cp_attn_mask,
+            ring_kv_cache=ring_kv_cache,
+            ring_max_seq_len=ring_max_seq_len,
+            ring_layer_idx=ring_layer_idx,
+            ring_num_layers=ring_num_layers,
+            packed_global_rope=packed_global_rope,
+            packed_sliding_rope=packed_sliding_rope,
         )
 
     tp = mesh_config.tp if mesh_config else 1
@@ -921,7 +1169,9 @@ def prefill_forward(
     seq_len = hidden_states.shape[-2]
     original_seq_len = seq_len
 
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    # See _prefill_forward_single: global layers project Q+K only and the split re-reads K as V.
+    kv_tied = qkv_projection_is_tied(weights, weights.is_global)
+    xqkv = apply_qkv_projection(hidden_states, weights, kv_tied=kv_tied)
     ttnn.deallocate(hidden_states)
 
     xqkv = ttnn.reshape(xqkv, [batch_size, 1, seq_len // batch_size, -1])
@@ -935,6 +1185,7 @@ def prefill_forward(
         tp=tp,
         kv_replicated=weights.kv_replicated,
         memory_config=act_mc,
+        kv_tied=kv_tied,
     )
     ttnn.deallocate(xqkv)
 
@@ -1074,7 +1325,7 @@ def prefill_forward(
                         if _t is not _orig:
                             _t.deallocate(True)
                     continue
-                ttnn.experimental.paged_fill_cache(
+                paged_fill_cache(
                     k_cache,
                     _k_merged,
                     page_table,

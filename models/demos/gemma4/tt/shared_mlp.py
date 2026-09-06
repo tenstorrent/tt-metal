@@ -22,6 +22,7 @@ import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.compute_config import gelu_variant
 from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
+from models.demos.gemma4.tt.precision import dtype_to_str
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # DRAM-width-sharded decode matmuls for the shared MLP. On by default for
@@ -80,8 +81,25 @@ class SharedMLP:
         # doesn't collide with a previously-cached file that holds the same
         # logical weight at a different dtype. The rest of the model's cache
         # entries are unaffected and stay reusable across runs.
-        _dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
-        dtype_suffix = f"_{_dtype_str}"
+        dtype_suffix = f"_{dtype_to_str(dtype)}"
+
+        # Match math fidelity to the weight's mantissa width. Fidelity is the number of passes
+        # the matrix unit makes over the operand mantissas, so it — not the storage format — is
+        # what sets math time: a narrower dtype moves fewer bytes but issues the same MACs. At
+        # bfp4 the weights carry 3 mantissa bits, so the extra passes of a higher fidelity spend
+        # time capturing bits that are not there. Left at the op default for wider dtypes, whose
+        # accuracy those passes do buy something for.
+        self.compute_kernel_config = (
+            ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+            if dtype == ttnn.bfloat4_b
+            else None
+        )
 
         if tp > 1:
             col_mapper = mesh_config.column_parallel(mesh_device)
@@ -89,6 +107,43 @@ class SharedMLP:
         else:
             col_mapper = None
             row_mapper = None
+
+        # The CP service predates the fused/DRAM-sharded decode optimization
+        # and deliberately retains its separate interleaved projections. This
+        # preserves both its execution graph and its existing cache identity.
+        self._legacy_cp_weights = bool(mesh_config and mesh_config.prefill.sp > 1)
+        if self._legacy_cp_weights:
+            if state_dict:
+                gate_proj_weight = state_dict["gate_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+                up_proj_weight = state_dict["up_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+                down_proj_weight = state_dict["down_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+            else:
+                gate_proj_weight = None
+                up_proj_weight = None
+                down_proj_weight = None
+            common = dict(device=mesh_device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+            self.gate_proj = ttnn.as_tensor(
+                gate_proj_weight,
+                mesh_mapper=col_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj.weight{tp_suffix}{dtype_suffix}"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                **common,
+            )
+            self.up_proj = ttnn.as_tensor(
+                up_proj_weight,
+                mesh_mapper=col_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj.weight{tp_suffix}{dtype_suffix}"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                **common,
+            )
+            self.down_proj = ttnn.as_tensor(
+                down_proj_weight,
+                mesh_mapper=row_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj.weight{tp_suffix}{dtype_suffix}"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                **common,
+            )
+            return
 
         # Pad intermediate to a tile-aligned per-device size (same pattern as
         # experts/weights.py). At TP=8, 2112/8=264 is not tile-aligned; TILE
@@ -206,6 +261,19 @@ class SharedMLP:
 
         gate/up are column-parallel, down is row-parallel + allreduce.
         """
+        if self._legacy_cp_weights:
+            gate = ttnn.linear(hidden_states, self.gate_proj, compute_kernel_config=self.compute_kernel_config)
+            gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
+            up = ttnn.linear(hidden_states, self.up_proj, compute_kernel_config=self.compute_kernel_config)
+            hidden = ttnn.mul(gate, up)
+            gate.deallocate(True)
+            up.deallocate(True)
+            output = ttnn.linear(hidden, self.down_proj, compute_kernel_config=self.compute_kernel_config)
+            hidden.deallocate(True)
+            if self.mesh_config is not None and self.mesh_config.tp > 1:
+                output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
+            return output
+
         # Fused gate/up projection: one matmul produces [.., 2*inter_pad/device]
         # laid out as [up_i | gate_i]. Split with the padded half-width so TILE
         # slice bounds stay aligned (264 would round to 288 and break down_proj).

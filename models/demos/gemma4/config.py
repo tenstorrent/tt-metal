@@ -6,10 +6,17 @@ This module defines the MeshConfig class which manages parallelization strategie
 across a mesh of devices for the Gemma4 MoE model.
 """
 
+import os
 from dataclasses import dataclass
 from enum import Enum
 
 import ttnn
+
+
+def _cp_disabled() -> bool:
+    """``GEMMA4_DISABLE_CP=1`` forces the prefill context-parallel degree to 1."""
+
+    return os.environ.get("GEMMA4_DISABLE_CP", "0").lower() in ("1", "true", "yes")
 
 
 class Mode(Enum):
@@ -50,7 +57,9 @@ class MeshConfig:
         self.total_devices = mesh_shape[0] * mesh_shape[1]
 
         self.decode = decode
-        self.prefill = prefill or ModeConfig(tp=decode.tp, sp=mesh_shape[0], ep=1)
+        # Rows carry sequence-parallel (context-parallel) prefill by default
+        default_prefill_sp = 1 if _cp_disabled() else mesh_shape[0]
+        self.prefill = prefill or ModeConfig(tp=decode.tp, sp=default_prefill_sp, ep=1)
 
         self._validate_config(self.decode, Mode.DECODE)
         self._validate_config(self.prefill, Mode.PREFILL)

@@ -15,7 +15,6 @@ Supports both prefill and decode modes with paged attention.
 Compatible with tt_transformers Generator interface.
 """
 
-
 import os
 
 import torch
@@ -24,7 +23,9 @@ from tracy import signpost
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
+from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
+from models.demos.gemma4.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
@@ -112,17 +113,76 @@ def _get_lm_head_program_config(mesh_device, m: int, k: int, n: int):
     )
 
 
-def create_rope_caches(mesh_device, hf_config, max_seq_len):
+def _cp_chunk_major_row_order(max_seq_len, cp, chunk_size):
+    """Row permutation putting each CP rank's positions in chunk order.
+
+    Multi-chunk CP prefill has a problem the single-chunk case hides. For chunk ``n``
+    rank ``r`` owns global positions ``[n*C + r*L, +L)`` with ``L = C/cp``. If the
+    RoPE cache is sharded by position, rank ``r`` holds ``[r*max/cp, ...)``, so the
+    local index it needs is ``n*C - r*(C - L)`` — rank-dependent, and the model
+    slices with a mesh-wide scalar that cannot vary per device.
+
+    Permuting fixes it. Lay row ``m`` out as::
+
+        m = r*(max_seq_len/cp) + n*L + j   holding global position   n*C + r*L + j
+
+    so that a contiguous shard across the CP axis hands rank ``r`` exactly its own
+    positions, ordered by chunk. The slice for chunk ``n`` is then ``[n*L, +L)`` on
+    every rank — a uniform scalar, which is ``chunk_start_idx // cp``.
+
+    Returns the index array to gather rows by, or None when there is nothing to do.
+    """
+    if cp <= 1 or not chunk_size:
+        return None
+    slab = chunk_size // cp
+    if slab == 0 or max_seq_len % chunk_size != 0 or chunk_size % cp != 0:
+        return None
+    num_chunks = max_seq_len // chunk_size
+    order = torch.empty(max_seq_len, dtype=torch.long)
+    for rank in range(cp):
+        for chunk in range(num_chunks):
+            local_base = rank * (max_seq_len // cp) + chunk * slab
+            global_base = chunk * chunk_size + rank * slab
+            order[local_base : local_base + slab] = torch.arange(global_base, global_base + slab)
+    return order
+
+
+def create_rope_caches(mesh_device, hf_config, max_seq_len, mesh_config=None, prefill_chunk_size=None):
     """Create HF-format cos/sin caches for both sliding and global layer types.
 
     Returns:
         caches_4d: dict mapping layer_type -> (cos_tt, sin_tt) [1,1,max_seq_len,head_dim] for prefill
         caches_2d: dict mapping layer_type -> (cos_tt, sin_tt) [max_seq_len,head_dim] for decode embedding lookup
+
+    Under context parallelism the 4D prefill caches are sharded along the position
+    axis instead of replicated, so rank ``r`` holds positions
+    ``[r*max_seq_len/cp, (r+1)*max_seq_len/cp)`` — exactly the tokens it owns. This
+    is how each rank gets its true absolute positions: ``_get_rope_mats`` slices
+    ``[0:seq_len]`` of the *local* shard with a mesh-wide scalar index, and a scalar
+    cannot differ per device, so the per-rank offset has to come from the sharding.
+
+    That alignment holds only when ``max_seq_len`` equals the prefill chunk, which
+    is the default in the prefill harness; the caller is expected to check.
+
+    The 2D decode caches stay replicated — decode is not context-parallel.
     """
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
+    from models.demos.gemma4.tt.ccl import cp_degree
+
     is_mesh = hasattr(mesh_device, "shape")
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+    cp = cp_degree(mesh_config) if (is_mesh and mesh_config is not None) else 1
+    row_order = None
+    if cp > 1:
+        assert max_seq_len % cp == 0, f"max_seq_len {max_seq_len} must be divisible by CP degree {cp}"
+        shard_dims = (-2, None) if mesh_config.sp_axis == 0 else (None, -2)
+        prefill_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=shard_dims)
+        # Multi-chunk needs the rows reordered so one scalar slice serves every rank;
+        # single-chunk (max_seq_len == chunk) is already correct without it.
+        row_order = _cp_chunk_major_row_order(max_seq_len, cp, prefill_chunk_size)
+    else:
+        prefill_mapper = replicate
 
     rope = Gemma4TextRotaryEmbedding(hf_config)
     x_dummy = torch.randn(1, max_seq_len, hf_config.hidden_size)
@@ -139,20 +199,25 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
         cos = cos.to(torch.bfloat16)
         sin = sin.to(torch.bfloat16)
 
-        # 4D for prefill: [1, 1, max_seq_len, head_dim]
+        # 4D for prefill: [1, 1, max_seq_len, head_dim].
+        # Sharded along positions under CP (see docstring), replicated otherwise.
+        cos_prefill, sin_prefill = cos, sin
+        if row_order is not None:
+            cos_prefill = cos[:, row_order, :]
+            sin_prefill = sin[:, row_order, :]
         cos_4d = ttnn.from_torch(
-            cos.unsqueeze(0),
+            cos_prefill.unsqueeze(0),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
-            mesh_mapper=replicate,
+            mesh_mapper=prefill_mapper,
         )
         sin_4d = ttnn.from_torch(
-            sin.unsqueeze(0),
+            sin_prefill.unsqueeze(0),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
-            mesh_mapper=replicate,
+            mesh_mapper=prefill_mapper,
         )
         caches_4d[layer_type] = (cos_4d, sin_4d)
 
@@ -262,17 +327,43 @@ class Gemma4Model:
         create_kv_cache=True,
         precision=None,
         bounded_sliding_kv_cache: bool = False,
+        bounded_sliding_cache_slots: int | None = None,
+        # Global prefill chunk size. Only needed under context parallelism with more
+        # than one chunk: it sets the RoPE cache's chunk-major row order and sizes the
+        # ring KV cache slabs. None means single-chunk prefill.
+        prefill_chunk_size=None,
+        ring_kv_caches=None,
         # Legacy parameters — ignored
         transformation_mats=None,
     ):
         self.mesh_device = mesh_device
         self.hf_config = hf_config
+        self.prefill_chunk_size = prefill_chunk_size
         self.mesh_config = mesh_config
         self.hidden_size = hf_config.hidden_size
         self.vocab_size = hf_config.vocab_size
         self.final_logit_softcapping = hf_config.final_logit_softcapping
         self.embed_scale = hf_config.hidden_size**0.5
         self.ccl_manager = ccl_manager
+        # Pinned RoPE slices for traced chunked prefill; see _refresh_rope_prefill.
+        # Empty and inactive unless a caller opts in, so the untraced path is unchanged.
+        self._rope_prefill_buffers = {}
+        self._rope_prefill_pinned = False
+        self._rope_prefill_positions = None
+        self._rope_prefill_gathered = {}
+        self._packed_global_rope_trans_mat = None
+        if mesh_config is not None and mesh_config.prefill.sp > 1:
+            self._packed_global_rope_trans_mat = ttnn.from_torch(
+                get_rot_transformation_mat(),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+        # When True the caller refreshes the ring metadata itself, outside any trace.
+        self._ring_metadata_external = False
+        self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
         self.hidden_size_per_layer_input = getattr(hf_config, "hidden_size_per_layer_input", 0) or 0
         # Host restage every step only when PLI must be recomputed from the token.
@@ -303,6 +394,9 @@ class Gemma4Model:
         router_dtype = precision.get("router", dtype)
         embedding_dtype = precision.get("embedding", dtype)
         lm_head_dtype = precision.get("lm_head", dtype)
+        # Paged K/V storage, not a weight: it sizes with context rather than with the model,
+        # so it is the one tensor whose precision trades against how long a prompt fits.
+        kv_cache_dtype = precision.get("kv_cache", dtype)
 
         # KV sharing map: layers after (full_n_layers - num_kv_shared_layers) share KV
         # from the last non-shared layer of the same type
@@ -327,7 +421,13 @@ class Gemma4Model:
         # Needs real HF text config (set by create_tt_model via _hf_text_config)
         hf_text_config = getattr(hf_config, "_hf_text_config", None)
         if hf_text_config is not None:
-            self.rope_caches, self.rope_caches_2d = create_rope_caches(mesh_device, hf_text_config, max_seq_len)
+            self.rope_caches, self.rope_caches_2d = create_rope_caches(
+                mesh_device,
+                hf_text_config,
+                max_seq_len,
+                mesh_config=self.mesh_config,
+                prefill_chunk_size=prefill_chunk_size,
+            )
         else:
             # Fallback: no automatic RoPE — caller must pass rope_mats explicitly
             self.rope_caches = {}
@@ -445,6 +545,8 @@ class Gemma4Model:
         # Decoder layers (each creates its own KV cache if requested)
         self.bounded_sliding_kv_cache = bounded_sliding_kv_cache
         self.layers = []
+        if ring_kv_caches is not None and len(ring_kv_caches) != n_layers:
+            raise ValueError(f"expected {n_layers} external ring caches, got {len(ring_kv_caches)}")
         for i in range(n_layers):
             layer = Gemma4DecoderLayer(
                 mesh_device=mesh_device,
@@ -462,10 +564,13 @@ class Gemma4Model:
                 max_seq_len=max_seq_len,
                 max_local_batch_size=max_local_batch_size,
                 bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+                ring_prefill_chunk_size=prefill_chunk_size,
+                ring_kv_cache=(ring_kv_caches[i] if ring_kv_caches is not None else None),
             )
-            # Create KV cache for non-shared layers only
-            # Shared layers will use their source layer's KV cache
-            if create_kv_cache and i not in self.kv_shared_layer_map:
+            # Create a paged cache for paths that consume one. CP global prefill
+            # uses its full-history ring cache as durable storage; global layers pack
+            # it to 640 channels. A paged cache here would duplicate the footprint.
+            if create_kv_cache and i not in self.kv_shared_layer_map and layer.self_attn.ring_kv_cache is None:
                 from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
 
                 attn_cfg = Gemma4AttentionConfig(hf_config, i)
@@ -481,14 +586,18 @@ class Gemma4Model:
                     and paged_attention_config is not None
                 ):
                     sliding_blocks_per_seq = attn_cfg.sliding_window // paged_attention_config.block_size
-                    max_num_blocks_override = sliding_blocks_per_seq * max_local_batch_size
+                    sliding_cache_slots = bounded_sliding_cache_slots or max_local_batch_size
+                    max_num_blocks_override = sliding_blocks_per_seq * sliding_cache_slots
+                max_num_blocks_override = self._cp_block_pool_override(
+                    max_num_blocks_override, paged_attention_config, bounded_sliding_kv_cache
+                )
                 kv_cache = init_kv_cache(
                     mesh_device=mesh_device,
                     config=attn_cfg,
                     max_batch_size=max_local_batch_size,
                     max_seq_len=max_seq_len,
                     paged_attention_config=paged_attention_config,
-                    cache_dtype=ttnn.bfloat16,
+                    cache_dtype=kv_cache_dtype,
                     max_num_blocks_override=max_num_blocks_override,
                 )
                 layer.self_attn.kv_cache = kv_cache
@@ -775,9 +884,59 @@ class Gemma4Model:
         if isinstance(start_pos, ttnn.Tensor):
             return (cos, sin)
         if seq_len is not None:
+            if self._rope_prefill_gathered:
+                return self._rope_prefill_gathered[layer_type]
+            if self._rope_prefill_pinned:
+                # Traced chunked prefill: hand back a buffer at a FIXED address whose
+                # contents were refreshed for this chunk (see _refresh_rope_prefill).
+                # Slicing here would allocate a new tensor per chunk, and a trace records
+                # the address it saw at capture — every replay would then re-read chunk
+                # N's RoPE rows regardless of which chunk is running.
+                return self._rope_prefill_buffers[(layer_type, seq_len)]
             cos = cos[:, :, start_pos : start_pos + seq_len, :]
             sin = sin[:, :, start_pos : start_pos + seq_len, :]
         return (cos, sin)
+
+    def set_prefill_trace_controller(self, controller):
+        """Attach the segmented trace controller used for per-layer migration acks."""
+        self._prefill_trace_controller = controller
+
+    def set_prefill_rope_positions(self, position_idx):
+        """Point traced prefill RoPE at this chunk's absolute positions.
+
+        ``position_idx`` is a CP-sharded [1, chunk] uint32 device tensor of GLOBAL token
+        positions, refreshed by the caller out-of-trace with a ~4 KB write. The gather
+        itself then happens on-device inside the trace (see __call__), which is what
+        removes the per-chunk RoPE copies: _refresh_rope_prefill issued four eager
+        slice+copy dispatches per chunk, ~155 ms at 256k, purely because a trace records
+        a slice's address rather than its rows. ttnn.embedding indexes the same
+        row-major 2D caches decode already uses, so the HF NeoX convention is preserved
+        (rotary_embedding_indexed would not: it reuses the rotary_embedding_llama
+        compute kernel, a different rotation pairing).
+        """
+        self._rope_prefill_positions = position_idx
+        self._rope_prefill_pinned = True
+
+    def _refresh_rope_prefill(self, seq_len, start_pos):
+        """Point the pinned RoPE buffers at ``[start_pos, start_pos+seq_len)``.
+
+        Runs on the host side of a chunk, outside any traced region: it copies the
+        chunk's slice into buffers whose addresses stay put, so a captured trace reads
+        the right positions on every replay. Buffers are allocated on first use, one
+        pair per (layer_type, seq_len) — with two layer types and one prefill chunk
+        size that is two pairs for the whole model.
+        """
+        for layer_type, (cos, sin) in self.rope_caches.items():
+            key = (layer_type, seq_len)
+            if key not in self._rope_prefill_buffers:
+                self._rope_prefill_buffers[key] = (
+                    ttnn.clone(cos[:, :, 0:seq_len, :]),
+                    ttnn.clone(sin[:, :, 0:seq_len, :]),
+                )
+            cos_buf, sin_buf = self._rope_prefill_buffers[key]
+            ttnn.copy(cos[:, :, start_pos : start_pos + seq_len, :], cos_buf)
+            ttnn.copy(sin[:, :, start_pos : start_pos + seq_len, :], sin_buf)
+        self._rope_prefill_pinned = True
 
     def __call__(
         self,
@@ -804,6 +963,9 @@ class Gemma4Model:
         chunk_page_table=None,
         valid_seq_lens=None,
         keep_sharded_for_sampling=False,
+        on_layer_complete=None,
+        d2h_service=None,
+        metadata_msg=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -909,6 +1071,59 @@ class Gemma4Model:
                 sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
                 decode_rope_presliced[lt] = (cos_pos, sin_pos)
 
+        # Prefill RoPE by on-device gather, once per layer_type rather than per layer —
+        # mirroring the decode path below/above. Runs inside a captured trace and reads
+        # the position tensor, so a replay picks up whatever positions the host staged.
+        prefill_rope_presliced = {}
+        if not is_decode and self._rope_prefill_positions is not None and self.rope_caches_2d:
+            for lt in {self.hf_config.layer_types[i] for i in range(len(self.layers))}:
+                if lt not in self.rope_caches_2d:
+                    continue
+                cos_2d, sin_2d = self.rope_caches_2d[lt]
+                prefill_rope_presliced[lt] = (
+                    ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, cos_2d, layout=ttnn.TILE_LAYOUT)),
+                    ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, sin_2d, layout=ttnn.TILE_LAYOUT)),
+                )
+
+        # Publish this chunk's per-chunk scalars once, before any layer runs. Every layer
+        # reads the same two metadata tensors, and they must be written from the host
+        # outside any traced region — a trace captures addresses, not values, which is the
+        # whole point of routing these through DRAM instead of runtime args.
+        # GEMMA4_PIN_ROPE exercises the traced path's pinned-RoPE buffers in EAGER mode.
+        # A probe: pinning must be a no-op numerically, so if eager results change under
+        # it, the refresh is wrong rather than anything about tracing.
+        import os as _os
+
+        if not is_decode and chunk_start_idx is not None and _os.environ.get("GEMMA4_PIN_ROPE"):
+            from models.demos.gemma4.tt.ccl import cp_degree as _cpd
+
+            _cp = _cpd(self.mesh_config)
+            self._refresh_rope_prefill(
+                seq_len // batch_size if batch_size > 1 else seq_len, int(chunk_start_idx) // _cp
+            )
+
+        # Skipped when a traced caller owns the update: copy_host_to_device_tensor has to
+        # run outside the captured region, or the trace would replay a stale write.
+        if not is_decode and chunk_start_idx is not None and not self._ring_metadata_external:
+            from models.demos.gemma4.tt.ccl import cp_degree as _cp_degree
+
+            if _cp_degree(self.mesh_config) > 1:
+                self.ccl_manager.set_ring_metadata(slot_idx=user_id or 0, kv_actual_global=int(chunk_start_idx))
+
+        self._rope_prefill_gathered = prefill_rope_presliced
+        packed_global_rope = None
+        if not is_decode and "full_attention" in prefill_rope_presliced:
+            packed_global_rope = (
+                *pack_global_rope_device(*prefill_rope_presliced["full_attention"]),
+                self._packed_global_rope_trans_mat,
+            )
+        packed_sliding_rope = None
+        if not is_decode and "sliding_attention" in prefill_rope_presliced:
+            packed_sliding_rope = (
+                *pack_sliding_rope_device(*prefill_rope_presliced["sliding_attention"]),
+                self._packed_global_rope_trans_mat,
+            )
+
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
             rope_presliced = False
@@ -939,6 +1154,13 @@ class Gemma4Model:
                     )
                 else:
                     rope_start_pos = int(chunk_start_idx) if chunk_start_idx is not None else 0
+                    # CP RoPE rows are chunk-major per rank, so scalar host slices
+                    # advance by a per-rank slab rather than the global chunk.
+                    from models.demos.gemma4.tt.ccl import cp_degree
+
+                    cp = cp_degree(self.mesh_config)
+                    if cp > 1:
+                        rope_start_pos //= cp
                     layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len, start_pos=rope_start_pos)
 
             # Convert per-layer input to device tensor if available
@@ -993,6 +1215,28 @@ class Gemma4Model:
                     "hot_pt": packed.get("hot_pt"),
                 }
 
+            if (
+                not is_decode
+                and self.hf_config.layer_types[i] == "full_attention"
+                and packed_global_rope is None
+                and self._packed_global_rope_trans_mat is not None
+            ):
+                packed_global_rope = (
+                    *pack_global_rope_device(*layer_rope),
+                    self._packed_global_rope_trans_mat,
+                )
+
+            if (
+                not is_decode
+                and self.hf_config.layer_types[i] == "sliding_attention"
+                and packed_sliding_rope is None
+                and self._packed_global_rope_trans_mat is not None
+            ):
+                packed_sliding_rope = (
+                    *pack_sliding_rope_device(*layer_rope),
+                    self._packed_global_rope_trans_mat,
+                )
+
             hidden_states = layer(
                 hidden_states,
                 rope_mats=layer_rope,
@@ -1014,7 +1258,24 @@ class Gemma4Model:
                 packed=layer_packed,
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
+                packed_global_rope=(packed_global_rope if self.hf_config.layer_types[i] == "full_attention" else None),
+                packed_sliding_rope=(
+                    packed_sliding_rope if self.hf_config.layer_types[i] == "sliding_attention" else None
+                ),
             )
+
+            if not is_decode and d2h_service is not None:
+                if metadata_msg is None:
+                    raise ValueError("metadata_msg is required for D2H layer acknowledgements")
+                # This device op follows the layer KV writes on the same CQ. Its record reaches
+                # the host only after those writes complete, and remains capture-safe in one trace.
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
+            elif not is_decode and on_layer_complete is not None:
+                if self._prefill_trace_controller is not None:
+                    self._prefill_trace_controller.layer_ack(i)
+                else:
+                    ttnn.synchronize_device(self.mesh_device)
+                    on_layer_complete(i)
 
             # For KV source layers during prefill, capture the K/V from the attention
             # The K/V are kept alive on device (not deallocated) when keep_kv=True
@@ -1115,6 +1376,70 @@ class Gemma4Model:
         """Commit stashed bounded ring K/V after lm_head (or batched-hidden return)."""
         if getattr(self, "bounded_sliding_kv_cache", False):
             flush_deferred_bounded_fills(self.layers)
+
+    def _cp_block_pool_override(self, current_override, paged_attention_config, bounded_sliding_kv_cache):
+        """Shrink the paged block pool to this rank's share under context parallelism.
+
+        Each CP rank computes the K/V for the tokens it owns, so that slice *is* the
+        part of the cache it should hold. Keeping the cache sharded along the CP axis
+        means the fill needs no gather and no per-device write offset: a rank's pool
+        is its shard, so local block indices suffice (which is why the page table can
+        stay a replicated identity — see ``_identity_page_table``). Per-chunk offsets
+        are already carried by ``chunk_page_table``, which does not vary by rank.
+
+        The win is capacity and write bandwidth, both 1/cp: at long context the KV
+        cache is what bounds how much context fits per device.
+
+        The global position of a token is implied by (rank, local block, offset) —
+        that permutation has to be undone when the cache is handed to the decode
+        side; see ``export_paged_kv_cache_natural_order``.
+
+        A bounded sliding pool is intentionally not divided by CP: each rank receives
+        one complete window per slot. This is conservative but correct for chunked
+        prefill, where each rank writes a full local chunk shard into its circular
+        window. Full-attention pools remain sequence-sharded by CP.
+        """
+        from models.demos.gemma4.tt.ccl import cp_degree
+
+        cp = cp_degree(self.mesh_config)
+        if cp <= 1 or paged_attention_config is None:
+            return current_override
+        if bounded_sliding_kv_cache and current_override is not None:
+            return current_override
+        base_blocks = current_override if current_override is not None else paged_attention_config.max_num_blocks
+        if base_blocks % cp != 0:
+            raise ValueError(
+                f"paged block pool {base_blocks} is not divisible by the CP degree {cp}; "
+                f"each rank must own a whole number of blocks"
+            )
+        return base_blocks // cp
+
+    def _cp_gather_prefill_sequence(self, hidden_states):
+        """Gather a CP-sharded prefill sequence back to full length.
+
+        Required before any slice by ABSOLUTE position. Those indices are mesh-wide
+        scalars, but under context parallelism each rank holds a different span of
+        the sequence, so the same scalar would select different (wrong) tokens on
+        every rank — the position wanted actually lives on exactly one of them.
+
+        Cheap in the place it is used: ~44 MB at 4k x 5376 bf16, and the lm_head
+        that follows only ever sees the 32-row slice. Gathering the *logits*
+        instead would be ~4.3 GB at a 262k vocab, which is why the head is fed a
+        slice in the first place.
+
+        Deliberately does not deallocate its input: one call site hands us a trace
+        output the caller still owns.
+        """
+        from models.demos.gemma4.tt.ccl import cp_degree
+
+        if cp_degree(self.mesh_config) <= 1:
+            return hidden_states
+        return ttnn.all_gather(
+            hidden_states,
+            dim=2,
+            cluster_axis=self.mesh_config.sp_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def _apply_lm_head(self, hidden_states, is_decode=False, keep_sharded_for_sampling=False, deallocate_input=True):
         """Project post-norm hidden states to vocab logits, softcap, all-gather.
@@ -1744,6 +2069,9 @@ class Gemma4Model:
         pli_device_tensors=None,
         page_tables_per_layer=None,
         valid_seq_lens=None,
+        on_layer_complete=None,
+        d2h_service=None,
+        metadata_msg=None,
         **kwargs,
     ):
         """Prefill forward — Generator-compatible signature.
@@ -1793,6 +2121,9 @@ class Gemma4Model:
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
             valid_seq_lens=valid_seq_lens,
+            on_layer_complete=on_layer_complete,
+            d2h_service=d2h_service,
+            metadata_msg=metadata_msg,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):

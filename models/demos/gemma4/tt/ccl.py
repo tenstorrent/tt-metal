@@ -3,13 +3,26 @@
 
 import os
 
+import torch
 from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.config import Mode
 
 
 def default_num_links():
+    # GEMMA4_NUM_LINKS overrides the CCL link count. Used to test whether the ring
+    # replay deadlock involves the two parallel link workers racing each other.
+    import os as _os
+
+    _forced = _os.environ.get("GEMMA4_NUM_LINKS")
+    if _forced:
+        return int(_forced)
+    return _default_num_links_impl()
+
+
+def _default_num_links_impl():
     """Default TP-collective link count for the current arch.
 
     Blackhole boards expose 2 ethernet links between adjacent mesh devices, so
@@ -151,6 +164,132 @@ class CCLManager:
         self._persistent_rs_out: dict = {}
         self._persistent_rs_inter: dict = {}
 
+        # CP prefill masks, shared by every layer on this mesh and keyed by
+        # (local_seq_len, sliding_window). This lives here rather than on each
+        # attention module because the mask depends only on the sequence geometry
+        # and the layer's window, so a 60-layer stack needs exactly two entries
+        # (sliding, global) — not 60 copies of an 8 MiB tensor.
+        self._cp_mask_cache = {}
+
+        # ── Ring attention (cross-chunk prefill under CP) ─────────────────────
+        # ring_joint SDPA reads the CP-sharded KV cache and gathers the prefix
+        # across the CP axis internally with online softmax, so a rank can attend
+        # history it does not hold without an explicit AllGather. That is what makes
+        # a sharded cache workable for chunk > 0.
+        self.compute_grid_size = mesh_device.compute_with_storage_grid_size()
+        # CCL workers take the LAST compute column; ring_joint's SDPA compute uses
+        # the remaining columns. The op requires the two sets to be disjoint and
+        # asserts ccl_core_grid_offset.x < sdpa_grid.x, so both must derive from this
+        # same grid (Blackhole is wider than 8x8).
+        self.ring_attention_ccl_core_grid_offset = (self.compute_grid_size.x - 1, 0)
+        # THREE, not the usual forward/backward pair. The third is the neighbor-halo
+        # exchange's own counter. With only two, the halo reuses semaphores[0] — the
+        # all-gather's backward semaphore — and lands on the same worker core, so two
+        # protocols with different arrival counts share one counter. The halo's completion
+        # then destroys all-gather increments and the ring deadlocks at depth. See
+        # docs/superpowers/specs/2026-08-06-ring-trace-replay-deadlock.md.
+        self.ring_attention_ccl_semaphore_handles = [
+            ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)
+        ]
+        self._ring_gather_buffers = {}
+        # Trace-safe per-chunk scalars for the ring path. One pair for the whole model:
+        # slot and prefix length are properties of the chunk, not the layer, so all 60
+        # layers read the same two tensors and the host updates them once per chunk.
+        self._ring_metadata = None
+        # Set by a traced caller to the full context length. logical_n sizes the ring
+        # gather at create time and is re-patched per dispatch; a trace does neither, so
+        # a per-chunk value would freeze the gather at the capturing chunk's prefix.
+        # GEMMA4_RING_LOGICAL_N forces the host logical_n to a fixed value. Used as a
+        # probe: on the metadata path the readers derive logical_nt on-device from
+        # kv_actual_isl, so a deliberately wrong host value must NOT change results.
+        _forced = os.environ.get("GEMMA4_RING_LOGICAL_N")
+        self.ring_logical_n_override = int(_forced) if _forced else None
+
+    def _scalar_metadata_tensor(self, value):
+        """1-element uint32 replicated DRAM tensor holding one per-chunk scalar.
+
+        Shape/layout/dtype mirror what update_padded_kv_cache and the ring readers
+        expect ([1,1,1,1] uint32 row-major in DRAM, replicated so every device reads
+        element [0]).
+        """
+        return ttnn.from_torch(
+            torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    def get_ring_metadata(self):
+        """``(slot_id, kv_actual_isl)`` tensors for the trace-safe ring path.
+
+        Passing these instead of Python ints moves the per-chunk scalars off the host
+        dispatch path: the readers load them from DRAM on-device, so the values are not
+        baked into the program's runtime args and one captured trace replays across
+        chunks. With the scalar form a trace would freeze whichever chunk was live at
+        capture, and every later chunk would read the wrong prefix length.
+        """
+        if self._ring_metadata is None:
+            self._ring_metadata = (self._scalar_metadata_tensor(0), self._scalar_metadata_tensor(0))
+        return self._ring_metadata
+
+    def set_ring_metadata(self, slot_idx, kv_actual_global):
+        """Update the metadata tensors in place for the chunk about to run.
+
+        Called once per chunk, before the layer loop (or before a trace replay). Writes
+        into the existing device tensors rather than allocating, because a trace holds
+        the addresses it captured.
+        """
+        slot_t, kv_t = self.get_ring_metadata()
+        for tensor, value in ((slot_t, slot_idx), (kv_t, kv_actual_global)):
+            host = ttnn.from_torch(
+                torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            ttnn.copy_host_to_device_tensor(host, tensor)
+
+    def get_ring_gather_buffer(self, key, n_kv_local, seq, head_dim, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        """Persistent ring-gather scratch for ``ring_joint`` SDPA.
+
+        Allocated once and reused across every layer and chunk. The op treats it as
+        scratch: it fills the gathered region and masks the invalid tail via
+        ``kv_actual_isl``, so reuse without re-zeroing is safe.
+
+        ``seq`` must be the FULL cache capacity (max_seq_len), not the current
+        ``logical_n``. ring_joint gathers the entire per-device cache shard
+        (seq_local = max_seq_len/cp, times cp around the ring), independent of how
+        much of it is valid. Sizing to logical_n happens to work when the final
+        chunk's logical_n == max_seq_len — i.e. a 2-chunk run — and fails beyond
+        that with "gather dim 2 too small" (minimax_m3 hit this at 11 chunks).
+
+        ``key`` separates buffers live in the same call ("k" vs "v"); shape and dtype
+        key the rest. Heads shard on the TP columns, sequence replicated across the
+        CP rows — the layout the ring op reconstructs into.
+
+        ``n_kv_local`` is the per-device head count. The buffer is built at the global
+        size ``n_kv_local * tp_cols`` and sharded across the TP columns so each device
+        ends up with its own ``n_kv_local`` heads. Passing the local count straight to
+        the sharder fails ("number of chunks N to match the mesh dimension size"), and
+        it also has to work for kv-replicated layers where the model's global KV head
+        count is smaller than the TP width.
+        """
+        rows, cols = tuple(self.mesh_device.shape)
+        n_kv_global = n_kv_local * cols
+        cache_key = (key, n_kv_global, seq, head_dim, str(dtype), str(memory_config))
+        if cache_key not in self._ring_gather_buffers:
+            self._ring_gather_buffers[cache_key] = ttnn.from_torch(
+                torch.zeros(1, n_kv_global, seq, head_dim),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=memory_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=(rows, cols), dims=[None, 1]),
+            )
+        return self._ring_gather_buffers[cache_key]
+
     def get_rs_semaphore(self):
         """Returns list of 3 semaphores for reduce_scatter (cycles double-buffer)."""
         sems = self._rs_semaphores[self._rs_idx]
@@ -239,6 +378,45 @@ class CCLManager:
             self._persistent_rs_out[out_key] = out
             logger.debug(f"CCL persistent RS buffers allocated out={out_shape} inter={inter_shape}")
         return [inter, out]
+
+
+def cp_degree(mesh_config, mode=Mode.PREFILL):
+    """Context-parallel degree along ``mesh_config.sp_axis``; 1 when CP is off.
+
+    CP splits the token dimension across a second mesh axis, so every rank holds
+    ``seq_len / cp`` tokens. The degree lives in the ``sp`` field of the mode
+    config (named for gpt_oss's sequence parallelism, which is the same idea
+    applied to one block).
+    """
+    if mesh_config is None:
+        return 1
+    return max(1, mesh_config.get_config(mode).sp)
+
+
+def ccl_cp_allgather(tensor, mesh_config, ccl_manager, dim, memory_config=None):
+    """All-gather along the context-parallel axis.
+
+    Used to rebuild the whole chunk's K/V from the per-rank sequence shards, so
+    every rank can attend over all keys while owning only its slice of queries.
+
+    The input must be TILE layout. Tile pages are always 64 B aligned, so this
+    takes ttnn's native all_gather; a row-major input whose page is unaligned
+    would silently fall back to composite_all_gather, which deadlocks at high
+    device counts (see docs/superpowers/specs/2026-08-03-gemma4-context-parallel-prefill-design.md).
+    """
+    if cp_degree(mesh_config) <= 1:
+        return tensor
+    assert (
+        tensor.layout == ttnn.TILE_LAYOUT
+    ), f"ccl_cp_allgather requires TILE layout to stay on the native all_gather path, got {tensor.layout}"
+    gathered = ttnn.all_gather(
+        tensor,
+        dim=dim,
+        cluster_axis=mesh_config.sp_axis,
+        memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tensor.deallocate(True)
+    return gathered
 
 
 def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):

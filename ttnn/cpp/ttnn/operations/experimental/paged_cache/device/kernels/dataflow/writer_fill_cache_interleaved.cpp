@@ -135,7 +135,7 @@ void kernel_main() {
         if (block_size_t > 0) {
             valid_tiles = ((valid_tiles + block_size_t - 1) / block_size_t) * block_size_t;
         }
-        if (valid_tiles > 0 && valid_tiles < num_blocks_of_work_per_head) {
+        if (valid_tiles < num_blocks_of_work_per_head) {
             effective_end = valid_tiles;
         }
     }

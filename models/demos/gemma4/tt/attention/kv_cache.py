@@ -11,6 +11,7 @@ Follows gpt-oss kv_cache.py pattern.
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.precision import dtype_to_str
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # Hot cache blocks held in staging per decode slot for the loop-free packed KV
@@ -18,6 +19,23 @@ from models.demos.gemma4.utils.general_utils import get_cache_file_name
 # so each slot reserves 2 staging blocks (cur_pos block + spill). Must match the
 # spec-decode driver's staging bookkeeping (see tt/spec_decode.py).
 PV_HOT_BLOCKS = 2
+
+
+def paged_fill_cache(cache, input_tensor, page_table, **kwargs):
+    """Fill a paged cache after explicitly matching its storage dtype.
+
+    Paged-cache kernels copy encoded tile bytes; they do not perform a numeric
+    conversion. Older kernels accepted mismatched BF16 inputs and BFP8 caches,
+    making the model appear to work while writing the wrong representation.
+    """
+    fill_tensor = input_tensor
+    if input_tensor.dtype != cache.dtype:
+        fill_tensor = ttnn.typecast(input_tensor, cache.dtype)
+    try:
+        return ttnn.experimental.paged_fill_cache(cache, fill_tensor, page_table, **kwargs)
+    finally:
+        if fill_tensor is not input_tensor:
+            fill_tensor.deallocate(True)
 
 
 def init_kv_cache(
@@ -80,24 +98,25 @@ def init_kv_cache(
         ]
 
     mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+    dtype_str = f"{dtype_to_str(cache_dtype)}"
 
     k_cache = ttnn.as_tensor(
-        torch.zeros(cache_shape),
+        torch.zeros(cache_shape, dtype=torch.bfloat16),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
         mesh_mapper=mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"k_cache_{cache_shape}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"k_cache_{cache_shape}_{dtype_str}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     v_cache = ttnn.as_tensor(
-        torch.zeros(cache_shape),
+        torch.zeros(cache_shape, dtype=torch.bfloat16),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
         mesh_mapper=mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"v_cache_{cache_shape}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"v_cache_{cache_shape}_{dtype_str}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -135,7 +154,7 @@ def init_kv_staging(
 
     def _zeros():
         return ttnn.as_tensor(
-            torch.zeros(stage_shape),
+            torch.zeros(stage_shape, dtype=torch.bfloat16),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=cache_dtype,
@@ -144,3 +163,51 @@ def init_kv_staging(
         )
 
     return [_zeros(), _zeros()]
+
+
+def export_paged_kv_cache_natural_order(cache, mesh_device, mesh_config, block_size):
+    """Read a context-parallel paged cache back with the CP permutation undone.
+
+    This is the "package it for the decode side" step. Under CP the block pool is
+    sharded along the CP axis, so a token's location is implied by
+    ``(cp_rank, local_block, row)`` rather than by a global block id:
+
+        global token = cp_rank * tokens_per_rank + local_block * block_size + row
+
+    Prefill can leave it that way — a rank's shard is exactly what it computed, so
+    the fill needs no gather (see ``Gemma4Model._cp_block_pool_override``). Whoever
+    consumes the cache does not share that layout, so the permutation is undone here.
+
+    Undoes **CP only**. Tensor-parallel head sharding is preserved as the leading
+    axis, because a disaggregated decode target is itself TP-sharded and wants its
+    heads already split; it is the sequence axis that has to become contiguous.
+
+    Returns a torch tensor ``[tp, num_tokens_global, num_local_kv_heads, head_dim]``.
+    With CP off this is just the per-column cache flattened, so callers can use it
+    unconditionally.
+    """
+    from models.demos.gemma4.tt.ccl import cp_degree
+
+    rows, cols = tuple(mesh_device.shape)
+    cp = cp_degree(mesh_config) if mesh_config is not None else 1
+    shards = ttnn.get_device_tensors(cache)
+
+    # CP lives on sp_axis; the other axis is TP. Only sp_axis == 0 is exercised
+    # (see MeshConfig.tp_axis), so refuse the transpose rather than guess at it.
+    if mesh_config is not None and cp > 1 and mesh_config.sp_axis != 0:
+        raise NotImplementedError(f"export expects CP on mesh axis 0, got sp_axis={mesh_config.sp_axis}")
+
+    per_column = []
+    for c in range(cols):
+        # Walk CP ranks in order so the concatenated sequence is globally ordered.
+        rank_chunks = []
+        for r in range(cp if cp > 1 else 1):
+            shard = ttnn.to_torch(shards[r * cols + c]).float()
+            # [blocks_local, kv_local, block_size, head_dim] -> [tokens_local, kv_local, head_dim]
+            blocks_local, kv_local, bs, head_dim = shard.shape
+            assert bs == block_size, f"cache block_size {bs} != {block_size}"
+            tokens = shard.permute(0, 2, 1, 3).reshape(blocks_local * bs, kv_local, head_dim)
+            rank_chunks.append(tokens)
+        per_column.append(torch.cat(rank_chunks, dim=0) if len(rank_chunks) > 1 else rank_chunks[0])
+
+    return torch.stack(per_column, dim=0)
