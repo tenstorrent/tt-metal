@@ -380,6 +380,13 @@ class Vocoder(Module):
         The same device graph as :meth:`forward`, minus the mel-specific input reshape.
         Used by MiniMax-H3's audio decoder, whose input is already channels-over-time.
         """
+        # H3 decodes eagerly while the DiT denoise runs as a replayed trace, and its tpad tail-set is
+        # keyed by audio length (t_pad = pad-to-1024 - num_latents), so no finite warmup covers the
+        # 5-15 s range. A length whose mask (and its suffix) first materialize at serve time lands in
+        # DRAM the denoise trace freed but still overwrites on replay, and a cached mask is then read
+        # back stomped. Rebuild both per call -- they are small constants -- so every decode restores
+        # correct values after the replay.
+        self._tpad_mask_cache = {}
         return self._device_to_host(self._forward_device(self._upload_BCT(x_BCT)))
 
     def forward_BCT_traced(self, x_BCT: torch.Tensor) -> torch.Tensor:
