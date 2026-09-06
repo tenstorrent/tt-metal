@@ -1,6 +1,6 @@
 {
-  "last_run": "2026-09-06T13:00:00Z",
-  "run_id": "34033319401",
+  "last_run": "2026-09-06T18:27:00Z",
+  "run_id": "34051637320",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -74,6 +74,12 @@
     "55424_clamp_output_tensor": {
       "issue": 55334,
       "status": "CI: 5/5 pre-checks green (RTL Sim CI + 4 Cycode scans); no build-artifact yet (PR Gate likely action_required pending maintainer approval); corrects prior memory which had wrong PR number 55334 (that was the issue, not the PR)"
+    },
+    "55582_transpose_wh_rm": {
+      "issue": 55582,
+      "branch": "repo-assist/fix-issue-55582-transpose-wh-rm-height-split",
+      "title": "tighten transpose WH sharded routing to avoid silent all-zero output",
+      "status": "opened this run; narrows use_sharded_wh gating to require both input/output fully H+W contained in a single shard (removes N==1&&C==1&&input_height_sharded&&output_width_sharded disjunct that admitted shard_height<H causing num_hw_blocks_per_core=0 silent no-op); added regression test WH_RM_height_to_width; CI triggered, outcome unknown yet, check next run"
     }
   },
   "issues_labeled": [
@@ -236,7 +242,11 @@
     "55379": "has open PR #55380",
     "55371": "has open PR #55296",
     "55438": "covered by open PR #55440 (Bessel's correction for batch_var), confirmed 2026-09-04",
-    "55551": "fix PR #55552 by amahmudTT already open and adequate (deepseek_prefill NoC ordering race); no repo-assist duplicate needed"
+    "55551": "fix PR #55552 by amahmudTT already open and adequate (deepseek_prefill NoC ordering race); no repo-assist duplicate needed",
+    "55576": {
+      "pr": 55575,
+      "note": "already has open community PR, confirmed no dup needed"
+    }
   },
   "dropped_fix_targets": {
     "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
@@ -858,6 +868,10 @@
       "label": "bug",
       "date": "2026-09-06",
       "note": "moreh_norm_backward NaN for all-zero reduced slices; confirmed power_and_recip_tile_to_cb has no zero-guard in moreh_common.hpp"
+    },
+    "55587": {
+      "label": "bug",
+      "date": "2026-09-06"
     }
   },
   "issues_commented": {
@@ -888,9 +902,17 @@
     "55392": "2026-09-03T18:35:00Z",
     "55471": "2026-09-04: confirmed root cause vs current main (common.cpp wrap_index), noted fix scope/risk",
     "55457": "follow-up comment posted 2026-09-04 (run 33905953169) acknowledging kanapitsas verification of PR #54080",
-    "55585": "2026-09-06: confirmed root cause against current moreh_norm_backward_kernel.cpp + moreh_common.hpp (power_and_recip_tile_to_cb unconditional recip on y^p); noted open questions on SFPU NaN/inf handling for p=+-inf, unverified without hardware"
+    "55585": "2026-09-06: confirmed root cause against current moreh_norm_backward_kernel.cpp + moreh_common.hpp (power_and_recip_tile_to_cb unconditional recip on y^p); noted open questions on SFPU NaN/inf handling for p=+-inf, unverified without hardware",
+    "55587": {
+      "date": "2026-09-06"
+    }
   },
   "run_history": [
+    {
+      "run_id": "34051637320",
+      "date": "2026-09-06T18:27:00Z",
+      "summary": "Labeled #55587 bug (moreh_clip_grad_norm inf/-inf/0 norm_type mishandling, verified against current source). Opened PR fixing #55582 (transpose WH sharded RM height-split silent zero output), narrowed use_sharded_wh gate, added regression test. Verified #55424/#55435 PR CI states unchanged (both green pre-checks/action_required gate). Confirmed #55576 already covered by PR #55575, no dup."
+    },
     {
       "run_id": "34033319401",
       "date": "2026-09-06T13:00:00Z",
