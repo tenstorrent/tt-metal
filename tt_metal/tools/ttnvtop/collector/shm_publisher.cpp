@@ -60,7 +60,13 @@ ShmPublisher::~ShmPublisher() { close(); }
 
 bool ShmPublisher::open(uint64_t asic_id, uint32_t arch_id, uint32_t signal_sources, uint32_t num_cores) {
     close();
-    shm_name_ = shm_name_for(asic_id);
+    // shm_name_ is assigned only once the flock below is HELD, never before. close()
+    // unlinks shm_name_ unconditionally, so setting it up front meant a collector that was
+    // REFUSED the lock still unlinked the live holder's file on its way out -- detaching the
+    // inode that holder is writing into, exactly the theft this flock exists to prevent.
+    // Observed: a refused collector deleted a running publisher's file, whose fds then read
+    // "(deleted)" and whose chip vanished from the viewer.
+    const std::string name = shm_name_for(asic_id);
     // EXCLUSIVE WRITER, enforced by flock -- not by unlinking.
     //
     // This used to `shm_unlink` first and then create with O_CREAT, on the theory that it
@@ -74,7 +80,7 @@ bool ShmPublisher::open(uint64_t asic_id, uint32_t arch_id, uint32_t signal_sour
     // flock has exactly the lifetime we need and no heuristics: it is released when the fd
     // closes OR when the process dies, so a crashed collector's file is takeable while a
     // live one's is not. No pid liveness guessing, no unlink race.
-    fd_ = ::shm_open(shm_name_.c_str(), O_CREAT | O_RDWR, 0644);
+    fd_ = ::shm_open(name.c_str(), O_CREAT | O_RDWR, 0644);
     if (fd_ < 0) {
         return false;
     }
@@ -92,7 +98,7 @@ bool ShmPublisher::open(uint64_t asic_id, uint32_t arch_id, uint32_t signal_sour
             "  Two collectors cannot share one chip's shared memory -- the second would take\n"
             "  the name and the first would publish where no viewer can see it. Stop that one\n"
             "  first, or use --device to give each collector a disjoint set of chips.\n",
-            shm_name_.c_str(),
+            name.c_str(),
             other ? " (pid " : "",
             other,
             other ? ")" : "");
@@ -101,6 +107,7 @@ bool ShmPublisher::open(uint64_t asic_id, uint32_t arch_id, uint32_t signal_sour
         fd_ = -1;
         return false;
     }
+    shm_name_ = name;  // the lock is ours; from here close() may unlink it
     map_size_ = shm_file_size(num_cores);
     if (::ftruncate(fd_, static_cast<off_t>(map_size_)) != 0) {
         ::close(fd_);
