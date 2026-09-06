@@ -389,6 +389,8 @@ void kernel_main() {
         gate_bases.init(gate_addr_e, /*noc=*/0);
         fast_il::Bases<kNumDramBanks> up_bases;
         up_bases.init(up_addr_e, /*noc=*/0);
+        fast_il::Bases<kNumDramBanks> down_bases;
+        down_bases.init(down_addr_e, /*noc=*/0);
 
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
         // A foreign expert (assigned to another row group) is a zero-count expert
@@ -897,27 +899,37 @@ void kernel_main() {
                     in1_ready_sem.set(0);
                     uint32_t l1_w = cb_in1_down_obj.get_write_ptr();
                     in1_block_start = l1_w;
-                    for (uint32_t k = 0; (down_split == 0) && k < in0_block_w_d; ++k) {
-                        for (uint32_t n = 0; n < per_core_N_d; ++n) {
-                            // K-block kb of the down matmul is the activated N-slice of column
-                            // core kb, so its down-weight ROWS follow that core's column map.
-                            const uint32_t row =
-                                group_assign::global_col(kb, k, in0_block_w_d, GRID_X_NOC, col_strided);
-                            const uint32_t col =
-                                group_assign::global_col(my_nt_d, n, per_core_N_d, GRID_X_NOC, col_strided);
-                            // Both OOB directions are left UNWRITTEN.
-                            //   * K-OOB (row >= K_down_tiles, reduction dim): the compute bounds
-                            //     its K-loop by real_k_tiles, so these are never reduced. Were
-                            //     they reduced, stale L1 decoding to Inf would NaN every valid
-                            //     output column — the bound is what makes the skip safe.
-                            //   * N-OOB (col >= N_down_tiles_full, free dim): the output column
-                            //     is dropped by the writer's col guard.
-                            if (row < K_down_tiles && col < N_down_tiles_full) {
-                                const uint32_t tile_idx = row * N_down_tiles_full + col;
-                                noc_read.async_read(
-                                    down_acc, CoreLocalMem<uint32_t>(l1_w), down_tile_bytes, {.page_id = tile_idx}, {});
+                    // DOWN_SPLIT shares each down block between the two RISCs: the reader
+                    // takes rows [0, k_split) on NoC 0, the writer rows [k_split, w_d) on
+                    // NoC 1, so both NoCs stream weights in every phase.
+                    constexpr uint32_t k_split = down_split ? (in0_block_w_d / 2) : in0_block_w_d;
+                    for (uint32_t k = 0; k < k_split; ++k) {
+                        // K-block kb of the down matmul is the activated N-slice of column
+                        // core kb, so its down-weight ROWS follow that core's column map.
+                        const uint32_t row = group_assign::global_col(kb, k, in0_block_w_d, GRID_X_NOC, col_strided);
+                        // K-OOB rows (row >= K_down_tiles) are left UNWRITTEN: the compute bounds
+                        // its K-loop by real_k_tiles, so they are never reduced.
+                        if constexpr (col_strided) {
+                            constexpr uint32_t run_tiles = N_down_tiles_full / GRID_X_NOC;
+                            if (row < K_down_tiles) {
+                                noc_async_read(
+                                    down_bases.b[my_nt_d] + static_cast<uint64_t>(row * run_tiles) * down_tile_bytes,
+                                    l1_w,
+                                    run_tiles * down_tile_bytes);
                             }
-                            l1_w += down_tile_bytes;
+                            l1_w += per_core_N_d * down_tile_bytes;
+                        } else {
+                            const uint32_t col0 = my_nt_d * per_core_N_d;
+                            fast_il::Cursor<kNumDramBanks> dc;
+                            dc.start(row * N_down_tiles_full + col0);
+                            for (uint32_t n = 0; n < per_core_N_d; ++n) {
+                                // N-OOB (col >= N_down_tiles_full): dropped by the writer's col guard.
+                                if (row < K_down_tiles && col0 + n < N_down_tiles_full) {
+                                    noc_async_read(dc.addr(down_bases, down_tile_bytes), l1_w, down_tile_bytes);
+                                }
+                                dc.next();
+                                l1_w += down_tile_bytes;
+                            }
                         }
                     }
                 }
@@ -930,10 +942,9 @@ void kernel_main() {
                 // that is BOTH senders (gy==0 && gx==kb) the DRAM-read barrier is no
                 // longer hidden under the activated wait — measure before keeping.
                 if (is_in1_sender) {
+                    noc_read.async_read_barrier();  // my half of the block (all of it when !down_split)
                     if constexpr (down_split) {
-                        down_done_sem.wait_min(down_seq);
-                    } else {
-                        noc_read.async_read_barrier();
+                        down_done_sem.wait_min(down_seq);  // the writer's half
                     }
                     // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
                     // core consumes the locally-read down weight directly.

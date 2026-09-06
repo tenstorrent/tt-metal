@@ -317,8 +317,12 @@ void kernel_main() {
                     for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
                         ++down_seq;
                         down_go_sem.wait_min(down_seq);
-                        uint32_t l1_w = down_cb_base + ((down_seq - 1) % kDownNumSlots) * down_slot_bytes;
-                        for (uint32_t k = 0; k < in0_block_w_d; ++k) {
+                        // The reader reads rows [0, k_split) of this block on NoC 0; the writer
+                        // takes rows [k_split, w_d) on NoC 1 (both NoCs busy in every phase).
+                        constexpr uint32_t k_split = in0_block_w_d / 2;
+                        uint32_t l1_w = down_cb_base + ((down_seq - 1) % kDownNumSlots) * down_slot_bytes +
+                                        k_split * per_core_N_d * down_tile_bytes;
+                        for (uint32_t k = k_split; k < in0_block_w_d; ++k) {
                             // K-block kb = the activated N-slice of column core kb, so the
                             // down-weight ROWS follow that core's column map (see reader).
                             const uint32_t row = group_assign::global_col(kb, k, in0_block_w_d, grid_x, col_strided);
