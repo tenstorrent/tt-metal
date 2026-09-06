@@ -3,23 +3,67 @@
 set -e
 
 LOGDIR="."
-LOGFILE="deployment_$(hostname)_$(date +%4Y-%m-%d-%H-%M-%S).log"
 ITERS="${ITERS:-5}"
+PYTHON="$(command -v python3 || command -v python)"
+DEPLOYMENT=0
+DEPLOYMENT_CYCLES=5
+CONTINUE_ON_FAILURE=0
 
 usage() {
-	echo "Usage: $0 [-l logdir]"
-	echo "	-l <logdir>		The directory where to save the log file"
-	echo "	Environment variable ITERS controls the number of iterations of each test"
-	echo "		(default 5)"
+	cat << EOF
+Usage: $0 [--output <logdir>] [--deployment] [--continue-on-failure] [--no-eth-links]
+
+Run the deployment test suite (Ethernet, DRAM, PCIe read/write).
+Must be run from the repository root with the tests already built.
+Everything printed to the console is also written to a single log file per run.
+
+Optional:
+    --output <logdir>                       Directory where the log file is written
+                                            (default: current directory)
+    --deployment                            Run $DEPLOYMENT_CYCLES deployment cycles, each starting with a
+                                            board reset. Stops after a cycle fails.
+                                            Forces ITERS=1.
+    --continue-on-failure                   Run all $DEPLOYMENT_CYCLES cycles even if a cycle fails
+                                            (implies --deployment)
+    --no-eth-links                          Do not require a specific number of Ethernet links per
+                                            chip (sets ETH_TEST_EXPECTED_LINKS=0). Use on partially
+                                            cabled systems, otherwise 10 links per chip are expected.
+    -h                                      Display this help message and exit
+
+Environment variables:
+    ITERS                                   Number of iterations of each test (default: 5,
+                                            ignored in deployment mode)
+
+Examples:
+    Regular run (all tests, $ITERS iterations each, logs in ./logs):
+        $0 --output ./logs
+
+    Deployment run ($DEPLOYMENT_CYCLES reset cycles, one iteration per test per cycle):
+        $0 --output ./logs --deployment
+
+    Deployment run on a partially cabled system, without stopping on failure:
+        $0 --output ./logs --continue-on-failure --no-eth-links
+EOF
 }
 
 while [ -n "$1" ]
 do
 	case "$1" in
-	-l)
+	--output)
 		if [ -z "$2" ]; then echo "Missing argument to $1"; exit 1; fi
 		LOGDIR="$2"
 		shift
+		;;
+	--deployment)
+		DEPLOYMENT=1
+		;;
+	--continue-on-failure)
+		DEPLOYMENT=1
+		CONTINUE_ON_FAILURE=1
+		;;
+	--no-eth-links)
+		ETH_TEST_EXPECTED_LINKS=0
+		export ETH_TEST_EXPECTED_LINKS
 		;;
 	-h)
 		usage
@@ -35,60 +79,215 @@ do
 done
 
 mkdir -p "$LOGDIR"
-LOGFILE="$LOGDIR/$LOGFILE"
 
-GREEN="$(printf '\033[32m')"
-RED="$(printf '\033[31m')"
-RESET="$(printf '\033[m')"
+RUN_LOG="$LOGDIR/deployment_$(hostname)_$(date +%4Y-%m-%d-%H-%M-%S).log"
+: > "$RUN_LOG"
 
+# Carries a command's exit status out of the tee pipeline
+RCFILE="$(mktemp)"
+trap 'rm -f "$RCFILE"' EXIT HUP INT TERM
+
+RULE_HEAVY='=============================================================================='
+RULE_LIGHT='------------------------------------------------------------------------------'
+
+BOLD=""
+NORM=""
 FAIL=failed
 PASS=passed
 
 if [ -t 1 ]
 then
-	FAIL="$RED$FAIL$RESET"
-	PASS="$GREEN$PASS$RESET"
+	BOLD="$(printf '\033[1m')"
+	NORM="$(printf '\033[m')"
+	FAIL="$(printf '\033[31m')$FAIL$NORM"
+	PASS="$(printf '\033[32m')$PASS$NORM"
 fi
 
-truncate -s0 "$LOGFILE"
+# emit: print a line.
+emit() {
+	printf '%s\n' "$*"
+	printf '%s\n' "$*" >> "$RUN_LOG"
+}
 
-failures=0
-passes=0
+# emit_bold: print a highlighted line.
+emit_bold() {
+	printf '%s%s%s\n' "$BOLD" "$*" "$NORM"
+	printf '%s\n' "$*" >> "$RUN_LOG"
+}
 
+# emit_banner: print a heading delimited by heavy rules.
+emit_banner() {
+	emit ""
+	emit "$RULE_HEAVY"
+	emit_bold "$*"
+	emit "$RULE_HEAVY"
+}
+
+# emit_section: print a heading delimited by light rules.
+emit_section() {
+	emit ""
+	emit "$RULE_LIGHT"
+	emit_bold "$*"
+	emit "$RULE_LIGHT"
+}
+
+# emit_status <text> <passed|failed>: print a line ending in a pass/fail verdict.
+emit_status() {
+	case "$2" in
+	passed) colored="$PASS" ;;
+	*) colored="$FAIL" ;;
+	esac
+	printf '%s %s\n' "$1" "$colored"
+	printf '%s %s\n' "$1" "$2" >> "$RUN_LOG"
+}
+
+# run_logged: run a command and set $rc to its exit status.
+run_logged() {
+	echo 0 > "$RCFILE"
+	{ "$@" 2>&1 || echo "$?" > "$RCFILE"; } | tee -a "$RUN_LOG"
+	rc="$(cat "$RCFILE")"
+}
+
+# run_reset <message>: reset the boards, aborting the run if the reset fails.
+run_reset() {
+	emit_section "$1"
+	run_logged $RESET_CMD
+	if [ "$rc" -ne 0 ]
+	then
+		emit "Reset failed (exit code $rc)"
+		exit "$rc"
+	fi
+}
+
+# run_test: runs a command $ITERS times.
 run_test() {
 	for i in $(seq "$ITERS")
 	do
-		printf "$MESSAGE loop $i "
-		if ! "$@" >> "$LOGFILE" 2>&1
+		emit_section "$MESSAGE: iteration $i/$ITERS"
+		run_logged "$@"
+		if [ "$rc" -ne 0 ]
 		then
 			failures=$((failures + 1))
-			echo "$FAIL"
+			emit_status "$MESSAGE iteration $i:" failed
 		else
 			passes=$((passes + 1))
-			echo "$PASS"
+			emit_status "$MESSAGE iteration $i:" passed
 		fi
 	done
 }
 
-MESSAGE='Ethernet tests\t'
-run_test python tests/tt_metal/tt_metal/deployment/eth/test_runner.py
+# run_tests: runs all tests.
+# Sets last_eth_ok, last_dram_ok, last_pcie_read_ok, last_pcie_write_ok (1=pass, 0=fail).
+# Returns 1 if any test failed, 0 otherwise.
+run_tests() {
+	failures=0
+	passes=0
+	prev_failures=0
 
-MESSAGE='DRAM tests\t'
-run_test python tests/tt_metal/tt_metal/deployment/dram/test_runner.py
+	MESSAGE='Ethernet tests'
+	run_test $PYTHON tests/tt_metal/tt_metal/deployment/eth/test_runner.py
+	last_eth_ok=$([ "$failures" -eq "$prev_failures" ] && echo 1 || echo 0)
+	prev_failures=$failures
 
-MESSAGE='PCIe read test\t'
-run_test ./build/tools/mem_bench --benchmark_filter='Device Reading Host/1073741824/32768/1/0/0/iterations:5/manual_time' --device-id=0
+	MESSAGE='DRAM tests'
+	run_test $PYTHON tests/tt_metal/tt_metal/deployment/dram/test_runner.py
+	last_dram_ok=$([ "$failures" -eq "$prev_failures" ] && echo 1 || echo 0)
+	prev_failures=$failures
 
-MESSAGE='PCIe write test\t'
-run_test ./build/tools/mem_bench --benchmark_filter='Device Writing Host/1073741824/32768/0/1/0/iterations:5/manual_time' --device-id=0
+	MESSAGE='PCIe read test'
+	run_test ./build/tools/mem_bench --benchmark_filter='Device Reading Host/1073741824/32768/1/0/0/iterations:5/manual_time' --device-id=0
+	last_pcie_read_ok=$([ "$failures" -eq "$prev_failures" ] && echo 1 || echo 0)
+	prev_failures=$failures
 
-if [ "$passes" -gt 0 ]
+	MESSAGE='PCIe write test'
+	run_test ./build/tools/mem_bench --benchmark_filter='Device Writing Host/1073741824/32768/0/1/0/iterations:5/manual_time' --device-id=0
+	last_pcie_write_ok=$([ "$failures" -eq "$prev_failures" ] && echo 1 || echo 0)
+
+	emit_section 'Test results'
+
+	if [ "$passes" -gt 0 ]
+	then
+		emit_status "$passes tests" passed
+	fi
+
+	if [ "$failures" -gt 0 ]
+	then
+		emit_status "$failures tests" failed
+		return 1
+	fi
+
+	return 0
+}
+
+RESET_CMD="tt-smi -glx_reset"
+
+if [ "$DEPLOYMENT" -eq 1 ]
 then
-	echo "$passes tests $PASS"
+	ITERS=1
+	MODE="deployment ($DEPLOYMENT_CYCLES cycles, $RESET_CMD before each)"
+else
+	MODE="single pass ($ITERS iterations per test)"
 fi
 
-if [ "$failures" -gt 0 ]
+emit_banner "DEPLOYMENT TEST RUN"
+emit "$(printf '%-12s %s' 'Date:' "$(date)")"
+emit "$(printf '%-12s %s' 'Host:' "$(hostname)")"
+emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write')"
+emit "$(printf '%-12s %s' 'Mode:' "$MODE")"
+emit "$(printf '%-12s %s' 'Run log:' "$RUN_LOG")"
+emit "$RULE_HEAVY"
+
+if [ "$DEPLOYMENT" -eq 1 ]
 then
-	echo "$failures tests $FAIL"
-	exit 1
+	deployment_failures=0
+	cycles_run=0
+	depl_eth_pass=0
+	depl_dram_pass=0
+	depl_pcie_read_pass=0
+	depl_pcie_write_pass=0
+
+	for cycle in $(seq 1 "$DEPLOYMENT_CYCLES")
+	do
+		emit_banner "DEPLOYMENT CYCLE $cycle/$DEPLOYMENT_CYCLES"
+		run_reset "Resetting boards ($RESET_CMD)..."
+		if run_tests
+		then
+			emit_banner "CYCLE $cycle PASSED"
+		else
+			deployment_failures=$((deployment_failures + 1))
+			emit_banner "CYCLE $cycle FAILED"
+		fi
+		cycles_run=$((cycles_run + 1))
+		depl_eth_pass=$((depl_eth_pass + last_eth_ok))
+		depl_dram_pass=$((depl_dram_pass + last_dram_ok))
+		depl_pcie_read_pass=$((depl_pcie_read_pass + last_pcie_read_ok))
+		depl_pcie_write_pass=$((depl_pcie_write_pass + last_pcie_write_ok))
+		if [ "$CONTINUE_ON_FAILURE" -eq 0 ] && [ "$deployment_failures" -gt 0 ]
+		then
+			emit "Stopping: cycle $cycle failed."
+			break
+		fi
+	done
+
+	emit_banner "DEPLOYMENT TEST SUITE - RESULTS SUMMARY (${cycles_run}/${DEPLOYMENT_CYCLES} cycles ran)"
+	emit "$(printf '%-20s %s' 'Host:'            "$(hostname)")"
+	emit "$RULE_LIGHT"
+	emit "$(printf '%-20s %s' 'Ethernet tests:'  "$depl_eth_pass/$cycles_run cycles passed")"
+	emit "$(printf '%-20s %s' 'DRAM tests:'      "$depl_dram_pass/$cycles_run cycles passed")"
+	emit "$(printf '%-20s %s' 'PCIe read test:'  "$depl_pcie_read_pass/$cycles_run cycles passed")"
+	emit "$(printf '%-20s %s' 'PCIe write test:' "$depl_pcie_write_pass/$cycles_run cycles passed")"
+	emit "$RULE_LIGHT"
+	if [ "$deployment_failures" -gt 0 ]
+	then
+		emit_bold "$(printf '%-20s %s' 'Overall:' "$((cycles_run - deployment_failures))/$cycles_run cycles passed")"
+		emit "$RULE_HEAVY"
+		emit "Run log: $RUN_LOG"
+		exit 1
+	fi
+	emit_bold "$(printf '%-20s %s' 'Overall:' "All $cycles_run cycles passed")"
+	emit "$RULE_HEAVY"
+	emit "Run log: $RUN_LOG"
+	exit 0
 fi
+
+run_tests
