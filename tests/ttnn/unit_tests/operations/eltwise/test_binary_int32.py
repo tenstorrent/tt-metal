@@ -2,13 +2,28 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
+
+INT32_MIN_THRESHOLD_DIVISORS = (
+    2**21 - 1,
+    2**21,
+    2**21 + 1,
+    -(2**21 - 1),
+    -(2**21),
+    -(2**21 + 1),
+    2**22 - 1,
+    2**22,
+    2**22 + 1,
+    -(2**22 - 1),
+    -(2**22),
+    -(2**22 + 1),
+)
 
 
 def create_full_range_tensor(input_shape, dtype, value_ranges):
@@ -580,7 +595,7 @@ def test_binary_mul_int32_edge_cases(device):
         # scalar bcast
         pytest.param([(1, 1, 1), (8, 16, 32)], id="broadcast_lhs_1"),
         pytest.param([(8, 16, 32), (1, 1, 1)], id="broadcast_rhs_1"),
-        # no subtile bcast
+        # no sub-tile bcast
         pytest.param([(1, 16, 32), (8, 16, 32)], id="broadcast_lhs_2"),
         pytest.param([(8, 16, 32), (1, 16, 32)], id="broadcast_rhs_2"),
         # row bcast
@@ -902,6 +917,106 @@ def test_div_edge_cases(rounding_mode, device):
         assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
     else:
         assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
+def test_div_int32_min_rounding_modes(rounding_mode, device):
+    divisors = [
+        *INT32_MIN_THRESHOLD_DIVISORS,
+        239823930,
+        2**30,
+        -(2**30),
+        2**31 - 1,
+        -(2**31),
+    ]
+    torch_input_tensor_a = torch.full((len(divisors),), -(2**31), dtype=torch.int32)
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor(divisors, dtype=torch.int32)
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    expected = torch.div(torch_input_tensor_a, torch_input_tensor_b, rounding_mode=rounding_mode)
+    actual = ttnn.to_torch(ttnn.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode))
+    assert_equal(expected, actual)
+
+    for divisor in divisors:
+        expected = torch.div(torch_input_tensor_a, divisor, rounding_mode=rounding_mode)
+        actual = ttnn.to_torch(ttnn.div(input_tensor_a, divisor, rounding_mode=rounding_mode))
+        assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
+@pytest.mark.parametrize("operand_kind", ["tensor", "scalar"])
+def test_div_int32_odd_residuals(rounding_mode, operand_kind, device):
+    # q*b is a multiple of 1024 (Blackhole) or 2048 (Wormhole), so these
+    # odd numerators exercise the low bit discarded by residual conversion.
+    # Unlike remainder's weaker reciprocal, division's Halley refinement must
+    # leave enough correction accuracy for the single final adjustment.
+    numerators = torch.cat(
+        [
+            torch.arange(-(2**31) + 1, -(2**31) + 256, 2, dtype=torch.int64),
+            torch.arange(2**31 - 255, 2**31, 2, dtype=torch.int64),
+            # Include remainder's -2140947629 / -1 counterexample and neighbors.
+            torch.arange(-2140947757, -2140947501, 2, dtype=torch.int64),
+            torch.arange(2140947501, 2140947757, 2, dtype=torch.int64),
+            torch.arange(-127, 128, 2, dtype=torch.int64),
+        ]
+    )
+    divisors = [
+        -7,
+        -3,
+        -2,
+        -1,
+        1,
+        2,
+        3,
+        7,
+        -2049,
+        -2048,
+        -2047,
+        -1025,
+        -1024,
+        -1023,
+        1023,
+        1024,
+        1025,
+        2047,
+        2048,
+        2049,
+        *INT32_MIN_THRESHOLD_DIVISORS,
+        2**31 - 1,
+        -(2**31 - 1),
+        -(2**31),
+    ]
+    # No zero divisors; all numerators are odd, excluding undefined INT_MIN / -1.
+    if operand_kind == "tensor":
+        pairs = torch.cartesian_prod(numerators, torch.tensor(divisors, dtype=torch.int64))
+        torch_a = pairs[:, 0].reshape(-1, 32).to(torch.int32).contiguous()
+        torch_b = pairs[:, 1].reshape(-1, 32).to(torch.int32).contiguous()
+        input_a = ttnn.from_torch(torch_a, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+        input_b = ttnn.from_torch(torch_b, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+        expected = torch.div(torch_a.to(torch.int64), torch_b.to(torch.int64), rounding_mode=rounding_mode)
+        actual = ttnn.to_torch(ttnn.div(input_a, input_b, rounding_mode=rounding_mode))
+        assert_equal(expected.to(torch.int32), actual)
+    else:
+        torch_a = numerators.reshape(-1, 32).to(torch.int32)
+        input_a = ttnn.from_torch(torch_a, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+        for divisor in divisors:
+            expected = torch.div(torch_a.to(torch.int64), divisor, rounding_mode=rounding_mode)
+            actual = ttnn.to_torch(ttnn.div(input_a, divisor, rounding_mode=rounding_mode))
+            assert_equal(expected.to(torch.int32), actual)
 
 
 def test_div_inf_nan_cases(device):
@@ -1277,6 +1392,416 @@ def test_binary_remainder_fmod_int32_edge_cases(ttnn_op, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.remainder,
+        ttnn.fmod,
+    ],
+)
+def test_binary_remainder_fmod_int32_min(ttnn_op, device):
+    divisors = [
+        *INT32_MIN_THRESHOLD_DIVISORS,
+        239823930,
+        2**30,
+        -(2**30),
+        2**31 - 1,
+        -(2**31),
+    ]
+    numerators = [-(2**31)] * len(divisors)
+    # Exercises an odd correction magnitude that must remain exact.
+    numerators.append(-2140947629)
+    divisors.append(-1)
+
+    torch_input_tensor_a = torch.tensor(numerators, dtype=torch.int32)
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor(divisors, dtype=torch.int32)
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    expected = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+    actual = ttnn.to_torch(ttnn_op(input_tensor_a, input_tensor_b))
+    assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+def test_binary_remainder_fmod_int32_odd_residuals(ttnn_op, device):
+    # q*b is a multiple of 1024 (Blackhole) or 2048 (Wormhole), so odd
+    # numerators produce odd initial residuals. Dropping their low bit before
+    # float conversion is unsafe: the approximate reciprocal can introduce
+    # additional error that the single final adjustment cannot recover.
+    numerators = torch.cat(
+        [
+            torch.arange(-(2**31), -(2**31) + 256, dtype=torch.int64),
+            torch.arange(2**31 - 256, 2**31, dtype=torch.int64),
+            # Include the known failing -2140947629 / -1 case and its neighbors.
+            torch.arange(-2140947757, -2140947501, dtype=torch.int64),
+            torch.arange(2140947501, 2140947757, dtype=torch.int64),
+            torch.arange(-128, 128, dtype=torch.int64),
+        ]
+    )
+    divisors = torch.tensor(
+        [-4194305, -2049, -2048, -2047, -7, -3, -2, -1, 1, 2, 3, 7, 2047, 2048, 2049, 4194305],
+        dtype=torch.int64,
+    )
+    pairs = torch.cartesian_prod(numerators, divisors)
+    torch_a = pairs[:, 0].reshape(-1, 32).to(torch.int32).contiguous()
+    torch_b = pairs[:, 1].reshape(-1, 32).to(torch.int32).contiguous()
+    input_a = ttnn.from_torch(torch_a, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(torch_b, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    # Widen the golden calculation to avoid the INT_MIN % -1 trap.
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    expected = golden_function(torch_a.to(torch.int64), torch_b.to(torch.int64), device=device).to(torch.int32)
+    assert_equal(expected, ttnn.to_torch(ttnn_op(input_a, input_b)))
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_binary_remainder_fmod_int32_sign_adjustment(ttnn_op, layout, device):
+    """Cover all operand sign combinations, zero remainders, and INT_MIN divisors."""
+    numerators = torch.tensor([-(2**31), -5, -4, -1, 0, 1, 4, 5], dtype=torch.int32)
+    divisors = torch.tensor([-(2**31), -5, -4, -1, 1, 4, 5, 2**31 - 1], dtype=torch.int32)
+    # Repeat all 64 operand pairs across a full tile.
+    pairs = torch.cartesian_prod(numerators, divisors).repeat(16, 1)
+    torch_a = pairs[:, 0].reshape(32, 32).contiguous()
+    torch_b = pairs[:, 1].reshape(32, 32).contiguous()
+    input_a = ttnn.from_torch(
+        torch_a, dtype=ttnn.int32, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    input_b = ttnn.from_torch(
+        torch_b, dtype=ttnn.int32, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    # Widen to avoid PyTorch's INT_MIN % -1 trap; its remainder is representable.
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    expected = golden_function(torch_a.to(torch.int64), torch_b.to(torch.int64), device=device).to(torch.int32)
+    actual = ttnn.to_torch(ttnn_op(input_a, input_b))
+    assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize(
+    "divisor", [-1, *INT32_MIN_THRESHOLD_DIVISORS, 239823930, 2**30, -(2**30), 2**31 - 1, -(2**31)]
+)
+def test_binary_remainder_fmod_int32_scalar_layout_and_extreme_values(ttnn_op, layout, divisor, device):
+    torch_input_tensor = torch.tensor(
+        [-(2**31), -2140947629, -(2**30), -1, 0, 1, 2**30, 2**31 - 1], dtype=torch.int32
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    # PyTorch's int32 implementation traps on INT_MIN % -1 even though the
+    # mathematical remainder is representable, so widen the golden calculation.
+    expected = golden_function(torch_input_tensor.to(torch.int64), divisor, device=device).to(torch.int32)
+    actual = ttnn.to_torch(ttnn_op(input_tensor, divisor))
+    assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.remainder,
+        ttnn.fmod,
+    ],
+)
+@pytest.mark.parametrize(
+    "layout,use_sub_core_grids",
+    [
+        pytest.param(ttnn.TILE_LAYOUT, False, id="tile"),
+        pytest.param(ttnn.TILE_LAYOUT, True, id="tile_subgrid"),
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, False, id="row_major"),
+    ],
+)
+def test_binary_remainder_fmod_int32_float_scalar(ttnn_op, layout, use_sub_core_grids, device):
+    torch_input_tensor = torch.tensor([-5, -1, 0, 1, 5], dtype=torch.int32)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    scalar = 1.5
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    expected = golden_function(torch_input_tensor, scalar, device=device)
+    sub_core_grids = None
+    if use_sub_core_grids:
+        sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    actual = ttnn.to_torch(ttnn_op(input_tensor, scalar, sub_core_grids=sub_core_grids))
+    assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize(
+    "layout,use_sub_core_grids",
+    [
+        pytest.param(ttnn.TILE_LAYOUT, False, id="tile"),
+        pytest.param(ttnn.TILE_LAYOUT, True, id="tile_subgrid"),
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, False, id="row_major"),
+    ],
+)
+@pytest.mark.parametrize("scalar", [1.5, -1.5, 1.75, -1.75])
+def test_binary_remainder_int32_float_scalar_optional_int32_output(layout, use_sub_core_grids, scalar, device):
+    torch_input_tensor = torch.tensor([-5, -4, -1, 0, 1, 4, 5], dtype=torch.int32)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.from_torch(
+        torch.zeros_like(torch_input_tensor),
+        dtype=ttnn.int32,
+        device=device,
+        layout=layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Negative scalars cover negative intermediates; +/-1.75 also distinguishes
+    # truncation from round-to-nearest-even (unlike the 0.5 remainders for +/-1.5).
+    expected = torch.remainder(torch_input_tensor, scalar).to(torch.int32)
+    sub_core_grids = None
+    if use_sub_core_grids:
+        sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    ttnn.remainder(input_tensor, scalar, output_tensor=output_tensor, sub_core_grids=sub_core_grids)
+
+    assert_equal(expected, ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize(
+    "layout,use_sub_core_grids",
+    [
+        pytest.param(ttnn.TILE_LAYOUT, False, id="tile"),
+        pytest.param(ttnn.TILE_LAYOUT, True, id="tile_subgrid"),
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, False, id="row_major"),
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, True, id="row_major_subgrid"),
+    ],
+)
+@pytest.mark.parametrize("scalar", [257.25, -257.25])
+@pytest.mark.parametrize("width", [32, 1056])
+def test_binary_remainder_int32_float_scalar_optional_bfloat16_output(
+    layout, use_sub_core_grids, scalar, width, device
+):
+    torch_input = (torch.arange(32 * width, dtype=torch.int32) % 1024 - 512).reshape(32, width)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=layout, device=device)
+    output_tensor = ttnn.from_torch(
+        torch.zeros_like(torch_input, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device
+    )
+    sub_core_grids = None
+    if use_sub_core_grids:
+        sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+    # Fused BF16 conversion must match the previous FP32 intermediate + typecast
+    # path, including rounding of fractional remainders beyond BF16 precision.
+    # Standalone row-major typecast does not support subgrids; the reference uses
+    # its full-grid path, while the operation under test must use the requested grid.
+    reference_typecast_grids = sub_core_grids if layout == ttnn.TILE_LAYOUT else None
+    promoted_input = ttnn.typecast(input_tensor, ttnn.float32, sub_core_grids=reference_typecast_grids)
+    intermediate = ttnn.remainder(promoted_input, scalar, sub_core_grids=sub_core_grids)
+    reference = ttnn.typecast(intermediate, ttnn.bfloat16, sub_core_grids=reference_typecast_grids)
+    result = ttnn.remainder(input_tensor, scalar, output_tensor=output_tensor, sub_core_grids=sub_core_grids)
+
+    assert result.buffer_address() == output_tensor.buffer_address()
+    assert result.dtype == ttnn.bfloat16
+    actual = ttnn.to_torch(result)
+    assert_equal(ttnn.to_torch(reference), actual)
+    assert_equal(torch.remainder(torch_input, scalar).to(torch.bfloat16), actual)
+
+
+@pytest.mark.parametrize("input_is_sharded", [False, True])
+@pytest.mark.parametrize(
+    "output_dtype,torch_output_dtype", [(ttnn.int32, torch.int32), (ttnn.bfloat16, torch.bfloat16)]
+)
+def test_binary_remainder_int32_float_scalar_optional_output_sharding(
+    input_is_sharded, output_dtype, torch_output_dtype, device
+):
+    torch_input_tensor = torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32)
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.from_torch(
+        torch.zeros_like(torch_input_tensor),
+        dtype=output_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    if input_is_sharded:
+        input_tensor = ttnn.to_memory_config(input_tensor, sharded_memory_config)
+    else:
+        output_tensor = ttnn.to_memory_config(output_tensor, sharded_memory_config)
+
+    scalar = 1.5
+    expected = torch.remainder(torch_input_tensor, scalar).to(torch_output_dtype)
+    ttnn.remainder(input_tensor, scalar, output_tensor=output_tensor)
+
+    assert input_tensor.is_sharded() != output_tensor.is_sharded()
+    assert_equal(expected, ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("output_dtype", [ttnn.int32, ttnn.bfloat16])
+def test_binary_remainder_int32_float_scalar_rejects_unsupported_sharded_output(
+    layout, output_dtype, device, expect_error
+):
+    torch_input = torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32)
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.int32, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.from_torch(
+        torch.zeros_like(torch_input),
+        dtype=output_dtype,
+        layout=layout,
+        device=device,
+        memory_config=sharded_memory_config,
+    )
+    sub_core_grids = cores if layout == ttnn.TILE_LAYOUT else None
+    message = (
+        "Remainder output typecast on a restricted grid requires a tiled interleaved tensor"
+        if sub_core_grids is not None
+        else "Remainder output typecast does not support row-major sharded tensors"
+    )
+    with expect_error(RuntimeError, message):
+        ttnn.remainder(input_tensor, 1.5, output_tensor=output_tensor, sub_core_grids=sub_core_grids)
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+@pytest.mark.parametrize("scalar", [1.5, -1.5, 2.0, -2.0])
+@pytest.mark.parametrize("width", [32, 1056])
+def test_binary_remainder_fmod_int32_float_scalar_row_major_subgrid(ttnn_op, scalar, width, device):
+    torch_input = (torch.arange(32 * width, dtype=torch.int32) % 1024 - 512).reshape(1, 1, 32, width)
+    if abs(scalar) == 2.0:
+        # Integral-valued floats must still promote: these odd integers round to even FP32 values.
+        torch_input.flatten()[:4] = torch.tensor([2**24 + 1, -(2**24 + 1), -(2**31), 2**31 - 1])
+    cores = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(1, 1)),
+            ttnn.CoreRange(ttnn.CoreCoord(3, 1), ttnn.CoreCoord(3, 1)),
+        }
+    )
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    result = ttnn_op(input_tensor, scalar, sub_core_grids=cores)
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    assert result.dtype == ttnn.float32
+    assert result.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert_equal(golden_function(torch_input.float(), scalar, device=device), ttnn.to_torch(result))
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+@pytest.mark.parametrize("scalar", [1.5, -1.5, 2.0, -2.0])
+@pytest.mark.parametrize("use_sub_core_grids", [False, True])
+@pytest.mark.parametrize("interleaved_output", [False, True])
+@pytest.mark.parametrize(
+    "strategy,shape,grid_end",
+    [
+        pytest.param(ttnn.ShardStrategy.HEIGHT, (128, 32), (3, 0), id="height"),
+        pytest.param(ttnn.ShardStrategy.WIDTH, (32, 128), (3, 0), id="width"),
+        pytest.param(ttnn.ShardStrategy.BLOCK, (64, 64), (1, 1), id="block"),
+    ],
+)
+def test_binary_remainder_fmod_int32_float_scalar_row_major_sharded(
+    ttnn_op, scalar, use_sub_core_grids, interleaved_output, strategy, shape, grid_end, device
+):
+    torch_input_tensor = (torch.arange(4096, dtype=torch.int32) % 1024 - 512).reshape(1, 1, *shape)
+    if abs(scalar) == 2.0:
+        torch_input_tensor.flatten()[:4] = torch.tensor([2**24 + 1, -(2**24 + 1), -(2**31), 2**31 - 1])
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(*grid_end))})
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=cores,
+        strategy=strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=sharded_memory_config,
+    )
+
+    output_memory_config = ttnn.DRAM_MEMORY_CONFIG if interleaved_output else sharded_memory_config
+    result = ttnn_op(
+        input_tensor,
+        scalar,
+        memory_config=output_memory_config,
+        sub_core_grids=cores if use_sub_core_grids else None,
+    )
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    assert result.dtype == ttnn.float32
+    assert result.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert result.memory_config() == output_memory_config
+    assert_equal(golden_function(torch_input_tensor.float(), scalar, device=device), ttnn.to_torch(result))
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_binary_remainder_int32_float_scalar_row_major_sharded_output_dtype(output_dtype, device, expect_error):
+    torch_input = torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32)
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(1, 1))})
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config, device=device
+    )
+    result = ttnn.remainder(input_tensor, 1.5, dtype=output_dtype, sub_core_grids=cores)
+    expected = torch.remainder(torch_input.float(), 1.5)
+    assert result.dtype == output_dtype
+    assert result.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert_equal(expected.to(torch.float32 if output_dtype == ttnn.float32 else torch.bfloat16), ttnn.to_torch(result))
+
+    # Preserve the existing preallocated-output restriction for inputs that need tilizing.
+    with expect_error(RuntimeError, "Optional output tensor with row-major sharded scalar promotion is not supported"):
+        ttnn.remainder(input_tensor, 1.5, output_tensor=result, sub_core_grids=cores)
+    other_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    with expect_error(RuntimeError, "requested grid to contain all input shard cores"):
+        ttnn.remainder(input_tensor, 1.5, sub_core_grids=other_cores)
 
 
 @pytest.mark.parametrize(
