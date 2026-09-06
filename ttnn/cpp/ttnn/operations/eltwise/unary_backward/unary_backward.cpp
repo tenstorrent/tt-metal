@@ -1672,12 +1672,34 @@ std::vector<Tensor> prod_bw(
     }
 
     if (all_dimensions) {
-        Tensor temp = ttnn::multiply(
-            prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
+        // Zero-aware gradient handling to prevent non-finite (inf * 0) results (#54551)
+        Tensor is_zero = ttnn::eq(input, 0.0f, std::nullopt, output_memory_config);
+        Tensor zero_count = ttnn::sum(is_zero, std::nullopt, false, output_memory_config);
+        Tensor non_zero_input = ttnn::where(is_zero, 1.0f, input, output_memory_config);
+        Tensor non_zero_prod = ttnn::prod(non_zero_input, dim, keepdim, output_memory_config);
+
+        Tensor temp = ttnn::multiply(prod_result, grad, std::nullopt, output_memory_config);
         Tensor fill_tensor = ttnn::fill_first_val_into_tensor<::bfloat16>(
             temp, temp.dtype(), temp.layout(), temp.device(), output_memory_config);
-        Tensor all_dimension_result = ttnn::multiply(
-            ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);
+        Tensor normal_grad = ttnn::multiply(
+            ttnn::reciprocal(non_zero_input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);
+
+        Tensor single_zero_grad = ttnn::where(
+            is_zero,
+            ttnn::multiply(non_zero_prod, grad, std::nullopt, output_memory_config),
+            0.0f,
+            output_memory_config);
+
+        Tensor all_dimension_result = ttnn::where(
+            ttnn::eq(zero_count, 0.0f, std::nullopt, output_memory_config),
+            normal_grad,
+            ttnn::where(
+                ttnn::eq(zero_count, 1.0f, std::nullopt, output_memory_config),
+                single_zero_grad,
+                0.0f,
+                output_memory_config),
+            output_memory_config);
+
         grad_tensor.emplace_back(all_dimension_result);
         return grad_tensor;
     }
