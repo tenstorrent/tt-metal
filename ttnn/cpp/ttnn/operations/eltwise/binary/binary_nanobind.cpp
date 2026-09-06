@@ -97,7 +97,8 @@ constexpr auto kDivideFastApproxPostNote =
         When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero.
         When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.)doc";
 constexpr auto kDivFastApproxPostNote =
-    R"doc(With INT32 inputs, rounding_mode `None` produces a FLOAT32 output and output datatype conversion is not supported, while `floor` and `trunc` produce an INT32 output.
+    R"doc(With INT32 tensor operands or an INT32 tensor and an integer scalar, rounding_mode `None` produces a FLOAT32 output and output datatype conversion is not supported, while `floor` and `trunc` produce an INT32 output.
+        An INT32 tensor with a floating-point scalar is promoted to FLOAT32 before division and rounding, including integral-valued floats such as `2.0`. The default output dtype is FLOAT32 in all rounding modes.
         When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero for fast approximation.
         When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero (accurate mode).)doc";
 constexpr auto kMultiplyInplaceFastApproxPostNote =
@@ -1153,7 +1154,7 @@ void bind_div(
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             fast_and_approximate_mode (bool, optional): `true` if input_tensor_b is non-zero for fast approximation, else `false` for accurate division (Only if the input tensor is not ComplexTensor). Defaults to `false`.
             rounding_mode (string, optional): can be `None`, `floor` and `trunc` (only if the input tensor is not ComplexTensor). Defaults to `None`.
-            dtype (ttnn.DataType, optional): dtype of the output tensor. Integer division with `rounding_mode=None` only accepts `None` or `ttnn.float32`. Defaults to the dtype of :attr:`input_tensor_a`.
+            dtype (ttnn.DataType, optional): dtype of the output tensor. Integer division with `rounding_mode=None` only accepts `None` or `ttnn.float32`. Defaults to the dtype of :attr:`input_tensor_a`, or FLOAT32 when an INT32 input is promoted by a floating-point scalar.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 

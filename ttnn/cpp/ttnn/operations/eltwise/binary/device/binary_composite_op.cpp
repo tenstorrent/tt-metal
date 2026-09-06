@@ -59,8 +59,9 @@ std::pair<Tensor, std::optional<CoreRangeSet>> promote_int32_scalar_input(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     auto operation_sub_core_grids = resolve_sub_device_workers(input, sub_core_grids, sub_device_id);
-    if (input.layout() == Layout::ROW_MAJOR && (input.is_sharded() || operation_sub_core_grids.has_value())) {
-        // Use unary TYPECAST's full-tile staging for restricted row-major grids.
+    if ((input.layout() == Layout::ROW_MAJOR && (input.is_sharded() || operation_sub_core_grids.has_value())) ||
+        (input.is_sharded() && operation_sub_core_grids.has_value())) {
+        // Use unary TYPECAST's full-tile staging for restricted row-major/sharded grids.
         // Sharded inputs use the existing tilize path, as binary_ng did before
         // promotion, so later output memory-layout changes also use tile pages.
         if (input.is_sharded() && operation_sub_core_grids.has_value()) {
@@ -233,6 +234,47 @@ Tensor div(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     const bool is_int32 = input.dtype() == DataType::INT32;
+
+    if (is_int32 && std::holds_alternative<float>(value)) {
+        // Dispatch from the scalar's type, not its value: even 2.0 must promote
+        // before division/rounding, whereas an integer 2 keeps exact INT32 division.
+        // Otherwise binary_ng truncates the floating divisor to an integer.
+        TT_FATAL(
+            !(input.layout() == Layout::ROW_MAJOR && output_tensor.has_value()),
+            "Optional output tensor with Row Major input is not supported right now for Elementwise operations");
+        const auto [operation_input, operation_sub_core_grids] =
+            promote_int32_scalar_input(input, sub_core_grids, sub_device_id);
+        const auto operation_mem_config =
+            operation_input.layout() != input.layout() ? operation_input.memory_config() : output_mem_config;
+        const std::optional<const DataType> requested_dtype =
+            output_tensor.has_value() ? std::optional<const DataType>{output_tensor->dtype()} : output_dtype;
+        if (rounding_mode.has_value() && requested_dtype.has_value() &&
+            !tt::tt_metal::is_floating_point(*requested_dtype)) {
+            // The floating path casts integer outputs after rounding. Retain the
+            // standalone typecast's layout/grid restrictions for that final step.
+            validate_scalar_typecast(
+                operation_input.layout(),
+                output_tensor.has_value() ? output_tensor->is_sharded()
+                                          : operation_mem_config.value_or(operation_input.memory_config()).is_sharded(),
+                operation_sub_core_grids,
+                "Division output typecast");
+        }
+        const auto result = ttnn::div(
+            operation_input,
+            value,
+            fast_and_approximate_mode,
+            rounding_mode,
+            output_dtype,
+            operation_mem_config,
+            output_tensor,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            operation_sub_core_grids,
+            std::nullopt);
+        return restore_scalar_output_layout(
+            input, operation_input.layout(), result, output_mem_config, operation_sub_core_grids);
+    }
 
     if (is_int32) {
         TT_FATAL(

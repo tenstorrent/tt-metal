@@ -634,3 +634,143 @@ def test_div_int32_rejects_non_float32_output_dtype(device, expect_error):
 
     with expect_error(RuntimeError, "Incorrect output_dtype value for Integer Division"):
         ttnn.div(input_tensor_a, input_tensor_b, dtype=ttnn.int32)
+
+
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
+@pytest.mark.parametrize("scalar", [2.5, -3.14, 2.0, -2.0, 0.5, -0.5])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("use_sub_core_grids", [False, True])
+def test_div_int32_float_scalar_promotion(device, rounding_mode, scalar, layout, use_sub_core_grids):
+    torch_input = torch.tensor(
+        [-(2**31), -(2**24 + 3), -1999, -7, -5, 0, 5, 7, 1999, 2**24 + 3, 2**31 - 1], dtype=torch.int32
+    )
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=layout, device=device)
+    cores = (
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 1))}) if use_sub_core_grids else None
+    )
+    result = ttnn.div(input_tensor, scalar, rounding_mode=rounding_mode, sub_core_grids=cores)
+    expected = torch.div(torch_input.float(), scalar, rounding_mode=rounding_mode)
+    assert result.dtype == ttnn.float32
+    assert result.layout == layout
+    # Match floating division's accuracy contract; rounded small results must be exact.
+    actual = ttnn.to_torch(result)
+    assert_with_ulp(actual, expected, ulp_threshold=1.0)
+    if rounding_mode is not None:
+        assert torch.equal(actual[2:9], expected[2:9])
+
+
+@pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
+def test_div_int32_integer_and_float_scalar_remain_distinct(device, rounding_mode):
+    torch_input = torch.tensor([-(2**24 + 3), 2**24 + 3], dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    integer_result = ttnn.div(input_tensor, 2, rounding_mode=rounding_mode)
+    float_result = ttnn.div(input_tensor, 2.0, rounding_mode=rounding_mode)
+    assert integer_result.dtype == ttnn.int32
+    assert float_result.dtype == ttnn.float32
+    assert torch.equal(ttnn.to_torch(integer_result), torch.div(torch_input, 2, rounding_mode=rounding_mode))
+    assert torch.equal(ttnn.to_torch(float_result), torch.div(torch_input.float(), 2.0, rounding_mode=rounding_mode))
+
+
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
+@pytest.mark.parametrize("output_dtype", [ttnn.float32, ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("preallocated", [False, True])
+def test_div_int32_float_scalar_promotion_output_dtype(device, rounding_mode, output_dtype, preallocated):
+    torch_input = torch.tensor([-7, -5, 0, 5, 7], dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = (
+        ttnn.from_torch(torch.zeros_like(torch_input), dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        if preallocated
+        else None
+    )
+    result = ttnn.div(input_tensor, 2.0, rounding_mode=rounding_mode, dtype=output_dtype, output_tensor=output_tensor)
+    torch_dtype = {ttnn.float32: torch.float32, ttnn.bfloat16: torch.bfloat16, ttnn.int32: torch.int32}[output_dtype]
+    expected = torch.div(torch_input.float(), 2.0, rounding_mode=rounding_mode).to(torch_dtype)
+    assert result.dtype == output_dtype
+    assert torch.equal(ttnn.to_torch(result), expected)
+    if preallocated:
+        assert torch.equal(ttnn.to_torch(output_tensor), expected)
+
+
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("use_sub_core_grids", [False, True])
+@pytest.mark.parametrize("interleaved_output", [False, True])
+@pytest.mark.parametrize(
+    "strategy,shape,grid_end",
+    [
+        pytest.param(ttnn.ShardStrategy.HEIGHT, (128, 32), (3, 0), id="height"),
+        pytest.param(ttnn.ShardStrategy.WIDTH, (32, 128), (3, 0), id="width"),
+        pytest.param(ttnn.ShardStrategy.BLOCK, (64, 64), (1, 1), id="block"),
+    ],
+)
+def test_div_int32_float_scalar_promotion_sharded(
+    device, rounding_mode, layout, use_sub_core_grids, interleaved_output, strategy, shape, grid_end
+):
+    torch_input = (torch.arange(4096, dtype=torch.int32) % 1024 - 512).reshape(1, 1, *shape)
+    torch_input.flatten()[:4] = torch.tensor([-(2**31), 2**31 - 1, -(2**24 + 3), 2**24 + 3])
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(*grid_end))})
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=cores,
+        strategy=strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.int32, layout=layout, memory_config=memory_config, device=device
+    )
+    output_memory_config = ttnn.DRAM_MEMORY_CONFIG if interleaved_output else memory_config
+    result = ttnn.div(
+        input_tensor,
+        2.5,
+        rounding_mode=rounding_mode,
+        memory_config=output_memory_config,
+        sub_core_grids=cores if use_sub_core_grids else None,
+    )
+    assert result.dtype == ttnn.float32
+    assert result.layout == layout
+    assert result.memory_config() == output_memory_config
+    expected = torch.div(torch_input.float(), 2.5, rounding_mode=rounding_mode)
+    assert_with_ulp(ttnn.to_torch(result), expected, ulp_threshold=1.0)
+
+
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
+@pytest.mark.parametrize("scalar", [0.0, -0.0, float("inf"), -float("inf"), float("nan")])
+def test_div_int32_float_scalar_promotion_nonfinite(device, rounding_mode, scalar):
+    torch_input = torch.tensor([-(2**31), -5, 0, 5], dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.div(input_tensor, scalar, rounding_mode=rounding_mode)
+    fp32_input = ttnn.from_torch(torch_input.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    expected = ttnn.to_torch(ttnn.div(fp32_input, scalar, rounding_mode=rounding_mode))
+    assert result.dtype == ttnn.float32
+    torch.testing.assert_close(ttnn.to_torch(result), expected, rtol=0, atol=0, equal_nan=True)
+    # Native FP32 division currently returns NaN for infinite divisors. Promotion
+    # must match that path; fixing its infinity handling is a separate kernel change.
+    if abs(scalar) != float("inf"):
+        golden = torch.div(torch_input.float(), scalar, rounding_mode=rounding_mode)
+        torch.testing.assert_close(ttnn.to_torch(result), golden, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
+def test_div_int32_float_scalar_promotion_fast_mode(device, rounding_mode):
+    torch_input = torch.tensor([-(2**31), -5, 0, 5], dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.div(input_tensor, 2.5, rounding_mode=rounding_mode, fast_and_approximate_mode=True)
+    assert result.dtype == ttnn.float32
+    expected = torch.div(torch_input.float(), 2.5, rounding_mode=rounding_mode)
+    assert_with_ulp(ttnn.to_torch(result), expected, ulp_threshold=1.0)
+
+
+def test_div_int32_float_scalar_promotion_output_guards(device, expect_error):
+    torch_input = torch.tensor([-7, 7], dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(1, 1))})
+    with expect_error(
+        RuntimeError, "Division output typecast on a restricted grid requires a tiled interleaved tensor"
+    ):
+        ttnn.div(input_tensor, 2.0, rounding_mode="floor", dtype=ttnn.int32, sub_core_grids=cores)
+    output_tensor = ttnn.from_torch(
+        torch_input.float(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "Optional output tensor with Row Major input is not supported"):
+        ttnn.div(input_tensor, 2.0, output_tensor=output_tensor)

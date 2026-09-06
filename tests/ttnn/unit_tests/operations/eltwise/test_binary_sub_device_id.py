@@ -165,6 +165,24 @@ def test_binary_int32_float_scalar_row_major_sharded_with_sub_device_id(device, 
         teardown_sub_device(device, sub_device_manager)
 
 
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@skip_for_slow_dispatch()
+def test_div_int32_float_scalar_promotion_with_sub_device_id(device, rounding_mode, layout):
+    torch_input = torch.tensor([-(2**31), -7, -5, 0, 5, 7, 2**24 + 3], dtype=torch.int32)
+    sub_device_manager = setup_sub_device(device)
+    try:
+        for offset in [0, 1]:
+            input_tensor = ttnn.from_torch(torch_input + offset, dtype=ttnn.int32, layout=layout, device=device)
+            result = ttnn.div(input_tensor, 2.0, rounding_mode=rounding_mode, sub_device_id=ttnn.SubDeviceId(1))
+            expected = torch.div((torch_input + offset).float(), 2.0, rounding_mode=rounding_mode)
+            assert result.dtype == ttnn.float32
+            assert result.layout == layout
+            assert torch.equal(ttnn.to_torch(result), expected)
+    finally:
+        teardown_sub_device(device, sub_device_manager)
+
+
 @skip_for_slow_dispatch()
 def test_binary_int32_float_scalar_sharded_output_with_sub_device_id(device, expect_error):
     """The unsupported output typecast must not be reported as an input-promotion failure."""
