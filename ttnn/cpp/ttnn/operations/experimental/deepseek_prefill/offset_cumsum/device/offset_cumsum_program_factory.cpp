@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <algorithm>
+#include <map>
 
 #include "offset_cumsum_program_factory.hpp"
 #include "offset_cumsum_device_operation_types.hpp"
@@ -15,6 +16,29 @@
 #include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
+
+tt::tt_metal::WorkloadDescriptor OffsetCumsumProgramFactory::create_workload_descriptor(
+    const OffsetCumsumParams& operation_attributes,
+    const Tensor& input,
+    tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    // Preserve the exact populated coordinate set, including sparse tensors.
+    // Merge only chips with the same reader row_idx; no other program argument
+    // depends on the coordinate, and buffers have mesh-wide uniform addresses.
+    std::map<uint32_t, ttnn::MeshCoordinateRangeSet> rows;
+    for (const auto& coord : tensor_coords.coords()) {
+        rows[coord[operation_attributes.cluster_axis]].merge(ttnn::MeshCoordinateRange(coord));
+    }
+
+    tt::tt_metal::WorkloadDescriptor workload;
+    for (const auto& [row_idx, coordinates] : rows) {
+        for (const auto& range : coordinates.ranges()) {
+            auto desc = create_descriptor(operation_attributes, input, tensor_return_value, range.start_coord());
+            workload.programs.push_back({range, std::move(desc)});
+        }
+    }
+    return workload;
+}
 
 tt::tt_metal::ProgramDescriptor OffsetCumsumProgramFactory::create_descriptor(
     const OffsetCumsumParams& operation_attributes,
