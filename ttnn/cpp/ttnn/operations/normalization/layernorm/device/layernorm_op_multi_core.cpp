@@ -2,16 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <string>
+#include <vector>
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_stats_selector.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -20,8 +24,8 @@
 
 #include <optional>
 #include <bit>
+#include <cstdint>
 
-using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -32,50 +36,49 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 namespace m2 = tt::tt_metal::experimental;
 
-// computes layernorm(a+*b)*gamma + beta
-// if b is nullptr it's treated as zero (no addition)
-bool buffers_can_fit_in_L1(
-    uint32_t in0_size,
-    uint32_t in1_size,
-    uint32_t out0_size,
-    uint32_t im0_size,
-    uint32_t im3_size,
-    uint32_t in5_size,
-    uint32_t in6_size,
-    uint32_t im6_size,
-    uint32_t im5_size,
-    uint32_t im4_size,
-    uint32_t im1_size,
-    uint32_t in2_size,
-    uint32_t in3_size,
-    uint32_t im2_size,
-    uint32_t recip_size,
-    uint32_t in_rm_size,
-    uint32_t l1_size) {
-    uint32_t sum = 0;
-    sum += in0_size;
-    sum += in1_size;
-    sum += out0_size;
-    sum += im0_size;
-    sum += im3_size;
-    sum += in5_size;
-    sum += in6_size;
-    sum += im6_size;
-    sum += im5_size;
-    sum += im4_size;
-    sum += im1_size;
-    sum += in2_size;
-    sum += in3_size;
-    sum += im2_size;
-    sum += recip_size;
-    sum += in_rm_size;
-    return sum < l1_size * 0.95;
+struct LayerNormCbFootprint {
+    std::uint64_t input = 0;
+    std::uint64_t residual_input = 0;
+    std::uint64_t output = 0;
+    std::uint64_t centred_values = 0;
+    std::uint64_t squared_values = 0;
+    std::uint64_t gamma = 0;
+    std::uint64_t beta = 0;
+    std::uint64_t residual_values = 0;
+    std::uint64_t affine_intermediate = 0;
+    std::uint64_t final_intermediate = 0;
+    std::uint64_t mean = 0;
+    std::uint64_t scaler = 0;
+    std::uint64_t epsilon = 0;
+    std::uint64_t variance = 0;
+    std::uint64_t accumulate = 0;
+    std::uint64_t row_major_staging = 0;
+
+    constexpr std::uint64_t total() const {
+        return input + residual_input + output + centred_values + squared_values + gamma + beta + residual_values +
+               affine_intermediate + final_intermediate + mean + scaler + epsilon + variance + accumulate +
+               row_major_staging;
+    }
+
+    constexpr bool fits(std::uint64_t usable_l1_bytes) const { return total() < usable_l1_bytes; }
+};
+
+constexpr bool uses_centred_values_buffer(bool rms_norm, bool fuse_pre_add, bool large_tensor) {
+    return !rms_norm || fuse_pre_add || large_tensor;
 }
+
+// Blackhole measurements show that the affine multicast rendezvous is amortised at 20 active
+// cores for the fused pre-add replay path.
+constexpr std::uint32_t kLayerNormAffineMcastMinCores = 20;
 
 // Kernel identities within the ProgramSpec.
 const m2::KernelSpecName READER{"reader"};
+const m2::KernelSpecName READER_MCAST_RECEIVER{"reader_mcast_receiver"};
 const m2::KernelSpecName WRITER{"writer"};
 const m2::KernelSpecName COMPUTE{"compute"};
+
+const m2::SemaphoreSpecName AFFINE_READY{"affine_ready"};
+const m2::SemaphoreSpecName AFFINE_DONE{"affine_done"};
 
 // Dataflow buffer identities. Each name carries the role its buffer plays in the layernorm
 // pipeline and nothing else: the `dfb::` namespace the kernels see already says these are
@@ -106,6 +109,10 @@ const m2::DFBSpecName OUT_RM{"out_rm"};            // row-major output staging f
 const m2::DFBSpecName X_WELFORD{"x_welford"};      // alias of X (fused) or IN (non-fused)
 const m2::DFBSpecName EX_WELFORD{"ex_welford"};    // alias of EX
 const m2::DFBSpecName EX2_WELFORD{"ex2_welford"};  // alias of EX2
+const m2::DFBSpecName IN_FP32{"in_fp32"};
+const m2::DFBSpecName INB_FP32{"inb_fp32"};
+const m2::DFBSpecName PRE_ADD_FP32{"pre_add_fp32"};
+const m2::DFBSpecName EX2PE_FP32{"ex2pe_fp32"};
 
 // Tensor parameter identities.
 const m2::TensorParamName INPUT{"input"};
@@ -140,16 +147,31 @@ void bind_tensor(m2::KernelSpec& kernel, const m2::TensorParamName& tensor, std:
     });
 }
 
-// Make the two members of a legacy two-index circular buffer into an alias clique. Both members
-// must name each other, which is what makes the group legal.
-void alias_pair(m2::ProgramSpec& spec, const m2::DFBSpecName& first, const m2::DFBSpecName& second) {
+void bind_semaphore(m2::KernelSpec& kernel, const m2::SemaphoreSpecName& semaphore, std::string accessor_name) {
+    kernel.semaphore_bindings.push_back(m2::SemaphoreBinding{
+        .semaphore_spec_name = semaphore,
+        .accessor_name = std::move(accessor_name),
+    });
+}
+
+// Make an arbitrary group of circular buffers into an alias clique. Every member must name every
+// other member for the group to be legal.
+void alias_group(m2::ProgramSpec& spec, const std::vector<m2::DFBSpecName>& group) {
     for (auto& dfb : spec.dataflow_buffers) {
-        if (dfb.unique_id == first) {
-            dfb.advanced_options.alias_with = {second};
-        } else if (dfb.unique_id == second) {
-            dfb.advanced_options.alias_with = {first};
+        if (std::find(group.begin(), group.end(), dfb.unique_id) == group.end()) {
+            continue;
+        }
+        dfb.advanced_options.alias_with.clear();
+        for (const auto& candidate : group) {
+            if (candidate != dfb.unique_id) {
+                dfb.advanced_options.alias_with.push_back(candidate);
+            }
         }
     }
+}
+
+void alias_pair(m2::ProgramSpec& spec, const m2::DFBSpecName& first, const m2::DFBSpecName& second) {
+    alias_group(spec, {first, second});
 }
 
 std::optional<tt::DataFormat> dfb_data_format(const m2::ProgramSpec& spec, const m2::DFBSpecName& dfb) {
@@ -163,6 +185,231 @@ std::optional<tt::DataFormat> dfb_data_format(const m2::ProgramSpec& spec, const
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
+
+LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
+    const LayerNormParams& operation_attributes,
+    const LayerNormInputs& tensor_args,
+    const std::optional<CoreRangeSet>& core_range_set) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+
+    const auto& input = tensor_args.input;
+    const auto& residual = tensor_args.residual_input_tensor;
+    const auto& gamma = tensor_args.weight;
+    const auto& beta = tensor_args.bias;
+    const bool rms_norm = operation_attributes.norm_type == LayerNormType::RMSNORM;
+    bool requested_use_welford = false;
+    std::visit(
+        [&](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
+                requested_use_welford = program_config.use_welford;
+            }
+        },
+        operation_attributes.program_config);
+
+    IDevice* device = input.device();
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+    const std::uint32_t tile_height = input.tensor_spec().tile().get_height();
+    const std::uint32_t tile_width = input.tensor_spec().tile().get_width();
+    const bool input_is_row_major = input.layout() == Layout::ROW_MAJOR;
+    const auto& padded_shape = input.padded_shape();
+    std::uint32_t padded_height = padded_shape[-2];
+    const std::uint32_t padded_width = padded_shape[-1];
+    if (padded_height == 0 || padded_width == 0 || tile_height == 0 || tile_width == 0) {
+        return {};
+    }
+    const std::uint32_t nc = input.physical_volume() / (padded_height * padded_width);
+    if (input_is_row_major) {
+        padded_height = tt::round_up(padded_height, TILE_HEIGHT);
+    }
+    const std::uint32_t width_tiles = padded_width / tile_width;
+    const std::uint32_t height_tiles = padded_height / tile_height;
+    const std::uint32_t num_tile_rows = nc * height_tiles;
+    if (width_tiles == 0 || num_tile_rows == 0) {
+        return {};
+    }
+    const std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
+
+    const auto input_format = datatype_to_dataformat_converter(input.dtype());
+    const auto output_format = input_format;
+    const auto intermediate_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const auto gamma_format =
+        gamma.has_value() ? datatype_to_dataformat_converter(gamma->dtype()) : tt::DataFormat::Float16_b;
+    const auto beta_format =
+        beta.has_value() ? datatype_to_dataformat_converter(beta->dtype()) : tt::DataFormat::Float16_b;
+    const std::uint32_t input_tile_size = tt::tile_size(input_format);
+    const std::uint32_t output_tile_size = tt::tile_size(output_format);
+    const std::uint32_t intermediate_tile_size = tt::tile_size(intermediate_format);
+    const std::uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const std::uint32_t gamma_tile_size = tt::tile_size(gamma_format);
+    const std::uint32_t beta_tile_size = tt::tile_size(beta_format);
+    const std::uint32_t residual_tile_size =
+        residual.has_value() ? tt::tile_size(datatype_to_dataformat_converter(residual->dtype())) : 0;
+
+    const CoreRangeSet requested_cores = core_range_set.value_or(default_core_range(device));
+    const auto [num_cores, all_cores, core_group_1, core_group_2, rows_per_core_group_1, rows_per_core_group_2] =
+        split_work_to_cores(requested_cores, num_tile_rows, true);
+
+    LayerNormInterleavedPlan plan;
+    plan.width_block_tiles = tt::round_up(width_tiles, block_size);
+    plan.input_tiles = plan.width_block_tiles;
+    plan.residual_tiles = block_size * 2;
+    plan.output_tiles = input_is_row_major ? plan.width_block_tiles : block_size * 2;
+    plan.centred_tiles = plan.width_block_tiles;
+    plan.squared_tiles = plan.width_block_tiles;
+    plan.gamma_tiles = plan.width_block_tiles;
+    plan.beta_tiles = plan.width_block_tiles;
+    plan.residual_value_tiles = residual.has_value() ? plan.width_block_tiles : block_size * 2;
+    if (residual.has_value()) {
+        plan.input_tiles = 2 * block_size;
+    }
+
+    const std::uint32_t affine_intermediate_tiles = 2 * block_size;
+    constexpr std::uint32_t final_intermediate_tiles = 8;
+    constexpr std::uint32_t mean_tiles = 2;
+    constexpr std::uint32_t scaler_tiles = 2;
+    constexpr std::uint32_t epsilon_tiles = 2;
+    constexpr std::uint32_t variance_tiles = 2;
+    const std::uint64_t row_major_staging =
+        input_is_row_major ? static_cast<std::uint64_t>(2 * block_size) * (input_tile_size + output_tile_size) : 0;
+    // Live allocator occupancy intentionally participates in planning: every decision it can change is included in
+    // LayerNormDeviceOperation::compute_program_hash, so a contracted L1 span selects a distinct cached programme.
+    const std::uint64_t usable_l1 = ttnn::operations::core::usable_program_l1_capacity(device);
+    const auto footprint = [&](bool sfpu_statistics) {
+        return LayerNormCbFootprint{
+            .input = static_cast<std::uint64_t>(plan.input_tiles) * input_tile_size,
+            .residual_input =
+                residual.has_value() ? static_cast<std::uint64_t>(plan.residual_tiles) * residual_tile_size : 0,
+            .output = static_cast<std::uint64_t>(plan.output_tiles) * output_tile_size,
+            .centred_values = uses_centred_values_buffer(rms_norm, residual.has_value(), plan.large_tensor)
+                                  ? static_cast<std::uint64_t>(plan.centred_tiles) * intermediate_tile_size
+                                  : 0,
+            .squared_values =
+                sfpu_statistics ? 0 : static_cast<std::uint64_t>(plan.squared_tiles) * intermediate_tile_size,
+            .gamma = gamma.has_value() ? static_cast<std::uint64_t>(plan.gamma_tiles) * gamma_tile_size : 0,
+            .beta = beta.has_value() ? static_cast<std::uint64_t>(plan.beta_tiles) * beta_tile_size : 0,
+            .residual_values = residual.has_value() && !rms_norm
+                                   ? static_cast<std::uint64_t>(plan.residual_value_tiles) * intermediate_tile_size
+                                   : 0,
+            .affine_intermediate = gamma.has_value() || beta.has_value()
+                                       ? static_cast<std::uint64_t>(affine_intermediate_tiles) * intermediate_tile_size
+                                       : 0,
+            .final_intermediate = static_cast<std::uint64_t>(final_intermediate_tiles) * intermediate_tile_size,
+            .mean = rms_norm ? 0 : static_cast<std::uint64_t>(mean_tiles) * intermediate_tile_size,
+            .scaler = sfpu_statistics ? 0 : static_cast<std::uint64_t>(scaler_tiles) * bfloat16_tile_size,
+            .epsilon = static_cast<std::uint64_t>(epsilon_tiles) * bfloat16_tile_size,
+            .variance = static_cast<std::uint64_t>(variance_tiles) * intermediate_tile_size,
+            .accumulate = plan.large_tensor && !sfpu_statistics ? intermediate_tile_size : 0,
+            .row_major_staging = row_major_staging,
+        };
+    };
+
+    const bool tile_fits = footprint(false).fits(usable_l1);
+    const bool two_pass_fits = footprint(true).fits(usable_l1);
+    const bool row_major_affine = (gamma.has_value() && gamma->layout() == Layout::ROW_MAJOR) ||
+                                  (beta.has_value() && beta->layout() == Layout::ROW_MAJOR);
+    plan.use_welford =
+        layernorm::select_interleaved_statistics_backend(
+            requested_use_welford,
+            device->arch(),
+            rms_norm,
+            input_is_row_major,
+            fp32_dest_acc_en,
+            {.input_format = input_format,
+             .padded_width = padded_width,
+             .fuse_pre_add = residual.has_value(),
+             .has_gamma = gamma.has_value(),
+             .has_beta = beta.has_value(),
+             .compact_two_pass_fits_in_l1 = two_pass_fits}) == layernorm::StatisticsBackend::SFPU_TWO_PASS;
+    const bool fp32_finalizer_arch = device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0;
+    const bool fp32_sfpu_finalizer = fp32_finalizer_arch && fp32_dest_acc_en && plan.use_welford && !rms_norm &&
+                                     !input_is_row_major && input_format == tt::DataFormat::Float32 &&
+                                     output_format == tt::DataFormat::Float32 &&
+                                     !operation_attributes.fused_activation.has_value();
+    const bool selected_fits = plan.use_welford ? two_pass_fits : tile_fits;
+    const bool large_tensor_kernel_allowed = !row_major_affine || input_is_row_major;
+    // These empirical limits keep the largest validated streaming configurations within L1. The tile-size ratio
+    // scales them down when FP32 destination accumulation doubles the intermediate tile footprint.
+    const std::uint32_t with_weights_max = 56 * bfloat16_tile_size / intermediate_tile_size;
+    const std::uint32_t without_weights_max = 112 * bfloat16_tile_size / intermediate_tile_size;
+    if (large_tensor_kernel_allowed) {
+        if ((gamma.has_value() || beta.has_value() || input_format == tt::DataFormat::Float32) && !selected_fits) {
+            plan.large_tensor = true;
+            plan.width_block_tiles = std::min(plan.width_block_tiles, with_weights_max);
+        } else if (!selected_fits) {
+            plan.large_tensor = true;
+            plan.width_block_tiles = std::min(plan.width_block_tiles, without_weights_max);
+        }
+    }
+    // The large-tensor reader cannot consume row-major affine tensors. Keep fused FP32 calls with
+    // row-major affine parameters on the small kernel and use its retained-input SFPU finaliser.
+    const bool compact_fp32_finalizer_supports_residual = row_major_affine;
+    plan.compact_fp32_finalizer = fp32_sfpu_finalizer && !plan.large_tensor &&
+                                  (!residual.has_value() || compact_fp32_finalizer_supports_residual);
+    if (large_tensor_kernel_allowed && fp32_sfpu_finalizer && !plan.compact_fp32_finalizer) {
+        plan.large_tensor = true;
+    }
+    const auto configure_large_buffers = [&]() {
+        plan.input_tiles = plan.width_block_tiles;
+        plan.centred_tiles = plan.width_block_tiles;
+        plan.squared_tiles = plan.width_block_tiles;
+        plan.gamma_tiles = plan.width_block_tiles;
+        plan.beta_tiles = plan.width_block_tiles;
+        if (residual.has_value()) {
+            plan.residual_value_tiles = plan.width_block_tiles;
+            plan.input_tiles = 2 * block_size;
+        }
+        if (input_is_row_major) {
+            plan.input_tiles = block_size;
+            plan.output_tiles = block_size;
+        }
+    };
+    if (plan.large_tensor) {
+        configure_large_buffers();
+        while (plan.width_block_tiles > block_size && !footprint(plan.use_welford).fits(usable_l1)) {
+            plan.width_block_tiles -= block_size;
+            configure_large_buffers();
+        }
+        const auto streaming_footprint = footprint(plan.use_welford);
+        TT_FATAL(
+            streaming_footprint.fits(usable_l1),
+            "LayerNorm streaming circular buffers require {} bytes, but only {} bytes of the allocator's L1 span "
+            "are available",
+            streaming_footprint.total(),
+            usable_l1);
+    }
+
+    if (device->arch() == tt::ARCH::BLACKHOLE && plan.use_welford && !rms_norm && plan.large_tensor &&
+        residual.has_value() && gamma.has_value() && beta.has_value() && !input_is_row_major &&
+        input_format == tt::DataFormat::Float32 && !operation_attributes.fused_activation.has_value()) {
+        const std::uint32_t full_row_tiles = tt::round_up(width_tiles, block_size);
+        auto replay_footprint = footprint(true);
+        replay_footprint.residual_values = static_cast<std::uint64_t>(full_row_tiles) * intermediate_tile_size;
+        if (replay_footprint.fits(usable_l1)) {
+            plan.residual_value_tiles = full_row_tiles;
+            plan.fused_pre_add_replay = true;
+        }
+    }
+    const bool affine_mcast_core_set_safe = all_cores.bounding_box().size() == num_cores;
+    plan.affine_mcast = plan.fused_pre_add_replay && num_cores >= kLayerNormAffineMcastMinCores &&
+                        num_tile_rows % num_cores == 0 && affine_mcast_core_set_safe;
+
+    if (plan.use_welford && !rms_norm && !plan.large_tensor) {
+        const std::uint32_t read_ahead_input = residual.has_value() ? 2 * plan.width_block_tiles : 3 * plan.input_tiles;
+        const std::uint32_t read_ahead_residual =
+            residual.has_value() ? 2 * plan.width_block_tiles : plan.residual_tiles;
+        auto read_ahead_footprint = footprint(true);
+        read_ahead_footprint.input = static_cast<std::uint64_t>(read_ahead_input) * input_tile_size;
+        read_ahead_footprint.residual_input =
+            residual.has_value() ? static_cast<std::uint64_t>(read_ahead_residual) * residual_tile_size : 0;
+        if (read_ahead_footprint.fits(usable_l1)) {
+            plan.input_tiles = read_ahead_input;
+            plan.residual_tiles = read_ahead_residual;
+        }
+    }
+    return plan;
+}
 
 ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::create_program_artifacts(
     const LayerNormParams& operation_attributes,
@@ -184,25 +431,23 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // Extract program config
     bool legacy_reduction = false;
     bool legacy_rsqrt = false;
-    bool use_welford = false;
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
                 legacy_reduction = program_config.legacy_reduction;
                 legacy_rsqrt = program_config.legacy_rsqrt;
-                use_welford = program_config.use_welford;
             }
         },
         operation_attributes.program_config);
 
     const auto& logical_shape = a.logical_shape();
     const auto& padded_shape = a.padded_shape();
-    uint32_t W = logical_shape[-1];
+    std::uint32_t W = logical_shape[-1];
     const bool input_is_row_major = a.layout() == Layout::ROW_MAJOR;
-    uint32_t Wp = padded_shape[-1], Hp = padded_shape[-2];
-    uint32_t HWp = Hp * Wp;
-    uint32_t NC = a.physical_volume() / HWp;
+    std::uint32_t Wp = padded_shape[-1], Hp = padded_shape[-2];
+    std::uint32_t HWp = Hp * Wp;
+    std::uint32_t NC = a.physical_volume() / HWp;
     // For ROW_MAJOR inputs the tensor height is not padded to tile boundaries.
     // Round Hp up to the next TILE_HEIGHT multiple so that Ht >= 1 for any H < TILE_HEIGHT.
     // HWp and NC are computed above from the original (unpadded) Hp, so they remain correct.
@@ -211,7 +456,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     }
     // Total logical (non-padded) row count. Used by RM reader/writer kernels to
     // avoid OOB DRAM reads/writes when H is not a multiple of TILE_HEIGHT.
-    const uint32_t H_logical = static_cast<uint32_t>(NC) * static_cast<uint32_t>(logical_shape[-2]);
+    const std::uint32_t H_logical = static_cast<std::uint32_t>(NC) * static_cast<std::uint32_t>(logical_shape[-2]);
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
 
@@ -227,16 +472,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    const uint32_t tile_height = a.tensor_spec().tile().get_height();
-    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const std::uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const std::uint32_t tile_width = a.tensor_spec().tile().get_width();
 
     // Data span in tiles, rounded up to tile boundaries
-    uint32_t Wt = Wp / tile_width;
-    uint32_t Ht = Hp / tile_height;
+    std::uint32_t Wt = Wp / tile_width;
+    std::uint32_t Ht = Hp / tile_height;
 
     // Block size that maximizes dest usage depending on
     // whether fp32 accumulation is enabled
-    uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
+    std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -269,7 +514,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
-    uint32_t inb_single_tile_size = 0;
+    std::uint32_t inb_single_tile_size = 0;
     if (b) {
         inb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().dtype());
         inb_single_tile_size = tt::tile_size(inb_data_format);
@@ -289,128 +534,55 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = split_work_to_cores(requested_cores, num_tile_rows, true /* row_wise */);
 
-    // Use passed-in reciprocal LUT tensor if using Welford
     std::optional<Tensor> recip_tensor = std::nullopt;
     uint32_t reciprocal_buffer_size_bytes = 0;
-    if (use_welford) {
-        TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
-        recip_tensor = tensor_args.recip_tensor;
-        reciprocal_buffer_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
-    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
-    // Size the small-kernel buffers to be a multiple of the block size
-    uint32_t Wt_next_block_up = tt::round_up(Wt, block_size);
-    uint32_t in0_t =
-        Wt_next_block_up;  // dfb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
-    uint32_t in1_t = block_size * 2;  // buffer for fused pre-add b tensor
-    uint32_t out0_t = input_is_row_major ? Wt_next_block_up : block_size * 2;
-    uint32_t im0_t = Wt_next_block_up;  // buffer for saving xmm
-    uint32_t im3_t = Wt_next_block_up;  // buffer for xmm^2
-    uint32_t in5_t = Wt_next_block_up;  // buffer for gamma
-    uint32_t in6_t = Wt_next_block_up;  // buffer for beta
-    uint32_t im6_t = block_size * 2;    // x=a+b reuse for x-E[x] computation plus a bit extra for buffering
-    if (b) {
-        im6_t = Wt_next_block_up;
-        in0_t = 2 * block_size;
-    }
-    uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
-    uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
-    uint32_t im1_t = 2;
-    uint32_t in2_t = 2;  // scaler for reduce coming from reader
-    uint32_t in3_t = 2;  // epsilon coming from reader
-    uint32_t im2_t = 2;  //
+    const LayerNormInterleavedPlan selected_plan = select_plan(operation_attributes, tensor_args, core_range_set);
+    const uint32_t in0_t = selected_plan.input_tiles;
+    const uint32_t in1_t = selected_plan.residual_tiles;
+    const uint32_t out0_t = selected_plan.output_tiles;
+    const uint32_t im0_t = selected_plan.centred_tiles;
+    const uint32_t im3_t = selected_plan.squared_tiles;
+    const uint32_t in5_t = selected_plan.gamma_tiles;
+    const uint32_t in6_t = selected_plan.beta_tiles;
+    const uint32_t im6_t = selected_plan.residual_value_tiles;
+    std::uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
+    std::uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
+    std::uint32_t im1_t = 2;
+    std::uint32_t in2_t = 2;  // scaler for reduce coming from reader
+    std::uint32_t in3_t = 2;  // epsilon coming from reader
+    std::uint32_t im2_t = 2;  //
 
-    bool large_tensor_needed = false;
-    // The following constants were chosen empirically to
-    // maximize the buffer size while still fitting the
-    // largest cases (fused pre-add + gamma + beta) in L1.
-    // There is room for optimization here based on different
-    // conditions (like what buffers are actually used),
-    // but having two constants for all cases is simpler.
-    //
-    // The base values (56 / 112) are calibrated for bfloat16 intermediate tiles.
-    // When fp32_dest_acc_en is true, interm_data_format is Float32 so single_tile_size
-    // doubles (4096 B vs 2048 B). All intermediate buffers (im0_t, im3_t, im5_t, …) use
-    // single_tile_size, so the same number of tiles takes 2x the L1 space. Scaling
-    // by bfloat16_tile_size / single_tile_size keeps the total intermediate buffer
-    // footprint within the empirically validated L1 budget regardless of the
-    // accumulation data format.
-    const uint32_t with_weights_max_size = 56 * bfloat16_tile_size / single_tile_size;
-    const uint32_t without_weights_max_size = 112 * bfloat16_tile_size / single_tile_size;
-    // dfb_in_rm: double-buffered staging for in-flight tilization.
-    // Two blocks let the reader DMA the next block from DRAM while compute tilizes the current
-    // block, hiding DRAM read latency. Only allocated when input_is_row_major.
-    const uint32_t in_rm_tiles = input_is_row_major ? 2 * block_size : 0;
-    const uint32_t in_rm_size = in_rm_tiles * in_single_tile_size;
-    // dfb_out_rm: double-buffered staging for the RM writer.
-    // Two blocks let the writer drain the previous block to DRAM while compute untilizes the
-    // next block into the buffer, hiding DRAM write latency. Only allocated when input_is_row_major.
-    const uint32_t out_rm_tiles = input_is_row_major ? 2 * block_size : 0;
-    const uint32_t out_rm_size = out_rm_tiles * out_single_tile_size;
+    // Double-buffered row-major staging for in-flight tilize and untilize.
+    const std::uint32_t in_rm_tiles = input_is_row_major ? 2 * block_size : 0;
+    const std::uint32_t out_rm_tiles = input_is_row_major ? 2 * block_size : 0;
 
-    bool buffers_fit_in_L1 = buffers_can_fit_in_L1(
-        in0_t * in_single_tile_size,
-        in1_t * inb_single_tile_size,
-        out0_t * out_single_tile_size,
-        im0_t * single_tile_size,
-        im3_t * single_tile_size,
-        in5_t * gamma_single_tile_size,
-        in6_t * beta_single_tile_size,
-        im6_t * single_tile_size,
-        im5_t * single_tile_size,
-        im4_t * single_tile_size,
-        im1_t * single_tile_size,
-        in2_t * scaler_tile_size,
-        in3_t * bfloat16_tile_size,
-        im2_t * single_tile_size,
-        reciprocal_buffer_size_bytes,
-        in_rm_size + out_rm_size,
-        a.device()->l1_size_per_core());
-    // For input_is_row_major we also allow large_tensor_needed (same L1 logic applies).
-    // use_row_major_kernel (row-major gamma/beta) still skips large_tensor check as before.
-    if (!use_row_major_kernel || input_is_row_major) {
-        if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and
-            !buffers_fit_in_L1) {
-            // In the case that the required space is larger than what can be handled by the single pass
-            large_tensor_needed = true;
-            Wt_next_block_up = with_weights_max_size;
-        } else if (!buffers_fit_in_L1) {
-            large_tensor_needed = true;
-            Wt_next_block_up = without_weights_max_size;
-        }
-    }
-    if (large_tensor_needed) {
-        in0_t = Wt_next_block_up;
-        im0_t = Wt_next_block_up;  // buffer for saving xmm
-        im3_t = Wt_next_block_up;  // buffer for xmm^2
-        in5_t = Wt_next_block_up;  // buffer for gamma
-        in6_t = Wt_next_block_up;  // buffer for beta
-        if (b) {
-            im6_t = Wt_next_block_up;
-            in0_t = 2 * block_size;
-        }
-        if (input_is_row_major) {
-            out0_t = Wt_next_block_up;  // keep in sync with capped value
-        }
+    const bool use_welford = selected_plan.use_welford;
+    const bool compensated_finalizer_arch =
+        device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0;
+    const bool fp32_sfpu_finalizer = compensated_finalizer_arch && fp32_dest_acc_en && use_welford && !rms_norm &&
+                                     !input_is_row_major && in_data_format == tt::DataFormat::Float32 &&
+                                     out_data_format == tt::DataFormat::Float32 &&
+                                     !operation_attributes.fused_activation.has_value();
+    const bool large_tensor_needed = selected_plan.large_tensor;
+    const bool uses_reciprocal_lut = use_welford && large_tensor_needed;
+    if (uses_reciprocal_lut) {
+        TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
+        recip_tensor = tensor_args.recip_tensor;
+        reciprocal_buffer_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
     }
 
-    if (input_is_row_major && large_tensor_needed) {
-        // layernorm_large_tensor.cpp interleaves tilize / compute / untilize per block, so
-        // dfb_in and dfb_out only ever hold one block at a time. Move the double-buffering to
-        // dfb_in_rm / dfb_out_rm so the reader prefetches the next DRAM block while compute
-        // processes the current one, and the writer drains concurrently.
-        //
-        // layernorm.cpp (large_tensor_needed=false) pre-fills ALL Wt tiles into dfb_in before
-        // starting the variance loop, and similarly accumulates all Wt tiles in dfb_out before
-        // UNTILIZE_OUT. Those paths must keep dfb_in = dfb_out = Wt_next_block_up.
-        in0_t = block_size;
-        out0_t = block_size;
-    }
+    const bool compact_fp32_finalizer = selected_plan.compact_fp32_finalizer;
+    const bool compact_fp32_pre_add = compact_fp32_finalizer && b.has_value();
+    TT_FATAL(
+        !large_tensor_needed || !use_row_major_kernel || input_is_row_major,
+        "The LayerNorm large-tensor reader and compute kernel do not support row-major affine tensors with tiled "
+        "input");
 
     // When the input is ROW_MAJOR and float32, the in-flight tilize_block path requires
     // fp32_dest_acc_en=True. Without it, UNPACK's SRCA register file is 16-bit and
@@ -436,6 +608,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     ////////////////////////////////////////////////////////////////////////////
     const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
     const auto fuse_pre_add = b.has_value();
+    const bool fused_pre_add_replay = selected_plan.fused_pre_add_replay;
+    const bool affine_mcast = selected_plan.affine_mcast;
 
     // For Float32 input on the Welford path: expose the input tile data under two buffer indices
     // backed by the same SRAM (aliased buffers). dfb_x retains the default unpack mode so
@@ -462,8 +636,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // and silently truncate FP32 to TF32 on every restore. Exposing the same memory under an
     // alias with UnpackToDest lets copy_tile take the FP32 path, while the original EX / EX2
     // indices stay in the default mode for the SrcA/SrcB consumers.
-    const bool welford_state_fp32_alias = use_welford_and_not_rms_norm && fuse_pre_add && large_tensor_needed &&
-                                          interm_data_format == tt::DataFormat::Float32;
+    const bool welford_state_fp32_alias =
+        use_welford_and_not_rms_norm && interm_data_format == tt::DataFormat::Float32 &&
+        ((large_tensor_needed && (fuse_pre_add || fp32_sfpu_finalizer)) || compact_fp32_finalizer);
 
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
 
@@ -477,6 +652,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     //                      Dataflow buffers
     ////////////////////////////////////////////////////////////////////////////
     m2::ProgramSpec spec{.name = "layernorm_multi_core"};
+    if (affine_mcast) {
+        spec.semaphores = {
+            m2::SemaphoreSpec{.unique_id = AFFINE_READY, .target_nodes = all_cores},
+            m2::SemaphoreSpec{.unique_id = AFFINE_DONE, .target_nodes = all_cores},
+        };
+    }
 
     auto add_dfb =
         [&spec](
@@ -515,7 +696,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     add_dfb(EX2, im2_t, single_tile_size, interm_data_format);
 
     // x - E[x].
-    if (!rms_norm || fuse_pre_add || large_tensor_needed) {
+    if (uses_centred_values_buffer(rms_norm, fuse_pre_add, large_tensor_needed)) {
         add_dfb(XMM, im0_t, single_tile_size, interm_data_format);
     }
 
@@ -571,8 +752,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         add_dfb(INB, in1_t, inb_single_tile_size, inb_data_format);
     }
 
-    // Reciprocal LUT, borrowed from the caller-supplied reciprocal tensor rather than allocated.
-    if (use_welford) {
+    // Only the large Welford kernel consumes a caller-supplied reciprocal LUT.
+    if (uses_reciprocal_lut) {
         spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
             .unique_id = RECIPROCALS,
             .entry_size = reciprocal_buffer_size_bytes,
@@ -584,19 +765,65 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     // Welford fp32 aliases: a second index over the primary buffer's SRAM, same total size.
     if (welford_fp32_alias) {
-        const auto& primary = fuse_pre_add ? X : IN;
         add_dfb(
             X_WELFORD,
             fuse_pre_add ? im6_t : in0_t,
             fuse_pre_add ? single_tile_size : in_single_tile_size,
             fuse_pre_add ? interm_data_format : in_data_format);
-        alias_pair(spec, primary, X_WELFORD);
+    }
+    if ((fp32_sfpu_finalizer && large_tensor_needed) || compact_fp32_pre_add) {
+        add_dfb(IN_FP32, in0_t, in_single_tile_size, in_data_format);
+        if (fuse_pre_add) {
+            add_dfb(INB_FP32, in1_t, inb_single_tile_size, inb_data_format);
+        }
+        if (fp32_sfpu_finalizer && large_tensor_needed && fuse_pre_add) {
+            add_dfb(PRE_ADD_FP32, im6_t, single_tile_size, interm_data_format);
+        }
+    }
+    if (compact_fp32_finalizer || (fp32_sfpu_finalizer && large_tensor_needed)) {
+        add_dfb(EX2PE_FP32, im4_t, single_tile_size, interm_data_format);
     }
     if (welford_state_fp32_alias) {
         add_dfb(EX_WELFORD, im1_t, single_tile_size, interm_data_format);
-        alias_pair(spec, EX, EX_WELFORD);
         add_dfb(EX2_WELFORD, im2_t, single_tile_size, interm_data_format);
+    }
+
+    std::vector<m2::DFBSpecName> input_aliases{IN};
+    if (welford_fp32_alias && !fuse_pre_add) {
+        input_aliases.push_back(X_WELFORD);
+    }
+    if ((fp32_sfpu_finalizer && large_tensor_needed) || compact_fp32_pre_add) {
+        input_aliases.push_back(IN_FP32);
+    }
+    if (input_aliases.size() > 1) {
+        alias_group(spec, input_aliases);
+    }
+    if (fuse_pre_add) {
+        std::vector<m2::DFBSpecName> residual_aliases{INB};
+        if ((fp32_sfpu_finalizer && large_tensor_needed) || compact_fp32_pre_add) {
+            residual_aliases.push_back(INB_FP32);
+        }
+        if (residual_aliases.size() > 1) {
+            alias_group(spec, residual_aliases);
+        }
+
+        std::vector<m2::DFBSpecName> pre_add_aliases{X};
+        if (welford_fp32_alias) {
+            pre_add_aliases.push_back(X_WELFORD);
+        }
+        if (fp32_sfpu_finalizer && large_tensor_needed) {
+            pre_add_aliases.push_back(PRE_ADD_FP32);
+        }
+        if (pre_add_aliases.size() > 1) {
+            alias_group(spec, pre_add_aliases);
+        }
+    }
+    if (welford_state_fp32_alias) {
+        alias_pair(spec, EX, EX_WELFORD);
         alias_pair(spec, EX2, EX2_WELFORD);
+    }
+    if (compact_fp32_finalizer || (fp32_sfpu_finalizer && large_tensor_needed)) {
+        alias_pair(spec, EX2PE, EX2PE_FP32);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -614,7 +841,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (beta.has_value()) {
         spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = BETA_T, .spec = beta.value().tensor_spec()});
     }
-    if (use_welford) {
+    if (uses_reciprocal_lut) {
         spec.tensor_parameters.push_back(
             m2::TensorParameter{.unique_id = RECIP, .spec = recip_tensor.value().tensor_spec()});
     }
@@ -677,6 +904,15 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (welford_fp32_alias) {
         reader.compiler_options.defines.emplace("WELFORD_FP32_ALIAS", "1");
     }
+    if (fp32_sfpu_finalizer && large_tensor_needed) {
+        reader.compiler_options.defines.emplace("FP32_SFPU_FINALIZER", "1");
+    }
+    if (compact_fp32_pre_add) {
+        reader.compiler_options.defines.emplace("COMPACT_FP32_PRE_ADD", "1");
+    }
+    if (fused_pre_add_replay) {
+        reader.compiler_options.defines.emplace("FUSED_PRE_ADD_REPLAY", "1");
+    }
 
     if (!compute_tilizes) {
         bind_dfb(reader, IN, "in", m2::DFBEndpointType::PRODUCER);
@@ -700,6 +936,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (welford_fp32_alias && !fuse_pre_add) {
         bind_dfb(reader, X_WELFORD, "x_welford", m2::DFBEndpointType::PRODUCER);
     }
+    if ((fp32_sfpu_finalizer && large_tensor_needed) || compact_fp32_pre_add) {
+        bind_dfb(reader, IN_FP32, "in_fp32", m2::DFBEndpointType::PRODUCER);
+        if (fuse_pre_add) {
+            bind_dfb(reader, INB_FP32, "inb_fp32", m2::DFBEndpointType::PRODUCER);
+        }
+    }
 
     bind_tensor(reader, INPUT, "src");
     if (b) {
@@ -710,6 +952,34 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     }
     if (beta.has_value()) {
         bind_tensor(reader, BETA_T, "beta");
+    }
+
+    std::optional<m2::KernelSpec> reader_mcast_receiver;
+    if (affine_mcast) {
+        reader_mcast_receiver = reader;
+        reader_mcast_receiver->unique_id = READER_MCAST_RECEIVER;
+        reader_mcast_receiver->compiler_options.defines.emplace("AFFINE_MCAST", "1");
+        reader_mcast_receiver->compiler_options.defines.emplace("AFFINE_MCAST_RECEIVER", "1");
+        reader_mcast_receiver->runtime_arg_schema.runtime_arg_names.insert(
+            reader_mcast_receiver->runtime_arg_schema.runtime_arg_names.end(), {"sender_noc_x", "sender_noc_y"});
+        reader_mcast_receiver->tensor_bindings.erase(
+            std::remove_if(
+                reader_mcast_receiver->tensor_bindings.begin(),
+                reader_mcast_receiver->tensor_bindings.end(),
+                [](const m2::TensorBinding& binding) {
+                    return binding.tensor_parameter_name == GAMMA_T || binding.tensor_parameter_name == BETA_T;
+                }),
+            reader_mcast_receiver->tensor_bindings.end());
+        bind_semaphore(*reader_mcast_receiver, AFFINE_READY, "affine_ready");
+        bind_semaphore(*reader_mcast_receiver, AFFINE_DONE, "affine_done");
+
+        reader.compiler_options.defines.emplace("AFFINE_MCAST", "1");
+        reader.compiler_options.defines.emplace("AFFINE_MCAST_SENDER", "1");
+        reader.runtime_arg_schema.runtime_arg_names.insert(
+            reader.runtime_arg_schema.runtime_arg_names.end(),
+            {"mcast_start_x", "mcast_start_y", "mcast_end_x", "mcast_end_y", "num_mcast_dests", "num_receivers"});
+        bind_semaphore(reader, AFFINE_READY, "affine_ready");
+        bind_semaphore(reader, AFFINE_DONE, "affine_done");
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -741,17 +1011,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     //                      Compute kernel
     ////////////////////////////////////////////////////////////////////////////
     // Select compute kernel path.
-    // For input_is_row_major: TILIZE_IN define handles in-flight tilization; large_tensor kernel allowed.
-    // use_row_major_kernel (row-major gamma/beta only) still prevents large_tensor as before.
     const auto* compute_kernel_path =
-        (large_tensor_needed && (!use_row_major_kernel || input_is_row_major))
-            ? (use_welford_and_not_rms_norm ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
-                                              "layernorm_large_tensor_welford.cpp"
-                                            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
-                                              "layernorm_large_tensor.cpp")
-            : (use_welford_and_not_rms_norm
-                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_welford.cpp"
-                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp");
+        large_tensor_needed
+            ? (use_welford_and_not_rms_norm ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
+                                              "compute/layernorm_large_tensor_welford.cpp"
+                                            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
+                                              "compute/layernorm_large_tensor.cpp")
+            : (use_welford_and_not_rms_norm ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
+                                              "compute/layernorm_welford.cpp"
+                                            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
+                                              "compute/layernorm.cpp");
 
     auto compute_hw = to_compute_hardware_config(device->arch(), compute_kernel_config);
 
@@ -775,6 +1044,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (use_welford_and_not_rms_norm) {
         compute.compile_time_args.emplace("tile_width", ttnn::types::TILE_SIZE);
         compute.compile_time_args.emplace("fuse_pre_add", static_cast<uint32_t>(fuse_pre_add));
+        compute.compile_time_args.emplace("reciprocal_w", std::bit_cast<uint32_t>(1.0f / static_cast<float>(W)));
     } else {
         compute.compile_time_args.emplace("tile_width", tile_width);
         compute.compile_time_args.emplace("float32_reduction", static_cast<uint32_t>(float32_reduction));
@@ -807,6 +1077,18 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     }
     if (welford_state_fp32_alias) {
         compute.compiler_options.defines.emplace("WELFORD_STATE_FP32_ALIAS", "1");
+    }
+    if (fp32_sfpu_finalizer && large_tensor_needed) {
+        compute.compiler_options.defines.emplace("FP32_SFPU_FINALIZER", "1");
+    }
+    if (compact_fp32_finalizer) {
+        compute.compiler_options.defines.emplace("COMPACT_FP32_FINALIZER", "1");
+    }
+    if (compact_fp32_pre_add) {
+        compute.compiler_options.defines.emplace("COMPACT_FP32_PRE_ADD", "1");
+    }
+    if (fused_pre_add_replay) {
+        compute.compiler_options.defines.emplace("FUSED_PRE_ADD_REPLAY", "1");
     }
     if (operation_attributes.fused_activation.has_value()) {
         const auto& act = operation_attributes.fused_activation.value();
@@ -859,7 +1141,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (!rms_norm || fuse_pre_add || large_tensor_needed) {
         bind_self_loop(compute, XMM, "xmm");
     }
-    if (use_welford) {
+    if (uses_reciprocal_lut) {
         bind_self_loop(compute, RECIPROCALS, "reciprocals");
     }
     if (large_tensor_needed && !use_welford) {
@@ -875,6 +1157,18 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (welford_state_fp32_alias) {
         bind_self_loop(compute, EX_WELFORD, "ex_welford");
         bind_self_loop(compute, EX2_WELFORD, "ex2_welford");
+    }
+    if ((fp32_sfpu_finalizer && large_tensor_needed) || compact_fp32_pre_add) {
+        bind_dfb(compute, IN_FP32, "in_fp32", m2::DFBEndpointType::CONSUMER);
+        if (fuse_pre_add) {
+            bind_dfb(compute, INB_FP32, "inb_fp32", m2::DFBEndpointType::CONSUMER);
+            if (fp32_sfpu_finalizer && large_tensor_needed) {
+                bind_self_loop(compute, PRE_ADD_FP32, "pre_add_fp32");
+            }
+        }
+    }
+    if (compact_fp32_finalizer || (fp32_sfpu_finalizer && large_tensor_needed)) {
+        bind_self_loop(compute, EX2PE_FP32, "ex2pe_fp32");
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -904,9 +1198,26 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         if (welford_fp32_alias) {
             unpack_to_dest.push_back(X_WELFORD);
         }
+        if (fused_pre_add_replay) {
+            // The primary X FIFO is retained for finalisation, so it can itself use
+            // the full-FP32 destination path without a separate replay alias.
+            unpack_to_dest.push_back(X);
+        }
         if (welford_state_fp32_alias) {
             unpack_to_dest.push_back(EX_WELFORD);
             unpack_to_dest.push_back(EX2_WELFORD);
+        }
+        if ((fp32_sfpu_finalizer && large_tensor_needed) || compact_fp32_pre_add) {
+            unpack_to_dest.push_back(IN_FP32);
+            if (fuse_pre_add) {
+                unpack_to_dest.push_back(INB_FP32);
+            }
+            if (fp32_sfpu_finalizer && large_tensor_needed && fuse_pre_add) {
+                unpack_to_dest.push_back(PRE_ADD_FP32);
+            }
+        }
+        if (compact_fp32_finalizer || (fp32_sfpu_finalizer && large_tensor_needed)) {
+            unpack_to_dest.push_back(EX2PE_FP32);
         }
         for (const auto& dfb : unpack_to_dest) {
             modes.emplace(dfb, UnpackMode::UnpackToDest);
@@ -928,15 +1239,26 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     //                      Runtime arguments
     ////////////////////////////////////////////////////////////////////////////
     m2::KernelRunArgs reader_run_args{.kernel = READER};
+    m2::KernelRunArgs reader_mcast_receiver_run_args{.kernel = READER_MCAST_RECEIVER};
     m2::KernelRunArgs writer_run_args{.kernel = WRITER};
     m2::KernelRunArgs compute_run_args{.kernel = COMPUTE};
 
     uint32_t curr_row = 0;
     auto all_core_coords = corerange_to_cores(all_cores, num_cores, true);
-    for (uint32_t i = 0; i < num_cores; ++i) {
+    const CoreCoord affine_mcast_sender_core = all_core_coords.front();
+    const CoreRangeSet affine_mcast_sender_cores{CoreRange{affine_mcast_sender_core}};
+    const CoreRangeSet affine_mcast_receiver_cores = all_cores.subtract(affine_mcast_sender_cores);
+    const CoreRange affine_mcast_bbox = all_cores.bounding_box();
+    TT_FATAL(
+        !affine_mcast || affine_mcast_bbox.size() == num_cores,
+        "LayerNorm affine multicast requires the participating cores to fill their bounding box");
+    const CoreCoord affine_mcast_start = device->worker_core_from_logical_core(affine_mcast_bbox.start_coord);
+    const CoreCoord affine_mcast_end = device->worker_core_from_logical_core(affine_mcast_bbox.end_coord);
+    const CoreCoord affine_mcast_sender_noc = device->worker_core_from_logical_core(affine_mcast_sender_core);
+    for (std::uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = all_core_coords[i];
 
-        uint32_t num_tile_rows_per_core = 0;
+        std::uint32_t num_tile_rows_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -945,23 +1267,43 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
             TT_THROW("Core not in specified core ranges");
         }
 
-        uint32_t tile_offset = curr_row * Wt;
+        std::uint32_t tile_offset = curr_row * Wt;
 
         // Merged readers (rm_and_tile, large_tensor_rm_and_tile) use a unified start_tile_row = curr_row.
         // Legacy kernels (welford large-tensor, rm_gb) still expect tile_offset = curr_row * Wt.
-        const bool using_legacy_tile_reader =
+        const bool reader_uses_tile_offset =
             (use_welford_and_not_rms_norm && large_tensor_needed) || (use_row_major_kernel && !input_is_row_major);
-        const uint32_t reader_start = using_legacy_tile_reader ? tile_offset : curr_row;
+        const std::uint32_t reader_start = reader_uses_tile_offset ? tile_offset : curr_row;
 
+        auto& active_reader_run_args =
+            affine_mcast && core != affine_mcast_sender_core ? reader_mcast_receiver_run_args : reader_run_args;
         m2::AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values,
+            active_reader_run_args.runtime_arg_values,
             core,
             {{"NCHt", num_tile_rows_per_core},
              {"Wt", Wt},
              {"reader_start", reader_start},
              {"eps", std::bit_cast<uint32_t>(eps)}});
         if (input_is_row_major) {
-            m2::AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"H_logical", H_logical}});
+            m2::AddRuntimeArgsForNode(active_reader_run_args.runtime_arg_values, core, {{"H_logical", H_logical}});
+        }
+        if (affine_mcast) {
+            if (core == affine_mcast_sender_core) {
+                m2::AddRuntimeArgsForNode(
+                    active_reader_run_args.runtime_arg_values,
+                    core,
+                    {{"mcast_start_x", affine_mcast_start.x},
+                     {"mcast_start_y", affine_mcast_start.y},
+                     {"mcast_end_x", affine_mcast_end.x},
+                     {"mcast_end_y", affine_mcast_end.y},
+                     {"num_mcast_dests", affine_mcast_bbox.size() - 1},
+                     {"num_receivers", num_cores - 1}});
+            } else {
+                m2::AddRuntimeArgsForNode(
+                    active_reader_run_args.runtime_arg_values,
+                    core,
+                    {{"sender_noc_x", affine_mcast_sender_noc.x}, {"sender_noc_y", affine_mcast_sender_noc.y}});
+            }
         }
 
         // For the RM output writer start_tile_row is the starting tile-row index for this core,
@@ -983,15 +1325,42 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     ////////////////////////////////////////////////////////////////////////////
     //                      Assemble
     ////////////////////////////////////////////////////////////////////////////
-    spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
-    spec.work_units = {m2::WorkUnitSpec{
-        .name = "main",
-        .kernels = {READER, WRITER, COMPUTE},
-        .target_nodes = all_cores,
-    }};
+    if (affine_mcast) {
+        spec.kernels = {
+            std::move(reader), std::move(reader_mcast_receiver.value()), std::move(writer), std::move(compute)};
+        spec.work_units = {
+            m2::WorkUnitSpec{
+                .name = "affine_sender",
+                .kernels = {READER, WRITER, COMPUTE},
+                .target_nodes = affine_mcast_sender_cores,
+            },
+            m2::WorkUnitSpec{
+                .name = "affine_receivers",
+                .kernels = {READER_MCAST_RECEIVER, WRITER, COMPUTE},
+                .target_nodes = affine_mcast_receiver_cores,
+            },
+        };
+    } else {
+        spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
+        spec.work_units = {m2::WorkUnitSpec{
+            .name = "main",
+            .kernels = {READER, WRITER, COMPUTE},
+            .target_nodes = all_cores,
+        }};
+    }
 
     m2::ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
+    if (affine_mcast) {
+        run_args.kernel_run_args = {
+            std::move(reader_run_args),
+            std::move(reader_mcast_receiver_run_args),
+            std::move(writer_run_args),
+            std::move(compute_run_args),
+        };
+    } else {
+        run_args.kernel_run_args = {
+            std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
+    }
     run_args.tensor_args.emplace(INPUT, a.mesh_tensor());
     run_args.tensor_args.emplace(OUTPUT, output.mesh_tensor());
     if (b) {
@@ -1003,7 +1372,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (beta.has_value()) {
         run_args.tensor_args.emplace(BETA_T, beta.value().mesh_tensor());
     }
-    if (use_welford) {
+    if (uses_reciprocal_lut) {
         run_args.tensor_args.emplace(RECIP, recip_tensor.value().mesh_tensor());
     }
 

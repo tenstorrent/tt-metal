@@ -5,10 +5,11 @@
 // Welford HW-reduction writer kernel.
 //
 // Phase 1 (per output): Reads Wt partial (mean, var) tile pairs from
-// dfb::partial (written by the compute kernel using
-// welford_finalize_to_row), combines their equal-sized populations across W,
-// applies Bessel's correction, and writes the combined scalar into dfb::combined
-// for the compute kernel to apply
+// dfb::partial. The compute kernel either writes 32 per-column statistics or,
+// on the SFPU leaf-combine path, one precombined 32-column leaf per tile.
+// This kernel combines those equal-sized populations across W, applies
+// Bessel's correction, and writes the combined scalar into dfb::combined for
+// the compute kernel to apply
 // sqrtf (if std) and re-pack in the output format. dfb::combined is
 // normally fp32, but for variance output to bf16 the program
 // factory may declare it as bf16 to save SRAM with no precision loss
@@ -119,6 +120,9 @@ void kernel_main() {
     constexpr std::uint32_t reduce_batch_size = get_arg(args::reduce_batch_size);
     constexpr bool combined_is_bf16 = get_arg(args::combined_is_bf16) != 0;
     static_assert(tile_width == welford_block_size);
+#ifdef WELFORD_SFPU_LEAF_COMBINE
+    static_assert(W % tile_width == 0, "SFPU leaf combine requires every input tile to have a full-width population");
+#endif
 
     constexpr std::uint32_t num_partials = reduce_batch_size * W;
     static_assert(num_partials > 0);
@@ -134,16 +138,12 @@ void kernel_main() {
     constexpr std::uint32_t last_tile_cols = (W % tile_width == 0) ? tile_width : W % tile_width;
 
     Noc noc;
-    // dfb::partial holds the per-column (mean, var) tile pairs produced by the compute kernel.
     DataflowBuffer dfb_partial(dfb::partial);
-    // dfb::combined: combined scalar tile written by this kernel, read back by compute for repacking
-    // into the output data format. Format is Float32 by default; bf16 when combined_is_bf16 is true
-    // (variance-to-bf16 path).
     DataflowBuffer dfb_combined(dfb::combined);
-    // dfb::out: output tile packed by compute in the correct data format.
     DataflowBuffer dfb_out(dfb::out);
 
     const std::uint32_t partial_tile_size_bytes = dfb_partial.get_tile_size();
+    const std::uint32_t combined_tile_size_bytes = dfb_combined.get_tile_size();
     const std::uint32_t out_tile_size_bytes = dfb_out.get_tile_size();
 
     const auto tensor_out = TensorAccessor(tensor::dst);
@@ -152,6 +152,24 @@ void kernel_main() {
     // Each output element is produced by combining reduce_batch_size
     // consecutive NC slices (each contributing Wt partial tile pairs).
     std::uint32_t num_outputs = NC_per_core / reduce_batch_size;
+
+    // dfb::combined has one entry, so its write pointer wraps to the same tile
+    // after every push/pop cycle. Clear the full tile once before publishing
+    // any result; subsequent outputs only need to replace element [0,0].
+    if (num_outputs > 0) {
+        dfb_combined.reserve_back(1);
+        if constexpr (combined_is_bf16) {
+            auto* combined_ptr = reinterpret_cast<volatile std::uint16_t*>(dfb_combined.get_write_ptr());
+            for (std::uint32_t i = 0; i < combined_tile_size_bytes / sizeof(std::uint16_t); ++i) {
+                combined_ptr[i] = 0;
+            }
+        } else {
+            auto* combined_ptr = reinterpret_cast<volatile float*>(dfb_combined.get_write_ptr());
+            for (std::uint32_t i = 0; i < combined_tile_size_bytes / sizeof(float); ++i) {
+                combined_ptr[i] = 0.0f;
+            }
+        }
+    }
 
     for (std::uint32_t out = 0; out < num_outputs; ++out) {
         // --- Phase 1: W-combine all per-column partials into one scalar ---
@@ -178,6 +196,14 @@ void kernel_main() {
                 auto* means_ptr = reinterpret_cast<volatile float*>(means_addr);
                 auto* vars_ptr = reinterpret_cast<volatile float*>(vars_addr);
 
+#ifdef WELFORD_SFPU_LEAF_COMBINE
+                const WelfordBlockStats block = {
+                    .mean = means_ptr[0],
+                    .variance_sum = vars_ptr[0],
+                };
+                push_full_block(tree, block, completed_blocks);
+                ++completed_blocks;
+#else
                 std::uint32_t num_cols = (wt < Wt - 1) ? tile_width : last_tile_cols;
                 for (std::uint32_t c = 0; c < num_cols; ++c) {
                     // In tile row format, columns 0-15 are in Face 0 and
@@ -210,6 +236,7 @@ void kernel_main() {
                         block_count = 0;
                     }
                 }
+#endif
 
                 dfb_partial.pop_front(2);
             }
@@ -247,31 +274,16 @@ void kernel_main() {
             final_var = combined.variance_sum * inv_num_partials;
         }
 
-        // Write the combined scalar into a tile in dfb::combined.  The compute
+        // Write the combined scalar into a tile in dfb::combined. The compute
         // kernel will unpack this and re-pack into dfb::out in the correct
         // output data format (using the packer hardware).
-        //
-        // Only Face 0 row 0 (FACE_W elements) needs zeroing.  The scalar
-        // lives at position [0,0]; the remaining FACE_W-1 elements in
-        // the same row share a BFP exponent group, so they must be zero
-        // to avoid corrupting the scalar's mantissa precision in
-        // BFLOAT8_B output.  Other face rows have independent exponents
-        // and are never read (the output is a single scalar), so stale
-        // L1 contents there are harmless.
-        dfb_combined.reserve_back(1);
         if constexpr (combined_is_bf16) {
-            auto* combined_ptr = reinterpret_cast<std::uint16_t*>(dfb_combined.get_write_ptr());
-            for (std::uint32_t i = 0; i < FACE_W; ++i) {
-                combined_ptr[i] = 0;
-            }
+            auto* combined_ptr = reinterpret_cast<volatile std::uint16_t*>(dfb_combined.get_write_ptr());
             // fp32_to_bf16 applies round-to-nearest-even, matching the packer
             // hardware so the output is bit-identical to a packer-produced bf16.
             combined_ptr[0] = fp32_to_bf16(final_var);
         } else {
-            auto* combined_ptr = reinterpret_cast<float*>(dfb_combined.get_write_ptr());
-            for (std::uint32_t i = 0; i < FACE_W; ++i) {
-                combined_ptr[i] = 0.0f;
-            }
+            auto* combined_ptr = reinterpret_cast<volatile float*>(dfb_combined.get_write_ptr());
             combined_ptr[0] = final_var;
         }
         dfb_combined.push_back(1);
@@ -282,6 +294,10 @@ void kernel_main() {
         noc.async_write(dfb_out, tensor_out, out_tile_size_bytes, {}, {.page_id = out_tile_id});
         noc.async_writes_flushed();
         dfb_out.pop_front(1);
+
+        if (out + 1 < num_outputs) {
+            dfb_combined.reserve_back(1);
+        }
     }
 
     noc.async_write_barrier();

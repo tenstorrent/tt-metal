@@ -6,12 +6,66 @@ import os
 
 import pytest
 import torch
-
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, is_blackhole, torch_random
+from models.common.utility_functions import (
+    comp_allclose_and_pcc,
+    is_blackhole,
+    torch_random,
+)
+
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
+
+
+@pytest.fixture
+def enabled_program_cache(device):
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    try:
+        yield
+    finally:
+        device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.var, ttnn.std], ids=["var", "std"])
+@pytest.mark.parametrize("correction", [False, True])
+@pytest.mark.parametrize("value", [1e38, -1e38])
+def test_std_var_hw_large_constant(device, ttnn_op, correction, value):
+    # W=128 selects Blackhole's SFPU leaf combine. The lane means are finite,
+    # but summing them before dividing by 32 would overflow.
+    torch_input = torch.full((1, 1, 32, 128), value, dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(ttnn_op(input_tensor, dim=(-2, -1), keepdim=True, correction=correction))
+    assert torch.isfinite(output).all()
+    assert torch.count_nonzero(output) == 0
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("correction", [False, True])
+@pytest.mark.parametrize(
+    "shape,dim",
+    [
+        ((2, 1, 65, 128), (-2, -1)),
+        ((2, 3, 33, 128), (1, 2, 3)),
+        ((1, 1, 32, 10528), (-2, -1)),
+    ],
+    ids=["partial_height", "batch_merge", "uneven_tree"],
+)
+def test_std_var_hw_compact_lane_combine(device, enabled_program_cache, dtype, correction, shape, dim):
+    # Full-width leaves select the Blackhole SFPU combine. Distinct lane means
+    # and nonzero lane variances exercise both terms and their relative scaling.
+    torch.manual_seed(123)
+    values = torch.randn(shape) + (torch.arange(shape[-1]) % 32).float() + 1024
+    tt_input = ttnn.from_torch(values, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    quantised_input = ttnn.to_torch(tt_input).to(torch.float64)
+    rtol = 2e-4 if dtype == ttnn.float32 else 0.01 if dtype == ttnn.bfloat16 else 0.03
+    for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
+        expected = torch_op(quantised_input, dim=dim, keepdim=True, correction=int(correction))
+        for _ in range(3):
+            actual = ttnn.to_torch(ttnn_op(tt_input, dim=dim, keepdim=True, correction=correction)).to(torch.float64)
+            assert torch.isfinite(actual).all()
+            torch.testing.assert_close(actual, expected, rtol=rtol, atol=1e-7)
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -60,6 +114,43 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
         assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
+def test_std_w_streaming_output_padding_is_finite(device):
+    torch.manual_seed(0)
+    torch_input = -torch.rand((1, 1, 32, 96), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.std(input_tensor, dim=-1, correction=False)
+    padded_output = output_tensor.cpu().to_torch_with_padded_shape()
+
+    assert torch.isfinite(padded_output).all()
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.var, ttnn.std], ids=["var", "std"])
+@pytest.mark.parametrize(
+    "torch_dtype,ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+    ids=["bf16", "fp32", "bfp8"],
+)
+def test_std_var_hw_output_padding_is_zero(device, torch_dtype, ttnn_dtype, ttnn_op):
+    torch.manual_seed(0)
+    # More outputs than either supported Gen1 compute grid ensures that the
+    # one-entry combined buffer is reused after its write pointer wraps.
+    torch_input = -torch.rand((1, 256, 32, 96), dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn_op(input_tensor, dim=(-2, -1), keepdim=True, correction=False)
+    padded_output = output_tensor.cpu().to_torch_with_padded_shape()
+    padding = padded_output.clone()
+    padding[..., 0, 0] = 0
+
+    assert torch.isfinite(padded_output).all()
+    assert torch.count_nonzero(padding) == 0
+
+
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
@@ -98,21 +189,35 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
     )
 
 
-# Regression test for fp32 Welford variance precision under large mean offsets.
+@pytest.mark.parametrize("reduce_op", [ttnn.var, ttnn.std])
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16)])
+def test_var_std_reject_off_default_tile(device, reduce_op, tile_shape, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.randn((1, 1, 32, 64), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+
+    with expect_error(RuntimeError, "Std/Var TILE input requires tile shape 32x32"):
+        reduce_op(input_tensor, dim=-1, correction=False)
+
+
+# Regression test for FP32 variance precision under large mean offsets.
 # Uses a bit-exact integer input where the true variance is known analytically:
 # variance of N consecutive integers is (N^2 - 1) / 12 (population); with N=32 and Bessel's
 # correction, sample variance = 32 * (32^2 - 1) / (12 * 31) = 88.0 exactly. Variance is
 # translation-invariant *and* sign-invariant, so neither adding a large offset to every
-# element nor flipping its sign should change the answer.the scalar is applied after the
+# element nor flipping its sign should change the answer. The scalar is applied after the
 # reduction as var(s*x) = s^2 * var(x).
-# test covers all three reduction kernels (H, W, HW) and both code paths
+# The test covers all three reduction kernels (H, W, HW).
 @pytest.mark.parametrize("scalar", [1.0, 0, -1.0])
 @pytest.mark.parametrize("offset", [0.0, 1e6])
 @pytest.mark.parametrize("dim", [-1, -2, (-2, -1)])
 def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     correction = True
-    # The input is read at full fp32 and reduced unscaled; scalar is now applied after the (unscaled, precise) Welford reduction
-    # as var(s*x) = s^2 * var(x), so this case is accurate regardless of offset.
+    # The input is read at full FP32 and reduced unscaled; scalar is applied afterwards
+    # as var(s*x) = s^2 * var(x), so this case remains accurate regardless of offset.
     N = 32
     seq = torch.arange(N, dtype=torch.float32) + offset
     # Lay out the input so the reduction axis is the integer sequence.
@@ -132,8 +237,8 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     tt_out = ttnn.var(tt_in, dim=dim, scalar=scalar, keepdim=True, correction=correction)
     actual = ttnn.to_torch(ttnn.from_device(tt_out))
 
-    # Tight tolerances: the unscaled fp32 reduction is essentially exact, so we only allow
-    # small accumulation noise from the SFPU Welford recurrence.
+    # Tight tolerances: the unscaled FP32 reduction is essentially exact, so allow only
+    # small SFPU accumulation noise.
     assert_numeric_metrics(
         torch_ref,
         actual,
@@ -145,11 +250,101 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     )
 
 
-# Regression test for fp32 Welford variance precision when do_scale=true (non-unity scalar)
+@pytest.mark.parametrize(
+    "shape,dim",
+    [
+        ((32, 8192), -1),
+        ((32, 16384), -1),
+        ((4096, 32), -2),
+        ((4097, 32), -2),
+        ((12289, 32), -2),
+        ((4096, 64), (-2, -1)),
+        ((4097, 64), (-2, -1)),
+        ((12289, 64), (-2, -1)),
+        ((4097, 128), (-2, -1)),
+        ((12289, 128), (-2, -1)),
+    ],
+    ids=[
+        "W_dynamic_l1_replay",
+        "W_streaming_fallback",
+        "H_l1_replay",
+        "H_dynamic_l1_replay",
+        "H_streaming_fallback",
+        "HW_l1_replay",
+        "HW_dynamic_l1_replay",
+        "HW_streaming_fallback",
+        "HW_compact_l1_replay",
+        "HW_compact_streaming_fallback",
+    ],
+)
+def test_var_fp32_large_reduction_translation_stability(device, shape, dim):
+    """Keep a long FP32 reduction stable when the variance is tiny relative to its mean."""
+    torch.manual_seed(123)
+    torch_input = (torch.randn(shape, dtype=torch.float32) + 1e6).contiguous()
+    torch_ref = torch.var(torch_input.to(torch.float64), dim=dim, keepdim=True, correction=True)
+
+    tt_in = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.from_device(ttnn.var(tt_in, dim=dim, keepdim=True, correction=True)))
+
+    torch.testing.assert_close(actual, torch_ref, rtol=1e-3, atol=1e-3, check_dtype=False)
+
+
+def test_std_var_fp32_w_l1_replay_respects_occupied_l1(device, enabled_program_cache):
+    if not is_blackhole():
+        pytest.skip("The near-capacity allocation is calibrated for Blackhole L1")
+
+    torch.manual_seed(20260731)
+    # This FP32 row requires 512 KiB of replay storage.
+    torch_input = (torch.randn((1, 1, 32, 4096), dtype=torch.float32) + 1e4).contiguous()
+    warm_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    for ttnn_op in (ttnn.var, ttnn.std):
+        warm_output = ttnn_op(warm_input, dim=-1, keepdim=True, correction=True)
+        ttnn.synchronize_device(device)
+        warm_output.deallocate(force=True)
+    warm_input.deallocate(force=True)
+
+    # Reuse the same operation keys after allocator state changes. Without the
+    # occupied-L1 cache discriminator, this resurrects the replay programs.
+    # Occupying 1100 KiB/core leaves room for streaming, but not 512 KiB row replay.
+    grid = device.compute_with_storage_grid_size()
+    pressure_tiles = (1100 * 1024 * grid.x * grid.y + 2047) // 2048
+    l1_pressure = ttnn.allocate_tensor_on_device(
+        ttnn.Shape((1, 1, 32, pressure_tiles * 32)),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
+        reference = torch_op(torch_input.to(torch.float64), dim=-1, keepdim=True, correction=1)
+        actual = ttnn.to_torch(ttnn.from_device(ttnn_op(tt_input, dim=-1, keepdim=True, correction=True)))
+
+        assert torch.isfinite(actual).all()
+        torch.testing.assert_close(actual, reference, rtol=1e-3, atol=1e-3, check_dtype=False)
+
+    assert l1_pressure.is_allocated()
+
+
+# Regression test for FP32 variance precision with a non-unity scalar
 # AND the reduction dimension crosses a tile boundary (Wt>1).
 # Unlike test_var_fp32_translation_invariance above, which tests whether inputs preserve
-# FP32 precision by using a large offset, this test checks that the FPU MUL result
-# is preserved in FP32, which requires UnpackToDestFp32 on cb_scaled.
+# FP32 precision by using a large offset, this test checks the post-reduction scalar
+# application across multiple input tiles.
 #
 # Variance of N consecutive integers 0..N-1 is (N^2 - 1) / 12 (population); with Bessel's
 # correction (sample variance) it is N * (N^2 - 1) / (12 * (N - 1)) = N * (N + 1) / 12. The
@@ -158,12 +353,9 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
 # by inspection.
 #
 # Parametrized across two N values to cover two Wt regimes of the wt-inner loop in
-# welford_reduce_w with do_scale=true:
+# the W-reduction kernel:
 #   - N=33  -> Wt = ceil(33/32)  = 2   (smallest multi-tile case; original regression target)
-#   - N=129 -> Wt = ceil(129/32) = 5   (deeper inner loop, exercises the per-iter UNPACK
-#                                       hw_configure flip between cb_in's Default mode and
-#                                       cb_scaled's UnpackToDestFp32 mode across many
-#                                       iterations rather than just one boundary crossing)
+#   - N=129 -> Wt = ceil(129/32) = 5   (deeper inner loop)
 @pytest.mark.parametrize("scalar", [2.0, -2.0, 0.5, 4.0])
 @pytest.mark.parametrize("N", [33, 129], ids=["Wt2", "Wt5"])
 def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
@@ -192,6 +384,26 @@ def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
         pcc_threshold=0.9999,
         check_ulp=False,
     )
+
+
+@pytest.mark.parametrize("dim", [-1, (-2, -1)], ids=["W", "HW"])
+def test_var_bf16_scalar_applied_before_output_rounding(device, dim):
+    # Alternating 0 and 1.3125 has the exactly representable population variance
+    # 0.4306640625. With scalar=2.43, rounding that variance to BF16 before applying
+    # scalar**2 produces 2.53125 instead of the correctly rounded 2.546875.
+    scalar = 2.43
+    amplitude = 1.3125
+    torch_input = torch.zeros((1, 1, 32, 32), dtype=torch.bfloat16)
+    torch_input[..., 1::2] = amplitude
+
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.var(tt_input, dim=dim, scalar=scalar, keepdim=True, correction=False)
+    actual = ttnn.to_torch(ttnn.from_device(tt_output))
+
+    variance = torch.tensor(amplitude * amplitude / 4, dtype=torch.float32)
+    scale = torch.tensor(scalar, dtype=torch.float32).square()
+    expected = (variance * scale).to(torch.bfloat16).expand_as(actual)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("correction", [False, True])
@@ -235,6 +447,40 @@ def test_std_var_hw_reduce_batch_crosses_tree_block(device):
 
         assert torch.isfinite(actual).all()
         torch.testing.assert_close(actual, reference, rtol=0.01, atol=1e-7)
+
+
+@pytest.mark.parametrize("width", [96, 128], ids=["Wt3_retained", "Wt4_replay"])
+def test_std_var_bfp8_two_pass_w_replay(device, width):
+    torch.manual_seed(20260722)
+    source = torch.randn((1, 1, 32, width), dtype=torch.float32) * 3.0 + 100.0
+    tt_input = ttnn.from_torch(source, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    quantized = ttnn.to_torch(ttnn.from_device(tt_input)).to(torch.float64)
+
+    for torch_op, ttnn_op, atol in ((torch.var, ttnn.var, 0.125), (torch.std, ttnn.std, 0.03125)):
+        reference = torch_op(quantized, dim=-1, keepdim=True, correction=1)
+        actual = ttnn.to_torch(ttnn.from_device(ttnn_op(tt_input, dim=-1, keepdim=True, correction=True))).to(
+            torch.float64
+        )
+
+        assert torch.isfinite(actual).all()
+        torch.testing.assert_close(actual, reference, rtol=0, atol=atol)
+
+
+@pytest.mark.parametrize("dim", [-2, (-2, -1)], ids=["H", "HW"])
+def test_std_var_bfp8_two_pass_h_replay(device, dim):
+    torch.manual_seed(20260722)
+    source = torch.randn((1, 1, 768, 64), dtype=torch.float32) * 3.0 + 100.0
+    tt_input = ttnn.from_torch(source, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    quantized = ttnn.to_torch(ttnn.from_device(tt_input)).to(torch.float64)
+
+    for torch_op, ttnn_op, atol in ((torch.var, ttnn.var, 0.125), (torch.std, ttnn.std, 0.03125)):
+        reference = torch_op(quantized, dim=dim, keepdim=True, correction=1)
+        actual = ttnn.to_torch(ttnn.from_device(ttnn_op(tt_input, dim=dim, keepdim=True, correction=True))).to(
+            torch.float64
+        )
+
+        assert torch.isfinite(actual).all()
+        torch.testing.assert_close(actual, reference, rtol=0, atol=atol)
 
 
 # Test a 1D, 2D, 3D, and 4D tensor

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <cstdint>
 
 #include "api/compute/common_globals.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
@@ -26,7 +27,7 @@ namespace ckernel {
  *     the SFPU replay buffer mid-pass after another op (e.g. `transpose_tile` on the
  *     unpack-to-DEST fp32 path) has clobbered the welford recurrence slots.
  */
-enum class WelfordInitMode : uint8_t {
+enum class WelfordInitMode : std::uint8_t {
     ClearStats,
     PreserveStats,
 };
@@ -55,7 +56,7 @@ ALWI void welford_init() {
  */
 #ifndef ARCH_QUASAR
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void welford_reinit(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
+ALWI void welford_reinit(std::uint32_t cbid, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(cbid, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         /*transpose=*/0, /*transpose_within_16x16_face=*/false, cbid)));
@@ -69,6 +70,169 @@ ALWI void welford_reinit(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
  * This function should be called before calling `welford_update` for a new set of values.
  */
 ALWI void welford_clear() { MATH((llk_math_welfords_sfpu_clear_previous_mean_and_m2())); }
+
+/**
+ * @brief Initializes the SFPU state used by the two-pass statistics helpers.
+ *
+ * Configures the Welford address mode used by their SFPU loads without
+ * programming Welford's unused replay buffer. The first shifted update with
+ * `initialize_anchor=true` initializes the accumulators.
+ */
+ALWI void two_pass_stats_init_shifted() { MATH((llk_math_two_pass_sfpu_init())); }
+
+/**
+ * @brief Accumulates squared differences from the current mean over a row range.
+ * @tparam dual_m2 If true, uses two independent accumulators to hide SFPU dependency latency.
+ * @param input_dst_idx Index of the input tile in the DST register buffer.
+ * @param start_row First tile row to process.
+ * @param num_rows Number of consecutive tile rows to process.
+ */
+template <bool dual_m2 = true>
+ALWI void two_pass_stats_update_rows(std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
+    ASSERT(start_row + num_rows <= TILE_WIDTH);
+    MATH((llk_math_two_pass_sfpu_update_rows<dual_m2>(input_dst_idx, start_row, num_rows)));
+}
+
+/**
+ * @brief Accumulates shifted sums or centred M2 over a row range.
+ * @tparam accumulate_m2 If true, accumulates centred squared residuals; otherwise accumulates shifted sums.
+ * @tparam initialize_anchor If true, initialises the common anchor from the first selected input value.
+ * @tparam dual_accumulator If true, uses two independent accumulators to hide SFPU dependency latency.
+ * @param input_dst_idx Index of the input tile in the DST register buffer.
+ * @param start_row First tile row to process.
+ * @param num_rows Number of consecutive tile rows to process.
+ */
+template <bool accumulate_m2, bool initialize_anchor = false, bool dual_accumulator = true>
+ALWI void two_pass_stats_update_shifted_rows(
+    std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
+    ASSERT(start_row + num_rows <= TILE_WIDTH);
+    ASSERT(!initialize_anchor || num_rows > 0);
+    MATH((llk_math_two_pass_sfpu_update_shifted_rows<accumulate_m2, initialize_anchor, dual_accumulator>(
+        input_dst_idx, start_row, num_rows)));
+}
+
+/**
+ * @brief Converts the shifted sum into a mean and clears the accumulators for the centred-M2 pass.
+ * @tparam dual_sum If true, combines the two shifted-sum accumulators before scaling.
+ * @tparam retain_anchor If true, retains the anchor for the subsequent centred-M2 pass; requires `dual_sum`.
+ * @param reciprocal_bits Bit representation of the FP32 reciprocal population count.
+ */
+template <bool dual_sum = true, bool retain_anchor = false>
+ALWI void two_pass_stats_finish_shifted_mean(std::uint32_t reciprocal_bits) {
+    static_assert(!retain_anchor || dual_sum, "anchor retention requires the dual-accumulator statistics path");
+    MATH((llk_math_two_pass_sfpu_finish_shifted_mean<dual_sum, retain_anchor>(reciprocal_bits)));
+}
+
+/** @brief Clears the two-pass mean, sum, and M2 accumulator registers. */
+ALWI void two_pass_stats_clear() { MATH((llk_math_two_pass_sfpu_clear_stats())); }
+
+/**
+ * @brief Stores the current mean and M2 state in consecutive DST tiles.
+ * @tparam dual_m2 If true, combines the two M2 accumulators before storing.
+ * @param mean_dst_idx Index of the DST tile that receives the mean; M2 is stored in the following tile.
+ */
+template <bool dual_m2 = true>
+ALWI void two_pass_stats_save_state(std::uint32_t mean_dst_idx) {
+    MATH((llk_math_two_pass_sfpu_store_mean_m2_to_dst<dual_m2>(mean_dst_idx)));
+}
+
+/**
+ * @brief Finalises variance while storing the anchor and mean correction in a split-mean row layout.
+ * @tparam dual_m2 If true, combines the two M2 accumulators before scaling.
+ * @param mean_dst_idx Index of the DST tile that receives the split mean; variance uses the following tile.
+ * @param reciprocal_bits Bit representation of the FP32 reciprocal population count.
+ */
+template <bool dual_m2 = true>
+ALWI void two_pass_stats_finalize_split_mean_to_row(std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
+    MATH((llk_math_two_pass_sfpu_store_split_mean_var_to_dst_row<dual_m2>(mean_dst_idx, reciprocal_bits)));
+}
+
+/**
+ * @brief Stores the current shift anchor in a DST tile.
+ * @param anchor_dst_idx Index of the destination tile.
+ */
+ALWI void two_pass_stats_save_anchor(std::uint32_t anchor_dst_idx) {
+    MATH((llk_math_two_pass_sfpu_store_anchor_to_dst(anchor_dst_idx)));
+}
+
+/**
+ * @brief Restores the shift anchor from a DST tile.
+ * @param anchor_dst_idx Index of the source tile.
+ */
+ALWI void two_pass_stats_restore_anchor(std::uint32_t anchor_dst_idx) {
+    MATH((llk_math_two_pass_sfpu_load_anchor_from_dst(anchor_dst_idx)));
+}
+
+/**
+ * @brief Stores the shift anchor in the anchor row of a saved statistics state.
+ * @param mean_dst_idx Index of the saved mean/M2 state.
+ */
+ALWI void two_pass_stats_save_anchor_to_state(std::uint32_t mean_dst_idx) {
+    MATH((llk_math_two_pass_sfpu_store_anchor_to_state_dst(mean_dst_idx)));
+}
+
+/**
+ * @brief Restores the shift anchor from the anchor row of a saved statistics state.
+ * @param mean_dst_idx Index of the saved mean/M2 state.
+ */
+ALWI void two_pass_stats_restore_anchor_from_state(std::uint32_t mean_dst_idx) {
+    MATH((llk_math_two_pass_sfpu_load_anchor_from_state_dst(mean_dst_idx)));
+}
+
+/**
+ * @brief Merges the current block's mean/M2 with a previously saved statistics state.
+ * @tparam dual_m2 If true, combines the current block's two M2 accumulators before merging.
+ * @param mean_dst_idx Index of the saved mean/M2 state to update.
+ * @param total_reciprocal_bits Bit representation of the reciprocal combined population count.
+ * @param block_n_bits Bit representation of the current block's FP32 population count.
+ */
+template <bool dual_m2 = true>
+ALWI void two_pass_stats_combine_block(
+    std::uint32_t mean_dst_idx, std::uint32_t total_reciprocal_bits, std::uint32_t block_n_bits) {
+    MATH((llk_math_two_pass_sfpu_combine_block_to_dst<dual_m2>(mean_dst_idx, total_reciprocal_bits, block_n_bits)));
+}
+
+/**
+ * @brief Finalises the current mean and variance into the first row of consecutive DST tiles.
+ * @tparam dual_m2 If true, combines the two M2 accumulators before scaling.
+ * @param mean_dst_idx Index of the mean tile; variance is stored in the following tile.
+ * @param reciprocal_bits Bit representation of the FP32 reciprocal population count.
+ */
+template <bool dual_m2 = true>
+ALWI void two_pass_stats_finalize_to_row(std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
+    MATH((llk_math_two_pass_sfpu_store_mean_var_to_dst_row<dual_m2>(mean_dst_idx, reciprocal_bits)));
+}
+
+/**
+ * @brief Finalises one group's mean and variance into the raw face layout of consecutive DST tiles.
+ * @tparam dual_m2 If true, combines the two M2 accumulators before scaling.
+ * @param mean_dst_idx Index of the mean tile; variance is stored in the following tile.
+ * @param group_id Group slot within the raw face layout.
+ * @param reciprocal_bits Bit representation of the FP32 reciprocal population count.
+ */
+template <bool dual_m2 = true>
+ALWI void two_pass_stats_finalize_to_face(
+    std::uint32_t mean_dst_idx, std::uint32_t group_id, std::uint32_t reciprocal_bits) {
+    MATH((llk_math_two_pass_sfpu_store_mean_var_to_dst_raw<dual_m2>(mean_dst_idx, group_id, reciprocal_bits)));
+}
+
+#if defined(WELFORD_SFPU_LOCAL_COMBINE) || defined(WELFORD_SFPU_LEAF_COMBINE)
+/**
+ * @brief Finalises one group's local statistics and combines its lane populations into the raw face layout.
+ * @tparam dual_m2 If true, combines the two M2 accumulators before finalisation.
+ * @tparam average_variance If false, stores the summed lane variance for a subsequent HW merge.
+ * @param mean_dst_idx Index of three consecutive DST tiles: mean, variance, and internal scratch.
+ * @param group_id Group slot within the raw face layout.
+ * @param reciprocal_bits Bit representation of the FP32 reciprocal local population count.
+ * @note The tile at `mean_dst_idx + 2` is temporary storage and is clobbered.
+ */
+template <bool dual_m2 = true, bool average_variance = true>
+ALWI void two_pass_stats_finalize_and_combine_to_face(
+    std::uint32_t mean_dst_idx, std::uint32_t group_id, std::uint32_t reciprocal_bits) {
+    MATH((llk_math_two_pass_sfpu_store_combined_mean_var_to_dst_raw<dual_m2, average_variance>(
+        mean_dst_idx, group_id, reciprocal_bits)));
+}
+#endif
 
 /**
  * @brief Performs a Welford's online algorithm update for mean and m2 on a tile in the DST register
@@ -92,9 +256,11 @@ ALWI void welford_clear() { MATH((llk_math_welfords_sfpu_clear_previous_mean_and
  * @return None. The mean and m2 values are held in the registers.
  */
 
-template <uint32_t reciprocal_size>
+template <std::uint32_t reciprocal_size>
 ALWI void welford_update(
-    uint32_t input_dst_idx, uint32_t start_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t input_dst_idx,
+    std::uint32_t start_idx,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     // Check limits on the reciprocal lookup table.
     ASSERT((reciprocal_size == 0) || (start_idx < reciprocal_size));
 
@@ -110,13 +276,13 @@ ALWI void welford_update(
  *                  0 <= start_row + num_rows <= 32.
  * -------------------------------------------------------------------------------------------------
  */
-template <uint32_t reciprocal_size>
+template <std::uint32_t reciprocal_size>
 ALWI void welford_update_rows(
-    uint32_t input_dst_idx,
-    uint32_t start_idx,
-    uint32_t start_row,
-    uint32_t num_rows,
-    const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t input_dst_idx,
+    std::uint32_t start_idx,
+    std::uint32_t start_row,
+    std::uint32_t num_rows,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     // Check limits on the reciprocal lookup table.
     ASSERT((reciprocal_size == 0) || (start_idx < reciprocal_size));
 
@@ -138,7 +304,7 @@ ALWI void welford_update_rows(
  * values are stored in the consecutive tile after the mean.
  * @return None. The mean and m2 values are stored in the tile in the dst reg.
  */
-ALWI void welford_save_state(uint32_t mean_dst_idx) {
+ALWI void welford_save_state(std::uint32_t mean_dst_idx) {
     MATH((llk_math_welfords_sfpu_store_mean_m2_to_dst(mean_dst_idx)));
 }
 
@@ -151,7 +317,7 @@ ALWI void welford_save_state(uint32_t mean_dst_idx) {
  * values are loaded from the consecutive tile after the mean.
  * @return None. The mean and m2 values are loaded into the SFPU.
  */
-ALWI void welford_restore_state(uint32_t mean_dst_idx) {
+ALWI void welford_restore_state(std::uint32_t mean_dst_idx) {
     MATH((llk_math_welfords_sfpu_load_mean_m2_from_dst(mean_dst_idx)));
 }
 /**
@@ -179,7 +345,9 @@ ALWI void welford_restore_state(uint32_t mean_dst_idx) {
  */
 template <std::size_t reciprocal_size>
 ALWI void welford_finalize_to_row(
-    uint32_t mean_dst_idx, uint32_t scale_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t mean_dst_idx,
+    std::uint32_t scale_idx,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     // Check limits on the reciprocal lookup table.
     ASSERT((reciprocal_size == 0) || (scale_idx < reciprocal_size));
 
@@ -210,7 +378,9 @@ ALWI void welford_finalize_to_row(
  */
 template <std::size_t reciprocal_size>
 ALWI void welford_finalize_to_face(
-    uint32_t mean_dst_idx, uint32_t scale_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t mean_dst_idx,
+    std::uint32_t scale_idx,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     // Check limits on the reciprocal lookup table.
     ASSERT((reciprocal_size == 0) || (scale_idx < reciprocal_size));
 
@@ -223,20 +393,33 @@ ALWI void welford_finalize_to_face(
  * @param group_id The group id to store the data for.
  * -------------------------------------------------------------------------------------------------
  */
-ALWI void welford_save_state(uint32_t mean_dst_idx, uint32_t group_id) {
+ALWI void welford_save_state(std::uint32_t mean_dst_idx, std::uint32_t group_id) {
     MATH((llk_math_welfords_sfpu_store_mean_m2_to_dst(mean_dst_idx, group_id)));
 }
 
-ALWI void welford_restore_state(uint32_t mean_dst_idx, uint32_t group_id) {
+ALWI void welford_restore_state(std::uint32_t mean_dst_idx, std::uint32_t group_id) {
     MATH((llk_math_welfords_sfpu_load_mean_m2_from_dst(mean_dst_idx, group_id)));
+}
+
+/**
+ * @brief Saves the active group state and restores another group state.
+ * @param mean_dst_idx Index of the mean state tile; M2 is stored in the following tile.
+ * @param save_group_id Group slot that receives the active state.
+ * @param restore_group_id Group slot to load into the SFPU accumulators.
+ * @tparam dual_accumulator Must be false: group switching preserves only the LREG4/LREG5 accumulator state.
+ */
+template <bool dual_accumulator>
+ALWI void two_pass_stats_switch_group(
+    std::uint32_t mean_dst_idx, std::uint32_t save_group_id, std::uint32_t restore_group_id) {
+    MATH((llk_math_two_pass_sfpu_switch_group<dual_accumulator>(mean_dst_idx, save_group_id, restore_group_id)));
 }
 
 template <std::size_t reciprocal_size>
 ALWI void welford_finalize_to_face(
-    uint32_t mean_dst_idx,
-    uint32_t group_id,
-    uint32_t scale_idx,
-    const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t mean_dst_idx,
+    std::uint32_t group_id,
+    std::uint32_t scale_idx,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     // Check limits on the reciprocal lookup table.
     ASSERT((reciprocal_size == 0) || (scale_idx < reciprocal_size));
 

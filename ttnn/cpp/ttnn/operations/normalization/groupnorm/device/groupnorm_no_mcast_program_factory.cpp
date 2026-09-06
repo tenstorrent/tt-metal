@@ -45,7 +45,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     const auto& gamma = tensor_args.gamma;
     const auto& beta = tensor_args.beta;
     const auto& input_mask = tensor_args.input_mask;
-    const auto& reciprocals = tensor_args.reciprocals;
     auto& output = tensor_return_value;
 
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
@@ -69,12 +68,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         TT_FATAL(beta.value().layout() == Layout::ROW_MAJOR, "Beta tensor must have ROW_MAJOR layout");
     }
 
-    // Mode is 0 for legacy groupnorm, 1 for welford groupnorm, 2 for groupnorm with reciprocals
-    uint32_t groupnorm_mode = static_cast<uint32_t>(
-        reciprocals.has_value() ? GroupNormMode::WELFORD_RECIPROCALS
-        : use_welford           ? GroupNormMode::WELFORD_NATIVE
-                                : GroupNormMode::LEGACY);
-    uint32_t num_reciprocals = reciprocals.has_value() ? reciprocals.value().shard_spec().value().numel() : 0;
+    uint32_t groupnorm_mode =
+        static_cast<uint32_t>(use_welford ? GroupNormMode::TWO_PASS : GroupNormMode::TILE_REDUCTION);
 
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -83,9 +78,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     // fp32 stats CBs (welford + fp32 DEST): reader kernels combine mean/variance as fp32, not bf16.
     const bool stats_is_fp32 = cb_data_format == tt::DataFormat::Float32;
     tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat reciprocal_cb_data_format =
-        reciprocals.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(reciprocals.value().dtype())
-                                : tt::DataFormat::Float32;
     if (gamma.has_value()) {
         gamma_beta_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype());
     }
@@ -286,6 +278,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    const bool use_sfpu_local_combine =
+        groupnorm_use_sfpu_local_combine(use_welford, device->arch(), fp32_dest_acc_en, tile_width);
 
     // Float32 input requires fp32_dest_acc_en=true on both GroupNorm paths:
     //  - Welford: prerequisite for UnpackToDestFp32 (set below), which bypasses the unpacker's
@@ -302,26 +296,23 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         "otherwise the DEST accumulator is bfloat16 and intermediate/accumulated results are silently "
         "rounded to bf16.");
 
-    // welford_unpack_fp32_active is true iff the compute kernel's intake transpose_tile
-    // reads from a CB that carries UnpackToDestFp32, regardless of which CB is used: c_29
-    // in the TILIZE_IN branch (configured below) or the c_19 alias of c_0 in the
-    // non-TILIZE_IN branch (welford_fp32_alias). Both paths route the transpose through
-    // llk_math_transpose_dest, whose math-side init records slots [16, 32) of the math-thread
-    // replay buffer (clobbering welford's LREG2 / LREG3 portions), so the kernel's SFPU re-init
-    // after the transpose must fire iff this is true.
+    // FP32 statistics intake uses UnpackToDestFp32 so transpose preserves the full mantissa.
     const bool welford_unpack_fp32_active =
         use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32;
 
     // welford_fp32_alias is the non-TILIZE_IN sub-case (c_19 alias is only useful when
     // c_0 isn't itself the consumer of the FP32 transpose, i.e. when tilize_in is false).
     const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
-
-    // cb_reciprocals is excluded: it's fp32 here but the reconfigs never touch it.
+    const bool fp32_sfpu_normalizer = welford_unpack_fp32_active;
     const bool enable_fp32_reconfig = groupnorm_needs_fp32_reconfig(
         {in_data_format, out_data_format, cb_data_format, gamma_beta_cb_data_format, in_mask_cb_data_format});
 
     const uint32_t cb_in0_welford_index =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
+    const uint32_t cb_normalize_in_fp32_index =
+        tilize_in ? static_cast<uint32_t>(tt::CBIndex::c_29) : static_cast<uint32_t>(tt::CBIndex::c_19);
+    constexpr uint32_t cb_ex_global_fp32_index = tt::CBIndex::c_7;
+    constexpr uint32_t cb_ex2pe_fp32_index = tt::CBIndex::c_11;
 
     TT_FATAL(num_channels_per_group > 0, "num_channels_per_group must be > 0 (W={}, num_groups={})", W, num_groups);
     TT_FATAL(
@@ -446,7 +437,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     uint32_t xmm3_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm3_CB_size_group_2 = 0;
     uint32_t ex2pe_CB_size = use_welford ? single_tile_size * num_groups_per_core : ex_partial_CB_size;
-    uint32_t reciprocal_CB_size = reciprocals.has_value() ? reciprocals.value().buffer()->aligned_size_per_bank() : 0;
     uint32_t out_CB_size_group_1 = in0_block_tiles_group_1 * out_single_tile_size;
     uint32_t out_CB_size_group_2 = 0;
 
@@ -490,6 +480,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             in_tilized_CB_size_group_2 =
                 groupnorm_tilized_group_tiles(block_ht_group_2, num_out_blocks, block_wt) * in_single_tile_size;
         }
+    }
+
+    const std::uint32_t replay_input_size_group_1 = block_ht_group_1 * per_core_Nt * in_single_tile_size;
+    const std::uint32_t replay_input_size_group_2 = block_ht_group_2 * per_core_Nt * in_single_tile_size;
+    const auto interleaved_plan = GroupNormDeviceOperation::select_interleaved_plan(operation_attributes, tensor_args);
+    const bool sfpu_two_pass_l1_replay_group_1 = interleaved_plan.replay_group_1;
+    const bool sfpu_two_pass_l1_replay_group_2 = interleaved_plan.replay_group_2;
+    if (sfpu_two_pass_l1_replay_group_1) {
+        in0_CB_size_group_1 = replay_input_size_group_1;
+    }
+    if (sfpu_two_pass_l1_replay_group_2) {
+        in0_CB_size_group_2 = replay_input_size_group_2;
     }
 
     // Application Setup
@@ -561,6 +563,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         .initial_value = 0});
 
     std::map<std::string, std::string> reader_mcast_sender_defines;
+    if (use_sfpu_local_combine) {
+        reader_mcast_sender_defines["WELFORD_SFPU_LOCAL_COMBINE"] = "1";
+    }
     if (gamma.has_value()) {
         reader_mcast_sender_defines["FUSE_GAMMA"] = "1";
     }
@@ -609,6 +614,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
         {"cb_in0_welford", cb_in0_welford_index},
         {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay_group_1)},
     };
 
     std::unordered_map<std::string, uint32_t> reader_mcast_sender_named_compile_time_args_group_2 = {
@@ -643,6 +649,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
         {"cb_in0_welford", cb_in0_welford_index},
         {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay_group_2)},
     };
 
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_1 = {};
@@ -840,6 +847,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     }
 
     std::map<std::string, std::string> eltwise_binary_defines;
+    if (use_sfpu_local_combine) {
+        eltwise_binary_defines["WELFORD_SFPU_LOCAL_COMBINE"] = "1";
+    }
     if (reader_repack_output) {
         eltwise_binary_defines["READER_REPACK"] = "1";
     }
@@ -883,10 +893,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"num_channels_per_group", num_channels_per_group},
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
         {"TILE_WIDTH", tile_width},
-        {"reciprocal_size", num_reciprocals},
         {"logical_hw", pad.kernel_logical_hw},
         {"padded_hw", pad.padded_hw},
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay_group_1)},
+        {"sfpu_two_pass_reciprocal",
+         std::bit_cast<uint32_t>(
+             1.0f / static_cast<float>(
+                        std::max(1U, num_channels_per_group * num_rows_per_batch_per_core_group_1 / tile_width)))},
     };
 
     std::unordered_map<std::string, uint32_t> mcast_sender_compute_named_compile_time_args_group_2 = {
@@ -919,10 +933,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"num_channels_per_group", num_channels_per_group},
         {"num_rows_per_group", num_rows_per_batch_per_core_group_2},
         {"TILE_WIDTH", tile_width},
-        {"reciprocal_size", num_reciprocals},
         {"logical_hw", pad.kernel_logical_hw},
         {"padded_hw", pad.padded_hw},
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay_group_2)},
+        {"sfpu_two_pass_reciprocal",
+         std::bit_cast<uint32_t>(
+             1.0f / static_cast<float>(
+                        std::max(1U, num_channels_per_group * num_rows_per_batch_per_core_group_2 / tile_width)))},
     };
 
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
@@ -967,6 +985,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_19)] =
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
+    if (fp32_sfpu_normalizer) {
+        unpack_to_dest_mode[cb_ex_global_fp32_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[cb_ex2pe_fp32_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
 
     mcast_sender_compute_named_compile_time_args_group_1["welford_fp32_alias"] =
         static_cast<uint32_t>(welford_fp32_alias);
@@ -975,6 +997,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     mcast_sender_compute_named_compile_time_args_group_1["cb_in0_welford"] = cb_in0_welford_index;
     mcast_sender_compute_named_compile_time_args_group_1["enable_fp32_reconfig"] =
         static_cast<uint32_t>(enable_fp32_reconfig);
+    mcast_sender_compute_named_compile_time_args_group_1["fp32_sfpu_normalizer"] =
+        static_cast<uint32_t>(fp32_sfpu_normalizer);
+    mcast_sender_compute_named_compile_time_args_group_1["cb_normalize_in_fp32"] = cb_normalize_in_fp32_index;
+    mcast_sender_compute_named_compile_time_args_group_1["cb_ex_global_fp32"] =
+        fp32_sfpu_normalizer ? cb_ex_global_fp32_index : static_cast<uint32_t>(tt::CBIndex::c_15);
+    mcast_sender_compute_named_compile_time_args_group_1["cb_ex2pe_fp32"] =
+        fp32_sfpu_normalizer ? cb_ex2pe_fp32_index : static_cast<uint32_t>(tt::CBIndex::c_27);
     mcast_sender_compute_named_compile_time_args_group_2["welford_fp32_alias"] =
         static_cast<uint32_t>(welford_fp32_alias);
     mcast_sender_compute_named_compile_time_args_group_2["welford_unpack_fp32_active"] =
@@ -982,6 +1011,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     mcast_sender_compute_named_compile_time_args_group_2["cb_in0_welford"] = cb_in0_welford_index;
     mcast_sender_compute_named_compile_time_args_group_2["enable_fp32_reconfig"] =
         static_cast<uint32_t>(enable_fp32_reconfig);
+    mcast_sender_compute_named_compile_time_args_group_2["fp32_sfpu_normalizer"] =
+        static_cast<uint32_t>(fp32_sfpu_normalizer);
+    mcast_sender_compute_named_compile_time_args_group_2["cb_normalize_in_fp32"] = cb_normalize_in_fp32_index;
+    mcast_sender_compute_named_compile_time_args_group_2["cb_ex_global_fp32"] =
+        fp32_sfpu_normalizer ? cb_ex_global_fp32_index : static_cast<uint32_t>(tt::CBIndex::c_15);
+    mcast_sender_compute_named_compile_time_args_group_2["cb_ex2pe_fp32"] =
+        fp32_sfpu_normalizer ? cb_ex2pe_fp32_index : static_cast<uint32_t>(tt::CBIndex::c_27);
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel_path;
@@ -1385,7 +1421,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
 
     constexpr uint32_t ex_cb_index = tt::CBIndex::c_9;
     constexpr uint32_t ex_global_cb_index = tt::CBIndex::c_15;
-    desc.cbs.push_back(CBDescriptor{
+    auto ex_global_desc = CBDescriptor{
         .total_size = ex_global_CB_size,
         .core_ranges = all_cores,
         .format_descriptors =
@@ -1399,7 +1435,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                   .data_format = cb_data_format,
                   .page_size = single_tile_size,
               }}},
-    });
+    };
+    if (fp32_sfpu_normalizer) {
+        ex_global_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_ex_global_fp32_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size});
+    }
+    desc.cbs.push_back(std::move(ex_global_desc));
 
     if (!use_welford) {
         constexpr uint32_t ex2_cb_index = tt::CBIndex::c_13;
@@ -1422,7 +1465,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     }
 
     constexpr uint32_t cb_ex2pe_index = tt::CBIndex::c_27;
-    desc.cbs.push_back(CBDescriptor{
+    auto ex2pe_desc = CBDescriptor{
         .total_size = ex2pe_CB_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
@@ -1430,21 +1473,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
-    });
-
-    if (reciprocals.has_value()) {
-        constexpr uint32_t cb_reciprocals = tt::CBIndex::c_18;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = reciprocal_CB_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_reciprocals),
-                .data_format = reciprocal_cb_data_format,
-                .page_size = reciprocal_CB_size,
-            }}},
-            .buffer = reciprocals.value().buffer(),
-        });
+    };
+    if (fp32_sfpu_normalizer) {
+        ex2pe_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_ex2pe_fp32_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size});
     }
+    desc.cbs.push_back(std::move(ex2pe_desc));
 
     // Runtime Args
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);
@@ -1575,8 +1611,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             }
             if (input_mask.has_value()) {
                 // Wrap on the set size, not the whole tensor: the row-masked set is an offset off this.
-                input_mask_tile_start_id =
-                    (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
+                input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
             }
         }
 
