@@ -28,18 +28,56 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::detail {
 
+namespace {
+
+// Largest deviation in each H x W plane, used to factor the magnitude out before squaring.
+//
+// The square is the only part of this computation with a narrower range than the answer it
+// feeds. Below |d| = 1.0842e-19 -- the square root of the smallest normal float -- d^2 flushes
+// to zero, so the standard deviation of an ordinary spread comes back as an exact 0. Above
+// |d| = 1.3043818e19 the accumulator tops out at 2^127 and the standard deviation comes back as
+// sqrt(2^127), the same value for every input above that point. Neither is a tolerance
+// question: the answers themselves, 1e-20 and 1e20, are ordinary float32 numbers.
+//
+// A constant tensor has no deviation and no scale to factor out. Substituting 1 there keeps the
+// division a no-op and the variance exactly zero, as before.
+Tensor _deviation_scale(const Tensor& y_minus_mean_y, const std::optional<MemoryConfig>& output_mem_config) {
+    ttsl::SmallVector<int> dims = {2, 3};
+    Tensor m = ttnn::max(ttnn::abs(y_minus_mean_y, output_mem_config), dims, true, output_mem_config);
+    return ttnn::where(ttnn::eqz(m, output_mem_config), 1.0f, m, output_mem_config);
+}
+
+// mean((d / max|d|)^2). Every squared term lands in [0, 1], so nothing here can underflow to zero
+// or saturate the accumulator; the magnitude is restored by the callers.
+Tensor _scaled_variance_impl(
+    const Tensor& y,
+    Tensor& y_minus_mean_y,
+    const Tensor& deviation_scale,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    ttsl::SmallVector<int> dims = {2, 3};
+    constexpr float correction = 0.0f;
+    auto shape_wh = y.padded_shape();
+    float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
+    Tensor normalised = ttnn::bcast(
+        y_minus_mean_y,
+        ttnn::reciprocal(deviation_scale, output_mem_config),
+        ttnn::BcastOpMath::MUL,
+        ttnn::BcastOpDim::HW);
+    Tensor sqr_normalised = ttnn::square(normalised, output_mem_config);
+    return ttnn::sum(sqr_normalised, dims, true, std::nullopt, std::nullopt, scale);
+}
+
+}  // namespace
+
 // Function variance of whole tensor.
 Tensor _variance_impl(
     const Tensor& y,
     const Tensor& /*mean_y*/,
     Tensor& y_minus_mean_y,
     const std::optional<MemoryConfig>& output_mem_config) {
-    ttsl::SmallVector<int> dims = {2, 3};
-    constexpr float correction = 0.0f;
-    auto shape_wh = y.padded_shape();
-    float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
-    Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
-    return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
+    Tensor m = _deviation_scale(y_minus_mean_y, output_mem_config);
+    Tensor scaled = _scaled_variance_impl(y, y_minus_mean_y, m, output_mem_config);
+    return ttnn::multiply(ttnn::square(m, output_mem_config), scaled, std::nullopt, output_mem_config);
 }
 Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
@@ -47,7 +85,8 @@ Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional
 }
 
 Tensor _std(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::sqrt(_variance_impl(y, mean_y, output_mem_config));
+    Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
+    return _std(y, mean_y, y_minus_mean_y, output_mem_config);
 }
 
 Tensor _std(
@@ -55,7 +94,13 @@ Tensor _std(
     const Tensor& mean_y,
     Tensor& y_minus_mean_y,
     const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::sqrt(_variance_impl(y, mean_y, y_minus_mean_y, output_mem_config));
+    // The scale is restored after the square root, not before it. Standard deviation is
+    // homogeneous of degree one -- std(k*d) = k*std(d) -- so going through the variance would
+    // demand that k^2 be representable when only k needs to be, which is exactly the range that
+    // was being lost. Routing std through the variance is what turned a 1e-20 spread into 0.
+    Tensor m = _deviation_scale(y_minus_mean_y, output_mem_config);
+    Tensor scaled = _scaled_variance_impl(y, y_minus_mean_y, m, output_mem_config);
+    return ttnn::multiply(m, ttnn::sqrt(scaled), std::nullopt, output_mem_config);
 }
 
 std::vector<Tensor> split_tensor_for_glu(
