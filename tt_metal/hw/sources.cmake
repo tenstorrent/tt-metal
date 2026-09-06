@@ -164,6 +164,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/isclose.h
     inc/api/compute/layernorm.h
     inc/api/compute/lcm.h
+    inc/api/compute/nextafter.h
     inc/api/compute/logsigmoid.h
     inc/api/compute/mask.h
     inc/api/compute/matmul.h
