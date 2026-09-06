@@ -40,6 +40,22 @@ def test_rows_render_as_the_other_information_section():
 def test_error_message_backfills_a_missing_root_cause():
     out = section({"failed": [row(root_cause=None)]})
     assert "assert 0.97 > 0.99" in out
+    assert "— error:" not in out
+
+
+def test_the_verbatim_error_rides_along_with_the_root_cause():
+    out = section({"failed": [row()]})
+    assert "PCC drift after SFPI bump [tt-metal:pcc] — error: assert 0.97 > 0.99" in out
+
+
+def test_subcategory_extends_the_category_tag():
+    out = section({"failed": [row(subcategory="pcc_drop")]})
+    assert "[tt-metal:pcc/pcc_drop]" in out
+
+
+def test_subcategory_alone_still_tags():
+    out = section({"failed": [row(category=None, subcategory="pcc_drop")]})
+    assert "[pcc_drop]" in out
 
 
 def test_a_row_with_no_cause_at_all_is_dropped():
