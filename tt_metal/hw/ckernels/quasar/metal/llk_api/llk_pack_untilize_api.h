@@ -77,6 +77,7 @@ inline void llk_pack_untilize(
     std::uint32_t pack_output,
     const std::uint32_t block_c_index = 0,
     const std::uint32_t tile_dst_rt_offset = 0) {
+    static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
     LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
     const std::uint32_t output_id = get_output_id(pack_output);
 
