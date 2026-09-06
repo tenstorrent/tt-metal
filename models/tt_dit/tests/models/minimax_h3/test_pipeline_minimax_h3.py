@@ -27,6 +27,7 @@ from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
     MiniMaxH3Pipeline,
     _requested_audio_t_factor,
     _resolve_audio_t_shard,
+    resolve_decode_submesh_layout,
 )
 from ..wan2_2.common import check_output_sanity
 from .common import GALAXY_MESHES
@@ -114,6 +115,36 @@ def test_requested_audio_t_factor_precedence(monkeypatch, expect_error):
     monkeypatch.setenv("MINIMAX_H3_AUDIO_T_FACTOR", "thirty-two")
     with expect_error(ValueError, "MINIMAX_H3_AUDIO_T_FACTOR"):
         _requested_audio_t_factor(None)
+
+
+# Pure coverage for the parallel-decode layout switch: the two children tile the 4x8 parent without
+# overlap, unset/off means sequential, and a layout on any other parent shape is refused.
+@pytest.mark.parametrize("name", [None, "", "0", "off", "none", "OFF"])
+def test_decode_submesh_layout_off(name):
+    assert resolve_decode_submesh_layout(name, (4, 8)) is None
+    assert resolve_decode_submesh_layout(name, (4, 32)) is None
+
+
+@pytest.mark.parametrize("name", ["4x7", "2x8", "3x8"])
+def test_decode_submesh_layout_tiles_the_parent(name):
+    (video_shape, video_offset), (audio_shape, audio_offset) = resolve_decode_submesh_layout(name, (4, 8))
+    cells = {}
+    for label, shape, offset in (("video", video_shape, video_offset), ("audio", audio_shape, audio_offset)):
+        for r in range(offset[0], offset[0] + shape[0]):
+            for c in range(offset[1], offset[1] + shape[1]):
+                assert (r, c) not in cells, f"{label} overlaps {cells[(r, c)]} at {(r, c)}"
+                assert 0 <= r < 4 and 0 <= c < 8, f"{label} leaves the 4x8 parent at {(r, c)}"
+                cells[(r, c)] = label
+    assert len(cells) == 32, "the two children must cover every parent device"
+    # The audio child always has an axis of 4 or 8 for the T-shard resolver to land on.
+    assert _resolve_audio_t_shard(8, audio_shape, 0, 1)[0] in (4, 8)
+
+
+def test_decode_submesh_layout_rejects_unknown(expect_error):
+    with expect_error(ValueError, "unknown decode submesh layout"):
+        resolve_decode_submesh_layout("5x5", (4, 8))
+    with expect_error(ValueError, "4x8 parent"):
+        resolve_decode_submesh_layout("4x7", (4, 32))
 
 
 @pytest.mark.timeout(7200)

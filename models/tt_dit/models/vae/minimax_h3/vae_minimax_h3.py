@@ -34,7 +34,9 @@ import json
 import math
 import os
 import time
+from collections import deque
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -99,6 +101,11 @@ class MiniMaxH3VaeConfig:
 # Decode does substantial host work (stitching, unpatchify, readback), so it raises torch's thread
 # count above the single thread a server worker pins for the denoise loop.
 _DECODE_TORCH_THREADS = 8
+
+# Host post-processing of the decode (upcast, unpatchify, stitch) on a worker thread, overlapped with
+# the main thread's wave enqueue and readback -- see `_decode_units_async_stitch`. Opt-in until it is
+# measured against the serial schedule on the same host.
+_ASYNC_STITCH_ENV = "MINIMAX_H3_VAE_ASYNC_STITCH"
 
 
 def split_tiles(length: int, tile_size: int, min_overlap: int, ratio: int) -> tuple[list[int], list[int], list[int]]:
@@ -361,6 +368,7 @@ class MiniMaxH3Vae:
         # bigger matmuls and fewer waves; 1 is the original one-tile-per-device schedule.
         assert waves_per_device >= 1, f"waves_per_device must be >= 1, got {waves_per_device}"
         self.waves_per_device = waves_per_device
+        self.async_stitch = os.environ.get(_ASYNC_STITCH_ENV, "0") == "1"
         # Pipeline warmup turns this off so the compile-pass decode does not dump a profile.
         self.log_profile = True
         self._encoder_state: dict[str, torch.Tensor] | None = None
@@ -477,6 +485,9 @@ class MiniMaxH3Vae:
             "unpatchify": 0.0,
             "tiling": 0.0,
             "stitch": 0.0,
+            # Async-stitch only: main-thread time spent draining the worker after the last wave. In
+            # that mode `unpatchify`/`stitch` are worker time, overlapped with the main thread.
+            "post_wait": 0.0,
             "waves": 0,
             "units": 0,
             # Per-wave readback durations, not just their sum: a mean hides a slow first wave, and
@@ -556,7 +567,10 @@ class MiniMaxH3Vae:
             f"({self.mesh_device.get_num_devices()} devices, "
             f"{units / waves if waves else 0:.1f} units/wave)"
         )
-        for name in ("device", "readback", "stitch", "unpatchify", "tiling", "upload", "host_prep", "residual"):
+        names = ("device", "readback", "stitch", "unpatchify", "tiling", "upload", "host_prep", "residual")
+        if p.get("post_wait"):
+            names += ("post_wait",)
+        for name in names:
             share = 100 * p[name] / total if total else 0.0
             per_wave = f"  {p[name] / waves * 1000:6.0f} ms/wave" if waves and name in ("device", "readback") else ""
             logger.info(f"    {name:<12} {p[name]:6.2f} s  ({share:4.1f} %){per_wave}")
@@ -779,8 +793,12 @@ class MiniMaxH3Vae:
 
     # ---------------------------------------------------------------- decode
 
-    def _stream_decoder_units(self, units: list[torch.Tensor]):
+    def _stream_decoder_units(self, units: list[torch.Tensor], *, postprocess: bool = True):
         """Yield decoded pixel tiles in ``units`` order, running the mesh a wave at a time.
+
+        With ``postprocess=False`` the generator yields each wave's raw ``(batch, count)`` readback
+        instead -- the bf16 token-space batch straight off the DMA -- for a caller that upcasts and
+        unpatchifies elsewhere (`_decode_units_async_stitch`).
 
         Same argument as :meth:`_run_encoder_units`: the reference decodes each spatial
         tile of each temporal chunk on its own and only cross-fades afterwards, and the ViT
@@ -824,6 +842,8 @@ class MiniMaxH3Vae:
             profile["shape"] = tuple(decoded.shape)
             profile["dtype"] = str(decoded.dtype)
             profile["readback_mb"] += out.numel() * out.element_size() / 1e6
+            if not postprocess:
+                return [(out, count)]
 
             mark = time.perf_counter()
             # `.float()` per tile rather than once over the whole batch: the batch is 32 x 22 MB and
@@ -886,6 +906,65 @@ class MiniMaxH3Vae:
 
         if pending is not None:
             yield from read_wave(*pending)
+
+    def _decode_units_async_stitch(
+        self, units: list[torch.Tensor], tiles_per_chunk: int, latent_height: int, latent_width: int
+    ) -> list[torch.Tensor]:
+        """The host path's post-processing -- upcast, unpatchify, chunk stitch -- on one worker thread.
+
+        The serial schedule runs enqueue, readback, unpatchify and stitch back to back on the main
+        thread, so a wave costs their sum on the host while the device finishes its ~110 ms and
+        idles: the stage is host-bound at roughly 300 ms/wave. Here the main thread keeps only what
+        must serialize with the device -- upload, enqueue, DMA readback -- and hands each wave's raw
+        batch to the worker, which upcasts, unpatchifies and stitches in submission order. Torch
+        releases the GIL inside its kernels, so the two threads overlap for real. One worker, not a
+        pool: submission order is what keeps `buffered` and `clips` single-writer, and torch's
+        intra-op threads already parallelize the tensor math. The main thread blocks once the worker
+        is two waves behind, which bounds the raw batches held. Numerically identical to the serial
+        path: the same ops in the same order on every tile.
+        """
+        from .decoder_minimax_h3 import unpatchify
+
+        _, _, num_frames, height, width = units[0].shape
+        config = self.config
+        profile = self._profile
+        clips: list[torch.Tensor] = []
+        buffered: list[torch.Tensor] = []
+
+        def post_process(out: torch.Tensor, count: int) -> None:
+            mark = time.perf_counter()
+            tiles = [
+                unpatchify(
+                    out[index : index + 1].float(),
+                    num_frames=num_frames,
+                    height=height,
+                    width=width,
+                    out_channels=config.out_channels,
+                    patch_size=config.spatial_compression_ratio,
+                    patch_size_t=config.temporal_compression_ratio,
+                )
+                for index in range(count)
+            ]
+            profile["unpatchify"] += time.perf_counter() - mark
+            buffered.extend(tiles)
+            while len(buffered) >= tiles_per_chunk:
+                mark = time.perf_counter()
+                clips.append(self._stitch_decoded(buffered[:tiles_per_chunk], latent_height, latent_width))
+                profile["stitch"] += time.perf_counter() - mark
+                del buffered[:tiles_per_chunk]
+
+        pending: deque = deque()
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="minimax-h3-vae-stitch") as pool:
+            for out, count in self._stream_decoder_units(units, postprocess=False):
+                pending.append(pool.submit(post_process, out, count))
+                while len(pending) > 2:
+                    pending.popleft().result()
+            mark = time.perf_counter()
+            while pending:
+                pending.popleft().result()
+            profile["post_wait"] += time.perf_counter() - mark
+        assert not buffered, f"{len(buffered)} tiles left over for a {tiles_per_chunk}-tile chunk grid"
+        return clips
 
     def _decode_clip_device_stitched(self, z_BCTHW: torch.Tensor, output_type: str = "float"):
         """One clip, decoded and stitched entirely on device, read back as the assembled canvas.
@@ -1174,18 +1253,21 @@ class MiniMaxH3Vae:
             self._profile["tiling"] += time.perf_counter() - mark
             tiles_per_chunk = len(all_units) // num_chunks
 
-            clips = []
-            # Holding every decoded tile would scale with the whole video. Stitching a chunk the
-            # moment its last tile lands caps the pile at one chunk plus the wave in flight.
-            buffered: list[torch.Tensor] = []
-            for tile in self._stream_decoder_units(all_units):
-                buffered.append(tile)
-                while len(buffered) >= tiles_per_chunk:
-                    mark = time.perf_counter()
-                    clips.append(self._stitch_decoded(buffered[:tiles_per_chunk], latent_height, latent_width))
-                    self._profile["stitch"] += time.perf_counter() - mark
-                    del buffered[:tiles_per_chunk]
-            assert not buffered, f"{len(buffered)} tiles left over for a {tiles_per_chunk}-tile chunk grid"
+            if self.async_stitch:
+                clips = self._decode_units_async_stitch(all_units, tiles_per_chunk, latent_height, latent_width)
+            else:
+                clips = []
+                # Holding every decoded tile would scale with the whole video. Stitching a chunk the
+                # moment its last tile lands caps the pile at one chunk plus the wave in flight.
+                buffered: list[torch.Tensor] = []
+                for tile in self._stream_decoder_units(all_units):
+                    buffered.append(tile)
+                    while len(buffered) >= tiles_per_chunk:
+                        mark = time.perf_counter()
+                        clips.append(self._stitch_decoded(buffered[:tiles_per_chunk], latent_height, latent_width))
+                        self._profile["stitch"] += time.perf_counter() - mark
+                        del buffered[:tiles_per_chunk]
+                assert not buffered, f"{len(buffered)} tiles left over for a {tiles_per_chunk}-tile chunk grid"
         else:
             clips = []
 
