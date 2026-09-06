@@ -534,8 +534,10 @@ bidirectional band, so making the model faster breaks it from the other side. Pr
 flag means re-measuring the goldens, not just flipping a default.
 
 **Accuracy, and why it is still default OFF.** On the demo prompt at seed 42, N150: SIM
-0.8662 -> **0.8997** (it went UP), WER 9.1 % in both arms (and that 9.1 % is entirely a typo in
-the prompt — the ASR hears the right words), no clipping and no sample-jump artifacts in either.
+0.8662 -> 0.8997, WER 9.1 % in both arms (and that 9.1 % is entirely a typo in the prompt — the
+ASR hears the right words), no clipping and no sample-jump artifacts in either. **Do not read
+that SIM move as an improvement: it is inside the noise.** See the variance baseline below —
+one seed cannot resolve 0.03 of SIM.
 PCC moves only where the test actually reaches the flag: `cp_step` 0.999976 -> 0.999844, while
 `mlp_decode` / `attention_decode` / `talker_chain` are digit-identical because those tests build
 their modules directly and never see the env var — **so `test_qwen3_tts_pcc.py` is NOT a gate on
@@ -553,6 +555,39 @@ needs: a frame-count + WER sweep over >= 8 seeds, a listen, and new gate goldens
 | `topk` k=64 -> k=32 (width 2048) | 229.4 -> 138.4 us, **-1.36 ms/frame** | Real, but the demo's `top_k=50` does not fit in 32, so it narrows sampling to top-32. A quality change for less than half of what bfp8 gives. |
 | Drop top-k: full-vocab Gumbel + `argmax` | argmax 132.9 us vs topk k=32 138.4 us | **Pointless.** Removing the top-k truncation entirely buys ~nothing over k=32, so there is no reason to pay its quality cost. |
 | Matmul program-config / grid tuning on N150 | already 70-88 % of DRAM peak | No headroom; see the table above. |
+
+---
+
+### 2.9 SIM variance: a single run cannot compare two configurations
+
+Comparing single demo runs suggested N150 clones the voice worse than N300 (0.8662 / 0.8997
+against 0.9350 / 0.9565). It does not. Four seeds per SKU, same text, same reference clip,
+`microsoft/wavlm-base-plus-sv`:
+
+| seed | N150 SIM | N300 SIM |
+|---|--:|--:|
+| 1 | 0.9078 | 0.9120 |
+| 7 | 0.9074 | 0.9180 |
+| 42 | **0.9495** | 0.9166 |
+| 123 | 0.8473 | 0.9318 |
+| **mean (sd)** | **0.9030 (0.0421)** | **0.9196 (0.0085)** |
+
+The gap of means is **+0.0166 for N300 against a pooled within-device sd of 0.0253** — smaller
+than the noise. N150's range [0.8473, 0.9495] entirely contains N300's [0.9120, 0.9318], and
+N150's best seed beats every N300 run. There is no device-level cloning gap; the earlier
+single-run pairs were low and high draws.
+
+Two things this does establish:
+
+* **WER is 0.0 % in all eight runs** on the clean prompt. Every 9.1 % elsewhere in these notes
+  is one typo in the test text (`gentlebreeze`), which the model speaks correctly as two words
+  and the ASR scores as a substitution plus an insertion. It is not a model error.
+* **N150's SIM spread is ~5x N300's** (sd 0.0421 vs 0.0085) across these four seeds. n=4 is far
+  too small to call that real, but it is the only hint of a device difference here and it is
+  what a follow-up should measure, not the means.
+
+**Rule for anyone comparing two configurations on SIM: n=1 resolves nothing.** Budget >= 4
+seeds per arm and compare distributions; a 0.03 move is inside a single arm's spread.
 
 ---
 
