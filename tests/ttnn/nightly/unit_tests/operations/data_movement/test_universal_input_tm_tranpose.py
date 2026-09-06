@@ -485,6 +485,18 @@ _RM = ttnn.ROW_MAJOR_LAYOUT
             _interleaved,
             id="WH_RM_height_to_interleaved",
         ),
+        # Regression test for #55582: HEIGHT_SHARDED (H split across cores) -> WIDTH_SHARDED
+        # inherited/requested output on ROW_MAJOR previously routed into
+        # TransposeWHShardedRMProgramFactory, whose num_hw_blocks_per_core = shard_height / H
+        # truncates to 0 (silent all-zero output) whenever the height shard doesn't hold a full H.
+        pytest.param(
+            (1, 1, 64, 128),
+            2,
+            3,
+            lambda d: _height_shard_config((1, 1, 64, 128), d, num_cores=4, layout=_RM),
+            lambda d: _width_shard_config((1, 1, 128, 64), d, num_cores=4, layout=_RM),
+            id="WH_RM_height_to_width",
+        ),
     ],
 )
 def test_transpose_universal_io_row_major(shape, dim0, dim1, input_factory, output_factory, dtype, device):
