@@ -79,6 +79,18 @@ contains review orchestration and MUST NOT be used as the source of PR code.
   concerns merely to produce comments.
 - Delegated agents return candidates or verdicts only. They MUST NOT post to
   GitHub or call `ReportFindings`; the parent command is the sole posting owner.
+- Comment signature. Several `github-actions[bot]` reviewers comment on LLK PRs,
+  so every GitHub comment this command posts — each inline finding, each
+  issue-level fallback, the no-findings summary, and the closed-PR skip note —
+  MUST end with the exact two-line footer below so readers and tooling can tell
+  LLK PR Reviewer comments apart from the other bots. Separate it from the body
+  by one blank line, place it once as the final content of the body, and never
+  attach it to a subagent's returned candidate:
+
+  ```markdown
+  <!-- llk-pr-reviewer -->
+  _Posted by the **LLK PR Reviewer**._
+  ```
 
 Follow these steps precisely:
 
@@ -86,7 +98,8 @@ Follow these steps precisely:
    parsed PR reference and the shell/filesystem constraints; it may inspect PR
    state only and must not inspect code or post. If the PR is closed, the parent
    posts a short issue-level skip comment through the issue-comments `gh api`
-   endpoint when `--comment` was provided, selects `.html_url`, verifies that it
+   endpoint when `--comment` was provided, ending the comment body with the
+   comment signature footer, selects `.html_url`, verifies that it
    is non-empty, then stops. Review every open
    PR that was explicitly dispatched, including draft, automated,
    Claude-generated, and trivial PRs.
@@ -221,13 +234,17 @@ Follow these steps precisely:
    that the PR changed during review and stop with an error.
 
    If no findings survived, post this issue-level comment with one direct issue-
-   comments `gh api` call using `--raw-field body=... --jq '.html_url'`:
+   comments `gh api` call using `--raw-field body=... --jq '.html_url'`. The body
+   ends with the comment signature footer:
 
    ```markdown
    ## Code review
 
    No issues found. Checked LLK correctness, hazards, team rules, and applicable
    architecture/test context.
+
+   <!-- llk-pr-reviewer -->
+   _Posted by the **LLK PR Reviewer**._
    ```
 
    Verify that the command result is a non-empty URL. Only then return the concise
@@ -236,7 +253,8 @@ Follow these steps precisely:
 8. If findings survived, refresh the PR's issue comments and inline review
    comments immediately before posting. Remove any finding another reviewer has
    already covered since step 3. Prepare one self-contained comment per unique
-   issue in context; do not create a file or publish the preparation list. Check
+   issue in context, ending every comment body with the comment signature footer;
+   do not create a file or publish the preparation list. Check
    each final `path`, `start_line`, and `line` against the refreshed diff. Use
    `start_line: null` for a single-line anchor; for a range, require
    `start_line < line` and keep both endpoints on the right side of the same diff
