@@ -33,6 +33,14 @@ CheckOptions:
     value: false
   - key: readability-function-cognitive-complexity.Threshold
     value: 25
+  # Fires when the base type name is at least this long, measured ignoring
+  # const/volatile/*. At the default of 5 this reports 2,137 times, 89% of them
+  # on `uint32_t x = get_arg_val<uint32_t>()` in the kernel runtime-arg preamble,
+  # where the duplication it objects to is eight characters on the same line. 9
+  # excludes uint32_t and keeps the ~131 sites with a genuinely long name to
+  # duplicate: sfpi::vFloat, RealtimeProfilerState, DataFormat.
+  - key: modernize-use-auto.MinTypeNameLength
+    value: 9
   - key: readability-simplify-boolean-expr.SimplifyDeMorgan
     value: false
   - key: readability-else-after-return.WarnOnUnfixable

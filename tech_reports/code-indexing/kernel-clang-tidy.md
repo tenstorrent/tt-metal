@@ -491,9 +491,9 @@ auto-fixable, which makes it a target for an agent rather than for suppression.
 
 **Check options are the quietest suppressor here**, so they are worth reading as
 carefully as the `--disable` list. Nothing readability- or complexity-related is
-disabled, but five options retune three checks, and they were mirrored verbatim
-from the repo's root host `.clang-tidy` ("mirror host .clang-tidy strategy for
-kernel checks") rather than chosen for device code:
+disabled, but six options retune four checks. Five were mirrored verbatim from
+the repo's root host `.clang-tidy` ("mirror host .clang-tidy strategy for kernel
+checks") rather than chosen for device code:
 
 | Option | clang-tidy default | Ours |
 | --- | --- | --- |
@@ -502,6 +502,7 @@ kernel checks") rather than chosen for device code:
 | `readability-simplify-boolean-expr.SimplifyDeMorgan` | true | false |
 | `readability-else-after-return.WarnOnUnfixable` | true | false |
 | `readability-else-after-return.WarnOnConditionVariables` | true | false |
+| `modernize-use-auto.MinTypeNameLength` | 5 | 9 |
 
 The first two are now back at clang-tidy's defaults, deliberately diverging from
 the host config. At `Threshold=312` with `IgnoreMacros=true`, cognitive
@@ -510,6 +511,28 @@ that also ignored precisely the macro-driven complexity that dominates LLK and
 the SFPU headers. That pairing suits a blocking host gate; it defeats a
 non-blocking report whose purpose is to enumerate problems. Both files state the
 values explicitly so a future "sync with host" edit does not silently undo it.
+
+`modernize-use-auto.MinTypeNameLength` is the one option chosen for this
+codebase rather than inherited. The check fires only on cast initialisers here —
+no `new`, no iterators — and at the default of 5 it reported 2,137 times, 89% of
+them on the kernel runtime-arg preamble, `uint32_t x = get_arg_val<uint32_t>(i)`,
+where the duplication it objects to is eight characters on the same line. The
+option measures the *base* type name, ignoring `const`, `volatile` and `*`, and
+fires when that length is **at least** the threshold — so 9 is the value that
+excludes `uint32_t` (8) while keeping the ~131 sites with a genuinely long name
+to duplicate: `sfpi::vFloat`, `RealtimeProfilerState`, `DataFormat`. Both
+semantics are worth stating because neither is obvious from the documentation and
+an off-by-one leaves the check unchanged.
+
+Compile time was checked before tuning rather than assumed, since kernels build
+at runtime. Measured front-end only on the exact pattern, `auto` costs about a
+microsecond per declaration and the sign flips between compilers — 5,000
+declarations took g++ 182 ms explicit against 187 ms auto, and clang 127 ms
+against 122 ms. At the ~27 declarations a real kernel carries that is tens of
+microseconds, so it played no part in the decision. (`auto` does have a real
+build-time cost as a deduced *return* type, which cannot be forward-declared and
+so pulls definitions into translation units that previously needed only a
+declaration. This check never suggests that.)
 
 **Check options** go through `--checker-config
 clang-tidy:<checker>:<option>=<value>`, not through a config file. Forwarding
@@ -523,7 +546,7 @@ verbatim args, but only matches args starting with `-config`, so
 problem by landing the options inside that single `-config`, and CodeChecker
 then also defaults `HeaderFilterRegex` to `.*`, which is what we want with the
 skiplist doing the scoping. Verified by reading the built command out of a
-failed-analysis zip: one `-config`, no `--config-file`, all five options
+failed-analysis zip: one `-config`, no `--config-file`, every option
 present. `tt_metal/jit_build/kernel_clang_tidy/.clang-tidy` survives only for
 the local `--run` path and mirrors those options.
 

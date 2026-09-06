@@ -47,6 +47,8 @@
         "--checker-config",
         "clang-tidy:readability-function-cognitive-complexity:Threshold=25",
         "--checker-config",
+        "clang-tidy:modernize-use-auto:MinTypeNameLength=9",
+        "--checker-config",
         "clang-tidy:readability-simplify-boolean-expr:SimplifyDeMorgan=false",
         "--checker-config",
         "clang-tidy:readability-else-after-return:WarnOnUnfixable=false",
