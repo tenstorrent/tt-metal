@@ -110,7 +110,6 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
     // shard_spec.shape is in padded terms; comparisons below use padded dims.
     const auto& input_padded_shape = input_tensor.padded_shape();
     const auto output_padded_shape = transposed_shapes(input_tensor, dim).padded;
-    uint32_t N = input_padded_shape[0], C = input_padded_shape[1];
     uint32_t output_width = output_padded_shape[-1];
     uint32_t output_height = output_padded_shape[-2];
 
@@ -121,14 +120,16 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
     bool output_height_sharded = native && output_memory_config.is_sharded() &&
                                  output_memory_config.shard_spec().has_value() &&
                                  output_memory_config.shard_spec()->shape[1] == output_width;
-    bool output_width_sharded = native && output_memory_config.is_sharded() &&
-                                output_memory_config.shard_spec().has_value() &&
-                                output_memory_config.shard_spec()->shape[0] == output_height;
     bool output_width_and_height_fully_in_shard =
         output_height_sharded && output_memory_config.shard_spec()->shape[0] % output_height == 0;
-    bool use_sharded_wh =
-        native && ((input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard) ||
-                   (N == 1 && C == 1 && input_height_sharded && output_width_sharded));
+    // Requiring both input and output to be fully height-and-width contained within a single shard (no
+    // splitting of H across cores) avoids the num_hw_blocks_per_core == 0 silent-corruption case in
+    // TransposeWHShardedRMProgramFactory / TransposeWHShardedProgramFactory when shard_height < H.
+    // See issue #55582: the previous N==1 && C==1 && input_height_sharded && output_width_sharded disjunct
+    // admitted shard_height < H (H split across cores), for which the RM factory computes
+    // num_hw_blocks_per_core = shard_height / H = 0, so its per-core loop never runs and the output shard is
+    // left unpopulated. TransposeWHProgramFactory (the interleaved-style fallback) handles this shape correctly.
+    bool use_sharded_wh = native && input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard;
     bool use_sharded_hc = native && input_height_sharded && output_height_sharded && is_row_major;
 
     auto parallelization_strategy = get_parallelization_strategy(operation_attributes, tensor_args);
