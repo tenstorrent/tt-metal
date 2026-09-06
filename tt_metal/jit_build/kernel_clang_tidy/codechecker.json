@@ -38,6 +38,8 @@
         "prefix:clang-diagnostic-c++98-compat",
         "--disable",
         "checker:modernize-use-trailing-return-type",
+        "--disable",
+        "checker:modernize-avoid-c-arrays",
         "--checker-config",
         "clang-tidy:readability-function-cognitive-complexity:IgnoreMacros=false",
         "--checker-config",

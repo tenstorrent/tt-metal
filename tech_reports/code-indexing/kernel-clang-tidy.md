@@ -320,10 +320,42 @@ this domain:
 | `portability-simd-intrinsics` | SFPI *is* a SIMD intrinsics layer, by design. |
 | `clang-diagnostic-c++98-compat` | Device code is C++17/20. |
 
-One more is muted on volume: `modernize-use-trailing-return-type` (1,182
-findings on a two-leg sample) is pure style and tt-umd mutes it too. Nothing
-else is muted for volume — see [Report consolidation](#report-consolidation)
-for why finding count no longer drives CI cost.
+Two more are muted on volume. `modernize-use-trailing-return-type` (1,182
+findings) is pure style and tt-umd mutes it too.
+
+`modernize-avoid-c-arrays` (21,785 findings, 35% of the whole report) is muted
+for a measured reason rather than a stylistic one. It is not that the codebase
+merely prefers C arrays: 98.3% of its findings are in generated JIT code, almost
+all in `chlkc_descriptors.h`, which emits ~23 constexpr tables per kernel variant
+across 451 kernel names. Only 364 findings are in hand-written code, and the
+checker collapses to 377 distinct locations.
+
+The reason not to act on it is compile time, which matters here because kernels
+are compiled at runtime. `std::array` is available and already used in device
+code (15 files in `tt_metal/hw/inc`, 14 in tt-llk, 43 of 1,475 ttnn kernel
+files), so this is not a capability limit. But measured on 23 constexpr integer
+tables, the cost is almost entirely the header, not the type:
+
+| Translation unit | g++ | clang |
+| --- | --- | --- |
+| C arrays, no `<array>` | 14.4 ms | 30.6 ms |
+| `#include <array>` alone | 56.4 ms | 84.4 ms |
+| C arrays with `<array>` already included | 56.4 ms | — |
+| `std::array` tables | 56.9 ms | 86.7 ms |
+
+Pulling in `<array>` costs ~42 ms per TU on g++; converting the tables once it is
+present costs ~0.5 ms. A cache-missing JIT build of twenty-odd TUs would pay
+close to a second of runtime compile if this newly introduced the header, for
+constexpr tables that only generated code indexes. Whether it *would* introduce
+it is unresolved: every firmware wrapper transitively reaches 5 or 6 headers that
+include `<array>`, but several are conditional (`device_print.h` is DPRINT-gated,
+`compile_time_args.h` is prolog-emitted only for named-arg kernels,
+`dataflow_buffer.h` guards its include with `__has_include`). Settling it needs
+`g++ -H` on a captured compile command in the CI container.
+
+Nothing else is muted for volume — see
+[Report consolidation](#report-consolidation) for why finding count no longer
+drives CI cost.
 
 Everything else is on. This replaced an inherited 189-entry opt-out list (13
 families plus 176 individual checks) carried over from the `kernel_clang_tidy`
