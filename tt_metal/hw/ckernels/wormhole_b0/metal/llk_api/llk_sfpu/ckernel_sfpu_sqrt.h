@@ -76,8 +76,19 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
         }
     }
     if constexpr (!FAST_APPROX) {
-        v_if(x < 0.0F) {
-            y = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
+        v_if(x < 0.0f) {
+            y = std::numeric_limits<float>::quiet_NaN();
+            // -0.0 is in the domain. The comparison above is a sign-bit test, so it lands
+            // here with the genuinely negative values; IEEE-754 says sqrt(-0) is -0 and
+            // rsqrt(-0) is -inf, which is also what torch returns.
+            v_if(sfpi::as<sfpi::vInt>(x) == static_cast<int>(0x80000000)) {
+                if constexpr (RECIPROCAL) {
+                    y = -std::numeric_limits<float>::infinity();
+                } else {
+                    y = x;
+                }
+            }
+            v_endif;
         }
         v_endif;
     }
