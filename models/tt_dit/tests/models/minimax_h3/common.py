@@ -119,13 +119,13 @@ def create_fractal_image(width: int, height: int) -> Image.Image:
 _L1_SMALL = 65536
 _ring = {**ring_params_req_exact_devices, "l1_small_size": _L1_SMALL}
 _ring_8k = {**ring_params_8k_req_exact_devices, "l1_small_size": _L1_SMALL}
-_ring_8k_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 450_000_000, "l1_small_size": _L1_SMALL}
+_ring_8k_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 1005_000_000, "l1_small_size": _L1_SMALL}
 
 MESH_4X8_RING = pytest.param((4, 8), _ring_8k, id="4x8")
-MESH_4X32_RING = pytest.param((4, 32), _ring_8k_trace, id="4x32")
+MESH_4X32_RING_TRACED = pytest.param((4, 32), _ring_8k_trace, id="4x32_TRACED")
 MESH_4X32_RING_UNTRACED = pytest.param((4, 32), _ring_8k, id="4x32_UNTRACED")
 
-GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING, MESH_4X32_RING_UNTRACED]
+GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING_TRACED, MESH_4X32_RING_UNTRACED]
 
 
 def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> torch.nn.Module:
