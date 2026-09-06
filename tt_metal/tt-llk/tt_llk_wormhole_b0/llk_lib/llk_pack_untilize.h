@@ -190,7 +190,8 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
 
     if (block_ct_dim != full_ct_dim)
     {
-        const std::uint32_t output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces > 1) ? num_faces / 2 : 1) * FACE_C_DIM);
+        // Match BH: 2 face-cols per tile-row for num_faces>=2; WH previously used num_faces/2 = 1 (#52175).
+        const std::uint32_t output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces == 1) ? 1 : 2) * FACE_C_DIM);
         TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET)); // store 16B aligned row offset address
     }
 
