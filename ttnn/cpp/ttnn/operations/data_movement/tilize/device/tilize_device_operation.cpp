@@ -170,15 +170,6 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
         tt::constants::TILE_WIDTH,
         tile_width);
 
-    // Blocked (exponent-shared) formats pack a full 32-row tile; a tiny tile height would split a
-    // block across faces incorrectly, so reject that combination.
-    if (tile_height < tt::constants::TILE_HEIGHT) {
-        const DataType out_dt = operation_attributes.output_dtype;
-        TT_FATAL(
-            out_dt != DataType::BFLOAT8_B && out_dt != DataType::BFLOAT4_B,
-            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
-    }
-
     TT_FATAL(
         input_tensor_a.padded_shape()[-1] % tile_width == 0,
         "Input tensor width ({}) must be divisible by tile width ({})",
@@ -192,12 +183,17 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
 
     auto width = input_tensor_a.padded_shape()[-1];
     uint32_t stick_s = width;
-    TT_FATAL(
-        input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32 or
-            input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
-            input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::UINT8 or
-            input_tensor_a.dtype() == DataType::FP8_E4M3,
-        "data type must be bfloat16, float32, uint32, int32, uint16, uint8, or fp8_e4m3");
+    // Retile accepts block-float inputs at any tile height (1..32): the packer LLK sizes the BFP
+    // exponent section from face_r_dim, so partial-face (tile height < 16) block-float tiles pack
+    // with the same layout the host and unpacker use.
+    if (!retile) {
+        TT_FATAL(
+            input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32 or
+                input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
+                input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::UINT8 or
+                input_tensor_a.dtype() == DataType::FP8_E4M3,
+            "data type must be bfloat16, float32, uint32, int32, uint16, uint8, or fp8_e4m3");
+    }
     // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
     // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
     {
@@ -250,7 +246,12 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
     const bool output_is_sharded =
         operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::INTERLEAVED &&
         operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::ND_SHARDED;
-    if (output_is_sharded && can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
+    // A retile is excluded: inheriting the input's shard spec and padded shape assumes both sides
+    // tile the same way, but a retile changes the tile height, so the output's physical height (and
+    // therefore its shard height) can differ from the input's. The caller's output_mem_config
+    // already describes the output tiling, so respect it.
+    if (output_is_sharded && !is_retile(operation_attributes, tensor_args) &&
+        can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
         log_warning(
             tt::LogOp,
             "ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program "
@@ -270,10 +271,6 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
                 input_tensor.padded_shape()))};
     }
 
-    auto output_layout = TensorLayout(
-        operation_attributes.output_dtype,
-        PageConfig(Layout::TILE, operation_attributes.tile),
-        operation_attributes.output_mem_config);
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout(
