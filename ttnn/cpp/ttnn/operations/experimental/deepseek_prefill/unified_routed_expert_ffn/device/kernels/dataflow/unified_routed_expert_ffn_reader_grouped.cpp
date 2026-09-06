@@ -315,7 +315,11 @@ void kernel_main() {
 
     // D2.0 Semaphore wrappers.
     Semaphore<> in1_ready_sem(in1_ready_sem_id);
-    Semaphore<> in1_valid_sem(in1_valid_sem_id);
+    // The legacy in1 valid semaphore is unused by the split-read protocol; it serves as a
+    // constant-1 word that is the SOURCE of the act_valid multicast below (relay_multicast).
+    // A never-rewritten source cannot be raced by a later local reset (see phase 4).
+    Semaphore<> one_sem(in1_valid_sem_id);
+    one_sem.set(1);
     Semaphore<> in0_ready_sem(in0_ready_sem_id);
     Semaphore<> in0_valid_sem(in0_valid_sem_id);
     Semaphore<> act_ready_sem(act_ready_sem_id);
@@ -915,19 +919,18 @@ void kernel_main() {
                             1);
                     }
                 }
+                // Every core (the sender included) consumes act_valid for this K-block: the
+                // sender's own copy of the activated block arrives by loopback multicast, so it
+                // too must see the valid (delivered behind the data on the same linked path)
+                // before it pushes cb_in0_down_full. History: the first version multicast
+                // act_valid from its own L1 word and reset that word here on the receivers;
+                // the NoC reads a multicast's 4-byte source only at packet injection, so a
+                // fast core (idle phantom row) reset it first and multicast a 0 -> receivers
+                // hung. The source is now the constant one_sem; the flush stays as cheap
+                // insurance that nothing sourced from this core's L1 is still queued.
+                noc.async_writes_flushed();
+                act_valid_sem.set(0);
                 if (!is_act_sender) {
-                    // If this core was the activated sender of the PREVIOUS K-block, its
-                    // act_valid set_multicast may still be queued in the NIU: the NoC reads
-                    // the 4-byte source (act_valid's own L1 word) only when the packet is
-                    // injected, which under heavy NoC-0 load can be later than this reset.
-                    // Resetting first would multicast a 0 and every receiver of that block
-                    // would wait forever (observed as an intermittent hang in two-row groups,
-                    // where the phantom row's compute is idle and reaches this point within
-                    // ~100 cycles of the multicast). Flush the sent-write counter first: the
-                    // set_multicast is a non-posted write, so this returns once its source
-                    // has been read. Cheap when nothing is pending.
-                    noc.async_writes_flushed();
-                    act_valid_sem.set(0);
                     const uint32_t sender_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 0);
                     const uint32_t sender_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 1);
                     act_ready_sem.up(noc, sender_nx, sender_ny, 1);
@@ -1082,18 +1085,25 @@ void kernel_main() {
                     }
                     noc.async_writes_flushed();
 
-                    act_valid_sem.set(ACT_VALID);
-                    act_valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
-                        noc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
+                    // Valid = the constant one_sem relayed into every row core's act_valid,
+                    // loopback included: the sender's own act_valid turns 1 only once its own
+                    // loopback copy of the data has landed (same linked path), which is what
+                    // makes the unconditional wait below safe for the sender as well.
+                    one_sem.relay_multicast<NocOptions::MCAST_INCL_SRC>(
+                        noc, act_valid_sem, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
 
                     cb_activated_obj.pop_front(act_tiles_max);
                 }
 
-                // Step 5: receivers wait for both valid sems and push.
-                if (!is_act_sender) {
-                    RB(0x9, RB_SEMV(act_valid_sem_id));
-                    act_valid_sem.wait(ACT_VALID);
-                }
+                // Step 5: EVERY core (sender included) waits for the activated block to land
+                // in its cb_in0_down_full before pushing it. async_writes_flushed() above only
+                // says the multicast left the sender's NIU; the sender's own loopback copy is
+                // still in flight, and a compute that starts the down matmul early (weights
+                // already resident) reads the previous block's stale tiles -> that core's
+                // whole down-output block is wrong. Observed as intermittent PCC drops in
+                // two-row groups (the legacy kernel pushes without this wait).
+                RB(0x9, RB_SEMV(act_valid_sem_id));
+                act_valid_sem.wait(ACT_VALID);
                 cb_in0_down_full_obj.push_back(d_in0_block_num_tiles);
 
                 if constexpr (split_read) {
