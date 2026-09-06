@@ -5,6 +5,7 @@
 #include "matmul.hpp"
 
 #include <numeric>
+#include <utility>
 #include <variant>
 
 #include "device/config/matmul_program_config_types.hpp"
@@ -304,8 +305,13 @@ static ttnn::Tensor bound_matmul(
         parameters.transpose_a,
         parameters.transpose_b);
 
-    auto attributes = ttnn::prim::create_matmul_attributes(
-        input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
+    // Reuse the attributes used for config selection unless preprocessing changed the operands.
+    // Manual transposes also clear transpose flags; a rank-one B is reshaped above.
+    auto attributes =
+        (needs_manual_transpose_a || needs_manual_transpose_b || input_tensor_b.logical_shape().rank() == 1)
+            ? ttnn::prim::create_matmul_attributes(
+                  input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor})
+            : std::move(matmul_struct);
 
     auto output_tensor = ttnn::prim::matmul(
                              input_tensor_a_adjusted,
