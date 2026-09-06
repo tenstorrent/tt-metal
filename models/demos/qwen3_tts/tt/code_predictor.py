@@ -621,6 +621,14 @@ class CodePredictor(LightweightModule):
             else:
                 self._ln_attn_memcfg = _ln_attn_memcfg
 
+        # QWEN3_TTS_BF8_WEIGHTS=1 stores the DRAM-sharded matmul weights as bfloat8_b.
+        # Every CP/Talker decode matmul is M=1 tile and therefore weight-bandwidth bound
+        # (the perf report puts them at 70-88 % of DRAM peak), so halving the weight
+        # bytes is the only lever with real headroom left -- no program config can beat
+        # a bandwidth wall. RMSNorm weights stay bf16 (small, dynamic-range sensitive).
+        # This is an ACCURACY change, hence default off; see PERF_NOTES 2.8.
+        _ds_dtype = ttnn.bfloat8_b if os.environ.get("QWEN3_TTS_BF8_WEIGHTS", "0") == "1" else ttnn.bfloat16
+
         # DRAM-sharded MLP weights on every SKU. QKV / o_proj DS weights are N150-only.
         for li, lw in enumerate(self.layers_w):
             pfx = f"talker.code_predictor.model.layers.{li}."
@@ -628,14 +636,12 @@ class CodePredictor(LightweightModule):
             gate_kn = lw_t["mlp.gate_proj.weight"].transpose(0, 1).contiguous()  # [H, interm]
             up_kn = lw_t["mlp.up_proj.weight"].transpose(0, 1).contiguous()
             lw["gate_ds"], _, _ = build_dram_sharded_weight_tp(
-                gate_kn, device, self.tp_size, split_dim=1, dtype=ttnn.bfloat16
+                gate_kn, device, self.tp_size, split_dim=1, dtype=_ds_dtype
             )
-            lw["up_ds"], _, _ = build_dram_sharded_weight_tp(
-                up_kn, device, self.tp_size, split_dim=1, dtype=ttnn.bfloat16
-            )
+            lw["up_ds"], _, _ = build_dram_sharded_weight_tp(up_kn, device, self.tp_size, split_dim=1, dtype=_ds_dtype)
             down_kn = lw_t["mlp.down_proj.weight"].transpose(0, 1).contiguous()  # [interm, H]
             lw["down_ds"], _, _ = build_dram_sharded_weight_tp(
-                down_kn, device, self.tp_size, split_dim=0, dtype=ttnn.bfloat16
+                down_kn, device, self.tp_size, split_dim=0, dtype=_ds_dtype
             )
             if self._ds_oproj:
                 # Row-parallel under TP: each chip owns local_hidden rows and produces a
@@ -644,7 +650,7 @@ class CodePredictor(LightweightModule):
                 # chain, which still uses it.
                 _wo_kn_ds = lw_t["self_attn.o_proj.weight"].transpose(0, 1).contiguous()
                 lw["o_ds"], _, _ = build_dram_sharded_weight_tp(
-                    _wo_kn_ds, device, self.tp_size, split_dim=0, dtype=ttnn.bfloat16
+                    _wo_kn_ds, device, self.tp_size, split_dim=0, dtype=_ds_dtype
                 )
             if self._n150:
                 _q = _perm_rope_rows(state_dict[pfx + "self_attn.q_proj.weight"], HD)
@@ -662,11 +668,11 @@ class CodePredictor(LightweightModule):
                 else:
                     wqkv_kn = torch.cat([c.transpose(-2, -1).contiguous() for c in _per_chip], dim=1)
                 lw["wqkv_ds"], _, _ = build_dram_sharded_weight_tp(
-                    wqkv_kn, device, self.tp_size, split_dim=1, dtype=ttnn.bfloat16
+                    wqkv_kn, device, self.tp_size, split_dim=1, dtype=_ds_dtype
                 )
                 wo_kn = lw_t["self_attn.o_proj.weight"].transpose(0, 1).contiguous()
                 lw["o_ds"], _, _ = build_dram_sharded_weight_tp(
-                    wo_kn, device, self.tp_size, split_dim=0, dtype=ttnn.bfloat16
+                    wo_kn, device, self.tp_size, split_dim=0, dtype=_ds_dtype
                 )
                 for _dead in ("wqkv", "o_proj", "gate", "up", "down"):
                     ttnn.deallocate(lw.pop(_dead))
