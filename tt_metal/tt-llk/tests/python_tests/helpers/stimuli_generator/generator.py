@@ -273,7 +273,8 @@ def generate_stimuli(
     face_r_dim: int = MAX_FACE_R_DIM,
     num_faces: int = MAX_NUM_FACES,
     output_format: Optional[DataFormat] = None,
-) -> tuple[torch.Tensor, int, torch.Tensor, int]:
+    generate_operand_B: bool = True,
+) -> tuple[torch.Tensor, int, Optional[torch.Tensor], int]:
     """Generate test stimuli for two operands.
 
     When tile_dimensions is provided, operates in dense mode with derived face layout;
@@ -290,9 +291,15 @@ def generate_stimuli(
         face_r_dim: Rows per face, 1-16 (ignored in dense mode, default 16).
         num_faces: Faces per tile for partial-face case (ignored in dense mode, default 4).
         output_format: Clamp outputs for mixed MX-format pairs when set.
+        generate_operand_B: When False, srcB is not generated and None is returned in
+            its place. ``tile_cnt_B`` is still computed, because callers need it to
+            reserve B's L1 region even when no kernel reads it. For a genuinely unary
+            test this skips generating a whole tile per test that is then packed and
+            DMA'd for nothing.
 
     Returns:
-        (srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B).
+        (srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B). srcB_tensor is None when
+        *generate_operand_B* is False.
     """
     _spec_B_originally_none = spec_B is None
 
@@ -362,6 +369,20 @@ def generate_stimuli(
         spec=spec_A,
         input_dimensions=input_dimensions_A,
     )
+    if not generate_operand_B:
+        # Still run the clamp on A. It is not purely pairwise: its output_format
+        # branches clamp A on their own, so skipping it here would silently widen A's
+        # range for an MX output. An empty stand-in for B keeps the A-side behaviour
+        # identical while costing nothing.
+        srcA_tensor, _ = _clamp_mx_tensors(
+            srcA_tensor,
+            srcA_tensor[:0],
+            stimuli_format_A,
+            stimuli_format_B,
+            output_format,
+        )
+        return srcA_tensor, tile_cnt_A, None, tile_cnt_B
+
     srcB_tensor = _generate_source_tensor(
         stimuli_format=stimuli_format_B,
         num_elements=num_elements_B,
