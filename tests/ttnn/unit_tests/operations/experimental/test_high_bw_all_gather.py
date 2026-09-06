@@ -373,6 +373,17 @@ def _meta_slot_terms(flat_slot):
     return flat_slot // _META_NUM_LAYERS, _META_NUM_LAYERS, flat_slot % _META_NUM_LAYERS
 
 
+def _meta_cache_slots(flat_slot):
+    """Slot capacity a metadata run must allocate for `flat_slot`.
+
+    The op reads the cache batch as user-major (batch == num_users * num_layers) and TT_FATALs unless
+    batch_slot_num_layers divides it, so the input has to COMPLETE the user holding this slot -- stopping
+    one past the slot itself (flat_slot + 1) leaves a partial user and fails validation. At the default
+    (flat slot 2, 2 layers) that is 4 slots: 2 users x 2 layers, one slot more than the scalar arm."""
+    user_id, num_layers, _ = _meta_slot_terms(flat_slot)
+    return (user_id + 1) * num_layers
+
+
 def _run_high_bw_all_gather_accuracy(
     mesh_device,
     dtype,
@@ -399,7 +410,7 @@ def _run_high_bw_all_gather_accuracy(
     assert (
         metadata_batch_index is None or cluster_axis is not None
     ), "metadata slot selection needs an axis-sharded input; the full-mesh mapper shards dim 2 only"
-    cache_slots = 1 if metadata_batch_index is None else metadata_batch_index + 1
+    cache_slots = 1 if metadata_batch_index is None else _meta_cache_slots(metadata_batch_index)
     global_shape = (cache_slots, 1, rows_per_device * collective_size, width)
     torch.manual_seed(0)
     host_input = torch.rand(global_shape, dtype=torch.bfloat16)
@@ -709,7 +720,7 @@ def _run_high_bw_all_gather_perf(
     assert rows_per_device <= capacity_rows_per_device
     if input_batch_index is not None:
         assert input_batch_index >= 0
-        cache_slots = input_batch_index + 1
+        cache_slots = _meta_cache_slots(input_batch_index) if invocation == "metadata" else input_batch_index + 1
     else:
         cache_slots = 1
     if gathered_dim_size is not None:
