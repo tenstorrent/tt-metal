@@ -780,7 +780,11 @@ class SeedManager:
     writes to device. `write_device_seed_values` writes explicit seeds only.
     """
 
-    def __init__(self, tt_sampling, max_batch_size=32, salt_duplicate_seeds=True):
+    def __init__(self, tt_sampling=None, max_batch_size=32, salt_duplicate_seeds=True, *, seed_buffer=None):
+        if tt_sampling is None and seed_buffer is None:
+            raise TypeError("SeedManager requires tt_sampling or a mutable seed_buffer")
+        if tt_sampling is not None and seed_buffer is not None:
+            raise TypeError("SeedManager accepts exactly one device seed sink")
         self.max_batch_size = max_batch_size
         # When False, concurrent slots sharing a request seed keep salt 0, so two independent
         # requests carrying the same seed stay bit-identical (the OpenAI/vLLM reproducibility
@@ -806,6 +810,13 @@ class SeedManager:
         # Pre-allocate RNG objects; actual request seeds are set via reset_seed().
         self.rngs = [random.Random(secrets.randbits(64)) for _ in range(max_batch_size)]
         self.tt_sampling = tt_sampling
+        self._seed_buffer = seed_buffer
+        self._seed_buffer_source = None
+        if seed_buffer is not None:
+            source = getattr(seed_buffer, "source", None)
+            if source is None or not callable(getattr(seed_buffer, "update", None)):
+                raise TypeError("seed_buffer must expose source and update()")
+            self._seed_buffer_source = source.clone() if callable(getattr(source, "clone", None)) else copy.copy(source)
         # True when at least one user slot has a non-None request seed.
         self._seed_active = False
         # Set to True by reset_seed() so the next get_new_values() pushes
@@ -819,13 +830,114 @@ class SeedManager:
         # True only for the most recent get_new_values() call when at least
         # one active slot used an explicit request seed.
         self._active_request_seed = False
+        # Sampling1D runtime state. The all-unseeded path is deliberately
+        # untouched until an explicit request seed overlays model defaults.
+        self._runtime_seed_buffer_managed = False
         # Mesh mapper for sharding seeds across rows when sampling_dp > 1.
-        if tt_sampling._sampling_dp > 1:
+        sampling_dp = 1 if tt_sampling is None else tt_sampling._sampling_dp
+        if sampling_dp > 1:
             self._seed_mapper = ttnn.ShardTensor2dMesh(
                 tt_sampling.mesh_device, dims=tt_sampling._param_dims, mesh_shape=tt_sampling.cluster_shape
             )
         else:
             self._seed_mapper = None
+
+    def restore_default_device_values(self) -> None:
+        """Restore a model-owned seed buffer after an explicitly seeded request.
+
+        ``LazyBuffer.update`` also replaces its future materialization source.  Runtime
+        request seeds are invocation state, not model configuration, so preserve the
+        construction-time source across updates and restore it when execution returns
+        to the legacy ``seed=None`` path.
+        """
+
+        if self._seed_buffer is None or self._seed_buffer_source is None:
+            return
+        source = (
+            self._seed_buffer_source.clone()
+            if callable(getattr(self._seed_buffer_source, "clone", None))
+            else copy.copy(self._seed_buffer_source)
+        )
+        self._seed_buffer.update(source)
+        self._seed_buffer.source = source
+        self.seeds = [None for _ in range(self.max_batch_size)]
+        self.seed_counters = [0 for _ in range(self.max_batch_size)]
+        self._seed_active = False
+        self._active_request_seed = False
+        self._reseted = False
+        self._needs_skip = False
+        self._runtime_seed_buffer_managed = False
+
+    @property
+    def seed_buffer(self):
+        """Return the borrowed model-owned seed buffer, if this manager uses one."""
+
+        return self._seed_buffer
+
+    def get_seed_device_buffer(self):
+        """Return the stable model-owned device handle used by Sampling1D traces."""
+
+        get_device_buffer = getattr(self._seed_buffer, "get_device_buffer", None)
+        return get_device_buffer() if callable(get_device_buffer) else None
+
+    def refresh_absolute_request_seeds(self, seeds, active_slots, positions, *, reset_batch: bool):
+        """Refresh a model-owned seed buffer for one Sampling1D decode step.
+
+        Explicit slots use the stable ``hash(request_seed, absolute_position)``
+        stream. Every unseeded and inactive slot retains its exact
+        construction-default value. The initial all-unseeded path remains
+        untouched; after a mixed/seeded request, the first all-unseeded call
+        restores the complete default tensor. Explicit seeds remain stable
+        across slot remaps through their absolute-position hash.
+        """
+
+        if self._seed_buffer is None:
+            raise RuntimeError("absolute request-seed refresh requires a model-owned seed buffer")
+        active = {int(slot) for slot in active_slots}
+        if any(slot < 0 or slot >= self.max_batch_size for slot in active):
+            raise ValueError("active seed slot is outside the seed-buffer capacity")
+        requested = {slot: self._seed_from_slot_params(seeds, slot) for slot in active}
+        explicit = {slot: seed for slot, seed in requested.items() if seed is not None}
+        if not explicit:
+            if self._runtime_seed_buffer_managed:
+                self.restore_default_device_values()
+                return tuple(int(value) for value in self._seed_buffer_source.reshape(-1).tolist())
+            return None
+
+        values = [int(value) for value in self._seed_buffer_source.reshape(-1).tolist()]
+        if len(values) != self.max_batch_size:
+            raise ValueError("seed-buffer default source does not match its declared capacity")
+        for slot, request_seed in explicit.items():
+            position = self._position_for_slot(positions, slot)
+            if position is None or position < 0:
+                raise ValueError("explicit request seed requires a nonnegative absolute decode position")
+            self.seeds[slot] = request_seed
+            self.seed_counters[slot] = position + 1
+            values[slot] = _hash_request_seed_to_device_seed(request_seed, position + 1)
+        for slot in set(range(self.max_batch_size)) - set(explicit):
+            self.seeds[slot] = None
+            self.seed_counters[slot] = 0
+        self._seed_active = True
+        self._active_request_seed = True
+        self._runtime_seed_buffer_managed = True
+        self._write_model_seed_values(values)
+        return tuple(values)
+
+    @staticmethod
+    def _position_for_slot(positions, slot: int):
+        if isinstance(positions, torch.Tensor):
+            flat = positions.reshape(-1)
+            return None if slot >= flat.numel() else int(flat[slot].item())
+        if isinstance(positions, (list, tuple)):
+            return None if slot >= len(positions) else int(positions[slot])
+        return None if positions is None else int(positions)
+
+    def _write_model_seed_values(self, values) -> None:
+        source = torch.tensor(values, dtype=self._seed_buffer_source.dtype).reshape(self._seed_buffer_source.shape)
+        self._seed_buffer.update(source)
+        # Request state must not become the LazyBuffer's rematerialization
+        # default after model cleanup.
+        self._seed_buffer.source = self._seed_buffer_source
 
     def _next_unseeded_rng_seed(self) -> int:
         return secrets.randbits(64)
@@ -923,7 +1035,7 @@ class SeedManager:
             if slot < 0 or slot >= flat.numel():
                 return None
             seed = flat[slot]
-        elif isinstance(seeds, list):
+        elif isinstance(seeds, (list, tuple)):
             if slot < 0 or slot >= len(seeds):
                 return None
             seed = seeds[slot]
@@ -1083,6 +1195,9 @@ class SeedManager:
         except (TypeError, ValueError) as exc:
             raise ValueError("seed_values must contain integer-like values") from exc
 
+        if self._seed_buffer is not None:
+            self._write_model_seed_values(wrapped)
+            return
         seed_tt = ttnn.from_torch(
             torch.tensor(wrapped, dtype=torch.uint32),
             dtype=ttnn.uint32,
@@ -1145,3 +1260,4 @@ class SeedManager:
 
         self.write_device_seed_values(new_seeds)
         self._reseted = False
+        return tuple(new_seeds)

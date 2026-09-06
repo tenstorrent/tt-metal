@@ -71,6 +71,23 @@ struct RingAttentionNeighborHaloConfig {
     // predecessor tail back to device 0 over the backward fabric direction.
     bool send_backward = false;
     uint32_t unicast_hops = 1;
+
+    // Trace-safe metadata path. send_to_next_start_Ht above is linear in the chunk index, so on the
+    // scalar path the host rewrites the halo page ranges every dispatch — something a captured trace
+    // never replays. When kv_actual_isl is set, the halo kernels read it on-device and recompute the
+    // start themselves, making one capture valid for every chunk. slot_id also selects the flattened
+    // cache batch on-device. The remaining fields are static inputs to those derivations;
+    // source_device selects which group.s tail is read.
+    const ttnn::Tensor* slot_id = nullptr;
+    const ttnn::Tensor* kv_actual_isl = nullptr;
+    uint32_t kv_cache_num_layers = 1;
+    uint32_t kv_cache_layer_idx = 0;
+    uint32_t q_local_tile_rows = 0;
+    uint32_t halo_tile_rows = 0;
+    uint32_t source_device = 0;
+
+    bool derives_cache_batch_on_device() const { return slot_id != nullptr; }
+    bool derives_start_on_device() const { return kv_actual_isl != nullptr; }
 };
 
 namespace ring_attention_all_gather_async_detail {
@@ -83,9 +100,11 @@ constexpr uint32_t kReaderReadySemaphoreFieldOffset = 2;
 // [4]=out_ready_sem, followed by one tensor-descriptor block per gathered input.
 constexpr uint32_t kWriterRuntimeArgHeaderCount = 5;
 constexpr uint32_t kWriterReadySemaphoreFieldOffset = 4;
-// Per-input fields: Wt, Ht, out_Wt, out_Ht, batch_head_size, input_batch_base,
-// valid_pages_per_batch_head, and worker link.
+// Per-input scalar fields: Wt, Ht, out_Wt, out_Ht, batch_head_size,
+// input_batch_base (offset 5), valid_pages_per_batch_head (offset 6), and worker link (offset 7).
+// Metadata-enabled kernels append input_cache_batch_extent (offset 8).
 constexpr uint32_t kTensorDescriptorFieldCount = 8;
+constexpr uint32_t kMetadataTensorDescriptorFieldCount = kTensorDescriptorFieldCount + 1;
 constexpr uint32_t kInputBatchBaseFieldOffset = 5;
 // Per-(batch,head) page count each worker is allowed to gather. Defaults to the full input
 // (input_Ht * input_Wt); the fused ring_joint_sdpa path patches it down to the logical_n-valid
@@ -93,6 +112,8 @@ constexpr uint32_t kInputBatchBaseFieldOffset = 5;
 constexpr uint32_t kValidPagesFieldOffset = 6;
 constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 1;
 constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 5;
+constexpr uint32_t kNeighborReaderMetadataTensorDescriptorFieldCount =
+    kNeighborReaderTensorDescriptorFieldCount + 1;
 constexpr uint32_t kNeighborReaderInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborReaderInputTileEndFieldOffset = 3;
 constexpr uint32_t kNeighborReaderInputBatchBaseFieldOffset = 4;

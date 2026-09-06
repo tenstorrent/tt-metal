@@ -14,6 +14,7 @@
 #include "ring_attention_all_gather_metadata.hpp"
 #include "ring_attention_rank_mapping.hpp"
 #include "ring_attention_prefetch_utils.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <utility>
 
@@ -160,7 +161,8 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_tile_id_end;
     std::array<uint32_t, num_inputs> input_valid_pages;
     std::array<uint32_t, num_inputs> worker_link;
-    // Nonzero only for a single-slot gather, where it skips to the selected input slot.
+    std::array<uint32_t, num_inputs> input_cache_batch_extent;
+    // Phase-1 input page base: nonzero only for single-slot gather (skip to the sliced input slot).
     // The slice is always emitted into output slot 0, whatever the output batch size.
     std::array<uint32_t, num_inputs> input_batch_base;
 
@@ -176,6 +178,9 @@ void kernel_main() {
         // counts and the ring slice protocol stay matched. Default (full input) leaves it unchanged.
         const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
         worker_link[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        if constexpr (has_metadata) {
+            input_cache_batch_extent[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        }
         input_valid_pages[input_idx] = valid_pages;
         const auto link_page_range =
             ring_attention_all_gather::compute_link_page_range(valid_pages, num_links, worker_link[input_idx]);
@@ -200,19 +205,28 @@ void kernel_main() {
         // Use the data CB as temporary metadata scratch. It is empty at this point and avoids
         // a separate tiny-CB read race on the all-gather worker cores.
         CircularBuffer cb_meta(cb_output_id);
+        // Guarded: the slot is optional even when the extent metadata is present (a kv_deduped gather
+        // hands the op a rebuilt BATCH-1 slab with no slot to select), so only recompose when the
+        // factory actually wired a slot tensor. main's bounded_cache_batch_idx clamps the recomposed
+        // index against the input's real batch extent (#53904).
         if constexpr (has_slot_metadata) {
             const uint32_t slot_id =
                 trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, slot_id_addr, cb_meta.get_write_ptr());
-            const uint32_t cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx;
             for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+                const uint32_t cache_batch_idx = trace_metadata::bounded_cache_batch_idx(
+                    slot_id, kv_cache_num_layers, kv_cache_layer_idx, input_cache_batch_extent[input_idx]);
                 input_batch_base[input_idx] = cache_batch_idx * input_batch_head_count[input_idx] *
                                               input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
             }
         }
         const uint32_t kv_actual = trace_metadata::read_metadata_scalar_u32(
             meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
-        const uint32_t gather_valid_Ht =
-            ring_attention_all_gather::compute_gather_valid_Ht(kv_actual, chunk_local_tiles, ring_size);
+        uint32_t cache_local_tile_rows = input_tensor_Ht[0];
+        for (uint32_t input_idx = 1; input_idx < num_inputs; ++input_idx) {
+            cache_local_tile_rows = std::min(cache_local_tile_rows, input_tensor_Ht[input_idx]);
+        }
+        const uint32_t gather_valid_Ht = ring_attention_all_gather::compute_gather_valid_Ht(
+            kv_actual, chunk_local_tiles, ring_size, cache_local_tile_rows);
         ring_attention_all_gather::update_link_page_ranges_for_gather_extent(
             gather_valid_Ht,
             num_links,

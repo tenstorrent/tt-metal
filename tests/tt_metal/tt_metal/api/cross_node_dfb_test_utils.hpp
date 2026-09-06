@@ -53,14 +53,14 @@ inline std::shared_ptr<Buffer> make_cross_node_data_buffer(
     BufferType buffer_type = BufferType::L1) {
     const uint32_t ring_size = entry_size * num_entries;
     const uint32_t num_cores = all_cores.num_cores();
-    return CreateBuffer(ShardedBufferConfig{
-        .device = &device,
-        .size = ring_size * num_cores,
-        .page_size = ring_size,
-        .buffer_type = buffer_type,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1}),
-    });
+    return Buffer::create(
+        &device,
+        ring_size * num_cores,
+        ring_size,
+        buffer_type,
+        BufferShardingArgs(
+            ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1}),
+            TensorMemoryLayout::HEIGHT_SHARDED));
 }
 
 inline uint32_t data_pattern_for_write_primitive(uint32_t write_primitive) {
