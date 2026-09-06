@@ -316,13 +316,18 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         std::nullopt);
 
     const uint32_t page_size = input_tensor.buffer()->aligned_page_size();
-    // Same 2-tiles-per-packet limit as create_at (see comment there): the device send path has no size
-    // check, so an oversized packet silently spills into the next EDM slot.
+    // Fill the fabric packet: as many contiguous tiles per write as the configured max payload holds
+    // (2 bf16 tiles at the 4352 B default, 4 at the 8k config). Derived from the live fabric config, so
+    // a packet can never oversize the EDM slot -- important because the device send path has no size
+    // check and an oversized packet would silently spill into the next slot. Degenerate guard: a single
+    // tile must always fit.
+    const uint32_t max_payload_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     TT_FATAL(
-        2 * page_size <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
-        "broadcast_ring packs 2 tiles per fabric packet: 2 x page_size ({}) exceeds the fabric max payload ({})",
-        2 * page_size,
-        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+        page_size <= max_payload_bytes,
+        "broadcast_ring: page_size ({}) exceeds the fabric max payload ({})",
+        page_size,
+        max_payload_bytes);
+    const uint32_t tiles_per_packet = std::max<uint32_t>(1, max_payload_bytes / page_size);
     const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
     const uint32_t bcast_offset = operation_attributes.broadcast_offset_tiles;
     const uint32_t bcast_count =
@@ -373,6 +378,7 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         unicast_backward_args[0],
         unicast_backward_args[1],
         num_slots,
+        tiles_per_packet,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(ct_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(ct_args);

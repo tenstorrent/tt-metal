@@ -43,7 +43,10 @@ constexpr uint32_t fwd_route_arg1 = get_compile_time_arg_val(9);   // to idx+1 d
 constexpr uint32_t bwd_route_arg0 = get_compile_time_arg_val(10);  // to idx-1 dst_mesh_id
 constexpr uint32_t bwd_route_arg1 = get_compile_time_arg_val(11);  // to idx-1 dst_chip_id
 constexpr uint32_t num_slots = get_compile_time_arg_val(12);       // recv-buffer depth (== credit window)
-constexpr uint32_t tensor_args_base = 13;
+// Contiguous tiles per fabric payload; host derives it from the fabric config's max payload so a packet
+// always fits the EDM slot (2 bf16 tiles at the 4352 B default, 4 at the 8k config).
+constexpr uint32_t tiles_per_packet = get_compile_time_arg_val(13);
+constexpr uint32_t tensor_args_base = 14;
 
 // Arc roles: the sender sends both ways; the ring splits into a forward arc (HF hops) and backward arc (HB
 // hops). A non-sender receives from its one upstream and forwards away from the sender until its arc end.
@@ -93,11 +96,12 @@ void kernel_main() {
         .dst_mesh_id = static_cast<uint16_t>(bwd_route_arg0), .dst_chip_id = static_cast<uint16_t>(bwd_route_arg1)};
 
     auto fabric_connection = FabricConnectionManager::build_from_args(fab_arg);
-    // Headers: payload + sem-inc per data direction; a credit-only direction needs just the sem-inc.
+    // Headers per data direction: full-packet payload + fused tail (payload+data_ready inc); a
+    // credit-only direction needs just its credit sem-inc header.
     volatile PACKET_HEADER_TYPE* pkt_hdr_fwd_data = nullptr;
-    volatile PACKET_HEADER_TYPE* pkt_hdr_fwd_sem = nullptr;
+    volatile PACKET_HEADER_TYPE* pkt_hdr_fwd_tail = nullptr;
     volatile PACKET_HEADER_TYPE* pkt_hdr_bwd_data = nullptr;
-    volatile PACKET_HEADER_TYPE* pkt_hdr_bwd_sem = nullptr;
+    volatile PACKET_HEADER_TYPE* pkt_hdr_bwd_tail = nullptr;
     volatile PACKET_HEADER_TYPE* pkt_hdr_cred_fwd = nullptr;
     volatile PACKET_HEADER_TYPE* pkt_hdr_cred_bwd = nullptr;
     if constexpr (opens_any) {
@@ -110,12 +114,12 @@ void kernel_main() {
         };
         if constexpr (send_data_fwd) {
             pkt_hdr_fwd_data = next_hdr();
-            pkt_hdr_fwd_sem = next_hdr();
+            pkt_hdr_fwd_tail = next_hdr();
             ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_fwd_data, fwd_route);
         }
         if constexpr (send_data_bwd) {
             pkt_hdr_bwd_data = next_hdr();
-            pkt_hdr_bwd_sem = next_hdr();
+            pkt_hdr_bwd_tail = next_hdr();
             ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_bwd_data, bwd_route);
         }
         if constexpr (credit_via_forward) {
@@ -136,27 +140,32 @@ void kernel_main() {
     const uint64_t up_cred_fwd_noc = safe_get_noc_addr(ds_sem_noc_x, ds_sem_noc_y, cred_fwd_addr, 0);  // idx-1.cred_fwd
     const uint64_t up_cred_bwd_noc = safe_get_noc_addr(ds_sem_noc_x, ds_sem_noc_y, cred_bwd_addr, 0);  // idx+1.cred_bwd
 
-    // Fabric-write a chunk from my slot into the downstream's same-index slot (2 tiles/packet + odd tail),
-    // then bump the downstream data_ready.
+    // Fabric-write a chunk from my slot into the downstream's same-index slot: full packets of
+    // tiles_per_packet contiguous tiles, then the tail (1..tiles_per_packet tiles) as one FUSED
+    // write+atomic-inc packet that bumps the downstream data_ready. flush=true makes the receiver EDM
+    // wait for every payload write of the chunk to commit before issuing the inc (packets on one
+    // connection are processed in order), so payload-lands-before-semaphore holds -- and the fused tail
+    // is one packet cheaper than a separate sem-only packet.
     auto forward_data = [&](volatile PACKET_HEADER_TYPE* pkt_data,
-                            volatile PACKET_HEADER_TYPE* pkt_sem,
+                            volatile PACKET_HEADER_TYPE* pkt_tail,
                             tt::tt_fabric::WorkerToFabricEdmSender* conn,
                             const ccl_routing_utils::line_unicast_route_info_t& route,
                             uint32_t slot_addr,
                             uint32_t chunk_tiles) {
         const uint64_t ds_slot_noc = safe_get_noc_addr(ds_sem_noc_x, ds_sem_noc_y, slot_addr, 0);
         uint32_t t = 0;
-        for (; t + 1 < chunk_tiles; t += 2) {
-            fabric_write_unidir(ds_slot_noc + t * page_size, pkt_data, *conn, slot_addr + t * page_size, 2 * page_size);
+        // Strict `<` keeps 1..tiles_per_packet tiles for the fused tail packet.
+        for (; t + tiles_per_packet < chunk_tiles; t += tiles_per_packet) {
+            fabric_write_unidir(
+                ds_slot_noc + t * page_size, pkt_data, *conn, slot_addr + t * page_size, tiles_per_packet * page_size);
         }
-        if (t < chunk_tiles) {
-            fabric_write_unidir(ds_slot_noc + t * page_size, pkt_data, *conn, slot_addr + t * page_size, page_size);
-        }
-        pkt_sem->to_noc_unicast_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{ds_data_ready_noc, static_cast<uint32_t>(1)});
-        conn->wait_for_empty_write_slot();
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_sem, route);
-        conn->send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(pkt_sem), sizeof(PACKET_HEADER_TYPE));
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_tail, route);
+        pkt_tail->to_noc_fused_unicast_write_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                ds_slot_noc + t * page_size, ds_data_ready_noc, 1, true},
+            (chunk_tiles - t) * page_size);
+        perform_payload_send(*conn, slot_addr + t * page_size, (chunk_tiles - t) * page_size, pkt_tail);
+        noc_async_writes_flushed();
     };
 
     // Increment the upstream's slot-free credit sem (no payload). `val` is 1 per consumed chunk in steady
@@ -237,14 +246,21 @@ void kernel_main() {
 
         // 3) Forward the chunk from L1 to the downstream slot(s).
         if constexpr (send_data_fwd) {
-            forward_data(pkt_hdr_fwd_data, pkt_hdr_fwd_sem, fwd_conn, fwd_route, slot_addr, chunk_tiles);
+            forward_data(pkt_hdr_fwd_data, pkt_hdr_fwd_tail, fwd_conn, fwd_route, slot_addr, chunk_tiles);
         }
         if constexpr (send_data_bwd) {
-            forward_data(pkt_hdr_bwd_data, pkt_hdr_bwd_sem, bwd_conn, bwd_route, slot_addr, chunk_tiles);
+            forward_data(pkt_hdr_bwd_data, pkt_hdr_bwd_tail, bwd_conn, bwd_route, slot_addr, chunk_tiles);
         }
 
-        // The output write and both forwards read this slot; wait before crediting (upstream may refill it).
-        noc_async_write_barrier();
+        // Crediting releases the upstream to refill this slot, which only requires the slot's bytes to
+        // have been READ OUT of L1 ("flushed"), not acknowledged at their destinations. Forwarding
+        // devices are already flushed: each fabric send in forward_data ends with
+        // noc_async_writes_flushed(), which also covers the step-2 DRAM persists issued earlier on the
+        // same noc. Arc tails forward nothing, so they flush explicitly here. The ack barrier for the
+        // DRAM persists happens once, after the loop -- not on every chunk's critical path.
+        if constexpr (!send_data_fwd && !send_data_bwd) {
+            noc_async_writes_flushed();
+        }
 
         // 4) Credit my upstream that this slot is consumed.
         if constexpr (credit_via_backward) {
@@ -257,6 +273,10 @@ void kernel_main() {
         tiles_done += chunk_tiles;
         ++chunk;
     }
+
+    // All DRAM persists must be ACKED before the kernel ends (the next program reads the output). The
+    // loop only guaranteed "flushed" (source reusable) for the credit handshake; the ack wait runs once.
+    noc_async_write_barrier();
 
     if constexpr (opens_any) {
         fabric_connection.close();
