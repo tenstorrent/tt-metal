@@ -24,7 +24,6 @@ namespace api = experimental::streaming_profiler;
 
 namespace {
 
-constexpr std::string_view kStallZoneName = "PROFILER-STALL";
 constexpr uint32_t kStallColor = 0xCD4F39u;
 constexpr size_t kSrclocTableInitial = 1024;
 // A probe pair is good to ~35 ns, so the ratio is only worth measuring over a baseline well above that; the map
@@ -92,10 +91,8 @@ void TracySink::on_batch(const Batch& batch) {
         refine_map();
     }
     for (const api::Zone& z : batch.zones) {
-        push_zone(z.core, z.site.name, ns_since_epoch(z.start_time()), ns_since_epoch(z.end_time()), 0);
-    }
-    for (const api::Stall& s : batch.stalls) {
-        push_zone(s.core, kStallZoneName, ns_since_epoch(s.start_time()), ns_since_epoch(s.end_time()), kStallColor);
+        push_zone(
+            z.core, z.site.name, ns_since_epoch(z.start_time()), ns_since_epoch(z.end_time()), z.stall ? kStallColor : 0);
     }
     for (const api::TimestampedData& d : batch.timestamped_data) {
         push_marker(d.core, d.site.name, ns_since_epoch(d.time()), d.runtime_id, d.payload);

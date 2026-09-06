@@ -6,7 +6,8 @@
 // against, and the batch-callback types.
 //  - A zone arrives as one `Zone` record with start and duration; consumers never see an unpaired half.
 //  - Zones are emitted at close, so per lane they arrive in end order: a nested child precedes its parent and
-//    start is not monotonic.
+//    start is not monotonic. One exception: a zone spanning a low-word wrap reads its end before reserving ring
+//    space, so a stall zone raised by that reservation precedes it with a later end.
 //  - Cross-lane and cross-socket interleaving is arbitrary; demux by meta.lane / meta.dev.
 //  - A Data head is followed immediately by one Ext record (id = payload word count, data.ext = payload words
 //    1-2 as (hi << 32) | lo) and then Cont records for words 3 and up (one uint64 each, hi word first), with

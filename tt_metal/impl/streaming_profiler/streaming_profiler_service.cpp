@@ -247,7 +247,7 @@ void Service::consumer_thread(Consumer& c) {
             const CaptureContext::Device& dev = ctx.devices[streams[i].dev];
             a.readers.push_back(streams[i].ring->make_reader());
             a.states[i].reset(dev.lanes.size() / profiler::kSpscNRiscDecode);
-            a.states[i].core_of_xy = dev.core_of_xy;
+            a.states[i].core_of_xy.load(dev.core_of_xy);
             a.last_ts[i].assign(dev.lanes.size(), 0);
             a.last_rec[i].assign(dev.lanes.size(), 0);
             a.decs[i].st = &a.states[i];

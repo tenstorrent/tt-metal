@@ -150,9 +150,12 @@ constexpr uint32_t kCvIdleGapMinInc = 256;
 // Below the first band the host is otherwise fed nothing until the spool fills that far; one pass every this many
 // sweeps keeps it busy at a bounce per stride, and bounds host staleness to the stride.
 constexpr uint32_t kIdlePumpStride = 8;
-constexpr uint64_t kStopDrainCycles = 1'000'000 * kCyclesPerUs;
+// Every wait below is a 32-bit low-word delta: a 64-bit wall-clock read on Blackhole can return the next epoch's
+// high half with a pre-wrap low word (+2^32), which once parked a relay for 3.2 s. Low-word deltas are wrap-safe
+// for any wait under 2^32 cycles; the 10 s restore wait accumulates them.
+constexpr uint32_t kStopDrainCycles = 1'000'000 * kCyclesPerUs;
 // How long the exit lets the posted head writes stream out; small packets leave in nanoseconds.
-constexpr uint64_t kPostedDrainCycles = 1000 * kCyclesPerUs;
+constexpr uint32_t kPostedDrainCycles = 1000 * kCyclesPerUs;
 // How long the exit waits for the host's NIU-restore word before restoring anyway.
 constexpr uint64_t kNiuRestoreWaitCycles = 10'000'000 * kCyclesPerUs;
 
@@ -654,9 +657,9 @@ static FORCE_INLINE void finish(
     while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
     }
     // The posted head write-backs are outside that barrier's predicate; drain their sent counter too.
-    const uint64_t t_ps = get_timestamp() + kPostedDrainCycles;
+    const uint32_t t_ps = get_timestamp_32b();
     while (!(ncrisc_noc_posted_writes_sent(NOC_INDEX) && ncrisc_noc_posted_writes_sent(kReadNoc)) &&
-           get_timestamp() < t_ps) {
+           get_timestamp_32b() - t_ps < kPostedDrainCycles) {
     }
     // Only for a live consumer: after an abandoned batch the socket's bytes_sent is already out of sync with
     // the host.
@@ -670,8 +673,12 @@ static FORCE_INLINE void finish(
 
     // NIU_CFG_0 persists until chip reset, so whoever set stream mode restores it; it goes last because NOC2AXI
     // takes this L1 out of the host's view.
-    const uint64_t t_end = get_timestamp() + kNiuRestoreWaitCycles;
-    while (!host_released(stop) && get_timestamp() < t_end) {
+    uint64_t waited = 0;
+    uint32_t last = get_timestamp_32b();
+    while (!host_released(stop) && waited < kNiuRestoreWaitCycles) {
+        const uint32_t now = get_timestamp_32b();
+        waited += now - last;
+        last = now;
     }
     experimental::drisc_set_noc2axi_mode_all();
 }
@@ -896,14 +903,16 @@ void kernel_main() {
     bool killed = false;  // the kill switch (stop=2) broke a wait: the consumer is gone, bytes are stranded
 
     // On stop=1, sweep until a whole sweep moves nothing, so no marker is stranded in a worker ring.
-    uint64_t stop_seen_at = 0;
+    bool stop_seen = false;
+    uint32_t stop_seen_at = 0;
     uint32_t relieved_at_stop_check = 0;
     while (true) {
         invalidate_l1_cache();
         if (*stop != 0) {
-            if (stop_seen_at == 0) {
-                stop_seen_at = get_timestamp();
-            } else if (relieved == relieved_at_stop_check || get_timestamp() - stop_seen_at > kStopDrainCycles) {
+            if (!stop_seen) {
+                stop_seen = true;
+                stop_seen_at = get_timestamp_32b();
+            } else if (relieved == relieved_at_stop_check || get_timestamp_32b() - stop_seen_at > kStopDrainCycles) {
                 break;
             }
             relieved_at_stop_check = relieved;
@@ -920,7 +929,7 @@ void kernel_main() {
         uint32_t gen = 0;
         uint32_t pend_n = 0;  // frames staged for the previous generation and not yet shipped; 0 = none pending
         static_assert(kNGens == 2, "the pending generation is derived as the other one");
-        const bool defer_ok = grid_busy && stop_seen_at == 0;
+        const bool defer_ok = grid_busy && !stop_seen;
         const uint32_t demote_below = defer_ok ? kDeferBelow : 1u;
 
         // Heads go out at the read barrier, not the frame emit: once the reads land the producer's ring slots are
@@ -1081,8 +1090,8 @@ void kernel_main() {
             gap = (gap + inc > kCvIdleGapMax) ? kCvIdleGapMax : gap + inc;
         }
         if (gap != 0) {
-            const uint64_t until = get_timestamp() + gap;
-            while (get_timestamp() < until) {
+            const uint32_t t0 = get_timestamp_32b();
+            while (get_timestamp_32b() - t0 < gap) {
                 if constexpr (kSpool) {
                     pump.pass_cold();
                 }

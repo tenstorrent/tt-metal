@@ -216,7 +216,7 @@ From `<tt-metalium/experimental/streaming_profiler.hpp>` (namespace
 `tt::tt_metal::experimental::streaming_profiler`):
 
 ```cpp
-auto h = Subscribe("my-tool", [](const Batch<Channel::Zones | Channel::Stalls>& b) { /* ... */ });
+auto h = Subscribe("my-tool", [](const Batch<Channel::Zones>& b) { /* ... */ });
 // later: Unsubscribe(h);
 ```
 

@@ -36,34 +36,6 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
-void StallIdMirror::refresh() {
-    std::vector<llrt::ZoneMetaEntry> delta;
-    cursor = llrt::ZoneMetaRegistry::instance().additions_since(cursor, delta);
-    bool grew = false;
-    for (const auto& e : delta) {
-        if (e.name == "PROFILER-STALL") {
-            ids.push_back(e.zone_id);
-            grew = true;
-        }
-    }
-    if (grew) {
-        // Rebuild at <= 25% load so the miss path is one probe.
-        uint32_t cap = 64;
-        while (cap < ids.size() * 4) {
-            cap *= 2;
-        }
-        mask = cap - 1;
-        table.assign(cap, 0xFFFFFFFFu);
-        for (uint32_t id : ids) {
-            uint32_t slot = (id * 0x9E3779B9u) & mask;
-            while (table[slot] != 0xFFFFFFFFu && table[slot] != id) {
-                slot = (slot + 1) & mask;
-            }
-            table[slot] = id;
-        }
-    }
-}
-
 namespace {
 
 // pop+ack every 8 decoded frames (about one relay push) so the device sees credit at decode pace.
@@ -133,7 +105,7 @@ Receiver::Receiver(std::vector<ReceiverDeviceConfig> devices) : devices_(std::mo
             s->sock_idx = sk;
             s->ring_node = dev.numa_node;
             s->decode.reset(dev.num_cores);
-            s->decode.core_of_xy = dev.core_of_xy;
+            s->decode.core_of_xy.load(dev.core_of_xy);
             s->last_zone_ts.assign(nl, 0);
             streams_.push_back(std::move(s));
         }

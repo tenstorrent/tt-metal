@@ -116,6 +116,7 @@ uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const st
         }
     }
 
+    taken[TT_ZONE_RESERVED_TU] = true;
     uint32_t id = 0;
     while (id < TT_ZONE_TU_COUNT && taken[id]) {
         ++id;

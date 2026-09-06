@@ -84,7 +84,7 @@ inline constexpr bool PROFILER_VALIDATES_ZONE = true;
 inline constexpr bool PROFILER_VALIDATES_ZONE = false;
 #endif
 
-constexpr int WALL_CLOCK_HIGH_INDEX = 1;
+constexpr int WALL_CLOCK_HIGH_INDEX = 2;  // WALL_CLOCK_H, the snapshot; 1 is the live half
 constexpr int WALL_CLOCK_LOW_INDEX = 0;
 
 volatile tt_l1_ptr uint32_t* profiler_control_buffer =
@@ -101,8 +101,7 @@ constexpr uint32_t TAIL_INDEX = SPSC_RING_TAIL_0 + myRiscID;
 constexpr uint32_t HEAD_INDEX = SPSC_RING_HEAD_0 + myRiscID;
 static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in the SPSC control layout");
 
-// Namespace scope only because profileScopeStall needs it.
-TT_ZONE_DEFINE_ID(PROFILER_STALL_ZONE_ID, "PROFILER-STALL");
+constexpr uint32_t PROFILER_STALL_ZONE_ID = TT_ZONE_STALL_ID;
 
 // Wire encode, duplicated from spsc_packet.h because the JIT build lacks that include path. word0 = type(5) |
 // low27. A zone ships whole at close: a 2-word ZONE_S when its end is within 2^16 cycles of the lane cursor
@@ -149,13 +148,14 @@ static constexpr uint32_t SPSC_MARKER_WORDS = 2;
 // against this word and reaches L1 once per drained batch. 0 is the safe floor.
 [[maybe_unused]] static uint32_t g_head_cache = 0;
 
-// Reading L latches the high half and H returns it, so the order is the protocol. The latch is single-agent
-// (TensixTile/DebugTimestamper.md): another RISC's L read landing in the L->H gap across a 2^32 boundary
-// puts a marker ~3.2 s in the future, at ~1e-9 per read, which is cheaper than a retry branch here.
+// Reading L snapshots the high half into WALL_CLOCK_H and H returns it, so the order is the protocol. Measured on
+// Blackhole (Tensix and DRISC): the snapshot holds only while the H load follows the L load immediately, so these two
+// loads must stay adjacent. Another RISC's L read landing in that gap across a 2^32 boundary puts a marker ~3.2 s in
+// the future, at ~1e-9 per read, which is cheaper than a retry branch here.
 inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_t& lo) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    lo = p_reg[WALL_CLOCK_LOW_INDEX];   // latches the high half
-    hi = p_reg[WALL_CLOCK_HIGH_INDEX];  // returns the latched value
+    lo = p_reg[WALL_CLOCK_LOW_INDEX];
+    hi = p_reg[WALL_CLOCK_HIGH_INDEX];
 }
 
 inline __attribute__((always_inline)) void publish_tail() {

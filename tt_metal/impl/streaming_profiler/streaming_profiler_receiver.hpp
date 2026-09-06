@@ -59,33 +59,6 @@ struct ReceiverDeviceConfig {
     int numa_node = -1;  // host node closest to this device; -1 leaves the ring unbound
 };
 
-// Mirror of the ELF-resolved PROFILER-STALL zone ids, one per kernel TU. Open-addressed because the membership
-// test runs per marker on the decode walk; a [min,max] pre-screen cannot work since stall ids carry tu_id in
-// their high bits.
-struct StallIdMirror {
-    uint32_t cursor = 0;
-    std::vector<uint32_t> ids;    // insertion order, source for rebuilds
-    std::vector<uint32_t> table;  // open addressing, linear probe; 0xFFFFFFFF = empty
-    uint32_t mask = 0;
-    void refresh();
-    bool contains(uint32_t id) const {
-        if (table.empty()) {
-            return false;
-        }
-        uint32_t slot = (id * 0x9E3779B9u) & mask;
-        while (true) {
-            const uint32_t v = table[slot];
-            if (v == id) {
-                return true;
-            }
-            if (v == 0xFFFFFFFFu) {
-                return false;
-            }
-            slot = (slot + 1) & mask;
-        }
-    }
-};
-
 class Devices;
 
 class Receiver : public Producer {

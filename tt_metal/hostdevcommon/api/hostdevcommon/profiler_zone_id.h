@@ -8,7 +8,8 @@
 //   tu_id  13 bits  per-TU id from the flock-guarded registry in jit_build/build.cpp, -DTT_PROFILER_TU_ID
 //   local  14 bits  the zone's raw __COUNTER__ in this TU (other __COUNTER__ uses eat the same budget)
 // Both halves are unique by construction and overflow is a static_assert at the site. Nothing on the host may
-// discriminate on an id's value: it moves when a source line does, so special markers are matched by name.
+// discriminate on a structural id's value: it moves when a source line does. Ids that must be the same constant
+// on both sides live in the reserved tu partition below, which the registry never hands out.
 // The record is emitted from assembler directives (after libmeta): zero .text and zero device memory, since
 // neither .tt_zone_str nor .tt_zone_meta is SHF_ALLOC and the host rebases pointers by the section's own
 // sh_addr; .tt_zone_str is "MS" so __FILE__ is stored once per file; .tt_zone_meta has a real sh_entsize of
@@ -34,6 +35,9 @@
 #define TT_ZONE_MAKE_ID(tu, local) ((((unsigned)(tu)) << TT_ZONE_LOCAL_BITS) | ((unsigned)(local)))
 #define TT_ZONE_TU_OF(id) (((unsigned)(id)) >> TT_ZONE_LOCAL_BITS)
 #define TT_ZONE_LOCAL_OF(id) (((unsigned)(id)) & (TT_ZONE_LOCAL_COUNT - 1u))
+#define TT_ZONE_RESERVED_TU (TT_ZONE_TU_COUNT - 1u)
+// The profiler's own stall zone: recognized by value, so it has no ELF record and no source location.
+#define TT_ZONE_STALL_ID TT_ZONE_MAKE_ID(TT_ZONE_RESERVED_TU, 0)
 
 // Bytes per .tt_zone_meta record. Also the section's sh_entsize -- see the host walk in llrt/zone_meta.cpp.
 #define TT_ZONE_META_RECORD_BYTES 16
@@ -52,16 +56,16 @@
 
 // Declares `var` as this site's zone id and emits its record; usable at namespace or block scope. `ctr` is a
 // parameter because __COUNTER__ increments on every appearance and the id and the record must see one value.
-#define TT_ZONE_DEFINE_ID_AT(var, name, ctr)                                                                  \
-    static_assert(                                                                                            \
-        TT_ZONE_LOCAL_IDX(ctr) < TT_ZONE_LOCAL_COUNT,                                                         \
-        "too many KERNEL_PROFILER zone sites in one translation unit for TT_ZONE_LOCAL_BITS -- widen the "    \
-        "split in hostdevcommon/profiler_zone_id.h");                                                         \
-    static_assert(                                                                                            \
-        (unsigned)(TT_PROFILER_TU_ID) < TT_ZONE_TU_COUNT,                                                     \
-        "TT_PROFILER_TU_ID exceeds TT_ZONE_TU_BITS -- the tu-id registry handed out an id this split cannot " \
-        "express; see get_or_assign_profiler_tu_id in jit_build/build.cpp");                                  \
-    constexpr uint32_t var = (uint32_t)TT_ZONE_MAKE_ID(TT_PROFILER_TU_ID, TT_ZONE_LOCAL_IDX(ctr));            \
+#define TT_ZONE_DEFINE_ID_AT(var, name, ctr)                                                               \
+    static_assert(                                                                                         \
+        TT_ZONE_LOCAL_IDX(ctr) < TT_ZONE_LOCAL_COUNT,                                                      \
+        "too many KERNEL_PROFILER zone sites in one translation unit for TT_ZONE_LOCAL_BITS -- widen the " \
+        "split in hostdevcommon/profiler_zone_id.h");                                                      \
+    static_assert(                                                                                         \
+        (unsigned)(TT_PROFILER_TU_ID) < TT_ZONE_RESERVED_TU,                                               \
+        "TT_PROFILER_TU_ID is not below TT_ZONE_RESERVED_TU -- the tu-id registry handed out an id this "  \
+        "split cannot express; see get_or_assign_profiler_tu_id in jit_build/build.cpp");                  \
+    constexpr uint32_t var = (uint32_t)TT_ZONE_MAKE_ID(TT_PROFILER_TU_ID, TT_ZONE_LOCAL_IDX(ctr));         \
     asm(".pushsection .tt_zone_str,\"MS\",@progbits,1\n"                                                      \
         "8880:\t.asciz \"" name "\"\n"                                                                        \
         "8881:\t.asciz \"" __FILE__ "\"\n"                                                                    \

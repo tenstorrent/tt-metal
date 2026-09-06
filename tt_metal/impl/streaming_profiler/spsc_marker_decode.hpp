@@ -42,6 +42,7 @@ namespace tt::tt_metal::profiler {
 inline constexpr uint32_t kSpscRingCap = kernel_profiler::PROFILER_L1_VECTOR_SIZE;
 inline constexpr uint32_t kSpscRingMask = kSpscRingCap - 1;
 inline constexpr uint32_t kSpscNRiscDecode = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
+inline constexpr uint32_t kSpscStallZoneId = TT_ZONE_STALL_ID;
 
 // Worst case: five full rings behind maximal pads. Bounds the bounce buffer and frame validation, not any
 // device layout.
@@ -51,6 +52,22 @@ inline constexpr uint32_t kSpscMaxPayloadWords =
 inline constexpr uint32_t kSpscMaxFrameWords = kernel_profiler::spsc_span_frame_words(kSpscMaxPayloadWords);
 inline constexpr uint32_t kSpscMaxFramePages = kSpscMaxFrameWords / kernel_profiler::SPSC_SPAN_PAGE_WORDS;
 static_assert(kSpscMaxFrameWords == 2656 && kSpscMaxFramePages == 166);
+
+// Packed NoC (y<<16)|x -> dense core index, direct-indexed so a frame's lookup is one load. 64x64 covers every
+// supported grid; a coordinate outside it is unknown.
+struct CoreTable {
+    static constexpr uint16_t kNone = 0xFFFF;
+    std::vector<uint16_t> slot = std::vector<uint16_t>(4096, kNone);
+    static uint32_t idx(uint32_t xy) { return (((xy >> 16) & 63u) << 6) | (xy & 63u); }
+    uint16_t& operator[](uint32_t xy) { return slot[idx(xy)]; }
+    uint32_t find(uint32_t xy) const { return (xy & 0xFFC0FFC0u) != 0 ? kNone : slot[idx(xy)]; }
+    void load(const std::unordered_map<uint32_t, uint32_t>& core_of_xy) {
+        slot.assign(4096, kNone);
+        for (const auto& [xy, core] : core_of_xy) {
+            (*this)[xy] = static_cast<uint16_t>(core);
+        }
+    }
+};
 
 // Decode state for one socket's frame stream. Written only by that socket's decode thread.
 struct SpanDecodeState {
@@ -62,7 +79,7 @@ struct SpanDecodeState {
     std::vector<uint32_t> prog;  // per lane: sticky runtime host-id (every RISC emits its own at launch)
     std::vector<uint32_t> head;  // per lane: monotonic words-consumed mirror; head(N) == tail(N-1)
     std::vector<uint8_t> seeded;
-    std::unordered_map<uint32_t, uint32_t> core_of_xy;  // packed (y<<16)|x -> dense core index
+    CoreTable core_of_xy;
     uint64_t live_words = 0;
     uint64_t resync_words = 0;
     uint64_t anomalies = 0;  // torn run / truncated run / undecodable word
@@ -149,7 +166,8 @@ struct SpscA16Result {
     uint32_t n;
     uint64_t ts_first;
     uint64_t ts_last;
-    bool near_wrap;  // some end in the block lies within kLatchWindow of a low-word wrap
+    bool near_wrap;   // some end in the block lies within kLatchWindow of a low-word wrap
+    uint32_t stalls;  // records whose id is kSpscStallZoneId
 };
 
 // A wall-clock read whose low word is this close below a wrap may carry the next epoch's high word (the
@@ -169,7 +187,7 @@ inline SpscA16Result spsc_atomic16_avx512(
     uint32_t lane,
     uint32_t dev,
     Sink& sw) {
-    SpscA16Result out{0, 0, 0, false};
+    SpscA16Result out{0, 0, 0, false, 0};
     __m512i v0, v1, v2;
     if (avail >= 48u) {  // frame interior: no mask math
         v0 = _mm512_loadu_si512(p);
@@ -210,12 +228,15 @@ inline SpscA16Result spsc_atomic16_avx512(
                           (static_cast<uint64_t>(_mm512_cmpge_epu32_mask(v2, lw)) << 32);
     constexpr uint64_t kEndBits = 0x492492492492ull;  // bit 3r+1 = record r's end word
     out.near_wrap = (near & kEndBits & ((1ull << (3u * n)) - 1u)) != 0;
+    auto gather = [&](const uint32_t* idx, __mmask16 from_v2) {
+        const __m512i iv = _mm512_load_si512(idx);
+        return _mm512_mask_permutexvar_epi32(_mm512_permutex2var_epi32(v0, iv, v1), from_v2, iv, v2);
+    };
+    const __m512i ids = _mm512_and_si512(gather(kA16W0, kA16FromV2W0), _mm512_set1_epi32(0x07FFFFFF));
+    out.stalls = std::popcount(
+        static_cast<uint32_t>(_mm512_cmpeq_epi32_mask(ids, _mm512_set1_epi32(static_cast<int>(kSpscStallZoneId)))) &
+        ((1u << n) - 1u));
     if constexpr (Sink::kStores) {
-        auto gather = [&](const uint32_t* idx, __mmask16 from_v2) {
-            const __m512i iv = _mm512_load_si512(idx);
-            return _mm512_mask_permutexvar_epi32(_mm512_permutex2var_epi32(v0, iv, v1), from_v2, iv, v2);
-        };
-        const __m512i ids = _mm512_and_si512(gather(kA16W0, kA16FromV2W0), _mm512_set1_epi32(0x07FFFFFF));
         const __m512i ends = gather(kA16W1, kA16FromV2W1);
         const __m512i durs = gather(kA16W2, kA16FromV2W2);
         const uint64_t meta64 = static_cast<uint64_t>((lane << 16) | (dev << 26) | (kSpscRecTypeZone << 29)) << 32;
@@ -379,7 +400,7 @@ inline SpscA16Result spsc_atomic8_avx2(
     uint32_t lane,
     uint32_t dev,
     Sink& sw) {
-    SpscA16Result out{0, 0, 0, false};
+    SpscA16Result out{0, 0, 0, false, 0};
     __m256i v[3];
     if (avail >= 24u) {
         for (int i = 0; i < 3; i++) {
@@ -420,16 +441,20 @@ inline SpscA16Result spsc_atomic8_avx2(
     out.ts_last = th_hi | p[3u * n - 2u];
     constexpr uint32_t kEndBits = 0x492492u;  // bit 3r+1 = record r's end word
     out.near_wrap = (near & kEndBits & ((1u << (3u * n)) - 1u)) != 0;
-    if constexpr (Sink::kStores) {
-        const __m256i ids = _mm256_and_si256(
+    const __m256i ids = _mm256_and_si256(
+        _mm256_blend_epi32(
             _mm256_blend_epi32(
-                _mm256_blend_epi32(
-                    _mm256_permutevar8x32_epi32(v[0], _mm256_setr_epi32(0, 3, 6, 0, 0, 0, 0, 0)),
-                    _mm256_permutevar8x32_epi32(v[1], _mm256_setr_epi32(0, 0, 0, 1, 4, 7, 0, 0)),
-                    0x38),
-                _mm256_permutevar8x32_epi32(v[2], _mm256_setr_epi32(0, 0, 0, 0, 0, 0, 2, 5)),
-                0xC0),
-            _mm256_set1_epi32(0x07FFFFFF));
+                _mm256_permutevar8x32_epi32(v[0], _mm256_setr_epi32(0, 3, 6, 0, 0, 0, 0, 0)),
+                _mm256_permutevar8x32_epi32(v[1], _mm256_setr_epi32(0, 0, 0, 1, 4, 7, 0, 0)),
+                0x38),
+            _mm256_permutevar8x32_epi32(v[2], _mm256_setr_epi32(0, 0, 0, 0, 0, 0, 2, 5)),
+            0xC0),
+        _mm256_set1_epi32(0x07FFFFFF));
+    out.stalls = std::popcount(
+        static_cast<uint32_t>(_mm256_movemask_ps(
+            _mm256_castsi256_ps(_mm256_cmpeq_epi32(ids, _mm256_set1_epi32(static_cast<int>(kSpscStallZoneId)))))) &
+        ((1u << n) - 1u));
+    if constexpr (Sink::kStores) {
         const __m256i ends = _mm256_blend_epi32(
             _mm256_blend_epi32(
                 _mm256_permutevar8x32_epi32(v[0], _mm256_setr_epi32(1, 4, 7, 0, 0, 0, 0, 0)),
@@ -578,28 +603,37 @@ inline SpscZoneS16Result spsc_zone_s16_avx2(
 // count, which changes how the latch-race repair applies to it. emit_data(lane, wire_type, id, full_ts, prog,
 // payload_words, n) for PP_DATA/PP_EVENT (payload in place, hi word first). emit_atomic16 / emit_zone_s16 take a
 // block at a PP_ZONE_ATOMIC / PP_ZONE_S word and return the records consumed; 0 hands the word to the scalar arm.
-// Returns the payload words the control vector implies, which the caller checks against the frame's length
-// field (a pack-rule disagreement desynchronizes every later lane), or 0 for an unknown core. Decode starts at
-// the larger of the head mirror and the extent's start: the mirror runs behind after an upstream loss (adopt
-// and count), the extent after a lagging head write-back (skip the overlap). The walk is baseline code, so no
-// AVX-512 can be emitted outside the gated kernels.
-template <typename EmitZone, typename EmitData, typename EmitAtomic16, typename EmitZoneS16>
-inline uint32_t spsc_decode_frame(
+// enter_lane(lane) / leave_lane(lane) bracket each lane's run. Returns the payload words the control vector
+// implies, which the caller checks against the frame's length field (a pack-rule disagreement desynchronizes every
+// later lane), or 0 for an unknown core. Decode starts at the larger of the head mirror and the extent's start:
+// the mirror runs behind after an upstream loss (adopt and count), the extent after a lagging head write-back
+// (skip the overlap). The walk is baseline code, so no AVX-512 can be emitted outside the gated kernels.
+// always_inline: the emitters keep per-lane state in captured locals, which stay in registers only while the walk
+// and its caller are one function.
+template <
+    typename EmitZone,
+    typename EmitData,
+    typename EmitAtomic16,
+    typename EmitZoneS16,
+    typename EnterLane,
+    typename LeaveLane>
+inline __attribute__((always_inline)) uint32_t spsc_decode_frame(
     SpanDecodeState& st,
     const uint32_t* frame,
     EmitZone&& emit,
     EmitData&& emit_data,
     EmitAtomic16&& emit_atomic16,
     EmitZoneS16&& emit_zone_s16,
+    EnterLane&& enter_lane,
+    LeaveLane&& leave_lane,
     // Nonzero authorizes the atomic block to load (never emit) up to 24 words past a lane's live run.
     uint32_t frame_words = 0) {
     const uint32_t* ctrl = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
-    const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_WIRE_XY]);
-    if (xy_it == st.core_of_xy.end()) {
+    const uint32_t core = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_WIRE_XY]);
+    if (core == CoreTable::kNone) {
         st.unknown_core_frames++;
         return 0;
     }
-    const uint32_t core = xy_it->second;
     // Folded into st once at the end: the emitters store through casted ring pointers, so the compiler must
     // assume those stores alias st and would reload per record.
     uint64_t lw = 0;
@@ -663,6 +697,7 @@ inline uint32_t spsc_decode_frame(
         // A linearised run lives in `lin`, where `frame + frame_words` is not a comparable pointer, so the over-read
         // vouch must be withdrawn or the gates admit reads past the scratch.
         const uint32_t fw_eff = ring_ordered ? 0u : frame_words;
+        enter_lane(lane);
         uint32_t i = 0;
         while (i < run) {
             const uint32_t w0 = p[i];
@@ -763,6 +798,7 @@ inline uint32_t spsc_decode_frame(
                 break;
             }
         }
+        leave_lane(lane);
         st.timer_hi[lane] = th;
         st.prog[lane] = pg;
         st.cursor[lane] = cur;

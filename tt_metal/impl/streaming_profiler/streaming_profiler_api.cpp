@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "impl/streaming_profiler/spsc_marker_decode.hpp"
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
 
@@ -51,7 +52,6 @@ public:
         names_.refresh();
         zones_.clear();
         events_.clear();
-        stalls_.clear();
         staged_.clear();
         arena_.clear();
         const internal::CaptureContext& ctx = *batch.context;
@@ -60,23 +60,16 @@ public:
             const internal::LaneInfo& lane = ctx.devices[r.meta.dev].lanes[r.meta.lane];
             switch (r.meta.type) {
                 case T::Zone:
-                    if (stall(r.id)) {
-                        if (detail::has(channels_, Channel::Stalls)) {
-                            stalls_.push_back(Stall{
-                                .core = core_of(lane),
-                                .clock = std::cref(batch.clocks[r.meta.dev]),
-                                .start_timestamp = r.data.zone.start,
-                                .end_timestamp = r.data.zone.start + r.data.zone.duration,
-                                .runtime_id = r.prog});
-                        }
-                    } else if (detail::has(channels_, Channel::Zones)) {
+                    if (detail::has(channels_, Channel::Zones)) {
+                        const bool is_stall = r.id == profiler::kSpscStallZoneId;
                         zones_.push_back(Zone{
-                            .site = site_of(names_.lookup_site(r.id)),
+                            .site = is_stall ? Site{.name = kStallZoneName} : site_of(names_.lookup_site(r.id)),
                             .core = core_of(lane),
                             .clock = std::cref(batch.clocks[r.meta.dev]),
                             .start_timestamp = r.data.zone.start,
                             .end_timestamp = r.data.zone.start + r.data.zone.duration,
-                            .runtime_id = r.prog});
+                            .runtime_id = r.prog,
+                            .stall = is_stall});
                     }
                     break;
                 case T::Event:
@@ -99,7 +92,7 @@ public:
                 default: break;
             }
         }
-        const bool any = !zones_.empty() || !events_.empty() || !stalls_.empty() || !staged_.empty();
+        const bool any = !zones_.empty() || !events_.empty() || !staged_.empty();
         if (!any && batch.dropped_delta == 0 && batch.stall_delta == 0) {
             return;
         }
@@ -113,7 +106,6 @@ public:
         full.zones = zones_;
         full.timestamped_data = data_;
         full.events = events_;
-        full.stalls = stalls_;
         full.clocks = batch.clocks;
         full.dropped = batch.dropped_delta;
         full.stall_count = batch.stall_delta;
@@ -136,15 +128,6 @@ private:
         size_t payload_offset = 0;
         size_t payload_len = 0;
     };
-
-    bool stall(uint32_t id) {
-        if (auto it = is_stall_.find(id); it != is_stall_.end()) {
-            return it->second;
-        }
-        const bool s = names_.lookup(id) == "PROFILER-STALL";
-        is_stall_.emplace(id, s);
-        return s;
-    }
 
     void complete(Pending& p) {
         p.active = false;
@@ -191,11 +174,9 @@ private:
     const std::function<void(const Batch<Channel::All>&)> cb_;
     std::span<const Clock> clocks_;  // this batch's
     internal::ZoneNameMirror names_;
-    std::unordered_map<uint32_t, bool> is_stall_;    // the stall zone is a Stall, never a Zone
     std::unordered_map<uint32_t, Pending> pending_;  // keyed (dev << 10) | lane
     std::vector<Zone> zones_;
     std::vector<Event> events_;
-    std::vector<Stall> stalls_;
     std::vector<Staged> staged_;
     std::vector<uint64_t> arena_;
     std::vector<TimestampedData> data_;
