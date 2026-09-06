@@ -59,10 +59,46 @@ std::pair<Tensor, std::optional<CoreRangeSet>> promote_int32_scalar_input(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     auto operation_sub_core_grids = resolve_sub_device_workers(input, sub_core_grids, sub_device_id);
+    if (input.layout() == Layout::ROW_MAJOR && (input.is_sharded() || operation_sub_core_grids.has_value())) {
+        // Use unary TYPECAST's full-tile staging for restricted row-major grids.
+        // Sharded inputs use the existing tilize path, as binary_ng did before
+        // promotion, so later output memory-layout changes also use tile pages.
+        if (input.is_sharded() && operation_sub_core_grids.has_value()) {
+            TT_FATAL(
+                operation_sub_core_grids->contains(input.shard_spec()->grid),
+                "INT32 scalar promotion requires the requested grid to contain all input shard cores");
+        }
+        const auto typecast_input =
+            input.is_sharded()
+                ? ttnn::to_layout(input, Layout::TILE, std::nullopt, std::nullopt, operation_sub_core_grids)
+                : input;
+        auto operation_input = unary::detail::unary_impl(
+            typecast_input,
+            {unary::EltwiseUnaryWithParam{
+                unary::UnaryOpType::TYPECAST,
+                {static_cast<float>(DataType::INT32), static_cast<float>(DataType::FLOAT32)}}},
+            std::nullopt,
+            std::nullopt,
+            operation_sub_core_grids);
+        return {std::move(operation_input), std::move(operation_sub_core_grids)};
+    }
     validate_scalar_typecast(input.layout(), input.is_sharded(), operation_sub_core_grids, "INT32 scalar promotion");
     auto operation_input =
         ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids);
     return {std::move(operation_input), std::move(operation_sub_core_grids)};
+}
+
+Tensor restore_scalar_output_layout(
+    const Tensor& input,
+    Layout operation_layout,
+    const Tensor& output,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    // Sharded untilize selects its workers from the shard spec, not a subgrid argument.
+    const auto untilize_sub_core_grids = output.is_sharded() ? std::nullopt : sub_core_grids;
+    return operation_layout == input.layout()
+               ? output
+               : ttnn::to_layout(output, input.layout(), std::nullopt, output_mem_config, untilize_sub_core_grids);
 }
 
 }  // namespace
@@ -560,12 +596,21 @@ Tensor remainder(
     auto operation_sub_core_grids = sub_core_grids;
     auto operation_sub_device_id = sub_device_id;
     if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
+        // binary_ng did not support preallocated outputs when tilizing row-major
+        // inputs. Preserve that restriction rather than writing tile data to them.
+        TT_FATAL(
+            !(input.layout() == Layout::ROW_MAJOR && input.is_sharded() && output_tensor.has_value()),
+            "Optional output tensor with row-major sharded scalar promotion is not supported");
         auto [promoted_input, promoted_sub_core_grids] =
             promote_int32_scalar_input(input, sub_core_grids, sub_device_id);
         operation_input = std::move(promoted_input);
         operation_sub_core_grids = std::move(promoted_sub_core_grids);
         operation_sub_device_id = std::nullopt;
     }
+    // Keep tilized shard pages through the arithmetic; untilize performs any
+    // requested output memory-layout conversion using the input shard workers.
+    const auto operation_mem_config =
+        operation_input.layout() != input.layout() ? operation_input.memory_config() : output_mem_config;
 
     // The unary SFPU fast path does not support INT32. Float scalars promote INT32 inputs
     // above; integral scalars must route through binary_ng.
@@ -576,8 +621,13 @@ Tensor remainder(
         // unary_remainder; preserve their existing packing behavior.
         if (input.dtype() != DataType::INT32 || !output_tensor.has_value() ||
             output_tensor->dtype() == operation_input.dtype()) {
-            return ttnn::unary_remainder(
-                operation_input, scalar, output_mem_config, output_tensor, operation_sub_core_grids);
+            return restore_scalar_output_layout(
+                input,
+                operation_input.layout(),
+                ttnn::unary_remainder(
+                    operation_input, scalar, operation_mem_config, output_tensor, operation_sub_core_grids),
+                output_mem_config,
+                operation_sub_core_grids);
         }
 
         // Preserve the supported layout/grid combinations for output conversion,
@@ -609,12 +659,12 @@ Tensor remainder(
         return ttnn::typecast(
             operation_output, output_tensor->dtype(), std::nullopt, output_tensor, operation_sub_core_grids);
     }
-    return ttnn::detail::invoke_binary_ng(
+    auto result = ttnn::detail::invoke_binary_ng(
         operation_input,
         scalar,
         binary::BinaryOpType::REMAINDER,
         output_dtype,
-        output_mem_config,
+        operation_mem_config,
         output_tensor,
         post_activations,
         lhs_activations,
@@ -622,6 +672,8 @@ Tensor remainder(
         std::nullopt,
         operation_sub_core_grids,
         operation_sub_device_id);
+    return restore_scalar_output_layout(
+        input, operation_input.layout(), result, output_mem_config, operation_sub_core_grids);
 }
 
 // FMOD result = input − (other * trunc(input/other))
@@ -656,7 +708,14 @@ Tensor fmod(
         const auto [operation_input, operation_sub_core_grids] =
             promote_int32_scalar_input(input, sub_core_grids, sub_device_id);
         const float scalar_f = std::get<float>(scalar);
-        return ttnn::unary_fmod(operation_input, scalar_f, output_mem_config, std::nullopt, operation_sub_core_grids);
+        const auto operation_mem_config =
+            operation_input.layout() != input.layout() ? operation_input.memory_config() : output_mem_config;
+        return restore_scalar_output_layout(
+            input,
+            operation_input.layout(),
+            ttnn::unary_fmod(operation_input, scalar_f, operation_mem_config, std::nullopt, operation_sub_core_grids),
+            output_mem_config,
+            operation_sub_core_grids);
     }
     if (input.dtype() == DataType::INT32 || sub_device_id.has_value()) {
         return ttnn::detail::invoke_binary_ng(

@@ -1695,12 +1695,50 @@ def test_binary_remainder_int32_float_scalar_rejects_unsupported_sharded_output(
 
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
-def test_binary_remainder_fmod_int32_float_scalar_rejects_row_major_sharded(ttnn_op, device, expect_error):
-    torch_input_tensor = torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32)
+@pytest.mark.parametrize("scalar", [1.5, -1.5, 2.0, -2.0])
+@pytest.mark.parametrize("width", [32, 1056])
+def test_binary_remainder_fmod_int32_float_scalar_row_major_subgrid(ttnn_op, scalar, width, device):
+    torch_input = (torch.arange(32 * width, dtype=torch.int32) % 1024 - 512).reshape(1, 1, 32, width)
+    if abs(scalar) == 2.0:
+        # Integral-valued floats must still promote: these odd integers round to even FP32 values.
+        torch_input.flatten()[:4] = torch.tensor([2**24 + 1, -(2**24 + 1), -(2**31), 2**31 - 1])
+    cores = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(1, 1)),
+            ttnn.CoreRange(ttnn.CoreCoord(3, 1), ttnn.CoreCoord(3, 1)),
+        }
+    )
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    result = ttnn_op(input_tensor, scalar, sub_core_grids=cores)
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    assert result.dtype == ttnn.float32
+    assert result.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert_equal(golden_function(torch_input.float(), scalar, device=device), ttnn.to_torch(result))
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+@pytest.mark.parametrize("scalar", [1.5, -1.5, 2.0, -2.0])
+@pytest.mark.parametrize("use_sub_core_grids", [False, True])
+@pytest.mark.parametrize("interleaved_output", [False, True])
+@pytest.mark.parametrize(
+    "strategy,shape,grid_end",
+    [
+        pytest.param(ttnn.ShardStrategy.HEIGHT, (128, 32), (3, 0), id="height"),
+        pytest.param(ttnn.ShardStrategy.WIDTH, (32, 128), (3, 0), id="width"),
+        pytest.param(ttnn.ShardStrategy.BLOCK, (64, 64), (1, 1), id="block"),
+    ],
+)
+def test_binary_remainder_fmod_int32_float_scalar_row_major_sharded(
+    ttnn_op, scalar, use_sub_core_grids, interleaved_output, strategy, shape, grid_end, device
+):
+    torch_input_tensor = (torch.arange(4096, dtype=torch.int32) % 1024 - 512).reshape(1, 1, *shape)
+    if abs(scalar) == 2.0:
+        torch_input_tensor.flatten()[:4] = torch.tensor([2**24 + 1, -(2**24 + 1), -(2**31), 2**31 - 1])
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(*grid_end))})
     sharded_memory_config = ttnn.create_sharded_memory_config(
         shape=(32, 32),
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-        strategy=ttnn.ShardStrategy.HEIGHT,
+        core_grid=cores,
+        strategy=strategy,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
@@ -1712,8 +1750,46 @@ def test_binary_remainder_fmod_int32_float_scalar_rejects_row_major_sharded(ttnn
         memory_config=sharded_memory_config,
     )
 
-    with expect_error(RuntimeError, "INT32 scalar promotion does not support row-major sharded tensors"):
-        ttnn_op(input_tensor, 1.5)
+    output_memory_config = ttnn.DRAM_MEMORY_CONFIG if interleaved_output else sharded_memory_config
+    result = ttnn_op(
+        input_tensor,
+        scalar,
+        memory_config=output_memory_config,
+        sub_core_grids=cores if use_sub_core_grids else None,
+    )
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    assert result.dtype == ttnn.float32
+    assert result.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert result.memory_config() == output_memory_config
+    assert_equal(golden_function(torch_input_tensor.float(), scalar, device=device), ttnn.to_torch(result))
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_binary_remainder_int32_float_scalar_row_major_sharded_output_dtype(output_dtype, device, expect_error):
+    torch_input = torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32)
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(1, 1))})
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config, device=device
+    )
+    result = ttnn.remainder(input_tensor, 1.5, dtype=output_dtype, sub_core_grids=cores)
+    expected = torch.remainder(torch_input.float(), 1.5)
+    assert result.dtype == output_dtype
+    assert result.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert_equal(expected.to(torch.float32 if output_dtype == ttnn.float32 else torch.bfloat16), ttnn.to_torch(result))
+
+    # Preserve the existing preallocated-output restriction for inputs that need tilizing.
+    with expect_error(RuntimeError, "Optional output tensor with row-major sharded scalar promotion is not supported"):
+        ttnn.remainder(input_tensor, 1.5, output_tensor=result, sub_core_grids=cores)
+    other_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    with expect_error(RuntimeError, "requested grid to contain all input shard cores"):
+        ttnn.remainder(input_tensor, 1.5, sub_core_grids=other_cores)
 
 
 @pytest.mark.parametrize(

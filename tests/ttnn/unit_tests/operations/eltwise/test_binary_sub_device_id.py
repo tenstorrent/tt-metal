@@ -10,13 +10,13 @@ import ttnn
 from models.common.utility_functions import skip_for_slow_dispatch
 
 
-def setup_sub_device(device):
+def setup_sub_device(device, local_l1_size=3200):
     """Create a sub-device manager with two sub-devices and load it."""
     tensix_cores0 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
     tensix_cores1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 4))})
     sub_device_0 = ttnn.SubDevice([tensix_cores0])
     sub_device_1 = ttnn.SubDevice([tensix_cores1])
-    sub_device_manager = device.create_sub_device_manager([sub_device_0, sub_device_1], 3200)
+    sub_device_manager = device.create_sub_device_manager([sub_device_0, sub_device_1], local_l1_size)
     device.load_sub_device_manager(sub_device_manager)
     return sub_device_manager
 
@@ -107,21 +107,60 @@ def test_binary_tensor_scalar_with_sub_device_id(device, op_fn, op_name):
 
 
 @pytest.mark.parametrize("op_fn", [ttnn.remainder, ttnn.fmod])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("scalar", [1.5, 2.0])
 @skip_for_slow_dispatch()
-def test_binary_int32_float_scalar_promotion_with_sub_device_id(device, op_fn):
+def test_binary_int32_float_scalar_promotion_with_sub_device_id(device, op_fn, layout, scalar):
     """INT32-to-FLOAT32 promotion and the scalar op both run on the requested sub-device."""
     torch_input = torch.tensor([-5, -1, 0, 1, 5], dtype=torch.int32)
-    scalar = 1.5
 
     sub_device_manager = setup_sub_device(device)
     try:
-        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=layout, device=device)
 
         result = op_fn(tt_input, scalar, sub_device_id=ttnn.SubDeviceId(1))
         actual = ttnn.to_torch(result)
+        assert result.dtype == ttnn.float32
+        assert result.layout == layout
         expected = torch.remainder(torch_input, scalar) if op_fn == ttnn.remainder else torch.fmod(torch_input, scalar)
 
         assert torch.equal(expected, actual)
+    finally:
+        teardown_sub_device(device, sub_device_manager)
+
+
+@pytest.mark.parametrize("op_fn", [ttnn.remainder, ttnn.fmod])
+@pytest.mark.parametrize("interleaved_output", [False, True])
+@skip_for_slow_dispatch()
+def test_binary_int32_float_scalar_row_major_sharded_with_sub_device_id(device, op_fn, interleaved_output):
+    """Tilize, promotion, arithmetic and untilize stay on the non-origin shard workers."""
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 3))})
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=cores,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    torch_input = (torch.arange(4096, dtype=torch.int32) % 1024 - 512).reshape(1, 1, 32, 128)
+    sub_device_manager = setup_sub_device(device, local_l1_size=128 * 1024)
+    try:
+        output_memory_config = ttnn.DRAM_MEMORY_CONFIG if interleaved_output else memory_config
+        # Repeat with different allocations and values to exercise cached conversion programs.
+        for offset in [0, 1]:
+            tt_input = ttnn.from_torch(
+                torch_input + offset,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=memory_config,
+                device=device,
+            )
+            result = op_fn(tt_input, 1.5, memory_config=output_memory_config, sub_device_id=ttnn.SubDeviceId(1))
+            expected = ttnn.get_golden_function(op_fn)((torch_input + offset).float(), 1.5, device=device)
+            assert result.dtype == ttnn.float32
+            assert result.layout == ttnn.ROW_MAJOR_LAYOUT
+            assert result.memory_config() == output_memory_config
+            assert torch.equal(expected, ttnn.to_torch(result))
     finally:
         teardown_sub_device(device, sub_device_manager)
 
