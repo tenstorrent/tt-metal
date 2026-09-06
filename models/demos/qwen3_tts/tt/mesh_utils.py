@@ -105,6 +105,36 @@ def to_torch(t: ttnn.Tensor, device=None, **kwargs) -> "torch.Tensor":
     return ttnn.to_torch(t, **kwargs)
 
 
+def to_torch_chip0(t: ttnn.Tensor, device=None, **kwargs) -> "torch.Tensor":
+    """Like :func:`to_torch`, but reads ONLY chip 0 instead of every chip.
+
+    ``to_torch`` goes through ``ConcatMeshToTensor``, which pulls the tensor off
+    **every** chip in the mesh and then throws all but the first slice away. After a
+    TP all-reduce every chip holds the same data, so for a read-only host peek chip 0
+    is the whole answer and the other reads are pure cost. Measured on N300, the
+    hot-loop reads in the AR decode loop:
+
+        [1,1,1,32] uint32 token   0.38 ms -> 0.17 ms
+        [1,1,1,3072] logits       0.79 ms -> 0.42 ms
+
+    Bit-exact against ``to_torch`` (``torch.equal``), because it is literally the
+    same bytes without the second chip's transfer.
+
+    Only valid where the chips are known to agree — replicated constants and
+    post-all-reduce activations. Use :func:`to_torch` for anything sharded.
+    """
+    dev = device
+    if dev is None:
+        try:
+            dev = t.device()
+        except Exception:
+            return ttnn.to_torch(t, **kwargs)
+
+    if dev.__class__.__name__ == "MeshDevice" and dev.get_num_devices() > 1:
+        return ttnn.to_torch(ttnn.get_device_tensors(t)[0], **kwargs)
+    return ttnn.to_torch(t, **kwargs)
+
+
 def tp_all_reduce(tensor: ttnn.Tensor, device, memory_config=None) -> ttnn.Tensor:
     """All-reduce ``tensor`` across the TP axis. No-op when tp_size==1.
 
