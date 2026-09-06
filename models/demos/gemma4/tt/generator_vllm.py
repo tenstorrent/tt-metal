@@ -1991,7 +1991,13 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             )
         drafter = self._spec_get_drafter()
         model0 = self.model[0]
+        # Boot warmup prefills feed all-zero dummy tokens (and warmup_prefill=1);
+        # capturing their taps would seed the drafter ctx with garbage. Only the
+        # REAL prompt prefill sets the pending spec session.
+        is_warmup = bool(kwargs.get("warmup_prefill")) or (tokens is not None and int(tokens.abs().sum()) == 0)
         kwargs["enable_trace"] = False  # traced replays skip the tap hook
+        if is_warmup:
+            return super().prefill_forward(*args, **kwargs)
         model0.dflash_capture_taps(drafter.target_layer_ids, keep_last=12)
         try:
             out = super().prefill_forward(*args, **kwargs)
@@ -2125,7 +2131,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         self._spec_first_step = False
         row = list(accepted) + [bonus]
         # defensive: never let an out-of-vocab id reach the token buffer
-        row = [t if 0 <= t < dec.vocab else int(bonus if 0 <= bonus < dec.vocab else 1) for t in row]
+        row = [t if 0 <= t < dec.drafter.vocab else int(bonus if 0 <= bonus < dec.drafter.vocab else 1) for t in row]
         out = torch.full((1, self._SPEC_N), -1, dtype=torch.int32)
         out[0, : len(row)] = torch.tensor(row, dtype=torch.int32)
         return out
