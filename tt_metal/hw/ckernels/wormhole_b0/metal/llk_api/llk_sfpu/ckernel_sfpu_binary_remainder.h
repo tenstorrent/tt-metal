@@ -90,10 +90,11 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     // Split q and b into 11-bit chunks to compute q * b
     // Shift out unwanted bits to avoid a mask register in this register-constrained helper.
     // Division and the small-divisor helper retain masks where they do not cause spills.
+    constexpr unsigned INT32_BITS = 32;
     constexpr unsigned CHUNK_BITS = 11;
     constexpr unsigned HIGH_CHUNK_SHIFT = 2 * CHUNK_BITS;
-    constexpr unsigned LOW_CHUNK_SHIFT = 32 - CHUNK_BITS;
-    constexpr unsigned MID_CHUNK_SHIFT = 32 - HIGH_CHUNK_SHIFT;
+    constexpr unsigned LOW_CHUNK_SHIFT = INT32_BITS - CHUNK_BITS;
+    constexpr unsigned MID_CHUNK_SHIFT = INT32_BITS - HIGH_CHUNK_SHIFT;
     sfpi::vFloat q1 =
         sfpi::convert<sfpi::vFloat>(sfpi::vMag((q << LOW_CHUNK_SHIFT) >> LOW_CHUNK_SHIFT), sfpi::RoundMode::Nearest);
     sfpi::vFloat q2 = sfpi::convert<sfpi::vFloat>(q >> CHUNK_BITS, sfpi::RoundMode::Nearest);

@@ -957,6 +957,68 @@ def test_div_int32_min_rounding_modes(rounding_mode, device):
         assert_equal(expected, actual)
 
 
+@pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
+@pytest.mark.parametrize("operand_kind", ["tensor", "scalar"])
+def test_div_int32_odd_residuals(rounding_mode, operand_kind, device):
+    # q*b is a multiple of 1024 (Blackhole) or 2048 (Wormhole), so these
+    # odd numerators exercise the low bit discarded by residual conversion.
+    # Unlike remainder's weaker reciprocal, division's Halley refinement must
+    # leave enough correction accuracy for the single final adjustment.
+    numerators = torch.cat(
+        [
+            torch.arange(-(2**31) + 1, -(2**31) + 256, 2, dtype=torch.int64),
+            torch.arange(2**31 - 255, 2**31, 2, dtype=torch.int64),
+            # Include remainder's -2140947629 / -1 counterexample and neighbors.
+            torch.arange(-2140947757, -2140947501, 2, dtype=torch.int64),
+            torch.arange(2140947501, 2140947757, 2, dtype=torch.int64),
+            torch.arange(-127, 128, 2, dtype=torch.int64),
+        ]
+    )
+    divisors = [
+        -7,
+        -3,
+        -2,
+        -1,
+        1,
+        2,
+        3,
+        7,
+        -2049,
+        -2048,
+        -2047,
+        -1025,
+        -1024,
+        -1023,
+        1023,
+        1024,
+        1025,
+        2047,
+        2048,
+        2049,
+        *INT32_MIN_THRESHOLD_DIVISORS,
+        2**31 - 1,
+        -(2**31 - 1),
+        -(2**31),
+    ]
+    # No zero divisors; all numerators are odd, excluding undefined INT_MIN / -1.
+    if operand_kind == "tensor":
+        pairs = torch.cartesian_prod(numerators, torch.tensor(divisors, dtype=torch.int64))
+        torch_a = pairs[:, 0].reshape(-1, 32).to(torch.int32).contiguous()
+        torch_b = pairs[:, 1].reshape(-1, 32).to(torch.int32).contiguous()
+        input_a = ttnn.from_torch(torch_a, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+        input_b = ttnn.from_torch(torch_b, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+        expected = torch.div(torch_a.to(torch.int64), torch_b.to(torch.int64), rounding_mode=rounding_mode)
+        actual = ttnn.to_torch(ttnn.div(input_a, input_b, rounding_mode=rounding_mode))
+        assert_equal(expected.to(torch.int32), actual)
+    else:
+        torch_a = numerators.reshape(-1, 32).to(torch.int32)
+        input_a = ttnn.from_torch(torch_a, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+        for divisor in divisors:
+            expected = torch.div(torch_a.to(torch.int64), divisor, rounding_mode=rounding_mode)
+            actual = ttnn.to_torch(ttnn.div(input_a, divisor, rounding_mode=rounding_mode))
+            assert_equal(expected.to(torch.int32), actual)
+
+
 def test_div_inf_nan_cases(device):
     torch_input_tensor_a = torch.tensor([0, 1, -1, 0, 0, 1, -1, -1, 1, 2147483647, 0], dtype=torch.int32)
     input_tensor_a = ttnn.from_torch(

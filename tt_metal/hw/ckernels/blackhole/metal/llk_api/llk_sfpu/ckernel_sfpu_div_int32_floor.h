@@ -68,8 +68,14 @@ sfpi_inline void calculate_div_int32_body(
     // Compute remainder.
     sfpi::vInt r = a - qb;
     // Shift before conversion so the valid magnitude 2**31 is representable as
-    // a positive sign-magnitude integer. Dropping the low bit can change the
-    // approximate correction by at most one, which the final adjustment handles.
+    // a positive sign-magnitude integer. Dropping the low bit adds at most 1/|b|
+    // to the correction error, on top of reciprocal and FP rounding error.
+    // The single final adjustment relies on the ~22-bit reciprocal accuracy
+    // from the Halley refinement above; do not weaken it without rechecking this
+    // error budget, especially for odd residuals with |b| == 1.
+    // Do not assume the same budget for ckernel_sfpu_binary_remainder.h: it uses
+    // a less accurate reciprocal and retains the low bit (see its Blackhole
+    // counterexample).
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r) >> 1, sfpi::RoundMode::Nearest);
     r_f = sfpi::addexp(r_f, 1 /* delta */);
 
