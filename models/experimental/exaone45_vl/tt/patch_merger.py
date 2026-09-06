@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.exaone45_vl.tt.vision_rmsnorm import RMSNorm
+from models.demos.qwen25_vl.tt.vision_rmsnorm import RMSNorm
 
 
 class PatchMerger(LightweightModule):
@@ -30,7 +30,7 @@ class PatchMerger(LightweightModule):
             state_dict_prefix=state_dict_prefix + ".",
             weight_key="ln_q",
             weight_dtype=ttnn.bfloat16,
-            eps=1e-6,  # Qwen2_5_VLPatchMerger hard-codes this
+            eps=1e-6,  # Exaone4_5_PatchMerger hard-codes this
         )
 
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
@@ -66,7 +66,7 @@ class PatchMerger(LightweightModule):
         self.w1 = as_weight_tensor("feed_forward.0", dtype, self.mlp_size, self.mlp_size)
         # Second layer: hidden_size -> out_dim
         self.w2 = as_weight_tensor("feed_forward.2", dtype, self.mlp_size, args.hf_config.vision_config.out_hidden_size)
-        # The HF merger MLP linears carry biases (dropped upstream in qwen25_vl;
+        # The HF merger MLP linears carry biases (the qwen25_vl PatchMerger drops them;
         # a real accuracy bug for EXAONE's 5120-wide output).
         self.b1 = as_bias_tensor("feed_forward.0", dtype)
         self.b2 = as_bias_tensor("feed_forward.2", dtype)

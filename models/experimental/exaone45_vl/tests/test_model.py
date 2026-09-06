@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.exaone45_vl.reference.functional import qwen2_5_vision_transformer_preprocess
+from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
 from models.experimental.exaone45_vl.tt.model import VisionTransformer
 from models.experimental.exaone45_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.load_checkpoints import (
@@ -88,7 +88,6 @@ def test_vision_model_inference(
 
     # Create reference model
     reference_model = model_args.reference_vision_model(depth=model_args.hf_config.vision_config.depth)
-    # reference_model = Qwen2_5_VisionTransformerPretrainedModel(model_args.hf_config.vision_config)
     # reference_model.load_state_dict(model_args.reference_vision_model().state_dict(), strict=False)
     # FIXME: state_dict = model_args.load_state_dict()
     state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())

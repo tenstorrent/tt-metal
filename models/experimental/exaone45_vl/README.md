@@ -1,18 +1,23 @@
 # EXAONE-4.5 Vision Tower (on-device)
 
-TT port of the EXAONE-4.5 vision encoder (Qwen2.5-VL-derived ViT: 28 blocks,
+TT port of the EXAONE-4.5 vision encoder (Qwen2.5-VL-style ViT: 28 blocks,
 hidden 2048, **GQA 32 Q / 8 KV heads**, head_dim 64, window attention 112 with
-full-attention blocks [6, 13, 20, 27], 2x2 spatial merger -> 5120). Based on
-`models/demos/qwen25_vl` with three deltas:
+full-attention blocks [6, 13, 20, 27], 2x2 spatial merger -> 5120).
 
-- GQA: `vision_n_kv_heads` from `vision_config.num_key_value_heads`, and the
-  fused-qkv split passes `n_heads`/`n_kv_heads` (an equal three-way split would
-  silently corrupt the weights — guarded by an assertion in
-  `tt/model.py::DropInVisionTransformer`).
-- Patch merger loads and applies the HF MLP **biases** (dropped upstream in the
-  qwen25_vl copy).
-- Reference model is `Exaone4_5_VisionModel` (its `forward` returns
-  `BaseModelOutputWithPooling`; `pooler_output` holds per-image merged embeds).
+The attention, block, MLP, RMSNorm and host-side preprocessing are imported
+from `models/demos/qwen25_vl` (the HF `Exaone4_5_VisionModel` is a modular copy
+of the Qwen2.5-VL tower; both TT implementations read every size and head count
+from `VisionModelArgs`). Only the EXAONE-specific pieces live here:
+
+- `tt/model_config.py` — GQA: `vision_n_kv_heads` from
+  `vision_config.num_key_value_heads`, plus grids sized for hidden 2048 / out 5120.
+- `tt/model.py` — GQA-aware fused-qkv split (an equal three-way split would
+  silently corrupt the weights; guarded by an assertion in
+  `DropInVisionTransformer`) and the `Exaone4_5_VisionModel` reference wiring
+  (its `forward` returns `BaseModelOutputWithPooling`; `pooler_output` holds
+  per-image merged embeds).
+- `tt/patch_merger.py` — loads and applies the HF merger MLP **biases**, which
+  the qwen25_vl merger drops.
 
 head_dim 64 is tile-aligned, so Qwen's 80->96 head padding paths are inert here.
 The tower is replicated per device (no TP); patch_embed and window/rope index

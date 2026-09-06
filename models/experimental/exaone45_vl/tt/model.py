@@ -8,10 +8,10 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import comp_pcc
-from models.experimental.exaone45_vl.reference.functional import qwen2_5_vision_transformer_preprocess
+from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
 from models.experimental.exaone45_vl.tt.model_config import VisionModelArgs
 from models.experimental.exaone45_vl.tt.patch_merger import PatchMerger
-from models.experimental.exaone45_vl.tt.vision_block import VisionBlock
+from models.demos.qwen25_vl.tt.vision_block import VisionBlock
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
@@ -22,7 +22,8 @@ from models.tt_transformers.tt.load_checkpoints import (
 
 class VisionTransformer(LightweightModule):
     """
-    Vision Transformer model for Qwen 2.5 VL.
+    Vision Transformer blocks for the EXAONE-4.5 vision tower (a Qwen2.5-VL-style
+    windowed ViT, assembled from the models/demos/qwen25_vl components).
     This implements only the transformer blocks part of the vision transformer.
     Patch embedding and merging should be done outside this class.
     """
@@ -152,7 +153,7 @@ class VisionTransformer(LightweightModule):
 
 class DropInVisionTransformer(torch.nn.Module):
     """Wraps VisionTransformer to be a drop-in replacement for
-    Qwen2_5_VisionTransformerPretrainedModel. It uses the reference model
+    Exaone4_5_VisionModel. It uses the reference model
     for certain preprocessing steps like patch embedding and index calculation.
     """
 
@@ -168,7 +169,7 @@ class DropInVisionTransformer(torch.nn.Module):
 
         Args:
             tt_model (VisionTransformer): Initialized TT VisionTransformer instance.
-            reference_model (Qwen2_5_VisionTransformerPretrainedModel): Initialized reference HF model instance.
+            reference_model (Exaone4_5_VisionModel): Initialized reference HF model instance.
             model_args (VisionModelArgs): Model configuration arguments.
             mesh_device (ttnn.MeshDevice): The mesh device used by the TT model.
         """
@@ -208,7 +209,7 @@ class DropInVisionTransformer(torch.nn.Module):
 
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass mimicking the Qwen2_5_VisionTransformerPretrainedModel interface.
+        Forward pass mimicking the Exaone4_5_VisionModel interface.
 
         Args:
             pixel_values (torch.Tensor): Input pixel values tensor (equivalent to hidden_states for the ref model start).

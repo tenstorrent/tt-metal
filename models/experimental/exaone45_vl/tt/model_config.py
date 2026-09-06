@@ -7,17 +7,17 @@ import math
 from loguru import logger
 
 import ttnn
-from models.experimental.exaone45_vl.tt.common import nearest_multiple
+from models.demos.qwen25_vl.tt.common import nearest_multiple
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
 class ModelOptimizations:
     def __init__(self, model_name):
-        """Configuration optimized for accuracy
-        Only 70B models uses bfp4 MLPs in this configuration
+        """Configuration optimized for accuracy.
+        EXAONE-4.5 keeps the vision MLP in bfp8 (no bfp4 variant).
         """
-        self.bfp4_mlp = "Qwen2.5-VL-72B" in model_name
+        self.bfp4_mlp = False
 
 
 class VisionModelArgs(ModelArgs):
