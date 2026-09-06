@@ -38,6 +38,14 @@ struct BroadcastRingParams {
     uint32_t broadcast_num_tiles = 0;
     uint32_t broadcast_stride_pages = 0;
     uint32_t broadcast_num_blocks = 1;
+    // Output remap (L1-relay only): when broadcast_out_stride_pages > 0, block b of the broadcast range is
+    // PERSISTED at output pages broadcast_out_offset_pages + b*broadcast_out_stride_pages + [0, block)
+    // instead of at its input page ids -- the relayed data lands directly in a caller-chosen (typically
+    // compact) layout, eliminating the post-broadcast slice/concat repackaging. Requires a
+    // persistent_output_buffer (the output shape differs from the input); 0 stride = identity (output
+    // pages == input pages, output input-shaped).
+    uint32_t broadcast_out_offset_pages = 0;
+    uint32_t broadcast_out_stride_pages = 0;
     // L1 relay: forward each chunk straight into the downstream's L1 recv buffer (no per-hop DRAM read),
     // gated by a backward credit protocol. Default false keeps the DRAM-output relay. Experimental.
     bool use_l1_relay = false;
@@ -64,6 +72,8 @@ struct BroadcastRingParams {
         uint32_t broadcast_num_tiles_ = 0,
         uint32_t broadcast_stride_pages_ = 0,
         uint32_t broadcast_num_blocks_ = 1,
+        uint32_t broadcast_out_offset_pages_ = 0,
+        uint32_t broadcast_out_stride_pages_ = 0,
         bool use_l1_relay_ = false,
         uint32_t num_slots_ = 0,
         std::vector<tt::tt_metal::GlobalSemaphore> multi_device_global_semaphore_ = {}) :
@@ -79,6 +89,8 @@ struct BroadcastRingParams {
         broadcast_num_tiles(broadcast_num_tiles_),
         broadcast_stride_pages(broadcast_stride_pages_),
         broadcast_num_blocks(broadcast_num_blocks_),
+        broadcast_out_offset_pages(broadcast_out_offset_pages_),
+        broadcast_out_stride_pages(broadcast_out_stride_pages_),
         use_l1_relay(use_l1_relay_),
         num_slots(num_slots_),
         multi_device_global_semaphore(std::move(multi_device_global_semaphore_)) {}
@@ -96,6 +108,8 @@ struct BroadcastRingParams {
         "broadcast_num_tiles",
         "broadcast_stride_pages",
         "broadcast_num_blocks",
+        "broadcast_out_offset_pages",
+        "broadcast_out_stride_pages",
         "use_l1_relay",
         "num_slots");
     auto attribute_values() const {
@@ -112,6 +126,8 @@ struct BroadcastRingParams {
             broadcast_num_tiles,
             broadcast_stride_pages,
             broadcast_num_blocks,
+            broadcast_out_offset_pages,
+            broadcast_out_stride_pages,
             use_l1_relay,
             num_slots);
     }

@@ -39,6 +39,8 @@ Tensor broadcast_ring(
     uint32_t broadcast_num_tiles = 0,
     uint32_t broadcast_stride_pages = 0,
     uint32_t broadcast_num_blocks = 1,
+    uint32_t broadcast_out_offset_pages = 0,
+    uint32_t broadcast_out_stride_pages = 0,
     bool use_l1_relay = false,
     uint32_t num_slots = 0,
     const std::optional<ttnn::Tensor>& persistent_output_buffer = std::nullopt,

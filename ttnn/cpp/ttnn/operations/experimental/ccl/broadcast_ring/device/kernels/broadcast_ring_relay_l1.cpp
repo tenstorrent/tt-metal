@@ -54,7 +54,13 @@ constexpr uint32_t bcast_offset = get_compile_time_arg_val(14);
 constexpr uint32_t bcast_block_pages = get_compile_time_arg_val(15);
 constexpr uint32_t bcast_stride_pages = get_compile_time_arg_val(16);
 constexpr bool blocked_range = (bcast_block_pages > 0);
-constexpr uint32_t tensor_args_base = 17;
+// Output remap: when out_stride > 0, the DRAM persist lands block b at out_offset + b*out_stride + in_blk
+// (a caller-chosen, typically compact, layout) instead of at the input page ids. Affects ONLY the persist
+// -- the sender read uses the input mapping and forwarding is layout-oblivious.
+constexpr uint32_t bcast_out_offset = get_compile_time_arg_val(17);
+constexpr uint32_t bcast_out_stride = get_compile_time_arg_val(18);
+constexpr bool out_remap = (bcast_out_stride > 0);
+constexpr uint32_t tensor_args_base = 19;
 
 // Arc roles: the sender sends both ways; the ring splits into a forward arc (HF hops) and backward arc (HB
 // hops). A non-sender receives from its one upstream and forwards away from the sender until its arc end.
@@ -212,28 +218,41 @@ void kernel_main() {
     }
 
     // Linear -> absolute page walker for the (possibly blocked) broadcast range: one div/mod per chunk
-    // (walk_seek), then add-and-compare per tile (walk_next). Contiguous ranges compile to page = offset
-    // + linear with no block walking.
+    // (walk_seek), then add-and-compare per tile (walk_next, parametrized by the stream's stride).
+    // Contiguous ranges compile to page = offset + linear with no block walking. The sender read walks
+    // the INPUT pages (walk_page0/bcast_stride_pages); the persist walks the OUTPUT pages -- identical to
+    // the input pages unless out_remap, where blocks land at out_offset + blk*out_stride instead.
     uint32_t walk_page0 = 0;
+    uint32_t walk_out_page0 = 0;
     uint32_t walk_in_blk0 = 0;  // chunk-start state, copied by each consumer loop
     auto walk_seek = [&](uint32_t linear) {
         if constexpr (blocked_range) {
             const uint32_t blk = linear / bcast_block_pages;
             walk_in_blk0 = linear - blk * bcast_block_pages;
             walk_page0 = bcast_offset + blk * bcast_stride_pages + walk_in_blk0;
+            if constexpr (out_remap) {
+                walk_out_page0 = bcast_out_offset + blk * bcast_out_stride + walk_in_blk0;
+            }
         } else {
             walk_page0 = bcast_offset + linear;
+            if constexpr (out_remap) {
+                walk_out_page0 = bcast_out_offset + linear;
+            }
+        }
+        if constexpr (!out_remap) {
+            walk_out_page0 = walk_page0;
         }
     };
-    auto walk_next = [](uint32_t& page, uint32_t& in_blk) {
+    auto walk_next = [](uint32_t& page, uint32_t& in_blk, uint32_t stride) {
         ++page;
         if constexpr (blocked_range) {
             if (++in_blk == bcast_block_pages) {
                 in_blk = 0;
-                page += bcast_stride_pages - bcast_block_pages;
+                page += stride - bcast_block_pages;
             }
         }
     };
+    constexpr uint32_t out_stride_eff = out_remap ? bcast_out_stride : bcast_stride_pages;
 
     const uint32_t tile_end = tile_start + tile_count;
     uint32_t tiles_done = tile_start;
@@ -260,7 +279,7 @@ void kernel_main() {
             uint32_t rd_in_blk = walk_in_blk0;
             for (uint32_t t = 0; t < chunk_tiles; ++t) {
                 noc_async_read_page(rd_page, in_addrgen, wr);
-                walk_next(rd_page, rd_in_blk);
+                walk_next(rd_page, rd_in_blk, bcast_stride_pages);
                 wr += page_size;
             }
             noc_async_read_barrier();
@@ -275,12 +294,12 @@ void kernel_main() {
         }
 
         // 2) Persist to my DRAM output (every device keeps the broadcast range; other pages untouched).
-        uint32_t out_page = walk_page0;
+        uint32_t out_page = walk_out_page0;
         uint32_t out_in_blk = walk_in_blk0;
         for (uint32_t t = 0; t < chunk_tiles; ++t) {
             const uint64_t dst = get_noc_addr(out_page, out_addrgen);
             noc_async_write(slot_addr + t * page_size, dst, page_size);
-            walk_next(out_page, out_in_blk);
+            walk_next(out_page, out_in_blk, out_stride_eff);
         }
 
         // 3) Forward the chunk from L1 to the downstream slot(s).

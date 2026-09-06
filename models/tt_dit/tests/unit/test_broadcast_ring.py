@@ -621,9 +621,11 @@ def test_broadcast_ring_l1(
 # (row-major, width tiles innermost), so a CONTIGUOUS dim-2 sub-range can only be expressed when E/32==1
 # and dim0*dim1==1. The "subrange" case below therefore fails (xfail: contiguous-range limitation). The
 # "blocked" case uses broadcast_stride_pages/broadcast_num_blocks -- one block of frame pages per
-# (dim0, head) with stride = shard rows -- which expresses the dim-2 sub-range exactly (L1 relay only);
-# this is what the production reference-frame path uses. "wholeshard" broadcasts the whole owner shard
-# and slices dim 2 on host -- correct, but moves the whole shard.
+# (dim0, head) with stride = shard rows -- which expresses the dim-2 sub-range exactly (L1 relay only).
+# "outremap" adds broadcast_out_offset/stride_pages on top: the blocks are persisted compactly into a
+# frame-shaped persistent buffer instead of at their input page ids -- this blocked+remapped form is what
+# the production reference-frame assembly uses (no post-broadcast slice/concat). "wholeshard" broadcasts
+# the whole owner shard and slices dim 2 on host -- correct, but moves the whole shard.
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
     [
@@ -637,6 +639,7 @@ def test_broadcast_ring_l1(
     [
         pytest.param("wholeshard", id="wholeshard"),
         pytest.param("blocked", id="blocked"),
+        pytest.param("outremap", id="outremap"),
         pytest.param(
             "subrange",
             id="subrange",
@@ -705,6 +708,27 @@ def test_broadcast_ring_reference_frame(mesh_device, sp_axis, tp_axis, device_pa
             broadcast_num_blocks=n_batch,
             use_l1_relay=True,
         )
+    elif mode == "outremap":
+        # Blocked input range as above PLUS output remap: block b is persisted at out page b*flen*e_tiles
+        # of a COMPACT [n_batch, 1, flen*T, e_tiles*T] buffer (frame rows only, no untouched pages) --
+        # the production reference-frame assembly writes reference_kv this way, with no post-op slicing.
+        out_buf = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([n_batch, 1, flen * T, e_tiles * T]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        bcast_kwargs.update(
+            broadcast_offset_tiles=off * e_tiles,
+            broadcast_num_tiles=flen * e_tiles,
+            broadcast_stride_pages=per_dev * e_tiles,
+            broadcast_num_blocks=n_batch,
+            broadcast_out_offset_pages=0,
+            broadcast_out_stride_pages=flen * e_tiles,
+            persistent_output_buffer=out_buf,
+            use_l1_relay=True,
+        )
     full = ttnn.experimental.broadcast_ring(tt_in, **bcast_kwargs)
     ttnn.synchronize_device(mesh_device, sub_device_ids=[wsd_id])
 
@@ -714,13 +738,16 @@ def test_broadcast_ring_reference_frame(mesh_device, sp_axis, tp_axis, device_pa
     )
 
     # Every sp device must hold the OWNER's frame tiles for its own tp head, across all batch/E tiles.
+    # outremap persists compactly (frame rows only), so its per-device row j is just j; the other modes
+    # persist at the input page ids, so the frame sits at rows [off, off+flen) of each shard.
     bad = []
     for b in range(n_batch):
         for head in range(tp_factor):
             for c in range(sp_factor):
                 for j in range(flen):
                     for et in range(e_tiles):
-                        got = out[b, head, (c * per_dev + off + j) * T, et * T].item()
+                        out_row = (c * flen + j) if mode == "outremap" else (c * per_dev + off + j)
+                        got = out[b, head, out_row * T, et * T].item()
                         want = host_bf16[b, head, (owner * per_dev + off + j) * T, et * T].item()
                         if got != want:
                             bad.append((b, head, c, off + j, et, got, want))

@@ -35,6 +35,12 @@ ttnn::Tensor broadcast_ring(
     // (b, h), stride = S_rows*E_cols), which a flat contiguous range cannot. num_blocks<=1 = contiguous.
     uint32_t broadcast_stride_pages = 0,
     uint32_t broadcast_num_blocks = 1,
+    // Output remap (L1 relay only): persist block b at out_offset + b*out_stride in the output buffer
+    // instead of its input page ids -- the broadcast lands directly in a caller-chosen (typically compact)
+    // layout, skipping post-broadcast slice/concat repackaging. Requires persistent_output_buffer; its
+    // page size must match the input's. 0 stride = identity (output pages == input pages).
+    uint32_t broadcast_out_offset_pages = 0,
+    uint32_t broadcast_out_stride_pages = 0,
     bool use_l1_relay = false,  // relay through L1 (no per-hop DRAM read) via a credit protocol. Experimental.
     uint32_t num_slots = 0,     // L1-relay credit window (recv-buffer slots); 0 = auto. Tuning knob.
     // Caller-owned output buffer (same shape as input). Required under tracing: a fresh per-call output is

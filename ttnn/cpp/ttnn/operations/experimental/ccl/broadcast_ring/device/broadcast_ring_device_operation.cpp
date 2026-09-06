@@ -50,6 +50,40 @@ void BroadcastRingDeviceOperation::validate_on_program_cache_miss(
             last_page_end,
             input_tensor.buffer()->num_pages());
     }
+
+    // Output remap: persist block b at out_offset + b*out_stride instead of the input page ids (see the
+    // params struct). The output shape then differs from the input, so a caller-owned buffer is required,
+    // and its page size must match the input's (the relay moves whole pages).
+    if (operation_attributes.broadcast_out_stride_pages > 0) {
+        TT_FATAL(operation_attributes.use_l1_relay, "broadcast_ring: output remap requires use_l1_relay");
+        TT_FATAL(
+            tensor_args.persistent_output_buffer.has_value(),
+            "broadcast_ring: output remap requires a persistent_output_buffer (output shape != input shape)");
+        const auto& out_buf = tensor_args.persistent_output_buffer.value();
+        TT_FATAL(
+            out_buf.buffer()->aligned_page_size() == input_tensor.buffer()->aligned_page_size(),
+            "broadcast_ring: output remap buffer page size ({}) must match the input's ({})",
+            out_buf.buffer()->aligned_page_size(),
+            input_tensor.buffer()->aligned_page_size());
+        const uint32_t block_pages = operation_attributes.broadcast_num_tiles > 0
+                                         ? operation_attributes.broadcast_num_tiles
+                                         : input_tensor.buffer()->num_pages();
+        TT_FATAL(
+            operation_attributes.broadcast_num_blocks <= 1 ||
+                operation_attributes.broadcast_out_stride_pages >= block_pages,
+            "broadcast_ring: broadcast_out_stride_pages ({}) must be >= pages per block ({})",
+            operation_attributes.broadcast_out_stride_pages,
+            block_pages);
+        const uint32_t num_blocks =
+            operation_attributes.broadcast_num_blocks > 1 ? operation_attributes.broadcast_num_blocks : 1;
+        const uint32_t last_out_end = operation_attributes.broadcast_out_offset_pages +
+                                      (num_blocks - 1) * operation_attributes.broadcast_out_stride_pages + block_pages;
+        TT_FATAL(
+            last_out_end <= out_buf.buffer()->num_pages(),
+            "broadcast_ring: output remap ends at page {} but the output buffer has {} pages",
+            last_out_end,
+            out_buf.buffer()->num_pages());
+    }
 }
 
 tt::tt_metal::TensorSpec BroadcastRingDeviceOperation::compute_output_specs(
@@ -84,13 +118,16 @@ Tensor broadcast_ring(
     uint32_t broadcast_num_tiles,
     uint32_t broadcast_stride_pages,
     uint32_t broadcast_num_blocks,
+    uint32_t broadcast_out_offset_pages,
+    uint32_t broadcast_out_stride_pages,
     bool use_l1_relay,
     uint32_t num_slots,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const std::vector<tt::tt_metal::GlobalSemaphore>& multi_device_global_semaphore) {
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(num_devices > 1, "broadcast_ring needs >1 device along cluster_axis, got {}", num_devices);
-    if (persistent_output_buffer.has_value()) {
+    // With output remap the output layout is caller-chosen (validated against the out range instead).
+    if (persistent_output_buffer.has_value() && broadcast_out_stride_pages == 0) {
         TT_FATAL(
             persistent_output_buffer->logical_shape() == input_tensor.logical_shape(),
             "broadcast_ring persistent_output_buffer shape {} must match input shape {}",
@@ -112,6 +149,8 @@ Tensor broadcast_ring(
             broadcast_num_tiles,
             broadcast_stride_pages,
             broadcast_num_blocks,
+            broadcast_out_offset_pages,
+            broadcast_out_stride_pages,
             use_l1_relay,
             num_slots,
             multi_device_global_semaphore),

@@ -390,6 +390,8 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         bcast_offset,
         num_blocks > 1 ? block_pages : 0,  // 0 = contiguous range (no block walking)
         bcast_stride,
+        operation_attributes.broadcast_out_offset_pages,
+        operation_attributes.broadcast_out_stride_pages,  // 0 = identity (persist at the input page ids)
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(ct_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(ct_args);
