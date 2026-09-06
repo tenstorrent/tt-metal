@@ -327,6 +327,20 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                     shard_shape[1],
                     tensors_args.input_tensor.tensor_spec().tile().get_width());
 
+                // The sharded compute kernel keeps subblock_w tiles live in Dest at once, so a
+                // subblock_w above the Dest capacity silently returns wrong results. The capacity
+                // depends on the compute config, hence get_dest_reg_count rather than a constant.
+                const uint32_t dest_tile_capacity = ttnn::get_dest_reg_count(
+                    attributes.compute_kernel_config, tensors_args.input_tensor.tensor_spec().tile().get_tile_shape());
+                TT_FATAL(
+                    program_config.subblock_w > 0 && program_config.subblock_w <= dest_tile_capacity,
+                    "subblock_w ({}) must be greater than 0 and at most the Dest capacity of {} tiles for this "
+                    "compute config (fp32_dest_acc_en={}, dst_full_sync_en={}).",
+                    program_config.subblock_w,
+                    dest_tile_capacity,
+                    attributes.compute_kernel_config.fp32_dest_acc_en,
+                    attributes.compute_kernel_config.dst_full_sync_en);
+
                 const auto& a = tensors_args.input_tensor;
                 if (a.is_sharded()) {
                     ttnn::operations::normalization::detail::validate_sharded_input(
