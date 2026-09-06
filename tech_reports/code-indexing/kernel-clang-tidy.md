@@ -276,6 +276,35 @@ this domain:
 | `portability-simd-intrinsics` | SFPI *is* a SIMD intrinsics layer, by design. |
 | `clang-diagnostic-c++98-compat` | Device code is C++17/20. |
 
+A further thirteen are muted on measured volume rather than on principle. The
+first two-leg consolidated report carried 19,835 unique findings, of which these
+thirteen checkers accounted for 14,523 — 73% of the report from 2.7% of the
+enabled checkers, and none of it actionable in this repo:
+
+| Disabled | Findings | Reason |
+| --- | --- | --- |
+| `modernize-macro-to-enum` | 3,968 | Hardware register and address `#define`s, many consumed by asm or the preprocessor. |
+| `readability-magic-numbers` | 1,619 | Register offsets and bit positions. |
+| `misc-const-correctness` | 1,605 | Style; large diff, no defect signal. |
+| `modernize-use-trailing-return-type` | 1,182 | Pure style. tt-umd mutes it too. |
+| `readability-identifier-length` | 1,064 | Short names are the LLK house style. |
+| `bugprone-easily-swappable-parameters` | 822 | Structural observation, not a defect. |
+| `readability-uppercase-literal-suffix` | 690 | Style. |
+| `clang-diagnostic-sign-conversion` | 677 | Pervasive and deliberate in register arithmetic. |
+| `clang-diagnostic-unused-parameter` | 656 | Almost entirely the `#ifdef`-variant false positives. |
+| `misc-unused-parameters` | 636 | Same class as above. |
+| `clang-diagnostic-documentation` | 625 | Doc-comment formatting. |
+| `clang-diagnostic-unsafe-buffer-usage` | 552 | `-Wunsafe-buffer-usage` on C-style device code; no `std::span` here. |
+| `clang-diagnostic-old-style-cast` | 427 | C casts are deliberate for MMIO. |
+
+Muting them leaves 5,312 findings and preserves every CRITICAL (17) and HIGH
+(12). This matters for cost as well as for readability: `CodeChecker parse` is
+single-threaded with no `--jobs`, costs roughly 115s per 52 plists before any
+source rendering, and scales with finding count, so the first consolidated run
+(33984801327) exhausted a 90-minute job timeout mid-render and published
+nothing. Re-enable any of them by deleting the pair of lines from
+`codechecker.json`; the cost is roughly linear in the findings added back.
+
 Everything else is on. This replaced an inherited 189-entry opt-out list (13
 families plus 176 individual checks) carried over from the `kernel_clang_tidy`
 CMake target in PR #37252, which had been assembled by muting whatever fired
@@ -373,9 +402,10 @@ follow-up once the `--enable-all` volume is understood.
   (clang vs GCC, generic `rv32im` instead of the TT cpu model, address-space
   attributes `rvtt_l1_ptr`/`rvtt_reg_ptr` ignored). Fine for tidy checks;
   don't expect codegen-dependent diagnostics to be meaningful.
-* The `--disable` list in `codechecker.json` is a seed, not a triaged result.
-  It could not be measured locally — the captured translation units reference
-  wheel-installed sources that exist only in the CI container, so a local
-  `--enable-all` run fails with `no-sources` on all of them. The first
-  all-legs CI run under `--enable-all` is therefore the measurement; expect to
-  trim it once the per-checker distribution is visible in the report.
+* The `--disable` list is now partly measured: the thirteen volume-based entries
+  come from the per-checker distribution of the first `--enable-all` run, but
+  that run covered two legs, so the tail beyond them is still unmeasured.
+  Re-triage once an all-legs report lands. Note that finding *counts* cannot be
+  reproduced locally — the captured translation units reference wheel-installed
+  sources that exist only in the CI container, so a local analyze fails with
+  `no-sources`; the numbers above come from CI plists parsed locally.

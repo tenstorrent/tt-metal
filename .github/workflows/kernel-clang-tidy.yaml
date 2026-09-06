@@ -63,7 +63,7 @@ jobs:
     # Legs that failed may still have produced findings, so do not gate on result.
     if: ${{ !cancelled() }}
     runs-on: tt-ubuntu-2204-large-stable
-    timeout-minutes: 90
+    timeout-minutes: 180
     # Renders one merged report, so it needs the analyzed sources on the same
     # absolute paths the legs used: /opt/venv/... (wheel, via setup-job) and
     # /work/... (checkout). Without them CodeChecker emits index.html and
@@ -114,8 +114,8 @@ jobs:
           path: /work/legs
           merge-multiple: false
 
-      - name: Merge and render one report
-        id: site
+      - name: Merge per-leg plists
+        id: merge
         run: |
           set -euo pipefail
           mkdir -p /work/merged
@@ -130,11 +130,20 @@ jobs:
           echo "merged $n plists from $(find /work/legs -maxdepth 1 -mindepth 1 -type d | wc -l) legs"
           if [ "$n" -eq 0 ]; then
             echo "::warning::no plists found; nothing to consolidate."
-            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "merged=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # parse exits non-zero when it finds reports, hence the guard.
-          CodeChecker parse /work/merged --export html --output /work/site || true
+          echo "merged=$n" >> "$GITHUB_OUTPUT"
+
+      # Cheap relative to the HTML render and it yields the complete finding
+      # set, so it runs first: if the render below runs long we still publish
+      # the numbers. parse exits non-zero when it finds reports, hence || true.
+      - name: Export findings and summarise
+        if: ${{ steps.merge.outputs.merged != '0' }}
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          mkdir -p /work/site
           CodeChecker parse /work/merged --export json --output /work/site/reports.json >/dev/null 2>&1 || true
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import collections, json, pathlib
@@ -163,15 +172,30 @@ jobs:
               print("")
               print("Top severity checkers: " + ", ".join(f"{c} ({n})" for c, n in top.most_common()))
           PY
+
+      # The expensive step: renders a source-annotated page per finding.
+      # Bounded and non-fatal so a slow render cannot cost us the whole job;
+      # run 33984801327 hit the job timeout here and published nothing.
+      - name: Render consolidated HTML report
+        id: site
+        if: ${{ steps.merge.outputs.merged != '0' }}
+        timeout-minutes: 100
+        continue-on-error: true
+        run: |
+          CodeChecker parse /work/merged --export html --output /work/site || true
           if [ -s /work/site/index.html ]; then
             touch /work/site/.nojekyll
             echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "finding pages rendered: $(ls /work/site/*.plist.html 2>/dev/null | wc -l)"
           else
+            echo "::warning::no index.html produced; not publishing."
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Not gated on the render: reports.json is the complete finding set and
+      # is worth keeping even if only the HTML rendering ran long.
       - name: Upload consolidated report
-        if: ${{ steps.site.outputs.found == 'true' }}
+        if: ${{ !cancelled() && steps.merge.outputs.merged != '0' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: kernel-tidy-report-site
