@@ -1,0 +1,36 @@
+# Mesh Graph Descriptor for the fully-async GRPO GSM8K example: two [1, 1]
+# meshes (one per MPI rank), each covering one P150 card.
+#
+# The example does NOT enable fabric (see set_fabric_config comment in
+# gsm8k_fully_async_training_example.py). The FABRIC graph + intermesh
+# connection below stays declared as a no-op so a follow-up that wires in
+# MeshSocketWeightBridge can just flip `ttnn.set_fabric_config(FABRIC_2D)`
+# back on with no config churn.
+#
+# !!! HARDWARE-SPECIFIC TEMPLATE !!!
+# The full physical eth topology must be declared here or
+# ControlPlane::init_control_plane() trips `Fabric node ID not yet assigned for
+# ASIC id ...`. Adjust this file (and rank_bindings.yaml) for your machine.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 1 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 1 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
