@@ -1,16 +1,23 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The graduated Nano Nemotron-H bring-up is part of the tool: routing, sibling
-map, and Lightning overlays must be in the checkout, not only on one machine."""
+"""The graduated Nano Nemotron-H bring-up is part of the tool: routing and the
+sibling map must be in the checkout, not only on one machine.
+
+Overlays are deliberately NOT asserted here. A third test used to require the
+Lightning overlay index to carry Nano's seeded stubs, on the premise that overlays
+belong in the checkout. That premise was retired: the overlay store is per-run
+state, untracked and gitignored, so such a test can only pass on a machine that
+happens to have run that bring-up — and what it pinned (carrying graduation
+markers from one model to another) is the defect that reported a model as
+graduated for work it had never done. The durable guarantee is below: routing
+resolves to a demo directory that is really in the repo."""
 from pathlib import Path
 
 from scripts.tt_hw_planner.compatibility import SUPPORTED_HF_MODELS, closest_supported_model
 from scripts.tt_hw_planner.family_backends import pick_backend_with_quality
-from scripts.tt_hw_planner.overlay_manager import _load_index
 
 _REPO = Path(__file__).resolve().parents[3]
 _NANO_ID = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
-_LIGHTNING_ID = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
 
 
 def test_nemotron_h_routes_exactly_to_the_graduated_nano_demo() -> None:
@@ -25,15 +32,3 @@ def test_nemotron_h_routes_exactly_to_the_graduated_nano_demo() -> None:
 def test_nemotron_h_sibling_map_points_at_nano() -> None:
     assert _NANO_ID in SUPPORTED_HF_MODELS
     assert closest_supported_model("someone/new-nemotron-h", {"model_type": "nemotron_h"}) == _NANO_ID
-
-
-def test_lightning_overlay_carries_nano_graduated_stubs() -> None:
-    idx = _load_index(_LIGHTNING_ID)
-    stubs = "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs"
-    for stem in (
-        "nemotron_h_mamba2_mixer.py",
-        "nemotron_h_mo_e.py",
-        "nemotron_h_topk_router.py",
-        "nemotron_h_block.py",
-    ):
-        assert f"{stubs}/{stem}" in idx, f"Lightning overlay missing seeded stub {stem}"
