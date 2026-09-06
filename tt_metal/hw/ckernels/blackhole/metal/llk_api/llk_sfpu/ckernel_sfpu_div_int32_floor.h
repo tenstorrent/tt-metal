@@ -67,6 +67,18 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt r = a - qb;
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
 
+    // `r` holds the magnitude |a| - q*|b|, which ranges over [0, 2**31]. The single value 2**31 --
+    // reached only when a == INT32_MIN and the aligned quotient underflowed to zero -- has the bit
+    // pattern 0x80000000, so it converts to -0.0f and reads as a negative remainder. Same edge case
+    // as b_f and a_f above; the bit pattern of `r` itself is already the right two's complement
+    // operand, so only the sign used to direct the residual correction needs the guard.
+    sfpi::vInt r_sign = r;
+    v_if(r_f < 0.0f) {
+        r_f = 0x1.0p31f;
+        r_sign = 0;
+    }
+    v_endif;
+
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
     sfpi::vMag correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::Nearest);
@@ -80,7 +92,7 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt tmp = tmp_lo + tmp_hi;
 
     // Apply correction and adjust remainder.
-    v_if(r < 0) {
+    v_if(r_sign < 0) {
         q -= correction;
         r += tmp;
     }

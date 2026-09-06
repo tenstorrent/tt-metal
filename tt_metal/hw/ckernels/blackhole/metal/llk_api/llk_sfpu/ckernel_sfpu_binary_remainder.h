@@ -56,6 +56,19 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
 
     // Compute correction for approximation error: correction = |r| / b
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
+
+    // `r` holds the magnitude |a| - q*|b|, which ranges over [0, 2**31]. The single value 2**31 --
+    // reached only when a == INT32_MIN and the aligned quotient underflowed to zero -- has the bit
+    // pattern 0x80000000, so it converts to -0.0f and reads as a negative remainder. Same edge case
+    // as a_f above; the bit pattern of `r` itself is already the right two's complement operand, so
+    // only the sign used to direct the residual correction needs the guard.
+    sfpi::vInt r_sign = r;
+    v_if(r_f < 0.0f) {
+        r_f = TWO_POW_31;
+        r_sign = 0;
+    }
+    v_endif;
+
     sfpi::vMag correction = sfpi::convert<sfpi::vUInt16>(r_f * inv_b_f, sfpi::RoundMode::Nearest);
 
     // Compute correction * b (full 32-bit result from 24-bit multiplies)
@@ -64,7 +77,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     sfpi::vInt b_hi = sfpi::fractional_mul(correction, b >> 23);
     sfpi::vInt tmp = tmp_lo + ((tmp_hi + b_hi) << 23);
 
-    v_if(r < 0) { tmp = -tmp; }
+    v_if(r_sign < 0) { tmp = -tmp; }
     v_endif;
     r -= tmp;
 
