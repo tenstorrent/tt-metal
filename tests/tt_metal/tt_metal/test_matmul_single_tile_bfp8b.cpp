@@ -83,7 +83,8 @@ TEST_F(UnitMeshFixture, MatmulSingleTileBfp8b) {
         /*is_exp_a=*/false,
         100,
         std::chrono::system_clock::now().time_since_epoch().count());
-    slow_dispatch::WriteToBuffer(*src0_dram_buffer, activations);
+    auto& cq = this->device().mesh_command_queue();
+    cq.enqueue_write_mesh_buffer(*src0_dram_buffer, activations, /*blocking=*/true);
 
     int num_float_in_tile = 32 * 32;
     std::vector<float> vec(num_float_in_tile, (float)0);
@@ -93,7 +94,7 @@ TEST_F(UnitMeshFixture, MatmulSingleTileBfp8b) {
     std::vector<uint32_t> weights =
         pack_as_bfp8_tiles(ttsl::make_const_span(vec), /*row_major_input=*/true, /*is_exp_a=*/false);
 
-    slow_dispatch::WriteToBuffer(*src1_dram_buffer, weights);
+    cq.enqueue_write_mesh_buffer(*src1_dram_buffer, weights, /*blocking=*/true);
 
     SetRuntimeArgs(
         program,
@@ -114,7 +115,7 @@ TEST_F(UnitMeshFixture, MatmulSingleTileBfp8b) {
     LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);
+    cq.enqueue_read_mesh_buffer(result_vec, *dst_dram_buffer, /*blocking=*/true);
 
     // Validation - matmul with identity should return same result
     EXPECT_EQ(activations, result_vec);

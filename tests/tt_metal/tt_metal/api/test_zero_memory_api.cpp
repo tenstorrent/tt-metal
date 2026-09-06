@@ -306,11 +306,12 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApi) {
     auto tensor =
         MeshTensor::allocate_on_device(this->device(), make_flat_dram_tensor_spec(page_size_bytes, num_pages));
     std::vector<uint32_t> stamped(total_words, 0xFFFFFFFFu);
-    slow_dispatch::WriteToBuffer(tensor.mesh_buffer(), stamped);
+    auto& cq = this->device().mesh_command_queue();
+    cq.enqueue_write_mesh_buffer(tensor.mesh_buffer(), stamped, /*blocking=*/true);
 
     // Pre-write verify: confirm the DRAM stamp landed so the post-zero check is meaningful.
     std::vector<uint32_t> stamp_check;
-    slow_dispatch::ReadFromBuffer(tensor.mesh_buffer(), stamp_check);
+    cq.enqueue_read_mesh_buffer(stamp_check, tensor.mesh_buffer(), /*blocking=*/true);
     ASSERT_EQ(stamp_check.size(), total_words);
     for (uint32_t i = 0; i < total_words; ++i) {
         ASSERT_EQ(stamp_check[i], 0xFFFFFFFFu) << "Pre-write 0xFF stamp did not land at DRAM word " << i;
@@ -395,7 +396,7 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApi) {
 
     // DRAM: every word should be zero after overload (2).
     std::vector<uint32_t> result;
-    slow_dispatch::ReadFromBuffer(tensor.mesh_buffer(), result);
+    cq.enqueue_read_mesh_buffer(result, tensor.mesh_buffer(), /*blocking=*/true);
     ASSERT_EQ(result.size(), total_words);
     for (uint32_t i = 0; i < total_words; ++i) {
         EXPECT_EQ(result[i], 0u) << "DRAM word " << i << " not zeroed; got 0x" << std::hex << result[i];
@@ -423,7 +424,7 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiBatchedL1) {
     auto tensor =
         MeshTensor::allocate_on_device(this->device(), make_flat_dram_tensor_spec(page_size_bytes, num_pages));
     std::vector<uint32_t> stamped(total_words, 0xFFFFFFFFu);
-    slow_dispatch::WriteToBuffer(tensor.mesh_buffer(), stamped);
+    this->device().mesh_command_queue().enqueue_write_mesh_buffer(tensor.mesh_buffer(), stamped, /*blocking=*/true);
 
     experimental::DataflowBufferSpec scratch_spec{
         .unique_id = SCRATCH_DFB,
