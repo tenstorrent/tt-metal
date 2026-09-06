@@ -486,4 +486,8 @@ void kernel_main() {
     sentinel_plan->entry_count = 0;
     sentinel_entries[0].flags = PLAN_FLAG_END;
     cb_push_back(cb_plan_id, 1);
+
+    // The baton hand-off above (next_turn_sem.up) is a non-posted atomic; nothing else in this
+    // kernel waits on it. Flush before exit so the next kernel doesn't inherit a pending atomic.
+    noc_async_atomic_barrier();
 }
