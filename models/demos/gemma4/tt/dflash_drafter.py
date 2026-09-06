@@ -197,7 +197,12 @@ class DFlashDrafter:
         self.n_heads = cfg["num_attention_heads"]
         self.n_kv_heads = cfg["num_key_value_heads"]
         self.head_dim = cfg["head_dim"]
-        self.block_size = cfg["block_size"]
+        # Block-size override (tt-blaze atupe/gemma4-0824-dflash runs this SAME
+        # checkpoint at block 8 BY DEFAULT and accepts ~5.1/7 vs our 16-block
+        # ~2.9-of-first-7: fewer mask tokens in the bidirectional denoise ->
+        # cleaner early positions). Checkpoint config says 16; 8 is the other
+        # geometry tt-blaze supports in production.
+        self.block_size = int(_os.environ.get("GEMMA4_DFLASH_BLOCK", cfg["block_size"]))
         self.mask_token_id = cfg["dflash_config"]["mask_token_id"]
         self.target_layer_ids = list(cfg["dflash_config"]["target_layer_ids"])
         self.sliding_window = cfg.get("sliding_window")
