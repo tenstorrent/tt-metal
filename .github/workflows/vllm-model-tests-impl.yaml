@@ -371,6 +371,22 @@ jobs:
                   export GEMMA4_GEN_PREFILL_CHUNK=2048
                   echo "Gemma4 WH-T3K: GEMMA4_GEN_PREFILL_CHUNK=$GEMMA4_GEN_PREFILL_CHUNK"
                 fi
+                # 12B on P150x8 (LoudBox): serve the validated target config —
+                # bounded sliding KV + batched prefill + eager chunks (overrides
+                # the CHUNKED_PREFILL_TRACE=1 export above). The gated
+                # traced-sequential-prefill default deterministically wedges 12B
+                # on a 1x8 BH mesh under concurrent prefill+decode (chip-local
+                # NOC1 write/ack stall); same reason the tt-inference-server
+                # P150X8 spec defaults to bounded.
+                if [ "$HF_MODEL" = "google/gemma-4-12B-it" ] && [ "${{ matrix.test-group.mesh-device }}" = "P150x8" ]; then
+                  export GEMMA4_BOUNDED_SLIDING_KV_CACHE=1
+                  export G4_FORCE_BATCH_PREFILL=1
+                  export GEMMA4_CHUNKED_PREFILL_TRACE=0
+                  # linear CCL is part of the validated P150X8 spec (the default
+                  # resolves to Ring here).
+                  export GEMMA4_CCL_TOPOLOGY=linear
+                  echo "Gemma4 P150x8: bounded sliding + batched prefill + eager chunks + linear CCL (gated wedges on 1x8)"
+                fi
                 echo "Gemma4 KV pool: GEMMA4_MAX_TOKENS_ALL_USERS=$GEMMA4_MAX_TOKENS_ALL_USERS (from max_model_len=${MAX_MODEL_LEN:-default})"
               fi
               ;;
