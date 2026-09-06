@@ -95,6 +95,70 @@ def _executable_source(fn) -> str:
     return ast.unparse(tree)  # unparse drops comments
 
 
+def test_partial_mesh_budgets_against_the_chips_actually_opened():
+    """A box can be run on fewer chips than it holds. Handing the builder the BOX
+    total would give it an aggregate budget larger than it can address — the same
+    wrong-arithmetic class this block exists to prevent. Checked across every box
+    and every canonical mesh that box declares."""
+    import re
+
+    for box in HARDWARE:
+        for rows, cols in box.mesh_shapes:
+            used = rows * cols
+            if used >= box.chips:
+                continue
+            block = _hardware_prompt_block(box, chips_in_use=used)
+            expected = used * box.hbm_per_chip_gb
+            m = re.search(r"Aggregate DRAM available to THIS RUN: (\d+) GB", block)
+            assert m, f"{box.name} mesh {rows}x{cols}: no run-scoped aggregate"
+            assert float(m.group(1)) == expected, f"{box.name} mesh {rows}x{cols}: wrong run aggregate"
+            assert f"opens {used} of the box's {box.chips}" in block
+            assert "NOT the box total" in block, "the box total must be explicitly disclaimed"
+
+
+def test_full_mesh_reports_the_box_total_without_a_disclaimer():
+    """When the run uses the whole box there is nothing to disambiguate, so the
+    prompt stays simple."""
+    for box in HARDWARE:
+        block = _hardware_prompt_block(box, chips_in_use=box.chips)
+        assert f"{box.chips} (all of the box)" in block
+        assert "NOT the box total" not in block
+        assert f"Aggregate DRAM available to this run: {box.total_hbm_gb:.0f} GB" in block
+
+
+def test_absent_or_bogus_chip_count_falls_back_to_the_whole_box():
+    """chips_in_use=0 is the "unknown" case (no mesh given); a count larger than the
+    box, or negative, must not produce a bigger budget than the hardware has."""
+    box = find_box("T3K")
+    for bogus in (0, -1, box.chips + 1, 9999):
+        block = _hardware_prompt_block(box, chips_in_use=bogus)
+        assert f"{box.chips} (all of the box)" in block, f"chips_in_use={bogus} must clamp to the box"
+        assert f"{box.total_hbm_gb:.0f} GB" in block
+
+
+def test_hardware_and_placement_blocks_agree_on_chip_count():
+    """The two blocks land in the same prompt; if one says 8 chips and the other
+    says a 4-chip mesh, the builder has to guess which governs."""
+    import re
+
+    from scripts.tt_hw_planner.commands.emit_e2e import _parallelism_prompt_block
+    from scripts.tt_hw_planner.parallelism import ParallelConfig
+
+    box = find_box("T3K")
+    pc = ParallelConfig(tp=4, dp=1)
+    prompt = _build_agent_prompt(
+        model_id="m/x",
+        demo_dir="/tmp/x",
+        pcc=0.95,
+        hardware_note=_hardware_prompt_block(box, chips_in_use=pc.chips),
+        parallel_note=_parallelism_prompt_block(pc),
+    )
+    assert f"{pc.chips}-CHIP MESH" in prompt
+    assert f"opens {pc.chips} of the box's {box.chips}" in prompt
+    run_totals = re.findall(r"Aggregate DRAM available to THIS RUN: (\d+) GB", prompt)
+    assert run_totals == [str(int(pc.chips * box.hbm_per_chip_gb))]
+
+
 def test_every_registered_box_renders_its_own_figures():
     """Correctness for ALL boxes, not just the one that exposed the bug: read the
     numbers back out of the rendered block and compare to the box they came from.
@@ -104,10 +168,12 @@ def test_every_registered_box_renders_its_own_figures():
 
     for box in HARDWARE:
         block = _hardware_prompt_block(box)
-        m = re.search(r"DRAM per chip: (\d+) GB \(total (\d+) GB\)", block)
+        m = re.search(r"DRAM per chip: (\d+) GB", block)
         assert m, f"{box.name}: no DRAM line rendered"
         assert float(m.group(1)) == box.hbm_per_chip_gb, f"{box.name}: wrong per-chip DRAM"
-        assert float(m.group(2)) == box.total_hbm_gb, f"{box.name}: wrong total DRAM"
+        t = re.search(r"Aggregate DRAM available to this run: (\d+) GB", block)
+        assert t, f"{box.name}: no aggregate line rendered"
+        assert float(t.group(1)) == box.total_hbm_gb, f"{box.name}: wrong total DRAM"
 
         u = re.search(r"overhead: ([\d.]+) GB\s+at TP=1, ([\d.]+) GB", block)
         assert u, f"{box.name}: no usable line rendered"

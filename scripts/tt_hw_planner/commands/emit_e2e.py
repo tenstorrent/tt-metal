@@ -1691,7 +1691,10 @@ def _emit_e2e_phase_a(args) -> int:
         parallel_note=_parallel_note,
         trace_note=_trace_note,
         batch_note=_batch_note,
-        hardware_note=_hardware_prompt_block(_resolve_box(getattr(args, "box", None))),
+        hardware_note=_hardware_prompt_block(
+            _resolve_box(getattr(args, "box", None)),
+            chips_in_use=(_pc.chips if _pc is not None else 0),
+        ),
         all_tasks=bool(getattr(args, "all_tasks", False)),
     )
     rc_build, build_final = _run_agent(
@@ -2051,7 +2054,7 @@ def _resolve_box(box_name):
         return None
 
 
-def _hardware_prompt_block(box) -> str:
+def _hardware_prompt_block(box, chips_in_use: int = 0) -> str:
     """Declare the ACTUAL per-chip memory of the box this run targets.
 
     Without it the builder derives its own DRAM arithmetic and can pick the wrong
@@ -2060,17 +2063,36 @@ def _hardware_prompt_block(box) -> str:
     rest of the run re-measuring the ceiling it had just invented. The figures come
     from the registered box, so they stay correct for any board the table knows.
 
+    ``chips_in_use`` is how many chips this run actually opens, which can be fewer
+    than the box holds (an 8-chip box run on a 4-chip mesh). Stating only the box
+    total would hand the builder an aggregate budget twice the size of the one it
+    can address — the same class of wrong arithmetic this block exists to prevent —
+    so when it differs, both numbers are given and the run's is named as governing.
+
     Returns "" when the box is unknown, keeping the prompt byte-identical to before."""
     if box is None:
         return ""
+    used = chips_in_use if chips_in_use and 0 < chips_in_use <= box.chips else box.chips
+    if used == box.chips:
+        budget = (
+            f"  - Chips: {box.chips} (all of the box)\n"
+            f"  - Aggregate DRAM available to this run: {box.total_hbm_gb:.0f} GB"
+        )
+    else:
+        budget = (
+            f"  - Chips: this run opens {used} of the box's {box.chips}\n"
+            f"  - Aggregate DRAM available to THIS RUN: {used * box.hbm_per_chip_gb:.0f} GB "
+            f"({used} x {box.hbm_per_chip_gb:.0f} GB) — NOT the box total of {box.total_hbm_gb:.0f} GB;\n"
+            f"    budget against the {used} chips you actually open"
+        )
     return f"""
 
 ================ HARDWARE — {box.name} ({box.chips}x {box.arch}) ================
 These are the REGISTERED figures for the box this run targets. Use them; do NOT
 derive per-chip memory from the model name, a sibling board, or your own arithmetic.
 
-  - Chips: {box.chips}
-  - DRAM per chip: {box.hbm_per_chip_gb:.0f} GB (total {box.total_hbm_gb:.0f} GB)
+  - DRAM per chip: {box.hbm_per_chip_gb:.0f} GB
+{budget}
   - Usable per chip after dispatch/CCL/fragmentation overhead: {box.usable_per_chip_gb(1):.1f} GB
     at TP=1, {box.usable_per_chip_gb(2):.1f} GB once a CCL axis is in play.
 
