@@ -4,9 +4,10 @@
 
 """Pytest configuration for TTML Python tests."""
 
+import math
 import os
 import pathlib
-from typing import Optional
+from typing import Optional, Sequence
 
 import pytest
 
@@ -33,6 +34,47 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "requires_device" in item.keywords:
                 item.add_marker(skip_device)
+
+
+# ---------------------------------------------------------------------------
+# Host capability checks
+# ---------------------------------------------------------------------------
+#
+# A host that is too small for the mesh a test wants should skip it. A host that
+# has the devices but still fails to open the mesh must fail.
+
+
+def _num_available_devices() -> Optional[int]:
+    """Chips visible to this host, or ``None`` if the cluster can't be queried."""
+    try:
+        return int(ttnn.get_num_devices())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _host_supports_mesh(shape: Sequence[int]) -> bool:
+    """Checks whether this host has enough chips for ``shape``."""
+    available = _num_available_devices()
+    return available is None or available >= math.prod(shape)
+
+
+def _skip_if_host_too_small(shape: Sequence[int], what: str) -> None:
+    """Skip when the host is too small for ``shape``, otherwise return normally."""
+
+    if _host_supports_mesh(shape):
+        return
+    pytest.skip(
+        f"{what} needs a {tuple(shape)} mesh with ({math.prod(shape)} devices); this host has {_num_available_devices()}"
+    )
+
+
+@pytest.fixture(scope="session")
+def skip_if_host_too_small():
+    """``skip_if_host_too_small(shape, what)`` -- skip unless this host has the chips for ``shape``.
+
+    Session-scoped so fixtures of any scope can request it.
+    """
+    return _skip_if_host_too_small
 
 
 # ---------------------------------------------------------------------------
@@ -106,11 +148,13 @@ def _close_device_mesh_quietly() -> None:
 def tp_mesh():
     """A ``[1, 2]`` mesh with axes ``("dp", "tp")``, per requesting module.
 
-    Skips the requesting tests if two devices on the ``"tp"`` axis are unavailable.
-    The parallelism context is initialised here too, since the qwen3 model paths
-    resolve their TP size through it.
+    Skips the requesting tests on a host with too few devices for the shape. A host
+    that has the devices but fails to open the mesh is a real failure and therefore,
+    not skipped. The parallelism context is initialised here too, since the qwen3
+    model paths resolve their TP size through it.
     """
     dp_expected, tp_expected = TP_MESH_SHAPE
+    _skip_if_host_too_small(TP_MESH_SHAPE, "tensor-parallel tests")
     previous_mgd = _ensure_mgd_path(TP_MESH_SHAPE)
     _close_device_mesh_quietly()
     try:
@@ -131,10 +175,10 @@ def tp_mesh():
                 )
         else:
             ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         _close_device_mesh_quietly()
         _restore_mgd_path(previous_mgd)
-        pytest.skip(f"needs a [{dp_expected}, {tp_expected}] 'tp' mesh: {e}")
+        raise
 
     yield ttml.mesh()
 
