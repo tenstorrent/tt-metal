@@ -6442,6 +6442,37 @@ def _stamp_run_id() -> str:
     return cur
 
 
+def _stamp_model_root(demo_dir) -> str:
+    """Name the model on THIS process's environment, before anything reads it. Returns the path set.
+
+    perf_mcp freezes `_MODEL_ROOT` at IMPORT -- `PERF_MCP_MODEL_ROOT or manifest.config.model_root or
+    "."` -- and 69 sites read that one value. Setting the variable later cannot reach any of them:
+    the module has already resolved "." , whose .name is "", which falls through to the literal
+    "model", so every (model, task)-keyed lookup asks for a file no run writes.
+
+    An earlier fix set the variable at the point the per-pipeline root is derived, which is after the
+    module is first loaded, so it changed nothing. Measured on voxtral_mini_3b_2507 2026-09-06: the
+    run carried the fix and its final report still printed "batch: not reported" and relabelled every
+    stage per-token, because the frozen value was already "". Verified directly -- importing with no
+    root then setting it leaves _MODEL_ROOT.name == "" and read_stage_batch() == 0.
+
+    So it is stamped HERE, at the top of the run, before the first _perf_mcp() import. run.py imports
+    perf_mcp lazily, so this is early enough for every consumer in this process.
+
+    setdefault, not assignment: an operator or a supervising process that already stated the root
+    outranks this inference from demo_dir, and a restart must not silently adopt a different one.
+    """
+    try:
+        _root = str(Path(demo_dir).resolve())
+    except Exception:  # noqa: BLE001 -- an unusable path states nothing, which is the honest default
+        return ""
+    os.environ.setdefault("PERF_MCP_MODEL_ROOT", _root)
+    # The key every per-run artifact is NAMED after, kept beside the root that produced it so the two
+    # cannot disagree -- perf_mcp exports the same pair at import for the same reason.
+    os.environ.setdefault("PERF_MCP_MODEL_NAME", Path(os.environ["PERF_MCP_MODEL_ROOT"]).name)
+    return os.environ["PERF_MCP_MODEL_ROOT"]
+
+
 def run_cc_optimize(
     demo_dir: Path,
     repo_root: Path,
@@ -6466,6 +6497,7 @@ def run_cc_optimize(
     at the end. Off by default — learning stays local unless opted in. Both steps are best-effort and
     never fail the run; the remote/branch is fully configurable (nothing hard-coded)."""
     _stamp_run_id()
+    _stamp_model_root(demo_dir)
     # BEFORE the device is touched and before discovery spends an agent call: verify the tool this
     # run will execute is the tool that was verified. See _preflight_tool.
     if not _preflight_tool(repo_root):
