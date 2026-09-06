@@ -530,6 +530,11 @@ cheap enough — it was cheaper than a tail instantiation, because it needs no s
 instantiation at all.** `1.34x–10.46x` on the target region, and the compute kernel is
 byte-for-byte unchanged.
 
+*(Refinement 4b addendum.* The harness overruled this `[x]` with a REGRESSION verdict, which
+turned out to be a **profiler zone-hash collision**, not the chunk: `test_golden` ran to
+completion with the identical prior failures and the process then aborted before writing its
+junit. Nothing here changed; see Refinement 4b below.)*
+
 *What shipped.* Not the deferred regime's "runtime `wt_c`", and not the notes' compile-time
 tail either. `_width_chunk` takes the coarsest **balanced** chunk
 `ceil(wt_c / ceil(wt_c / cap))` and **pads** the last chunk out to it, so every chunk stays
@@ -596,7 +601,7 @@ this record is where the finding lives.
 | Code-review items, ledger corrections, `math_approx_mode` coverage gap | `verification_report.md`. |
 
 
-### [ ] Refinement 4b — Remove the prime-`Wt` granularity cliff (ragged width chunk) (debug: fix gate violations)
+### [x] Refinement 4b — Remove the prime-`Wt` granularity cliff (ragged width chunk) (debug: fix gate violations)
 
 **Goal**: fix the hard violation from Refinement 4 so the completion gate's three bullets hold.
 
@@ -607,3 +612,44 @@ Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (respons
 ```
 
 **Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+
+**Outcome**: the gate now passes, and **the ragged width chunk was never implicated** — not
+one line of it changed. `golden_refinement_4/golden_results.txt` read
+`PASSED=0 ... TOTAL=0`: `test_golden.py` had in fact run to completion with the same 10
+harness-attributed failures as every prior round, and the *process* then aborted at
+`profiler.cpp:373` on the `test_golden -> test_regression` device re-open, before pytest
+could write `junit.xml`. No junit, no results, every cell scored "never ran".
+
+*The bug.* `populateZoneSrcLocations()` keys each device zone by a **16-bit** hash of
+`"<zone>,<abs path>,<line>,KERNEL_PROFILER"` and hard-`TT_THROW`s on any two distinct
+strings sharing a slot. The eval runner sets `TT_METAL_DEVICE_PROFILER=1` — to read the
+op-level duration off the *firmware* markers — which as a side effect compiles this op's
+**41** `MaybeDeviceZoneScope` sites in too. 41 entries in 65 536 slots is a ~2–3% birthday
+collision per kernel edit, and Refinement 4's edits moved `writer_tree_forward` onto
+`writer.cpp:662`, colliding with `compute_scale`@`compute.cpp:1680` at **0x0773**.
+Reproduced locally: 3 throws on a 448-cell slice with the profiler env, 0 without.
+
+*The fix, in increasing durability.* (1) the zone moved off line 662; (2) **D34** — the
+zones are now opt-in behind the `RMS_STAGE_ZONES` kernel define (`STAGE_ZONES` /
+`_kernel_defines()`, one source of truth, all six `KernelDescriptor` sites), so a graded run
+registers **zero** op zone locations and the collision class cannot reach it, while a perf
+round gets every zone back with `RMS_STAGE_ZONES=1`; (3) purged the 115 534 stale
+`.ii`/`*.o.log` under `built/*/kernels/rms_norm_ttnn_*/` — `extract_zone_src_locations()`
+harvests zone pragmas out of a build dir **on the ELF-reuse path too**, and the dir key is
+coarse enough to be reused across source edits, so preprocessed copies of superseded kernel
+versions were re-registering line numbers the tree no longer has. That third one is why the
+source fix alone did not clear it: the hash table is populated from the cache, not the tree.
+
+*Verification.* Full golden suite, run exactly as the harness runs it
+(`eval/eval_test_runner.sh`): **`PASSED=23348 FAILED=19 ERRORS=0 SKIPPED=98071 REFUSED=0
+HANGS=0 TOTAL=121438`** — byte-identical to `golden_phase0`, `golden_refinement_1`,
+`_2` and `_3`. Suite ran to completion, wrote its junit, zero hangs, zero regression. Unit
+directory **1 067 passed / 7 skipped**. New guard
+`test_rms_norm_ttnn_zone_hashes.py` (6 cases) re-implements `hash16CT` and fails on any
+16-bit collision among the op's current zone locations, on a zone population past the
+birthday budget, or on an accumulated `zone_src_locations.log` already in the state that
+killed the Refinement 4 run — with the exact purge command in the failure message.
+
+*Standing hazard for later rounds.* A profiling session run with `RMS_STAGE_ZONES=1` re-seeds
+the cache with zone-carrying `.ii`, which a **later** graded run will harvest. Purge after
+such a session (command in the test's comment); the guard test above is the detector.

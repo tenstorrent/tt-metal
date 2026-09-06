@@ -662,3 +662,83 @@
   prime-`Wt` build in both layouts, reader/writer pad-count agreement, the `PARTIAL_W != 0`
   gate, and on-device PCC/rel-RMS at the prime widths across every operand combination.
   Plus `probes/bench_r4*.py` via `bench_r3.py`'s harness (the A/B above).
+
+## Refinement 4b — Remove the prime-`Wt` granularity cliff (debug: the golden run reported TOTAL=0)
+
+- Date: 2026-09-06
+
+- What was done: **the ragged width chunk was never the problem.** The harness's completion
+  gate failed Refinement 4 with `REGRESSION — prior-passing golden cells no longer pass
+  (responsible cells 0/0)`, and its `golden_results.txt` read
+  `PASSED=0 FAILED=0 ERRORS=0 SKIPPED=0 HANGS=0 TOTAL=0` — nothing at all was recorded.
+  Reading that run's `pytest_stdout.log` shows why: `test_golden.py` ran **to completion**
+  with the same 10 harness-attributed failures as every prior round, and the process then
+  died with `Fatal Python error: Aborted` at `profiler.cpp:373` on the
+  `test_golden.py → test_regression.py` device re-open, before pytest could write
+  `junit.xml`. No junit, no results — every cell scored as "never ran", i.e. a regression.
+
+  **Root cause: a 16-bit device-zone-hash collision.** `populateZoneSrcLocations()` keys
+  every device zone by `hash16CT("<zone>,<abs source path>,<line>,KERNEL_PROFILER")` and
+  hard-`TT_THROW`s the moment two DISTINCT strings share a slot. The eval golden runner sets
+  `TT_METAL_DEVICE_PROFILER=1` (to read the op-level `DEVICE KERNEL DURATION` off the
+  *firmware* markers), which as a side effect compiles this op's **41** `MaybeDeviceZoneScope`
+  sites in as well — 41 entries in a 65 536-slot table, i.e. a ~2–3% birthday collision every
+  time a kernel edit moves a line. Refinement 4's edits moved `writer_tree_forward` onto
+  `rms_norm_ttnn_writer.cpp:662`, which collides with `compute_scale`@`compute.cpp:1680` at
+  **0x0773**. Reproduced locally: 3 throws on a 448-cell slice with the profiler env, 0
+  without. The throw is caught at most sites (hence 47 089 of them in the log and the tests
+  still passing) and escapes as `terminate` only at a device re-open.
+
+  Three changes, in increasing order of durability:
+
+  1. **`writer_tree_forward` moved off line 662** (a four-line comment above it), which
+     breaks *this* collision.
+  2. **D34 — the per-stage zones are now OPT-IN.** `MaybeDeviceZoneScope` compiles only under
+     the `RMS_STAGE_ZONES` kernel define, which `STAGE_ZONES` / `_kernel_defines()` in the
+     descriptor emits from the env var of the same name (ONE source of truth, plumbed to all
+     six `KernelDescriptor` sites). A graded run now registers **zero** op zone locations, so
+     the collision class cannot reach it at all; `RMS_STAGE_ZONES=1` restores every zone for a
+     perf round. The zones themselves are untouched and still permanent — the durability
+     contract in `perf_instrumentation.hpp` is amended, not weakened. Empty defines means the
+     build key is unchanged, so a non-profiled build is byte-identical.
+  3. **Purged the stale preprocessed artifacts that replay old zone strings.**
+     `extract_zone_src_locations()` harvests zone pragmas out of each build dir's `.ii` /
+     `*.o.log` **on the ELF-reuse path too**, and a build dir is keyed coarsely enough to be
+     reused across source edits — so `.ii` files preprocessed from superseded kernel versions
+     kept re-registering line numbers the tree no longer has (this is why the *source* fix
+     alone did not clear it: the hash table is populated from the cache, not the tree).
+     115 534 stale `.ii`/`*.o.log` under `built/*/kernels/rms_norm_ttnn_*/` older than the
+     gating change were deleted (ELFs untouched, cache stays warm), and the op's rows dropped
+     from `generated/profiler/.logs/*zone_src_locations.log`. Deleting them mid-flight during
+     the verification run stopped the throws immediately — the last 100 k log lines went from
+     ~7 000 collisions to 0.
+
+  **No functional change to the op.** Not one line of the ragged-width-chunk work
+  (`_width_chunk`, `WT_PAD`, the reader's pad zeroing, the writer's tail write) was altered.
+
+- Accuracy achieved: unchanged — the op is bit-identical to Refinement 4 in every
+  non-profiled build. Full golden suite: **PASSED=23348 FAILED=19 ERRORS=0 SKIPPED=98071
+  REFUSED=0 HANGS=0 TOTAL=121438**, which is the byte-identical figure from
+  `golden_phase0`, `golden_refinement_1`, `golden_refinement_2` and `golden_refinement_3`.
+  Zero regression, zero hangs, suite ran to completion and wrote its junit.
+
+- Golden test progress: **23348 / 23348** non-xfail cells passing (19 known
+  harness-attributed failures, unchanged in count and identity from Phase 0).
+
+- Issues encountered:
+  1. **The source fix alone was not enough** — see (3) above. Diagnosing that took reading
+     `build.cpp`'s `extract_zone_src_locations()`: the `.ii` harvest runs on cache hits, so a
+     501 GB cache carrying every historical build of these kernels was re-injecting ~40
+     distinct line numbers per zone. Worth remembering: after ANY profiling session run with
+     `RMS_STAGE_ZONES=1`, purge those artifacts or a later graded run will harvest them.
+  2. **`hash16CT` is only 16 bits and the table is global.** 41 zones is a lot to spend of
+     65 536 slots for one op; the birthday budget is now asserted (`<= 128` including the
+     firmware markers).
+
+- Tests added: `tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_zone_hashes.py`
+  (6 cases) — re-implements the profiler's `hash32CT`/`hash16CT` (pinned against two
+  clone-path-independent fixtures), asserts no two of the op's CURRENT zone source locations
+  collide in 16 bits, asserts the zone population stays under the birthday budget, guards that
+  the macro is still discoverable, and adds a pre-flight check on the accumulated
+  `zone_src_locations.log` that fails with the exact purge command when the machine is in the
+  state that killed the Refinement 4 run.

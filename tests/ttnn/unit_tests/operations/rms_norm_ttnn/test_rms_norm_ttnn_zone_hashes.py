@@ -139,3 +139,70 @@ def test_hash16_matches_the_profiler_implementation(text, expected):
     """`hash16CT` is re-implemented here; pin it so a drift in profiler.cpp is
     visible as a failing expectation rather than a silently useless guard."""
     assert _hash16(text) == expected
+
+
+# ---------------------------------------------------------------------------
+#  Pre-flight: the CACHE can replay zone strings the source no longer has
+# ---------------------------------------------------------------------------
+# `extract_zone_src_locations()` in `tt_metal/jit_build/build.cpp` harvests zone
+# `#pragma message`es out of the PREPROCESSED `.ii` (and `*.o.log`) sitting in each
+# kernel's build directory — on the ELF-REUSE path as well as the compile path.  A
+# build dir is keyed coarsely enough to be reused across source edits, so a `.ii`
+# preprocessed from a SUPERSEDED version of a kernel keeps re-registering that
+# version's zone strings, at line numbers the file no longer has, for as long as the
+# cache lives.  That is how Refinement 4's collision survived the source fix: the
+# hash table is populated from the cache, not from the tree.
+#
+# Two consequences, both handled here:
+#   * with `RMS_STAGE_ZONES` off (the default) a fresh build contributes NOTHING, so
+#     the population can only shrink — the hazard is closed going forward; but
+#   * a profiling session run with `RMS_STAGE_ZONES=1` re-seeds the cache with zone-
+#     carrying `.ii`, and a LATER graded run will harvest them.  After such a
+#     session, purge:
+#
+#       find built -path '*/kernels/rms_norm_ttnn_*' \( -name '*.ii' -o -name '*.o.log' \) \
+#            ! -newer ttnn/ttnn/operations/rms_norm_ttnn/kernels/perf_instrumentation.hpp -delete
+#       # and drop the op's rows from generated/profiler/.logs/*zone_src_locations.log
+#
+# This test reads the ACCUMULATED log the profiler loads at startup and fails on the
+# exact condition that crashes a run — a 16-bit collision among the strings actually
+# registered.  It is a pre-flight check on the machine, not on the source, so it
+# skips when the log is absent.
+_ZONE_LOG = Path(__file__).resolve().parents[5] / "generated" / "profiler" / ".logs" / "zone_src_locations.log"
+_ZONE_LOG_DELIM = "'#pragma message: "
+
+
+def _registered_zone_strings(path: Path) -> list[str]:
+    out = []
+    for line in path.read_text(errors="replace").splitlines():
+        i = line.find(_ZONE_LOG_DELIM)
+        if i < 0:
+            continue
+        out.append(line[i + len(_ZONE_LOG_DELIM) : len(line) - 1])
+    return out
+
+
+def test_accumulated_zone_log_has_no_collision():
+    """The condition that actually terminates a profiled run, checked on the file
+    the profiler really loads."""
+    if not _ZONE_LOG.exists():
+        pytest.skip(f"no accumulated zone log at {_ZONE_LOG} — nothing registered yet")
+    by_hash: dict[int, str] = {}
+    seen: set[str] = set()
+    collisions: list[str] = []
+    for s in _registered_zone_strings(_ZONE_LOG):
+        if s in seen:
+            continue
+        seen.add(s)
+        h = _hash16(s)
+        if h in by_hash:
+            collisions.append(f"0x{h:04X}: {by_hash[h]}  <->  {s}")
+        else:
+            by_hash[h] = s
+    assert not collisions, (
+        f"{_ZONE_LOG} registers two zone locations on the same 16-bit slot; every profiler "
+        "read will TT_THROW and the process will `terminate` at the next device open "
+        "(this is what reported TOTAL=0 for the Refinement 4 golden run).\n"
+        "Purge the stale cache artifacts and the op's rows from the log — see the comment "
+        "above this test for the exact commands.\n  " + "\n  ".join(collisions)
+    )
