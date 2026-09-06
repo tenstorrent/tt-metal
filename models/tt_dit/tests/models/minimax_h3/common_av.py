@@ -479,23 +479,22 @@ def artifact_dir(name: str) -> Path:
 
 
 def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, profiler_iteration: int = 0, **gen_kwargs):
-    """Warmup then the timed generation with identical kwargs; asserts padded-length agreement (programs are keyed on it).
+    """A quiet compile pass then the timed generation with identical kwargs; asserts padded-length agreement (programs are keyed on it).
 
-    Warmup runs a short 3-step schedule regardless of the measured step count: every program, conv3d
+    The compile pass runs a short 3-step schedule regardless of the measured step count: every program, conv3d
     blocking and persistent buffer is keyed on the *padded sequence length*, not the number of steps,
     so 3 steps compile and allocate exactly what the full run needs at a fraction of the cost, and the
     denoise trace stays warm across step counts (its signature is shape + slot count) so the measured
     full-step call still replays it.
 
     `profiler`, when given, is a `BenchmarkProfiler`: only the measured call is wrapped in `"run"` and
-    receives `on_event`. Warmup and the quiet compile pass are unprofiled.
+    receives `on_event`. The quiet compile pass is unprofiled.
     """
     warmup_kwargs = {**gen_kwargs, "num_inference_steps": 3}
-    pipeline.warmup(prompt=prompt, **warmup_kwargs)
 
-    # `warmup` walks the whole bucket ladder, so `last_seq_len` afterwards is the last (smallest)
-    # rung it touched, not this request's rung. The quiet compile pass runs the *real* request, so
-    # it establishes the rung the measured call will run at -- take the reference from there.
+    # The pipeline warms its whole bucket ladder at construction, so `last_seq_len` does not yet
+    # reflect this request's rung. The quiet compile pass runs the *real* request, so it establishes
+    # the rung the measured call will run at -- take the reference from there.
     with pipeline.quiet():
         pipeline(prompt, seed=seed, **warmup_kwargs)
     warm_padded_len = pipeline.last_seq_len.padded
@@ -774,10 +773,21 @@ def pretest_user_repl(*, timeout: float = 1800, rounds: int = 3) -> None:
         logger.info(f"REPL pretest ok ({rounds} round-trips)")
 
 
+def _read_optional_image_path(label: str) -> str | None:
+    """A path to an existing file, or None when left blank. Re-prompts a non-existent path; raises EOFError to abort."""
+    while True:
+        raw = _prompt_line(label).strip()
+        if not raw:
+            return None
+        if os.path.isfile(raw):
+            return raw
+        print(f"no such file: {raw}", file=sys.stderr)
+
+
 def _read_user_spec(
     default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int
-) -> tuple[str, tuple[int, int], float, int] | None:
-    """Host stdin: prompt (required; `q` quits; blank lines ignored), aspect, duration and steps defaulting to the test case."""
+) -> tuple[str, tuple[int, int], float, int, str | None, str | None] | None:
+    """Host stdin: prompt (required; `q` quits; blank lines ignored), aspect, duration, steps and optional fl2va keyframes."""
     while True:
         try:
             prompt = _prompt_line("User prompt (q to quit): ").strip()
@@ -814,19 +824,24 @@ def _read_user_spec(
             return None
         except ValueError:
             print("expected a positive integer", file=sys.stderr)
-    return prompt, aspect, duration_s, num_steps
+    try:
+        first_image = _read_optional_image_path("First image path (blank for none): ")
+        last_image = _read_optional_image_path("Last image path (blank for none): ")
+    except EOFError:
+        return None
+    return prompt, aspect, duration_s, num_steps, first_image, last_image
 
 
 def _broadcast_user_spec(
-    spec: tuple[str, tuple[int, int], float, int] | None,
-) -> tuple[str, tuple[int, int], float, int] | None:
+    spec: tuple[str, tuple[int, int], float, int, str | None, str | None] | None,
+) -> tuple[str, tuple[int, int], float, int, str | None, str | None] | None:
     """Host `spec` (or None to quit) to every rank via the journal and one allgather."""
     if not ttnn.using_distributed_env():
         return spec
     seq = 0
     if is_host() and spec is not None:
         seq = _next_repl_seq()
-        prompt, aspect, duration_s, num_steps = spec
+        prompt, aspect, duration_s, num_steps, first_image, last_image = spec
         _append_journal(
             seq,
             json.dumps(
@@ -835,6 +850,8 @@ def _broadcast_user_spec(
                     "aspect": [int(aspect[0]), int(aspect[1])],
                     "duration_s": float(duration_s),
                     "num_steps": int(num_steps),
+                    "first_image": first_image,
+                    "last_image": last_image,
                 }
             ),
         )
@@ -848,6 +865,8 @@ def _broadcast_user_spec(
             (int(payload["aspect"][0]), int(payload["aspect"][1])),
             float(payload["duration_s"]),
             int(payload["num_steps"]),
+            payload["first_image"],
+            payload["last_image"],
         )
     ttnn.distributed_context_barrier()
     return spec
@@ -1004,6 +1023,8 @@ def run_user_generations(
     """
     if not user_input_enabled():
         return
+    from PIL import Image
+
     artifacts = artifact_dir(artifact_name)
     index = 0
     while True:
@@ -1011,7 +1032,9 @@ def run_user_generations(
         spec = _broadcast_user_spec(spec)
         if spec is None:
             return
-        prompt, aspect_ratio, duration_s, num_steps = spec
+        prompt, aspect_ratio, duration_s, num_steps, first_image, last_image = spec
+        image = Image.open(first_image).convert("RGB") if first_image else None
+        last = Image.open(last_image).convert("RGB") if last_image else None
         profiler = BenchmarkProfiler()
         try:
             height, width = resolve_canvas_size(*aspect_ratio)
@@ -1019,6 +1042,8 @@ def run_user_generations(
             with profiler("run", iteration=0):
                 output = pipeline(
                     prompt,
+                    image=image,
+                    last_image=last,
                     num_frames=num_frames,
                     height=height,
                     width=width,

@@ -116,6 +116,7 @@ def test_ref2va_reference_encode(mesh_device, num_images, num_videos, num_audios
         mesh_device=mesh_device,
         weights_dir=weights_dir("text_encoder"),
         topology=ttnn.Topology.Linear,
+        warmup=False,
     )
 
     references = _references(num_images, num_videos, num_audios, pipeline.audio_sampling_rate)

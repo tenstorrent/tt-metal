@@ -35,7 +35,7 @@ def _noise_image(seed: int) -> Image.Image:
 @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize("num_keyframes", [1, 2], ids=["one_keyframe", "two_keyframes"])
 def test_encode_prompt_vision_sp_tower(mesh_device, num_keyframes):
-    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir())
+    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir(), warmup=False)
     assert pipeline.sp_factor > 1, "this smoke exists to exercise the SP tower; the mesh has no SP axis"
 
     keyframes = [_noise_image(seed) for seed in range(num_keyframes)]

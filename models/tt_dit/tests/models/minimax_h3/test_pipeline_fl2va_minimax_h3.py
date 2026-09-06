@@ -152,7 +152,9 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
     image = _load_keyframe(FIRST_KEYFRAME)
     last_image = _load_keyframe(LAST_KEYFRAME)
 
-    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir(), dit_fsdp=False)
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device, weights_dir=weights_dir(), dit_fsdp=False, warmup=False
+    )
 
     # Warmup must be fl2va-shaped (keyframes included): programs are keyed on padded length; the helper asserts it.
     benchmark_profiler = BenchmarkProfiler()
@@ -271,7 +273,9 @@ def test_lone_last_keyframe_is_stretched_not_cover_cropped():
 def test_fl2va_follows_the_keyframe(mesh_device, reset_seeds):
     """Discriminating gate: a fractal keyframe the model would never produce must drive frame 0."""
     fractal = create_fractal_image(WIDTH, HEIGHT)
-    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir(), dit_fsdp=False)
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device, weights_dir=weights_dir(), dit_fsdp=False, warmup=False
+    )
     output = pipeline(
         PROMPT,
         image=fractal,

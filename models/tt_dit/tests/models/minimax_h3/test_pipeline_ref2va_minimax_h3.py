@@ -151,7 +151,7 @@ def _record_quality(frames: np.ndarray, paths: dict, case: str) -> None:
 def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
     """Pipeline bound to the `transformer_ref` partition (62 GB, fixed at construction)."""
     return MiniMaxH3Pipeline.create_pipeline(
-        mesh_device=mesh_device, weights_dir=weights_dir("transformer_ref"), task="ref2va"
+        mesh_device=mesh_device, weights_dir=weights_dir("transformer_ref"), task="ref2va", warmup=False
     )
 
 
