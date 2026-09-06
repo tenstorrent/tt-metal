@@ -7,9 +7,6 @@
 
 #include <array>
 #include <cstdint>
-#ifdef KERNEL_COMPILE_TIME_ARG_MAP
-#include <string_view>
-#endif
 
 template <class T, class... Ts>
 FORCE_INLINE constexpr std::array<T, sizeof...(Ts)> make_array(Ts... values) {
@@ -27,27 +24,6 @@ constexpr uint32_t get_ct_arg() {
     static_assert(Idx < kernel_compile_time_args.size(), "Index out of range");
     return kernel_compile_time_args[Idx];
 }
-
-#ifdef KERNEL_COMPILE_TIME_ARG_MAP
-namespace {
-constexpr std::pair<std::string_view, uint32_t> named_args_map[] = {KERNEL_COMPILE_TIME_ARG_MAP};
-}
-#endif
-
-// TODO #28026: Migrate to C++20 standards when available, see related issue for more details.
-#ifdef KERNEL_COMPILE_TIME_ARG_MAP
-constexpr uint32_t get_named_ct_arg(std::string_view name) {
-    for (const auto& [arg_name, arg_value] : named_args_map) {
-        if (name == arg_name) {
-            return arg_value;
-        }
-    }
-    // This should never be reached if the named argument is defined in KERNEL_COMPILE_TIME_ARG_MAP.
-    // Upon reaching this point, compilation should fail.
-    // Note: Compilation currently fails with a segfault.
-    __builtin_unreachable();  // Invalid named compile time argument
-}
-#endif
 
 // clang-format off
 /**
@@ -79,8 +55,12 @@ constexpr uint32_t get_named_ct_arg(std::string_view name) {
  * | arg_name              | The name of the argument           | string literal        | defined names | True   |
  */
 // clang-format on
-#ifdef KERNEL_COMPILE_TIME_ARG_MAP
-constexpr uint32_t get_named_compile_time_arg_val(std::string_view name) { return get_named_ct_arg(name); }
-#endif
 
 #endif  // TT_METAL_COMPILE_TIME_ARGS_H
+
+// The named-argument API lives in api/named_compile_time_args.h, which every
+// definer of KERNEL_COMPILE_TIME_ARG_MAP includes itself, directly after the
+// #define -- the generated map header and the emulator wrapper both do. This
+// header deliberately does not tail-include it: under TT_METAL_JIT_PCH this
+// header sits inside the precompiled prelude, where the macro does not exist
+// yet, so an include from here could only ever bake in the disabled state.

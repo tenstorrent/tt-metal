@@ -1035,6 +1035,10 @@ static std::function<void()> jit_compile_kernel(
         if (!named_compile_args.empty()) {
             f << "#define KERNEL_COMPILE_TIME_ARG_MAP "
               << tt::jit_build::utils::format_named_ct_arg_map(named_compile_args) << "\n";
+            // Turns the macro into the get_named_compile_time_arg_val API. Included
+            // here, like the generated map header on the device path does, because
+            // compile_time_args.h no longer tail-includes it; see that header.
+            f << "#include \"api/named_compile_time_args.h\"\n";
         }
         f << "#include \"jit_kernel_stubs.hpp\"\n";
         // Metal-2.0 `namespace args` (base).
