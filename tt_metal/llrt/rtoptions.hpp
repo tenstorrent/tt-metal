@@ -234,12 +234,9 @@ class RunTimeOptions {
     bool profiler_accumulate = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
-    // Streaming (perf_debug) device profiler. Mutually exclusive with profiler_enabled (the DRAM profiler):
+    // Streaming device profiler. Mutually exclusive with profiler_enabled (the legacy profiler):
     // the two device producers overlay the same L1 profiler region and the two hosts would both drive it.
     bool streaming_profiler_enabled = false;
-    // Streaming producers armed, built-in consumer NOT booted -- a caller supplies its own DRISC drainer
-    // (tests/tt_metal/tt_metal/api/test_dram_kernels.cpp). Only meaningful with streaming_profiler_enabled.
-    bool drisc_profiler_enabled = false;
     // Streaming-only: sync-event zones at the blocking primitives (critical-path tool).
     bool profiler_sync_events_enabled = false;
     uint32_t profiler_perf_counter_mode = 0;
@@ -253,11 +250,8 @@ class RunTimeOptions {
     uint32_t streaming_profiler_fifo_mb = 64;
     uint32_t streaming_profiler_ring_mb = 512;
     uint32_t streaming_profiler_decode_threads = 2;
-    uint32_t streaming_profiler_writer_timeout_s = 120;
-    uint32_t streaming_profiler_ship_min_pct = 25;
     std::string streaming_profiler_ops_csv_path;
     std::string streaming_profiler_zone_csv_path;
-    std::string streaming_profiler_stall_csv_path;
     bool experimental_noc_debug_dump_enabled = false;
     // Tuning for the NOC-debug-dump background thread (see ProfilerStateManager::start_debug_dump_thread).
     std::chrono::milliseconds noc_debug_poll_interval{500};
@@ -705,7 +699,6 @@ public:
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     bool get_streaming_profiler_enabled() const { return streaming_profiler_enabled; }
-    bool get_drisc_profiler_enabled() const { return drisc_profiler_enabled; }
     // Only effective with the streaming profiler; the DRAM profiler has no sync-event support.
     bool get_profiler_sync_events_enabled() const { return streaming_profiler_enabled && profiler_sync_events_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
@@ -718,11 +711,8 @@ public:
     uint32_t get_streaming_profiler_fifo_mb() const { return streaming_profiler_fifo_mb; }
     uint32_t get_streaming_profiler_ring_mb() const { return streaming_profiler_ring_mb; }
     uint32_t get_streaming_profiler_decode_threads() const { return streaming_profiler_decode_threads; }
-    uint32_t get_streaming_profiler_writer_timeout_s() const { return streaming_profiler_writer_timeout_s; }
-    uint32_t get_streaming_profiler_ship_min_pct() const { return streaming_profiler_ship_min_pct; }
     const std::string& get_streaming_profiler_ops_csv_path() const { return streaming_profiler_ops_csv_path; }
     const std::string& get_streaming_profiler_zone_csv_path() const { return streaming_profiler_zone_csv_path; }
-    const std::string& get_streaming_profiler_stall_csv_path() const { return streaming_profiler_stall_csv_path; }
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
     // How often the NOC-debug-dump background thread polls for stalled cores (light, unblocking poll).

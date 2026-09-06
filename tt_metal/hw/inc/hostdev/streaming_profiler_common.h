@@ -4,20 +4,20 @@
 
 #pragma once
 
-// ---- STREAMING (perf_debug) profiler: host/device shared constants --------------------------------------
+// Host/device shared constants of the streaming profiler.
 //
 // Everything the streaming backend adds on top of the DRAM profiler's hostdev/profiler_common.h lives here,
 // so that header stays byte-for-byte the DRAM profiler's own. The two backends are mutually exclusive at run
 // time (TT_METAL_DEVICE_PROFILER vs TT_METAL_STREAMING_PROFILER, see llrt/rtoptions.cpp), and the device
 // producer for this backend is tools/profiler/kernel_profiler_streaming.hpp, selected by -DPROFILE_STREAMING.
 //
-// Consumers: the SPSC producer (kernel_profiler_streaming.hpp), the DRISC filler kernels
-// (tools/profiler/kernels/drisc_*.cpp), the host receiver/decoder (tools/profiler/perf_debug_*,
-// spsc_marker_decode.hpp) and the DRISC test kernels.
+// Consumers: the SPSC producer (kernel_profiler_streaming.hpp), the DRISC relay kernel
+// (tools/profiler/kernels/streaming_profiler_relay.cpp) and the host receiver
+// (tools/profiler/streaming_profiler_receiver.cpp, spsc_marker_decode.hpp).
 
 #include <cstdint>
 
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "hostdevcommon/profiler_zone_id.h"
 
 namespace kernel_profiler {
@@ -49,9 +49,12 @@ enum SpscControlBuffer {
     SPSC_RING_HEAD_0 = 0,
     // [PROFILER_SPSC_MAX_RISC, 2*): ring tail per RISC, producer-written, monotonic word count.
     SPSC_RING_TAIL_0 = PROFILER_SPSC_MAX_RISC,
-    // Host->kernel terminate: while clear a producer blocks on a full ring; while set it proceeds, so a dispatch
-    // core cannot wedge wait_until_cores_done() at device close.
-    PROFILER_TERMINATE = 2 * PROFILER_SPSC_MAX_RISC,
+    // Host->kernel arm: while set a producer blocks on a full ring, because a relay is draining this core; while
+    // clear it proceeds and overwrites. The host clears it on every Tensix core of the device at session start
+    // (this backend does not touch the firmware) and sets it only on the cores its relays serve, so a core nobody
+    // drains (dispatch cores, whose rings fill one launch at a time across processes) can never park in the stall
+    // path and wedge wait_until_cores_done() at device close.
+    PROFILER_ARMED = 2 * PROFILER_SPSC_MAX_RISC,
     // NoC coords packed (y << 16) | x, written once by BRISC FW at init. Coords, not the flat id: the flat id is a
     // dense rank over a sorted core map with no positional formula, computable only host-side.
     SPSC_CORE_XY = 2 * PROFILER_SPSC_MAX_RISC + 1,
@@ -145,18 +148,13 @@ constexpr bool spsc_span_wrap_image(std::uint32_t start, std::uint32_t extent, s
 inline std::uint32_t spsc_span_w0() { return SPSC_SPAN_PACKET_TYPE << SPSC_SPAN_TYPE_SHIFT; }
 
 // Control block of a packed frame: just the words the decoder walks. The L1 vector is 64 words laid out for
-// 24 RISCs, ~50 of them dead on the wire. Raw frames carry the true vector; the w0 raw flag picks the geometry.
+// 24 RISCs, ~50 of them dead on the wire.
 constexpr static std::uint32_t SPSC_SPAN_WIRE_CTRL_WORDS = 16;
 enum SpscWireCtrl : std::uint32_t {
     SPSC_WIRE_HEAD_0 = 0,  // ..4
     SPSC_WIRE_TAIL_0 = 5,  // ..9
     SPSC_WIRE_XY = 10,
 };
-
-// w0 flag: the payload is the raw span (control vector plus five whole rings, wrap unresolved) rather than
-// packed live runs. Packing trades bytes for ~10 extra NoC issues per frame, so above the fill threshold raw
-// wins.
-constexpr static std::uint32_t SPSC_SPAN_RAW_FLAG = 1u;
 
 // ---- Wire codes shared with the producer and the host decoder --------------------------------------
 //
@@ -174,29 +172,16 @@ constexpr static std::uint32_t SPSC_SPAN_RAW_FLAG = 1u;
 // a real producer cost over 16 -- and producer overhead outranks the knee here by policy.
 static constexpr std::uint32_t SPSC_PUBLISH_BATCH_WORDS = 16;
 
-static constexpr std::uint32_t SPSC_TYPE_ZONE_START = 0;  // legacy pair (workers: stall zone, >3.2s fallback)
-static constexpr std::uint32_t SPSC_TYPE_ZONE_END = 1;    // legacy pair
 static constexpr std::uint32_t SPSC_TYPE_ZONE_L = 4;      // >3.2 s zone: id | end_lo | end_hi | dur_lo | dur_hi
 static constexpr std::uint32_t SPSC_TYPE_STICKY_TIMER = 9;
 static constexpr std::uint32_t SPSC_TIMER_HI_MASK = 0x7FFFFFFu;  // the 27-bit low field of word0
 
-// FULL 27 bits. This mask was 0xFFFF once, and that truncation was invisible: markers rendered
-// perfectly and only their NAMES could not be resolved. Any change to the id width has to be made in
-// EVERY copy of the packer at once -- this one, ppfmt in kernel_profiler_streaming.hpp, and pp_* in spsc_packet.h.
-inline std::uint32_t spsc_marker_w0(std::uint32_t type, std::uint32_t zone_id) {
-    return (type << SPSC_SPAN_TYPE_SHIFT) | (zone_id & TT_ZONE_ID_MASK);
-}
-inline std::uint32_t spsc_sticky_timer_w0(std::uint32_t timer_hi) {
-    return (SPSC_TYPE_STICKY_TIMER << SPSC_SPAN_TYPE_SHIFT) | (timer_hi & SPSC_TIMER_HI_MASK);
-}
-// 3 + N words: word0 is shaped like a zone marker (type | 27-bit id), the length lives in word2. Mirrors
-// spsc_packet.h's pp_data_w0/w2.
+// Marker ids are the FULL 27 bits. The mask was 0xFFFF once, and that truncation was invisible: markers rendered
+// perfectly and only their NAMES could not be resolved. Any change to the id width has to be made in every packer
+// at once: ppfmt in kernel_profiler_streaming.hpp and pp_* in spsc_packet.h.
+// DATA is 3 + N words: word0 is shaped like a zone marker (type | 27-bit id), the length lives in word2.
 static constexpr std::uint32_t SPSC_TYPE_DATA = 10;
 static constexpr std::uint32_t SPSC_DATA_SIZE_SHIFT = 25;
-inline std::uint32_t spsc_data_w0(std::uint32_t id) {
-    return (SPSC_TYPE_DATA << SPSC_SPAN_TYPE_SHIFT) | (id & TT_ZONE_ID_MASK);
-}
-inline std::uint32_t spsc_data_w2(std::uint32_t size_words) { return (size_words & 0x7Fu) << SPSC_DATA_SIZE_SHIFT; }
 
 // Words in a staging/ring slot. A slot must hold the PACKED image of a span, which can be LARGER than the
 // raw span it replaces: the raw layout needs no pads (lane r starts at prefix + ctrl + r*ring, inherently

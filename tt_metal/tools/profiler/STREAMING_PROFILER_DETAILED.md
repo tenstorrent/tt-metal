@@ -16,8 +16,8 @@ wire format (§4), the offline Tracy tools (§5), and — in the companion
 and benchmarks that produced all of it. The findings record is a separate file only because of the 500 KB
 per-file pre-commit limit.
 
-It consolidates, unchanged in substance, the former `STREAMING_PROFILER_ZONES.md` and
-`tools/drisc_drain/{ARCHITECTURE,HANGS,README,DIRECT_PUSH_PLAN,FINDINGS}.md`.
+It consolidates, unchanged in substance, the former standalone zone-format, architecture, hang-runbook,
+harness and direct-push-plan notes.
 
 ## Contents
 
@@ -132,7 +132,7 @@ It consolidates, unchanged in substance, the former `STREAMING_PROFILER_ZONES.md
   - [§N+62 — Per-op repeatability under capture: perf-debug jitters 3-4x more than classic, medians unbiased (bh-18, 2026-08-19)](STREAMING_PROFILER_FINDINGS.md#n62--per-op-repeatability-under-capture-perf-debug-jitters-3-4x-more-than-classic-medians-unbiased-bh-18-2026-08-19)
   - [§N+63 — Raw fallback: per-frame cheapest-encoding selector; mover ceiling 45 GB/s at max load (bh-18, 2026-08-19)](STREAMING_PROFILER_FINDINGS.md#n63--raw-fallback-per-frame-cheapest-encoding-selector-mover-ceiling-45-gbs-at-max-load-bh-18-2026-08-19)
   - [§N+64 — DRISC code-region overflow at max instrumentation: one u64 division cost a 956 B soft-div (bh-18, 2026-08-20)](STREAMING_PROFILER_FINDINGS.md#n64--drisc-code-region-overflow-at-max-instrumentation-one-u64-division-cost-a-956-b-soft-div-bh-18-2026-08-20)
-  - [§N+65 — kimi_k2 8-chip producer stalls: the DRAM ring FILLING was the mechanism; ship threshold + predictive valve + CV-first take 71,446 → 0 (yyz 8xp150, 2026-08-21)](STREAMING_PROFILER_FINDINGS.md#n65--kimi_k2-8-chip-producer-stalls-the-dram-ring-filling-was-the-mechanism-ship-threshold--predictive-valve--cv-first-take-71446--0-yyz-8xp150-2026-08-21)
+  - [§N+65 — kimi_k2 8-chip profiler stalls: the DRAM ring FILLING was the mechanism; ship threshold + predictive valve + CV-first take 71,446 → 0 (yyz 8xp150, 2026-08-21)](STREAMING_PROFILER_FINDINGS.md#n65--kimi_k2-8-chip-producer-stalls-the-dram-ring-filling-was-the-mechanism-ship-threshold--predictive-valve--cv-first-take-71446--0-yyz-8xp150-2026-08-21)
   - [§N+67 — DMA-mover landed: rings on the mover's banks, GDDR-DMA reads, deterministic per-frame seq verification (yyz 8xp150, 2026-08-21)](STREAMING_PROFILER_FINDINGS.md#n67--dma-mover-landed-rings-on-the-movers-banks-gddr-dma-reads-deterministic-per-frame-seq-verification-yyz-8xp150-2026-08-21)
   - [§N+68 — The host decoder was the hidden half of every stall story: atomic zones had silently halved it (yyz 8xp150, 2026-08-21/22)](STREAMING_PROFILER_FINDINGS.md#n68--the-host-decoder-was-the-hidden-half-of-every-stall-story-atomic-zones-had-silently-halved-it-yyz-8xp150-2026-08-2122)
   - [N+69: The cleanup-surgery corruption was a hardcoded experimental read path](STREAMING_PROFILER_FINDINGS.md#n69-the-cleanup-surgery-corruption-was-a-hardcoded-experimental-read-path)
@@ -173,7 +173,6 @@ Everything except `TT_METAL_STREAMING_PROFILER` itself applies in mode 3 only.
 | variable | default | effect |
 |---|---|---|
 | `TT_METAL_STREAMING_PROFILER` | off | Boots the streaming profiler (resident DRISC relays + host receiver) at `MeshDevice` bring-up and compiles kernels with `-DPROFILE_STREAMING`. Does **not** set `profiler_enabled`, so nothing of the DRAM profiler is active, and the real-time profiler is disabled (it reads the same L1 rings). Fatal together with `TT_METAL_DEVICE_PROFILER`. |
-| `TT_METAL_DRISC_PROFILER` | off | Streaming sub-option: arm the streaming producers but do **not** boot the built-in relays/receiver; the caller supplies its own DRISC drainer. Ignored without `TT_METAL_STREAMING_PROFILER=1`. |
 | `TT_METAL_DEVICE_PROFILER_SYNC_EVENTS` | off | Compiles the CB/semaphore sync-event hooks (`-DPROFILE_SYNC_EVENTS`) for the critical-path tool. Streaming only: in mode 2 the JIT define is never emitted. |
 
 **Streaming pipeline sizing**
@@ -185,8 +184,6 @@ Everything except `TT_METAL_STREAMING_PROFILER` itself applies in mode 3 only.
 | `TT_METAL_STREAMING_PROFILER_FIFO_MB` | 64 | Host FIFO per D2H socket, MiB, `[1, 3584]`. The pipeline's only elasticity in a direct-push run. Plain mmap + IOMMU host RAM reached by a full 64-bit NoC/PCIe address: costs no TLB window and has no channel cap. The 3.5 GiB cap is the socket's 32-bit byte size and the device's wrap-safe 32-bit credit arithmetic. |
 | `TT_METAL_STREAMING_PROFILER_RING_MB` | 512 | Host-side verbatim-frame ring the receiver thread fills and the decode threads drain, MiB. The capture's elastic buffer; at ~9.8 wire bytes per zone the default holds ~55 M zones per stream. |
 | `TT_METAL_STREAMING_PROFILER_DECODE_THREADS` | 2 | Decode threads per device, clamped by bring-up to the number of relay streams. |
-| `TT_METAL_STREAMING_PROFILER_SHIP_MIN_PCT` | 25 | A relay defers shipping a live core until its fullest lane holds at least this percent of its own ring, unless the core aged out. 0 ships every live core every sweep; values past 50 are capped by the kernel's half-ring lane trigger. Per-lane, not per-span: the producer that blocks is always a lane. The measured stall-free band ends between 30 and 35. |
-| `TT_METAL_STREAMING_PROFILER_WRITER_TIMEOUT_S` | 120 | How long the receiver waits for a stalled consumer before reporting it, seconds. |
 
 **Consumers, all off unless set**
 
@@ -195,7 +192,6 @@ Everything except `TT_METAL_STREAMING_PROFILER` itself applies in mode 3 only.
 | `TT_METAL_STREAMING_PROFILER_TRACY=1` | Attach the built-in Tracy sink. Off by default because the primary consumers are the registered ones and Tracy is one more, expensive, consumer. |
 | `TT_METAL_STREAMING_PROFILER_OPS_CSV=<path>` | Per-op CSV consumer (one row per op; see §1.7). |
 | `TT_METAL_STREAMING_PROFILER_ZONE_CSV=<path>` | Per-zone CSV consumer (one row per zone). |
-| `TT_METAL_STREAMING_PROFILER_STALL_CSV=<path>` | Producer-stall timeline CSV consumer (PRODUCER-STALL zones). |
 
 A plain `TT_METAL_STREAMING_PROFILER=1` run therefore drains and decodes but writes nothing; that is the configuration the
 knee sweeps use, since every consumer adds host-side cost.
@@ -214,29 +210,31 @@ export TT_METAL_STREAMING_PROFILER=1
 
 One switch — it also arms the device-side markers. Leave `TT_METAL_DEVICE_PROFILER` unset.
 
-### 1.4 Register a callback
+### 1.4 Subscribe
 
-From `tt_metal/tools/profiler/streaming_profiler_consumer.hpp`:
+From `<tt-metalium/experimental/streaming_profiler.hpp>` (namespace
+`tt::tt_metal::experimental::streaming_profiler`):
 
 ```cpp
-auto h = streaming_profiler::register_consumer("my-sink",
-    [](const streaming_profiler::StreamingProfilerRecordBatch& b) { /* ... */ });
-// later: streaming_profiler::unregister_consumer(h);
+auto h = Subscribe("my-tool", [](const Batch<Channel::Zones | Channel::Stalls>& b) { /* ... */ });
+// later: Unsubscribe(h);
 ```
 
-Register any time — before the device opens or mid-capture. Your callback runs on its own
-thread; if you're slow you drop only your own records (`b.dropped_delta`), never anyone
-else's. The batch span is only valid during the call, so copy what you keep.
+Subscribe any time — before the device opens, mid-capture, or between captures; the subscription
+persists until `Unsubscribe`. Your callback runs on its own thread; if you're slow you drop only your
+own records (`b.dropped`), never anyone else's. Spans are only valid during the call, so copy what
+you keep. Subscriptions live on the process-wide `streaming_profiler::Service`; each capture's
+receiver attaches to it as a producer, so one subscription sees every MeshDevice.
 
 ### 1.5 What you get
 
 Zones arrive **whole**: a zone is one record with a start and a duration. On the wire the device
 ships most zones atomically (one 3-word packet at scope close, carrying end + duration); the kinds
-that still ship as start/end pairs (the producer-stall zone, the >3.2 s long-zone fallback, DRISC
+that still ship as start/end pairs (the profiler-stall zone, the >3.2 s long-zone fallback, DRISC
 relay self-zones) are paired for you on the host. Either way you never see halves.
 
 ```cpp
-enum class StreamingProfilerRecType : uint32_t {
+enum class RecType : uint32_t {
     Zone = 1,   // a complete zone: data.zone = {start, duration}
     Data = 3,   // point marker with payload: data.ts; payload follows via Ext (+ Cont)
     Event = 4,  // point marker, no payload: data.ts; complete in itself
@@ -244,14 +242,14 @@ enum class StreamingProfilerRecType : uint32_t {
     Cont = 6,   // one uint64 of Data payload (words 3 and up): data.payload
 };
 
-struct StreamingProfilerRecMeta {
+struct RecMeta {
     uint32_t spare : 16;
     uint32_t lane : 10;  // which (core, RISC) stream: lane = core_index * 5 + risc
     uint32_t dev : 3;    // device index into the capture context
-    StreamingProfilerRecType type : 3;
+    RecType type : 3;
 };
 
-struct StreamingProfilerRec {
+struct Rec {
     // The active member is decided by meta.type.
     union {
         struct {
@@ -263,7 +261,7 @@ struct StreamingProfilerRec {
         uint64_t payload;  // Cont
     } data;
     uint32_t id;            // structural zone id -> resolves to the zone's name
-    StreamingProfilerRecMeta meta;
+    RecMeta meta;
     uint32_t prog;          // runtime host-id of the op this lane is executing (0 = none yet)
 };
 ```
@@ -279,13 +277,10 @@ The ops-CSV consumer in `tt_metal/tools/profiler/streaming_profiler_ops_csv.{hpp
 reference.
 
 ```cpp
-void MyConsumer::operator()(const streaming_profiler::StreamingProfilerRecordBatch& batch) {
-    names_.refresh();  // ZoneNameMirror member: names arrive as kernels JIT, refresh once per batch
-    for (const auto& r : batch.records) {
-        if (r.meta.type != StreamingProfilerRecType::Zone) continue;
-        std::string_view name = names_.lookup(r.id);                          // zone name
-        const auto& lane = batch.context->devices[r.meta.dev].lanes[r.meta.lane];  // chip, core x/y, risc, role
-        // ... aggregate: e.g. per-op rows keyed on r.prog, using r.data.zone.start / .duration ...
+void MyConsumer::operator()(const Batch<Channel::Zones>& batch) {
+    for (const Zone& z : batch.zones) {
+        // z.site.name, z.core (chip, coordinate, RISC), z.runtime_id; device ticks in z.start_timestamp /
+        // z.end_timestamp, host time via z.start_time() / z.duration()
     }
 }
 ```
@@ -330,7 +325,7 @@ worker RISC ──2/3/5-word zone packets──▶ L1 SPSC marker ring, one per 
     │                                     pipeline is lossless end to end (the stall is itself a zone).
     ▼
 DRISC relay — one per DRAM view (≤ 8), resident on the bank's spare DRISC from device open to teardown
-    CV pass    read every core's five tails (32 B/core), decide the ship set (SHIP_MIN_PCT / half-ring
+    CV pass    read every core's five tails (32 B/core), decide the ship set (25 % lane fill / half-ring
                lane trigger / age); idle backoff grows the poll gap to a 5 µs ceiling
     gather     read each live run STRAIGHT to its packed wire offset in a staging slot, so the staged slot
                IS the frame's wire image (16 B src≡dst congruence pads, spsc_span_pack_pad())
@@ -372,7 +367,7 @@ bank and pumps them to the host FIFO over a D2H socket.
   going through the CQ would deadlock the first `Finish()`.
 - **Reads on the NoC the writes do not use** (`kReadNoc = NOC_INDEX == 0 ? 1 : 0`), a static VC for PCIe
   pushes spread across relays by the host, and `NOC_MAX_BURST_SIZE` chunking on every host write.
-- **Ship decision, per lane.** A core ships when its fullest lane holds ≥ `SHIP_MIN_PCT` of its ring, when it
+- **Ship decision, per lane.** A core ships when its fullest lane holds ≥ 25 % of its ring (`kShipMinPct`), when it
   aged out, or at the half-ring lane trigger; a head only reaches a producer on a ship, so the idle backoff
   ceiling (5 µs) stays below a lane's fill time at high rates. The CV pass's tails are authoritative: a frame
   claims exactly `[mirror, tail-at-the-CV-read)`, which is safe at any gather lag because a producer only
@@ -388,8 +383,9 @@ bank and pumps them to the host FIFO over a D2H socket.
   (`kSpoolFreshCycles`), so host staleness is bounded.
 - **Teardown** talks to a relay through its stop word: 1 = quiesce (every wait holds while the last frames
   drain, up to 1 s), 2 = kill switch (abandon waits, free the NIU). The relay publishes `0xD09E****` in its
-  done word once its last page is out. Producers are disarmed (`PROFILER_TERMINATE`) on every path where a
-  relay does not come up, so a missing relay can never wedge the workload (§N+24).
+  done word once its last page is out. Producers boot unarmed and are armed (`PROFILER_ARMED`) only on the
+  cores a relay drains, once every relay is up; a path where a relay does not come up leaves them unarmed, so a
+  missing relay can never wedge the workload (§N+24).
 - **Not instrumented itself.** The relay opts out of the producer instrumentation (no drainer serves a DRAM
   core, so the ring would be write-only dead weight — §N+72); the DRISC code region is 11,264 B and every
   feature has had to be fitted into it (§N+43, §N+64).
@@ -413,9 +409,12 @@ bank and pumps them to the host FIFO over a D2H socket.
 - `spsc_marker_decode.hpp` (the decode single source of truth), `spsc_packet.h` (plain-C packet
   constants shared with the device's `ppfmt`), `hw/inc/hostdev/streaming_profiler_common.h` (span/frame
   geometry, pack-pad rule, `SPSC_SPAN_RAW_FLAG`).
-- Consumers: `streaming_profiler_consumer.{hpp,cpp}` (`register_consumer`, `ZoneNameMirror`),
-  `streaming_profiler_ops_csv`, `streaming_profiler_zone_csv`, `streaming_profiler_stall_csv`,
-  `streaming_profiler_tracy_consumer` + `streaming_profiler_tracy_handler` (the Tracy sink; per-relay
+- Consumers: `streaming_profiler_service.{hpp,cpp}` (subscriptions, one thread each, reading every attached
+  receiver's rings), `streaming_profiler_api.cpp` (the public `Subscribe`, decoding records into the public types),
+  `streaming_profiler_consumer.{hpp,cpp}` (the internal record contract, `ZoneNameMirror`),
+  `streaming_profiler_decode.hpp` (the frame decode the audit and the consumers share),
+  `streaming_profiler_ops_csv`, `streaming_profiler_zone_csv`,
+  `streaming_profiler_tracy` (the Tracy sink; per-relay
   anchors, k-way merge of a context's lanes by timestamp so Tracy's 2^31-tick unwrap heuristic never fires —
   §4.2).
 - Device producer: `kernel_profiler_streaming.hpp`, selected by `-DPROFILE_STREAMING`. Zone ids are 27-bit
@@ -427,7 +426,7 @@ bank and pumps them to the host FIFO over a D2H socket.
 | knob | default | what it buys | measured |
 |---|---|---|---|
 | relays | one per DRAM view | the sweep is O(cores per relay); fewer cores per relay is the only lever on the device-side knee | §N+28, §N+40, §N+71 |
-| `SHIP_MIN_PCT` | 25 | fewer, fuller frames; stall-free band ends at 30–35 | §N+65, §N+71 |
+| `kShipMinPct` (relay constant) | 25 | fewer, fuller frames; stall-free band ends at 30–35 | §N+65, §N+71 |
 | `FIFO_MB` | 64 | direct-push elasticity; 3 GiB holds a whole 150k-iteration capture and takes the host out of the knee | §N+71 |
 | `DRAM_MB` | 128 | spool runway per relay; a ring absorbs a running deficit, not bursts — it is runway, not headroom | §N+39, §N+65 |
 | `RING_MB` | 512 | ~55 M zones per stream; the host ring, not the device, is the first thing to lose data as volume grows | §N+39, §N+52 |
@@ -463,10 +462,10 @@ Names in the historical text and what they are today:
 |---|---|
 | `drisc_profiler_drain.cpp` (the filler/mover kernel, role by `kRole` compile arg), `drisc_profiler_filler.cpp` | `tt_metal/tools/profiler/kernels/streaming_profiler_relay.cpp` |
 | `drisc_drain_common.hpp`, `test_kernels/misc/drisc_drain_frame.h`, the streaming constants that were in `profiler_common.h` | `tt_metal/hw/inc/hostdev/streaming_profiler_common.h` (the DRAM profiler keeps `profiler_common.h`) |
-| `perf_debug_profiler.{hpp,cpp}`, `PerfDebugProfiler` | `tt_metal/tools/profiler/streaming_profiler.{hpp,cpp}`, `StreamingProfiler` |
-| `PerfDebugTracyHandler`, `perf_debug_tracy_handler` | `StreamingProfilerTracyHandler`, `streaming_profiler_tracy_handler.{hpp,cpp}` |
+| `perf_debug_profiler.{hpp,cpp}`, `PerfDebugProfiler` | `tt_metal/tools/profiler/streaming_profiler_device.{hpp,cpp}`, `streaming_profiler::Devices` |
+| `PerfDebugTracyHandler`, `perf_debug_tracy_handler` | `TracySink`, `streaming_profiler_tracy.{hpp,cpp}` |
 | the host "writer"/"decoder" threads, `D2HSocket::read()` memcpy path, receiver v2 | `streaming_profiler_receiver.{hpp,cpp}` |
-| host record ring of 24 B `StreamingProfilerRec` (`BroadcastRing`, `RING_RECS`) | per-stream `BroadcastRing` of verbatim frames (`RING_MB`); records are decoded per consumer |
+| host record ring of 24 B `Rec` (`BroadcastRing`, `RING_RECS`) | per-stream `BroadcastRing` of verbatim frames (`RING_MB`); records are decoded per consumer |
 | `drisc_niu_mode.cpp` | `tt_metal/tools/profiler/kernels/drisc_niu_mode.cpp` (same job) |
 | `test_perf_debug_zones` | `tt_metal/programming_examples/profiler/test_streaming_profiler_zones` |
 | `TT_METAL_PERF_DEBUG_*` | `TT_METAL_STREAMING_PROFILER_*` — full table at the top of §6 |
@@ -476,7 +475,7 @@ Names in the historical text and what they are today:
 
 ### 3.1 Fillers + movers and the DRAM frame ring (2026-08-11; superseded 2026-08-25)
 
-*Formerly `tools/drisc_drain/ARCHITECTURE.md`.* This is the six-DRISC design: four **fillers** sweeping
+This is the six-DRISC design: four **fillers** sweeping
 30 worker cores each into a DRAM frame ring, two **movers** each draining two rings into a D2H socket, with
 optional self-profiling of the drainers. The direct-push plan (§6.2) deleted the movers and the rings; the
 relay (§2) is what replaced the fillers. Its buffer-stack table and cost model are still the best
@@ -493,7 +492,7 @@ Use these names. Confusing them has already cost real debugging time.
 | **L1 marker ring** | worker L1, one per RISC | 2-word markers | the worker RISC (producer) | the FILLER's bulk span read |
 | **DRAM frame ring** | device DRAM, one per FILLER | whole frames | its FILLER | its MOVER |
 | **socket FIFO** | host RAM, one per MOVER | 64 B pages | its MOVER, over PCIe | the host writer thread |
-| **host record ring** | host RAM, one shared | 24 B `StreamingProfilerRec` | the decoder threads | the consumer thread -> Tracy |
+| **host record ring** | host RAM, one shared | 24 B `Rec` | the decoder threads | the consumer thread -> Tracy |
 
 So: `ring_ensure_room` / `PROFILER_STALL_ZONE` / `SPSC_STALL_COUNT_0` are about the **L1 marker ring**.
 `ring-room waits` and `head`/`tail` are about the **DRAM frame ring**. `reserve_pages` / credit-wait /
@@ -560,7 +559,7 @@ one L1 would overlap staging, socket config, results and handshake with no count
 | **DRAM frame ring** | device DRAM | one frame | **64 MiB = 6,355 frames** | 1 per FILLER (**4**) |
 | **socket FIFO** | host RAM | 64 B page | 196,608 pages = **12 MiB** | 1 per MOVER (2) |
 | host read chunk | host RAM | pooled buffer | <= 1,024 pages = **64 KB** per read | pool <= 4,096 |
-| **host record ring** | host RAM | 24 B `StreamingProfilerRec` | 4 Mi default = 96 MiB (runs use 16 Mi = **384 MiB**) | 1 shared |
+| **host record ring** | host RAM | 24 B `Rec` | 4 Mi default = 96 MiB (runs use 16 Mi = **384 MiB**) | 1 shared |
 
 Geometry notes that are load-bearing, not incidental:
 - 2,640 words is a whole number of 64 B pages, so a frame never needs padding, and the bulk span read
@@ -638,7 +637,7 @@ sweep out of 55 on a filler and 11 of 64 on a mover. A mover arms before issuing
 visit is captured whole; a filler arms at the end of the first batch with live cores, so that sweep's earlier
 batches are not recovered. An instrumented sweep that turns out idle is rewound or abandoned for free, and a
 captured sweep is bounded to one ring (past that it is truncated, counted, and excluded from the counter
-cross-check). Cost: **0.28-0.52% of a drainer's egress**, +4% on a filler's sweep time, 0 producer stalls at
+cross-check). Cost: **0.28-0.52% of a drainer's egress**, +4% on a filler's sweep time, 0 profiler stalls at
 delay 60 and 49-140 at delay 15 (a knee crossing).
 
 **Sampling IDLE sweeps is off by default and should stay off** unless the question is specifically what an idle
@@ -735,7 +734,7 @@ before lowering `ROLE_RING_MB` on the 4-ring configuration.
 
 ### 3.2 Blackhole device/host hang runbook (2026-08-07 … 08-08)
 
-*Formerly `tools/drisc_drain/HANGS.md`.* Written against the single/dual-drainer and fillers+movers
+Written against the single/dual-drainer and fillers+movers
 kernels, but the failure taxonomy (WEDGE / TEARDOWN / DEGRADED / VM FREEZE), the classification and
 recovery rules are about the card, the link and the box, and they hold for any resident DRISC. The harness
 scripts it names (`drisc_hang_harness.sh`, `drisc_hang_compare.sh`, `drisc_reclassify.py`, `drisc_wedge_watch.sh`) were removed with the DRISC experiments in 2026-09; the listings below are kept as the record of how the runs were scored.
@@ -779,9 +778,9 @@ device access. Silent by construction.
 **Repro**
 
 ```bash
-tools/drisc_drain/drisc_hang_harness.sh    # scores card state + duration + masked-signature + rc
-tools/drisc_drain/drisc_hang_compare.sh
-tools/drisc_drain/drisc_reclassify.py      # re-derives classes from logs: a scoring bug costs no re-runs
+drisc_hang_harness.sh    # scores card state + duration + masked-signature + rc
+drisc_hang_compare.sh
+drisc_reclassify.py      # re-derives classes from logs: a scoring bug costs no re-runs
 ```
 
 - Rate is **~2–3% per run** with **no delay dependence** (125/150/500 alike), so budget ~50–100 runs
@@ -935,7 +934,7 @@ short version: if the two ever disagree, the findings win.
 
 ### 3.3 The DRISC hang-investigation harness (2026-08)
 
-*Formerly `tools/drisc_drain/README.md`.* The scripts (`drisc_hang_harness.sh`, `drisc_hang_compare.sh`,
+The scripts (`drisc_hang_harness.sh`, `drisc_hang_compare.sh`,
 `drisc_reclassify.py`, `drisc_wedge_watch.sh`, `drisc_2x2_rerun.sh`) were removed with the DRISC experiments in 2026-09; they
 were written against the superseded kernels' knobs (`SHIP_REPEAT`, `ARMED`, `DISPATCH`), and the scoring
 rules below are the durable part.
@@ -1040,8 +1039,6 @@ separate on purpose: it is the first thing to read, and it does not depend on an
 
 ### 4.2 The zone wire format, and what it measures like
 
-*Formerly `STREAMING_PROFILER_ZONES.md`.*
-
 This documents the variable-width zone packet family the SPSC streaming profiler puts on the wire
 (producer: `kernel_profiler.hpp`; decoder: `spsc_marker_decode.hpp`; plain-C constants:
 `spsc_packet.h`). For how to consume the stream, see
@@ -1087,7 +1084,7 @@ children's ends, so start deltas go negative; ends never do. Start is always rec
 The producer's class test is one OR-tree into one branch, laid out as the fall-through:
 `(((c_lo_d | lo_d) >> 16) | c_hi_d | hi_d) == 0`.
 
-##### The stall zone (PRODUCER-STALL)
+##### The stall zone (PROFILER-STALL)
 
 Pinned to **M with a saturating duration**, written straight into the ring's stall reserve with no
 room check — a room check from inside the full-ring path recurses into another stall scope, which is
@@ -1111,8 +1108,7 @@ types they always saw.
 
 ##### Which classes real workloads use
 
-The receiver's per-stream decode-path line breaks records down by class (`decode paths: ... zoneS16 +
-zone8 + atomic16 ...`):
+Records by class, measured with the receiver's (since removed) per-stream decode-path report:
 
 | workload | S | M |
 |---|---|---|
@@ -1135,7 +1131,7 @@ instrumentation, not the duration field.
 **ZONE_S is not a producer-cycle win**: its cursor bookkeeping (two RAM stores + a 64-bit delta + the
 class test) slightly outweighs the one saved L1 store. What S buys is **wire volume** — and volume is
 what the pipeline scales with: 2 words per zone instead of 3 is a third off a dense capture, and the
-producer-stall onset knee moves with the volume, not with per-zone cycles.
+profiler-stall onset knee moves with the volume, not with per-zone cycles.
 
 Accounting identities worth keeping for verification: a clean run decodes exactly
 `iters × 6000 + 600` records (10 zones × 600 lanes + 1 trailing per lane), and a stalling run's
@@ -1155,7 +1151,7 @@ prints per-thread zone spans to check exactly this.
 
 ## 5. Dev tools: reading a `.tracy` without the GUI
 
-Three small offline tools under `tools/drisc_drain/`, one directory each, built by the normal
+Three small offline tools under `tools/tracy_inspect/`, one directory each, built by the normal
 `./build_metal.sh` into the build directory; each binary is named after its directory. They link the Tracy
 server library and walk a saved capture, which is how every alignment and count claim in §6 was checked —
 `tracy-capture`'s "Zones:" headline counts CPU zones only, so a device capture is judged by these, never by
@@ -1172,8 +1168,7 @@ index joins their outputs.
 
 ## 6. Findings and benchmarks
 
-The complete dated record of the findings and benchmarks — formerly `tools/drisc_drain/FINDINGS.md` and
-`DIRECT_PUSH_PLAN.md` — lives in the companion file
+The complete dated record of the findings and benchmarks lives in the companion file
 [`STREAMING_PROFILER_FINDINGS.md`](STREAMING_PROFILER_FINDINGS.md). It is a separate file only because the
 pre-commit large-file check caps a file at 500 KB; its sections keep the 6.x numbering used throughout this
 document:

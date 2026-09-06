@@ -1,18 +1,18 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "streaming_profiler_zone_csv.hpp"
+#include "tools/profiler/streaming_profiler_zone_csv.hpp"
 
 #include <unistd.h>
 
 #include <cstdio>
-#include <cstring>
 #include <string>
-
-#include "context/metal_context.hpp"
+#include <string_view>
 
 namespace tt::tt_metal::streaming_profiler {
+
+namespace api = experimental::streaming_profiler;
 
 namespace {
 
@@ -24,14 +24,12 @@ const char* risc_name(uint8_t risc) {
         case 2: return "TRISC_0";
         case 3: return "TRISC_1";
         case 4: return "TRISC_2";
-        case 5: return "ERISC";
         default: return "UNKNOWN";
     }
 }
 
-// Sync events by name with the legacy numeric id the classic reader keys on (the wire carries per-TU
-// structural ids). Only payload-carrying events are listed; the wait-half ids stay reserved so a stale
-// reader keying on them cannot pick up something else.
+// Sync events by name with the legacy numeric id the classic reader keys on. Only payload-carrying events are
+// listed; the wait-half ids stay reserved so a stale reader keying on them cannot pick up something else.
 struct SyncName {
     const char* name;
     uint32_t legacy_id;
@@ -48,133 +46,70 @@ constexpr SyncName kSyncNames[] = {
     {"SYNC-CB-POP", 1010},
 };
 
-uint32_t lane_key(uint32_t dev, uint32_t lane) { return (dev << 16) | lane; }
-
 }  // namespace
 
-uint32_t StreamingProfilerZoneCsvConsumer::sync_legacy_id(uint32_t wire_id) {
-    if (auto it = sync_id_cache_.find(wire_id); it != sync_id_cache_.end()) {
-        return it->second;
-    }
-    uint32_t legacy = 0;
-    const std::string_view name = names_.lookup(wire_id);
+uint32_t ZoneCsvConsumer::sync_legacy_id(std::string_view name) {
     for (const SyncName& s : kSyncNames) {
         if (name == s.name) {
-            legacy = s.legacy_id;
-            break;
+            return s.legacy_id;
         }
     }
-    sync_id_cache_.emplace(wire_id, legacy);
-    return legacy;
+    return 0;
 }
 
-void StreamingProfilerZoneCsvConsumer::flush_pending(
-    uint32_t dev, uint32_t lane, const StreamingProfilerCaptureContext& ctx) {
-    auto it = pending_.find(lane_key(dev, lane));
-    if (it == pending_.end() || !it->second.active) {
-        return;
+// The reader pairs START/END rows by order and type; the id only has to be stable per name and never 0.
+uint32_t ZoneCsvConsumer::name_hash(std::string_view name) {
+    uint32_t h = 2166136261u;
+    for (unsigned char ch : name) {
+        h = (h ^ ch) * 16777619u;
     }
-    Pending& p = it->second;
-    if (p.payload.empty()) {
-        // A Data with no payload is counted, not emitted as zero: a semaphore event at address 0 would invent a
-        // dependency.
-        incomplete_++;
-        p = Pending{};
-        return;
-    }
-    const auto& li = ctx.devices[dev].lanes[lane];
-    Row& r = rows_.emplace_back();
-    r.chip = li.chip_id;
-    r.core_x = li.noc0_x;
-    r.core_y = li.noc0_y;
-    r.risc = li.risc;
-    r.timer_id = p.legacy_id;
-    r.timestamp = p.ts;
-    r.data = p.payload.front();
-    r.type = "TS_DATA";
-    p = Pending{};
+    return (h & 0x7FFFFFFu) | 0x8000000u;  // outside the legacy sync-id range
 }
 
-void StreamingProfilerZoneCsvConsumer::operator()(const StreamingProfilerRecordBatch& batch) {
-    names_.refresh();
-    dropped_ += batch.dropped_delta;
-
-    const StreamingProfilerCaptureContext& ctx = *batch.context;
-
-    for (const auto& rec : batch.records) {
-        const uint32_t dev = rec.meta.dev;
-        const uint32_t lane = rec.meta.lane;
-        if (dev >= ctx.devices.size() || lane >= ctx.devices[dev].lanes.size()) {
+void ZoneCsvConsumer::operator()(const Batch& batch) {
+    dropped_ += batch.dropped;
+    if (freq_mhz_ == 0.0 && !batch.clocks.empty()) {
+        freq_mhz_ = batch.clocks.front().frequency_ghz * 1000.0;
+    }
+    for (const api::Zone& z : batch.zones) {
+        // Both rows emitted: the classic reader pairs ZONE_START with ZONE_END itself.
+        const uint32_t id = name_hash(z.site.name);
+        for (int end = 0; end < 2; end++) {
+            Row& r = rows_.emplace_back();
+            r.chip = z.core.chip_id;
+            r.core_x = static_cast<uint16_t>(z.core.coord.x);
+            r.core_y = static_cast<uint16_t>(z.core.coord.y);
+            r.risc = static_cast<uint8_t>(z.core.risc);
+            r.timer_id = id;
+            r.timestamp = end ? z.end_timestamp : z.start_timestamp;
+            r.prog = z.runtime_id;
+            r.zone_name = std::string(z.site.name);
+            r.type = end ? "ZONE_END" : "ZONE_START";
+        }
+    }
+    for (const api::TimestampedData& d : batch.timestamped_data) {
+        // Sync events only: the reader interprets `data` as a CB id or semaphore address.
+        const uint32_t legacy = sync_legacy_id(d.site.name);
+        if (legacy == 0) {
             continue;
         }
-        const auto& li = ctx.devices[dev].lanes[lane];
-        if (freq_mhz_ == 0.0 && ctx.devices[dev].frequency_ghz > 0.0) {
-            freq_mhz_ = ctx.devices[dev].frequency_ghz * 1000.0;
+        if (d.payload.empty()) {
+            empty_payloads_++;  // a semaphore event at address 0 would invent a dependency
+            continue;
         }
-
-        switch (rec.meta.type) {
-            case StreamingProfilerRecType::Zone: {
-                // Both rows emitted: the classic reader pairs ZONE_START with ZONE_END itself.
-                const std::string name(names_.lookup(rec.id));
-                for (int end = 0; end < 2; end++) {
-                    Row& r = rows_.emplace_back();
-                    r.chip = li.chip_id;
-                    r.core_x = li.noc0_x;
-                    r.core_y = li.noc0_y;
-                    r.risc = li.risc;
-                    r.timer_id = rec.id;
-                    r.timestamp = end ? rec.data.zone.start + rec.data.zone.duration : rec.data.zone.start;
-                    r.prog = rec.prog;
-                    r.zone_name = name;
-                    r.type = end ? "ZONE_END" : "ZONE_START";
-                }
-                break;
-            }
-            case StreamingProfilerRecType::Data: {
-                // Sync events only: the reader interprets `data` as a CB id or semaphore address.
-                const uint32_t legacy = sync_legacy_id(rec.id);
-                if (legacy == 0) {
-                    break;
-                }
-                flush_pending(dev, lane, ctx);  // a new Data ends any unfinished one
-                Pending& p = pending_[lane_key(dev, lane)];
-                p = Pending{};
-                p.active = true;
-                p.legacy_id = legacy;
-                p.ts = rec.data.ts;
-                break;
-            }
-            case StreamingProfilerRecType::Ext: {
-                Pending& p = pending_[lane_key(dev, lane)];
-                if (!p.active) {
-                    break;
-                }
-                // Every sync macro passes exactly one datum, so the event completes at the Ext; Cont only covers a
-                // >2-word payload.
-                p.words_expected = rec.id;
-                p.payload.push_back(rec.data.ext);
-                if (p.words_expected <= 2) {
-                    flush_pending(dev, lane, ctx);
-                }
-                break;
-            }
-            case StreamingProfilerRecType::Cont: {
-                Pending& p = pending_[lane_key(dev, lane)];
-                if (!p.active) {
-                    break;  // continuation of a marker we are not collecting
-                }
-                p.payload.push_back(rec.data.payload);
-                if (p.payload.size() * 2 >= p.words_expected) {
-                    flush_pending(dev, lane, ctx);
-                }
-                break;
-            }
-            default: break;  // Event carries nothing the classic reader consumes
-        }
+        Row& r = rows_.emplace_back();
+        r.chip = d.core.chip_id;
+        r.core_x = static_cast<uint16_t>(d.core.coord.x);
+        r.core_y = static_cast<uint16_t>(d.core.coord.y);
+        r.risc = static_cast<uint8_t>(d.core.risc);
+        r.timer_id = legacy;
+        r.timestamp = d.timestamp;
+        r.data = d.payload.front();
+        r.type = "TS_DATA";
     }
 }
 
-void StreamingProfilerZoneCsvConsumer::write_csv(const std::string& path) const {
+void ZoneCsvConsumer::write_csv(const std::string& path) const {
     FILE* f = std::fopen(path.c_str(), "w");
     if (f == nullptr) {
         std::fprintf(stderr, "[streaming profiler zone-csv] cannot open %s\n", path.c_str());
@@ -188,11 +123,9 @@ void StreamingProfilerZoneCsvConsumer::write_csv(const std::string& path) const 
         "PCIe slot, core_x, core_y, RISC processor type, timer_id, "
         "time[cycles since reset], data, run host ID, trace id, trace id counter, "
         "zone name, type, source line, source file, meta data\n");
-
     // The PID, not a constant: two hand-concatenated captures then carry different ids and the reader's
     // multi-run warning still fires.
     const uint32_t run_id = static_cast<uint32_t>(::getpid());
-
     for (const Row& r : rows_) {
         std::fprintf(
             f,
@@ -210,26 +143,13 @@ void StreamingProfilerZoneCsvConsumer::write_csv(const std::string& path) const 
             r.type);
     }
     std::fclose(f);
-
     std::fprintf(
         stderr,
-        "[streaming profiler zone-csv] wrote %zu row(s) to %s (dropped batches: %llu, "
-        "events with no payload: %llu)\n",
+        "[streaming profiler zone-csv] wrote %zu row(s) to %s (dropped records: %llu, events with no payload: %llu)\n",
         rows_.size(),
         path.c_str(),
         static_cast<unsigned long long>(dropped_),
-        static_cast<unsigned long long>(incomplete_));
+        static_cast<unsigned long long>(empty_payloads_));
 }
-
-namespace {
-
-const bool g_zone_csv_declared = [] {
-    register_file_consumer<StreamingProfilerZoneCsvConsumer>("zone-csv", []() -> std::string {
-        return MetalContext::instance().rtoptions().get_streaming_profiler_zone_csv_path();
-    });
-    return true;
-}();
-
-}  // namespace
 
 }  // namespace tt::tt_metal::streaming_profiler

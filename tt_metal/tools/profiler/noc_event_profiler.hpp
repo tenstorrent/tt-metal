@@ -237,7 +237,7 @@ FORCE_INLINE void recordNocEventWithAddr(
 #include "event_metadata.hpp"
 #include "internal/risc_attribs.h"
 #include "kernel_profiler.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 
 namespace noc_event_profiler {
 

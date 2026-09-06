@@ -32,7 +32,7 @@
 // --empty only: registers a stats consumer to measure the profiler's own per-zone overhead.
 #include <algorithm>
 #include <mutex>
-#include "tools/profiler/streaming_profiler_consumer.hpp"
+#include <tt-metalium/experimental/streaming_profiler.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -140,20 +140,20 @@ void clock_probe(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
 // gaps are nested pairs (the kernel wrapper zone) and are dropped.
 struct EmptyZoneStats {
     std::mutex mu;  // register/unregister lifetime only; batches arrive on a single consumer thread
-    // Keyed (dev << 10) | lane: (start, duration) of every Zone record seen.
+    // Keyed (chip << 24) | (y << 16) | (x << 8) | risc: (start, duration) of every zone seen.
     std::map<uint32_t, std::vector<std::pair<uint64_t, uint64_t>>> lanes;
     double frequency_ghz = 0.0;
 
-    void operator()(const streaming_profiler::StreamingProfilerRecordBatch& batch) {
+    void operator()(
+        const experimental::streaming_profiler::Batch<experimental::streaming_profiler::Channel::Zones>& b) {
         std::lock_guard<std::mutex> lk(mu);
-        if (frequency_ghz == 0.0 && !batch.context->devices.empty()) {
-            frequency_ghz = batch.context->devices[0].frequency_ghz;
-        }
-        for (const auto& r : batch.records) {
-            if (r.meta.type != streaming_profiler::StreamingProfilerRecType::Zone) {
-                continue;
+        for (const auto& z : b.zones) {
+            if (frequency_ghz == 0.0) {
+                frequency_ghz = z.clock.get().frequency_ghz;
             }
-            lanes[(r.meta.dev << 10) | r.meta.lane].push_back({r.data.zone.start, r.data.zone.duration});
+            const uint32_t key = (z.core.chip_id << 24) | (z.core.coord.y << 16) | (z.core.coord.x << 8) |
+                                 static_cast<uint32_t>(z.core.risc);
+            lanes[key].push_back({z.start_timestamp, z.end_timestamp - z.start_timestamp});
         }
     }
 
@@ -184,7 +184,7 @@ struct EmptyZoneStats {
             std::vector<uint64_t> durs, gaps;
             uint64_t dur_sum = 0, gap_sum = 0;
             for (auto& [key, zones] : lanes) {
-                if ((key & 0x3FF) % 5 != risc || zones.size() < 2) {
+                if ((key & 0xFF) != risc || zones.size() < 2) {
                     continue;
                 }
                 std::sort(zones.begin(), zones.end());
@@ -238,7 +238,10 @@ int main(int argc, char** argv) {
     // --delay sets uniform nop-iterations per zone; 0 is a valid setting meaning max rate. Omitting it
     // selects a separate mode: graduated ~1..100 us wall-clock zone durations.
     uint32_t gx = 2, gy = 2, n_iters = 50, zone_cyc = 0;
-    bool bench_mode = false;    // --bench: ZONE_MODE 2, the DeviceZoneScopedN microbench
+    uint32_t bench_mode =
+        0;  // --bench: ZONE_MODE 2 microbench; 0 = spin only, 1 = empty zone, 2 = DeviceFlag, 3 = Data
+    uint32_t bench_delay = 0;  // --benchdelay: nop iterations between bench markers
+    bool bench_requested = false;
     bool knee_mode = false;     // set by --delay, including --delay 0
     bool clkprobe = false;      // --clkprobe 1: read wall clocks and exit, no workload
     uint32_t emit_markers = 0;  // --markers 1: emit the point-marker trio (Flag/Data/Iter) per iteration
@@ -257,7 +260,10 @@ int main(int argc, char** argv) {
         } else if (a == "--iters") {
             n_iters = v;
         } else if (a == "--bench") {
-            bench_mode = v != 0;
+            bench_mode = v;
+            bench_requested = true;
+        } else if (a == "--benchdelay") {
+            bench_delay = v;
         } else if (a == "--delay") {
             zone_cyc = v;
             knee_mode = true;  // not `zone_cyc != 0`: --delay 0 is a real knee point (max rate)
@@ -269,11 +275,12 @@ int main(int argc, char** argv) {
     }
 
     auto empty_stats = std::make_shared<EmptyZoneStats>();
-    streaming_profiler::StreamingProfilerConsumerHandle empty_handle = 0;
-    if (empty_mode != 0) {
-        empty_handle = streaming_profiler::register_consumer(
-            "empty-zone-overhead",
-            [empty_stats](const streaming_profiler::StreamingProfilerRecordBatch& b) { (*empty_stats)(b); });
+    experimental::streaming_profiler::SubscriptionHandle empty_handle = 0;
+    if (empty_mode != 0 || bench_requested) {
+        using experimental::streaming_profiler::Batch;
+        using experimental::streaming_profiler::Channel;
+        empty_handle = experimental::streaming_profiler::Subscribe(
+            "empty-zone-overhead", [empty_stats](const Batch<Channel::Zones>& b) { (*empty_stats)(b); });
     }
 
     const char* sd = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -313,8 +320,11 @@ int main(int argc, char** argv) {
     CoreRange cores(CoreCoord{0, 0}, CoreCoord{gx - 1, gy - 1});
     std::map<std::string, std::string> defs{
         {"N_ITERS", std::to_string(n_iters) + "u"},
-        {"ZONE_MODE", empty_mode >= 2 ? "4" : (empty_mode != 0 ? "3" : (bench_mode ? "2" : (knee_mode ? "1" : "0")))},
+        {"ZONE_MODE",
+         empty_mode >= 2 ? "4" : (empty_mode != 0 ? "3" : (bench_requested ? "2" : (knee_mode ? "1" : "0")))},
         {"EMIT_MARKERS", emit_markers != 0 ? "1" : "0"},
+        {"BENCH_KIND", std::to_string(bench_mode)},
+        {"BENCH_DELAY", std::to_string(bench_delay)},
         {"ZONE_CYC", std::to_string(zone_cyc) + "u"},
         {"BENCH_ADDR", "0x170000u"}};
     const std::string kdir = "tt_metal/programming_examples/profiler/test_streaming_profiler_zones/kernels/";
@@ -377,7 +387,7 @@ int main(int argc, char** argv) {
     printf(
         "[streaming profiler zones] workload done in %.1f ms; closing device.\n",
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_launch).count());
-    if (bench_mode) {
+    if (bench_requested) {
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         IDevice* d0 = mesh_device->get_devices().front();
         const CoreCoord wv = d0->virtual_core_from_logical_core(CoreCoord{0, 0}, CoreType::WORKER);
@@ -388,7 +398,7 @@ int main(int argc, char** argv) {
             cluster.read_reg(&zn, tgt, 0x170000ULL + slot * 8ULL + 4ULL);
             if (zn != 0) {
                 printf(
-                    "[zonebench] %s: %u zones, %u cycles, %.2f cycles/zone\n",
+                    "[zonebench] %s: %u markers, %u cycles, %.2f cycles/marker\n",
                     (const char*[]){"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"}[slot],
                     zn,
                     cyc,
@@ -397,9 +407,9 @@ int main(int argc, char** argv) {
         }
     }
     mesh_device->close();
-    if (empty_mode != 0) {
+    if (empty_mode != 0 || bench_requested) {
         // close() joined the delivery threads, so the stats are complete.
-        streaming_profiler::unregister_consumer(empty_handle);
+        experimental::streaming_profiler::Unsubscribe(empty_handle);
         empty_stats->report();
     }
     return 0;

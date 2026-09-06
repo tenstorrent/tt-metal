@@ -318,7 +318,7 @@ void JitBuildEnv::init(
                           std::to_string(config.profiler_dram_bank_size_per_risc_bytes) + " ";
     }
     if (rtoptions.get_streaming_profiler_enabled()) {
-        // Streaming (perf_debug) profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
+        // Streaming profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
         // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps every
         // DeviceZoneScopedN / DeviceTimestampedData site compiled; PROFILE_STREAMING makes
         // tools/profiler/kernel_profiler.hpp select the SPSC producer (kernel_profiler_streaming.hpp) instead of

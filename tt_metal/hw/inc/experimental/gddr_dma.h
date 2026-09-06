@@ -13,9 +13,9 @@ namespace experimental {
 /*
     GDDR DMA API for DRISC kernels - DRISC L1 <-> GDDR transfers.
 
-    Two independent TX streams (0 and 1). Each stream can concurrently carry:
-    - 255 outstanding reads
-    - 15 outstanding writes
+    Two independent TX streams (0 and 1). Each stream can concurrently carry kMaxOutstandingReads reads and
+    kMaxOutstandingWrites writes; issuing into a full queue is silently dropped, so the issue functions poll the
+    stream's ready flag first unless the caller opts out and keeps its own count under the limit.
 
     Typical read:
         dma_async_read(stream, src_gddr, dst_l1, size_bytes);
@@ -28,6 +28,10 @@ namespace experimental {
     All size and increment parameters are in bytes and must be multiples of 16.
     stream must be 0 or 1.
 */
+
+// Command-queue depth per TX stream; the status register's outstanding-count fields are 8 and 4 bits wide.
+constexpr uint32_t kMaxOutstandingReads = 255;
+constexpr uint32_t kMaxOutstandingWrites = 15;
 
 #ifdef COMPILE_FOR_DRISC
 
@@ -45,11 +49,11 @@ static inline __attribute__((always_inline)) void check_transfer_size_(uint32_t 
 }
 
 static inline __attribute__((always_inline)) void check_outstanding_reads_(uint32_t n) {
-    ASSERT(n <= 255, DebugAssertTripped);
+    ASSERT(n <= kMaxOutstandingReads, DebugAssertTripped);
 }
 
 static inline __attribute__((always_inline)) void check_outstanding_writes_(uint32_t n) {
-    ASSERT(n <= 15, DebugAssertTripped);
+    ASSERT(n <= kMaxOutstandingWrites, DebugAssertTripped);
 }
 
 static inline __attribute__((always_inline)) void program_dma_write_addresses_(
@@ -100,8 +104,9 @@ inline __attribute__((always_inline)) void dma_set_burst_size(uint8_t burst_size
 /**
  * @brief Non-blocking GDDR to L1 read. Pair with dma_async_read_barrier().
  *
- * @tparam kWaitReady Poll the engine's read-ready status before issuing. False skips the poll; the caller
- *                    must then bound the in-flight read count itself (queue-full is otherwise silent).
+ * @tparam kWaitReady Poll the stream's read-ready flag before issuing. False skips the poll: the caller must then
+ *                    guarantee fewer than kMaxOutstandingReads reads are in flight on the stream when it issues
+ *                    (dma_get_reads_outstanding() is the count), since a full queue drops the issue silently.
  * @param stream      TX stream (0 or 1).
  * @param src_gddr    GDDR source address (64-bit).
  * @param dst_l1      DRISC L1 destination address (32-bit).
@@ -131,8 +136,9 @@ inline __attribute__((always_inline)) void dma_async_read(
 /**
  * @brief Non-blocking L1 to GDDR write. Pair with dma_async_write_barrier().
  *
- * @tparam kWaitReady Poll the engine's write-ready status before issuing. False skips the poll; the caller
- *                    must then bound the in-flight write count itself (queue-full is otherwise silent).
+ * @tparam kWaitReady Poll the stream's write-ready flag before issuing. False skips the poll: the caller must then
+ *                    guarantee fewer than kMaxOutstandingWrites writes are in flight on the stream when it issues
+ *                    (dma_get_writes_outstanding() is the count), since a full queue drops the issue silently.
  * @param stream      TX stream (0 or 1).
  * @param src_l1      DRISC L1 source address (32-bit).
  * @param dst_gddr    GDDR destination address (64-bit).

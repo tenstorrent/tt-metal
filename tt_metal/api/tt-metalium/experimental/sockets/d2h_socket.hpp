@@ -6,6 +6,11 @@
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <array>
+#include <ranges>
+#include <span>
 #include <memory>
 #include <utility>
 
@@ -104,11 +109,9 @@ public:
      */
     struct ExternalConfigBuffer {
         uint32_t address;  // L1 address on the sender core
-        // Set when the sender is not a Tensix worker (a Blackhole DRISC): the socket then addresses it by
-        // physical->virtual NoC translation plus the full L1 address. Addressing only: the static-vs-dynamic TLB
-        // path is decided by asking UMD for a window over the config buffer (init_sender_tlb), so a caller on a DRAM
-        // port without one should configure a window first or every read() pays a ~210 ns reconfigure.
-        bool sender_uses_physical_noc_addr = false;
+        // For any type but TENSIX, `sender_core.core_coord` is the core's physical NoC coordinate (such cores
+        // have no logical grid) and host writes into its L1 carry that core type's L1 NoC offset.
+        HalProgrammableCoreType sender_core_type = HalProgrammableCoreType::TENSIX;
     };
 
     /**
@@ -282,31 +285,23 @@ public:
     void read(void* data, uint32_t num_pages, bool notify_sender = true);
 
     /**
-     * @brief View into the FIFO's host memory returned by peek(): one span, or two when the
-     *        requested range wraps the FIFO end (`second` is then the FIFO base).
+     * @brief The words of a peek(): one range that runs straight across the FIFO's wrap point. Bulk copiers can
+     *        take base() instead, the one or two contiguous spans the words sit in.
      */
-    struct ReadView {
-        const uint32_t* first = nullptr;
-        uint32_t first_bytes = 0;
-        const uint32_t* second = nullptr;
-        uint32_t second_bytes = 0;
-    };
+    using PeekRange = decltype(std::views::join(std::declval<std::array<std::span<const uint32_t>, 2>>()));
 
     /**
-     * @brief Zero-copy read: returns spans into the FIFO's host memory instead of copying.
-     *
-     * Blocks until `num_pages` are available, so only request what pages_available() reported. The spans
-     * stay valid until the caller retires them with pop(), since the device only reclaims FIFO space it has
-     * been notified of via `bytes_acked`. Peeking again before pop() returns the same data.
+     * @brief Zero-copy read: blocks until `num_pages` are available and returns them in place, consuming
+     *        nothing. The range stays valid until pop() retires the pages, and a second peek() before that
+     *        returns the same words.
      *
      * @throws TT_FATAL if page_size has not been set or num_pages exceeds FIFO capacity.
      */
-    ReadView peek(uint32_t num_pages);
+    PeekRange peek(uint32_t num_pages);
 
     /**
-     * @brief Retires a prior peek(): advances the read pointer past `num_pages` and (optionally)
-     *        notifies the device that the space is reclaimable. Call with the same page count as
-     *        the peek(), after the caller has finished with the spans.
+     * @brief Consumes `num_pages` from the read position; with `notify_sender`, also returns their space to the
+     *        device. read() is peek(), a copy, and pop().
      */
     void pop(uint32_t num_pages, bool notify_sender = true);
 
@@ -395,6 +390,7 @@ private:
         const PinnedBufferInfo& bytes_sent_info) const;
     void init_sender_tlb(
         const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
+    CoreCoord sender_virtual_core(const MeshDevice& mesh_device, ChipId device_id) const;
 
     void wait_for_bytes(uint32_t num_bytes);
     void pop_bytes(uint32_t num_bytes);
@@ -416,7 +412,7 @@ private:
     uint32_t read_ptr_ = 0;
     uint32_t fifo_curr_size_ = 0;
     uint32_t config_buffer_address_ = 0;
-    bool sender_uses_physical_noc_addr_ = false;  // non-worker sender addressing (see ExternalConfigBuffer)
+    HalProgrammableCoreType sender_core_type_ = HalProgrammableCoreType::TENSIX;
     uint32_t pcie_alignment_ = 0;
     uint32_t bytes_acked_device_offset_ = 0;
     tt::umd::TlbWindow* sender_core_tlb_ = nullptr;

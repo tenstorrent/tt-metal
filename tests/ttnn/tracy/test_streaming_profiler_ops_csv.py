@@ -52,7 +52,6 @@ def test_streaming_profiler_ops_csv():
             "TT_METAL_HOME": str(TT_METAL_HOME),
             # Its own mode; do not also set TT_METAL_DEVICE_PROFILER (the two are mutually exclusive).
             "TT_METAL_STREAMING_PROFILER": "1",
-            "TT_METAL_STREAMING_PROFILER_ROLE_SPLIT": "1",
             "TT_METAL_STREAMING_PROFILER_OPS_CSV": str(csv_path),
         }
     )

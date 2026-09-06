@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <concepts>
 #include <cstring>
 #include <cstddef>
 #include <cstdint>
@@ -19,16 +20,17 @@
 #include <utility>
 
 #include <tt_stl/assert.hpp>
+#include <umd/device/driver_atomics.hpp>
 #include <tt_stl/tt_pause.hpp>
 
-#if defined(__x86_64__)
-#include <emmintrin.h>
-#endif
-#if defined(__linux__)
-#include <sys/mman.h>
-#endif
-
 namespace tt::tt_metal {
+
+/**
+ * @brief A writer for BroadcastRing::Writer::publish_direct: `write(run, first)` fills one contiguous run of raw slot
+ *        storage with the batch's items [first, first + run.size() / sizeof(T)).
+ */
+template <typename F>
+concept BroadcastRingSlotWriter = std::invocable<F, std::span<std::byte>, size_t>;
 
 /**
  * @brief Single-producer, multi-consumer broadcast ring buffer.
@@ -70,54 +72,29 @@ public:
      * @param capacity Requested slot count; gets rounded up to the next power of two.
      */
     explicit BroadcastRing(size_t capacity) :
-        capacity_(capacity ? std::bit_ceil(capacity) : 1),
-        storage_(heap_slots(capacity_)),
-        writer_(&shared_state_, view()) {}
+        BroadcastRing(capacity, std::make_unique<std::byte[]>(storage_bytes(capacity))) {}
+
+    /** @brief Bytes of caller-provided memory a ring of @p capacity slots needs, alignment slack included. */
+    static size_t storage_bytes(size_t capacity) noexcept {
+        return round_capacity(capacity) * sizeof(Slot) + kFalseSharingSize - 1;
+    }
 
     /**
-     * @brief Constructs the ring but leaves its slots UNTOUCHED, for a caller that will call
-     *        construct_slots() from the thread that is going to write them. The slots are backed by an
-     *        anonymous mmap (huge pages above 64 MiB) rather than the heap -- see mmap_slots().
-     *
-     * This is the constructor the streaming profiler's receiver uses; the default constructor above keeps
-     * main's heap-backed slots byte-for-byte for every other ring (e.g. the real-time profiler's).
-     *
-     * First touch decides a page's NUMA node for the life of the mapping, so constructing the slots here
-     * would bind a multi-GB ring to whichever thread built it rather than the one streaming into it.
+     * @brief Constructs a broadcast ring in caller-provided memory of at least storage_bytes(capacity) bytes that
+     *        outlives the ring. The slots are constructed here, so placement policy on the pages (NUMA binding,
+     *        huge pages) is applied before this call.
      */
-    struct DeferSlotInit {};
-    BroadcastRing(size_t capacity, DeferSlotInit) :
-        capacity_(capacity ? std::bit_ceil(capacity) : 1),
-        storage_(mmap_slots(capacity_)),
-        writer_(&shared_state_, view()) {}
-
-    /**
-     * @brief The anonymous mapping backing the slots, or {nullptr, 0} when the slots are heap-backed.
-     *
-     * Exposed so a caller can set a NUMA policy on the pages before construct_slots() faults them, making
-     * placement independent of which thread touches them first.
-     */
-    std::pair<void*, size_t> raw_mapping() const noexcept { return {storage_.map_base, storage_.map_bytes}; }
-
-    /** @brief Constructs the deferred slots. Call once, before any reader or writer runs. */
-    void construct_slots() noexcept {
-        for (size_t i = 0; i < capacity_; i++) {
-            new (storage_.slots + i) Slot();
-        }
+    BroadcastRing(size_t capacity, std::span<std::byte> storage) :
+        capacity_(round_capacity(capacity)), slots_(aligned_slots(storage)), writer_(&shared_state_, view()) {
+        TT_FATAL(storage.size() >= storage_bytes(capacity), "BroadcastRing storage is smaller than storage_bytes()");
+        std::uninitialized_default_construct_n(slots_, capacity_);
     }
 
     ~BroadcastRing() {
         TT_FATAL(
             active_readers_.load(std::memory_order_relaxed) == 0,
             "BroadcastRing readers must be destroyed before the ring");
-#if defined(__linux__)
-        if (storage_.map_base != nullptr) {
-            for (size_t i = 0; i < capacity_; i++) {
-                storage_.slots[i].~Slot();
-            }
-            ::munmap(storage_.map_base, storage_.map_bytes);
-        }
-#endif
+        std::destroy_n(slots_, capacity_);
     }
 
     [[nodiscard]] size_t capacity() const noexcept { return capacity_; }
@@ -150,67 +127,30 @@ public:
         }
 
         /**
-         * @brief Current stream position: the count of items ever published. The start of a
-         *        direct-emit region (see emit_reserve/emit_store/emit_commit).
+         * @brief Publishes @p n items (at most capacity()) that the caller writes into slot storage itself, for
+         *        writers that stream (e.g. non-temporal stores). @p write runs once per contiguous run, at most two
+         *        (split where the ring wraps), and the publish is ordered after it. Does not wake readers; see
+         *        wake_readers().
          */
-        [[nodiscard]] uint64_t position() const noexcept { return head_cache_; }
-
-        /**
-         * @brief Direct emit, step 1: raise the claim to @p upto before storing items into
-         *        [position(), upto). May be called repeatedly with a growing bound while a region
-         *        is open (e.g. a worst-case bump per input chunk); @p upto must never decrease
-         *        within the region. Readers treat claimed-but-uncommitted slots as potentially
-         *        overwritten, so keep the over-claim small relative to capacity.
-         */
-        void emit_reserve(uint64_t upto) noexcept {
-            shared_state_->claim.store(upto, std::memory_order_relaxed);
+        template <BroadcastRingSlotWriter Write>
+        void publish_direct(size_t n, Write write) noexcept {
+            static_assert(
+                kTriviallyCopyable && sizeof(T) == sizeof(Slot),
+                "direct emit needs items that are their slot's exact storage");
+            const uint64_t head = head_cache_;
+            shared_state_->claim.store(head + n, std::memory_order_relaxed);
             std::atomic_thread_fence(std::memory_order_release);
-        }
-
-        /** @brief Direct emit, step 2: store one item at @p pos, which must be below the reserved bound. */
-        void emit_store(uint64_t pos, const T& item) noexcept {
-#if defined(__x86_64__)
-            // Non-temporal: the ring is written far beyond cache capacity and never re-read by the writer, and
-            // emit_commit's sfence orders these before the head release. They bypass the slot's atomic words, so
-            // tearing stays bounded by the claim-recheck readers already tolerate. Every writer path must stay NT:
-            // mixing cached and NT stores into one line costs a WC flush plus an RFO per collision.
-            if constexpr (kTriviallyCopyable && sizeof(T) == 16 && sizeof(Slot) == 16) {
-                _mm_stream_si128(
-                    reinterpret_cast<__m128i*>(&view_.slot_at(pos)),
-                    _mm_loadu_si128(reinterpret_cast<const __m128i*>(&item)));
-                return;
+            const size_t first_run = std::min<size_t>(n, view_.capacity - (head & (view_.capacity - 1)));
+            write(std::span<std::byte>(reinterpret_cast<std::byte*>(&view_.slot_at(head)), first_run * sizeof(T)), 0);
+            if (first_run < n) {
+                write(
+                    std::span<std::byte>(reinterpret_cast<std::byte*>(view_.slots), (n - first_run) * sizeof(T)),
+                    first_run);
             }
-            // 8-byte-multiple slots (the 24 B streaming profiler record): movnti per quadword.
-            if constexpr (kTriviallyCopyable && sizeof(T) % 8 == 0 && sizeof(Slot) == sizeof(T)) {
-                auto* q = reinterpret_cast<long long*>(&view_.slot_at(pos));
-                const auto* src = reinterpret_cast<const long long*>(&item);
-#pragma GCC unroll 8
-                for (size_t k = 0; k < sizeof(T) / 8; k++) {
-                    _mm_stream_si64(q + k, src[k]);
-                }
-                return;
-            }
-#endif
-            view_.slot_at(pos).store(item);
-        }
-
-        /**
-         * @brief Address of the slot at @p pos, for direct-emit bulk stores built outside the ring
-         *        (same reserve/commit contract and the same non-temporal caveats as emit_store).
-         */
-        [[nodiscard]] void* emit_slot_ptr(uint64_t pos) noexcept { return &view_.slot_at(pos); }
-
-        /**
-         * @brief Direct emit, step 3: publish items [position(), pos) and settle the claim to the
-         *        committed position. Does not wake readers; see wake_readers().
-         */
-        void emit_commit(uint64_t pos) noexcept {
-#if defined(__x86_64__)
-            _mm_sfence();
-#endif
-            shared_state_->head.store(pos, std::memory_order_release);
-            shared_state_->claim.store(pos, std::memory_order_relaxed);
-            head_cache_ = pos;
+            tt_driver_atomics::sfence();  // the store fence also drains non-temporal stores
+            shared_state_->head.store(head + n, std::memory_order_release);
+            shared_state_->claim.store(head + n, std::memory_order_relaxed);
+            head_cache_ = head + n;
         }
 
         /**
@@ -439,10 +379,7 @@ private:
         kTriviallyCopyable || (std::is_nothrow_move_constructible_v<T> && std::is_nothrow_move_assignable_v<T>);
     static constexpr bool kLoadNoexcept = kTriviallyCopyable || std::is_nothrow_copy_assignable_v<T>;
 
-    // 16 B slots are 16-aligned so Writer::emit_store's non-temporal store path is usable on them.
-    static constexpr size_t kSlotAlign = (kTriviallyCopyable && sizeof(T) == 16) ? 16 : alignof(std::atomic<uint64_t>);
-
-    struct alignas(kSlotAlign) AtomicSlot {
+    struct AtomicSlot {
         static constexpr size_t kWordCount = (sizeof(T) + sizeof(uint64_t) - 1) / sizeof(uint64_t);
 
         std::array<std::atomic<uint64_t>, kWordCount> words;
@@ -498,58 +435,6 @@ private:
         Slot& slot_at(uint64_t position) const noexcept { return slots[position & (capacity - 1)]; }
     };
 
-    struct SlotStorage {
-        Slot* slots = nullptr;
-        std::unique_ptr<Slot[]> owned;
-        void* map_base = nullptr;
-        size_t map_bytes = 0;
-    };
-
-    // Default constructor's storage: heap slots, constructed, exactly as main.
-    static SlotStorage heap_slots(size_t n) {
-        SlotStorage storage;
-        storage.owned = std::make_unique<Slot[]>(n);
-        storage.slots = storage.owned.get();
-        return storage;
-    }
-
-    // DeferSlotInit storage (streaming profiler receiver). mmap-backed at EVERY size, not just the
-    // huge-page tier: a page-aligned base is what guarantees the cache-line alignment that direct emitters
-    // stream 64 B non-temporal stores against (via emit_slot_ptr) -- new[]'s 16 B alignment
-    // general-protection-faulted such a store, which presents as a SIGSEGV at a nil address, on any ring
-    // small enough to have skipped the mmap. Large slot arrays are additionally walked far beyond TLB
-    // reach, so they get 2 MiB pages; THP is madvise-opt-in on typical deployments, hence the explicit
-    // MADV_HUGEPAGE (over-mapped by one huge page to guarantee an aligned start, which the huge-page fault
-    // path requires). Slots are left unconstructed for construct_slots(). Falls back to (unconstructed)
-    // heap slots if mmap fails or off Linux.
-    static SlotStorage mmap_slots(size_t n) {
-        SlotStorage storage;
-#if defined(__linux__)
-        static constexpr size_t kHugePageSize = size_t{2} << 20;
-        static constexpr size_t kHugePageMinBytes = size_t{64} << 20;
-        const size_t bytes = n * sizeof(Slot);
-        const bool huge = bytes >= kHugePageMinBytes;
-        const size_t map_bytes = huge ? bytes + kHugePageSize : bytes;
-        void* base = ::mmap(nullptr, map_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (base != MAP_FAILED) {
-            storage.map_base = base;
-            storage.map_bytes = map_bytes;
-            uintptr_t aligned = reinterpret_cast<uintptr_t>(base);
-            if (huge) {
-                aligned = (aligned + kHugePageSize - 1) & ~(kHugePageSize - 1);
-                ::madvise(reinterpret_cast<void*>(aligned), bytes, MADV_HUGEPAGE);
-            }
-            storage.slots = reinterpret_cast<Slot*>(aligned);
-            return storage;
-        }
-#endif
-        // Heap fallback: make_unique<Slot[]> value-initializes, so these slots are already constructed
-        // and construct_slots()'s placement-new over them is a harmless re-construction of trivial state.
-        storage.owned = std::make_unique<Slot[]>(n);
-        storage.slots = storage.owned.get();
-        return storage;
-    }
-
     // head/claim are accessed together so they share a cache line; wake_token is on its own line so a
     // reader spin-waiting on it in wait() can't steal the head/claim line from the writer
     struct SharedState {
@@ -558,10 +443,21 @@ private:
         alignas(kFalseSharingSize) WakeTokenAtomic wake_token{0};
     };
 
-    SlotsView view() const noexcept { return {storage_.slots, capacity_}; }
+    SlotsView view() const noexcept { return {slots_, capacity_}; }
+
+    static size_t round_capacity(size_t capacity) noexcept { return capacity ? std::bit_ceil(capacity) : 1; }
+    static Slot* aligned_slots(std::span<std::byte> storage) noexcept {
+        const uintptr_t base = reinterpret_cast<uintptr_t>(storage.data());
+        return reinterpret_cast<Slot*>((base + kFalseSharingSize - 1) & ~uintptr_t{kFalseSharingSize - 1});
+    }
+    BroadcastRing(size_t capacity, std::unique_ptr<std::byte[]> owned) :
+        BroadcastRing(capacity, std::span<std::byte>(owned.get(), storage_bytes(capacity))) {
+        owned_ = std::move(owned);
+    }
 
     const size_t capacity_;
-    SlotStorage storage_;
+    std::unique_ptr<std::byte[]> owned_;
+    Slot* const slots_;
     SharedState shared_state_;
     mutable std::atomic<uint32_t> active_readers_{0};
     Writer writer_;

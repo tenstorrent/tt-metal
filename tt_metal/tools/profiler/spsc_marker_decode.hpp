@@ -4,25 +4,20 @@
 //
 // Host-side decode of the relay's wire, and its only definition. A frame is a 16-word prefix (word 1 = payload
 // length), the SPSC_SPAN_WIRE_CTRL_WORDS control block, then each RISC's live ring window packed flat with congruence
-// pads and wraps resolved device-side; SPSC_SPAN_RAW_FLAG frames carry the whole raw span instead (five full
-// rings, circular). Packet formats: spsc_packet.h. The producer publishes its tail only on packet boundaries,
-// so a window never ends mid-packet.
+// pads and wraps resolved device-side. Packet formats: spsc_packet.h. The producer publishes its tail only on
+// packet boundaries, so a window never ends mid-packet.
 #pragma once
 
-#include <algorithm>
 #include <bit>
 #include <cstring>
 #include <cstdint>
-#include <cstdio>
-#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
-#if defined(__x86_64__)
-#include <xmmintrin.h>
-#endif
-#if defined(__AVX2__)
 #include <immintrin.h>
+
+#if !defined(__AVX2__)
+#error "the streaming profiler decode is AVX2 code; build for x86-64-v3 or newer"
 #endif
 
 #include "hostdev/streaming_profiler_common.h"
@@ -30,11 +25,9 @@
 
 static_assert(
     PP_BULK_SPAN == kernel_profiler::SPSC_SPAN_PACKET_TYPE,
-    "spsc_packet.h (plain C, relay firmware) and profiler_common.h (C++, metal kernels) must agree on the "
+    "spsc_packet.h (plain C, host decoder) and profiler_common.h (C++, relay and metal kernels) must agree on the "
     "BULK_SPAN wire code -- they cannot include each other, so this is the only thing holding them together");
-// Same argument for the three codes the DRISC self-profiling packer in profiler_common.h emits directly.
-static_assert(PP_ZONE_START == kernel_profiler::SPSC_TYPE_ZONE_START, "ZONE_START wire code disagrees");
-static_assert(PP_ZONE_END == kernel_profiler::SPSC_TYPE_ZONE_END, "ZONE_END wire code disagrees");
+// Same argument for the codes profiler_common.h also names.
 static_assert(PP_STICKY_TIMER == kernel_profiler::SPSC_TYPE_STICKY_TIMER, "STICKY_TIMER wire code disagrees");
 static_assert(PP_ZONE_L == kernel_profiler::SPSC_TYPE_ZONE_L, "ZONE_L wire code disagrees");
 static_assert(PP_TYPE_SHIFT == kernel_profiler::SPSC_SPAN_TYPE_SHIFT, "packet type field moved");
@@ -49,9 +42,6 @@ namespace tt::tt_metal::profiler {
 inline constexpr uint32_t kSpscRingCap = kernel_profiler::PROFILER_L1_VECTOR_SIZE;
 inline constexpr uint32_t kSpscRingMask = kSpscRingCap - 1;
 inline constexpr uint32_t kSpscNRiscDecode = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
-
-// Largest PP_DATA payload the 7-bit size field can express; bounds the raw-layout unwrap scratch.
-inline constexpr uint32_t kSpscMaxDataWords = 127;
 
 // Worst case: five full rings behind maximal pads. Bounds the bounce buffer and frame validation, not any
 // device layout.
@@ -74,16 +64,9 @@ struct SpanDecodeState {
     std::vector<uint8_t> seeded;
     std::unordered_map<uint32_t, uint32_t> core_of_xy;  // packed (y<<16)|x -> dense core index
     uint64_t live_words = 0;
-    uint64_t resync_events = 0;
     uint64_t resync_words = 0;
-    uint64_t head_lag = 0;
     uint64_t anomalies = 0;  // torn run / truncated run / undecodable word
     uint64_t unknown_core_frames = 0;
-    // Diagnostic: vector-path vs scalar-fallback record counts.
-    uint64_t vec_zone_recs = 0, vec_atomic_recs = 0, scalar_recs = 0, vec_block_rejects = 0;
-    uint64_t vec_atomic_calls = 0;
-    uint64_t vec_zone_s_recs = 0, vec_zone_s_calls = 0;
-    uint64_t scalar_by_type[16] = {};
 
     void reset(uint32_t num_cores) {
         timer_hi.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
@@ -94,48 +77,20 @@ struct SpanDecodeState {
     }
 };
 
-struct SpscIgnoreProg {
-    void operator()(uint32_t /*lane*/, uint32_t /*prog*/) const {}
-};
+// Attributed rather than -march: raising the build baseline changes codegen everywhere; clang inlines only
+// across matching target attributes, so every function in the block carries it, and callers pass plain
+// arguments because they cannot form a __m512i. Shuffle operands are file-scope data so the block loads them
+// instead of rebuilding vectors per call.
+// ZONE_ATOMIC operands: word0 (type|id27), word1 (end low) and word2 (duration) of sixteen 3-word records
+// gathered from the three loaded vectors; indices 0-31 come from (v0, v1), the masked tail lanes from v2.
+alignas(64) inline constexpr uint32_t kA16W0[16] = {0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 1, 4, 7, 10, 13};
+alignas(64) inline constexpr uint32_t kA16W1[16] = {1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 2, 5, 8, 11, 14};
+alignas(64) inline constexpr uint32_t kA16W2[16] = {2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 0, 3, 6, 9, 12, 15};
+inline constexpr __mmask16 kA16FromV2W0 = 0xF800, kA16FromV2W1 = 0xF800, kA16FromV2W2 = 0xFC00;
 
-// Sentinel default for the vectorized zone-block sink: without a real one the walk stays scalar.
-struct SpscNoZones8 {};
-struct SpscNoAtomic8 {};
-struct SpscNoAtomic16 {};
-struct SpscNoZoneS16 {};
-
-#if defined(__AVX2__)
-// Deinterleave eight consecutive 3-word atomic records into vectors of word0 (type|id27), word1 (ts low) and
-// word2 (duration). Attributed rather than -march: raising the build baseline changes codegen everywhere;
-// clang inlines only across matching target attributes, so every function in the block carries it, and
-// callers pass plain arguments because they cannot form a __m512i. Shuffle operands are file-scope data so
-// the block loads them instead of rebuilding vectors per call. kA16Lines: record r's output dwords
-// {ts, th, id, meta, prog, dur} come from wire words {3r+1, -, 3r, -, -, 3r+2}, indices 16/17/18 take
-// th/meta/prog from the constant operand; eight records = 24 words = 1.5 vectors, so rows repeat every three
-// lines.
-alignas(64) inline constexpr uint32_t kA16Lines[4][16] = {
-    {1, 16, 0, 17, 18, 2, 4, 16, 3, 17, 18, 5, 7, 16, 6, 17},        // line 0 from v0 (words 0-15)
-    {18, 0, 2, 16, 1, 17, 18, 3, 5, 16, 4, 17, 18, 6, 8, 16},        // lines 1, 4
-    {7, 17, 18, 9, 11, 16, 10, 17, 18, 12, 14, 16, 13, 17, 18, 15},  // lines 2, 5
-    {9, 16, 8, 17, 18, 10, 12, 16, 11, 17, 18, 13, 15, 16, 14, 17},  // line 3 from v1 (words 16-31)
-};
-
-// ZONE_S operands: even/odd deinterleave of a 16-record (32-word) load pair into w0s/w1s; the EM/D rows
-// compose output lines from computed E (ends), M (meta|id), D (dur|prog) via one two-source permute
-// (0-7 = E, 8-15 = M) plus a masked permute for D. Three lines per 8 records.
+// ZONE_S operands: even/odd deinterleave of a 16-record (32-word) load pair into w0s/w1s.
 alignas(64) inline constexpr uint32_t kZS16Even[16] = {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30};
 alignas(64) inline constexpr uint32_t kZS16Odd[16] = {1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31};
-alignas(64) inline constexpr uint64_t kZS16EM[3][8] = {
-    {0, 8, 0, 1, 9, 0, 2, 10},
-    {0, 3, 11, 0, 4, 12, 0, 5},
-    {13, 0, 6, 14, 0, 7, 15, 0},
-};
-alignas(64) inline constexpr uint64_t kZS16D[3][8] = {
-    {0, 0, 0, 0, 0, 1, 0, 0},
-    {2, 0, 0, 3, 0, 0, 4, 0},
-    {0, 5, 0, 0, 6, 0, 0, 7},
-};
-inline constexpr uint8_t kZS16DMask[3] = {0x24, 0x49, 0x92};
 
 // The build baseline is x86-64-v3, so AVX-512 exists only inside attributed functions and every call into one
 // sits behind this check; a host without it runs the AVX2/scalar tier instead of faulting.
@@ -147,72 +102,60 @@ inline bool spsc_host_avx512() {
     return v;
 }
 
-// Blocks compose 24 B records as whole 64 B lines into a Sink. Stores are cached, not NT: the consumer
-// re-reads the scratch immediately. The audit sink stores nothing (Sink::kStores). A put may over-store up to
-// a full vector past its nq qwords, so the buffer needs 64 B of slack past cap.
-struct SpscCachedRecSink {
+// Every record a consumer sees is the public 32 B Rec {start|ts, duration, meta<<32 | id, prog}; blocks compose
+// them as whole 64 B lines straight into the Sink's buffer. Stores are cached, not NT: the consumer re-reads the
+// scratch immediately. The audit sink stores nothing (Sink::kStores). A partial block still writes its full
+// half (4 lines), so the buffer needs kSpscSinkSlackRecs of slack past cap.
+inline constexpr uint32_t kSpscRecBytes = 32;
+inline constexpr uint32_t kSpscSinkSlackRecs = 8;
+inline constexpr uint32_t kSpscRecTypeZone = 1;  // RecType::Zone, pinned by the receiver's layout probe
+struct SpscRecSink {
     static constexpr bool kStores = true;
     uint8_t* buf = nullptr;
-    uint64_t off = 0;  // bytes written; 24 B per record
+    uint64_t off = 0;  // bytes written
 
-    __attribute__((target("avx512f"))) inline void put(const __m512i* lines, uint32_t nq) {
-        for (uint32_t k = 0; 8 * k < nq; k++) {
-            _mm512_storeu_si512(buf + off + 64ull * k, lines[k]);
-        }
-        off += 8ull * nq;
-    }
-    inline void put3(uint64_t a, uint64_t b, uint64_t c) {  // one 24 B record
-        uint64_t* p = reinterpret_cast<uint64_t*>(buf + off);
-        p[0] = a;
-        p[1] = b;
-        p[2] = c;
-        off += 24;
-    }
-    __attribute__((target("avx512f"))) inline void put_lines(const __m512i* lines, uint32_t bytes) {
-        put(lines, bytes >> 3);
-    }
-};
-struct SpscNullRecSink {
-    static constexpr bool kStores = false;
-    inline void put(const __m512i*, uint32_t) {}
-    inline void put3(uint64_t, uint64_t, uint64_t) {}
-    inline void put_lines(const __m512i*, uint32_t) {}
-};
-
-// ZONE_S blocks compose the consumer-facing 32 B record {start, duration, meta<<32|id, prog} directly; only
-// genuine start/end pairs take the scalar pairing arm.
-struct SpscZone32Sink {
-    static constexpr bool kStores = true;
-    static constexpr bool kZone32 = true;
-    uint8_t* buf = nullptr;
-    uint64_t off = 0;  // bytes written; 32 B per record
-
-    __attribute__((target("avx512f"))) inline void put_lines(const __m512i* lines, uint32_t bytes) {
-        for (uint32_t k = 0; 64 * k < bytes; k++) {
-            _mm512_storeu_si512(buf + off + 64ull * k, lines[k]);
-        }
-        off += bytes;
-    }
     inline void put4(uint64_t q0, uint64_t q1, uint64_t q2, uint64_t q3) {
         uint64_t* p = reinterpret_cast<uint64_t*>(buf + off);
         p[0] = q0;
         p[1] = q1;
         p[2] = q2;
         p[3] = q3;
-        off += 32;
+        off += kSpscRecBytes;
     }
 };
-
-template <typename S>
-inline constexpr bool kSpscSinkZone32 = requires { S::kZone32; };
+struct SpscNullRecSink {
+    static constexpr bool kStores = false;
+    inline void put4(uint64_t, uint64_t, uint64_t, uint64_t) {}
+};
 
 #pragma clang attribute push(__attribute__((target("avx512f,avx512bw,avx512vl,avx512dq"))), apply_to = function)
+
+// Eight zone records {start, duration, meta|id, prog} as four lines stored straight to dst: lanes 0,1,4,5 of
+// each line come from (start, duration), lanes 2,3,6,7 from (meta|id, prog); one index vector serves both
+// permutes and advances by two records per line. Always writes all four lines (the sink's slack covers a
+// partial block), so there is no per-line count to compute.
+inline void spsc_zone_lines8(__m512i s64, __m512i d64, __m512i m64, __m512i pv, uint8_t* dst) {
+    __m512i idx = _mm512_set_epi64(9, 1, 9, 1, 8, 0, 8, 0);
+    const __m512i inc = _mm512_set1_epi64(2);
+    for (int j = 0; j < 4; j++) {
+        const __m512i sd = _mm512_permutex2var_epi64(s64, idx, d64);
+        const __m512i mp = _mm512_permutex2var_epi64(m64, idx, pv);
+        _mm512_storeu_si512(dst + 64 * j, _mm512_mask_blend_epi64(0xCC, sd, mp));
+        idx = _mm512_add_epi64(idx, inc);
+    }
+}
 
 struct SpscA16Result {
     uint32_t n;
     uint64_t ts_first;
     uint64_t ts_last;
+    bool near_wrap;  // some end in the block lies within kLatchWindow of a low-word wrap
 };
+
+// A wall-clock read whose low word is this close below a wrap may carry the next epoch's high word (the
+// device-side latch race, kernel_profiler_streaming.hpp read_wall_clock); the decoder repairs it when the lane's
+// next timestamp regresses. The gap is a few cycles; 1024 keeps the false-positive odds at ~2e-7 per regression.
+inline constexpr uint32_t kLatchWindow = 0xFFFFFC00u;
 
 // Any n from 1 to 16: each output line comes straight off the wire through one two-source permute, with
 // th/meta/prog on the constant operand.
@@ -226,7 +169,7 @@ inline SpscA16Result spsc_atomic16_avx512(
     uint32_t lane,
     uint32_t dev,
     Sink& sw) {
-    SpscA16Result out{0, 0, 0};
+    SpscA16Result out{0, 0, 0, false};
     __m512i v0, v1, v2;
     if (avail >= 48u) {  // frame interior: no mask math
         v0 = _mm512_loadu_si512(p);
@@ -261,24 +204,39 @@ inline SpscA16Result spsc_atomic16_avx512(
     // Scalar reloads of L1-hot source lines: no store to forward from, no shuffle-port contention.
     out.ts_first = th_hi | p[1];
     out.ts_last = th_hi | p[3u * n - 2u];
+    const __m512i lw = _mm512_set1_epi32(static_cast<int>(kLatchWindow));
+    const uint64_t near = static_cast<uint64_t>(_mm512_cmpge_epu32_mask(v0, lw)) |
+                          (static_cast<uint64_t>(_mm512_cmpge_epu32_mask(v1, lw)) << 16) |
+                          (static_cast<uint64_t>(_mm512_cmpge_epu32_mask(v2, lw)) << 32);
+    constexpr uint64_t kEndBits = 0x492492492492ull;  // bit 3r+1 = record r's end word
+    out.near_wrap = (near & kEndBits & ((1ull << (3u * n)) - 1u)) != 0;
     if constexpr (Sink::kStores) {
-        const __m512i cvec = _mm512_zextsi128_si512(_mm_setr_epi32(
-            static_cast<int>(th), static_cast<int>((lane << 16) | (dev << 26)), static_cast<int>(prog), 0));
-        const __m512i idm = _mm512_set1_epi32(0x07FFFFFF);
-        v0 = _mm512_mask_and_epi32(v0, 0x9249, v0, idm);
-        v1 = _mm512_mask_and_epi32(v1, 0x4924, v1, idm);
-        v2 = _mm512_mask_and_epi32(v2, 0x2492, v2, idm);
-        const __m512i u1 = _mm512_alignr_epi32(v1, v0, 8);
-        __m512i o[7];
-        o[0] = _mm512_permutex2var_epi32(v0, _mm512_load_si512(kA16Lines[0]), cvec);
-        o[1] = _mm512_permutex2var_epi32(u1, _mm512_load_si512(kA16Lines[1]), cvec);
-        o[2] = _mm512_permutex2var_epi32(u1, _mm512_load_si512(kA16Lines[2]), cvec);
-        if (n > 8) {  // the second compose half only when its lanes are live
-            o[3] = _mm512_permutex2var_epi32(v1, _mm512_load_si512(kA16Lines[3]), cvec);
-            o[4] = _mm512_permutex2var_epi32(v2, _mm512_load_si512(kA16Lines[1]), cvec);
-            o[5] = _mm512_permutex2var_epi32(v2, _mm512_load_si512(kA16Lines[2]), cvec);
+        auto gather = [&](const uint32_t* idx, __mmask16 from_v2) {
+            const __m512i iv = _mm512_load_si512(idx);
+            return _mm512_mask_permutexvar_epi32(_mm512_permutex2var_epi32(v0, iv, v1), from_v2, iv, v2);
+        };
+        const __m512i ids = _mm512_and_si512(gather(kA16W0, kA16FromV2W0), _mm512_set1_epi32(0x07FFFFFF));
+        const __m512i ends = gather(kA16W1, kA16FromV2W1);
+        const __m512i durs = gather(kA16W2, kA16FromV2W2);
+        const uint64_t meta64 = static_cast<uint64_t>((lane << 16) | (dev << 26) | (kSpscRecTypeZone << 29)) << 32;
+        const __m512i mv = _mm512_set1_epi64(static_cast<long long>(meta64));
+        const __m512i pv = _mm512_set1_epi64(prog);
+        const __m512i tv = _mm512_set1_epi64(static_cast<long long>(th_hi));
+        uint8_t* const dst = sw.buf + sw.off;
+        const auto half = [&](__m256i end_h, __m256i dur_h, __m256i id_h, uint8_t* o) {
+            const __m512i d64 = _mm512_cvtepu32_epi64(dur_h);
+            const __m512i s64 = _mm512_sub_epi64(_mm512_or_si512(tv, _mm512_cvtepu32_epi64(end_h)), d64);
+            spsc_zone_lines8(s64, d64, _mm512_or_si512(mv, _mm512_cvtepu32_epi64(id_h)), pv, o);
+        };
+        half(_mm512_castsi512_si256(ends), _mm512_castsi512_si256(durs), _mm512_castsi512_si256(ids), dst);
+        if (n > 8) {
+            half(
+                _mm512_extracti64x4_epi64(ends, 1),
+                _mm512_extracti64x4_epi64(durs, 1),
+                _mm512_extracti64x4_epi64(ids, 1),
+                dst + 256);
         }
-        sw.put_lines(o, 24u * n);
+        sw.off += kSpscRecBytes * n;
     } else {
         (void)lane;
         (void)dev;
@@ -295,200 +253,214 @@ struct SpscZoneS16Result {
 
 // ZONE_S counterpart of the atomic block: a ZONE_S end is cursor-relative, an inclusive prefix sum (four
 // shifted adds for 16 lanes), and records normalize to ZONE_ATOMIC form so downstream never sees wire size
-// classes. Same load contract: `avail` authorizes loads, never emits, past the live run.
+// classes. Consumes every consecutive full block in one call, so a dense lane pays the walk's per-call cost
+// once per run rather than once per 16 records. `readable` authorizes loads, never emits, past the live run;
+// `max_recs` bounds the emits.
 template <typename Sink>
 inline SpscZoneS16Result spsc_zone_s16_avx512(
     const uint32_t* p,
-    uint32_t avail,
+    uint32_t readable,
     uint32_t max_recs,
     uint64_t cursor,
     uint32_t prog,
     uint32_t lane,
     uint32_t dev,
     Sink& sw) {
-    SpscZoneS16Result out{0, 0, 0};
-    __m512i v0, v1;
-    if (avail >= 32u) {
-        v0 = _mm512_loadu_si512(p);
-        v1 = _mm512_loadu_si512(p + 16);
-    } else {
-        const __mmask16 m0 = static_cast<__mmask16>(avail >= 16u ? 0xFFFFu : ((1u << avail) - 1u));
-        const __mmask16 m1 = static_cast<__mmask16>(avail <= 16u ? 0u : ((1u << (avail - 16u)) - 1u));
-        v0 = _mm512_maskz_loadu_epi32(m0, p);
-        v1 = _mm512_maskz_loadu_epi32(m1, p + 16);
-    }
+    SpscZoneS16Result out{0, 0, cursor};
     const __m512i stype = _mm512_set1_epi32(PP_ZONE_S);
-    const uint64_t k0 = _mm512_cmpeq_epi32_mask(_mm512_srli_epi32(v0, PP_TYPE_SHIFT), stype);
-    const uint64_t k1 = _mm512_cmpeq_epi32_mask(_mm512_srli_epi32(v1, PP_TYPE_SHIFT), stype);
-    // Only even bits (bit 2r = record r's w0) are meaningful; bit 32 terminates an all-hit scan.
-    constexpr uint64_t kW0Bits = 0x55555555ull;
-    const uint64_t miss = (~(k0 | (k1 << 16)) & kW0Bits) | (1ull << 32);
-    uint32_t n = static_cast<uint32_t>(std::countr_zero(miss)) / 2u;
-    if (n > max_recs) {
-        n = max_recs;
-    }
-    if (n == 0) {
-        return out;
-    }
-    const __m512i w1s = _mm512_permutex2var_epi32(v0, _mm512_load_si512(kZS16Odd), v1);
+    const __m512i odd = _mm512_load_si512(kZS16Odd);
     const __m512i z = _mm512_setzero_si512();
-    __m512i pfx = _mm512_srli_epi32(w1s, 16);
-    pfx = _mm512_add_epi32(pfx, _mm512_alignr_epi32(pfx, z, 15));
-    pfx = _mm512_add_epi32(pfx, _mm512_alignr_epi32(pfx, z, 14));
-    pfx = _mm512_add_epi32(pfx, _mm512_alignr_epi32(pfx, z, 12));
-    pfx = _mm512_add_epi32(pfx, _mm512_alignr_epi32(pfx, z, 8));
-    out.n = n;
-    out.ts_first = cursor + (p[1] >> 16);
-    // Spilled, not lane-extracted: n-1 is runtime, and an aligned store to hot stack beats a variable-lane
-    // compress.
-    alignas(64) uint32_t pfx_arr[16];
-    _mm512_store_si512(pfx_arr, pfx);
-    out.ts_last = cursor + pfx_arr[n - 1];
-    if constexpr (kSpscSinkZone32<Sink>) {
-        const __m512i w0s = _mm512_permutex2var_epi32(v0, _mm512_load_si512(kZS16Even), v1);
-        const __m512i durs = _mm512_and_si512(w1s, _mm512_set1_epi32(0xFFFF));
-        const __m512i ids = _mm512_and_si512(w0s, _mm512_set1_epi32(0x07FFFFFF));
-        // Public meta: type = StreamingProfilerRecType::Zone (1).
-        const uint64_t meta64 = static_cast<uint64_t>((lane << 16) | (dev << 26) | (1u << 29)) << 32;
-        const __m512i mv = _mm512_set1_epi64(static_cast<long long>(meta64));
-        const __m512i pv = _mm512_set1_epi64(prog);
-        const __m512i cv = _mm512_set1_epi64(static_cast<long long>(cursor));
-        // Record r is qwords {S_r, D_r, M_r, P_r}: one index vector serves both permutes (lanes 0,1,4,5 from (S,D),
-        // lanes 2,3,6,7 from (M,P)); the next line is the same indices advanced by two records.
-        const __m512i vbase = _mm512_set_epi64(9, 1, 9, 1, 8, 0, 8, 0);
-        const __m512i inc = _mm512_set1_epi64(2);
-        const auto half = [&](__m256i pfx_h, __m256i dur_h, __m256i id_h, __m512i* o) {
-            const __m512i d64 = _mm512_cvtepu32_epi64(dur_h);
-            const __m512i e64 = _mm512_add_epi64(cv, _mm512_cvtepu32_epi64(pfx_h));
-            const __m512i s64 = _mm512_sub_epi64(e64, d64);
-            const __m512i m64 = _mm512_or_si512(mv, _mm512_cvtepu32_epi64(id_h));
-            __m512i idx = vbase;
-            for (int j = 0; j < 4; j++) {
-                const __m512i sd = _mm512_permutex2var_epi64(s64, idx, d64);
-                const __m512i mp = _mm512_permutex2var_epi64(m64, idx, pv);
-                o[j] = _mm512_mask_blend_epi64(0xCC, sd, mp);
-                idx = _mm512_add_epi64(idx, inc);
+    [[maybe_unused]] const __m512i even = _mm512_load_si512(kZS16Even);
+    [[maybe_unused]] const __m512i mv = _mm512_set1_epi64(
+        static_cast<long long>(static_cast<uint64_t>((lane << 16) | (dev << 26) | (kSpscRecTypeZone << 29)) << 32));
+    [[maybe_unused]] const __m512i pv = _mm512_set1_epi64(prog);
+    while (max_recs != 0 && readable >= 2u) {
+        __m512i v0, v1;
+        if (readable >= 32u) {
+            v0 = _mm512_loadu_si512(p);
+            v1 = _mm512_loadu_si512(p + 16);
+        } else {
+            const __mmask16 m0 = static_cast<__mmask16>(readable >= 16u ? 0xFFFFu : ((1u << readable) - 1u));
+            const __mmask16 m1 = static_cast<__mmask16>(readable <= 16u ? 0u : ((1u << (readable - 16u)) - 1u));
+            v0 = _mm512_maskz_loadu_epi32(m0, p);
+            v1 = _mm512_maskz_loadu_epi32(m1, p + 16);
+        }
+        const uint64_t k0 = _mm512_cmpeq_epi32_mask(_mm512_srli_epi32(v0, PP_TYPE_SHIFT), stype);
+        const uint64_t k1 = _mm512_cmpeq_epi32_mask(_mm512_srli_epi32(v1, PP_TYPE_SHIFT), stype);
+        // Only even bits (bit 2r = record r's w0) are meaningful; bit 32 terminates an all-hit scan.
+        constexpr uint64_t kW0Bits = 0x55555555ull;
+        const uint64_t miss = (~(k0 | (k1 << 16)) & kW0Bits) | (1ull << 32);
+        uint32_t n = static_cast<uint32_t>(std::countr_zero(miss)) / 2u;
+        if (n > max_recs) {
+            n = max_recs;
+        }
+        if (n == 0) {
+            break;
+        }
+        const __m512i w1s = _mm512_permutex2var_epi32(v0, odd, v1);
+        __m512i pfx = _mm512_srli_epi32(w1s, 16);
+        pfx = _mm512_add_epi32(pfx, _mm512_alignr_epi32(pfx, z, 15));
+        pfx = _mm512_add_epi32(pfx, _mm512_alignr_epi32(pfx, z, 14));
+        pfx = _mm512_add_epi32(pfx, _mm512_alignr_epi32(pfx, z, 12));
+        pfx = _mm512_add_epi32(pfx, _mm512_alignr_epi32(pfx, z, 8));
+        if (out.n == 0) {
+            out.ts_first = cursor + (p[1] >> 16);
+        }
+        // Spilled, not lane-extracted: n-1 is runtime, and an aligned store to hot stack beats a variable-lane
+        // compress.
+        alignas(64) uint32_t pfx_arr[16];
+        _mm512_store_si512(pfx_arr, pfx);
+        if constexpr (Sink::kStores) {
+            const __m512i w0s = _mm512_permutex2var_epi32(v0, even, v1);
+            const __m512i durs = _mm512_and_si512(w1s, _mm512_set1_epi32(0xFFFF));
+            const __m512i ids = _mm512_and_si512(w0s, _mm512_set1_epi32(0x07FFFFFF));
+            const __m512i cv = _mm512_set1_epi64(static_cast<long long>(cursor));
+            uint8_t* const dst = sw.buf + sw.off;
+            const auto half = [&](__m256i pfx_h, __m256i dur_h, __m256i id_h, uint8_t* o) {
+                const __m512i d64 = _mm512_cvtepu32_epi64(dur_h);
+                const __m512i s64 = _mm512_sub_epi64(_mm512_add_epi64(cv, _mm512_cvtepu32_epi64(pfx_h)), d64);
+                spsc_zone_lines8(s64, d64, _mm512_or_si512(mv, _mm512_cvtepu32_epi64(id_h)), pv, o);
+            };
+            half(_mm512_castsi512_si256(pfx), _mm512_castsi512_si256(durs), _mm512_castsi512_si256(ids), dst);
+            if (n > 8) {
+                half(
+                    _mm512_extracti64x4_epi64(pfx, 1),
+                    _mm512_extracti64x4_epi64(durs, 1),
+                    _mm512_extracti64x4_epi64(ids, 1),
+                    dst + 256);
             }
-        };
-        __m512i o[9];
-        half(_mm512_castsi512_si256(pfx), _mm512_castsi512_si256(durs), _mm512_castsi512_si256(ids), o);
-        if (n > 8) {
-            half(
-                _mm512_extracti64x4_epi64(pfx, 1),
-                _mm512_extracti64x4_epi64(durs, 1),
-                _mm512_extracti64x4_epi64(ids, 1),
-                o + 4);
+            sw.off += kSpscRecBytes * n;
         }
-        sw.put_lines(o, 32u * n);
-    } else if constexpr (Sink::kStores) {
-        const __m512i w0s = _mm512_permutex2var_epi32(v0, _mm512_load_si512(kZS16Even), v1);
-        const __m512i durs = _mm512_and_si512(w1s, _mm512_set1_epi32(0xFFFF));
-        const __m512i ids = _mm512_and_si512(w0s, _mm512_set1_epi32(0x07FFFFFF));
-        const uint64_t meta64 = static_cast<uint64_t>((lane << 16) | (dev << 26)) << 32;  // type = Zone
-        const __m512i mv = _mm512_set1_epi64(static_cast<long long>(meta64));
-        const __m512i pv = _mm512_set1_epi64(prog);
-        const __m512i cv = _mm512_set1_epi64(static_cast<long long>(cursor));
-        const auto compose = [&](__m512i e, __m512i m, __m512i d, int r) {
-            const __m512i em = _mm512_permutex2var_epi64(e, _mm512_load_si512(kZS16EM[r]), m);
-            return _mm512_mask_permutexvar_epi64(em, kZS16DMask[r], _mm512_load_si512(kZS16D[r]), d);
-        };
-        const __m512i e_lo = _mm512_add_epi64(cv, _mm512_cvtepu32_epi64(_mm512_castsi512_si256(pfx)));
-        const __m512i m_lo = _mm512_or_si512(mv, _mm512_cvtepu32_epi64(_mm512_castsi512_si256(ids)));
-        const __m512i d_lo =
-            _mm512_or_si512(pv, _mm512_slli_epi64(_mm512_cvtepu32_epi64(_mm512_castsi512_si256(durs)), 32));
-        __m512i o[7];
-        o[0] = compose(e_lo, m_lo, d_lo, 0);
-        o[1] = compose(e_lo, m_lo, d_lo, 1);
-        o[2] = compose(e_lo, m_lo, d_lo, 2);
-        if (n > 8) {
-            const __m512i e_hi = _mm512_add_epi64(cv, _mm512_cvtepu32_epi64(_mm512_extracti64x4_epi64(pfx, 1)));
-            const __m512i m_hi = _mm512_or_si512(mv, _mm512_cvtepu32_epi64(_mm512_extracti64x4_epi64(ids, 1)));
-            const __m512i d_hi =
-                _mm512_or_si512(pv, _mm512_slli_epi64(_mm512_cvtepu32_epi64(_mm512_extracti64x4_epi64(durs, 1)), 32));
-            o[3] = compose(e_hi, m_hi, d_hi, 0);
-            o[4] = compose(e_hi, m_hi, d_hi, 1);
-            o[5] = compose(e_hi, m_hi, d_hi, 2);
+        cursor += pfx_arr[n - 1];
+        out.n += n;
+        out.ts_last = cursor;
+        if (n < 16u) {
+            break;  // the block ended on a non-S word or the emit budget
         }
-        sw.put_lines(o, 24u * n);
-    } else {
-        (void)lane;
-        (void)dev;
-        (void)prog;
+        p += 32;
+        readable -= 32;
+        max_recs -= 16;
     }
     return out;
 }
 
 #pragma clang attribute pop
 
-// AVX2 tier for hosts without AVX-512: same contract, up to eight records; the compose spills to scratch
-// and emits through put3.
+// Inclusive prefix sum of eight 32-bit lanes: two in-lane shifted adds, then the low lane's total carried into the
+// high lane.
+inline __m256i spsc_prefix8_avx2(__m256i x) {
+    x = _mm256_add_epi32(x, _mm256_slli_si256(x, 4));
+    x = _mm256_add_epi32(x, _mm256_slli_si256(x, 8));
+    return _mm256_add_epi32(x, _mm256_shuffle_epi32(_mm256_permute2x128_si256(x, x, 0x08), 0xFF));
+}
+
+// Four zone records {start, duration, meta|id, prog} as four 32 B stores: 64-bit unpacks pair (start, duration) and
+// (meta|id, prog), and each record's two pairs meet across the 128-bit lanes.
+inline void spsc_zone_lines4_avx2(__m256i s64, __m256i d64, __m256i m64, __m256i pv, uint8_t* dst) {
+    const __m256i sd_lo = _mm256_unpacklo_epi64(s64, d64);
+    const __m256i sd_hi = _mm256_unpackhi_epi64(s64, d64);
+    const __m256i mp_lo = _mm256_unpacklo_epi64(m64, pv);
+    const __m256i mp_hi = _mm256_unpackhi_epi64(m64, pv);
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst), _mm256_permute2x128_si256(sd_lo, mp_lo, 0x20));
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + 32), _mm256_permute2x128_si256(sd_hi, mp_hi, 0x20));
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + 64), _mm256_permute2x128_si256(sd_lo, mp_lo, 0x31));
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + 96), _mm256_permute2x128_si256(sd_hi, mp_hi, 0x31));
+}
+
+// AVX2 tier of spsc_atomic16_avx512: any n from 1 to 8 out of three 256-bit loads. A field's every-third words
+// gather with one permute per load and two blends; the permute indices name each output lane's source element.
 template <typename Sink>
-inline SpscZoneS16Result spsc_zone_s8_avx2(
+inline SpscA16Result spsc_atomic8_avx2(
     const uint32_t* p,
     uint32_t avail,
     uint32_t max_recs,
-    uint64_t cursor,
+    uint32_t th,
     uint32_t prog,
     uint32_t lane,
     uint32_t dev,
     Sink& sw) {
-    SpscZoneS16Result out{0, 0, 0};
-    __m256i v0, v1;
-    if (avail >= 16u) {
-        v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p));
-        v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 8));
-    } else {
-        alignas(32) int32_t m[16] = {};
-        for (uint32_t i = 0; i < avail; i++) {
-            m[i] = -1;
+    SpscA16Result out{0, 0, 0, false};
+    __m256i v[3];
+    if (avail >= 24u) {
+        for (int i = 0; i < 3; i++) {
+            v[i] = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 8 * i));
         }
-        v0 = _mm256_maskload_epi32(
-            reinterpret_cast<const int*>(p), _mm256_load_si256(reinterpret_cast<const __m256i*>(m)));
-        v1 = _mm256_maskload_epi32(
-            reinterpret_cast<const int*>(p + 8), _mm256_load_si256(reinterpret_cast<const __m256i*>(m + 8)));
+    } else {
+        const __m256i lane_idx = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+        for (int i = 0; i < 3; i++) {
+            const __m256i m = _mm256_cmpgt_epi32(_mm256_set1_epi32(static_cast<int>(avail) - 8 * i), lane_idx);
+            v[i] = _mm256_maskload_epi32(reinterpret_cast<const int*>(p + 8 * i), m);
+        }
     }
-    const __m256i stype = _mm256_set1_epi32(PP_ZONE_S);
-    const uint32_t k0 = static_cast<uint32_t>(
-        _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(_mm256_srli_epi32(v0, PP_TYPE_SHIFT), stype))));
-    const uint32_t k1 = static_cast<uint32_t>(
-        _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(_mm256_srli_epi32(v1, PP_TYPE_SHIFT), stype))));
-    const uint32_t miss = (~(k0 | (k1 << 8)) & 0x5555u) | (1u << 16);
-    uint32_t n = static_cast<uint32_t>(std::countr_zero(miss)) / 2u;
+    const __m256i atype = _mm256_set1_epi32(PP_ZONE_ATOMIC);
+    const __m256i lw = _mm256_set1_epi32(static_cast<int>(kLatchWindow));
+    uint32_t hit = 0, near = 0;
+    for (int i = 0; i < 3; i++) {
+        hit |= static_cast<uint32_t>(_mm256_movemask_ps(
+                   _mm256_castsi256_ps(_mm256_cmpeq_epi32(_mm256_srli_epi32(v[i], PP_TYPE_SHIFT), atype))))
+               << (8 * i);
+        near |= static_cast<uint32_t>(
+                    _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(_mm256_max_epu32(v[i], lw), v[i]))))
+                << (8 * i);
+    }
+    // Only every third bit (bit 3r = record r's w0) is meaningful: any ts/dur word can match the type pattern.
+    // Bit 24 terminates an all-hit scan.
+    constexpr uint32_t kW0Bits = 0x249249u;
+    const uint32_t miss = (~hit & kW0Bits) | (1u << 24);
+    uint32_t n = static_cast<uint32_t>(std::countr_zero(miss)) / 3u;
     if (n > max_recs) {
         n = max_recs;
     }
     if (n == 0) {
         return out;
     }
-    const __m256i idx_even = _mm256_setr_epi32(0, 2, 4, 6, 0, 2, 4, 6);
-    const __m256i idx_odd = _mm256_setr_epi32(1, 3, 5, 7, 1, 3, 5, 7);
-    const __m256i w0s = _mm256_permute2x128_si256(
-        _mm256_permutevar8x32_epi32(v0, idx_even), _mm256_permutevar8x32_epi32(v1, idx_even), 0x20);
-    const __m256i w1s = _mm256_permute2x128_si256(
-        _mm256_permutevar8x32_epi32(v0, idx_odd), _mm256_permutevar8x32_epi32(v1, idx_odd), 0x20);
-    // Hillis-Steele prefix sum: cross-lane shift via permutevar, low lanes zeroed by blend.
-    const __m256i z = _mm256_setzero_si256();
-    __m256i pfx = _mm256_srli_epi32(w1s, 16);
-    pfx = _mm256_add_epi32(
-        pfx, _mm256_blend_epi32(_mm256_permutevar8x32_epi32(pfx, _mm256_setr_epi32(0, 0, 1, 2, 3, 4, 5, 6)), z, 0x01));
-    pfx = _mm256_add_epi32(
-        pfx, _mm256_blend_epi32(_mm256_permutevar8x32_epi32(pfx, _mm256_setr_epi32(0, 0, 0, 1, 2, 3, 4, 5)), z, 0x03));
-    pfx = _mm256_add_epi32(
-        pfx, _mm256_blend_epi32(_mm256_permutevar8x32_epi32(pfx, _mm256_setr_epi32(0, 0, 0, 0, 0, 1, 2, 3)), z, 0x0F));
-    alignas(32) uint32_t pfx_arr[8];
-    _mm256_store_si256(reinterpret_cast<__m256i*>(pfx_arr), pfx);
+    const uint64_t th_hi = static_cast<uint64_t>(th) << 32;
     out.n = n;
-    out.ts_first = cursor + (p[1] >> 16);
-    out.ts_last = cursor + pfx_arr[n - 1];
+    out.ts_first = th_hi | p[1];
+    out.ts_last = th_hi | p[3u * n - 2u];
+    constexpr uint32_t kEndBits = 0x492492u;  // bit 3r+1 = record r's end word
+    out.near_wrap = (near & kEndBits & ((1u << (3u * n)) - 1u)) != 0;
     if constexpr (Sink::kStores) {
-        alignas(32) uint32_t id_arr[8];
-        alignas(32) uint32_t dur_arr[8];
-        _mm256_store_si256(reinterpret_cast<__m256i*>(id_arr), _mm256_and_si256(w0s, _mm256_set1_epi32(0x07FFFFFF)));
-        _mm256_store_si256(reinterpret_cast<__m256i*>(dur_arr), _mm256_and_si256(w1s, _mm256_set1_epi32(0xFFFF)));
-        const uint64_t meta64 = static_cast<uint64_t>((lane << 16) | (dev << 26)) << 32;  // type = Zone
-        for (uint32_t k = 0; k < n; k++) {
-            sw.put3(cursor + pfx_arr[k], meta64 | id_arr[k], (static_cast<uint64_t>(dur_arr[k]) << 32) | prog);
-        }
+        const __m256i ids = _mm256_and_si256(
+            _mm256_blend_epi32(
+                _mm256_blend_epi32(
+                    _mm256_permutevar8x32_epi32(v[0], _mm256_setr_epi32(0, 3, 6, 0, 0, 0, 0, 0)),
+                    _mm256_permutevar8x32_epi32(v[1], _mm256_setr_epi32(0, 0, 0, 1, 4, 7, 0, 0)),
+                    0x38),
+                _mm256_permutevar8x32_epi32(v[2], _mm256_setr_epi32(0, 0, 0, 0, 0, 0, 2, 5)),
+                0xC0),
+            _mm256_set1_epi32(0x07FFFFFF));
+        const __m256i ends = _mm256_blend_epi32(
+            _mm256_blend_epi32(
+                _mm256_permutevar8x32_epi32(v[0], _mm256_setr_epi32(1, 4, 7, 0, 0, 0, 0, 0)),
+                _mm256_permutevar8x32_epi32(v[1], _mm256_setr_epi32(0, 0, 0, 2, 5, 0, 0, 0)),
+                0x18),
+            _mm256_permutevar8x32_epi32(v[2], _mm256_setr_epi32(0, 0, 0, 0, 0, 0, 3, 6)),
+            0xE0);
+        const __m256i durs = _mm256_blend_epi32(
+            _mm256_blend_epi32(
+                _mm256_permutevar8x32_epi32(v[0], _mm256_setr_epi32(2, 5, 0, 0, 0, 0, 0, 0)),
+                _mm256_permutevar8x32_epi32(v[1], _mm256_setr_epi32(0, 0, 0, 3, 6, 0, 0, 0)),
+                0x1C),
+            _mm256_permutevar8x32_epi32(v[2], _mm256_setr_epi32(0, 0, 0, 0, 0, 1, 4, 7)),
+            0xE0);
+        const __m256i mv = _mm256_set1_epi64x(
+            static_cast<long long>(static_cast<uint64_t>((lane << 16) | (dev << 26) | (kSpscRecTypeZone << 29)) << 32));
+        const __m256i pv = _mm256_set1_epi64x(prog);
+        const __m256i tv = _mm256_set1_epi64x(static_cast<long long>(th_hi));
+        uint8_t* const dst = sw.buf + sw.off;
+        const auto quad = [&](__m128i en, __m128i du, __m128i id, uint8_t* o) {
+            const __m256i d64 = _mm256_cvtepu32_epi64(du);
+            const __m256i s64 = _mm256_sub_epi64(_mm256_or_si256(tv, _mm256_cvtepu32_epi64(en)), d64);
+            spsc_zone_lines4_avx2(s64, d64, _mm256_or_si256(mv, _mm256_cvtepu32_epi64(id)), pv, o);
+        };
+        quad(_mm256_castsi256_si128(ends), _mm256_castsi256_si128(durs), _mm256_castsi256_si128(ids), dst);
+        quad(
+            _mm256_extracti128_si256(ends, 1),
+            _mm256_extracti128_si256(durs, 1),
+            _mm256_extracti128_si256(ids, 1),
+            dst + 128);
+        sw.off += kSpscRecBytes * n;
     } else {
         (void)lane;
         (void)dev;
@@ -497,79 +469,132 @@ inline SpscZoneS16Result spsc_zone_s8_avx2(
     return out;
 }
 
-inline void spsc_load_atomic8(const uint32_t* src, __m256i& w0s, __m256i& w1s, __m256i& w2s) {
-    const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src));
-    const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 8));
-    const __m256i v2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 16));
-    const __m256i iA0 = _mm256_setr_epi32(0, 3, 6, 0, 0, 0, 0, 0);
-    const __m256i iB0 = _mm256_setr_epi32(0, 0, 0, 1, 4, 7, 0, 0);
-    const __m256i iC0 = _mm256_setr_epi32(0, 0, 0, 0, 0, 0, 2, 5);
-    const __m256i iA1 = _mm256_setr_epi32(1, 4, 7, 0, 0, 0, 0, 0);
-    const __m256i iB1 = _mm256_setr_epi32(0, 0, 0, 2, 5, 0, 0, 0);
-    const __m256i iC1 = _mm256_setr_epi32(0, 0, 0, 0, 0, 0, 3, 6);
-    const __m256i iA2 = _mm256_setr_epi32(2, 5, 0, 0, 0, 0, 0, 0);
-    const __m256i iB2 = _mm256_setr_epi32(0, 0, 0, 3, 6, 0, 0, 0);
-    const __m256i iC2 = _mm256_setr_epi32(0, 0, 1, 0, 0, 1, 4, 7);
-    w0s = _mm256_blend_epi32(
-        _mm256_blend_epi32(_mm256_permutevar8x32_epi32(v0, iA0), _mm256_permutevar8x32_epi32(v1, iB0), 0b00111000),
-        _mm256_permutevar8x32_epi32(v2, iC0),
-        0b11000000);
-    w1s = _mm256_blend_epi32(
-        _mm256_blend_epi32(_mm256_permutevar8x32_epi32(v0, iA1), _mm256_permutevar8x32_epi32(v1, iB1), 0b00011000),
-        _mm256_permutevar8x32_epi32(v2, iC1),
-        0b11100000);
-    w2s = _mm256_blend_epi32(
-        _mm256_blend_epi32(_mm256_permutevar8x32_epi32(v0, iA2), _mm256_permutevar8x32_epi32(v1, iB2), 0b00011100),
-        _mm256_permutevar8x32_epi32(v2, iC2),
-        0b11100000);
+// AVX2 tier of spsc_zone_s16_avx512: the same contract and 16-record block on 256-bit vectors, so a host without
+// AVX-512 pays the walk's per-call cost once per run too. A half block still writes all eight of its records
+// (the sink's slack covers a partial block).
+template <typename Sink>
+inline SpscZoneS16Result spsc_zone_s16_avx2(
+    const uint32_t* p,
+    uint32_t readable,
+    uint32_t max_recs,
+    uint64_t cursor,
+    uint32_t prog,
+    uint32_t lane,
+    uint32_t dev,
+    Sink& sw) {
+    SpscZoneS16Result out{0, 0, cursor};
+    const __m256i stype = _mm256_set1_epi32(PP_ZONE_S);
+    // shuffle_ps gathers a block's even (or odd) words as r0 r1 r4 r5 | r2 r3 r6 r7; this puts them in record order.
+    const __m256i order = _mm256_setr_epi32(0, 1, 4, 5, 2, 3, 6, 7);
+    const __m256i lane_idx = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+    [[maybe_unused]] const __m256i mv = _mm256_set1_epi64x(
+        static_cast<long long>(static_cast<uint64_t>((lane << 16) | (dev << 26) | (kSpscRecTypeZone << 29)) << 32));
+    [[maybe_unused]] const __m256i pv = _mm256_set1_epi64x(prog);
+    const auto evens = [&](__m256i a, __m256i b) {
+        return _mm256_permutevar8x32_epi32(
+            _mm256_castps_si256(_mm256_shuffle_ps(_mm256_castsi256_ps(a), _mm256_castsi256_ps(b), 0x88)), order);
+    };
+    const auto odds = [&](__m256i a, __m256i b) {
+        return _mm256_permutevar8x32_epi32(
+            _mm256_castps_si256(_mm256_shuffle_ps(_mm256_castsi256_ps(a), _mm256_castsi256_ps(b), 0xDD)), order);
+    };
+    while (max_recs != 0 && readable >= 2u) {
+        __m256i v[4];
+        if (readable >= 32u) {
+            for (int i = 0; i < 4; i++) {
+                v[i] = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + 8 * i));
+            }
+        } else {
+            for (int i = 0; i < 4; i++) {
+                const __m256i m = _mm256_cmpgt_epi32(_mm256_set1_epi32(static_cast<int>(readable) - 8 * i), lane_idx);
+                v[i] = _mm256_maskload_epi32(reinterpret_cast<const int*>(p + 8 * i), m);
+            }
+        }
+        uint32_t hit = 0;
+        for (int i = 0; i < 4; i++) {
+            hit |= static_cast<uint32_t>(_mm256_movemask_ps(
+                       _mm256_castsi256_ps(_mm256_cmpeq_epi32(_mm256_srli_epi32(v[i], PP_TYPE_SHIFT), stype))))
+                   << (8 * i);
+        }
+        // Only even bits (bit 2r = record r's w0) are meaningful; bit 32 terminates an all-hit scan.
+        const uint64_t miss = (~static_cast<uint64_t>(hit) & 0x55555555ull) | (1ull << 32);
+        uint32_t n = static_cast<uint32_t>(std::countr_zero(miss)) / 2u;
+        if (n > max_recs) {
+            n = max_recs;
+        }
+        if (n == 0) {
+            break;
+        }
+        const __m256i w1_lo = odds(v[0], v[1]);
+        const __m256i w1_hi = odds(v[2], v[3]);
+        const __m256i pfx_lo = spsc_prefix8_avx2(_mm256_srli_epi32(w1_lo, 16));
+        const __m256i pfx_hi = _mm256_add_epi32(
+            spsc_prefix8_avx2(_mm256_srli_epi32(w1_hi, 16)), _mm256_permutevar8x32_epi32(pfx_lo, _mm256_set1_epi32(7)));
+        if (out.n == 0) {
+            out.ts_first = cursor + (p[1] >> 16);
+        }
+        alignas(32) uint32_t pfx_arr[16];
+        _mm256_store_si256(reinterpret_cast<__m256i*>(pfx_arr), pfx_lo);
+        _mm256_store_si256(reinterpret_cast<__m256i*>(pfx_arr + 8), pfx_hi);
+        if constexpr (Sink::kStores) {
+            const __m256i cv = _mm256_set1_epi64x(static_cast<long long>(cursor));
+            uint8_t* const dst = sw.buf + sw.off;
+            const auto quad = [&](__m128i pf, __m128i du, __m128i id, uint8_t* o) {
+                const __m256i d64 = _mm256_cvtepu32_epi64(du);
+                const __m256i s64 = _mm256_sub_epi64(_mm256_add_epi64(cv, _mm256_cvtepu32_epi64(pf)), d64);
+                spsc_zone_lines4_avx2(s64, d64, _mm256_or_si256(mv, _mm256_cvtepu32_epi64(id)), pv, o);
+            };
+            const auto half = [&](__m256i pfx, __m256i w0s, __m256i w1s, uint8_t* o) {
+                const __m256i durs = _mm256_and_si256(w1s, _mm256_set1_epi32(0xFFFF));
+                const __m256i ids = _mm256_and_si256(w0s, _mm256_set1_epi32(0x07FFFFFF));
+                quad(_mm256_castsi256_si128(pfx), _mm256_castsi256_si128(durs), _mm256_castsi256_si128(ids), o);
+                quad(
+                    _mm256_extracti128_si256(pfx, 1),
+                    _mm256_extracti128_si256(durs, 1),
+                    _mm256_extracti128_si256(ids, 1),
+                    o + 128);
+            };
+            half(pfx_lo, evens(v[0], v[1]), w1_lo, dst);
+            if (n > 8) {
+                half(pfx_hi, evens(v[2], v[3]), w1_hi, dst + 256);
+            }
+            sw.off += kSpscRecBytes * n;
+        }
+        cursor += pfx_arr[n - 1];
+        out.n += n;
+        out.ts_last = cursor;
+        if (n < 16u) {
+            break;  // the block ended on a non-S word or the emit budget
+        }
+        p += 32;
+        readable -= 32;
+        max_recs -= 16;
+    }
+    return out;
 }
-#endif
 
-inline void spsc_prefetch(const void* p) {
-#if defined(__x86_64__)
-    _mm_prefetch(static_cast<const char*>(p), _MM_HINT_T0);
-#else
-    (void)p;
-#endif
-}
-
-// Decode one packed BULK_SPAN frame in place. emit(lane, wire_type, zone_id27, full_ts, prog, duration):
-// START/END carry the marker time (duration 0), TOTAL the sum, ATOMIC the zone's end plus its length;
-// duration is its own argument because op attribution keys on prog. emit_data(lane, wire_type, id, full_ts,
-// prog, payload_words, n) for PP_DATA/PP_EVENT (payload in place, hi word first); emit_prog(lane, prog) when
-// a lane's sticky host-id changes. Returns the payload words the control vector implies, which the caller
-// checks against the frame's length field (a pack-rule disagreement desynchronizes every later lane), or 0
-// for an unknown core. Decode starts at the larger of the head mirror and the extent's start: the mirror
-// runs behind after an upstream loss (adopt and count), the extent after a lagging head write-back (skip the
-// overlap). emit_zones8 / emit_atomic8 receive up to eight deinterleaved records when a block passes the
-// type screen; only the n leading lanes are valid. The walk is baseline code, so no AVX-512 can be emitted
-// outside the gated kernels.
-template <
-    typename EmitMarker,
-    typename EmitData,
-    typename EmitProg = SpscIgnoreProg,
-    typename EmitZones8 = SpscNoZones8,
-    typename EmitAtomic8 = SpscNoAtomic8,
-    typename EmitAtomic16 = SpscNoAtomic16,
-    typename EmitZoneS16 = SpscNoZoneS16>
+// Decode one packed BULK_SPAN frame in place. emit(lane, zone_id27, end, prog, duration, two_reads) is one whole
+// zone; two_reads marks a ZONE_L, whose duration is the difference of two wall-clock reads rather than an exact
+// count, which changes how the latch-race repair applies to it. emit_data(lane, wire_type, id, full_ts, prog,
+// payload_words, n) for PP_DATA/PP_EVENT (payload in place, hi word first). emit_atomic16 / emit_zone_s16 take a
+// block at a PP_ZONE_ATOMIC / PP_ZONE_S word and return the records consumed; 0 hands the word to the scalar arm.
+// Returns the payload words the control vector implies, which the caller checks against the frame's length
+// field (a pack-rule disagreement desynchronizes every later lane), or 0 for an unknown core. Decode starts at
+// the larger of the head mirror and the extent's start: the mirror runs behind after an upstream loss (adopt
+// and count), the extent after a lagging head write-back (skip the overlap). The walk is baseline code, so no
+// AVX-512 can be emitted outside the gated kernels.
+template <typename EmitZone, typename EmitData, typename EmitAtomic16, typename EmitZoneS16>
 inline uint32_t spsc_decode_frame(
     SpanDecodeState& st,
     const uint32_t* frame,
-    EmitMarker&& emit,
+    EmitZone&& emit,
     EmitData&& emit_data,
-    EmitProg&& emit_prog = SpscIgnoreProg{},
-    EmitZones8&& emit_zones8 = SpscNoZones8{},
-    EmitAtomic8&& emit_atomic8 = SpscNoAtomic8{},
-    EmitAtomic16&& emit_atomic16 = SpscNoAtomic16{},
-    EmitZoneS16&& emit_zone_s16 = SpscNoZoneS16{},
+    EmitAtomic16&& emit_atomic16,
+    EmitZoneS16&& emit_zone_s16,
     // Nonzero authorizes the atomic block to load (never emit) up to 24 words past a lane's live run.
     uint32_t frame_words = 0) {
-    (void)emit_atomic16;
-    (void)emit_atomic8;  // the atomic arm is 512-bit only
-    (void)emit_zone_s16;
     const uint32_t* ctrl = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
-    const bool raw = (frame[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) != 0;
-    const auto xy_it = st.core_of_xy.find(ctrl[raw ? +kernel_profiler::SPSC_CORE_XY : +kernel_profiler::SPSC_WIRE_XY]);
+    const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_WIRE_XY]);
     if (xy_it == st.core_of_xy.end()) {
         st.unknown_core_frames++;
         return 0;
@@ -577,14 +602,12 @@ inline uint32_t spsc_decode_frame(
     const uint32_t core = xy_it->second;
     // Folded into st once at the end: the emitters store through casted ring pointers, so the compiler must
     // assume those stores alias st and would reload per record.
-    uint64_t vz = 0, va = 0, vac = 0, sr = 0, lw = 0, vzs = 0, vzsc = 0;
-    uint32_t off = kernel_profiler::SPSC_SPAN_PREFIX_WORDS + (raw ? kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE
-                                                                  : kernel_profiler::SPSC_SPAN_WIRE_CTRL_WORDS);
+    uint64_t lw = 0;
+    uint32_t off = kernel_profiler::SPSC_SPAN_PREFIX_WORDS + kernel_profiler::SPSC_SPAN_WIRE_CTRL_WORDS;
     for (uint32_t r = 0; r < kSpscNRiscDecode; r++) {
         const uint32_t lane = core * kSpscNRiscDecode + r;
-        const uint32_t tail = ctrl[(raw ? +kernel_profiler::SPSC_RING_TAIL_0 : +kernel_profiler::SPSC_WIRE_TAIL_0) + r];
-        const uint32_t frame_head =
-            ctrl[(raw ? +kernel_profiler::SPSC_RING_HEAD_0 : +kernel_profiler::SPSC_WIRE_HEAD_0) + r];
+        const uint32_t tail = ctrl[kernel_profiler::SPSC_WIRE_TAIL_0 + r];
+        const uint32_t frame_head = ctrl[kernel_profiler::SPSC_WIRE_HEAD_0 + r];
         const uint32_t extent = kernel_profiler::spsc_span_live(frame_head, tail, kSpscRingCap);
         if (extent != tail - frame_head) {
             st.anomalies++;  // torn snapshot; the clamped geometry still frames consistently on both sides
@@ -593,9 +616,8 @@ inline uint32_t spsc_decode_frame(
         const uint32_t* p = nullptr;
         // A near-full wrapping run arrives as the whole ring image (predicate shared with the device,
         // spsc_span_wrap_image), the pad is phased for ring offset 0, and the payload advance is the full ring.
-        const bool ring_ordered =
-            !raw && extent != 0 && kernel_profiler::spsc_span_wrap_image(start, extent, kSpscRingCap);
-        if (!raw && extent != 0) {
+        const bool ring_ordered = extent != 0 && kernel_profiler::spsc_span_wrap_image(start, extent, kSpscRingCap);
+        if (extent != 0) {
             off += kernel_profiler::spsc_span_pack_pad(ring_ordered ? 0u : start, off);
             p = frame + off;
             off += ring_ordered ? kSpscRingCap : extent;
@@ -608,11 +630,8 @@ inline uint32_t spsc_decode_frame(
             head = st.head[lane];
             const int32_t behind = static_cast<int32_t>(start - head);
             if (behind > 0) {
-                st.resync_events++;
                 st.resync_words += static_cast<uint32_t>(behind);
                 head = start;
-            } else if (behind < 0) {
-                st.head_lag++;
             }
         }
         st.head[lane] = tail;
@@ -628,18 +647,14 @@ inline uint32_t spsc_decode_frame(
         uint32_t th = st.timer_hi[lane];
         uint32_t pg = st.prog[lane];
         uint64_t cur = st.cursor[lane];
-        // Raw and packed frames differ only in addressing (circular 512-word rings vs contiguous), so a raw frame is
-        // linearised and shares the walk; raw frames are the relays' own, off the workload's path.
+        // A wrap image is the whole ring in ring order, so its run is linearised before the walk.
         uint32_t lin[kSpscRingCap];
-        if (raw || ring_ordered) {
-            const uint32_t* ring = raw ? frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS +
-                                             kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE + r * kSpscRingCap
-                                       : p;
+        if (ring_ordered) {
             const uint32_t hm = head & kSpscRingMask;
             const uint32_t first = kSpscRingCap - hm < run ? kSpscRingCap - hm : run;
-            std::memcpy(lin, ring + hm, first * sizeof(uint32_t));
+            std::memcpy(lin, p + hm, first * sizeof(uint32_t));
             if (first < run) {
-                std::memcpy(lin + first, ring, (run - first) * sizeof(uint32_t));
+                std::memcpy(lin + first, p, (run - first) * sizeof(uint32_t));
             }
             p = lin;
         } else {
@@ -647,84 +662,43 @@ inline uint32_t spsc_decode_frame(
         }
         // A linearised run lives in `lin`, where `frame + frame_words` is not a comparable pointer, so the over-read
         // vouch must be withdrawn or the gates admit reads past the scratch.
-        [[maybe_unused]] const uint32_t fw_eff = (raw || ring_ordered) ? 0u : frame_words;
-        // Just-in-time prefetch of the lane's live window (whole-frame prefetch starves the walk's demand loads);
-        // the second stream mirrors it one frame ahead because the device DMA lands in DRAM, not cache.
-        for (uint32_t o = 0; o < run; o += 16) {
-            spsc_prefetch(p + o);
-            if (fw_eff != 0) {
-                spsc_prefetch(p + o + frame_words);
-            }
-        }
+        const uint32_t fw_eff = ring_ordered ? 0u : frame_words;
         uint32_t i = 0;
         while (i < run) {
             const uint32_t w0 = p[i];
             const uint32_t t = pp_type(w0);
-#if defined(__AVX2__)
-            if constexpr (!std::is_same_v<std::decay_t<EmitZoneS16>, SpscNoZoneS16>) {
-                if (t == PP_ZONE_S) {
-                    const size_t readable =
-                        fw_eff != 0 ? static_cast<size_t>(frame + fw_eff - (p + i)) : static_cast<size_t>(run - i);
-                    const auto zs = emit_zone_s16(
-                        lane, cur, pg, p + i, readable > 32u ? 32u : static_cast<uint32_t>(readable), (run - i) / 2u);
-                    if (zs.n != 0) {
-                        cur = zs.ts_last;
-                        vzs += zs.n;
-                        vzsc++;
-                        i += 2u * zs.n;
-                        continue;
-                    }
+            if (t == PP_ZONE_S) {
+                const size_t readable =
+                    fw_eff != 0 ? static_cast<size_t>(frame + fw_eff - (p + i)) : static_cast<size_t>(run - i);
+                const auto zs = emit_zone_s16(
+                    lane,
+                    cur,
+                    pg,
+                    p + i,
+                    readable > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(readable),
+                    (run - i) / 2u);
+                if (zs.n != 0) {
+                    cur = zs.ts_last;
+                    i += 2u * zs.n;
+                    continue;
                 }
             }
-#endif
-#if defined(__AVX2__)
-            // The screen matches 2-word markers only; gate on the leading type so an atomic stream does not fail the
-            // scan per record.
-            if constexpr (!std::is_same_v<std::decay_t<EmitZones8>, SpscNoZones8>) {
-                if (t <= PP_ZONE_END && i + 16 <= run) {
-                    const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + i));
-                    const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + i + 8));
-                    const __m256i even = _mm256_castps_si256(
-                        _mm256_shuffle_ps(_mm256_castsi256_ps(v0), _mm256_castsi256_ps(v1), _MM_SHUFFLE(2, 0, 2, 0)));
-                    const __m256i odd = _mm256_castps_si256(
-                        _mm256_shuffle_ps(_mm256_castsi256_ps(v0), _mm256_castsi256_ps(v1), _MM_SHUFFLE(3, 1, 3, 1)));
-                    const __m256i w0s = _mm256_permute4x64_epi64(even, _MM_SHUFFLE(3, 1, 2, 0));
-                    const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
-                    if (_mm256_movemask_epi8(_mm256_cmpgt_epi32(types, _mm256_set1_epi32(1))) == 0) {
-                        const __m256i w1s = _mm256_permute4x64_epi64(odd, _MM_SHUFFLE(3, 1, 2, 0));
-                        emit_zones8(lane, th, pg, w0s, w1s);
-                        vz += 8;
-                        i += 16;
-                        continue;
-                    }
-                    st.vec_block_rejects++;
-                }
-            }
-#endif  // __AVX2__
-#if defined(__AVX2__)
             // The block emits n records for any n, so there is no tail case.
-            if constexpr (!std::is_same_v<std::decay_t<EmitAtomic16>, SpscNoAtomic16>) {
-                if (t == PP_ZONE_ATOMIC) {
-                    const size_t readable =
-                        fw_eff != 0 ? static_cast<size_t>(frame + fw_eff - (p + i)) : static_cast<size_t>(run - i);
-                    const uint32_t got = emit_atomic16(
-                        lane, th, pg, p + i, readable > 48u ? 48u : static_cast<uint32_t>(readable), (run - i) / 3u);
-                    if (got != 0) {
-                        va += got;
-                        vac++;
-                        // A block is atomics only (a sticky ends it), so th is constant across it and the last end re-
-                        // anchors the lane cursor.
-                        cur = pp_full_ts(th, p[i + 3u * (got - 1u) + 1u]);
-                        i += 3 * got;
-                        continue;
-                    }
+            if (t == PP_ZONE_ATOMIC) {
+                const size_t readable =
+                    fw_eff != 0 ? static_cast<size_t>(frame + fw_eff - (p + i)) : static_cast<size_t>(run - i);
+                const uint32_t got = emit_atomic16(
+                    lane, th, pg, p + i, readable > 48u ? 48u : static_cast<uint32_t>(readable), (run - i) / 3u);
+                if (got != 0) {
+                    // A block is atomics only (a sticky ends it), so th is constant across it and the last end re-
+                    // anchors the lane cursor.
+                    cur = pp_full_ts(th, p[i + 3u * (got - 1u) + 1u]);
+                    i += 3 * got;
+                    continue;
                 }
             }
-#endif
             // Packets the vector paths cannot take: STICKY_TIMER redefines `th` and STICKY_PROG/_EXT redefine `pg` for
             // every later record, and PP_DATA's length is in its own word 2, so the next offset is unknown until read.
-            sr++;
-            st.scalar_by_type[t & 15u]++;
             if (t == PP_EVENT) {
                 if (i + 2 > run) {
                     st.anomalies++;
@@ -752,27 +726,15 @@ inline uint32_t spsc_decode_frame(
                 }
                 const uint64_t lend = (static_cast<uint64_t>(p[i + 2]) << 32) | p[i + 1];
                 const uint64_t ldur = (static_cast<uint64_t>(p[i + 4]) << 32) | p[i + 3];
-                // A 64-bit duration cannot ride the 32-bit dur argument: normalize to a synthetic START/END pair. Does
-                // not move the cursor.
-                emit(lane, PP_ZONE_START, pp_low27(w0), lend - ldur, pg, 0);
-                emit(lane, PP_ZONE_END, pp_low27(w0), lend, pg, 0);
+                emit(lane, pp_low27(w0), lend, pg, ldur, true);  // does not move the cursor
                 i += 5;
-            } else if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
-                if (i + 2 > run) {
-                    st.anomalies++;
-                    break;
-                }
-                const uint32_t w1 = p[i + 1];
-                const uint64_t ts = (t == PP_ZONE_TOTAL) ? w1 : pp_full_ts(th, w1);
-                emit(lane, t, pp_low27(w0), ts, pg, 0);  // full 27-bit structural id
-                i += 2;
             } else if (t == PP_ZONE_ATOMIC) {
                 if (i + 3 > run) {
                     st.anomalies++;
                     break;
                 }
                 cur = pp_full_ts(th, p[i + 1]);  // absolute end re-anchors the lane cursor
-                emit(lane, t, pp_low27(w0), cur, pg, p[i + 2]);
+                emit(lane, pp_low27(w0), cur, pg, p[i + 2], false);
                 i += 3;
             } else if (t == PP_ZONE_S) {
                 if (i + 2 > run) {
@@ -781,28 +743,20 @@ inline uint32_t spsc_decode_frame(
                 }
                 const uint32_t w1 = p[i + 1];
                 cur += pp_zone_s_delta(w1);  // 64-bit add: crosses the lo-wrap with no sticky
-                // An S emits as a ZONE_ATOMIC record with its end resolved off the lane cursor.
-                emit(lane, PP_ZONE_ATOMIC, pp_low27(w0), cur, pg, pp_zone_s_dur(w1));
+                emit(lane, pp_low27(w0), cur, pg, pp_zone_s_dur(w1), false);
                 i += 2;
             } else if (t == PP_STICKY_TIMER) {
                 th = pp_timer_hi(w0);
                 i += 1;
             } else if (t == PP_STICKY_PROG) {
-                if (const uint32_t id = pp_low27(w0); id != pg) {
-                    pg = id;
-                    emit_prog(lane, pg);
-                }
+                pg = pp_low27(w0);
                 i += 1;
             } else if (t == PP_STICKY_PROG_EXT) {
                 if (i + 2 > run) {
                     st.anomalies++;
                     break;
                 }
-                const uint32_t w1 = p[i + 1];
-                if (w1 != pg) {
-                    pg = w1;
-                    emit_prog(lane, pg);
-                }
+                pg = p[i + 1];
                 i += 2;
             } else {
                 st.anomalies++;
@@ -813,16 +767,7 @@ inline uint32_t spsc_decode_frame(
         st.prog[lane] = pg;
         st.cursor[lane] = cur;
     }
-    st.vec_zone_recs += vz;
-    st.vec_atomic_recs += va;
-    st.vec_atomic_calls += vac;
-    st.vec_zone_s_recs += vzs;
-    st.vec_zone_s_calls += vzsc;
-    st.scalar_recs += sr;
     st.live_words += lw;
-    if (raw) {
-        return kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE + kSpscNRiscDecode * kSpscRingCap;
-    }
     return off - kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
 }
 

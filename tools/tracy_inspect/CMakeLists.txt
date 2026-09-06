@@ -7,7 +7,7 @@
 # tooling can find them via tools.tracy.common.PROFILER_BIN_DIR.
 
 if(NOT TARGET TracyServer)
-    message(STATUS "TracyServer target not available; skipping the drisc_drain Tracy inspectors")
+    message(STATUS "TracyServer target not available; skipping the tracy_inspect tools")
     return()
 endif()
 
@@ -53,7 +53,7 @@ endforeach()
 
 # Aggregate, mirroring tracy_profiler_cli_tools in tt_metal/third_party.
 add_custom_target(
-    drisc_drain_tracy_tools
+    tracy_inspect_tools
     DEPENDS
         tracy_ctx_inspect
         tracy_plot_check

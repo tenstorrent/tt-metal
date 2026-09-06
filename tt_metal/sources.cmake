@@ -89,6 +89,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp
     api/tt-metalium/experimental/pinned_memory.hpp
     api/tt-metalium/experimental/profiler.hpp
+    api/tt-metalium/experimental/streaming_profiler.hpp
     api/tt-metalium/experimental/program_descriptor_patching.hpp
     api/tt-metalium/experimental/sockets/d2h_socket.hpp
     api/tt-metalium/experimental/sockets/h2d_socket.hpp
@@ -175,14 +176,14 @@ set(TT_METAL_SOURCES
     impl/experimental/offline_compile/offline_kernel_compile.cpp
     impl/graph/graph_tracking.cpp
     hal.cpp
-    tools/profiler/streaming_profiler.cpp
-    tools/profiler/streaming_profiler_tracy_handler.cpp
+    tools/profiler/streaming_profiler_device.cpp
+    tools/profiler/streaming_profiler_api.cpp
     tools/profiler/streaming_profiler_consumer.cpp
     tools/profiler/streaming_profiler_ops_csv.cpp
     tools/profiler/streaming_profiler_receiver.cpp
-    tools/profiler/streaming_profiler_stall_csv.cpp
+    tools/profiler/streaming_profiler_service.cpp
     tools/profiler/streaming_profiler_zone_csv.cpp
-    tools/profiler/streaming_profiler_tracy_consumer.cpp
+    tools/profiler/streaming_profiler_tracy.cpp
 )
 
 set(JITAPI_FILES

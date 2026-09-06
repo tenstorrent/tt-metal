@@ -26,7 +26,7 @@ from tools.tracy.common import PROFILER_ARTIFACTS_DIR, PROFILER_BIN_DIR, TT_META
 
 CAPTURE_TOOL = PROFILER_BIN_DIR / "tracy-capture"
 WORKLOAD_BIN = Path(TT_METAL_HOME) / "build_Release" / "programming_examples" / "test_streaming_profiler_zones"
-CTX_INSPECT = PROFILER_BIN_DIR / "tracy_ctx_inspect"  # built by tools/drisc_drain/CMakeLists.txt next to tracy-capture
+CTX_INSPECT = PROFILER_BIN_DIR / "tracy_ctx_inspect"  # built by tools/tracy_inspect/CMakeLists.txt next to tracy-capture
 ARTIFACTS = PROFILER_ARTIFACTS_DIR / "streaming_profiler_tests"
 
 
@@ -98,7 +98,7 @@ def test_streaming_profiler_zones_capture(gx, gy, iters):
     log = proc.stdout + proc.stderr
     # Match only the role-agnostic substring of the residency log line: a guard tied to fuller wording
     # skips unconditionally the moment the message is reworded, leaving the test green and asserting nothing.
-    if "not Blackhole" in log or "resident on logical" not in log:
+    if "not Blackhole" in log or "[streaming profiler] active on" not in log:
         pytest.skip("streaming profiler did not start the DRISC relay (not Blackhole / no DRAM programmable cores)")
 
     assert proc.returncode == 0, f"workload failed (rc={proc.returncode}):\n{log[-2000:]}"
@@ -109,7 +109,7 @@ def test_streaming_profiler_zones_capture(gx, gy, iters):
         pytest.fail(
             f"tracy_ctx_inspect not built at {CTX_INSPECT} -- the device-zone assertions cannot run and "
             f"this test would otherwise verify only that the capture exceeds 4096 bytes. It is a normal "
-            f"CMake target (tools/drisc_drain/CMakeLists.txt) that ./build_metal.sh builds next to tracy-capture; "
+            f"CMake target (tools/tracy_inspect/CMakeLists.txt) that ./build_metal.sh builds next to tracy-capture; "
             f"rebuild, or `cmake --build build --target tracy_ctx_inspect`."
         )
 

@@ -5,54 +5,31 @@
 #include "tools/profiler/streaming_profiler_ops_csv.hpp"
 
 #include <algorithm>
-#include <bit>
 #include <cstdio>
 #include <string>
 #include <string_view>
 
-#include "context/metal_context.hpp"
-
 namespace tt::tt_metal::streaming_profiler {
 
-void StreamingProfilerOpsCsvConsumer::operator()(const StreamingProfilerRecordBatch& batch) {
-    const StreamingProfilerCaptureContext* ctx = batch.context;
-    if (devices_.size() < ctx->devices.size()) {
-        devices_.clear();
-        for (const auto& d : ctx->devices) {
-            devices_.push_back({d.chip_id, d.frequency_ghz});
-        }
+void OpsCsvConsumer::operator()(const Batch& batch) {
+    for (const auto& clk : batch.clocks) {
+        devices_[clk.chip_id] = DeviceMeta{clk.chip_id, clk.frequency_ghz};
     }
-    names_.refresh();
-    for (const StreamingProfilerRec& rec : batch.records) {
-        if (rec.meta.type != StreamingProfilerRecType::Zone || rec.prog == 0) {
+    for (const auto& z : batch.zones) {
+        if (z.runtime_id == 0 || !z.site.name.ends_with("-KERNEL")) {
             continue;
         }
-        ZoneClass cls = ZoneClass::Unseen;
-        if (auto it = class_of_id_.find(rec.id); it != class_of_id_.end()) {
-            cls = it->second;
-        } else if (const std::string_view name = names_.lookup(rec.id); !name.empty()) {
-            cls = name.ends_with("-KERNEL") ? ZoneClass::Kernel : ZoneClass::Other;
-            class_of_id_.emplace(rec.id, cls);
-        }
-        if (cls != ZoneClass::Kernel) {
-            continue;
-        }
-        const auto& lanes = ctx->devices[rec.meta.dev].lanes;
-        if (rec.meta.lane >= lanes.size() || lanes[rec.meta.lane].role != StreamingProfilerLaneRole::Worker) {
-            continue;
-        }
-        constexpr uint32_t kLaneShift = 32;
-        constexpr uint32_t kDevShift = kLaneShift + std::bit_width(kStreamingProfilerMaxLanes - 1u);
-        // The wrapper zone never self-nests, so the k-th Zone on a lane for a prog is execution k.
+        const uint32_t risc = static_cast<uint32_t>(z.core.risc);
+        const uint32_t core_key = (static_cast<uint32_t>(z.core.coord.y) << 16) | static_cast<uint32_t>(z.core.coord.x);
+        // The wrapper zone never self-nests, so the k-th one on a lane for a prog is execution k.
         uint32_t& completed = pair_count_
-            [(static_cast<uint64_t>(rec.meta.dev) << kDevShift) | (static_cast<uint64_t>(rec.meta.lane) << kLaneShift) |
-             rec.prog];
-        OpAgg& op = ops_[{rec.meta.dev, rec.prog, completed}];
+            [(static_cast<uint64_t>(z.core.chip_id) << 56) | (static_cast<uint64_t>(core_key) << 24) |
+             (static_cast<uint64_t>(risc) << 20) | (z.runtime_id & 0xFFFFFu)];
+        OpAgg& op = ops_[{z.core.chip_id, z.runtime_id, completed}];
         completed++;
-        const uint64_t start = rec.data.zone.start;
-        const uint64_t end = start + rec.data.zone.duration;
-        const uint32_t risc = rec.meta.lane % kNumRisc;
-        auto& core = op.cores[rec.meta.lane / kNumRisc];
+        const uint64_t start = z.start_timestamp;
+        const uint64_t end = z.end_timestamp;
+        auto& core = op.cores[core_key];
         op.k_start = std::min(op.k_start, start);
         op.k_start_last = std::max(op.k_start_last, start);
         if (risc <= 1) {
@@ -66,7 +43,7 @@ void StreamingProfilerOpsCsvConsumer::operator()(const StreamingProfilerRecordBa
     }
 }
 
-void StreamingProfilerOpsCsvConsumer::write_csv(const std::string& path) const {
+void OpsCsvConsumer::write_csv(const std::string& path) const {
     FILE* f = std::fopen(path.c_str(), "w");
     if (f == nullptr) {
         return;
@@ -81,8 +58,9 @@ void StreamingProfilerOpsCsvConsumer::write_csv(const std::string& path) const {
         "DEVICE TRISC2 KERNEL DURATION [ns]\n",
         f);
     for (const auto& [key, op] : ops_) {
-        const auto& [dev, prog, exec] = key;
-        const DeviceMeta meta = dev < devices_.size() ? devices_[dev] : DeviceMeta{};
+        const auto& [chip, prog, exec] = key;
+        const auto mit = devices_.find(chip);
+        const DeviceMeta meta = mit != devices_.end() ? mit->second : DeviceMeta{chip, 0.0};
         const double freq = meta.frequency_ghz;
         auto ns = [&](uint64_t start, uint64_t end) {
             return (freq > 0.0 && end > start && start != UINT64_MAX) ? (end - start) / freq : 0.0;
@@ -123,16 +101,5 @@ void StreamingProfilerOpsCsvConsumer::write_csv(const std::string& path) const {
     }
     std::fclose(f);
 }
-
-namespace {
-
-const bool g_ops_csv_declared = [] {
-    register_file_consumer<StreamingProfilerOpsCsvConsumer>("ops-csv", []() -> std::string {
-        return MetalContext::instance().rtoptions().get_streaming_profiler_ops_csv_path();
-    });
-    return true;
-}();
-
-}  // namespace
 
 }  // namespace tt::tt_metal::streaming_profiler

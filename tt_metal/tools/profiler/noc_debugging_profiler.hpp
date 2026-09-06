@@ -51,7 +51,7 @@ FORCE_INLINE void recordScopedLockEvent(uint32_t locked_address_base, uint32_t n
 #include "noc_debugging_metadata.hpp"
 #include "internal/risc_attribs.h"
 #include "kernel_profiler.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 
 namespace noc_debugging_profiler {
 

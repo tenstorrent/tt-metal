@@ -64,7 +64,9 @@ class AllocatorImpl;
 class ThreadPool;
 struct TraceDescriptor;
 class DriscL1Arena;
-class StreamingProfiler;
+namespace streaming_profiler {
+class Receiver;
+}
 
 namespace distributed {
 
@@ -163,7 +165,7 @@ private:
 
     // Constructed by init_streaming_profiler() when TT_METAL_STREAMING_PROFILER is set; torn down in
     // close_impl().
-    std::unique_ptr<StreamingProfiler> streaming_profiler_;
+    std::unique_ptr<streaming_profiler::Receiver> streaming_profiler_;
 
     // DRISC L1 arena for DRAM-sender GlobalCircularBuffer pages_sent allocations.
     // Constructed eagerly in initialize_impl() when the HAL exposes programmable

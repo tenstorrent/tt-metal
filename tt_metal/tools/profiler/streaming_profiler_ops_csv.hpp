@@ -7,7 +7,7 @@
 // per-RISC splits), joinable against a classic ops_perf_results CSV on GLOBAL CALL COUNT. The classic FW
 // columns have no counterpart: this producer's FW wrapper emits no markers. Trace replays reuse a host-id,
 // so an op's executions are split by ordinal: per (lane, prog) the k-th wrapper pair is execution k.
-// Enabled by TT_METAL_STREAMING_PROFILER_OPS_CSV=<path>; written at process exit.
+// Enabled by TT_METAL_STREAMING_PROFILER_OPS_CSV=<path>; written when the last capture detaches.
 #pragma once
 
 #include <array>
@@ -18,19 +18,19 @@
 #include <unordered_map>
 #include <vector>
 
-#include "hostdev/streaming_profiler_common.h"
 #include "tools/profiler/streaming_profiler_consumer.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
-class StreamingProfilerOpsCsvConsumer {
+class OpsCsvConsumer {
 public:
-    void operator()(const StreamingProfilerRecordBatch& batch);
+    using Batch = experimental::streaming_profiler::Batch<experimental::streaming_profiler::Channel::Zones>;
+    void operator()(const Batch& batch);
     // Call only after the consumer can no longer receive batches.
     void write_csv(const std::string& path) const;
 
 private:
-    static constexpr uint32_t kNumRisc = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
+    static constexpr uint32_t kNumRisc = 5;
 
     struct OpAgg {
         uint64_t k_start = UINT64_MAX, k_start_last = 0, k_end = 0;
@@ -48,13 +48,10 @@ private:
 
     enum class ZoneClass : uint8_t { Unseen = 0, Other, Kernel };
 
-    std::map<std::tuple<uint32_t, uint32_t, uint32_t>, OpAgg> ops_;  // (dev, runtime host-id, execution)
-    std::unordered_map<uint64_t, uint32_t> pair_count_;              // (dev, lane, prog) -> completed pairs
-    // Cached only once the name resolves, so an id whose ELF has not registered yet retries.
-    std::unordered_map<uint32_t, ZoneClass> class_of_id_;
-    ZoneNameMirror names_;  // id -> name, mirrored per-ELF from llrt::ZoneMetaRegistry
-    // Snapshot: the context lives on the receiver and is gone by the exit-path write_csv.
-    std::vector<DeviceMeta> devices_;
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t>, OpAgg> ops_;  // (chip, runtime host-id, execution)
+    std::unordered_map<uint64_t, uint32_t> pair_count_;              // (chip, core, risc, prog) -> completed pairs
+    // Snapshot: the clocks live on the receiver and are gone by the exit-path write_csv.
+    std::unordered_map<uint32_t, DeviceMeta> devices_;
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

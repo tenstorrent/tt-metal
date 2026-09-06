@@ -50,13 +50,17 @@ inline void push_fifo(const SocketSenderInterface& sender, uint32_t src, uint32_
     }
 }
 
+// Blackhole stores can reach SRAM out of order, and the NIU and the DMA engine read the words the scalar core
+// staged.
+FORCE_INLINE void staged_store_fence() { asm volatile("fence" ::: "memory"); }
+
 // Not socket_notify_receiver: it re-inits write_cmd_buf onto another VC, and the bytes_sent word can then
 // overtake the data it announces.
 inline void notify_bytes_sent(const SocketSenderInterface& sender) {
     volatile tt_l1_ptr sender_socket_md* cfg =
         reinterpret_cast<volatile tt_l1_ptr sender_socket_md*>(sender.config_addr);
     cfg->bytes_sent = sender.bytes_sent;
-    asm volatile("fence" ::: "memory");
+    staged_store_fence();
     write_to_host_chunked(
         sender.d2h.pcie_xy_enc,
         sender.config_addr,
@@ -72,11 +76,12 @@ constexpr uint32_t kDoneAddr = get_named_compile_time_arg_val("done_addr");
 constexpr uint32_t kStopAddr = get_named_compile_time_arg_val("stop_addr");
 constexpr uint32_t kSocketConfigAddr = get_named_compile_time_arg_val("socket_config_addr");
 constexpr uint32_t kMaxCores = get_named_compile_time_arg_val("max_cores");
-static_assert(kMaxCores <= 256, "ship_list and hot index cores as bytes");
+static_assert(kMaxCores <= 256, "the core lists index cores as bytes");
 // Static VC for PCIe pushes, spread across relays by the host.
 constexpr uint32_t kWriteVc = get_named_compile_time_arg_val("write_vc");
-// Per lane, not per span: the producer that blocks is always one lane.
-constexpr uint32_t kShipMinPct = get_named_compile_time_arg_val("ship_min_pct");
+// A core ships once its fullest lane holds this percent of its ring. Per lane, not per span: the producer that
+// blocks is always one lane. The measured stall-free band ends between 30 and 35.
+constexpr uint32_t kShipMinPct = 25;
 // 0 selects direct push: frames go straight from staging to the host FIFO.
 constexpr uint32_t kSpoolBase = get_named_compile_time_arg_val("spool_base");
 constexpr uint32_t kSpoolBytes = get_named_compile_time_arg_val("spool_bytes");
@@ -103,14 +108,17 @@ constexpr uint8_t kReadNoc = NOC_INDEX == 0 ? 1 : 0;
 constexpr bool kSpool = kSpoolBytes != 0;
 constexpr uint8_t kDmaShip = 0;   // TX stream 0: staging -> spool
 constexpr uint8_t kDmaDrain = 1;  // TX stream 1: spool -> bounce
-// The TX stream status register's num_writes_outstanding field is 4 bits wide (gddr_dma_regs.h).
-constexpr uint32_t kDmaOutstandingMax = 15;
 // Two-core batches in kNGens generations; in spool mode the leftover slots are the two drain bounces.
 constexpr uint32_t kGenSlots = 2;
 static_assert(kGenSlots == 2, "the frame emit is written for two-slot generations");
 constexpr uint32_t kNBounce = kSpool ? 2u : 0u;
 constexpr uint32_t kNGens = (kNStage - kNBounce) / kGenSlots;
 static_assert(kNGens >= 2, "the ship pipeline needs at least two staging generations");
+// Both DMA streams are issued without the ready poll (dma_async_*<false>): a generation's emit is at most two
+// appends of at most two pieces each (one split at the spool wrap), retire_gen keeps at most kNGens generations
+// in flight, and each bounce holds at most one drain read.
+static_assert(kNGens * 4 < experimental::kMaxOutstandingWrites, "the ship stream could fill and drop an issue");
+static_assert(kNBounce < experimental::kMaxOutstandingReads, "the drain stream could fill and drop an issue");
 // 64 B per core: the tail read at +0, the head mirror at +32, the wire XY word behind the heads so the head
 // write is 20 bytes.
 constexpr uint32_t kCvReadBytes = 32;
@@ -139,8 +147,9 @@ constexpr uint64_t kCyclesPerUs = 1350;  // DRISC wall clock at the 1.35 GHz AIC
 // Idle backoff ceiling. 20 us exceeded a lane's fill time at high rates.
 constexpr uint32_t kCvIdleGapMax = 5 * kCyclesPerUs;
 constexpr uint32_t kCvIdleGapMinInc = 256;
-// Worst-case host staleness for a workload too light to reach the occupancy bands.
-constexpr uint64_t kSpoolFreshCycles = 50'000 * kCyclesPerUs;
+// Below the first band the host is otherwise fed nothing until the spool fills that far; one pass every this many
+// sweeps keeps it busy at a bounce per stride, and bounds host staleness to the stride.
+constexpr uint32_t kIdlePumpStride = 8;
 constexpr uint64_t kStopDrainCycles = 1'000'000 * kCyclesPerUs;
 // How long the exit lets the posted head writes stream out; small packets leave in nanoseconds.
 constexpr uint64_t kPostedDrainCycles = 1000 * kCyclesPerUs;
@@ -164,18 +173,38 @@ static_assert(
         kSlotBytes % (kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS * 4u) == 0,
     "packed-gather congruence broken");
 
+// socket_reserve_pages spins with no escape. This wait holds through quiesce (stop=1), when the receiver is
+// still acking; only the kill switch (stop=2) returns false.
+inline bool reserve_pages(const SocketSenderInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* stop) {
+    const uint32_t num_bytes = num_pages * socket.page_size;
+    volatile tt_l1_ptr uint32_t* acked = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_base_addr);
+    const uint32_t acked_end = socket.bytes_acked_base_addr + socket.num_downstreams * bytes_acked_size_bytes;
+    while (reinterpret_cast<uint32_t>(acked) < acked_end) {
+        while (true) {
+            invalidate_l1_cache();
+            const uint32_t bytes_free = socket.downstream_fifo_total_size - (socket.bytes_sent - *acked);
+            if (bytes_free >= num_bytes) {
+                break;
+            }
+            if (*stop == kernel_profiler::kRelayStopRelease) {
+                return false;
+            }
+        }
+        acked =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reinterpret_cast<uint32_t>(acked) + bytes_acked_size_bytes);
+    }
+    return true;
+}
+
 // pass() never blocks: every wait is a state a later pass observes, so the pump can delay host delivery but
 // never the sweep. kSpoolBytes == 0 is the direct-push build, which never calls this.
 struct SpoolPump {
     enum : uint32_t { kEmpty = 0, kReading = 1, kReady = 2, kShipping = 3 };
     static constexpr uint32_t kNone = 2;  // no bounce in the asked-for state
-    // Pump effort by spool occupancy: idle sweeps only, every other sweep, every sweep, also per batch and
-    // inside the read-wait spin.
-    enum : uint32_t { kLevelIdle = 0, kLevelHalf = 1, kLevelEverySweep = 2, kLevelInline = 3 };
-    static constexpr uint32_t kBandHalf = kSpoolBytes / 4u + kSpoolBytes / 8u;
+    // Pump effort by spool occupancy: the sweep cadence, every sweep, also per batch and inside the read-wait spin.
+    enum : uint32_t { kLevelIdle = 0, kLevelEverySweep = 1, kLevelInline = 2 };
     static constexpr uint32_t kBandEverySweep = kSpoolBytes / 2u;
     static constexpr uint32_t kBandInline = kSpoolBytes / 2u + kSpoolBytes / 8u;
-    static constexpr uint32_t kFreshTickStride = 64;
     // At most one READING and one SHIPPING bounce at a time, so every pass is a poll.
     struct Bounce {
         uint32_t state;
@@ -197,12 +226,8 @@ struct SpoolPump {
     uint32_t dma_rd_issued = 0;
     uint32_t chunks = 0;  // refills so far; also the sequence number the oldest-first ship compares
     Bounce b[2] = {};
-    bool notify_pending = false;  // pump ships owe the host a bytes_sent notify (batched per sweep)
+    bool notify_pending = false;  // ships owe the host a bytes_sent notify (batched per sweep)
     uint32_t level = kLevelIdle;
-    // Latched trickle for a workload too light to reach the bands; cleared when the spool empties.
-    bool fresh_boost = false;
-    uint64_t oldest = 0;  // when the spool last went non-empty; 0 = empty
-    uint32_t fresh_tick = 0;
     SocketSenderInterface& sender_;
     volatile tt_l1_ptr uint32_t* acked_;  // the downstream's bytes_acked word
 
@@ -225,15 +250,12 @@ struct SpoolPump {
     }
 
     // Call wherever wr or rd advance.
-    __attribute__((always_inline)) void rebalance() {
+    FORCE_INLINE void rebalance() {
         const uint32_t occ = occupancy();
-        level = occ >= kBandInline       ? kLevelInline
-                : occ >= kBandEverySweep ? kLevelEverySweep
-                : occ >= kBandHalf       ? kLevelHalf
-                                         : kLevelIdle;
+        level = occ >= kBandInline ? kLevelInline : occ >= kBandEverySweep ? kLevelEverySweep : kLevelIdle;
     }
 
-    __attribute__((always_inline)) void append(uint32_t src, uint32_t len) {
+    FORCE_INLINE void append(uint32_t src, uint32_t len) {
         while (len != 0) {
             const uint32_t piece = len > kSpoolBytes - wr_off ? kSpoolBytes - wr_off : len;
             experimental::dma_async_write<false>(kDmaShip, src, kSpoolBase + wr_off, piece);
@@ -250,7 +272,7 @@ struct SpoolPump {
 
     // SHIPPING -> EMPTY on write-ack, not on sent: the bounce's next writer is the DMA engine, which a
     // sent-only gate does not fence.
-    __attribute__((always_inline)) void reclaim_shipped(bool& did) {
+    FORCE_INLINE void reclaim_shipped(bool& did) {
         if (b[0].state == kShipping || b[1].state == kShipping) {
             const uint32_t acked = NOC_STATUS_READ_REG(NOC_INDEX, NIU_MST_WR_ACK_RECEIVED);
             for (uint32_t i = 0; i < 2; i++) {
@@ -263,7 +285,7 @@ struct SpoolPump {
     }
 
     // Stream completion is FIFO, so one outstanding count gives each bounce its own line.
-    __attribute__((always_inline)) void retire_reads(bool& did) {
+    FORCE_INLINE void retire_reads(bool& did) {
         if (b[0].state == kReading || b[1].state == kReading) {
             const uint32_t rd_out = experimental::dma_get_reads_outstanding(kDmaDrain);
             for (uint32_t i = 0; i < 2; i++) {
@@ -280,7 +302,7 @@ struct SpoolPump {
 
     // Refill before shipping so the read runs under the ship's NoC issue; a second concurrent refill only at
     // full pressure, where the deeper bank queue pays for itself.
-    __attribute__((always_inline)) void refill(bool& did) {
+    FORCE_INLINE void refill(bool& did) {
         const uint32_t emp = first_empty();
         const bool want_refill = emp != kNone && (level >= kLevelInline || b[emp ^ 1u].state != kReading);
         // Only ship-completed bytes are readable: nothing short of a write's completion orders a read of the same
@@ -314,7 +336,7 @@ struct SpoolPump {
         }
     }
 
-    __attribute__((always_inline)) void ship(bool& did) {
+    FORCE_INLINE void ship(bool& did) {
         const uint32_t rdy = oldest_ready();
         if (rdy != kNone) {
             invalidate_l1_cache();
@@ -339,7 +361,7 @@ struct SpoolPump {
         }
     }
 
-    __attribute__((always_inline)) void pass() {
+    FORCE_INLINE void pass() {
         if (wr == rd && both_empty()) {
             return;
         }
@@ -353,35 +375,13 @@ struct SpoolPump {
         }
     }
 
-    // Out-of-line copy for the cold sites.
     __attribute__((noinline)) void pass_cold() { pass(); }
 
     // Once per sweep, not per chunk.
-    __attribute__((always_inline)) void notify() {
+    FORCE_INLINE void notify() {
         if (notify_pending) {
             notify_bytes_sent(sender_);
             notify_pending = false;
-        }
-    }
-
-    // The wall clock is read every 64th call: one read per sweep stalls producers at saturation, and ~1 ms of
-    // stride is noise against the 50 ms bound.
-    __attribute__((always_inline)) void freshness_tick(uint64_t deadline_cycles) {
-        if (++fresh_tick < kFreshTickStride) {
-            return;
-        }
-        fresh_tick = 0;
-        if (wr == rd) {
-            oldest = 0;
-            fresh_boost = false;
-            return;
-        }
-        const uint64_t now = get_timestamp();
-        if (oldest == 0 || level >= kLevelHalf || fresh_boost) {
-            oldest = now;
-            fresh_boost = level == kLevelIdle && fresh_boost;
-        } else if (now - oldest > deadline_cycles) {
-            fresh_boost = true;
         }
     }
 };
@@ -390,32 +390,57 @@ struct SpoolPump {
 // is the coordinate, one address and the send.
 constexpr uint32_t kCvCmdBuf = write_at_cmd_buf;
 constexpr uint32_t kHeadCmdBuf = write_cmd_buf;
+constexpr uint32_t kGatherTxn = 1;
 
-__attribute__((always_inline)) inline bool host_released(volatile tt_l1_ptr uint32_t* stop) {
+FORCE_INLINE bool host_released(volatile tt_l1_ptr uint32_t* stop) {
     invalidate_l1_cache();
     return *stop == kernel_profiler::kRelayStopRelease;
 }
 
+FORCE_INLINE uint32_t record(uint32_t c) { return kCoreRecords + c * kRecordBytes; }
 
-__attribute__((always_inline)) inline uint32_t record(uint32_t c) { return kCoreRecords + c * kRecordBytes; }
+// Computed once: get_noc_addr's coordinate arithmetic would otherwise run at every issue of an
+// instruction-bound sweep.
+// NOC_TARG_ADDR_COORDINATE field of each worker's profiler block, ready to write.
+static uint32_t core_coord[kMaxCores];
+static uint32_t ring_base;  // lane 0's ring on every worker: the control block plus its control words
 
-// A gather read on a command buffer already known to be ready: the caller polled it before writing the
-// coordinate and has sent nothing since, so the poll ncrisc_noc_read_with_state would repeat is redundant.
-__attribute__((always_inline)) inline void gather_read_ready(uint32_t src, uint32_t dst, uint32_t len_bytes) {
-    NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_RET_ADDR_LO, dst);
-    NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_TARG_ADDR_LO, src);
-    NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_AT_LEN_BE, len_bytes);
-    NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+// The gather command buffer's register block and its send word. Laundered through an empty asm: as constants
+// the allocator rematerialises both before every poll of the unrolled lane walk instead of keeping them in the
+// registers it has free.
+struct GatherRegs {
+    volatile uint32_t* base;
+    uint32_t send;
+};
+FORCE_INLINE GatherRegs gather_regs() {
+    volatile uint32_t* base = reinterpret_cast<volatile uint32_t*>(
+        NOC_REGS_START_ADDR + NOC_CMD_BUF_INSTANCE_OFFSET(kReadNoc, read_cmd_buf));
+    uint32_t send = NOC_CTRL_SEND_REQ;
+    asm("" : "+r"(base), "+r"(send));
+    return {base, send};
+}
+FORCE_INLINE void gather_reg(const GatherRegs& g, uint32_t reg, uint32_t val) {
+    g.base[(reg - NOC_REGS_START_ADDR) / 4u] = val;
+}
+FORCE_INLINE bool gather_ready(const GatherRegs& g) {
+    return g.base[(NOC_CMD_CTRL - NOC_REGS_START_ADDR) / 4u] == NOC_CTRL_STATUS_READY;
 }
 
-__attribute__((always_inline)) inline void gather_read(uint32_t src, uint32_t dst, uint32_t len_bytes) {
-    ncrisc_noc_read_with_state<DM_DEDICATED_NOC, false, false>(kReadNoc, read_cmd_buf, src, dst, len_bytes);
+FORCE_INLINE void gather_read(const GatherRegs& g, bool poll, uint32_t src, uint32_t dst, uint32_t len_bytes) {
+    if (poll) {
+        while (!gather_ready(g)) {
+        }
+    }
+    gather_reg(g, NOC_RET_ADDR_LO, dst);
+    gather_reg(g, NOC_TARG_ADDR_LO, src);
+    gather_reg(g, NOC_AT_LEN_BE, len_bytes);
+    gather_reg(g, NOC_CMD_CTRL, g.send);
 }
-__attribute__((always_inline)) inline uint32_t heads(uint32_t c) { return record(c) + kHeadWord * 4u; }
+FORCE_INLINE uint32_t heads(uint32_t c) { return record(c) + kHeadWord * 4u; }
 
 // Counted, not barriered: in-flight gather responses also bump the counter, which can only hand the scan
 // stale-but-valid tails (tails are monotonic).
-__attribute__((always_inline)) inline void cv_issue(const uint32_t* core_coord, uint32_t c) {
+FORCE_INLINE void cv_issue(uint32_t c) {
     while (!noc_cmd_buf_ready(kReadNoc, kCvCmdBuf)) {
     }
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_TARG_ADDR_COORDINATE, core_coord[c]);
@@ -423,13 +448,13 @@ __attribute__((always_inline)) inline void cv_issue(const uint32_t* core_coord, 
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 }
 
-__attribute__((always_inline)) inline void cv_issue(const uint32_t* core_coord, uint32_t lo, uint32_t hi) {
+FORCE_INLINE void cv_issue(uint32_t lo, uint32_t hi) {
     for (uint32_t i = lo; i < hi; i++) {
-        cv_issue(core_coord, i);
+        cv_issue(i);
     }
 }
 
-__attribute__((always_inline)) inline void cv_wait(uint32_t rd0, uint32_t expect) {
+FORCE_INLINE void cv_wait(uint32_t rd0, uint32_t expect) {
     while (NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED) - rd0 < expect) {
     }
     invalidate_l1_cache();
@@ -437,19 +462,17 @@ __attribute__((always_inline)) inline void cv_wait(uint32_t rd0, uint32_t expect
 
 // Posted (the barriers protect staging, which a head write never touches) and on the read NoC, where it does
 // not queue behind frame data and the PCIe tile's acceptance jitter.
-__attribute__((always_inline)) inline void post_heads(const uint32_t* core_coord, uint32_t c) {
+FORCE_INLINE void post_heads(uint32_t c) {
     noc_wwrite_with_state<DM_DEDICATED_NOC, kHeadCmdBuf, CQ_NOC_SNdl, CQ_NOC_SEND, CQ_NOC_WAIT, true, true>(
         kReadNoc, heads(c), core_coord[c], 0);
 }
 
 // A frame occupies whole socket pages on the wire.
-__attribute__((always_inline)) inline uint32_t page_round(uint32_t bytes) {
-    return (bytes + kPageBytes - 1u) & ~(kPageBytes - 1u);
-}
+FORCE_INLINE uint32_t page_round(uint32_t bytes) { return (bytes + kPageBytes - 1u) & ~(kPageBytes - 1u); }
 
 // Prefix word 1 is the payload length in words.
 constexpr uint32_t kLenWord = 1;
-__attribute__((always_inline)) inline uint32_t frame_bytes(uint32_t slot) {
+FORCE_INLINE uint32_t frame_bytes(uint32_t slot) {
     return (reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[kLenWord] + kPrefix) * 4u;
 }
 
@@ -467,45 +490,36 @@ constexpr bool image_rule_matches() {
 }
 static_assert(image_rule_matches(), "the inline image test drifted from spsc_span_wrap_image");
 
-// Computed once: get_noc_addr's coordinate arithmetic would otherwise run at every issue of an
-// instruction-bound sweep.
-// NOC_TARG_ADDR_COORDINATE field of each worker's profiler block, ready to write.
-static uint32_t core_coord[kMaxCores];
-static uint32_t ring_base;  // lane 0's ring on every worker: the control block plus its control words
-
 // Gather-read each live run straight to its packed wire offset; the pads keep read src == dst (mod 16 B) for
 // every piece, wrap continuations included. Returns the smallest per-core peak lane take.
 __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n, uint32_t slot, uint32_t rb) {
     uint32_t min_peak = ~0u;
     const uint8_t* end = cores + n;
+    const GatherRegs g = gather_regs();
     do {
         const uint32_t c = *cores++;
-        const uint32_t rec = record(c);
-        const tt_l1_ptr uint32_t* __restrict tails = reinterpret_cast<const tt_l1_ptr uint32_t*>(rec);
-        volatile tt_l1_ptr uint32_t* __restrict cv =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
         // The head advance hides behind the NIU's acceptance of the same lane's read; nothing reads the record
         // before the batch barrier.
-        volatile tt_l1_ptr uint32_t* __restrict head =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rec + kHeadWord * 4u);
+        volatile tt_l1_ptr uint32_t* __restrict rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(record(c));
+        volatile tt_l1_ptr uint32_t* __restrict frame = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
         uint32_t off = kPrefix + kWireCtrl;
         uint32_t peak = 0;
-        while (!noc_cmd_buf_ready(kReadNoc, read_cmd_buf)) {
+        while (!gather_ready(g)) {
         }
-        NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, core_coord[c]);
+        gather_reg(g, NOC_TARG_ADDR_COORDINATE, core_coord[c]);
         // Unrolled: the three induction pointers and the split +2048 stride were 5 of the lane's 29 instructions.
         // All three read shapes stay inline: at the knee most runs wrap (P ~ take/512), so none of them is rare.
 #pragma GCC unroll 5
         for (uint32_t r = 0; r < kNumRisc; r++) {
-            const uint32_t tail = tails[r];
-            const uint32_t start = head[r];
+            const uint32_t tail = rec[r];
+            const uint32_t start = rec[kHeadWord + r];
             const uint32_t take = tail - start;
-            head[r] = start + take;
+            rec[kHeadWord + r] = start + take;
             if (take > peak) {
                 peak = take;
             }
-            cv[kernel_profiler::SPSC_WIRE_HEAD_0 + r] = start;
-            cv[kernel_profiler::SPSC_WIRE_TAIL_0 + r] = tail;
+            frame[kPrefix + kernel_profiler::SPSC_WIRE_HEAD_0 + r] = start;
+            frame[kPrefix + kernel_profiler::SPSC_WIRE_TAIL_0 + r] = tail;
             if (take == 0) {
                 continue;
             }
@@ -513,42 +527,37 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
             const uint32_t hm = start & (kRingWords - 1u);
             // Lane 0's first read needs no poll: the buffer was polled before the coordinate write above and
             // nothing has been sent since. Every later read follows a send.
-            const bool ready = (r == 0);
+            const bool poll = r != 0;
             if (hm + take <= kRingWords) {
                 off += kernel_profiler::spsc_span_pack_pad(start, off);
-                if (ready) {
-                    gather_read_ready(ring_src + hm * 4u, slot + off * 4u, take * 4u);
-                } else {
-                    gather_read(ring_src + hm * 4u, slot + off * 4u, take * 4u);
-                }
+                gather_read(g, poll, ring_src + hm * 4u, slot + off * 4u, take * 4u);
                 off += take;
             } else if (take - kImageMinTake <= kernel_profiler::SPSC_SPAN_WRAP_IMAGE_MAX_PAD_WORDS) {
                 // A near-full wrapping run ships as its whole ring image in one read (the decoder linearises by head).
                 // Coalescing adjacent images into one read starves the producer's L1 port ~70x.
                 off += kernel_profiler::spsc_span_pack_pad(0u, off);
-                if (ready) {
-                    gather_read_ready(ring_src, slot + off * 4u, kRingWords * 4u);
-                } else {
-                    gather_read(ring_src, slot + off * 4u, kRingWords * 4u);
-                }
+                gather_read(g, poll, ring_src, slot + off * 4u, kRingWords * 4u);
                 off += kRingWords;
             } else {
                 // A small wrapping run ships as two byte-exact pieces: its dead remainder would be most of the ring.
                 off += kernel_profiler::spsc_span_pack_pad(start, off);
                 const uint32_t first = kRingWords - hm;
-                if (ready) {
-                    gather_read_ready(ring_src + hm * 4u, slot + off * 4u, first * 4u);
-                } else {
-                    gather_read(ring_src + hm * 4u, slot + off * 4u, first * 4u);
-                }
-                gather_read(ring_src, slot + (off + first) * 4u, (take - first) * 4u);
-                off += take;
+                uint32_t dst = slot + off * 4u;
+                const uint32_t first_bytes = first * 4u;
+                gather_read(g, poll, ring_src + hm * 4u, dst, first_bytes);
+                // The second piece's operands are derived only after the first send: the poll that follows must
+                // trail the send by at least this much work, or it lands before the NIU has assigned the VC and
+                // costs a full extra spin per command.
+                uint32_t rest = take;
+                asm volatile("" : "+r"(dst), "+r"(rest), "+r"(off));
+                off += rest;
+                rest -= first;
+                gather_read(g, true, ring_src, dst + first_bytes, rest * 4u);
             }
         }
-        cv[kernel_profiler::SPSC_WIRE_XY] = tails[kXyWord];
-        // pfx[0] is staged once at init; only the payload word varies.
-        volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
-        pfx[kLenWord] = off - kPrefix;
+        frame[kPrefix + kernel_profiler::SPSC_WIRE_XY] = rec[kXyWord];
+        // frame[0] is staged once at init; only the payload word varies.
+        frame[kLenWord] = off - kPrefix;
         if (peak < min_peak) {
             min_peak = peak;
         }
@@ -557,11 +566,12 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
     return min_peak;
 }
 
-__attribute__((always_inline)) static inline void program_command_buffers(uint32_t cv_src) {
-    // Both read buffers use transaction id 0: the NIU's outstanding count for that id is the batch barrier.
+static FORCE_INLINE void program_command_buffers(uint32_t cv_src) {
+    // Gathers carry transaction id kGatherTxn and tail reads id 0: the NIU's outstanding count per id lets the
+    // batch barrier wait for the gathers alone, and the tail reads are waited for where they are consumed.
     while (!noc_cmd_buf_ready(kReadNoc, read_cmd_buf)) {
     }
-    NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_PACKET_TAG, 0);
+    NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(kGatherTxn));
     // Worker L1 addresses fit 32 bits, so the address-mid word is zero and set_state is the coordinate alone.
     NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_TARG_ADDR_MID, 0);
     while (!noc_cmd_buf_ready(kReadNoc, kCvCmdBuf)) {
@@ -588,7 +598,7 @@ __attribute__((always_inline)) static inline void program_command_buffers(uint32
 }
 
 // Only heads, tails and the core identity are staged per frame; the rest must read zero on the wire.
-__attribute__((always_inline)) static inline void zero_stage_prefixes() {
+static FORCE_INLINE void zero_stage_prefixes() {
     for (uint32_t sl = 0; sl < kNStage; sl++) {
         volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase + sl * kSlotBytes);
         pfx[0] = kernel_profiler::spsc_span_w0();
@@ -600,10 +610,9 @@ __attribute__((always_inline)) static inline void zero_stage_prefixes() {
 
 // Heads seed from the current tails: everything published before this launch predates the capture. The
 // scratch is the only copy of the heads.
-__attribute__((always_inline)) static inline void seed_heads(
-    uint32_t num_cores, volatile tt_l1_ptr uint32_t* coords, uint32_t* tails_seen) {
+static FORCE_INLINE void seed_heads(uint32_t num_cores, volatile tt_l1_ptr uint32_t* coords, uint32_t* tails_seen) {
     const uint32_t rd_seed = NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED);
-    cv_issue(core_coord, 0, num_cores);
+    cv_issue(0, num_cores);
     cv_wait(rd_seed, num_cores);
     for (uint32_t c = 0; c < num_cores; c++) {
         volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(record(c));
@@ -617,8 +626,7 @@ __attribute__((always_inline)) static inline void seed_heads(
     }
 }
 
-// Drain the spool, barrier the socket, publish done, then hand the NIU back on the host's word.
-__attribute__((always_inline)) static inline void finish(
+static FORCE_INLINE void finish(
     SpoolPump& pump, SocketSenderInterface& sender, volatile tt_l1_ptr uint32_t* stop, bool killed) {
     // Bounded: a consumer that stopped acking strands bytes instead of wedging teardown.
     if constexpr (kSpool) {
@@ -638,6 +646,9 @@ __attribute__((always_inline)) static inline void finish(
 
     // socket_barrier waits for the host to ack everything, so it would hang on a dead consumer.
     if (!killed) {
+        if constexpr (!kSpool) {
+            pump.notify();
+        }
         socket_barrier(sender);
     }
     while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
@@ -663,6 +674,167 @@ __attribute__((always_inline)) static inline void finish(
     while (!host_released(stop) && get_timestamp() < t_end) {
     }
     experimental::drisc_set_noc2axi_mode_all();
+}
+
+// Every core is on exactly one list. The ship list persists across sweeps and is gathered in order off the
+// per-batch tail refreshes; the probe list is read once per sweep, and a core that comes back live joins the
+// sweep in progress. A gathered core whose peak comes back under the sweep's demote bound moves to the probes.
+// tails_seen is the sum of a core's tails at its last read; tails are monotonic, so its delta is one interval's
+// production.
+static uint8_t ship_list[kMaxCores];
+static uint8_t probe_list[kMaxCores];
+static uint8_t demote_pos[kMaxCores];  // ship-list positions demoted this sweep, ascending
+static uint32_t tails_seen[kMaxCores];
+static uint32_t n_list;
+static uint32_t n_probe;
+static uint32_t acked_seen;  // direct push: the downstream's bytes_acked as last read
+static uint32_t n_demote;
+static uint32_t sweep_peak;
+static bool sweep_grew;
+
+// Out of line: these run at most once per sweep, and inline they cost the batch loop registers. A core's peak is
+// recomputed from the heads and tails its frame header already holds.
+__attribute__((noinline)) static void note_demotions(uint32_t slot, uint32_t n, uint32_t cur, uint32_t demote_below) {
+    for (uint32_t i = 0; i < n; i++, slot += kSlotBytes) {
+        const tt_l1_ptr uint32_t* frame = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot);
+        uint32_t peak = 0;
+        for (uint32_t r = 0; r < kNumRisc; r++) {
+            const uint32_t take = frame[kPrefix + kernel_profiler::SPSC_WIRE_TAIL_0 + r] -
+                                  frame[kPrefix + kernel_profiler::SPSC_WIRE_HEAD_0 + r];
+            if (take > peak) {
+                peak = take;
+            }
+        }
+        if (peak < demote_below) {
+            demote_pos[n_demote++] = static_cast<uint8_t>(cur + i);
+        }
+    }
+}
+
+// The probes' tails have landed; every live, undeferred probe joins the ship list.
+__attribute__((noinline)) static void promote_probes(bool defer_ok) {
+    for (uint32_t k = 0; k < n_probe;) {
+        const uint32_t c = probe_list[k];
+        const tt_l1_ptr uint32_t* __restrict tails = reinterpret_cast<const tt_l1_ptr uint32_t*>(record(c));
+        const tt_l1_ptr uint32_t* __restrict mine = tails + kHeadWord;
+        // Unrolled into registers: an indexed-array loop spills, and each spilled word is an L1 round trip per
+        // core per sweep.
+        const uint32_t d0 = tails[0] - mine[0];
+        const uint32_t d1 = tails[1] - mine[1];
+        const uint32_t d2 = tails[2] - mine[2];
+        const uint32_t d3 = tails[3] - mine[3];
+        const uint32_t d4 = tails[4] - mine[4];
+        // No clamp: a producer blocks 506 words past the head it sees, and the mirror is never behind that head.
+        const uint32_t live = d0 | d1 | d2 | d3 | d4;
+        uint32_t grew = 0;
+        uint32_t peak = 0;
+        // With the ship gate open every live core ships; peak and growth are unused.
+        if constexpr (kLaneShipWords != 0) {
+            const uint32_t tsum = tails[0] + tails[1] + tails[2] + tails[3] + tails[4];
+            grew = tsum - tails_seen[c];
+            tails_seen[c] = tsum;
+            sweep_grew |= grew != 0;
+            peak = d0;
+            if (d1 > peak) {
+                peak = d1;
+            }
+            if (d2 > peak) {
+                peak = d2;
+            }
+            if (d3 > peak) {
+                peak = d3;
+            }
+            if (d4 > peak) {
+                peak = d4;
+            }
+            if (peak > sweep_peak) {
+                sweep_peak = peak;
+            }
+        }
+        // Deferral must survive one more interval of production, so `grew` (last interval's words) must be under
+        // the threshold too; that bounds a deferred core at ~2x threshold.
+        const bool defer = defer_ok && peak < kLaneShipWords && grew < kLaneShipWords && peak < kLaneTrigger;
+        if (live != 0 && !defer) {
+            ship_list[n_list++] = static_cast<uint8_t>(c);
+            probe_list[k] = probe_list[--n_probe];
+        } else {
+            k++;
+        }
+    }
+}
+
+// Descending, so each swap-remove leaves the earlier positions valid. The last batch's refresh may have covered
+// cores that just moved, so the next sweep's first batch is read again.
+__attribute__((noinline)) static void demote() {
+    do {
+        const uint32_t pos = demote_pos[--n_demote];
+        const uint32_t c = ship_list[pos];
+        ship_list[pos] = ship_list[--n_list];
+        probe_list[n_probe++] = static_cast<uint8_t>(c);
+        if constexpr (kLaneShipWords != 0) {
+            const tt_l1_ptr uint32_t* tails = reinterpret_cast<const tt_l1_ptr uint32_t*>(record(c));
+            tails_seen[c] = tails[0] + tails[1] + tails[2] + tails[3] + tails[4];
+        }
+    } while (n_demote != 0);
+    const uint32_t nn = n_list < kGenSlots ? n_list : kGenSlots;
+    for (uint32_t i = 0; i < nn; i++) {
+        cv_issue(ship_list[i]);
+    }
+}
+
+// A staged slot is its frame's wire image, so a frame is one write or one DMA; the trailing page fill is
+// never written, the host reads past it. Returns true when the kill switch broke a wait.
+static FORCE_INLINE bool emit_slots(
+    SpoolPump& pump, SocketSenderInterface& sender, volatile tt_l1_ptr uint32_t* stop, uint32_t base, uint32_t count) {
+    // Frames occupy whole pages on the wire, so the FIFO write pointer and the spool offset advance in lockstep.
+    const uint32_t raw0 = frame_bytes(base);
+    const uint32_t len0 = page_round(raw0);
+    uint32_t raw1 = 0;
+    uint32_t len1 = 0;
+    if (count == kGenSlots) {
+        raw1 = frame_bytes(base + kSlotBytes);
+        len1 = page_round(raw1);
+    }
+    const uint32_t bytes = len0 + len1;
+    if constexpr (kSpool) {
+        // This wait is the spool's back-pressure: it holds through quiesce and only the kill switch breaks it.
+        while (!pump.has_room(bytes)) {
+            if (host_released(stop)) {
+                return true;
+            }
+            pump.pass_cold();
+        }
+        staged_store_fence();
+        // A full-span frame fills its slot exactly, so it and a full neighbour are wire-contiguous and ship as one
+        // DMA.
+        if (len1 != 0 && len0 != kSlotBytes) {
+            pump.append(base, len0);
+            pump.append(base + kSlotBytes, len1);
+        } else {
+            pump.append(base, bytes);
+        }
+        pump.rebalance();
+    } else {
+        staged_store_fence();
+        // bytes_acked only advances, so a copy that shows room is still right; it is re-read (an L1 invalidate the
+        // next batch's record reads pay for) only when it does not. Credit only returns for bytes the host has been
+        // told about, so a FIFO without room is notified before the wait; otherwise bytes_sent goes out once per
+        // sweep, as the pump's does.
+        if (sender.downstream_fifo_total_size - (sender.bytes_sent - acked_seen) < bytes) {
+            pump.notify();
+            if (!reserve_pages(sender, bytes / kPageBytes, stop)) {
+                return true;
+            }
+            acked_seen = *pump.acked_;
+        }
+        push_fifo(sender, base, sender.write_ptr, raw0);
+        if (len1 != 0) {
+            push_fifo(sender, base + kSlotBytes, sender.write_ptr + len0, raw1);
+        }
+        socket_push_pages(sender, bytes / kPageBytes);
+        pump.notify_pending = true;
+    }
+    return false;
 }
 
 void kernel_main() {
@@ -693,13 +865,12 @@ void kernel_main() {
 
     zero_stage_prefixes();
 
-    // Statics persist across launches, so everything the loop trusts is re-initialised. tails_seen is the sum of
-    // a core's tails at its last scan; tails are monotonic, so its delta is one interval's production.
-    static uint32_t tails_seen[kMaxCores];
-    static uint8_t hot[kMaxCores];        // shipped real words last scan; hot + empty scan = publish lag
-    static uint8_t ship_list[kMaxCores];  // this sweep's ship set, dense core indices
+    // Statics persist across launches, so everything the loop trusts is re-initialised.
+    n_list = 0;
+    n_probe = num_cores;
+    acked_seen = 0;
     for (uint32_t i = 0; i < num_cores; i++) {
-        hot[i] = 0;
+        probe_list[i] = static_cast<uint8_t>(i);
     }
     seed_heads(num_cores, coords, tails_seen);
 
@@ -710,13 +881,12 @@ void kernel_main() {
     // dead ones: occupancy alone cannot tell pre-burst trickle from a light workload's steady lanes, and a
     // pre-loaded ring tips over during the detection latency.
     bool grid_busy = false;
-    // Once a sweep shipped every core above the threshold the scan is pure overhead, so the grid ships in list
-    // order off the per-batch refreshes until a core comes back empty or under threshold.
-    bool all_live = false;
     uint32_t grow_streak = 0;
     uint32_t quiet_streak = 0;
     constexpr uint32_t kBatchArmSweeps = 3;
     constexpr uint32_t kFlushQuietSweeps = 8;
+    // An empty core always leaves the ship list; under armed deferral so does one below the ship threshold.
+    constexpr uint32_t kDeferBelow = kLaneShipWords > 1 ? kLaneShipWords : 1u;
     // Persists across sweeps so a sweep's final ship drains under the pace gap, not on its own critical path.
     uint32_t gen_shipped = 0;  // bit g: generation g's last frame may still be leaving staging
     static_assert(kNGens <= 32, "gen_shipped is a bit mask");
@@ -724,54 +894,6 @@ void kernel_main() {
     uint32_t gen_dma_mark[kNGens] = {};
     SpoolPump pump(sender);
     bool killed = false;  // the kill switch (stop=2) broke a wait: the consumer is gone, bytes are stranded
-
-    // A staged slot is its frame's wire image, so a frame is one write or one DMA; the trailing page fill is
-    // never written, the host reads past it.
-    auto emit_slots = [&](uint32_t base, uint32_t count) __attribute__((always_inline)) {
-        // Frames occupy whole pages on the wire, so the FIFO write pointer and the spool offset advance in lockstep.
-        const uint32_t raw0 = frame_bytes(base);
-        const uint32_t len0 = page_round(raw0);
-        uint32_t raw1 = 0;
-        uint32_t len1 = 0;
-        if (count == kGenSlots) {
-            raw1 = frame_bytes(base + kSlotBytes);
-            len1 = page_round(raw1);
-        }
-        const uint32_t bytes = len0 + len1;
-        if constexpr (kSpool) {
-            // This wait is the spool's back-pressure: it holds through quiesce and only the kill switch breaks it.
-            while (!pump.has_room(bytes)) {
-                if (host_released(stop)) {
-                    killed = true;
-                    return;
-                }
-                pump.pass_cold();
-            }
-            // Blackhole stores can reach SRAM out of order, and the DMA engine reads the words the scalar core staged.
-            asm volatile("fence" ::: "memory");
-            // A full-span frame fills its slot exactly, so it and a full neighbour are wire-contiguous and ship as one
-            // DMA.
-            if (len1 != 0 && len0 != kSlotBytes) {
-                pump.append(base, len0);
-                pump.append(base + kSlotBytes, len1);
-            } else {
-                pump.append(base, bytes);
-            }
-            pump.rebalance();
-        } else {
-            asm volatile("fence" ::: "memory");
-            if (!socket_reserve_pages(sender, bytes / kPageBytes, stop, kernel_profiler::kRelayStopRelease)) {
-                killed = true;
-                return;
-            }
-            push_fifo(sender, base, sender.write_ptr, raw0);
-            if (len1 != 0) {
-                push_fifo(sender, base + kSlotBytes, sender.write_ptr + len0, raw1);
-            }
-            socket_push_pages(sender, bytes / kPageBytes);
-            notify_bytes_sent(sender);
-        }
-    };
 
     // On stop=1, sweep until a whole sweep moves nothing, so no marker is stranded in a worker ring.
     uint64_t stop_seen_at = 0;
@@ -790,22 +912,22 @@ void kernel_main() {
         *hb = sweeps;
         const uint32_t relieved_at_sweep_start = relieved;
 
-        uint32_t sweep_peak = 0;
-        bool sweep_grew = false;
-        // Gather generation G on the read NoC while G^1 ships; tail reads issue up front and the rest of the grid is
-        // scanned just in time as the ship list runs low. No lambda here: a by-reference capture costs sweep time
-        // at the saturation boundary.
+        sweep_peak = 0;
+        sweep_grew = false;
+        n_demote = 0;
+        // Gather generation G on the read NoC while G^1 ships. No lambda here: a by-reference capture costs sweep
+        // time at the saturation boundary.
         uint32_t gen = 0;
-        uint32_t pend_n = 0;  // frames staged for gen pend_gen and not yet shipped; 0 = none pending
-        uint32_t pend_gen = 0;
-        uint32_t n_ship = 0;
-        uint32_t min_peak = ~0u;
+        uint32_t pend_n = 0;  // frames staged for the previous generation and not yet shipped; 0 = none pending
+        static_assert(kNGens == 2, "the pending generation is derived as the other one");
+        const bool defer_ok = grid_busy && stop_seen_at == 0;
+        const uint32_t demote_below = defer_ok ? kDeferBelow : 1u;
 
         // Heads go out at the read barrier, not the frame emit: once the reads land the producer's ring slots are
         // free. A lambda on purpose: written inline, issue_batch picks up a spill per core.
         auto advance_heads = [&](uint32_t n, const uint8_t* cores) __attribute__((always_inline)) {
             for (uint32_t i = 0; i < n; i++) {
-                post_heads(core_coord, cores[i]);
+                post_heads(cores[i]);
                 relieved++;
             }
         };
@@ -818,7 +940,7 @@ void kernel_main() {
                 if constexpr (kSpool) {
                     // Stream completion is FIFO, so outstanding <= later-issues means this generation retired.
                     const uint32_t since = pump.dma_issued - gen_dma_mark[g];
-                    const uint32_t cap = since > kDmaOutstandingMax ? kDmaOutstandingMax : since;
+                    const uint32_t cap = since > experimental::kMaxOutstandingWrites ? experimental::kMaxOutstandingWrites : since;
                     while (experimental::dma_get_writes_outstanding(kDmaShip) > cap) {
                     }
                 } else {
@@ -830,161 +952,112 @@ void kernel_main() {
             }
         };
 
-        if (all_live) {
-            n_ship = num_cores;
-            if constexpr (kLaneShipWords != 0) {
-                sweep_grew = true;
-            }
-        } else {
-            const uint32_t rd0 = NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED);
-            // Responses can arrive out of order; a core counted early scans last sweep's tails (stale but valid),
-            // under-ships, and catches up next visit.
-            cv_issue(core_coord, 0, num_cores);
-            // The previous sweep's last ship retires under the tail reads' round trip, not between the tails landing
-            // and the first issue: the batch whose tails age most is the batch whose producers stall.
-            retire_gen(gen);
-            cv_wait(rd0, num_cores);
-            for (uint32_t c = 0; c < num_cores; c++) {
-                const tt_l1_ptr uint32_t* __restrict tails = reinterpret_cast<const tt_l1_ptr uint32_t*>(record(c));
-                const tt_l1_ptr uint32_t* __restrict mine = tails + kHeadWord;
-                // Unrolled into registers: an indexed-array loop spills, and each spilled word is an L1 round trip per
-                // core per sweep.
-                const uint32_t d0 = tails[0] - mine[0];
-                const uint32_t d1 = tails[1] - mine[1];
-                const uint32_t d2 = tails[2] - mine[2];
-                const uint32_t d3 = tails[3] - mine[3];
-                const uint32_t d4 = tails[4] - mine[4];
-                // No clamp: a producer blocks 506 words past the head it sees, and the mirror is never behind that
-                // head.
-                const uint32_t live = d0 | d1 | d2 | d3 | d4;
-                uint32_t grew = 0;
-                uint32_t peak = 0;
-                // With the ship gate open every live core ships; peak and growth are unused.
-                if constexpr (kLaneShipWords != 0) {
-                    const uint32_t tsum = tails[0] + tails[1] + tails[2] + tails[3] + tails[4];
-                    grew = tsum - tails_seen[c];
-                    tails_seen[c] = tsum;
-                    sweep_grew |= grew != 0;
-                    peak = d0;
-                    if (d1 > peak) {
-                        peak = d1;
-                    }
-                    if (d2 > peak) {
-                        peak = d2;
-                    }
-                    if (d3 > peak) {
-                        peak = d3;
-                    }
-                    if (d4 > peak) {
-                        peak = d4;
-                    }
-                    if (peak > sweep_peak) {
-                        sweep_peak = peak;
-                    }
-                }
-                if (live != 0) {
-                    // Deferral must survive one more interval of production, so `grew` (last interval's words) must
-                    // be under the threshold too; that bounds a deferred core at ~2x threshold.
-                    if (grid_busy && stop_seen_at == 0 && peak < kLaneShipWords && grew < kLaneShipWords &&
-                        peak < kLaneTrigger) {
-                        continue;
-                    }
-                    hot[c] = 1;
-                    ship_list[n_ship++] = static_cast<uint8_t>(c);
-                } else if (hot[c] != 0) {
-                    // A hot core scanning empty is almost always the producer's 64-word batched tail publish, not
-                    // idleness; skipping it would double its service interval. One-shot: an idle core wastes one
-                    // empty frame.
-                    hot[c] = 0;
-                    ship_list[n_ship++] = static_cast<uint8_t>(c);
-                }
+        // The probes fly with the first batch's gathers and land under its barrier.
+        bool probe_pending = n_probe != 0;
+        uint32_t rd0 = 0;
+        if (probe_pending) {
+            rd0 = NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED);
+            for (uint32_t i = 0; i < n_probe; i++) {
+                cv_issue(probe_list[i]);
             }
         }
+        if constexpr (kLaneShipWords != 0) {
+            sweep_grew = n_list != 0;
+        }
 
-        // One ship site: the last batch leaves through the same code, on the pass that finds nothing to issue.
+        // One ship site: the last batch leaves through the same code, on the pass that finds nothing to issue. The
+        // outer loop runs only for probes: they landed under the first batch's barrier (an empty list waits for
+        // them here), and the cores they promote are gathered by a second pass over the appended tail.
         uint32_t cur = 0;
         uint32_t n = 0;
-        const uint8_t* batch = ship_list;
         while (true) {
-            const bool more = cur < n_ship;
-            if (more) {
-                retire_gen(gen);
-                n = (n_ship - cur) < kGenSlots ? (n_ship - cur) : kGenSlots;
-                batch = &ship_list[cur];
-                const uint32_t pk = issue_batch(batch, n, kGenBase[gen], ring_base);
-                if (pk < min_peak) {
-                    min_peak = pk;
+            const uint32_t n_end = n_list;
+            while (true) {
+                const bool more = cur < n_end;
+                if (more) {
+                    // The tails this batch consumes were refreshed a batch ago (or probed at sweep start); they are
+                    // waited for here, not at the gather barrier. retire_gen comes after them: with full frames its
+                    // DMA wait is what binds here, and the poll and fence then run under it instead of after it.
+                    while (NOC_STATUS_READ_REG(kReadNoc, NIU_MST_REQS_OUTSTANDING_ID(0)) != 0) {
+                    }
+                    invalidate_l1_cache();
+                    retire_gen(gen);
+                    n = (n_end - cur) < kGenSlots ? (n_end - cur) : kGenSlots;
+                    const uint32_t pk = issue_batch(&ship_list[cur], n, kGenBase[gen], ring_base);
+                    if (pk < demote_below) {
+                        note_demotions(kGenBase[gen], n, cur, demote_below);
+                    }
+                    cur += n;
+                    // Refresh the next batch's tails in the same flight (this generation's read barrier covers them);
+                    // the last batch refreshes the next sweep's first, so a sweep opens on the issue with no wave.
+                    uint32_t nn = n_end - cur;
+                    uint32_t ri = cur;
+                    if (nn > kGenSlots) {
+                        nn = kGenSlots;
+                    } else if (nn == 0) {
+                        nn = n_end < kGenSlots ? n_end : kGenSlots;
+                        ri = 0;
+                    }
+                    for (uint32_t i = 0; i < nn; i++) {
+                        cv_issue(ship_list[ri + i]);
+                    }
                 }
-                cur += n;
-                // Refresh the next batch's tails in the same flight (this generation's read barrier covers them); a
-                // full list's last batch refreshes the next sweep's first, so a saturated sweep opens on the issue with
-                // no wave.
-                uint32_t nn = n_ship - cur;
-                uint32_t ri = cur;
-                if (nn > kGenSlots) {
-                    nn = kGenSlots;
-                } else if (nn == 0 && n_ship == num_cores) {
-                    nn = num_cores < kGenSlots ? num_cores : kGenSlots;
-                    ri = 0;
-                }
-                for (uint32_t i = 0; i < nn; i++) {
-                    cv_issue(core_coord, ship_list[ri + i]);
-                }
-            }
 
-            if (pend_n != 0) {
-                emit_slots(kGenBase[pend_gen], pend_n);
-                if constexpr (kSpool) {
-                    gen_dma_mark[pend_gen] = pump.dma_issued;
+                if (pend_n != 0) {
+                    const uint32_t pend_gen = gen ^ 1u;
+                    killed |= emit_slots(pump, sender, stop, kGenBase[pend_gen], pend_n);
+                    if constexpr (kSpool) {
+                        gen_dma_mark[pend_gen] = pump.dma_issued;
+                    }
+                    gen_shipped |= 1u << pend_gen;
+                    pend_n = 0;
                 }
-                gen_shipped |= 1u << pend_gen;
-                pend_n = 0;
-            }
-            if (!more) {
-                break;
-            }
-            if constexpr (kSpool) {
-                if (pump.level >= SpoolPump::kLevelInline) {
-                    pump.pass();
+                if (!more) {
+                    break;
                 }
-            }
-
-            // Hardware-counted read barrier: every read carries transaction id 0, so the NIU's per-id outstanding count
-            // is the barrier. The spin doubles as the pump's slot only at full pressure, where the pump's GDDR reads no
-            // longer contend with the gathers.
-            while (NOC_STATUS_READ_REG(kReadNoc, NIU_MST_REQS_OUTSTANDING_ID(0)) != 0) {
                 if constexpr (kSpool) {
-                    // Inline level means occupancy is over the 5/8 line, so nonempty holds.
                     if (pump.level >= SpoolPump::kLevelInline) {
                         pump.pass();
                     }
                 }
-            }
-            invalidate_l1_cache();
-            advance_heads(n, batch);
 
-            pend_n = n;
-            pend_gen = gen;
-            gen = gen + 1u == kNGens ? 0u : gen + 1u;
-        }
-        // Enter only when the scan would have shipped every core anyway; a core dropping below either bound leaves
-        // the mode.
-        const bool next = n_ship == num_cores && min_peak != 0 && min_peak >= kLaneShipWords;
-        if (next && !all_live) {
-            for (uint32_t c = 0; c < num_cores; c++) {
-                ship_list[c] = static_cast<uint8_t>(c);
+                // Hardware-counted read barrier on the gathers' transaction id. The spin doubles as the pump's slot
+                // only at full pressure, where the pump's GDDR reads no longer contend with the gathers. The heads are
+                // NIU-sourced from L1, so no cache invalidate is needed before posting them.
+                while (NOC_STATUS_READ_REG(kReadNoc, NIU_MST_REQS_OUTSTANDING_ID(kGatherTxn)) != 0) {
+                    if constexpr (kSpool) {
+                        // Inline level means occupancy is over the 5/8 line, so nonempty holds.
+                        if (pump.level >= SpoolPump::kLevelInline) {
+                            pump.pass();
+                        }
+                    }
+                }
+                advance_heads(n, &ship_list[cur - n]);
+
+                pend_n = n;
+                gen ^= 1u;
             }
+            if (!probe_pending) {
+                break;
+            }
+            probe_pending = false;
+            retire_gen(gen);
+            cv_wait(rd0, n_probe);
+            promote_probes(defer_ok);
         }
-        all_live = next;
+        if (n_demote != 0) {
+            demote();
+        }
 
         // Busy sweeps below the first band skip the post-sweep pump: a capture that fits the spool gets pure gather.
         if constexpr (kSpool) {
-            const bool half_turn = pump.level == SpoolPump::kLevelHalf && (sweeps & 1u) != 0;
-            if (pump.level >= SpoolPump::kLevelEverySweep || half_turn || pump.fresh_boost ||
-                relieved == relieved_at_sweep_start) {
+            const bool cadence = (sweeps & (kIdlePumpStride - 1u)) == 0;
+            if (pump.level >= SpoolPump::kLevelEverySweep || cadence || relieved == relieved_at_sweep_start) {
                 pump.pass();
                 pump.notify();
             }
+        } else {
+            pump.notify();
         }
 
         if constexpr (kLaneShipWords != 0) {
@@ -995,9 +1068,6 @@ void kernel_main() {
                 grow_streak = 0;
             }
             grid_busy = grow_streak >= kBatchArmSweeps;
-        }
-        if constexpr (kSpool) {
-            pump.freshness_tick(kSpoolFreshCycles);
         }
         // Collapse on work, creep toward the ceiling when idle; live-but-untriggered lanes count as work, since a
         // head only reaches a producer on a ship.

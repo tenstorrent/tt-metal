@@ -23,19 +23,20 @@ void kernel_main() {
 }
 ```
 
-Host callback — a zone arrives as one record, whole, when it closes:
+Host callback — a zone arrives as one record, whole, when it closes. The public API is
+`<tt-metalium/experimental/streaming_profiler.hpp>` (namespace `tt::tt_metal::experimental::streaming_profiler`);
+subscribe with a callable taking the `Batch` of the channels you want:
 
 ```cpp
-streaming_profiler::ZoneNameMirror names;   // id -> name; grows as kernels JIT-load
-auto h = streaming_profiler::register_consumer("zone-sink", [&](const streaming_profiler::StreamingProfilerRecordBatch& b) {
-    names.refresh();
-    for (const auto& r : b.records) {
-        if (r.meta.type != streaming_profiler::StreamingProfilerRecType::Zone) continue;
-        fmt::print("{}: start={} dur={} cycles (lane {}, op {})\n",
-            names.lookup(r.id),          // "compute"
-            r.data.zone.start, r.data.zone.duration, r.meta.lane, r.prog);
+auto h = Subscribe("zone-sink", [](const Batch<Channel::Zones>& b) {
+    for (const Zone& z : b.zones) {
+        fmt::print("{}: {} ns on chip {} core ({},{}) {} (op {})\n",
+            z.site.name,                 // "compute"
+            z.duration().count(), z.core.chip_id, z.core.coord.x, z.core.coord.y,
+            static_cast<int>(z.core.risc), z.runtime_id);
     }
 });
+// later: Unsubscribe(h);
 ```
 
 ![zone scopes](docs/zone_gifs/zone_scopes.gif)
@@ -57,24 +58,14 @@ for (uint32_t it = 0; it < N_ITERS; it++) {
 }
 ```
 
-Host callback — a `Data` record carries the timestamp; one `Ext` record follows on the same lane
-with the payload word count in `id` and payload words 1–2 packed into `data.ext` (`(hi << 32) | lo`).
-A 64-bit value like this one fits entirely in the `Ext`; `Cont` records appear only for payloads
-past two words (one uint64 each, words 3 and up):
+Host callback — a `TimestampedData` record arrives assembled, its payload as a span of uint64 words:
 
 ```cpp
-auto h = streaming_profiler::register_consumer("data-sink", [&](const streaming_profiler::StreamingProfilerRecordBatch& b) {
-    names.refresh();
-    for (const auto& r : b.records) {
-        switch (r.meta.type) {
-            case streaming_profiler::StreamingProfilerRecType::Data:  // marker: name id + device timestamp
-                pending = {names.lookup(r.id), r.data.ts};   // "BYTES-MOVED"
-                break;
-            case streaming_profiler::StreamingProfilerRecType::Ext:  // payload words 1-2: the whole uint64 here
-                fmt::print("{} @ {}: value={}\n", pending.name, pending.ts, r.data.ext);
-                break;
-            default: break;  // Cont (words 3+) unused for a single-uint64 payload
-        }
+auto h = Subscribe("data-sink", [](const Batch<Channel::TimestampedData>& b) {
+    for (const TimestampedData& d : b.timestamped_data) {
+        fmt::print("{} @ {}: value={}\n",
+            d.site.name,                                     // "BYTES-MOVED"
+            d.time().time_since_epoch().count(), d.payload[0]);
     }
 });
 ```
@@ -95,15 +86,14 @@ for (uint32_t it = 0; it < N_ITERS; it++) {
 }
 ```
 
-Host callback — an `Event` record is complete by itself: name id + timestamp, no payload:
+Host callback — an `Event` is a name and a time, nothing else:
 
 ```cpp
-auto h = streaming_profiler::register_consumer("flag-sink", [&](const streaming_profiler::StreamingProfilerRecordBatch& b) {
-    names.refresh();
-    for (const auto& r : b.records) {
-        if (r.meta.type != streaming_profiler::StreamingProfilerRecType::Event) continue;
-        fmt::print("{} @ {} (lane {})\n",
-            names.lookup(r.id), r.data.ts, r.meta.lane);     // "LOOP-START" @ device time
+auto h = Subscribe("flag-sink", [](const Batch<Channel::Events>& b) {
+    for (const Event& e : b.events) {
+        fmt::print("{} @ {} on core ({},{})\n",
+            e.site.name, e.time().time_since_epoch().count(),   // "LOOP-START" @ host time
+            e.core.coord.x, e.core.coord.y);
     }
 });
 ```

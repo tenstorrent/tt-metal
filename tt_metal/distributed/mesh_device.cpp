@@ -50,7 +50,7 @@
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
 #include "distributed/trace_allocation_tracker.hpp"
-#include "tools/profiler/streaming_profiler.hpp"
+#include "tools/profiler/streaming_profiler_receiver.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
@@ -1588,11 +1588,8 @@ void MeshDeviceImpl::init_streaming_profiler(const std::shared_ptr<MeshDevice>& 
     if (streaming_profiler_) {
         return;
     }
-    // Streaming (perf_debug) profiler: TT_METAL_STREAMING_PROFILER=1 (llrt/rtoptions.cpp) boots the
-    // device-side DRISC relays and spawns the host receiver. Off by default. It is a mode of its own,
-    // exclusive with TT_METAL_DEVICE_PROFILER (rtoptions TT_FATALs on the pair), and the real-time profiler
-    // stands down while it is on (realtime_profiler_manager.cpp: evaluate_realtime_profiler_eligibility) --
-    // both would consume the same per-RISC L1 rings.
+    // TT_METAL_STREAMING_PROFILER=1 boots the DRISC relays and the host receiver. Exclusive with
+    // TT_METAL_DEVICE_PROFILER (rtoptions TT_FATALs on the pair); the real-time profiler stands down while it is on.
     const auto& rtoptions = MetalContext::instance(get_context_id()).rtoptions();
     if (!rtoptions.get_streaming_profiler_enabled()) {
         return;
@@ -1601,15 +1598,7 @@ void MeshDeviceImpl::init_streaming_profiler(const std::shared_ptr<MeshDevice>& 
         MetalContext::instance(get_context_id()).hal().get_arch() != tt::ARCH::QUASAR,
         "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC drainer, "
         "which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
-    // TT_METAL_DRISC_PROFILER: producers armed, no built-in consumer -- the caller supplies its own DRISC
-    // drainer (tests/tt_metal/tt_metal/api/test_dram_kernels.cpp), so booting ours would compete with it.
-    if (rtoptions.get_drisc_profiler_enabled()) {
-        log_info(
-            tt::LogMetal,
-            "[streaming profiler] TT_METAL_DRISC_PROFILER set -- producers armed, built-in receiver not started.");
-        return;
-    }
-    streaming_profiler_ = std::make_unique<StreamingProfiler>(mesh_device);
+    streaming_profiler_ = streaming_profiler::Receiver::create(mesh_device);
 }
 
 void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {

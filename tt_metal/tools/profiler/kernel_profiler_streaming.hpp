@@ -102,21 +102,19 @@ constexpr uint32_t HEAD_INDEX = SPSC_RING_HEAD_0 + myRiscID;
 static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in the SPSC control layout");
 
 // Namespace scope only because profileScopeStall needs it.
-TT_ZONE_DEFINE_ID(PROFILER_STALL_ZONE_ID, "PRODUCER-STALL");
+TT_ZONE_DEFINE_ID(PROFILER_STALL_ZONE_ID, "PROFILER-STALL");
 
 // Wire encode, duplicated from spsc_packet.h because the JIT build lacks that include path. word0 = type(5) |
 // low27. A zone ships whole at close: a 2-word ZONE_S when its end is within 2^16 cycles of the lane cursor
 // and its duration fits 16 bits, else a 3-word ZONE_ATOMIC (id | end timer_low | duration) that re-anchors
-// the cursor. START/END pairs serve only the stall zone and the >3.2 s fallback. Lane identity and the
-// timer's high half are host-reconstructed from stickies.
+// the cursor, or a 5-word ZONE_L when the duration overflows 32 bits. Lane identity and the timer's high half
+// are host-reconstructed from stickies.
 struct ppfmt {
     static constexpr uint32_t TYPE_SHIFT = 27;
     static constexpr uint32_t TYPE_MASK = 0x1Fu;
     static constexpr uint32_t LOW27_MASK = 0x7FFFFFFu;
     // This wire's own type space: never pass a hostdevcommon PacketTypes value through, and never reuse
     // a retired value (11 = ZONE_TOTAL).
-    static constexpr uint32_t T_ZONE_START = 0u;        // PP_ZONE_START (stall zone + long-zone fallback only)
-    static constexpr uint32_t T_ZONE_END = 1u;          // PP_ZONE_END   (stall zone + long-zone fallback only)
     static constexpr uint32_t T_ZONE_ATOMIC = 2u;       // PP_ZONE_ATOMIC (3 words: id | end_lo | duration)
     static constexpr uint32_t T_ZONE_S = 3u;            // PP_ZONE_S (2 words: id | end_delta16<<16 | dur16)
     static constexpr uint32_t T_ZONE_L = 4u;            // PP_ZONE_L (5 words: id | end_lo | end_hi | dur_lo | dur_hi)
@@ -245,9 +243,9 @@ __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
     // The relay can only free words up to the published tail, so waiting on unpublished words deadlocks.
     publish_tail();
     while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_USABLE - nwords - STALL_CLOSE_WORDS)) {
-        invalidate_l1_cache();  // re-read the relay-updated head (and the terminate flag)
-        if (profiler_control_buffer[PROFILER_TERMINATE]) {
-            return;  // teardown: stop waiting on a dead ring; the destructor still closes the zone
+        invalidate_l1_cache();  // re-read the relay-updated head (and the arm flag)
+        if (!profiler_control_buffer[PROFILER_ARMED]) {
+            return;  // nobody drains this ring (or teardown disarmed it): overwrite rather than wait
         }
     }
     g_head_cache = profiler_control_buffer[HEAD_INDEX];
