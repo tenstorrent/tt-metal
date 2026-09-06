@@ -1007,6 +1007,37 @@ additive signature; bit-identical at every smaller block. Not reachable from any
 (no helper reaches that combination) and not reachable from this op, which caps its fused
 block below the limit — recorded, not worked around.
 
+### Issues encountered
+
+1. **The only op-attributed correctness break of the round was one this round created and
+   fixed in the same round: D35's deleted implicit ordering.** Written up under "a latent bug
+   the round exposed" above. Worth restating as a rule, because it generalizes past this op:
+   *a helper that documents a precondition but does not enforce it makes the caller's
+   statement order load-bearing, and nothing at the call site says so.* Two of them
+   (`reduce`'s scaler, `matmul_tiles`' operands) were satisfied here only as a side effect of
+   where the reader's publish happened to sit. Both are now explicit, and both are rows in the
+   helper-bypass table.
+2. **`.ii` / `*.o.log` purging poisons a warm JIT cache — Refinement 4b's hygiene step needs
+   amending.** R4b prescribes deleting the harvested preprocessed artifacts under
+   `built/*/kernels/rms_norm_ttnn_*/` after a `RMS_STAGE_ZONES=1` session, and says "ELFs
+   untouched, cache stays warm". In this environment (`TT_METAL_CACHE=<repo>/built` +
+   `TT_METAL_CCACHE_KERNEL_SUPPORT=1` + `TT_METAL_JIT_SERVER_ENDPOINT`) that is **not safe
+   mid-session**: it leaves build dirs the cache still considers reusable whose contents no
+   longer match the tree, and the next narrow run gets a MIXED kernel set. Reproduced exactly —
+   after such a purge the ROW_MAJOR BAND cell returned **all zeros** (pcc 0.000) and the HEIGHT
+   shard silently reverted to its pre-round timing (4744 ns against the repaired 3437), while a
+   run with a FRESH `TT_METAL_CACHE` on the identical tree was correct and fast (22612 ns /
+   pcc 0.999985, and 3441 ns). **The correct repair is to delete the op's kernel build
+   DIRECTORIES wholesale** (`find built -type d -name 'rms_norm_ttnn_*' -exec rm -rf {} +`),
+   not just the harvest artifacts inside them; done, and re-verified green afterwards on the
+   normal cache. Every number in this entry was taken BEFORE that purge, on a coherent cache,
+   and the post-repair re-measurement reproduces them (focus 3716 ns, HEIGHT 3437, BAND 22587,
+   BLOCK gbr 28877, G=32 tree 3354, interleaved decode 8369) with golden shard 2 green again.
+3. **The golden suite exceeds a single foreground window.** It is ~20 minutes of device time,
+   so it was run as 10 `pytest-split` shards (`--splits 10 --group k`), which
+   `run_safe_pytest.sh` forwards to pytest unchanged. Counts are additive across shards and sum
+   to the 23348 / 19 above.
+
 ### Round 2 entry state
 
 Re-ranked, the worst `perf` cells are now `(1,1,8192,2304)` and `(1,1,8192,1024)`
