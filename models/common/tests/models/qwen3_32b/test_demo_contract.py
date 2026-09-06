@@ -50,7 +50,7 @@ def test_demo_case_manifest_is_preserved():
 
 
 def test_demo_keeps_qwen3_trace_region_and_fabric():
-    assert '"trace_region_size": 50_000_000' in _DEMO_SOURCE
+    assert '"trace_region_size": 90_000_000' in _DEMO_SOURCE
     assert "ttnn.FabricConfig.FABRIC_1D" in _DEMO_SOURCE
 
 

@@ -517,6 +517,7 @@ class TracedQwen25Coder32BExecutor(Qwen25Coder32BExecutor):
         mesh_device,
         ondevice_decode_loop: bool = False,
         fast_prefill_last_token: bool = False,
+        trace_mode: str = "all",
     ):
         del mesh_device, fast_prefill_last_token
         super().__init__(
@@ -524,7 +525,7 @@ class TracedQwen25Coder32BExecutor(Qwen25Coder32BExecutor):
             model.model_args,
             _compat_executor_config(
                 model,
-                trace_mode="all",
+                trace_mode=trace_mode,
                 device_sampling_enabled=bool(ondevice_decode_loop),
             ),
         )

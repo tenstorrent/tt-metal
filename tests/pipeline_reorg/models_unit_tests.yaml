@@ -1742,7 +1742,9 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 4
+      # Passing runs take ~3:45 (main 33710384109: 3:41); 4 min left no headroom
+      # and timed out on run 33967118837 at 4:00.
+      timeout: 6
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models

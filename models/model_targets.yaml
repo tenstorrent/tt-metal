@@ -1096,10 +1096,8 @@ targets:
           - batch_size: 32
             seq_len: 707
             status: active
-            # Re-seeded from run 27036772693 (ci eval-32); the earlier 7.63/189
-            # were the token-matching teacher-forcing artifacts, not eval perf.
             perf:
-              decode_t/s/u: 22.1
+              decode_t/s/u: 29.9
               prefill_time_to_first_token: 82
             accuracy: {}
   qwen2.5-72b:
@@ -1132,7 +1130,7 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_first_token: 419
+              prefill_time_to_first_token: 275
               # b1 decode is run-to-run unstable: measured ~10.9-13.2 t/s across
               # recent scheduled runs + 3 targeted reruns. The old 13.77 center
               # sat at the top of the range, so its tol-0.15 floor (11.70) tripped
@@ -1270,8 +1268,8 @@ targets:
             status: active
             perf:
               prefill_time_to_first_token: 616
-              decode_t/s/u: 17.76
-              decode_t/s: 568.19
+              decode_t/s/u: 19.5
+              decode_t/s: 624
             accuracy: {}
             owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
@@ -1320,15 +1318,14 @@ targets:
           - batch_size: 32
             seq_len: 686
             status: active
-            # Targets raised to match sustained perf on bh_quietbox_2 (p300x2):
-            # 6/6 recent scheduled runs measured decode_t/s ~680-703, t/s/u ~21.8,
-            # TTFT ~86-88ms (old targets 278 / 18.7 / 207 were stale). decode_t/s
-            # = batch_size * decode_t/s/u (32 * 21.6 ~= 691).
+            #Raised again 691 / 21.6 -> 931 / 29.1:
+            # runs 33710384109 (main) and 33967118837 both measured 931 / 29.1,
+            # above the old +15% ceiling.
             perf:
               prefill_time_to_first_token: 87
               prefill_time_to_first_token_tolerance: 0.2
-              decode_t/s/u: 21.6
-              decode_t/s: 691
+              decode_t/s/u: 29.1
+              decode_t/s: 931
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
@@ -1392,7 +1389,7 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_first_token: 174.0
+              prefill_time_to_first_token: 150.0
               decode_t/s: 26.0
               decode_t/s/u: 26.0
               tolerance: 0.2
