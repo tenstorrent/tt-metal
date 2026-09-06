@@ -567,6 +567,38 @@ class CLOBBER_OP(TemplateParameter):
 
 
 @dataclass
+class ZERO_FLAG_CLOBBER(TemplateParameter):
+    """State-pollution mode applied between reduce_init and the reduce calls, to prove the
+    REDUCE_ROW MAX mov phase re-asserts the Src zero-substitution flag it depends on.
+
+    Each mode stands in for something a real tt-metal compute kernel does after reduce_init:
+    0=none (control), 1=reconfig_data_format, 2=llk_math_hw_configure (the case #46511's tracker
+    was designed to survive), 3=copy_tile_to_dst_init_short on an fp8 operand, 4=raw flush
+    (ground truth: forces the flag to zero-substitute regardless of tracker/format state, so a
+    passing test cannot be explained away as "the clobber never moved the flag").
+    """
+
+    zero_flag_clobber: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int ZERO_FLAG_CLOBBER = {self.zero_flag_clobber};"
+
+
+@dataclass
+class ZERO_FLAG_CLOBBER_PER_TILE(TemplateParameter):
+    """Apply the ZERO_FLAG_CLOBBER before every reduce call instead of once after reduce_init.
+
+    Once-after-init is only caught by a per-tile re-assert on the first tile; per-tile clobbering
+    is what a kernel that reconfigs inside its tile loop does, and it is caught on every tile.
+    """
+
+    zero_flag_clobber_per_tile: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool ZERO_FLAG_CLOBBER_PER_TILE = {str(self.zero_flag_clobber_per_tile).lower()};"
+
+
+@dataclass
 class RESPECT_TRIGGER(TemplateParameter):
     """Enable the reduce_block_max_row producer/consumer trigger handshake.
 
