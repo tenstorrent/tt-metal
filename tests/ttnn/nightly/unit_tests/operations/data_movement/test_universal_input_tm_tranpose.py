@@ -485,6 +485,16 @@ _RM = ttnn.ROW_MAJOR_LAYOUT
             _interleaved,
             id="WH_RM_height_to_interleaved",
         ),
+        # Guards #55582: H-sharded RM in → W-sharded RM out routed to TransposeWHShardedRMProgramFactory
+        # with shard_height/H truncating to 0 → silent all-zero output.
+        pytest.param(
+            (1, 1, 64, 128),
+            2,
+            3,
+            lambda d: _height_shard_config((1, 1, 64, 128), d, num_cores=2, layout=_RM),
+            lambda d: _width_shard_config((1, 1, 128, 64), d, num_cores=2, layout=_RM),
+            id="WH_RM_height_to_width",
+        ),
     ],
 )
 def test_transpose_universal_io_row_major(shape, dim0, dim1, input_factory, output_factory, dtype, device):
