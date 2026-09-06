@@ -118,6 +118,11 @@ jobs:
         id: merge
         run: |
           set -euo pipefail
+          # Restore each leg's generated JIT sources to their original absolute
+          # paths. Without them CodeChecker skips every plist that references
+          # one, which is all of them, and renders an empty report.
+          find /work/legs -name 'generated-sources.tar.gz' -print0 \
+            | xargs -0 -r -I{} tar -xzf {} -C / 2>/dev/null || true
           # Every TU re-reports the defects of the headers it includes, so the
           # raw plists carry ~19x more diagnostics than there are distinct
           # findings. parse is single-threaded and scales with that raw count,
@@ -154,6 +159,18 @@ jobs:
               return (path, r.get("line"), r.get("column"), r.get("checker_name"))
           unique = {loc(r) for r in reports}
           by_severity = collections.Counter(r.get("severity") for r in reports)
+          # CodeChecker's own export carries bug paths and macro expansions and
+          # ran to 124 MB, over GitHub's 100 MB per-file limit. This is the
+          # queryable form, and the one to point an agent at.
+          slim = [
+              {"file": loc(r)[0], "line": r.get("line"), "col": r.get("column"),
+               "checker": r.get("checker_name"), "severity": r.get("severity"),
+               "message": r.get("message")}
+              for r in reports
+          ]
+          pathlib.Path("/work/site/findings.json").write_text(
+              json.dumps(slim, separators=(",", ":"))
+          )
           print("## Kernel clang-tidy (consolidated)")
           print("")
           print(f"{len(reports)} findings, {len(unique)} unique locations.")
@@ -182,12 +199,16 @@ jobs:
         continue-on-error: true
         run: |
           CodeChecker parse /work/merged --export html --output /work/site || true
-          if [ -s /work/site/index.html ]; then
+          # index.html alone is not success: CodeChecker writes it even when it
+          # skipped every plist for missing sources, which is how run
+          # 34006365739 published a report with no findings in it.
+          pages=$(ls /work/site/*.plist.html 2>/dev/null | wc -l)
+          echo "finding pages rendered: $pages"
+          if [ -s /work/site/index.html ] && [ "$pages" -gt 0 ]; then
             touch /work/site/.nojekyll
             echo "found=true" >> "$GITHUB_OUTPUT"
-            echo "finding pages rendered: $(ls /work/site/*.plist.html 2>/dev/null | wc -l)"
           else
-            echo "::warning::no index.html produced; not publishing."
+            echo "::warning::render produced no finding pages; not publishing."
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -212,4 +233,7 @@ jobs:
           publish_branch: gh-pages
           publish_dir: /work/site
           force_orphan: true
+          # CodeChecker's raw export exceeds GitHub's 100 MB per-file limit and
+          # is only in the artifact; findings.json is the published database.
+          exclude_assets: ".github,reports.json"
           commit_message: "kernel clang-tidy report from tt-metal @ ${{ github.sha }}"

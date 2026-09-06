@@ -521,6 +521,23 @@ jobs:
           PY
           # Suggested-fix YAMLs are ~35% of the artifact and unused downstream.
           rm -rf /work/kernel_tidy/reports/fixit
+          # The consolidate job renders HTML, which needs every analyzed source
+          # on its original path. Generated JIT sources exist only in this
+          # runner's kernel cache, and CodeChecker skips a whole plist if any of
+          # its sources are missing, so ship the ones the reports reference.
+          python3 - <<'PY' | tee -a /work/kernel_tidy/summary.txt
+          import pathlib, plistlib, tarfile
+          want = set()
+          for p in pathlib.Path("/work/kernel_tidy/reports").glob("*.plist"):
+              for f in plistlib.loads(p.read_bytes()).get("files", []):
+                  if "tt-metal-cache" in f and pathlib.Path(f).is_file():
+                      want.add(f)
+          out = pathlib.Path("/work/kernel_tidy/generated-sources.tar.gz")
+          with tarfile.open(out, "w:gz") as tar:
+              for f in sorted(want):
+                  tar.add(f, arcname=f.lstrip("/"))
+          print(f"generated sources shipped: {len(want)} files, {out.stat().st_size/1e6:.1f} MB")
+          PY
           {
             echo '<details><summary>Kernel clang-tidy (prototype, non-blocking)</summary>'
             echo ''
