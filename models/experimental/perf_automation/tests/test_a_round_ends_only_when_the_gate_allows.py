@@ -61,28 +61,41 @@ def test_the_refusal_hands_back_the_work(monkeypatch):
     assert "top of the LOOP" in r["why"]
 
 
-def test_a_real_dead_end_still_ends_cleanly(monkeypatch):
-    """NOT A TRAP: stacks short but nothing reachable left is a genuine ending, or a round spins."""
+def test_stacks_short_with_nothing_left_is_still_refused(monkeypatch):
+    """BEHAVIOUR CHANGE (2026-09-06), deliberate. This used to be the "genuine ending" exit and it
+    was the one that fired: five voxtral rounds in a row ended on it with prefill 101.8 ms above its
+    band, each reported as a clean finish. A band that cannot be reached is not a band that is met.
+    The round still ends -- the agent exits regardless -- but it ends recorded as refused, and the
+    run stops on its budget saying the work was unfinished."""
     _arrange(monkeypatch, SHORT, [])
     r = _finish()()
-    assert r["finished"] is True
-    assert "nothing reachable is left" in r["why"]
+    assert r["finished"] is False
+    assert "above its own achievable band" in r["why"]
 
 
-def test_every_stack_in_band_ends_cleanly(monkeypatch):
+def test_every_stack_in_band_with_rungs_left_is_refused(monkeypatch):
+    """The other half. In band is not finished while ops still owe a rung they have never tried."""
     _arrange(monkeypatch, [], [{"op": "A"}])
     r = _finish()()
+    assert r["finished"] is False
+    assert "rung they are next owed" in r["why"]
+
+
+def test_both_halves_met_ends_cleanly(monkeypatch):
+    _arrange(monkeypatch, [], [])
+    r = _finish()()
     assert r["finished"] is True
-    assert "inside its achievable band" in r["why"]
+    assert "inside its achievable band" in r["why"] and "nothing reachable is left" in r["why"]
 
 
-def test_a_check_that_cannot_run_does_not_trap_the_round(monkeypatch):
-    """A broken reader must not make a round unfinishable."""
+def test_a_check_that_cannot_run_does_not_itself_refuse(monkeypatch):
+    """A broken reader must not ADD a reason to refuse -- it reports nothing outstanding, so the
+    verdict rests on the band alone, which is measured separately and still works."""
 
     def _boom(*a, **k):
         raise RuntimeError("gate unavailable")
 
-    monkeypatch.setattr(_pm, "_stages_short_of_achievable", lambda: list(SHORT))
+    monkeypatch.setattr(_pm, "_stages_short_of_achievable", list)
     monkeypatch.setattr(_pm, "_untried_material_ops", _boom)
     monkeypatch.setattr(_pm, "_record_round_finish", lambda v: None)
     r = _finish()()

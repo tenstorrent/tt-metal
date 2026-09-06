@@ -1365,7 +1365,20 @@ def _tp_candidate(open_op: dict, op_code: str) -> bool:
 
 
 def _untried_material_ops(blocking, attempts) -> list:
-    """Ops with a material gap that have no recorded attempt at all, in gap order.
+    """Ops with a material gap whose NEXT RUNG has no recorded attempt, in gap order.
+
+    THE UNIT IS THE RUNG, NOT THE OP. This asked whether an op had any attempt AT ALL, so a single
+    grid try retired an op with seven rungs untouched -- and because attempts are cumulative across
+    runs, one touched weeks ago stayed retired forever. Measured on voxtral_mini_3b_2507 2026-09-05:
+    48 ops ever attempted, 2.8 of 8 rungs explored on average, 20 of them at exactly one rung, and
+    finish_round allowed every round to end on "nothing reachable is left" while prefill sat 101.8 ms
+    above its band.
+
+    next_rung is what the gate would hand out for this op right now, so asking whether THAT has been
+    tried advances each op by one rung per round -- the completeness sweep the ladder already
+    describes -- and cannot spin: an op runs out of rungs. It also fixes the cumulative problem
+    without touching the attempt store, because last run's grid attempt does not answer for this
+    run's block rung.
 
     Shape-aware via _op_match, so an attempt on one matmul does not clear a different-shape matmul.
     A `wedged` attempt counts as tried -- the candidate crashed the device, which is a result, and
@@ -1376,7 +1389,13 @@ def _untried_material_ops(blocking, attempts) -> list:
         op = (b or {}).get("op") or ""
         if not op:
             continue
-        if not any(_op_match(op, a) for a in (attempts or []) if isinstance(a, dict)):
+        _want = _normalise_rung((b or {}).get("next_rung"))
+        _tried = [a for a in (attempts or []) if isinstance(a, dict) and _op_match(op, a)]
+        # An op with no rung named falls back to the old question -- has it been touched at all --
+        # so a caller that cannot say what is next behaves exactly as before.
+        if _want and _want != "knob":
+            _tried = [a for a in _tried if _normalise_rung(a.get("kernel_kind")) == _want]
+        if not _tried:
             out.append(op)
     return out
 
@@ -7100,12 +7119,16 @@ def finish_round() -> dict:
     """
     _short = _stages_short_of_achievable()
     _verdict: dict = {"finished": True, "stages_short_of_achievable": _short}
-    if not _short:
-        _verdict["why"] = "every priced stack is inside its achievable band"
-        _record_round_finish(_verdict)
-        return _verdict
-    # STILL SHORT -- but only refuse while there is something left to try. Everything reachable
-    # already measured and recorded is a real ending, and refusing it would spin a round forever.
+    # BOTH, NOT EITHER. These were two independent exits, so a round ended the moment either held --
+    # and the one that fired was "everything has been poked once", which retired the run's own
+    # requirement without meeting it. A round is finished when every stack is inside its band AND
+    # nothing reachable is left; anything less is a round that stopped early, and saying so is the
+    # point of this tool.
+    #
+    # A band that cannot be reached now refuses forever rather than being quietly waived. The round
+    # still ends -- the agent exits on its own and no tool can prevent that -- but it ends recorded
+    # as REFUSED, and the run stops on its round budget. The budget becoming the visible stopping
+    # point is the honest outcome: it says the work was not finished instead of claiming it was.
     try:
         # THE GATE'S OWN ANSWER, not a second one. termination_check already builds the blocking list
         # and already names what has no attempt yet; asking it here means finish_round and the target
@@ -7119,25 +7142,29 @@ def finish_round() -> dict:
         _left = _untried_material_ops(_rep.get("blocking_ops") or [], _load_attempts_all())
     except Exception:  # noqa: BLE001 -- a check that cannot run must not trap the round
         _left = []
-    if not _left:
-        _verdict["why"] = (
-            "stacks still owe their band, but every material op has a recorded attempt -- "
-            "nothing reachable is left this round"
-        )
+    if not _short and not _left:
+        _verdict["why"] = "every priced stack is inside its achievable band and nothing reachable is left"
         _record_round_finish(_verdict)
         return _verdict
     _verdict["finished"] = False
     _verdict["untried_material_ops"] = _left[:8]
-    _verdict["why"] = (
-        "NOT FINISHED. %s still above its own achievable band (%s), and %d material op(s) have no "
-        "recorded attempt yet. Go back to the top of the LOOP: call termination_check, take the next "
-        "target -- prefer ops in the stacks named here -- and work its rung. Banking wins and writing "
-        "a summary is not an ending while this list is non-empty."
-        % (
-            ", ".join(str(r.get("stage")) for r in _short),
-            "; ".join("%s %.1fms over" % (r.get("stage"), r.get("over_by_ms") or 0.0) for r in _short),
-            len(_left),
+    # SAY WHICH HALF FAILED. Either can now hold alone, so a message that always blames the band
+    # would misdescribe a round refused purely for unworked rungs.
+    _owed = []
+    if _short:
+        _owed.append(
+            "%s still above its own achievable band (%s)"
+            % (
+                ", ".join(str(r.get("stage")) for r in _short),
+                "; ".join("%s %.1fms over" % (r.get("stage"), r.get("over_by_ms") or 0.0) for r in _short),
+            )
         )
+    if _left:
+        _owed.append("%d material op(s) have no attempt on the rung they are next owed" % len(_left))
+    _verdict["why"] = (
+        "NOT FINISHED. %s. Go back to the top of the LOOP: call termination_check, take the next "
+        "target -- prefer ops in the stacks named here -- and work its rung. Banking wins and writing "
+        "a summary is not an ending while either half is outstanding." % ", and ".join(_owed)
     )
     _record_round_finish(_verdict)
     return _verdict
