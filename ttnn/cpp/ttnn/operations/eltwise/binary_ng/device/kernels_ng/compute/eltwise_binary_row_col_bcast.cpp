@@ -47,7 +47,8 @@ ALWI void process_tile(
     CircularBuffer exp_cb_post_bcast(CB_POST_BCAST);
     CircularBuffer exp_cb_post_other(CB_POST_OTHER);
 
-    compute_kernel_hw_startup(cb_left, cb_right, cb_out);
+    // compute_kernel_hw_startup is hoisted to kernel_main (must be the first Compute API call and run
+    // exactly once); process_tile is called per iteration.
     PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_BCAST), exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
     exp_cb_post_bcast.wait_front(num_tiles_per_cycle);
 
@@ -56,7 +57,6 @@ ALWI void process_tile(
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         pack_reconfig_data_format(cb_out, cb_llk_post);
         reconfig_data_format(cb_raw_other, cb_raw_other);
-        pack_reconfig_data_format(cb_llk_post);
         unary_bcast_init<BroadcastType::ROW>(cb_raw_other);
 
         tile_regs_acquire();
@@ -70,9 +70,6 @@ ALWI void process_tile(
         exp_cb_raw_other.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_raw_other);
         pack_reconfig_data_format(cb_llk_post, cb_out);
-#ifdef ARCH_BLACKHOLE
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
-#endif
 
         PREPROCESS(OTHER_OP, CircularBuffer(cb_llk_post), exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_other.wait_front(num_tiles_per_cycle);
@@ -122,8 +119,11 @@ void kernel_main() {
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
 #endif
 
+    // One-time hardware startup: must be the first Compute API call and run exactly once. cb_left/cb_right
+    // inside process_tile are always cb_post_lhs/cb_post_rhs, so configure the pipeline for those here.
+    compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
