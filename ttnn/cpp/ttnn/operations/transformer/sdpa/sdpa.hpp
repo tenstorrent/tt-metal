@@ -9,7 +9,6 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
 
 namespace ttnn::transformer {
 
