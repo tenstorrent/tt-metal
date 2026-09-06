@@ -1,0 +1,93 @@
+/* SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Reference DTS for a Quasar DM complex (not used by build.sh — needs dtc).
+ * Sources: quasar/dev_mem_map.h, risc_common.h, quasar_dm_cache_management.md.
+ * (?) = unverified sizes from the cache-management doc.
+ */
+
+/dts-v1/;
+
+/ {
+    #address-cells = <2>;
+    #size-cells = <2>;
+    compatible = "tenstorrent,quasar-node";
+    model = "tenstorrent,quasar-dm";
+
+    chosen {
+        /* DM kernels are linked at MEM_KERNEL_BASE with MEM_DM_KERNEL_SIZE of
+         * room; see tt_metal/llrt/hal/tt-2xx/quasar/qa_hal.cpp, which passes
+         * --defsym=__kn_text=MEM_KERNEL_BASE. */
+        metal,entry = <&{/soc/tl1@400000} 0 0>;
+        metal,ram = <&{/soc/tl1@400000} 0 0>;
+        metal,boothart = <&{/cpus/cpu@0}>;
+        /* No stdout-path: a DM core has no UART. freedom-metal's
+         * metal_tty_putc() is weak in that case, and src/quasar_tty.c supplies
+         * a Tensix L1 console instead. */
+    };
+
+    cpus {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        /* 8 DM cores per node (NUM_DM_CORES). Only cpu@0 is spelled out; the
+         * remaining seven are identical. */
+        cpu@0 {
+            device_type = "cpu";
+            compatible = "sifive,x280", "riscv";
+            reg = <0>;
+            /* No F/D and no C -- this is what -mcpu=tt-qsr64-rocc actually
+             * targets, and it differs from a stock X280 (RV64GCV). */
+            riscv,isa = "rv64imab_zihpm_zmmul_zaamo_zalrsc_zba_zbb_zbc_zbs";
+            status = "okay";
+
+            /* L1 D$: 4 KB, 2-way, 64 B lines, write-back, private.
+             * L1 I$: 4 KB, 2-way, private. (?) sizes from the X280 manual. */
+            sifive,dtim = <&{/soc/tl1@400000}>;
+            d-cache-size = <4096>;
+            d-cache-sets = <32>;
+            d-cache-block-size = <64>;
+            i-cache-size = <4096>;
+            i-cache-sets = <32>;
+            i-cache-block-size = <64>;
+
+            interrupt-controller {
+                #interrupt-cells = <1>;
+                compatible = "riscv,cpu-intc";
+                interrupt-controller;
+            };
+        };
+    };
+
+    soc {
+        #address-cells = <2>;
+        #size-cells = <2>;
+        compatible = "tenstorrent,quasar-soc";
+        ranges;
+
+        /* Tensix L1. MEM_L1_BASE = 0x0, MEM_L1_SIZE = 4 MB cacheable, with
+         * MEM_L1_UNCACHED_BASE = 0x400000 aliasing the same storage uncached.
+         * The region declared here is the DM kernel window that programs are
+         * linked into, not all of TL1. */
+        tl1: tl1@400000 {
+            compatible = "tenstorrent,tl1", "mmio-sram";
+            reg = <0x0 0x00400000 0x0 0x0000c000>; /* MEM_KERNEL_BASE, MEM_DM_KERNEL_SIZE */
+        };
+
+        /* Shared L2: 128 KB, 4-way, 64 B lines, shared across the 8 DM cores.
+         * Not a sifive,ccache0 -- the controller is Quasar's own, driven through
+         * the L2_FLUSH_ADDR / L2_INVALIDATE_ADDR / L2_FULL_INVALIDATE_ADDR
+         * registers in quasar/overlay/overlay_addresses.h. A generated BSP
+         * needs a driver for it before metal_l2cache_*() will do anything;
+         * tt-metal's risc_common.h already implements the same operations. */
+        l2cache: cache-controller {
+            compatible = "tenstorrent,quasar-l2";
+            cache-level = <2>;
+            cache-size = <131072>;
+            cache-sets = <512>;
+            cache-block-size = <64>;
+            cache-unified;
+        };
+    };
+};
