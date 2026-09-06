@@ -436,6 +436,52 @@ distribution, a different draw, so the audio differs while the words do not.
 
 ---
 
+### 2.7 N150 (single chip): two N300 optimisations that were never applied there
+
+The N150 path is well developed — it has its own fused SDPA, DRAM-sharded QKV/o_proj,
+sharded RMSNorm and 1D gate/up. But two things the N300 work established were left behind,
+both because there was no single-chip board to measure on at the time.
+
+Profiling the same `decode_frame` window on one Wormhole die opened as a 1x1 mesh, against
+the N300 TP=2 capture, shows the op graph is **identical** (546 matmuls, 428 LayerNorms, 103
+SDPA, 15 TopK on both). Everything is accounted for by TP — except two rows:
+
+| op | N150 | N300 | |
+|---|--:|--:|---|
+| SDPAOperation | 103 / **2.404 ms** (23.3 us) | 103 / 1.428 ms (13.9 us) | same call count |
+| ReshardDeviceOperation | **234** / 0.476 ms | 159 / 0.271 ms | +75 = 5 CP layers x 15 CP invocations |
+
+**(a) The CP SDPA k_chunk was still 64 on N150.** 2.4 recorded 20.0 -> 7.4 us per call at
+chunk 32 and left N150 at 64 with the note "it has no board here to re-measure on". The CP KV
+cache is one tile (32) deep on every device, so a 64-wide chunk pads against nothing there
+either. Measured on N150: traced AR frame **47.23 -> 46.24 ms**, SDPA 2.404 -> 1.572 ms, demo
+steady decode 49.1 -> 48.3 ms/frame. All 85x16 generated codes byte-identical — the chunk only
+changes how much padding SDPA walks. Default is now 32 everywhere.
+
+**(b) The heads-per-shard concat trick was never ported.** 2.5 derives the concat input spec
+from the DRAM-sharded o_proj's in0 grid so `nlp_concat_heads` emits exactly that spec and the
+Reshard between them disappears — and says in as many words that it "applies there too (not
+ported)". Ported: **Reshard 234 -> 159 ops, 0.476 -> 0.305 ms**, NLPConcatHeads 0.213 -> 0.178,
+and N150's reshard count now matches N300's exactly. Bit-exact (layout only; codes identical).
+
+Together: traced AR frame **47.28 -> 46.26 ms** device, 3693 -> 3618 ops, demo steady decode
+**49.1 -> 48.1 ms/frame**. N300 is untouched by both (the chunk was already 32; the concat
+change is inside `if self._n150:`) and re-measured at 42.12 ms/frame after.
+
+> **(b) is below the wall-clock noise floor — gate it on op count, not time.** 75 reshards at
+> 2 us is 0.17 ms against a +/-0.3 ms run-to-run spread; the timing pass read 46.24 before and
+> 46.30 after. Only the op-count diff shows it working. The same caution applies to anything
+> else on this list worth < 0.3 ms.
+
+**What is NOT a gap.** The rest of the N150/N300 delta is tensor parallelism doing its job and
+should not be "fixed": matmul 25.86 vs 15.31 ms (N300 splits every GEMM, then pays 4.73 ms of
+AllGather + ReduceScatter that N150 does not run — net -5.8 ms on that bucket), and the
+per-call cost of `PagedUpdateCache` / `Unary` / SDPA scales with the per-chip head count.
+N150's *host* overhead is actually lower than N300's (1.0 vs 2.4 ms/frame) because every
+transfer touches one chip instead of a mesh.
+
+---
+
 ---
 
 ## 3. Measured results

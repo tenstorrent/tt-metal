@@ -120,8 +120,12 @@ class CodePredictor(LightweightModule):
         _sdpa_cg = device.compute_with_storage_grid_size()
         # The CP KV cache is always 32 deep (one tile), so a 64-wide K chunk pads
         # against nothing: measured 20.0 -> 7.4 us per SDPA call at chunk 32.
-        # N150 keeps its validated 64 — it has no board here to re-measure on.
-        _sdpa_chunk = int(os.environ.get("QWEN3_TTS_CP_SDPA_CHUNK", "64" if self._n150 else "32"))
+        # N150 used to keep 64 only because there was no single-chip board to re-measure
+        # on. Measured since, on one Wormhole die as a 1x1 mesh: the traced AR frame goes
+        # 47.23 -> 46.24 ms and the demo's steady decode 49.1 -> 48.3 ms/frame, with all
+        # 85x16 generated codes byte-identical (the cache is one tile either way, so the
+        # chunk only changes how much padding SDPA walks).
+        _sdpa_chunk = int(os.environ.get("QWEN3_TTS_CP_SDPA_CHUNK", "32"))
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(_sdpa_cg.x, _sdpa_cg.y),
             exp_approx_mode=False,
@@ -441,11 +445,11 @@ class CodePredictor(LightweightModule):
             _q_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.num_heads - 1, 0))})
             _concat_grid = ttnn.num_cores_to_corerangeset(self.num_heads, _cg, True)
 
-            def _hs(grid, w):
+            def _hs(grid, w, m=_M):
                 return ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                     ttnn.BufferType.L1,
-                    ttnn.ShardSpec(grid, (_M, w), ttnn.ShardOrientation.ROW_MAJOR),
+                    ttnn.ShardSpec(grid, (m, w), ttnn.ShardOrientation.ROW_MAJOR),
                 )
 
             def _ws(grid, w):
@@ -455,10 +459,25 @@ class CodePredictor(LightweightModule):
                     ttnn.ShardSpec(grid, (_M, w), ttnn.ShardOrientation.ROW_MAJOR),
                 )
 
+            # Same heads-per-shard derivation the N300 block uses (see the long comment
+            # there): nlp_concat_heads takes its OUTPUT shard spec from its INPUT's, so
+            # packing num_heads / o_proj_in0_cores heads per core on the way in makes the
+            # concat land exactly in the DRAM-sharded o_proj's in0 spec, and the Reshard
+            # between them disappears. PERF_NOTES 2.5 recorded this as applying to N150
+            # too but never ported; measured here it drops the 75 Reshards per frame
+            # (5 CP layers x 15 CP invocations) that the N300 path does not run.
+            _heads_per_shard = 1
+            _wo_shard = self._cp_wo_in0_memcfg.shard_spec
+            _wo_cores = _wo_shard.grid.num_cores()
+            _hps = self.num_heads // _wo_cores if _wo_cores and self.num_heads % _wo_cores == 0 else 0
+            if _hps >= 1 and tuple(_wo_shard.shape) == (_M, HD * _hps):
+                _heads_per_shard = _hps
+                _concat_grid = _wo_shard.grid
+
             self._qkv_split_in_memcfg = _ws(_qkv_grid, _qkv_shard_w)
             self._qkv_split_q_memcfg = _hs(_q_grid, HD)
-            self._concat_in_memcfg = _hs(_concat_grid, HD)
-            self._concat_out_memcfg = _ws(_concat_grid, HD)
+            self._concat_in_memcfg = _hs(_concat_grid, HD, m=_M * _heads_per_shard)
+            self._concat_out_memcfg = _ws(_concat_grid, HD * _heads_per_shard)
             _n150_qkv_cores = _rows_q * _cols_q
 
             # KV-group-interleaved row perm so the sharded nlp_create kernel can
@@ -970,8 +989,13 @@ class CodePredictor(LightweightModule):
                 attn_s = attn_out
             attn_concat_s = ttnn.experimental.nlp_concat_heads(attn_s, memory_config=self._concat_out_memcfg)
             ttnn.deallocate(attn_s)
-            attn_wo = ttnn.to_memory_config(attn_concat_s, self._cp_wo_in0_memcfg)
-            ttnn.deallocate(attn_concat_s)
+            # With heads-per-shard picked above the concat already IS the o_proj in0
+            # spec; keep the reshard only as the fallback when it is not.
+            if attn_concat_s.memory_config() != self._cp_wo_in0_memcfg:
+                attn_wo = ttnn.to_memory_config(attn_concat_s, self._cp_wo_in0_memcfg)
+                ttnn.deallocate(attn_concat_s)
+            else:
+                attn_wo = attn_concat_s
             o_s = ttnn.linear(
                 attn_wo,
                 lw["o_ds"],
