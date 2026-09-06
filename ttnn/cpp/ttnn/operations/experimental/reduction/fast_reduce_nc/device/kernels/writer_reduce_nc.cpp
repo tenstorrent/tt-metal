@@ -4,30 +4,28 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // compile-time args
-    constexpr uint32_t shard_factor = get_compile_time_arg_val(0);
-    constexpr uint32_t num_cores_to_be_used = get_compile_time_arg_val(1);
+    constexpr auto shard_factor = get_arg(args::shard_factor);
+    constexpr auto num_cores_to_be_used = get_arg(args::num_cores_to_be_used);
     constexpr uint32_t outer_id_increment = shard_factor * num_cores_to_be_used;
-    constexpr auto tensor_args = TensorAccessorArgs<2>();
 
     // runtime args
-    const auto output_addr = get_arg_val<uint32_t>(0);
-    const auto id_range_length = get_arg_val<uint32_t>(1);
-    const auto start_id = get_arg_val<uint32_t>(2);
+    const auto id_range_length = get_arg(args::id_range_length);
+    const auto start_id = get_arg(args::start_id);
 
-    constexpr uint32_t cb_id_out = 16;
     constexpr uint32_t onetile = 1;
 
     Noc noc;
-    CircularBuffer cb_out_obj(cb_id_out);
+    DataflowBuffer cb_out_obj(dfb::out0);
 
-    uint32_t output_tile_bytes = get_tile_size(cb_id_out);
+    uint32_t output_tile_bytes = cb_out_obj.get_entry_size();
 
-    auto tensor_accessor = TensorAccessor(tensor_args, output_addr);
+    auto tensor_accessor = TensorAccessor(tensor::dst);
 
     // For each shard, start at the index of the first shard to be reduced (same
     // index as output), then increment by the appropriate increment (based on
