@@ -123,11 +123,16 @@ inline void _calculate_rsqrt_compat_(const int iterations)
         sfpi::dst_reg[0] = _sqrt_compat_<APPROXIMATION_MODE, 2>(sfpi::dst_reg[0]);
         sfpi::vFloat in  = sfpi::dst_reg[0];
         sfpi::vFloat out = _reciprocal_compat_<APPROXIMATION_MODE ? 2 : 3>(in);
-        v_if (in < 0.0)
-        {
-            out = -out;
-        }
-        v_endif;
+        // Branch-free sign transplant. _reciprocal_compat_ always returns a non-negative
+        // magnitude -- it forces val negative via setsgn, the Newton iteration on
+        // val in [-1,-0.5] stays positive, setexp preserves that sign, and the saturation
+        // and pole cases produce +0.0 and +infinity -- so negating on in < 0 is exactly
+        // copysgn(out, in). Replaces an SFPSETCC/SFPMOV/SFPENCC block with one SFPSETSGN.
+        //
+        // -0.0 behaves as before: SFPSETCC orders operands as a sign-magnitude total order,
+        // so v_if(in < 0.0) already fired for -0.0 (which is what the pole-guard comment in
+        // _reciprocal_compat_ relies on), and copysgn transplants the same sign bit.
+        out = sfpi::copysgn(out, in);
         if constexpr (!(fp32_dest_acc_en || APPROXIMATION_MODE))
         {
             out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
@@ -156,11 +161,16 @@ inline void _calculate_reciprocal_compat_(const int iterations)
     {
         sfpi::vFloat in  = sfpi::dst_reg[0];
         sfpi::vFloat out = _reciprocal_compat_<APPROXIMATION_MODE ? 2 : 3>(in);
-        v_if (in < 0.0)
-        {
-            out = -out;
-        }
-        v_endif;
+        // Branch-free sign transplant. _reciprocal_compat_ always returns a non-negative
+        // magnitude -- it forces val negative via setsgn, the Newton iteration on
+        // val in [-1,-0.5] stays positive, setexp preserves that sign, and the saturation
+        // and pole cases produce +0.0 and +infinity -- so negating on in < 0 is exactly
+        // copysgn(out, in). Replaces an SFPSETCC/SFPMOV/SFPENCC block with one SFPSETSGN.
+        //
+        // -0.0 behaves as before: SFPSETCC orders operands as a sign-magnitude total order,
+        // so v_if(in < 0.0) already fired for -0.0 (which is what the pole-guard comment in
+        // _reciprocal_compat_ relies on), and copysgn transplants the same sign bit.
+        out = sfpi::copysgn(out, in);
         if constexpr (!(fp32_dest_acc_en || APPROXIMATION_MODE))
         {
             out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
