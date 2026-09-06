@@ -280,25 +280,33 @@ TEST_F(MeshBufferTest2x4, Deallocation) {
         return buffer->address();
     }();
 
-    // Test that creating and deallocating a MeshBuffer frees the address.
+    // Test that destroying a MeshBuffer frees the address.
     auto buffer1 = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
     EXPECT_TRUE(buffer1->is_allocated());
     EXPECT_EQ(buffer1->address(), expected_address);
 
-    buffer1->deallocate();
-    EXPECT_FALSE(buffer1->is_allocated());
+    buffer1.reset();
 
     auto buffer2 = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
     EXPECT_TRUE(buffer2->is_allocated());
     EXPECT_EQ(buffer2->address(), expected_address);
 
-    // Test deallocation of the view also works.
-    auto buffer_view = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get(), buffer2->address());
-    EXPECT_TRUE(buffer_view->is_allocated());
-    EXPECT_EQ(buffer_view->address(), expected_address);
+    // Test that destroying a view leaves the allocation it views intact.
+    {
+        auto buffer_view =
+            MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get(), buffer2->address());
+        EXPECT_TRUE(buffer_view->is_allocated());
+        EXPECT_EQ(buffer_view->address(), expected_address);
+    }
+    EXPECT_TRUE(buffer2->is_allocated());
+    EXPECT_EQ(buffer2->address(), expected_address);
 
-    buffer_view->deallocate();
-    EXPECT_FALSE(buffer_view->is_allocated());
+    // A moved-from MeshBuffer no longer owns an allocation; the move target takes it over.
+    auto move_target = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+    *move_target = std::move(*buffer2);
+    EXPECT_FALSE(buffer2->is_allocated());
+    EXPECT_TRUE(move_target->is_allocated());
+    EXPECT_EQ(move_target->address(), expected_address);
 }
 
 TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
