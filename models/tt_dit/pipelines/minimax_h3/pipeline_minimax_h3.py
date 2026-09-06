@@ -176,10 +176,10 @@ MODEL_NAME = "minimax-h3"
 # rung; a request pads to the smallest rung that fits. Multiples of 1024 so every rung satisfies the
 # `sp_factor * TILE_SIZE` alignment on both supported meshes (256 at SP=8, 1024 at SP=32). The values
 # span the t2va/fl2va envelope: 5 s at 1:1 (~21.8k packed rows) up to 15 s at the 1044 rows/frame
-# canvas ceiling with two keyframes and a generous prompt (~118.5k). The top rung is the admission
+# canvas ceiling with two keyframes and a generous prompt (~119.2k). The top rung is the admission
 # cap: a longer request raises, it is not served untraced. A property of the sequence-length
 # envelope rather than of the mesh, hence a module default and a constructor knob, not a preset.
-MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 118784)
+MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 119808)
 
 # ref2va shares the machinery but not the envelope: reference rows (up to 9 images and 3 video clips)
 # push the packed length far past t2va's. The ladder runs from the smallest measured case (~46k, one
@@ -230,7 +230,7 @@ class MiniMaxH3ArenaCaps:
     `for_task` gives the t2va/fl2va and ref2va defaults.
     """
 
-    prompt: int = 2048  # deployment policy; the documented working points run 39-512 tokens
+    prompt: int = 4160  # 2112 for two keyframe vision blocks (2 x 1044, x32-aligned) + 2048 text
     video_rows: int = 111712  # 15 s at the 1044 rows/frame canvas ceiling, x32-aligned
     audio_rows: int = 1216  # 1206 audio rows at 15 s, x32-aligned
     condition_video_rows: int = 2112  # two keyframe anchors at 1044 rows/frame, x32-aligned
