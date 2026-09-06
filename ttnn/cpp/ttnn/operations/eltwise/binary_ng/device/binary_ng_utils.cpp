@@ -10,6 +10,7 @@
 #include <fmt/core.h>
 #include <fmt/format.h>
 #include <enchantum/enchantum.hpp>
+#include <cstdint>
 
 namespace ttnn::operations::binary_ng {
 
@@ -163,7 +164,14 @@ OpConfig::OpConfig(
                 binary_op = FpuBinaryOp::MUL;
             }
             break;
-        case BinaryOpType::DIV_FLOOR: binary_op = SfpuBinaryOp::DIV_FLOOR; break;
+        case BinaryOpType::DIV_FLOOR:
+            if (dtype == DataType::INT32) {
+                binary_op = SfpuBinaryOp::DIV_FLOOR;
+            } else {
+                binary_op = SfpuBinaryOp::DIV;
+                postprocess = unary::UnaryOpType::FLOOR;
+            }
+            break;
         case BinaryOpType::DIV_TRUNC: binary_op = SfpuBinaryOp::DIV_TRUNC; break;
         case BinaryOpType::REMAINDER: binary_op = SfpuBinaryOp::REMAINDER; break;
         case BinaryOpType::FMOD: binary_op = SfpuBinaryOp::FMOD; break;
@@ -679,22 +687,22 @@ std::map<std::string, std::string> make_dataflow_defines(
 
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }
 
-uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataType dtype, const bool is_quant_op) {
+std::uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataType dtype, const bool is_quant_op) {
     return std::visit(
-        [&](auto v) -> uint32_t {
+        [&](auto v) -> std::uint32_t {
             // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
             if ((dtype == DataType::FLOAT32) || is_quant_op) {
-                return std::bit_cast<uint32_t>(static_cast<float>(v));
+                return std::bit_cast<std::uint32_t>(static_cast<float>(v));
             }
             if (dtype == DataType::INT32) {
-                return std::bit_cast<uint32_t>(static_cast<int32_t>(v));
+                return std::bit_cast<std::uint32_t>(static_cast<std::int32_t>(v));
             }
             if (dtype == DataType::UINT32) {
-                return static_cast<uint32_t>(v);
+                return static_cast<std::uint32_t>(v);
             }
             if (dtype == DataType::UINT16) {
-                auto val = static_cast<uint16_t>(static_cast<float>(v));
-                return (static_cast<uint32_t>(val) << 16) | val;
+                auto val = static_cast<std::uint16_t>(static_cast<float>(v));
+                return (static_cast<std::uint32_t>(val) << 16) | val;
             }
             auto scalar_bf16 = bfloat16(static_cast<float>(v));
             return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
@@ -711,8 +719,8 @@ tt::tt_metal::ShardSpec adjust_to_shape(
 
     // Calculate volume of all dimensions EXCEPT the last (width)
     // This is the "collapsed height" for sharding purposes
-    uint32_t from_volume_except_width = 1;
-    uint32_t to_volume_except_width = 1;
+    std::uint32_t from_volume_except_width = 1;
+    std::uint32_t to_volume_except_width = 1;
 
     const auto from_rank = static_cast<int>(from_shape.rank());
     const auto to_rank = static_cast<int>(to_shape.rank());
@@ -726,8 +734,8 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     }
 
     // Get width dimensions
-    uint32_t from_width = from_shape[-1];
-    uint32_t to_width = to_shape[-1];
+    std::uint32_t from_width = from_shape[-1];
+    std::uint32_t to_width = to_shape[-1];
 
     // Adjust shard shape based on full volume ratios
     TT_FATAL(from_volume_except_width > 0, "Invalid from_shape: volume is zero");
@@ -752,7 +760,7 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
 
     TT_FATAL(rank >= 2, "Rank must be at least 2");
     // Compute product of all dimensions except the last
-    uint64_t volume_except_last = 1;
+    std::uint64_t volume_except_last = 1;
     for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
         volume_except_last *= shape[i];
     }
@@ -883,7 +891,7 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
     const int rank_a = shape_a.rank();
     const int rank_b = shape_b.rank();
     const int larger_rank = std::max(rank_a, rank_b);
-    ttsl::SmallVector<uint32_t> output_shape(larger_rank, 1);
+    ttsl::SmallVector<std::uint32_t> output_shape(larger_rank, 1);
     for (int i = -1; i >= -larger_rank; --i) {
         auto dim_a = (i >= -rank_a) ? shape_a[i] : 1;
         auto dim_b = (i >= -rank_b) ? shape_b[i] : 1;

@@ -7,9 +7,14 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+#include <cmath>
+#include <limits>
+#include <cstdint>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -395,7 +400,7 @@
 #define TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(NAME, OP_TYPE)                                            \
     Tensor NAME(                                                                                           \
         const Tensor& lhs,                                                                                 \
-        int32_t rhs,                                                                                       \
+        std::int32_t rhs,                                                                                  \
         const std::optional<MemoryConfig>& memory_config,                                                  \
         const std::optional<Tensor>& output,                                                               \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,                       \
@@ -530,14 +535,14 @@ inline auto preprocess_inputs(BinaryOpType binary_op_type, Tensor a, Tensor b) {
         // repeats second if it is smaller
         if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[0] > second_shape[0]) {
             TT_FATAL(second_shape[0] == 1, "Dimension trying to broadcast is not equal to 1");
-            Shape repeats(std::array<uint32_t, 4>{first_shape[0], 1, 1, 1});
+            Shape repeats(std::array<std::uint32_t, 4>{first_shape[0], 1, 1, 1});
             second = ttnn::repeat(second, repeats);
         }
         // repeats second if it is smaller
         if (first_shape.rank() >= 3 and second_shape.rank() >= 3 and first_shape[-3] > second_shape[-3]) {
             TT_FATAL(second_shape[-3] == 1, "Dimension trying to broadcast is not equal to 1");
             int rank_a = first_shape.rank();
-            std::vector<uint32_t> repeat_dim(rank_a, 1);
+            std::vector<std::uint32_t> repeat_dim(rank_a, 1);
             repeat_dim[rank_a - 3] = first_shape[rank_a - 3];
             Shape repeats(repeat_dim);
             second = ttnn::repeat(second, repeats);
@@ -1212,6 +1217,55 @@ Tensor divide(
         lhs_activations,
         rhs_activations,
         fast_and_approximate_mode,
+        sub_core_grids,
+        sub_device_id);
+}
+Tensor floor_div(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return ttnn::detail::invoke_binary_ng(
+        lhs,
+        rhs,
+        operations::binary::BinaryOpType::DIV_FLOOR,
+        std::nullopt,
+        memory_config,
+        std::nullopt,
+        {},
+        {},
+        {},
+        /*fast_and_approximate_mode=*/false,
+        sub_core_grids,
+        sub_device_id);
+}
+Tensor floor_div(
+    const Tensor& lhs,
+    operations::unary::ScalarVariant rhs,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const float rhs_f = std::visit([](auto value) -> float { return static_cast<float>(value); }, rhs);
+    if (rhs_f == 0.0f) {
+        const float infinity = std::numeric_limits<float>::infinity();
+        const float nan = std::nanf("");
+        return ttnn::where(
+            ttnn::eqz(lhs, memory_config),
+            nan,
+            ttnn::multiply(ttnn::sign(lhs, memory_config), infinity, std::nullopt, memory_config));
+    }
+    return ttnn::detail::invoke_binary_ng(
+        lhs,
+        rhs,
+        operations::binary::BinaryOpType::DIV_FLOOR,
+        std::nullopt,
+        memory_config,
+        std::nullopt,
+        {},
+        {},
+        {},
+        /*fast_and_approximate_mode=*/false,
         sub_core_grids,
         sub_device_id);
 }
