@@ -667,7 +667,7 @@ def load_and_compute_layer_by_layer(
     from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 
     if gate_fallback_mode is None:
-        gate_fallback_mode = GateComputeMode.HOST_ALL
+        gate_fallback_mode = GateComputeMode.DEVICE_FP32
 
     # Validation
     if not (compute_reference or build_ttnn_cache):

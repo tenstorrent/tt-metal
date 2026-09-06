@@ -357,7 +357,7 @@ def run_chunked_block(
 @pytest.mark.parametrize("n_chunks", [1, 2, 5, 10, 11], ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks11"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
-    [(2, None), (3, GateComputeMode.DEVICE)],
+    [(2, None), (3, GateComputeMode.DEVICE_FP32)],
     ids=["dense", "moe-gate_device"],
 )
 @pytest.mark.parametrize(
@@ -814,7 +814,7 @@ def run_chunked_block_padded(
 @pytest.mark.parametrize("splits", [[1024, 4096], _PADDED_FULL_55K], ids=["1k+4k", "full55k"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
-    [(2, None), (3, GateComputeMode.DEVICE)],
+    [(2, None), (3, GateComputeMode.DEVICE_FP32)],
     ids=["dense", "moe-gate_device"],
 )
 @pytest.mark.parametrize(
@@ -893,7 +893,14 @@ def test_kimi_prefill_block_chunked(
     layer_idx,
     gate_fallback_mode,
     num_links,
+    is_ci_env,
+    is_ci_v2_env,
 ):
+    # Skipped at run time rather than uncollected: this test's only parametrize row is the host
+    # gate, so an uncollect_if would leave a `-k kimi` run with zero items (pytest exit 5).
+    if (is_ci_env or is_ci_v2_env) and gate_fallback_mode != GateComputeMode.DEVICE_FP32:
+        pytest.skip("host gate is a local diagnostic; CI runs device_fp32 only")
+
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_block(
         variant,
@@ -940,7 +947,14 @@ def test_kimi_prefill_block_chunked_padded(
     layer_idx,
     gate_fallback_mode,
     num_links,
+    is_ci_env,
+    is_ci_v2_env,
 ):
+    # Skipped at run time rather than uncollected: this test's only parametrize row is the host
+    # gate, so an uncollect_if would leave a `-k kimi` run with zero items (pytest exit 5).
+    if (is_ci_env or is_ci_v2_env) and gate_fallback_mode != GateComputeMode.DEVICE_FP32:
+        pytest.skip("host gate is a local diagnostic; CI runs device_fp32 only")
+
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_block_padded(
         variant, config_only, mesh_device, weight_cache_path, splits, layer_idx, gate_fallback_mode, num_links, topology

@@ -52,7 +52,7 @@ class TtMiniMaxMoE(LightweightModule):
         topology=ttnn.Topology.Linear,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
-        gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
+        gate_fallback_mode: GateComputeMode = GateComputeMode.DEVICE_FP32,
         weight_cache_path=None,
         layer_idx: int = 0,
         route_scale: float = 1.0,
