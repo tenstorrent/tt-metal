@@ -17,9 +17,15 @@ SDPA chunk sizes are the tt_transformers Llama-family rule the spec records: 256
 2048 threshold, 64/64 below.
 """
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 
 import ttnn
+
+
+def _env_int(name: str, default: int) -> int:
+    """Environment override for a program-config knob; the default is the spec's value."""
+    return int(os.environ.get(name, default))
 
 
 @dataclass
@@ -62,11 +68,14 @@ class ProgramConfig:
     are the spec's ``numerics.accumulation``: HiFi4, fp32_dest_acc_en False, packer_l1_acc False.
     """
 
-    prefill_q_chunk_size_small: int = 64
-    prefill_k_chunk_size_small: int = 64
-    prefill_q_chunk_size_large: int = 256
-    prefill_k_chunk_size_large: int = 256
-    prefill_threshold: int = 2048
+    # Defaults are the spec's values. Overridable from the environment so the threshold's effect can
+    # be MEASURED rather than inferred: it is a 3x cliff at 2048 (docs/PROFILING.md), and a knob is
+    # the difference between a controlled experiment and a correlation. Unset => spec behaviour.
+    prefill_q_chunk_size_small: int = field(default_factory=lambda: _env_int("PREFILL_SDPA_Q_SMALL", 64))
+    prefill_k_chunk_size_small: int = field(default_factory=lambda: _env_int("PREFILL_SDPA_K_SMALL", 64))
+    prefill_q_chunk_size_large: int = field(default_factory=lambda: _env_int("PREFILL_SDPA_Q_LARGE", 256))
+    prefill_k_chunk_size_large: int = field(default_factory=lambda: _env_int("PREFILL_SDPA_K_LARGE", 256))
+    prefill_threshold: int = field(default_factory=lambda: _env_int("PREFILL_SDPA_THRESHOLD", 2048))
 
     math_fidelity: str = "HiFi4"
     math_approx_mode: bool = False

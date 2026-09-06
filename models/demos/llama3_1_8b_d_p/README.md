@@ -105,6 +105,16 @@ Host-only (no device): 34 tests in `tests/torch/` pin the vendored torch referen
 `transformers` — RMSNorm, MLP, llama3 rope frequencies, attention, decoder layer, whole model, the
 chunked==one-shot invariant, and the golden-cache round-trip.
 
+### Performance
+
+Warm, 32 layers, 2048-token chunk, bf16: **~900 ms/chunk**, of which only **~75 ms is device kernel
+time**. Cost is linear in layers (28.4 ms/layer, R² 0.996) and flat in tokens per chunk — a
+latency-bound pipeline. Device time is 34% collectives, 25% matmul, 17% layout conversion.
+
+The prefill is host-dispatch-bound, so **trace mode is the largest available lever, and it is blocked
+by the GQA ring SDPA** (`docs/SPEC_NOTES.md` §8d). Full analysis, method and caveats in
+[`docs/PROFILING.md`](docs/PROFILING.md).
+
 ### Known gaps
 
 - **bfp4 cannot meet the spec's 0.999 module gate** (measured 0.9895). The spec's `numerics` and
@@ -216,6 +226,7 @@ tests/
   test_kv_cache_table.py     P4: address table vs device DRAM, bit-exact
   galaxy_prefill_kv_pcc.py   P1/P2: real-weights per-layer KV vs the CPU golden
 docs/SPEC_NOTES.md           what the prefill spec template should carry next time
+docs/PROFILING.md            where the time goes, and which optimisations are worth doing
 bringup_log.jsonl            append-only process log (recipe §7)
 run_bringup.sh               one-command re-run
 ```
