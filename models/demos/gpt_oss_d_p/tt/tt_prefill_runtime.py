@@ -502,6 +502,63 @@ class TtPrefillRuntime:
         logger.info(f"[kv-diag L{gL}] K per-head:     {heads}")
         logger.info(f"[kv-diag L{gL}] dumped -> {out_dir / f'layer_{gL}.pt'}")
 
+    def logits_top1_oneshot(self, out, n_tokens):
+        """One-shot: convert SP-seq + TP-vocab sharded prefill logits to per-position GLOBAL top-1
+        token id in natural token order, first ``n_tokens``.
+
+        out: per-device [1,1,chunk_local,vocab_shard].
+        - SEQUENCE is sharded CONTIGUOUSLY across SP rows (prepare_inputs_prefill uses a
+          ShardTensor2dMesh split on the seq dim: row r = positions [r*cl:(r+1)*cl]). This is the
+          ACTIVATION layout and is NOT block-cyclic -- block-cyclic is only the KV-CACHE storage
+          layout (gather_layer un-rotates that; the logits are a plain activation, so no un-rotation).
+          => concatenating the rows in mesh order already gives natural token order.
+        - VOCAB is col-parallel: col c holds a contiguous shard, and lm_head is PADDED to a pow2
+          padded_vocab_size with ZEROS (model.py). => concat the col shards in order, then SLICE to the
+          real vocab_size before argmax, else a zero-padded index can win when all real logits are < 0.
+
+        Bring-up hook for the top-1 functional sign-off (galaxy_prefill_kv_pcc TOP1 mode). One-shot only
+        (single chunk == whole seq). Validated end-to-end vs reference_top1 when the golden carries it."""
+        sp = self.config.sp_factor
+        cols = self.config.tp_factor
+        vocab = self.hf_config.vocab_size
+        dts = ttnn.get_device_tensors(out)
+        rows = []
+        for r in range(sp):
+            shards = [ttnn.to_torch(dts[r * cols + c])[0, 0].float() for c in range(cols)]  # [cl, vshard]
+            full = torch.cat(shards, dim=-1)[:, :vocab]  # [chunk_local, vocab] (drop pow2 zero-padding)
+            rows.append(full.argmax(dim=-1))  # [chunk_local] global vocab id
+        dev = torch.cat(rows, dim=0)  # contiguous SP-row order == natural token order (no un-rotation)
+        return dev[:n_tokens]  # [n_tokens] argmax token ids
+
+    def top1_check(self, our_top1, trace_dir):
+        """Compare our per-position top-1 to the golden reference (reference_top1.safetensors, key
+        top1_token_ids [n_tokens]). Returns (agreement_fraction, n_positions, gen_token_match).
+
+        gen_token_match is the FIRST GENERATED token — the argmax at the LAST prompt position
+        (our_top1[-1]), i.e. the token the model would emit after the prompt. (Position 0 is a
+        teacher-forced next-token, not the generation.) Requires a FULL-length reference: a truncated /
+        mismatched golden is rejected, not silently partially compared, since this is the definitive
+        full-prompt sign-off."""
+        from safetensors import safe_open
+
+        ref_path = Path(trace_dir) / "reference_top1.safetensors"
+        if not ref_path.exists():
+            raise FileNotFoundError(
+                f"{ref_path} missing - golden has no reference top-1 yet (ask the golden generator to "
+                f"save logits.argmax(-1) as top1_token_ids)."
+            )
+        with safe_open(str(ref_path), framework="pt") as h:
+            ref = h.get_tensor("top1_token_ids").reshape(-1).long()
+        our = our_top1.long()
+        if ref.numel() != our.numel():
+            raise ValueError(
+                f"reference_top1 has {ref.numel()} positions but prefill produced {our.numel()}; the "
+                f"sign-off needs a full-prompt reference — regenerate the golden for this exact prompt."
+            )
+        agree = float((our == ref).float().mean())
+        gen_match = bool(our[-1] == ref[-1])  # first generated token = argmax at the last prompt position
+        return agree, our.numel(), gen_match
+
     def kv_cache_pcc_check(
         self,
         kv_caches=None,
