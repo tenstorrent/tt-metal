@@ -472,6 +472,7 @@ class MiniMaxH3Pipeline:
         precomputed_adaln: bool = False,
         dit_fsdp: bool = False,
         trace_denoise: bool | None = None,
+        trace_audio: bool | None = None,
         bucket_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
@@ -538,6 +539,14 @@ class MiniMaxH3Pipeline:
         # recapture would swamp replay anyway. Co-residency measurements live in the class docstring.
         self.coresident = coresident
         self.trace_denoise = self.trace_denoise and self.coresident
+        # Replay a captured vocoder graph for the audio decode (`MiniMaxH3AudioDecoder.forward(traced=)`):
+        # the stage is ~70 % host dispatch, so this is its dominant lever, and the more MPI ranks share
+        # the dispatch the more it pays. One capture per clip length (the vocoder keys its trace on the
+        # latent shape), taken on the first call at that length -- warmup and the compile pass, in the
+        # perf flow. Needs a `trace_region_size` on the mesh (~375 MB per captured length in accurate
+        # mode). Off by default: `MINIMAX_H3_TRACE_AUDIO=1` or `trace_audio=True`.
+        env_trace_audio = os.environ.get("MINIMAX_H3_TRACE_AUDIO")
+        self.trace_audio = (env_trace_audio == "1") if trace_audio is None else bool(trace_audio)
         # To be used for JIT compile bucketing without tracing
         self.bucket_denoise = self.trace_denoise or bool(bucket_denoise)
         # False during `warmup`: generation logs (stage times, per-step, VAE profile) are the
@@ -789,6 +798,7 @@ class MiniMaxH3Pipeline:
         precomputed_adaln: bool = False,
         dit_fsdp: bool = False,
         trace_denoise: bool | None = None,
+        trace_audio: bool | None = None,
         bucket_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
@@ -830,6 +840,7 @@ class MiniMaxH3Pipeline:
             precomputed_adaln=precomputed_adaln,
             dit_fsdp=dit_fsdp,
             trace_denoise=trace_denoise,
+            trace_audio=trace_audio,
             bucket_denoise=bucket_denoise,
             bucket_ladder=bucket_ladder,
             arena_caps=arena_caps,
@@ -1776,7 +1787,8 @@ class MiniMaxH3Pipeline:
                 else "unsharded (factor 1)"
             )
             _src = f" (from {_AUDIO_T_FACTOR_ENV})" if self._audio_t_factor_from_env else ""
-            self._host_log(f"building the audio decoder ({_shard_desc}{_src})")
+            _traced = ", traced vocoder" if self.trace_audio else ""
+            self._host_log(f"building the audio decoder ({_shard_desc}{_src}{_traced})")
             audio_parallel_config = (
                 ParallelFactor(factor=self.audio_t_factor, mesh_axis=self._audio_t_axis)
                 if self.audio_t_factor > 1
@@ -2506,6 +2518,8 @@ class MiniMaxH3Pipeline:
         return tracer is not None and tracer.trace_captured
 
     def release_traces(self) -> None:
+        if self._audio_decoder is not None:
+            self._audio_decoder.release_trace()  # safe when nothing was captured
         transformer = self._transformer
         if transformer is None:
             return
@@ -2895,6 +2909,6 @@ class MiniMaxH3Pipeline:
         assert rows.shape[0] == expected, f"expected {expected} target audio rows to decode, got {rows.shape[0]}"
         latents = unpack_audio_tokens(rows, num_audio_latents)
         latents = self._denormalize(latents, self.audio_config["latents_mean"], self.audio_config["latents_std"])
-        waveform = audio_decoder(latents)
+        waveform = audio_decoder(latents, traced=self.trace_audio)
         # The audio VAE is mono and took the two stereo channels as two batch items.
         return waveform.float().permute(1, 0, 2)
