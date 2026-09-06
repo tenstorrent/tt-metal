@@ -34,13 +34,22 @@ struct TopkLargeIndicesDeviceOperation {
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length);
+        const Tensor& input_tensor,
+        uint32_t k,
+        std::optional<uint32_t> valid_length,
+        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+        const std::optional<CoreRangeSet>& sub_core_grid);
 };
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
 
 namespace ttnn::experimental {
 
-Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length = std::nullopt);
+Tensor topk_large_indices(
+    const Tensor& input_tensor,
+    uint32_t k,
+    std::optional<uint32_t> valid_length = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
 }  // namespace ttnn::experimental
