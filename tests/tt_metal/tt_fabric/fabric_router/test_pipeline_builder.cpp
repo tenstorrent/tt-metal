@@ -32,8 +32,11 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -239,6 +242,86 @@ std::string describe_layouts(const std::vector<SubmeshLayout>& layouts) {
 
 }  // namespace
 
+TEST(PipelineBuilderLayoutTest, MapsStageWithoutCapacityConstraints) {
+    const std::vector<std::string> nodes{"s0"};
+    const std::vector<EdgeInputTuple> edges;
+    const std::vector<std::vector<ChipTuple>> submesh_chips{{{0, 0, 0, 0}}};
+
+    const GraphLayoutResult result = resolve_graph_layout(nodes, edges, submesh_chips);
+
+    ASSERT_EQ(result.stage_order, nodes);
+    EXPECT_EQ(result.node_to_submesh.at("s0"), 0);
+    EXPECT_TRUE(result.resolved_edges.empty());
+    EXPECT_FALSE(result.h2d_core_slot.has_value());
+    EXPECT_FALSE(result.d2h_core_slot.has_value());
+}
+
+// These focused capacity tests use one synthetic submesh, so connection discovery
+// never queries the control plane and no device or fabric initialization is needed.
+TEST(PipelineBuilderCapacityTest, SpreadsHostEndpointsAcrossAvailableChips) {
+    const std::vector<std::string> nodes{"s0"};
+    const std::vector<EdgeInputTuple> edges;
+    const std::vector<std::vector<ChipTuple>> submesh_chips{{{0, 0, 0, 0}, {0, 1, 0, 1}}};
+    const std::map<std::string, uint32_t> capacities{{"s0", 1}};
+
+    const GraphLayoutResult result = resolve_graph_layout(nodes, edges, submesh_chips, {}, capacities);
+
+    EXPECT_EQ(result.node_to_submesh.at("s0"), 0);
+    EXPECT_TRUE(result.resolved_edges.empty());
+    EXPECT_NE(std::tie(result.h2d_entry_row, result.h2d_entry_col), std::tie(result.d2h_exit_row, result.d2h_exit_col));
+    ASSERT_TRUE(result.h2d_core_slot.has_value());
+    ASSERT_TRUE(result.d2h_core_slot.has_value());
+    EXPECT_EQ(*result.h2d_core_slot, 0);
+    EXPECT_EQ(*result.d2h_core_slot, 0);
+}
+
+TEST(PipelineBuilderCapacityTest, FoldsHostEndpointsIntoDistinctSlots) {
+    const std::vector<std::string> nodes{"s0"};
+    const std::vector<EdgeInputTuple> edges;
+    const std::vector<std::vector<ChipTuple>> submesh_chips{{{0, 0, 0, 0}}};
+    const std::map<std::string, uint32_t> capacities{{"s0", 2}};
+
+    const GraphLayoutResult result = resolve_graph_layout(nodes, edges, submesh_chips, {}, capacities);
+
+    EXPECT_EQ(std::tie(result.h2d_entry_row, result.h2d_entry_col), std::tie(result.d2h_exit_row, result.d2h_exit_col));
+    ASSERT_TRUE(result.h2d_core_slot.has_value());
+    ASSERT_TRUE(result.d2h_core_slot.has_value());
+    EXPECT_EQ(*result.h2d_core_slot, 0);
+    EXPECT_EQ(*result.d2h_core_slot, 1);
+}
+
+TEST(PipelineBuilderCapacityTest, RejectsInsufficientHostEndpointCapacity) {
+    const std::vector<std::string> nodes{"s0"};
+    const std::vector<EdgeInputTuple> edges;
+    const std::vector<std::vector<ChipTuple>> submesh_chips{{{0, 0, 0, 0}}};
+    const std::map<std::string, uint32_t> capacities{{"s0", 1}};
+
+    try {
+        static_cast<void>(resolve_graph_layout(nodes, edges, submesh_chips, {}, capacities));
+        FAIL() << "expected capacity exhaustion";
+    } catch (const std::runtime_error& error) {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("pipeline-core capacity exhausted"), std::string::npos);
+        EXPECT_NE(message.find("stage 's0'"), std::string::npos);
+        EXPECT_NE(message.find("required slots 2"), std::string::npos);
+        EXPECT_NE(message.find("declared capacity 1"), std::string::npos);
+        EXPECT_NE(message.find("h2d"), std::string::npos);
+        EXPECT_NE(message.find("d2h"), std::string::npos);
+    }
+}
+
+TEST(PipelineBuilderCapacityTest, RejectsMissingOrZeroStageCapacity) {
+    const std::vector<std::string> nodes{"s0"};
+    const std::vector<EdgeInputTuple> edges;
+    const std::vector<std::vector<ChipTuple>> submesh_chips{{{0, 0, 0, 0}}};
+
+    EXPECT_THROW(
+        static_cast<void>(resolve_graph_layout(nodes, edges, submesh_chips, {}, {{"other_stage", 1}})),
+        std::runtime_error);
+    EXPECT_THROW(
+        static_cast<void>(resolve_graph_layout(nodes, edges, submesh_chips, {}, {{"s0", 0}})), std::runtime_error);
+}
+
 // Resolve and validate the canonical blaze pipeline ring for whatever MGD is loaded:
 // one stage per host-rank submesh at its native shape, full loopback ring, single
 // resolve_graph_layout call (the exact API tt-blaze build_topology* drives).
@@ -260,18 +343,78 @@ TEST_F(ControlPlaneFixture, TestPipelineBuilderCheck) {
         GTEST_SKIP() << "MGD has fewer than 2 host-rank submeshes; no pipeline ring to resolve";
     }
 
-    // A 1x1 host-rank slice has a single chip.  Same-chip entry/exit sockets are valid at
-    // runtime (PipelineBlock splits them across two cores), but resolve_graph_layout still
-    // requires a distinct exit chip per stage, so it cannot resolve an all-1x1 ring.  blaze
-    // never builds 1x1-stage pipelines, so skip rather than exercise that resolver path.
-    if (std::all_of(layouts.begin(), layouts.end(), [](const SubmeshLayout& layout) {
-            return layout.rank_shape.mesh_size() == 1;
-        })) {
-        GTEST_SKIP() << "all-1x1 host-rank slices: resolve_graph_layout requires a distinct exit chip per stage";
+    const auto edges = build_ring_edges(layouts.size());
+    const auto nodes = build_ring_nodes(layouts.size());
+    const auto submesh_chips = to_submesh_chips(layouts);
+    const bool all_single_chip = std::all_of(
+        layouts.begin(), layouts.end(), [](const SubmeshLayout& layout) { return layout.rank_shape.mesh_size() == 1; });
+
+    // Preserve the legacy call and its historical deconfliction behavior. An all-1x1
+    // ring is intentionally exercised only through capacity mode because it cannot be
+    // unfolded and legacy mode has no way to declare the required second core.
+    if (!all_single_chip) {
+        const GraphLayoutResult legacy = resolve_graph_layout(nodes, edges, submesh_chips);
+        EXPECT_FALSE(legacy.h2d_core_slot.has_value());
+        EXPECT_FALSE(legacy.d2h_core_slot.has_value());
+        for (const auto& edge : legacy.resolved_edges) {
+            EXPECT_FALSE(edge.exit_core_slot.has_value());
+            EXPECT_FALSE(edge.entry_core_slot.has_value());
+        }
+        const auto legacy_error = validate_pipeline_builder_graph_layout_errors(control_plane, layouts, legacy);
+        EXPECT_FALSE(legacy_error.has_value())
+            << "Legacy pipeline ring failed validation: " << legacy_error.value_or("")
+            << "\n  layout: " << describe_layouts(layouts);
     }
 
-    const GraphLayoutResult result = resolve_graph_layout(
-        build_ring_nodes(layouts.size()), build_ring_edges(layouts.size()), to_submesh_chips(layouts));
+    std::map<std::string, uint32_t> capacities;
+    for (std::size_t i = 0; i < layouts.size(); ++i) {
+        // Four is sufficient even for stage 0 on a one-chip submesh: forward exit,
+        // loopback entry, H2D, and D2H. Other stages need only entry + exit.
+        capacities.emplace(fmt::format("s{}", i), 4);
+    }
+
+    const GraphLayoutResult result = resolve_graph_layout(nodes, edges, submesh_chips, {}, capacities);
+    const GraphLayoutResult repeated = resolve_graph_layout(nodes, edges, submesh_chips, {}, capacities);
+
+    ASSERT_TRUE(result.h2d_core_slot.has_value());
+    ASSERT_TRUE(result.d2h_core_slot.has_value());
+    EXPECT_EQ(result.node_to_submesh, repeated.node_to_submesh);
+    ASSERT_EQ(result.resolved_edges.size(), repeated.resolved_edges.size());
+
+    using SlotKey = std::tuple<std::string, uint32_t, uint32_t>;
+    std::map<SlotKey, std::set<uint32_t>> occupied_slots;
+    auto check_slot =
+        [&](const std::string& stage_name, uint32_t row, uint32_t col, const std::optional<uint32_t>& slot) {
+            ASSERT_TRUE(slot.has_value());
+            EXPECT_LT(*slot, capacities.at(stage_name));
+            const SlotKey key{stage_name, row, col};
+            EXPECT_TRUE(occupied_slots[key].insert(*slot).second)
+                << "duplicate slot for " << stage_name << " chip (" << row << "," << col << ")";
+        };
+    for (std::size_t i = 0; i < result.resolved_edges.size(); ++i) {
+        const auto& edge = result.resolved_edges[i];
+        const auto& repeated_edge = repeated.resolved_edges[i];
+        EXPECT_EQ(
+            std::tie(
+                edge.exit_row,
+                edge.exit_col,
+                edge.entry_row,
+                edge.entry_col,
+                edge.exit_core_slot,
+                edge.entry_core_slot),
+            std::tie(
+                repeated_edge.exit_row,
+                repeated_edge.exit_col,
+                repeated_edge.entry_row,
+                repeated_edge.entry_col,
+                repeated_edge.exit_core_slot,
+                repeated_edge.entry_core_slot));
+        check_slot(edge.src, edge.exit_row, edge.exit_col, edge.exit_core_slot);
+        check_slot(edge.dst, edge.entry_row, edge.entry_col, edge.entry_core_slot);
+    }
+    const std::string& stage0 = result.stage_order.front();
+    check_slot(stage0, result.h2d_entry_row, result.h2d_entry_col, result.h2d_core_slot);
+    check_slot(stage0, result.d2h_exit_row, result.d2h_exit_col, result.d2h_core_slot);
 
     for (const auto& edge : result.resolved_edges) {
         const std::size_t src_sub = result.node_to_submesh.at(edge.src);
