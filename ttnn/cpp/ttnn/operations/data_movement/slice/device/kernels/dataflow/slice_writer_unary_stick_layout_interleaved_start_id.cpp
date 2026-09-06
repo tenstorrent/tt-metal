@@ -8,35 +8,34 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t stick_size = get_arg_val<uint32_t>(1);
-    uint32_t stick_size_offset = get_arg_val<uint32_t>(2);
-    uint32_t num_sticks_per_core = get_arg_val<uint32_t>(3);
-    uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(4);
-    uint32_t num_read_per_barrier = get_arg_val<uint32_t>(5);
-    uint32_t start_id = get_arg_val<uint32_t>(6);
-    // Sub-row chunking (mirrors reader): `num_chunks_per_stick` CB pages of `chunk_size` per stick (last =
+    const auto stick_size = get_arg(args::stick_size);
+    const auto stick_size_offset = get_arg(args::stick_size_offset);
+    const auto num_sticks_per_core = get_arg(args::num_sticks_per_core);
+    const auto num_sticks_per_core_read = get_arg(args::num_sticks_per_core_read);
+    const auto num_read_per_barrier = get_arg(args::num_read_per_barrier);
+    const auto start_id = get_arg(args::start_id);
+    // Sub-row chunking (mirrors reader): `num_chunks_per_stick` DFB entries of `chunk_size` per stick (last =
     // `last_chunk_size`).
-    const uint32_t chunk_size = get_arg_val<uint32_t>(7);
-    const uint32_t num_chunks_per_stick = get_arg_val<uint32_t>(8);
-    const uint32_t last_chunk_size = get_arg_val<uint32_t>(9);
+    const auto chunk_size = get_arg(args::chunk_size);
+    const auto num_chunks_per_stick = get_arg(args::num_chunks_per_stick);
+    const auto last_chunk_size = get_arg(args::last_chunk_size);
 
-    constexpr uint32_t dfb_id_out0 = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
-
-    const auto s0 = TensorAccessor(dst_args, dst_addr);
+    // The per-page stride is the buffer's aligned page size, which the binding supplies; the host
+    // pins that it equals the per-shard page size this kernel needs (check_accessor_page_size).
+    const auto s0 = TensorAccessor(tensor::dst);
 
     Noc noc;
     // Create DataflowBuffer for Device 2.0 API
-    DataflowBuffer dfb_out0(dfb_id_out0);
+    DataflowBuffer dfb_out0(dfb::out0);
 
     uint32_t i_stick = start_id;
     uint32_t sticks_read = 0;
 
     if (num_chunks_per_stick > 1) {
-        // Chunked path (mirrors reader): batch by `num_read_per_barrier` so the second CB pair pipelines.
+        // Chunked path (mirrors reader): batch by `num_read_per_barrier` so the second DFB pair pipelines.
         for (uint32_t iter = 0; iter < num_sticks_per_core_read && sticks_read < num_sticks_per_core; ++iter) {
             uint32_t c = 0;
             while (c < num_chunks_per_stick) {
