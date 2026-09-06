@@ -1935,8 +1935,8 @@ void py_module(nb::module_& mod) {
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            scale (float, optional): Scale value. Defaults to `1.0507`.
-            alpha (float, optional): Alpha value. Defaults to `1.67326`.
+            scale (float, optional): Scale value. Defaults to `1.050700987f`.
+            alpha (float, optional): Alpha value. Defaults to `1.673263242f`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): Sub-core grids. Defaults to `None`.
@@ -1950,8 +1950,8 @@ void py_module(nb::module_& mod) {
             &ttnn::selu,
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("scale") = 1.0507f,
-            nb::arg("alpha") = 1.67326f,
+            nb::arg("scale") = 1.050700987f,
+            nb::arg("alpha") = 1.673263242f,
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
             nb::arg("sub_core_grids") = nb::none());
