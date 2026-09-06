@@ -315,7 +315,16 @@ void kernel_main() {
     constexpr uint32_t WT = get_compile_time_arg_val(1);
     constexpr uint32_t WT_CHUNK = get_compile_time_arg_val(2);
     constexpr uint32_t NUM_W_CHUNKS = get_compile_time_arg_val(3);
-    constexpr uint32_t BLOCK_ROWS = get_compile_time_arg_val(4);
+    // Refinement 3 / lever 3: index 4 packs BLOCK_ROWS (low half) with the NoC
+    // TRANSACTION UNIT minus one (high half) -- see `_pack_txn_rows` in the
+    // descriptor.  TXN_ROWS is always a DIVISOR of BLOCK_ROWS, which is what makes a
+    // multi-tile-row reserve straddle-free: every block-scoped ring is
+    // `depth * BLOCK_ROWS * WT_CHUNK` pages and a group starts block-aligned.  At the
+    // default TXN_ROWS == 1 the word IS `block_rows` and this file is the seed's.
+    constexpr uint32_t BLOCK_ROWS_CT = get_compile_time_arg_val(4);
+    constexpr uint32_t BLOCK_ROWS = BLOCK_ROWS_CT & 0xFFFFu;
+    constexpr uint32_t TXN_ROWS = (BLOCK_ROWS_CT >> 16) + 1;
+    static_assert(TXN_ROWS >= 1 && BLOCK_ROWS % TXN_ROWS == 0, "rms_norm_ttnn: TXN_ROWS must divide BLOCK_ROWS");
     constexpr uint32_t PARTIAL_W = get_compile_time_arg_val(5);
     constexpr uint32_t HAS_GAMMA = get_compile_time_arg_val(6);
     // The two per-channel operands SHARE a layout by contract, so one flag covers
@@ -679,37 +688,45 @@ void kernel_main() {
     // NoC-0 globally -- so a residual costs zero extra barriers and the two rings
     // stay in lockstep, which is what keeps the consumer's two Upfront waits from
     // deadlocking against each other.
+    // R3 lever 3: the group is TXN_ROWS tile-rows -- ONE reserve, one issue run, ONE
+    // barrier and one push per group instead of per tile-row.  The final group of a
+    // ragged block is short and reserves/pushes only what it carries, which is the
+    // ragged-tail rule: the ACTUAL page count, never the nominal one.
     auto stage_tile_rows = [&](auto&& xa, auto&& ra, uint32_t first_tile_row, uint32_t rows, uint32_t c) {
-        for (uint32_t r = 0; r < rows; ++r) {
-            // + w_start: this core's width slice under a cross-core width split
-            // (0 on the whole-row schemes).
-            const uint32_t tile_base = (first_tile_row + r) * WT + w_start + c * WT_CHUNK;
+        for (uint32_t r = 0; r < rows; r += TXN_ROWS) {
+            const uint32_t n = ((rows - r) < TXN_ROWS) ? (rows - r) : TXN_ROWS;
+            const uint32_t pages = n * WT_CHUNK;
             uint32_t xl1 = 0;
             uint32_t rl1 = 0;
             if constexpr (!NATIVE_X) {
-                cb_reserve_back(cb_input_tiles, WT_CHUNK);
+                cb_reserve_back(cb_input_tiles, pages);
                 xl1 = get_write_ptr(cb_input_tiles);
             }
             if constexpr (HAS_R && !NATIVE_R) {
-                cb_reserve_back(cb_residual_tiles, WT_CHUNK);
+                cb_reserve_back(cb_residual_tiles, pages);
                 rl1 = get_write_ptr(cb_residual_tiles);
             }
-            for (uint32_t w = 0; w < WT_CHUNK; ++w) {
-                if constexpr (!NATIVE_X) {
-                    noc_async_read_tile(tile_base + w, xa, xl1);
-                    xl1 += x_tile_bytes;
-                }
-                if constexpr (HAS_R && !NATIVE_R) {
-                    noc_async_read_tile(tile_base + w, ra, rl1);
-                    rl1 += x_tile_bytes;
+            for (uint32_t g = 0; g < n; ++g) {
+                // + w_start: this core's width slice under a cross-core width split
+                // (0 on the whole-row schemes).
+                const uint32_t tile_base = (first_tile_row + r + g) * WT + w_start + c * WT_CHUNK;
+                for (uint32_t w = 0; w < WT_CHUNK; ++w) {
+                    if constexpr (!NATIVE_X) {
+                        noc_async_read_tile(tile_base + w, xa, xl1);
+                        xl1 += x_tile_bytes;
+                    }
+                    if constexpr (HAS_R && !NATIVE_R) {
+                        noc_async_read_tile(tile_base + w, ra, rl1);
+                        rl1 += x_tile_bytes;
+                    }
                 }
             }
             noc_async_read_barrier();
             if constexpr (!NATIVE_X) {
-                cb_push_back(cb_input_tiles, WT_CHUNK);
+                cb_push_back(cb_input_tiles, pages);
             }
             if constexpr (HAS_R && !NATIVE_R) {
-                cb_push_back(cb_residual_tiles, WT_CHUNK);
+                cb_push_back(cb_residual_tiles, pages);
             }
         }
     };

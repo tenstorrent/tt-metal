@@ -754,6 +754,87 @@ L1_CB_ARENA_BASE_RESERVE = 70656
 # Depth of the ROW_MAJOR stick staging CBs (reader <-> tilize overlap).
 CB_RM_STAGE_DEPTH = 2
 
+# ---- Refinement 3 / Lamp L-OPERAND-TRIM: per-channel read granularity ---------
+# D23 derived ONE policy (two face-rows where the dtype's face offset is 64-byte
+# DRAM aligned, else the half page) and the bias copied it.  The lamp's question is
+# whether the TRANSACTION COUNT -- two trimmed reads per tile instead of one, and
+# two operands instead of one -- is the thing that actually matters (D13 found it
+# was), so each operand now carries its own measured override.
+#
+#   TRIM_DERIVED  take D23's derived answer (the shipped default: byte-identical)
+#   2             two face-rows      (2 reads x 32*elem bytes per tile)
+#   1             one half page      (1 read x tile/2 bytes per tile)
+#   0             the whole tile     (1 read x tile bytes per tile)
+#
+# MEASURED -- see the changelog's Refinement 3 table.  One source of truth: the
+# value is read ONCE, in `_trim_for`, and both the reader CT arg and the CB table
+# derive from that.
+TRIM_DERIVED = -1
+PER_CHANNEL_TRIM_GAMMA = TRIM_DERIVED
+PER_CHANNEL_TRIM_BIAS = TRIM_DERIVED
+
+# ---- Refinement 3 / lever 3: the data-movement TRANSACTION UNIT --------------
+# op_design.md's block-schedule table states the TILE path's intent as "one NoC
+# barrier per (block, chunk) per stream"; the shipped reader and writer issue one
+# per TILE-ROW of the chunk (WT_CHUNK tiles).  `DM_TXN_ROWS_MAX` is the cap on how
+# many tile-rows share one reserve / issue / barrier / push group:
+#
+#   1   the seed: one barrier per tile-row                        (the default)
+#   n   up to n tile-rows per barrier
+#   0   the whole row-block  (BLOCK_ROWS tile-rows -- the design's stated intent)
+#
+# The unit is always a DIVISOR of BLOCK_ROWS, which is what makes the multi-page
+# group straddle-free: every block-scoped ring is `depth * BLOCK_ROWS * WT_CHUNK`
+# pages, so a group of `TXN_ROWS * WT_CHUNK` pages starting at a block-aligned
+# offset can never cross the ring wrap.  It is a genuine TRADE, not a free win --
+# a coarser handoff costs reader <-> compute overlap INSIDE a block -- which is why
+# the default is measured rather than assumed.  See the changelog's R3 table.
+#
+# ONE source of truth: `_dm_txn_rows` decides, `_pack_txn_rows` encodes, and BOTH
+# dataflow kernels decode the same CT word (index 4, the BLOCK_ROWS slot).  The
+# encoding stores `TXN_ROWS - 1` in the high half so the default is byte-identical
+# to the seed's plain `block_rows`.
+DM_TXN_ROWS_MAX = 1
+
+
+def _dm_txn_rows(block_rows: int) -> int:
+    """Tile-rows per NoC transaction group: the largest DIVISOR of block_rows <= the cap."""
+    cap = block_rows if DM_TXN_ROWS_MAX == 0 else min(DM_TXN_ROWS_MAX, block_rows)
+    cap = max(1, cap)
+    for n in range(cap, 0, -1):
+        if block_rows % n == 0:
+            return n
+    return 1
+
+
+def _pack_txn_rows(block_rows: int, txn_rows: int) -> int:
+    """Encode (BLOCK_ROWS, TXN_ROWS) into the CT word both dataflow kernels read at index 4."""
+    assert 0 < block_rows < (1 << 16), f"rms_norm_ttnn: BLOCK_ROWS={block_rows} does not fit the packed CT word"
+    assert txn_rows >= 1 and block_rows % txn_rows == 0, (
+        f"rms_norm_ttnn: the NoC transaction unit ({txn_rows}) must divide BLOCK_ROWS ({block_rows}) -- "
+        "otherwise a group can straddle the block-scoped ring's wrap"
+    )
+    return block_rows | ((txn_rows - 1) << 16)
+
+
+# ---- Refinement 3 / levers 2 + the pass-A DEST block -------------------------
+# PASS_A_SQ_BLOCK: give pass A's `square` the SAME DEST-lane block size pass B's
+#   chains already take (D21, measured 1.28-1.66x there) instead of the per-tile
+#   spelling.  0 == the seed's per-tile chain (byte-identical); 1 == blocked at
+#   PASS_B_BLK.  Inert under the D12 DEST fold, whose accumulation already owns D0
+#   for the whole tile-row.
+# RES_FUSE (Lamp L-RES-FUSE): fuse pass A's `t = x + r` and its square into ONE
+#   eltwise_chain -- Add -> Square(DEST) -> PackTile(cb_x_squared) -- so the square
+#   takes the sum straight out of DEST and `t` is never packed at all in pass A.
+#   STREAM-ONLY, and that boundary is measured rather than argued: in both RESIDENT
+#   regimes cb_x_sum IS the tensor pass B normalizes, and a chain cannot publish an
+#   INTERMEDIATE DEST value (pack is its own cohort, so every pack runs after every
+#   compute element) -- the four-element form writes the square into cb_x_sum too and
+#   measures pcc 0.260.  See the gate comment in the compute kernel.
+#   0 == the seed's two chains.
+PASS_A_SQ_BLOCK = 0
+RES_FUSE = 0
+
 # Ordered depth candidates for the two cross-processor CBs (cb_input_tiles,
 # cb_output_tiles), COARSEST FIRST.  The regime search (D4) walks them and takes
 # the RESIDENT regime at the first depth whose whole-row working set fits L1.
@@ -2469,7 +2550,7 @@ def _zero_volume_descriptor(all_cores, compute_kernel_config):
     writer_ct += [0] * 6 + null_acc
 
     compute_ct = [1, 1, 1, 1, 0, 0, 0, _f32_bits(1.0), _f32_bits(0.0), REDUCE_BULK, 0, 1, 0, 1, 1, 1, 0, 0, 0]
-    compute_ct += [0, 0, 0, 0, 0]
+    compute_ct += [0, 0, 0, 0, 0, 0, 0]
     assert len(compute_ct) == COMPUTE_CT_SCALARS
 
     reader_rt = ttnn.RuntimeArgs()
@@ -2517,7 +2598,7 @@ def _zero_volume_descriptor(all_cores, compute_kernel_config):
 # equal the scalar count exactly.  Named here (and asserted at both emission
 # sites) so appending an arg fails in Python instead of mis-parsing on device.
 READER_CT_SCALARS = 29
-COMPUTE_CT_SCALARS = 24
+COMPUTE_CT_SCALARS = 26
 
 
 def create_program_descriptor(
@@ -2619,13 +2700,26 @@ def create_program_descriptor(
     # at different dtypes, so a shared constant would truncate one of them.  The
     # lamp records that two trimmed reads per chunk change the transaction count,
     # which is a measurement to take, not an argument to settle here.
-    def _trim_for(tile_bytes: int, present: bool) -> int:
+    # Refinement 3 / Lamp L-OPERAND-TRIM.  The policy above is D23's DERIVED one and
+    # stays the single source of the *legality* question (which granularities the
+    # dtype's tile layout admits).  `PER_CHANNEL_TRIM_GAMMA` / `_BIAS` are the two
+    # measured OVERRIDES on top of it -- `TRIM_DERIVED` means "take the derived
+    # answer", and an explicit 0/1/2 forces a granularity.  A forced value is still
+    # filtered through the legality rule (a block-float operand can never take the
+    # face-row form), so a knob can never produce a truncated read.
+    def _trim_for(tile_bytes: int, present: bool, override: int) -> int:
         if not present or per_channel_is_rm:
             return 0
-        return 2 if (tile_bytes % 4 == 0 and (tile_bytes // 4) % 64 == 0) else 1
+        legal_2 = tile_bytes % 4 == 0 and (tile_bytes // 4) % 64 == 0
+        derived = 2 if legal_2 else 1
+        if override == TRIM_DERIVED:
+            return derived
+        if override == 2 and not legal_2:
+            return 1  # the dtype refuses the face-row form; fall back, never truncate
+        return override
 
-    gamma_trim = _trim_for(gt, has_gamma)
-    bias_trim = _trim_for(bit, has_bias)
+    gamma_trim = _trim_for(gt, has_gamma, PER_CHANNEL_TRIM_GAMMA)
+    bias_trim = _trim_for(bit, has_bias, PER_CHANNEL_TRIM_BIAS)
 
     # ---- placement -> scheme, cores, per-core (row, width) extents ---------
     # The scheme decides which axis the cores cut, whether the x / residual / out
@@ -2974,6 +3068,9 @@ def create_program_descriptor(
     # absent config is byte-identical.  A supplied value is HONOURED, not
     # clamped; every way it could be illegal was refused in
     # resolve_program_config, which is the only place that decision lives.
+    # R3 lever 3: the NoC transaction unit, a divisor of BLOCK_ROWS (one source).
+    dm_txn_rows = _dm_txn_rows(block_rows)
+
     pass_b_blk_ct = int(resolved_pc.subblock_w)
     assert pass_b_blk_ct == 0 or wt_chunk % pass_b_blk_ct == 0, (
         f"rms_norm_ttnn: program_config.subblock_w={pass_b_blk_ct} does not divide the resolved " f"WT_CHUNK={wt_chunk}"
@@ -3098,7 +3195,7 @@ def create_program_descriptor(
         Wt,  # 1  WT (whole-row width tiles: per-channel / x tile ids)
         wt_chunk,  # 2  WT_CHUNK
         num_w_chunks,  # 3  NUM_W_CHUNKS
-        block_rows,  # 4  BLOCK_ROWS
+        _pack_txn_rows(block_rows, dm_txn_rows),  # 4  BLOCK_ROWS | (TXN_ROWS-1)<<16 (R3 lever 3)
         kernel_partial_w,  # 5  PARTIAL_W (0 => aligned, or the BAND scheme)
         1 if has_gamma else 0,  # 6  HAS_GAMMA
         1 if per_channel_is_rm else 0,  # 7  PER_CHANNEL_IS_RM (weight and bias share a layout)
@@ -3150,7 +3247,7 @@ def create_program_descriptor(
         Wt,  # 1  WT
         wt_chunk,  # 2  WT_CHUNK
         num_w_chunks,  # 3  NUM_W_CHUNKS
-        block_rows,  # 4  BLOCK_ROWS
+        _pack_txn_rows(block_rows, dm_txn_rows),  # 4  BLOCK_ROWS | (TXN_ROWS-1)<<16 (R3 lever 3)
         elem_bytes,  # 5  output element bytes
         R_rm,  # 6  total ROW_MAJOR sticks (0 for TILE)
         W,  # 7  logical width (elements)
@@ -3210,6 +3307,9 @@ def create_program_descriptor(
         # forwards the RAW group sum and every core finalizes its own copy.  Appended, so
         # every build at the default is byte-identical to the seed's prefix.
         1 if fin_spread else 0,
+        # ---- Refinement 3: the two pass-A knobs, appended (default 0 == the seed) ----
+        PASS_A_SQ_BLOCK,  # 24 pass A's square takes pass B's DEST-lane block size
+        RES_FUSE,  # 25 Lamp L-RES-FUSE: t = x + r and its square as ONE chain
     ]
     assert len(compute_ct_args) == COMPUTE_CT_SCALARS, "compute CT-arg count drifted"
     assert x_squared_wt in (1, wt_chunk), "rms_norm_ttnn: x_squared_wt must be 1 (DEST fold) or WT_CHUNK"

@@ -109,6 +109,9 @@
 // the profiler is off -- see the header's durability contract).
 #include "perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+// ckl::Square -- the DEST-only SFPU square Lamp L-RES-FUSE's fused pass-A chain
+// applies to the residual sum without unpacking it back out of cb_x_sum.
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -542,6 +545,20 @@ void kernel_main() {
     // carries the measurement.  Off the combine path this is dead (there is no root).
     constexpr uint32_t FIN_SPREAD_CT = get_compile_time_arg_val(23);
 
+    // ---- Refinement 3: pass A's two knobs -----------------------------------
+    // PASS_A_SQ_BLOCK_CT: run pass A's `square` at pass B's DEST-LANE BLOCK SIZE
+    // (`PASS_B_BLK`) instead of the per-tile spelling, so one per-element init, one
+    // format reconfig and one CB reserve/push cover PASS_B_BLK tiles.  That is D21's
+    // measured 1.28-1.66x lever applied to the one chain in the kernel that never got
+    // it.  0 == the seed's per-tile chain, byte-identical.
+    constexpr uint32_t PASS_A_SQ_BLOCK_CT = get_compile_time_arg_val(24);
+    // RES_FUSE_CT: Lamp L-RES-FUSE.  1 == pass A runs `t = x + r` and its square as ONE
+    // chain -- Add -> PackTile(cb_x_sum) -> Square(DEST) -> PackTile(cb_x_squared) --
+    // so the square takes the sum out of DEST instead of unpacking cb_x_sum back in.
+    // cb_x_sum is STILL materialized (every RESIDENT regime's pass B reads it, and
+    // STREAM's pass B rebuilds it with the unfused chain), so there is no L1 change.
+    constexpr uint32_t RES_FUSE_CT = get_compile_time_arg_val(25);
+
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // tile-rows owned by this core
     // Only the core holding the row's LAST width tile applies the partial-W
     // scaler/mask; 1 on the whole-row schemes.
@@ -742,6 +759,30 @@ void kernel_main() {
         !SQ_FOLD || PARTIAL_W == 0,
         "rms_norm_ttnn: the DEST fold folds the last width tile's pad lanes in BEFORE the "
         "reduce, so the reduce's partial scaler / mask can no longer reach them");
+    // Lamp L-RES-FUSE (R3).  Three gates, and the THIRD is the lamp's real boundary:
+    //   * HAS_R          -- there is nothing to fuse without a residual;
+    //   * !SQ_FOLD       -- the D12 fold's DestAccumulation::PerRow keeps D0 live across
+    //                       the whole tile-row, so there is no per-tile DEST value left
+    //                       to square;
+    //   * !X_RESIDENT    -- MEASURED, not argued.  The lamp's premise is "pass A only
+    //                       squares t -- it does not need t to survive", and that is true
+    //                       ONLY in STREAM, where pass B rebuilds `t` from the re-read x
+    //                       and r.  In both RESIDENT regimes cb_x_sum IS the tensor pass B
+    //                       normalizes, so `t` has to be packed as well as squared -- and
+    //                       an eltwise_chain CANNOT publish an intermediate DEST value:
+    //                       Pack is its OWN COHORT, disjoint from math-MOP/SFPU
+    //                       (chain.inl `elem_pack_init`), so every pack in a chain runs
+    //                       AFTER every compute element.  A
+    //                       `Add -> PackTile(cb_x_sum) -> Square -> PackTile(cb_x_squared)`
+    //                       chain therefore writes the SQUARE into cb_x_sum too, and pass B
+    //                       normalizes t^2 instead of t.  It is not a subtle error: built
+    //                       and measured at pcc 0.260 on (1,1,8192,5120) ROW_RESIDENT
+    //                       gamma_bias_residual (and 0.947x, so it was not even faster).
+    //                       Publishing `t` and squaring it in one DEST window needs a
+    //                       DEST->DEST copy element the chain does not expose; that is a
+    //                       helper gap, recorded here rather than worked around with raw
+    //                       LLK.
+    constexpr bool RES_FUSE = HAS_R && (RES_FUSE_CT != 0) && !SQ_FOLD && !X_RESIDENT;
     // The fold's pack is per-OUTER (one tile per tile-row of the grid), which is the
     // policy pair DestAccumulation::PerRow requires.
     constexpr auto SQ_OUT_FOLDED = ckl::output(
@@ -752,7 +793,27 @@ void kernel_main() {
         ckl::PackRelu::Disabled,
         ckl::L1Accumulation::Disabled,
         ckl::DestAccumulation::PerRow);
-    constexpr auto SQ_OUT = SQ_FOLD ? SQ_OUT_FOLDED : ckl::output(cb_x_squared);
+    // A5: the caller's `subblock_w` when they supplied one -- HONOURED, never
+    // clamped and never absorbed.  Every way it could be illegal (< 1, not a
+    // divisor of block_w, above the DEST capacity their own fp32_dest_acc_en
+    // bought) was REFUSED host-side in resolve_program_config, which is the only
+    // place that decision lives; 0 means "the op's own choice" and is the seed's
+    // expression exactly.
+    constexpr uint32_t PASS_B_BLK = (PASS_B_BLK_CT != 0) ? PASS_B_BLK_CT : pass_b_blk(WT_CHUNK, ckl::DEST_AUTO_LIMIT);
+    static_assert(PASS_B_BLK >= 1 && WT_CHUNK % PASS_B_BLK == 0, "rms_norm_ttnn: PASS_B_BLK must divide WT_CHUNK");
+    static_assert(PASS_B_BLK <= ckl::DEST_AUTO_LIMIT, "rms_norm_ttnn: PASS_B_BLK exceeds the DEST lane capacity");
+
+    // R3: pass A's DEST-lane block size.  The D12 fold already owns D0 across the whole
+    // tile-row (DestAccumulation::PerRow), so it stays at 1 there; everywhere else the
+    // block size is PASS_B_BLK -- the SAME expression pass B uses, never a second
+    // literal.  The block size and the pack lifecycle are ONE change: at block_size > 1
+    // the chain emits the pack lifecycle once per OUTER iter, so a PerTile reserve would
+    // reserve 1 page and pack PASS_A_SQ_BLK of them (a corrupted ring, i.e. a hang).
+    constexpr bool SQ_BLOCKED = (PASS_A_SQ_BLOCK_CT != 0) && !SQ_FOLD && (PASS_B_BLK > 1);
+    constexpr uint32_t SQ_BLK = SQ_BLOCKED ? PASS_B_BLK : 1u;
+    constexpr auto SQ_OUT_BLOCKED =
+        ckl::output(cb_x_squared, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize);
+    constexpr auto SQ_OUT = SQ_FOLD ? SQ_OUT_FOLDED : (SQ_BLOCKED ? SQ_OUT_BLOCKED : ckl::output(cb_x_squared));
 
     // Perf 1's D16 `ROOT_FOLD_OUT` -- the root fold's packer-L1-accumulation output spec
     // (`cb_row_stat`, OneUpfront/OneAtEnd, `L1Accumulation::SeedFirst`) -- is DELETED.
@@ -865,15 +926,6 @@ void kernel_main() {
     // lane loop), so a `PerTile` reserve would reserve 1 page and then pack
     // PASS_B_BLK -- it corrupts the CB ring and HANGS (observed in the bench before the
     // fix).  Do not change one without the other.
-    // A5: the caller's `subblock_w` when they supplied one -- HONOURED, never
-    // clamped and never absorbed.  Every way it could be illegal (< 1, not a
-    // divisor of block_w, above the DEST capacity their own fp32_dest_acc_en
-    // bought) was REFUSED host-side in resolve_program_config, which is the only
-    // place that decision lives; 0 means "the op's own choice" and is the seed's
-    // expression exactly.
-    constexpr uint32_t PASS_B_BLK = (PASS_B_BLK_CT != 0) ? PASS_B_BLK_CT : pass_b_blk(WT_CHUNK, ckl::DEST_AUTO_LIMIT);
-    static_assert(PASS_B_BLK >= 1 && WT_CHUNK % PASS_B_BLK == 0, "rms_norm_ttnn: PASS_B_BLK must divide WT_CHUNK");
-    static_assert(PASS_B_BLK <= ckl::DEST_AUTO_LIMIT, "rms_norm_ttnn: PASS_B_BLK exceeds the DEST lane capacity");
     // Reserve/push once per DEST-lane block. `PerChunk` (not `Upfront`) deliberately:
     // it keeps the per-block page handover the ROW_MAJOR path's `untilize` consumer
     // needs, and it measured within noise of `Upfront` (8860 vs 8901 ns) wherever both
@@ -1121,15 +1173,31 @@ void kernel_main() {
                 MaybeDeviceZoneScope("compute_tilize_r");
                 ckl::tilize<WT_CHUNK, cb_residual_sticks, cb_residual_tiles>(rows);
             }
-            // t = x + r, materialized into the CB the rest of the kernel reads.
-            residual_add_block(rows);
-            // x^2, either packed to cb_x_squared per width tile or folded into DEST
-            // (D12).  `square` cannot carry the tile base, so the chain is spelled
-            // out; it is exactly what square<> expands to.
-            {
+            if constexpr (RES_FUSE) {
+                // Lamp L-RES-FUSE: ONE chain for `t = x + r` AND `t^2`.  The FPU add
+                // leaves the sum in D0 and the SFPU `Square` squares that DEST slot in
+                // place, so the square costs NO unpack and NO pack of `t` at all -- two
+                // chain setups, one pack and two unpacks per tile become one setup, one
+                // pack and two unpacks.  cb_x_sum is not written in pass A here and is
+                // not read there either: this branch is STREAM-only (see RES_FUSE above),
+                // and STREAM's pass B calls `residual_add_block` to rebuild `t` itself.
+                // The two activation CBs are still popped by the chain, so the push/pop
+                // balance is exactly the unfused pair's minus cb_x_sum's matched pair.
+                MaybeDeviceZoneScope("compute_res_square");
+                ckl::eltwise_chain(
+                    ckl::IterationShape::grid(rows, WT_CHUNK).block_size(SQ_BLK),
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Add, R_X_IN, R_R_IN>{},
+                    ckl::Square<>{},
+                    ckl::PackTile<SQ_OUT>{});
+            } else {
+                // t = x + r, materialized into the CB the rest of the kernel reads.
+                residual_add_block(rows);
+                // x^2, either packed to cb_x_squared per width tile or folded into DEST
+                // (D12).  `square` cannot carry the tile base, so the chain is spelled
+                // out; it is exactly what square<> expands to.
                 MaybeDeviceZoneScope("compute_square");
                 ckl::eltwise_chain(
-                    ckl::IterationShape::grid(rows, WT_CHUNK),
+                    ckl::IterationShape::grid(rows, WT_CHUNK).block_size(SQ_BLK),
                     ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, X_IN_A, X_IN_A, ckl::Dst::D0, SQ_OUT.dest_accumulation>{
                         hold_base, hold_base},
                     ckl::PackTile<SQ_OUT>{});

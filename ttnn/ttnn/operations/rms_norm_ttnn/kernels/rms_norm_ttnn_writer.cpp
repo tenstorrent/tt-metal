@@ -125,7 +125,13 @@ void kernel_main() {
     constexpr uint32_t WT = get_compile_time_arg_val(1);
     constexpr uint32_t WT_CHUNK = get_compile_time_arg_val(2);
     constexpr uint32_t NUM_W_CHUNKS = get_compile_time_arg_val(3);
-    constexpr uint32_t BLOCK_ROWS = get_compile_time_arg_val(4);
+    // Refinement 3 / lever 3: index 4 packs BLOCK_ROWS with the NoC TRANSACTION UNIT
+    // minus one -- the reader's word, decoded identically, so neither NoC half is the
+    // batched one.  See the reader and `_pack_txn_rows` in the descriptor.
+    constexpr uint32_t BLOCK_ROWS_CT = get_compile_time_arg_val(4);
+    constexpr uint32_t BLOCK_ROWS = BLOCK_ROWS_CT & 0xFFFFu;
+    constexpr uint32_t TXN_ROWS = (BLOCK_ROWS_CT >> 16) + 1;
+    static_assert(TXN_ROWS >= 1 && BLOCK_ROWS % TXN_ROWS == 0, "rms_norm_ttnn: TXN_ROWS must divide BLOCK_ROWS");
     constexpr uint32_t ELEM_BYTES = get_compile_time_arg_val(5);
     [[maybe_unused]] constexpr uint32_t R_RM = get_compile_time_arg_val(6);
     constexpr uint32_t W_ELEMS = get_compile_time_arg_val(7);
@@ -330,21 +336,27 @@ void kernel_main() {
                         out_acc, sticks, row_bytes, stick_start, /*byte_offset_within_page=*/c * CHUNK_ROW_BYTES);
                 }
             } else {
-                for (uint32_t r = 0; r < rows; ++r) {
-                    // + w_start: this core's width slice under a cross-core width
-                    // split (0 on the whole-row schemes).
-                    const uint32_t tile_base = (first_tile_row + r) * WT + w_start + c * WT_CHUNK;
-                    cb_wait_front(cb_output_tiles, WT_CHUNK);
+                // R3 lever 3, the WRITER TWIN of the reader's grouped read: ONE wait,
+                // one issue run, ONE barrier and one pop per TXN_ROWS tile-rows.  The
+                // final group of a ragged block waits and pops the ACTUAL page count.
+                for (uint32_t r = 0; r < rows; r += TXN_ROWS) {
+                    const uint32_t n = ((rows - r) < TXN_ROWS) ? (rows - r) : TXN_ROWS;
+                    cb_wait_front(cb_output_tiles, n * WT_CHUNK);
                     uint32_t l1_addr = get_read_ptr(cb_output_tiles);
-                    for (uint32_t w = 0; w < WT_CHUNK; ++w) {
-                        const uint32_t wt = w_start + c * WT_CHUNK + w;
-                        if (wt < WT) {  // a ragged width shard ends in pad tiles
-                            noc_async_write_tile(tile_base + w, out_acc, l1_addr);
+                    for (uint32_t g = 0; g < n; ++g) {
+                        // + w_start: this core's width slice under a cross-core width
+                        // split (0 on the whole-row schemes).
+                        const uint32_t tile_base = (first_tile_row + r + g) * WT + w_start + c * WT_CHUNK;
+                        for (uint32_t w = 0; w < WT_CHUNK; ++w) {
+                            const uint32_t wt = w_start + c * WT_CHUNK + w;
+                            if (wt < WT) {  // a ragged width shard ends in pad tiles
+                                noc_async_write_tile(tile_base + w, out_acc, l1_addr);
+                            }
+                            l1_addr += out_tile_bytes;
                         }
-                        l1_addr += out_tile_bytes;
                     }
                     noc_async_write_barrier();
-                    cb_pop_front(cb_output_tiles, WT_CHUNK);
+                    cb_pop_front(cb_output_tiles, n * WT_CHUNK);
                 }
             }
         }

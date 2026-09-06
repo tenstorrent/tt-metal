@@ -50,6 +50,9 @@ CASES = {
     "P4_int2048_g": ((1, 1, 8192, 2048), None, _ML.INTERLEAVED, "gamma", False, 0),
     "P5_int5120_gbr": ((1, 1, 8192, 5120), None, _ML.INTERLEAVED, "gamma_bias_residual", False, 0),
     "P6_int7168_g": ((1, 1, 8192, 7168), None, _ML.INTERLEAVED, "gamma", False, 589591),
+    # ---- the STREAM regime (x re-read in pass B): Lamp L-RES-FUSE's only home ----
+    "S1_stream_gbr": ((1, 1, 1024, 16384), None, _ML.INTERLEAVED, "gamma_bias_residual", False, 0),
+    "S2_stream_r": ((1, 1, 1024, 16384), None, _ML.INTERLEAVED, "residual", False, 0),
     # ---- guards: combine / sharded paths (must not regress) ---------------
     "G1_w7168_g28": ((1, 1, 32, 7168), ([32, 256], (7, 4)), _ML.WIDTH_SHARDED, "gamma", False, 5481),
     "G2_w5120_gbr": ((1, 1, 32, 5120), ([32, 160], (8, 4)), _ML.WIDTH_SHARDED, "gamma_bias_residual", True, 6555),
