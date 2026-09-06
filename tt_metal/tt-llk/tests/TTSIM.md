@@ -58,7 +58,7 @@ The simplest end-to-end check that the stack is wired up:
 
 ```bash
 pytest -v --run-simulator --timeout=300 \
-  test_eltwise_unary_datacopy.py -k "Float16_b and not tilize"
+  test_eltwise_unary_datacopy.py -k "Float16_b and tilize:No"
 ```
 
 This exercises unpack → math (datacopy) → pack on a single tile with
