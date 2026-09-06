@@ -46,7 +46,7 @@ RANK_BINDING_KEYS: frozenset[str] = frozenset({"rank", "mesh_id", "mesh_host_ran
 ALLOWED_TOP_LEVEL: frozenset[str] = (
     frozenset(REQUIRED_FIELDS)
     | OPTIONAL_STRING_FIELDS
-    | frozenset({"analyzer_code", "topology", "duration_s", "labels"})
+    | frozenset({"analyzer_code", "topology", "duration_s", "pass_pct", "labels"})
 )
 
 CLUSTER_HEALTH_JSON_SCHEMA: dict[str, Any] = {
@@ -122,6 +122,12 @@ CLUSTER_HEALTH_JSON_SCHEMA: dict[str, Any] = {
             "type": "number",
             "minimum": 0,
             "description": "Finite non-negative seconds; NaN and Infinity are rejected.",
+        },
+        "pass_pct": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Physical analyzer success rate 0-100. Omit for other test types and when no rate exists.",
         },
         "labels": {
             "type": "object",
@@ -297,6 +303,13 @@ def validate_record(record: Any, *, file_written: bool = False) -> None:
         duration = obj["duration_s"]
         if not _is_number(duration) or duration < 0 or not math.isfinite(duration):
             _fail("duration_s", "must be a finite number >= 0")
+
+    if "pass_pct" in obj:
+        if test_type != "physical":
+            _fail("pass_pct", "only valid for test_type=physical")
+        rate = obj["pass_pct"]
+        if not _is_number(rate) or rate < 0 or rate > 100 or not math.isfinite(rate):
+            _fail("pass_pct", "must be a finite number in [0, 100]")
 
     if "labels" in obj:
         _validate_labels(obj["labels"])
