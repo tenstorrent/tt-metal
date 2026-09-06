@@ -138,10 +138,18 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
             SOFTPLUS_BF16_POLY_C5,
             SOFTPLUS_BF16_POLY_C6);
 
-        // Tail: the degree-6 poly diverges past its [0, 5] fit domain, while the true
-        // residual < exp(-5) = 0.0067 there. Clamping to 0 keeps softplus(t>0) = t within
-        // bf16 rounding and avoids the ~8-op exp tail on every element.
-        v_if(a > SOFTPLUS_POLY_BOUNDARY) { residual = 0.0f; }
+        // Tail: the degree-6 poly diverges past its [0, 5] fit domain. The residual there is
+        // < exp(-5) = 0.0067, negligible for t > 0 -- but for t < -5 the residual IS the whole
+        // result (softplus(t) = log1p(exp(t))), and clamping it to 0 returned exactly 0 for every
+        // input below -5. DeepSeek-V4-Flash's MoE router scores are sqrt(softplus(logit)) and
+        // its layer-23 gate produces logits of -8..-18 for the BOS token, so every selected
+        // score was 0 and the top-k weight normalisation divided by zero (blaze DS4F-0125).
+        // Use the same exp-series tail as the fp32 path; bf16 represents 3e-4 exactly enough.
+        sfpi::vFloat neg_a = sfpi::setsgn(a, 1);
+        v_if(a > SOFTPLUS_POLY_BOUNDARY) {
+            sfpi::vFloat e = softplus_exp_negative(neg_a);
+            residual = e * (1.0f + e * (-0.5f + e * 0.333333343f));
+        }
         v_endif;
 #endif
 
