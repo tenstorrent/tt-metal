@@ -231,17 +231,28 @@ of the redundancy.
 
 Note where that 17x comes from: feeding CodeChecker 19,863 diagnostics instead
 of 370,060. It does not depend on the core count. Only the merge itself is
-parallel (the XML parse is embarrassingly so), and it is the cheap half —
-measured on two legs at 3.8s with 64 workers and **21s with 4**, against a
-budget that was blowing past 90 minutes. It is therefore safe on a small runner;
-`consolidate-report` currently uses `tt-ubuntu-2204-large-stable`, but a
-4-core GitHub-hosted runner would cost only a couple of minutes at 15 legs.
+parallel (the XML parse is embarrassingly so), and it is the cheap half. On the
+two-leg sample:
 
-Worker count comes from `os.sched_getaffinity` and the cgroup v2 CPU quota, not
-`cpu_count()`: inside a CPU-limited container the latter reports the host's
-cores, which would oversubscribe and multiply peak memory by the same factor.
-Peak RSS is modest regardless — ~70 MB for the largest single plist, ~135 MB for
-the whole run.
+| Workers | Merge wall time |
+| --- | --- |
+| 64 (capped to 52, one per plist) | 3.1s |
+| 16 (`tt-ubuntu-2204-large-stable`) | 5.3s |
+| 4 (a GitHub-hosted runner) | 16s |
+
+Against a budget that was overrunning 90 minutes, all three are noise; at 15
+legs the 16-core case projects to well under a minute. Worker count comes from
+`os.sched_getaffinity` and the cgroup v2 CPU quota rather than `cpu_count()`,
+which inside a CPU-limited container reports the host's cores and would
+oversubscribe while multiplying peak memory to match. Peak RSS is ~70 MB for the
+largest single plist and ~135 MB for the run.
+
+The merge makes two read passes over the inputs instead of one pass plus a
+staged rewrite. Duplicates are almost entirely *cross*-plist — within a single
+plist the raw and distinct counts are the same 370,060 — so a per-plist
+intermediate would be a byte-for-byte copy of the input, about 4 GB of writes at
+15 legs, to remove nothing. Note that `/tmp` in this container is a tmpfs, so
+that scratch would have come out of RAM.
 
 This is why no checker is disabled for volume: report size no longer drives CI
 cost, and the point of the report is a complete database of problems to fix.

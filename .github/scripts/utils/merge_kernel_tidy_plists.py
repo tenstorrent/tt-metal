@@ -61,42 +61,30 @@ def _resolve(diag: dict, files: list[str]) -> Key:
     return (path, loc.get("line"), loc.get("col"), diag.get("check_name"), diag.get("description"))
 
 
-def _scan(args: tuple[pathlib.Path, pathlib.Path, pathlib.Path]) -> tuple[str, list[Key]]:
-    """Parse one plist, drop within-file duplicates, stage the remainder."""
-    src, root, stage = args
+def _scan(src: pathlib.Path) -> tuple[str, list[Key]]:
+    """Report which distinct findings one plist contains. Reads only."""
     try:
         data = plistlib.loads(src.read_bytes())
     except Exception as exc:  # a truncated plist must not sink the whole merge
         print(f"warning: skipping unreadable {src.name}: {exc}", file=sys.stderr)
         return (str(src), [])
-
     files = data.get("files", [])
-    seen: dict[Key, None] = {}
-    kept = []
-    for diag in data.get("diagnostics", []):
-        key = _resolve(diag, files)
-        if key not in seen:
-            seen[key] = None
-            kept.append(diag)
-
-    # Flatten to a unique name: leg directories collide on TU filenames.
-    rel = src.relative_to(root)
-    out = stage / ("__".join(rel.parts[:-1] + (rel.name,)) if len(rel.parts) > 1 else rel.name)
-    data["diagnostics"] = kept
-    out.write_bytes(plistlib.dumps(data))
-    return (str(out), list(seen))
+    return (str(src), list(dict.fromkeys(_resolve(d, files) for d in data.get("diagnostics", []))))
 
 
-def _prune(args: tuple[pathlib.Path, pathlib.Path, set[Key]]) -> int:
-    """Keep only the diagnostics this plist owns after global deduplication."""
-    staged, final, owned = args
-    data = plistlib.loads(staged.read_bytes())
+def _prune(args: tuple[pathlib.Path, pathlib.Path, pathlib.Path, set[Key]]) -> int:
+    """Write out only the diagnostics this plist owns after global dedup."""
+    src, root, final, owned = args
+    data = plistlib.loads(src.read_bytes())
     files = data.get("files", [])
     kept = [d for d in data.get("diagnostics", []) if _resolve(d, files) in owned]
     if not kept:
         return 0
     data["diagnostics"] = kept
-    (final / staged.name).write_bytes(plistlib.dumps(data))
+    # Flatten to a unique name: leg directories collide on TU filenames.
+    rel = src.relative_to(root)
+    name = "__".join(rel.parts[:-1] + (rel.name,)) if len(rel.parts) > 1 else rel.name
+    (final / name).write_bytes(plistlib.dumps(data))
     return len(kept)
 
 
@@ -115,13 +103,14 @@ def main() -> int:
         print(f"no plists under {args.input}", file=sys.stderr)
         return 1
 
-    stage = args.output.with_name(args.output.name + ".stage")
-    for d in (stage, args.output):
-        shutil.rmtree(d, ignore_errors=True)
-        d.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(args.output, ignore_errors=True)
+    args.output.mkdir(parents=True, exist_ok=True)
 
+    # Two read passes over the inputs rather than one plus a staged rewrite:
+    # duplicates are almost entirely cross-plist, so a per-plist intermediate
+    # would be a byte-for-byte copy of the input (~4 GB at 15 legs) for nothing.
     with multiprocessing.Pool(jobs) as pool:
-        scanned = pool.map(_scan, [(s, args.input, stage) for s in sources], chunksize=1)
+        scanned = pool.map(_scan, sources, chunksize=1)
 
         # First plist to report a finding owns it; the rest drop their copies.
         owner: dict[Key, str] = {}
@@ -136,14 +125,14 @@ def main() -> int:
             by_plist.setdefault(path, set()).add(key)
 
         written = pool.map(
-            _prune, [(pathlib.Path(p), args.output, k) for p, k in by_plist.items()], chunksize=1
+            _prune,
+            [(pathlib.Path(p), args.input, args.output, k) for p, k in by_plist.items()],
+            chunksize=1,
         )
 
-    shutil.rmtree(stage, ignore_errors=True)
     print(
         f"{len(sources)} plists in, {sum(1 for w in written if w)} out; "
-        f"{raw} findings after per-file dedup -> {sum(written)} distinct "
-        f"({jobs} workers)"
+        f"{raw} findings -> {sum(written)} distinct ({jobs} workers)"
     )
     return 0
 
