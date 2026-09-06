@@ -1213,37 +1213,16 @@ using LowLatencyPacketHeader = LowLatencyPacketHeaderT<FABRIC_1D_PKT_HDR_EXTENSI
 using LowLatencyRoutingFields = LowLatencyRoutingFieldsT<FABRIC_1D_PKT_HDR_EXTENSION_WORDS>;
 #endif
 
-// 2D Mesh routing fields struct
-// This struct contains routing STATE (hop_index union) for 2D packet headers.
-// All constants are centralized in RoutingFieldsConstants::Mesh (fabric_common.h).
-// Access constants via: MeshRoutingFields (aliased from RoutingFieldsConstants::Mesh)
+// Reserved 2D routing word. Indexed action-map routing consumes route_buffer instead; this type remains only to
+// preserve the packet layout and the shared ROUTING_FIELDS_TYPE plumbing.
 struct LowLatencyMeshRoutingFields {
-    // Type alias to reference centralized constants
-    using MeshRoutingFields = RoutingFieldsConstants::Mesh;
-
-    // Routing state (the actual data members)
-    union {
-        uint32_t value;  // Referenced for fast increment when updating hop count in packet header.
-                         // Also used when doing noc inline dword write to update packet header in next hop
-                         // router.
-        struct {
-            uint16_t hop_index;
-            uint8_t branch_east_offset;  // Referenced when updating hop index for mcast east branch
-            uint8_t branch_west_offset;  // Referenced when updating hop index for mcast west branch
-        };
-    };
+    uint32_t value;
 };
+static_assert(sizeof(LowLatencyMeshRoutingFields) == sizeof(uint32_t));
 
-// TODO: https://github.com/tenstorrent/tt-metal/issues/32237
 // Primary template for 2D routing headers with variable route buffer size
-template <int RouteBufferSize = 35>
+template <int RouteBufferSize = FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE>
 struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteBufferSize>> {
-    // Block route buffers >67 bytes until memory map is updated
-    static_assert(
-        RouteBufferSize <= 67,
-        "ERROR: 2D routing with >67-byte route buffer requires memory map updates.\n"
-        "Current L1 allocation (ROUTING_PATH_SIZE_2D = 1024 bytes) supports max 67 hops.");
-
     LowLatencyMeshRoutingFields routing_fields;
     uint8_t route_buffer[RouteBufferSize];
     union {
@@ -1257,7 +1236,6 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
         uint16_t mcast_params[4];  // Array representing the hops in each direction
         uint64_t mcast_params_64;  // Used for efficiently writing to the mcast_params array
     };
-    uint8_t is_mcast_active;
 
     // Type alias for Sparse Multicast Routing Command Header
     // NOTE: Sparse multicast is not currently supported for 2D routing, tracked in issue #35604
@@ -1290,27 +1268,25 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
 } __attribute__((packed, aligned(16)));
 
 // Validate expected sizes for max-capacity tiers only (one per header size)
-// Base size = 61B (command_fields:40 + payload_size:2 + noc_send_type:1 + src_ch_id:1 +
-//              routing_fields:4 + dst_start:4 + mcast_params:8 + is_mcast_active:1)
-static_assert(sizeof(HybridMeshPacketHeaderT<19>) == 80, "19B buffer must result in 80B header (max capacity)");
-static_assert(sizeof(HybridMeshPacketHeaderT<35>) == 96, "35B buffer must result in 96B header (max capacity)");
-static_assert(sizeof(HybridMeshPacketHeaderT<51>) == 112, "51B buffer must result in 112B header (max capacity)");
-static_assert(sizeof(HybridMeshPacketHeaderT<67>) == 128, "67B buffer must result in 128B header (max capacity)");
+// Base size = 60 B (command_fields:40 + payload_size:2 + noc_send_type:1 + src_ch_id:1 +
+//              routing_fields:4 + dst_start:4 + mcast_params:8)
+//
+// routing_fields is a reserved 4 B compatibility word. Reclaim it once the shared 1D/2D type plumbing is split.
+// The 60 B base plus the maximum 68 B action map fills a 128 B header exactly.
+static_assert(sizeof(HybridMeshPacketHeaderT<20>) == 80, "20B buffer must result in 80B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<36>) == 96, "36B buffer must result in 96B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<52>) == 112, "52B buffer must result in 112B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<68>) == 128, "68B buffer must fill the 128B header");
 
 // Used to get the maximum number of hops that this packet header can support
 template <int RouteBufferSize>
 struct get_max_num_hops<HybridMeshPacketHeaderT<RouteBufferSize>> {
-    // Each byte in the packet header's route buffer represents a single hop
+    // Retains the legacy trait name; 2D route-buffer entries are action-map bytes.
     static constexpr uint32_t value = static_cast<uint32_t>(RouteBufferSize);
 };
 
-// Conditional type selection based on injected define
-#ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE
-using HybridMeshPacketHeader = HybridMeshPacketHeaderT<FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE>;
-#else
-// Default: backward compatibility (96B header with 35B route buffer)
-using HybridMeshPacketHeader = HybridMeshPacketHeaderT<35>;
-#endif
+using HybridMeshPacketHeader = HybridMeshPacketHeaderT<>;
+static_assert(sizeof(HybridMeshPacketHeader) <= 128, "Configured 2D packet header exceeds the 128B allocation");
 
 struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     UDMControlFields udm_control;
@@ -1356,6 +1332,20 @@ static_assert(false, "UDM mode does not support 1D routing - use 2D routing inst
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
 // 2D routing with UDM
+#if defined(FABRIC_EXPRESS_ENABLED)
+// Express routing with UDM is not supported.
+//
+// UDM records the source's first-hop direction in the packet (udm_control.initial_direction) and uses
+// it to pick a downstream mux. The mux fabric is cardinal-only by construction --
+// NUM_DOWNSTREAM_MUX_CONNECTIONS is 3 ("all directions except self"), and the tensix builder skips Z
+// outright ("Skip Z direction - it's for 3D routing") -- so there is no Z mux to hand a packet to.
+// On an express mesh a first hop is often a chord, which would land in the zero-filled Z column of
+// direction_to_mux_index_map and be forwarded to mux 0: the wrong mux, silently.
+//
+// Supporting it means allocating a Z mux and widening NUM_DOWNSTREAM_MUX_CONNECTIONS to 4, which is a
+// tensix/mux builder change. Until then the combination is refused here rather than misrouting.
+static_assert(false, "UDM mode does not support express routing - the mux fabric is cardinal-only");
+#endif
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
 #define PACKET_HEADER_TYPE tt::tt_fabric::UDMHybridMeshPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields

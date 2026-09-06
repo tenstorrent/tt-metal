@@ -1421,42 +1421,15 @@ def test_fabric_event_profiler_2d():
             ]
         )
 
-    all_tests_expected_event_counts = [
-        {
-            frozenset({"ns_hops": 0, "e_hops": 3, "w_hops": 0, "is_mcast": False}.items()): 10,
-        },
-        {
-            frozenset({"ns_hops": 0, "e_hops": 0, "w_hops": 1, "is_mcast": False}.items()): 100,
-            frozenset({"ns_hops": 0, "e_hops": 2, "w_hops": 0, "is_mcast": True}.items()): 100,
-        },
-        {
-            frozenset({"ns_hops": 1, "e_hops": 1, "w_hops": 1, "is_mcast": True}.items()): 100,
-            frozenset({"ns_hops": 0, "e_hops": 1, "w_hops": 0, "is_mcast": False}.items()): 100,
-            frozenset({"ns_hops": 0, "e_hops": 0, "w_hops": 1, "is_mcast": False}.items()): 100,
-        },
-    ]
+    # Route-specific hop summaries are unavailable, so retain only the total event counts:
+    # 10; 100 + 100 = 200; and 100 + 100 + 100 = 300.
+    all_tests_expected_event_counts = [10, 200, 300]
 
     if is_6u_bool:
-        all_tests_expected_event_counts.extend(
-            [
-                {
-                    frozenset({"ns_hops": 3, "e_hops": 0, "w_hops": 0, "is_mcast": False}.items()): 10,
-                },
-                {
-                    frozenset({"ns_hops": 2, "e_hops": 4, "w_hops": 0, "is_mcast": False}.items()): 10,
-                },
-                {
-                    frozenset({"ns_hops": 2, "e_hops": 0, "w_hops": 0, "is_mcast": True}.items()): 100,
-                    frozenset({"ns_hops": 1, "e_hops": 0, "w_hops": 0, "is_mcast": False}.items()): 100,
-                },
-                {
-                    frozenset({"ns_hops": 7, "e_hops": 3, "w_hops": 0, "is_mcast": True}.items()): 100,
-                    frozenset({"ns_hops": 0, "e_hops": 3, "w_hops": 0, "is_mcast": True}.items()): 100,
-                },
-            ]
-        )
+        # The additional tests produce 10; 10; 100 + 100 = 200; and 100 + 100 = 200 events.
+        all_tests_expected_event_counts.extend([10, 10, 200, 200])
 
-    for test_name, expected_event_counts in zip(tests, all_tests_expected_event_counts):
+    for test_name, expected_event_count in zip(tests, all_tests_expected_event_counts):
         nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
         try:
             not_skipped = run_gtest_profiler_test(test_bin, test_name, False, True)
@@ -1470,7 +1443,7 @@ def test_fabric_event_profiler_2d():
             if re.match(r"^noc_trace_dev[0-9]+_ID[0-9]+.json$", f):
                 noc_trace_files.append(f)
 
-        actual_event_counts = {}
+        actual_event_count = 0
         for trace_file in noc_trace_files:
             with open(f"{PROFILER_LOGS_DIR}/{trace_file}", "r") as nocTraceJson:
                 try:
@@ -1486,17 +1459,14 @@ def test_fabric_event_profiler_2d():
                         assert event.get("fabric_send", None) is not None
                         fabric_send_metadata = event.get("fabric_send", None)
                         assert fabric_send_metadata.get("eth_chan", None) is not None
-                        del fabric_send_metadata["eth_chan"]
-                        key = frozenset(fabric_send_metadata.items())
-                        if key not in actual_event_counts:
-                            actual_event_counts[key] = 0
-                        actual_event_counts[key] += 1
+                        assert fabric_send_metadata.get("routing_metadata_available", None) is False
+                        for unavailable_field in ("ns_hops", "e_hops", "w_hops", "is_mcast"):
+                            assert unavailable_field not in fabric_send_metadata
+                        actual_event_count += 1
 
-        # compare expected event counts to actual event_counts
-        for event in expected_event_counts.keys() | actual_event_counts.keys():
-            assert expected_event_counts.get(event, 0) == actual_event_counts.get(
-                event, 0
-            ), f"There are {actual_event_counts.get(event, 0)} fabric events with fields {event}, expected {expected_event_counts.get(event, 0)}"
+        assert (
+            actual_event_count == expected_event_count
+        ), f"Incorrect number of fabric events found: {actual_event_count}, expected {expected_event_count}"
 
 
 def test_sub_device_profiler():
