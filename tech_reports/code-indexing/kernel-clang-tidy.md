@@ -345,6 +345,30 @@ and it keeps scope in one reviewable file. The list is exclusion-only — the
 same shape as tt-umd's `.codechecker.skiplist` — and now covers only upstream
 SFPI and host libc, neither of which is fixable in this repo.
 
+**SFPI headers are demoted to `-isystem`**, which is the mechanism that actually
+saves analysis time; the skiplist only discards findings after the analyzer has
+already produced them. The device build passes `-I /opt/tenstorrent/sfpi/include`
+while every other SFPI path already arrives as `-isystem`, so clang-tidy treated
+`sfpi.h` as first-party and reported on it — the same distinction CMake's
+`SYSTEM` keyword draws for host dependencies like nlohmann/json.
+`build_kernel_clang_tidy_commands.py` rewrites it during capture (21 of 44
+entries on a sample leg, the compute TUs; project `-I` flags are untouched), so
+this is analysis-only and cannot affect the device build.
+
+This matters more than it looks. CodeChecker forces `HeaderFilterRegex=".*"`
+whenever no `--analyzer-config` is given (`clangtidy/analyzer.py:665`), so every
+non-system header is fair game; `-isystem` is what takes SFPI back out, since
+clang-tidy's `SystemHeaders` defaults to false and is not overridden by the
+header filter. Measured on a synthetic 4,000-function vendor header, moving it
+from `-I` to `-isystem` took clang-tidy from **1.93s and 23,834 warnings to
+0.10s and 2**. That is a pathological density and an upper bound, not a
+prediction for SFPI, but the mechanism is the point: the parse still happens
+because the TU needs the AST, while diagnostic matching, fix-it construction and
+message rendering do not.
+
+The skiplist keeps its SFPI entry as a backstop, since `clang-diagnostic-error`
+and friends can still surface from system headers.
+
 The machine-generated JIT glue in the kernel cache used to be excluded too, on
 the grounds that findings there belong to the generator rather than the output.
 That was the wrong call: `genfiles.cpp` emits the `chlkc_*.cpp` prologs, the

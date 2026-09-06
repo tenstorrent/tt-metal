@@ -234,6 +234,17 @@ def find_sfpi_compiler_root(compiler_path):
     return root if (root / "riscv-tt-elf" / "include").is_dir() else None
 
 
+def is_vendor_include(path):
+    """True for the pinned SFPI release, which is not ours to fix.
+
+    The device build passes `-I /opt/tenstorrent/sfpi/include` while every other
+    SFPI path already arrives as `-isystem`, so clang-tidy treats sfpi.h as
+    first-party and reports on it. Demoting it to a system include is the same
+    thing CMake's SYSTEM keyword does for host dependencies.
+    """
+    return "/sfpi/" in path.replace(os.sep, "/")
+
+
 def sfpi_isystem_flags(compiler_root, multilib):
     """The SFPI toolchain's own newlib + libstdc++ header paths, for clang."""
     if compiler_root is None:
@@ -277,6 +288,14 @@ def transform(argv, clang):
             continue
         if a.startswith("-mcpu="):
             target_info = MCPU_MAP.get(a[len("-mcpu=") :])
+            i += 1
+            continue
+        if a == "-I" and i + 1 < len(argv) and is_vendor_include(argv[i + 1]):
+            out += ["-isystem", argv[i + 1]]
+            i += 2
+            continue
+        if len(a) > 2 and a.startswith("-I") and is_vendor_include(a[2:]):
+            out += ["-isystem", a[2:]]
             i += 1
             continue
         out.append(a)
@@ -424,6 +443,17 @@ def self_test():
     for banned in ("-ftt-nttp", "-flto=auto", "-MMD", "-MF", "-o", "-mcpu=tt-wh-tensix"):
         assert banned not in out, f"{banned} must be dropped"
     assert '-DFULL_KERNEL_NAME="reduce_h/42"' in out, "defines must pass through verbatim"
+
+    # SFPI headers must reach clang as system includes, in either -I spelling,
+    # so clang-tidy does not analyze what we cannot fix. Project -I is untouched.
+    for spelling in (["-I", "/opt/tenstorrent/sfpi/include"], ["-I/opt/tenstorrent/sfpi/include"]):
+        got = transform([gxx, "-c", "-mcpu=tt-wh-tensix", *spelling, "-I/work/tt_metal", "x.cc"], "clang++")
+        assert got is not None, f"transform rejected {spelling}"
+        assert "-isystem" in got and got[got.index("-isystem") + 1] == "/opt/tenstorrent/sfpi/include", (
+            f"SFPI include not demoted to -isystem for {spelling}: {got}"
+        )
+        assert "-I/opt/tenstorrent/sfpi/include" not in got, f"SFPI kept as -I for {spelling}"
+        assert "-I/work/tt_metal" in got, "project includes must stay first-party"
 
     print("[kernel-clang-tidy] self-test PASSED")
     return 0
