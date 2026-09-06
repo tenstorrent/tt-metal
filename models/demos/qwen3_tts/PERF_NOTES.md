@@ -482,6 +482,80 @@ transfer touches one chip instead of a mesh.
 
 ---
 
+### 2.8 N150 and the perf gate: what is left is a trade-off, not a missing optimisation
+
+`tests/test_qwen3_tts_perf_device.py` asserts prefill < 22.0 ms and steady decode inside
+[41.13, 45.46]. After 2.7, N150 measures **23.81 ms / 48.06 ms — it fails both.** It needs
+-1.9 ms of prefill and -2.6 ms of steady decode.
+
+**There is no config headroom left to find it in.** The perf report's matmul-efficiency table
+for the N150 frame (25.861 ms over 546 calls, 55 % of the frame) reads:
+
+| M x K x N | n | ms | DRAM % |
+|---|--:|--:|--:|
+| 32x2048x6144 (Talker gate/up) | 56 | 6.520 | 75.1 |
+| 32x1024x3072 (CP gate/up) | 150 | 4.590 | 71.4 |
+| 32x1024x4224 (CP qkv) | 75 | 3.189 | 70.6 |
+| 32x6144x2304 (Talker down) | 28 | 3.140 | **87.7** |
+| 32x3072x1152 (CP mlp down) | 75 | 2.398 | 76.9 |
+| 32x2048x4224 (Talker qkv) | 28 | 2.070 | 81.3 |
+
+Every decode matmul is M=1 tile and weight-bandwidth bound, and they are already at **70-88 %
+of Wormhole's 288 GB/s**. No program config beats a bandwidth wall. The only lever that moves
+a bandwidth-bound matmul is fewer weight bytes.
+
+#### bfloat8_b weights — `QWEN3_TTS_BF8_WEIGHTS=1`, default OFF
+
+Covers the DRAM-sharded CP weights (qkv / o_proj / gate / up / down) and the Talker's decoder
+layers. RMSNorm weights stay bf16. Measured per shape in isolation on N150, traced:
+
+| shape | bf16 | bfp8 | |
+|---|--:|--:|--:|
+| Talker down 32x6144x2304 | 115.6 us (245 GB/s) | 79.2 us | 1.46x |
+| Talker qkv 32x2048x4224 | 77.9 us (222 GB/s) | 52.4 us | 1.49x |
+| CP qkv 32x1024x4224 | 45.1 us (192 GB/s) | 31.7 us | 1.42x |
+| CP mlp down 32x3072x1152 | 32.4 us (218 GB/s) | 27.0 us | 1.20x |
+| CP gate/up 32x1024x3072 | 46.9 us (**134 GB/s**) | 45.6 us | **1.03x** |
+
+The last row is the tell: the one shape that was *not* near the bandwidth wall gets nothing.
+bfp8 buys exactly what the roofline says it should, no more.
+
+End to end:
+
+| | prefill | steady decode | gate |
+|---|--:|--:|---|
+| N150 bf16 | 23.81 ms | 48.06 ms | **fails both** |
+| N150 bfp8 | **20.44 ms** | **42.10 ms** | **passes** |
+| N300 bf16 | 19.32 ms | 42.12 ms | passes |
+| N300 bfp8 | 18.21 ms | 40.42 ms | **fails — 40.42 is BELOW the 41.13 lower bound** |
+
+Traced N150 AR frame 46.30 -> 39.88 ms (-13.9 %). Note the last row: the gate is a tight
+bidirectional band, so making the model faster breaks it from the other side. Promoting this
+flag means re-measuring the goldens, not just flipping a default.
+
+**Accuracy, and why it is still default OFF.** On the demo prompt at seed 42, N150: SIM
+0.8662 -> **0.8997** (it went UP), WER 9.1 % in both arms (and that 9.1 % is entirely a typo in
+the prompt — the ASR hears the right words), no clipping and no sample-jump artifacts in either.
+PCC moves only where the test actually reaches the flag: `cp_step` 0.999976 -> 0.999844, while
+`mlp_decode` / `attention_decode` / `talker_chain` are digit-identical because those tests build
+their modules directly and never see the env var — **so `test_qwen3_tts_pcc.py` is NOT a gate on
+this flag.** Generation shortens, as it did the last time this was tried (`cf0617b5c90`, a
+different tree, which also reported extra click frames): 85 frames / 6.80 s -> 79 / 6.32 s.
+
+That is one prompt at one seed. 6.4 documents that generation length is chaotic here and that
+PCC cannot predict it, so a single favourable pair is not certification. What promoting this
+needs: a frame-count + WER sweep over >= 8 seeds, a listen, and new gate goldens for both SKUs.
+
+#### Rejected while looking
+
+| idea | measured | verdict |
+|---|---|---|
+| `topk` k=64 -> k=32 (width 2048) | 229.4 -> 138.4 us, **-1.36 ms/frame** | Real, but the demo's `top_k=50` does not fit in 32, so it narrows sampling to top-32. A quality change for less than half of what bfp8 gives. |
+| Drop top-k: full-vocab Gumbel + `argmax` | argmax 132.9 us vs topk k=32 138.4 us | **Pointless.** Removing the top-k truncation entirely buys ~nothing over k=32, so there is no reason to pay its quality cost. |
+| Matmul program-config / grid tuning on N150 | already 70-88 % of DRAM peak | No headroom; see the table above. |
+
+---
+
 ---
 
 ## 3. Measured results
