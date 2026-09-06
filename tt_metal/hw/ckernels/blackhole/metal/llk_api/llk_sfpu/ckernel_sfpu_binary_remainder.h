@@ -56,6 +56,8 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
 
     // Compute correction for approximation error: correction = |r| / b
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
+    v_if(r_f < 0.0f) { r_f = 0x1.0p31f; }
+    v_endif;
     sfpi::vMag correction = sfpi::convert<sfpi::vUInt16>(r_f * inv_b_f, sfpi::RoundMode::Nearest);
 
     // Compute correction * b (full 32-bit result from 24-bit multiplies)
