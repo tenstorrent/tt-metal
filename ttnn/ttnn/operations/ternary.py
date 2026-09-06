@@ -6,6 +6,7 @@ import sys
 from typing import Union
 
 import ttnn
+from ttnn.operations import integer_golden
 
 __all__ = []
 
@@ -16,10 +17,13 @@ def torch_mac(input, tensor1, tensor2):
     return torch.add(torch.mul(input, tensor1), tensor2)
 
 
-def _golden_function_addcmul(input_tensor_a, input_tensor_b, input_tensor_c, *args, value=1, **kwargs):
+def _golden_function_addcmul(input_a, input_b, input_c, *args, value=1, **kwargs):
     import torch
 
-    return torch.addcmul(input_tensor_a, input_tensor_b, input_tensor_c, value=value)
+    if integer_golden.is_unsigned_dtype(input_a.dtype):
+        # PyTorch lacks UInt32 addcmul; widen and restore the hardware wraparound.
+        return integer_golden.addcmul(input_a, input_b, input_c, value)
+    return torch.addcmul(input_a, input_b, input_c, value=value)
 
 
 ttnn.attach_golden_function(ttnn.addcmul, golden_function=_golden_function_addcmul)
@@ -63,10 +67,27 @@ def _golden_function_mac(input_tensor_a, input_tensor_b, input_tensor_c, *args, 
 ttnn.attach_golden_function(ttnn.mac, golden_function=_golden_function_mac)
 
 
-def _golden_function_where(input_tensor_a, input_tensor_b, input_tensor_c, *args, **kwargs):
+def _golden_function_where(predicate, true_value, false_value, *args, **kwargs):
     import torch
 
-    return torch.where(input_tensor_a, input_tensor_b, input_tensor_c)
+    # TT where selects the true branch for any nonzero predicate; torch.where requires bool.
+    if integer_golden.is_unsigned_dtype(predicate.dtype):
+        condition = integer_golden.compare(predicate, 0, torch.gt)
+        # Widen unsigned branches because Torch has no UInt16/UInt32 where kernel.
+        output_dtype = (
+            true_value.dtype
+            if torch.is_tensor(true_value)
+            else false_value.dtype
+            if torch.is_tensor(false_value)
+            else predicate.dtype
+        )
+        true_value = true_value.to(torch.int64) if torch.is_tensor(true_value) else true_value
+        false_value = false_value.to(torch.int64) if torch.is_tensor(false_value) else false_value
+        result = torch.where(condition, true_value, false_value)
+        return result.to(output_dtype)
+    else:
+        condition = torch.ne(predicate, 0)
+    return torch.where(condition, true_value, false_value)
 
 
 ttnn.attach_golden_function(ttnn.where, golden_function=_golden_function_where)

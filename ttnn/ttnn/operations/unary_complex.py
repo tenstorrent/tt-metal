@@ -82,6 +82,8 @@ ttnn.attach_golden_function(ttnn.polar, golden_function=_golden_function)
 def _golden_function(input_tensor_a, *args, **kwargs):
     import torch
 
+    # Keep reciprocal's signed infinities and NaNs intact when complex registrations are loaded last.
+    # Replacing them with finite extrema would undo the real unary golden's special-value contract.
     return torch.reciprocal(input_tensor_a)
 
 
