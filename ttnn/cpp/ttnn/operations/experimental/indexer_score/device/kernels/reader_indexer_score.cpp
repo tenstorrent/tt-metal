@@ -27,6 +27,10 @@
 // per-band gate in kernel_main) so scoring of already-arrived shards runs while farther slabs are in flight.
 // Reuses the ring-joint-SDPA receiver so the crossed direction-index swap + asymmetric thresholds stay identical.
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_receiver.hpp"
+// Metadata reads invalidate the reused L1 address; causal geometry is shared with the host implementation.
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "indexer_score_metadata.hpp"
+#include "indexer_score_causal_geometry.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 
 constexpr uint32_t q_tile_bytes = get_tile_size(cb_q);     // q: bf16 or bfp8_b (smaller tile)
@@ -75,6 +79,28 @@ FORCE_INLINE constexpr uint32_t tensor_rank_from_transport_rank(uint32_t transpo
     return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
         transport_rank, rank_mapping_mesh_rows, rank_mapping_mesh_cols, snake_orientation);
 }
+
+// +10, not +9: main's partial_readiness_enabled took bc_ct_base + 9. Both factories push that flag
+// before this block, so the two cannot overlap.
+constexpr uint32_t meta_ct_base = bc_ct_base + 10;
+constexpr bool chunk_start_from_metadata = get_compile_time_arg_val(meta_ct_base) != 0;
+constexpr uint32_t meta_rt_base = get_compile_time_arg_val(meta_ct_base + 1);
+constexpr uint32_t cb_meta_derived = get_compile_time_arg_val(meta_ct_base + 2);
+constexpr uint32_t cb_meta_writer = get_compile_time_arg_val(meta_ct_base + 3);
+constexpr uint32_t meta_Sq = get_compile_time_arg_val(meta_ct_base + 4);
+// Rotation-exact SP geometry: sp_axis set, OR a fused full-mesh ring. The host computes the
+// same predicate in rotation_exact_sp_geometry(), so both sides pick the same branch.
+constexpr uint32_t meta_rotation_exact = get_compile_time_arg_val(meta_ct_base + 5);
+constexpr auto meta_args = TensorAccessorArgs<meta_ct_base + 6>();
+// Cache-slot select, appended with the same fixed-width discipline as the chunk-start block above: both
+// factories always push it (zero-filled, with a placeholder accessor, when off), so every index here is
+// valid unconditionally and no guarded-index trick is needed.
+constexpr uint32_t slot_ct_base = meta_args.next_compile_time_args_offset();
+constexpr bool cache_slot_from_metadata = get_compile_time_arg_val(slot_ct_base) != 0;
+constexpr uint32_t slot_rt_base = get_compile_time_arg_val(slot_ct_base + 1);      // RT slot of this block
+constexpr uint32_t slot_local_pages = get_compile_time_arg_val(slot_ct_base + 2);  // pages per cache slot
+constexpr uint32_t cb_meta_slot = get_compile_time_arg_val(slot_ct_base + 3);      // NoC landing slot
+constexpr auto slot_meta_args = TensorAccessorArgs<slot_ct_base + 4>();
 
 // Thin alias over the shared block-cyclic invP map (tt::block_cyclic, block_cyclic_remap.hpp): identity for
 // contiguous K, invP for the per-SP-shard block-cyclic layout. One name shared between the non-fused reader and
@@ -350,6 +376,12 @@ struct FusedRingGate {
     uint32_t sem_id[2];                      // the two direction semaphore ids
     KLocalAcc k_local_acc;                   // local SP shard cache (the all-gather INPUT; AG omits it from gathered)
     uint32_t local_batch_page_offset;        // selected slot in k_local; gathered k may be batch-1
+    uint32_t meta_addr;                      // trace-safe: DRAM address of the 1-element chunk_start_idx tensor
+    uint32_t meta_device_index;              // this device's SP-ring index (causal geometry input)
+    uint32_t meta_tp_index;                  // its TP sub-shard rank (0 when SP-only)
+    uint32_t slot_meta_addr;                 // trace-safe: DRAM address of the 1-element USER id tensor
+    uint32_t slot_num_layers;                // index-cache layers per user (recomposition stride)
+    uint32_t slot_layer_idx;                 // this layer's index within a user's slots
     uint32_t perm_base;                      // rt slot of the band-visit permutation (one entry per band)
     uint32_t shard_dir[max_ring_size];       // shard -> direction semaphore index
     uint32_t shard_half_val[max_ring_size];  // shard -> midpoint-ready threshold
@@ -357,17 +389,34 @@ struct FusedRingGate {
 
     // recv has already consumed the fused block (waiting for the op signal) and advanced argidx; take the
     // k_local addr from the next slot and leave argidx at the band-perm base.
-    FusedRingGate(const RingSDPAOpReceiver& recv, uint32_t& argidx) :
+    // `local_offset_override` is the reader-derived slot base on the metadata path (0 elsewhere); it
+    // replaces the runtime argument, which a replay would have frozen at the captured slot.
+    FusedRingGate(const RingSDPAOpReceiver& recv, uint32_t& argidx, uint32_t local_offset_override = 0) :
+        // TENSOR rank, not the transport rank: on a full-mesh ring the two differ by the snake mapping,
+        // and both the slot recomposition and the causal geometry are defined over tensor ranks.
         ring_index(tensor_rank_from_transport_rank(recv.seq.ring_index)),
         ring_size(recv.seq.ring_size),
         tiles_per_shard(k_len_tiles / recv.seq.ring_size),
         sem_id{recv.signal_op_semaphore_ids[0], recv.signal_op_semaphore_ids[1]},
         k_local_acc(TensorAccessor(kl_args, get_arg_val<uint32_t>(argidx++), k_tile_bytes)),
+        // Consumed UNCONDITIONALLY: the host pushes this slot on both paths (0 on the metadata one), so
+        // skipping it would shift perm_base. The metadata value is applied in the body below.
         local_batch_page_offset(get_arg_val<uint32_t>(argidx++)),
+        meta_addr(get_arg_val<uint32_t>(argidx++)),
+        meta_device_index(get_arg_val<uint32_t>(argidx++)),
+        meta_tp_index(get_arg_val<uint32_t>(argidx++)),
+        // Cache-slot block: three more fixed slots, consumed unconditionally like the chunk-start block
+        // above, so band_perm_base stays a compile-time constant on every path.
+        slot_meta_addr(get_arg_val<uint32_t>(argidx++)),
+        slot_num_layers(get_arg_val<uint32_t>(argidx++)),
+        slot_layer_idx(get_arg_val<uint32_t>(argidx++)),
         perm_base(argidx),
         shard_dir{},
         shard_half_val{},
         shard_val{} {
+        if constexpr (cache_slot_from_metadata) {
+            local_batch_page_offset = local_offset_override;
+        }
         RingIdSequencer s = recv.seq;  // fresh copy (received={0,0}); replay to index (dir,val) by shard id
         for (uint32_t i = 0; i < ring_size; ++i) {
             uint32_t cap_dir = 0, cap_val = 0;
@@ -490,7 +539,7 @@ void kernel_main() {
     const McastDir q_dir = read_mcast_dir(17);            // Q/W row mcast: args [17, 25)
     // Persistent-cache args (hash-excluded, re-applied each dispatch), after the mcast tuples.
     const uint32_t k_batch_page_offset = get_arg_val<uint32_t>(25);  // indexed-cache page offset; 0 when not indexed
-    const uint32_t kv_len_tiles = get_arg_val<uint32_t>(26);         // valid KV length in tiles (full when unset)
+    uint32_t kv_len_tiles = get_arg_val<uint32_t>(26);               // valid KV length in tiles (full when unset)
 
     const auto q_acc = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
@@ -590,13 +639,83 @@ void kernel_main() {
         }
     };
 
+    if constexpr (fused_ring_enabled && chunk_start_from_metadata) {
+        // Derive causal values before the blocking ring receiver so compute can consume them independently.
+        // The factory supplies meta_rt_base to keep this layout coupled to the runtime-argument builder.
+        CircularBuffer cb_derived(cb_meta_derived);
+        cb_derived.reserve_back(1);
+        const uint32_t derived_l1 = cb_derived.get_write_ptr();
+        // Lands at the page base, is consumed immediately, then the four derived words overwrite it -- so the
+        // one CB serves as both the NoC landing slot and the reader->compute mailbox.
+        const uint32_t chunk_start_idx = trace_metadata::read_metadata_scalar_u32(
+            noc, meta_args, get_arg_val<uint32_t>(meta_rt_base + 0), derived_l1);
+        // Preserve the scalar API's alignment and capacity contract before any causal-geometry arithmetic.
+        // Express the capacity check as subtraction to avoid overflowing chunk_start_idx + chunk_global.
+        constexpr uint32_t chunk_global_tiles = bc_sp * bc_chunk_local;
+        ASSERT(
+            chunk_start_idx % iscore::kCausalTileWidth == 0 && chunk_global_tiles <= k_len_tiles &&
+            chunk_start_idx / iscore::kCausalTileWidth <= k_len_tiles - chunk_global_tiles);
+        const auto geom = ttnn::operations::experimental::indexer_score::causal_geometry_tiles(
+            chunk_start_idx,
+            block_cyclic,
+            meta_rotation_exact != 0,
+            bc_sp,
+            bc_chunk_local * 32,  // block_cyclic_ct carries chunk_local in TILES; the closed form takes elements
+            get_arg_val<uint32_t>(meta_rt_base + 1),  // device_index
+            get_arg_val<uint32_t>(meta_rt_base + 2),  // tp_index
+            meta_Sq);
+        // Derive kv_len from the same position used for causal geometry.
+        const uint32_t derived_kv_len_tiles = chunk_start_idx / 32 + chunk_global_tiles;
+        kv_len_tiles = derived_kv_len_tiles < k_len_tiles ? derived_kv_len_tiles : k_len_tiles;
+
+        const IndexerScoreMetadataBounds bounds{
+            .kv_len_tiles = kv_len_tiles,
+            .chunk_start_tiles = geom.chunk_start_tiles,
+            .straddle_q_tile = geom.straddle_q_tile,
+            .straddle_jump_tiles = geom.straddle_jump_tiles,
+        };
+        CoreLocalMem<IndexerScoreMetadataBounds> mailbox(derived_l1);
+        mailbox->kv_len_tiles = bounds.kv_len_tiles;
+        mailbox->chunk_start_tiles = bounds.chunk_start_tiles;
+        mailbox->straddle_q_tile = bounds.straddle_q_tile;
+        mailbox->straddle_jump_tiles = bounds.straddle_jump_tiles;
+        clobber_all_memory();
+        cb_derived.push_back(1);
+
+        // Second copy for the writer (one derivation, two consumers -- see the factory note).
+        CircularBuffer cb_wmeta(cb_meta_writer);
+        cb_wmeta.reserve_back(1);
+        CoreLocalMem<IndexerScoreMetadataBounds> wmailbox(cb_wmeta.get_write_ptr());
+        wmailbox->kv_len_tiles = bounds.kv_len_tiles;
+        wmailbox->chunk_start_tiles = bounds.chunk_start_tiles;
+        wmailbox->straddle_q_tile = bounds.straddle_q_tile;
+        wmailbox->straddle_jump_tiles = bounds.straddle_jump_tiles;
+        clobber_all_memory();
+        cb_wmeta.push_back(1);
+    }
+
     if constexpr (fused_ring_enabled) {
         // The receiver consumes the fused-arg block at slot 27 (ring/dir/sems plus the split-forwarding
         // triple — this op runs with split forwarding disabled) and waits for the producer signal. The
         // gate then consumes k_local and records the following band-permutation base.
         uint32_t fused_argidx = 27;
         RingSDPAOpReceiver fused_recv(/*wait_for_op_signal=*/true, fused_argidx);
-        const FusedRingGate gate(fused_recv, fused_argidx);
+        // TRACE-SAFE slot select. cache_batch_idx is a host runtime arg the override re-patches per
+        // dispatch, which a replay cannot do -- so a captured program would score every request against
+        // the slot live at capture time (capture warms user 0). Recompose it here from the on-device user
+        // id, mirroring TtIndexer's host formula. The RT slots are still consumed by the gate so the
+        // band-permutation base is unaffected.
+        uint32_t local_slot_offset = 0;
+        if constexpr (cache_slot_from_metadata) {
+            CircularBuffer cb_slot(cb_meta_slot);
+            cb_slot.reserve_back(1);
+            const uint32_t user_id = trace_metadata::read_metadata_scalar_u32(
+                noc, slot_meta_args, get_arg_val<uint32_t>(slot_rt_base + 0), cb_slot.get_write_ptr());
+            const uint32_t num_layers = get_arg_val<uint32_t>(slot_rt_base + 1);
+            const uint32_t layer_idx = get_arg_val<uint32_t>(slot_rt_base + 2);
+            local_slot_offset = (user_id * num_layers + layer_idx) * slot_local_pages;
+        }
+        const FusedRingGate gate(fused_recv, fused_argidx, local_slot_offset);
         run(&gate);
     } else {
         run(nullptr);

@@ -19,6 +19,7 @@
 #include "api/compute/reduce.h"            // block-max-pool: PoolType / ReduceDim enums
 #include "api/compute/reduce_custom.h"     // block-max-pool: batched reduce_block_max_row (scaler-resident)
 #include "api/dataflow/circular_buffer.h"  // Device 2.0 CircularBuffer wrapper (cb ops)
+#include "indexer_score_metadata.hpp"
 
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"  // block-max-pool: compute_kernel_lib::reduce
@@ -45,6 +46,10 @@ constexpr bool fused_ring_enabled = get_compile_time_arg_val(num_common_ct_args 
 constexpr bool shard_block_cyclic = get_compile_time_arg_val(num_common_ct_args + 7) != 0;
 constexpr uint32_t shard_chunk_local = get_compile_time_arg_val(num_common_ct_args + 8);
 constexpr uint32_t shard_sp = get_compile_time_arg_val(num_common_ct_args + 9);
+// Metadata-derived causal values arrive through a reader-produced mailbox because compute cannot issue
+// NoC reads. Appended after main's shard block, so both factories push these last.
+constexpr bool chunk_start_from_metadata = get_compile_time_arg_val(num_common_ct_args + 10) != 0;
+constexpr uint32_t cb_meta_derived = get_compile_time_arg_val(num_common_ct_args + 11);
 
 // k-cols sharing ONE dest acquire in the blocked-custom mul (dest-bounded). One unpack context per head
 // (w[h] + ct_dim qk cols), so unpack-context sync is paid 1/ct_dim of the per-tile bcast-mul rate.
@@ -457,18 +462,30 @@ void kernel_main() {
     const uint32_t max_bands = get_arg_val<uint32_t>(5);  // row's widest column; streaming drains q to this
     // Valid KV length in tiles: caps each cell's valid cols (mask suffix grows over the tail). Full when
     // unset (dense path unchanged). Hash-excluded.
-    const uint32_t kv_len_tiles = get_arg_val<uint32_t>(6);
+    uint32_t kv_len_tiles = get_arg_val<uint32_t>(6);
     // Per-device chunk-start offset (tiles); runtime so distinct values reuse one program.
-    const uint32_t chunk_start_tiles = get_arg_val<uint32_t>(7);
+    uint32_t chunk_start_tiles = get_arg_val<uint32_t>(7);
     // Mid-slab boundary-chip diagonal straddle (tiles): q-rows >= straddle_q_tile jump by straddle_jump_tiles.
     // Both 0 on every non-boundary device and in the chunk-aligned case, leaving the diagonal linear.
-    const uint32_t straddle_q_tile = get_arg_val<uint32_t>(8);
-    const uint32_t straddle_jump_tiles = get_arg_val<uint32_t>(9);
+    uint32_t straddle_q_tile = get_arg_val<uint32_t>(8);
+    uint32_t straddle_jump_tiles = get_arg_val<uint32_t>(9);
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_qk);
+
+    if constexpr (chunk_start_from_metadata) {
+        // Consume the unconditional mailbox publication before the zero-work return.
+        CircularBuffer cb_derived(cb_meta_derived);
+        cb_derived.wait_front(1);
+        kv_len_tiles = ckernel::read_tile_value(cb_meta_derived, 0, indexer_score_kv_len_tiles_word);
+        chunk_start_tiles = ckernel::read_tile_value(cb_meta_derived, 0, indexer_score_chunk_start_tiles_word);
+        straddle_q_tile = ckernel::read_tile_value(cb_meta_derived, 0, indexer_score_straddle_q_tile_word);
+        straddle_jump_tiles = ckernel::read_tile_value(cb_meta_derived, 0, indexer_score_straddle_jump_tiles_word);
+        cb_derived.pop_front(1);
+    }
     if (num_groups == 0 || num_bands == 0) {
         return;
     }
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_qk);
     matmul_block_init(
         cb_q, cb_k, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
     CircularBuffer(cb_mask).wait_front(num_mask_tiles);  // never popped

@@ -43,7 +43,6 @@
 #include "buffer_types.hpp"
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
-#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
@@ -379,20 +378,7 @@ detail::ProgramImpl::ProgramImpl(ContextId context_id) :
 detail::ProgramImpl::~ProgramImpl() noexcept {
     // Deallocate circular buffers and unregister from devices
     deallocate_circular_buffers();
-    persistent_l1_seals_.clear();
     Inspector::program_destroyed(this);
-}
-
-DeviceAddr detail::ProgramImpl::reserve_program_local_l1(const IDevice* device, const CoreRangeSet& cores) {
-    auto& arena = device->allocator_impl()->persistent_l1();
-    auto& sealed_cores = persistent_l1_seals_[&arena];
-    for (const CoreCoord& core : corerange_to_cores(cores)) {
-        if (sealed_cores.contains(core)) {
-            continue;
-        }
-        sealed_cores.emplace(core, arena.seal(CoreRangeSet(CoreRange(core))));
-    }
-    return arena.high_water_mark(cores);
 }
 
 Program::Program() : internal_(std::make_shared<detail::ProgramImpl>()) {
@@ -1321,10 +1307,6 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
         this->per_core_cross_node_dfbs_.empty(),
         "Cannot add a GlobalCircularBuffer to a program that already has CrossNodeDFB participants. "
         "GlobalCircularBuffer and CrossNodeDFB are mutually exclusive within a program.");
-    TT_FATAL(
-        this->per_core_prefetcher_pipes_.empty(),
-        "Cannot add a GlobalCircularBuffer to a program that already has PrefetcherPipe attachments. "
-        "GlobalCircularBuffer and PrefetcherPipe are mutually exclusive within a program.");
     // Merge ranges to reduce the number of multicasts needed to initialize CBs.
     std::shared_ptr<CircularBufferImpl> circular_buffer =
         std::make_shared<CircularBufferImpl>(core_range_set.merge_ranges(), config, global_circular_buffer);
@@ -1341,9 +1323,11 @@ uint8_t detail::ProgramImpl::add_cross_node_dfb(experimental::CrossNodeDFB gdfb)
             "GlobalCircularBuffer and CrossNodeDFB are mutually exclusive within a program.");
     }
 
+    constexpr uint8_t max_cross_node_dfbs = static_cast<uint8_t>(MAX_CROSS_NODE_DFBS);
     TT_FATAL(
-        next_cross_node_dfb_slot_ < std::numeric_limits<uint8_t>::max(),
-        "CrossNodeDFB id would wrap uint8_t (ids are [0, 255))");
+        next_cross_node_dfb_slot_ < max_cross_node_dfbs,
+        "Exceeded maximum number ({}) of CrossNodeDFBs per program",
+        max_cross_node_dfbs);
     const uint8_t remote_dfb_id = next_cross_node_dfb_slot_++;
     const CoreRangeSet& cores = gdfb.all_cores();
 
@@ -1365,174 +1349,6 @@ uint8_t detail::ProgramImpl::add_cross_node_dfb(experimental::CrossNodeDFB gdfb)
     }
     cross_node_dfbs_.emplace(remote_dfb_id, std::move(gdfb));
     return remote_dfb_id;
-}
-
-uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
-    experimental::PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size) {
-    TT_FATAL(this->compiled_.empty(), "Cannot attach PrefetcherPipe to an already compiled program {}", this->id);
-
-    for (const auto& [core, remote_bits] : per_core_remote_cb_indices_) {
-        TT_FATAL(
-            !remote_bits.any(),
-            "Cannot attach PrefetcherPipe to a program that already has GlobalCircularBuffers. "
-            "GlobalCircularBuffer and PrefetcherPipe are mutually exclusive within a program.");
-    }
-
-    TT_FATAL(
-        next_prefetcher_pipe_slot_ < std::numeric_limits<uint8_t>::max(),
-        "PrefetcherPipe id would wrap uint8_t (ids are [0, 255); 0xFF is NO_PREFETCHER_PIPE)");
-
-    TT_FATAL(cores.num_cores() > 0, "AttachPrefetcherPipe requires a non-empty core set");
-    const CoreRangeSet& all_cores = prefetcher_pipe.all_cores();
-    TT_FATAL(
-        all_cores.intersection(cores).num_cores() == cores.num_cores(),
-        "AttachPrefetcherPipe cores must be a subset of the PrefetcherPipe mapping cores");
-
-    const CoreRangeSet& sender_cores = prefetcher_pipe.sender_cores();
-    const uint32_t attached_sender_count = sender_cores.intersection(cores).num_cores();
-    TT_FATAL(
-        attached_sender_count == 0 || attached_sender_count == sender_cores.num_cores(),
-        "AttachPrefetcherPipe cannot split sender cores across Programs: attached {} of {} senders",
-        attached_sender_count,
-        sender_cores.num_cores());
-
-    const CoreRangeSet& receiver_cores = prefetcher_pipe.receiver_cores();
-    const uint32_t attached_receiver_count = receiver_cores.intersection(cores).num_cores();
-    TT_FATAL(
-        attached_receiver_count == 0 || attached_receiver_count == receiver_cores.num_cores(),
-        "AttachPrefetcherPipe cannot split receiver cores across Programs: attached {} of {} receivers",
-        attached_receiver_count,
-        receiver_cores.num_cores());
-
-    const uint32_t l1_alignment = MetalContext::instance(this->get_context_id()).hal().get_alignment(HalMemType::L1);
-    TT_FATAL(entry_size > 0, "PrefetcherPipe entry_size must be > 0");
-    TT_FATAL(
-        entry_size % l1_alignment == 0,
-        "PrefetcherPipe entry_size {} must be a multiple of L1_ALIGNMENT {}",
-        entry_size,
-        l1_alignment);
-    TT_FATAL(
-        entry_size <= prefetcher_pipe.ring_size(),
-        "PrefetcherPipe entry_size {} must not exceed ring_size {}",
-        entry_size,
-        prefetcher_pipe.ring_size());
-
-    const uint8_t prefetcher_pipe_id = next_prefetcher_pipe_slot_++;
-
-    for (const auto& core_range : cores.ranges()) {
-        for (const auto& core : core_range) {
-            auto& participants = per_core_prefetcher_pipes_[core];
-            for (const auto& a : participants) {
-                TT_FATAL(
-                    a.prefetcher_pipe_id != prefetcher_pipe_id,
-                    "PrefetcherPipe slot {} already has a participant on core {}",
-                    prefetcher_pipe_id,
-                    core.str());
-            }
-            participants.push_back(
-                {prefetcher_pipe_id,
-                 prefetcher_pipe.config_address(),
-                 entry_size,
-                 std::numeric_limits<uint8_t>::max()});
-        }
-    }
-    prefetcher_pipe_attachments_[prefetcher_pipe_id] = &prefetcher_pipe;
-    return prefetcher_pipe_id;
-}
-
-const experimental::PrefetcherPipe& detail::ProgramImpl::get_prefetcher_pipe_attachment(
-    uint8_t prefetcher_pipe_id) const {
-    auto it = prefetcher_pipe_attachments_.find(prefetcher_pipe_id);
-    TT_FATAL(
-        it != prefetcher_pipe_attachments_.end(),
-        "get_prefetcher_pipe_attachment: slot {} is not attached to program {}",
-        prefetcher_pipe_id,
-        this->id);
-    TT_FATAL(it->second != nullptr, "PrefetcherPipe attachment slot {} is null", prefetcher_pipe_id);
-    return *it->second;
-}
-
-std::optional<uint8_t> detail::ProgramImpl::get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const {
-    for (const auto& [prefetcher_pipe_id, registered_relay_host_id] : prefetcher_pipe_relay_host_ids_) {
-        if (registered_relay_host_id == relay_dfb_host_id) {
-            return prefetcher_pipe_id;
-        }
-    }
-    return std::nullopt;
-}
-
-void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
-    const CoreRangeSet& receiver_cores, uint8_t prefetcher_pipe_id, uint32_t relay_dfb_host_id) {
-    TT_FATAL(
-        this->compiled_.empty(), "Cannot register a PrefetcherPipe relay on an already compiled program {}", this->id);
-
-    const experimental::PrefetcherPipe& pipe = get_prefetcher_pipe_attachment(prefetcher_pipe_id);
-
-    auto relay_dfb = get_dataflow_buffer(relay_dfb_host_id);
-    TT_FATAL(relay_dfb != nullptr, "Relay DFB host id {} does not exist", relay_dfb_host_id);
-    TT_FATAL(relay_dfb->borrows_memory(), "PrefetcherPipe relay DFB {} must use borrowed memory", relay_dfb_host_id);
-    TT_FATAL(
-        pipe.ring_size() % relay_dfb->config.entry_size == 0,
-        "PrefetcherPipe relay entry size {} must divide PrefetcherPipe ring size {}",
-        relay_dfb->config.entry_size,
-        pipe.ring_size());
-    TT_FATAL(
-        relay_dfb->config.num_entries == pipe.ring_size() / relay_dfb->config.entry_size,
-        "PrefetcherPipe relay depth {} must equal ring_size/entry_size ({})",
-        relay_dfb->config.num_entries,
-        pipe.ring_size() / relay_dfb->config.entry_size);
-    TT_FATAL(
-        relay_dfb->core_ranges == receiver_cores.merge_ranges(),
-        "Relay DFB core ranges must match the declared relay receiver cores");
-    TT_FATAL(
-        pipe.receiver_cores().merge(receiver_cores).num_cores() == pipe.receiver_cores().num_cores(),
-        "PrefetcherPipe relay cores must be a subset of the PrefetcherPipe receiver cores");
-    TT_FATAL(
-        relay_dfb->device_slot < std::numeric_limits<uint8_t>::max(),
-        "Relay DFB device slot {} cannot be represented in PrefetcherPipe receiver metadata",
-        relay_dfb->device_slot);
-
-    auto relay_it = prefetcher_pipe_relay_host_ids_.find(prefetcher_pipe_id);
-    TT_FATAL(
-        relay_it == prefetcher_pipe_relay_host_ids_.end() || relay_it->second == relay_dfb_host_id,
-        "PrefetcherPipe slot {} already has relay DFB host id {}",
-        prefetcher_pipe_id,
-        relay_it != prefetcher_pipe_relay_host_ids_.end() ? relay_it->second : 0);
-    prefetcher_pipe_relay_host_ids_[prefetcher_pipe_id] = relay_dfb_host_id;
-
-    relay_dfb->set_borrowed_memory_base_addr(pipe.buffer_address());
-    const uint8_t relay_device_slot = static_cast<uint8_t>(relay_dfb->device_slot);
-
-    for (const CoreCoord& core : corerange_to_cores(receiver_cores)) {
-        auto participant_it = per_core_prefetcher_pipes_.find(core);
-        TT_FATAL(
-            participant_it != per_core_prefetcher_pipes_.end(),
-            "PrefetcherPipe must be attached on relay receiver core {} before registering its relay",
-            core.str());
-        auto& participants = participant_it->second;
-        auto participant = std::find_if(participants.begin(), participants.end(), [prefetcher_pipe_id](const auto& a) {
-            return a.prefetcher_pipe_id == prefetcher_pipe_id;
-        });
-        TT_FATAL(
-            participant != participants.end(),
-            "PrefetcherPipe slot {} is not present on relay receiver core {}",
-            prefetcher_pipe_id,
-            core.str());
-        TT_FATAL(
-            participant->entry_size == relay_dfb->config.entry_size,
-            "PrefetcherPipe relay entry size {} must match Attach dense entry_size {} on core {}",
-            relay_dfb->config.entry_size,
-            participant->entry_size,
-            core.str());
-        TT_FATAL(
-            participant->relay_dfb_id == std::numeric_limits<uint8_t>::max() ||
-                participant->relay_dfb_id == relay_device_slot,
-            "PrefetcherPipe slot {} already has relay device slot {} on core {}",
-            prefetcher_pipe_id,
-            participant->relay_dfb_id,
-            core.str());
-        participant->relay_dfb_id = relay_device_slot;
-    }
 }
 
 const experimental::CrossNodeDFB& detail::ProgramImpl::get_cross_node_dfb(uint8_t remote_dfb_id) const {
@@ -1750,7 +1566,9 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
         return;
     }
 
+    const uint64_t base_l1_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
+
     for (auto& kernels_of_core_type : this->kernels_) {
         for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
             auto& scratchpad_handles = kernel->scratchpad_binding_handles();
@@ -1758,7 +1576,6 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                 continue;
             }
             const CoreRangeSet& kernel_cores = kernel->core_range_set();
-            const DeviceAddr persistent_base = reserve_program_local_l1(device, kernel_cores);
 
             for (auto& handle : scratchpad_handles) {
                 // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
@@ -1793,14 +1610,13 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                         }
                     }
                 }
-                uint64_t addr = persistent_base;
+                uint64_t addr = base_l1_address;
                 for (const CircularBufferAllocator* a : touched) {
                     addr = std::max<uint64_t>(addr, a->get_cb_region_end());
                 }
                 addr = align(addr, alignment);
                 for (CircularBufferAllocator* a : touched) {
-                    const uint64_t allocator_base = reserve_program_local_l1(device, CoreRangeSet(a->core_range));
-                    a->mark_address(addr, handle.size_bytes, allocator_base);
+                    a->mark_address(addr, handle.size_bytes, base_l1_address);
                 }
 
                 handle.allocated_address = static_cast<uint32_t>(addr);
@@ -1891,11 +1707,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         return;
     }
 
-    for (const auto& circular_buffer : this->circular_buffers_) {
-        if (!circular_buffer->globally_allocated()) {
-            reserve_program_local_l1(device, circular_buffer->core_ranges());
-        }
-    }
+    uint64_t base_cb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
             // Track globally allocated CBs too (they use L1 memory allocated via the allocator)
@@ -1910,7 +1722,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
             continue;
         }
 
-        uint64_t computed_addr = reserve_program_local_l1(device, circular_buffer->core_ranges());
+        uint64_t computed_addr = base_cb_address;
         for (const CoreRange& core_range : circular_buffer->core_ranges().ranges()) {
             // Need the max available address across all cores circular buffer is placed on
             for (const CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
@@ -1930,9 +1742,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
                         // `core_range` but also intersecting `cb_allocator.core_range`
                         continue;
                     }
-                    const uint64_t allocator_base =
-                        reserve_program_local_l1(device, CoreRangeSet(cb_allocator.core_range));
-                    cb_allocator.mark_address(computed_addr, circular_buffer->size(), allocator_base);
+                    cb_allocator.mark_address(computed_addr, circular_buffer->size(), base_cb_address);
                 }
             }
         }
@@ -3047,7 +2857,6 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
     program_config.dfb_offset = state.dfb_offset;
     program_config.dfb_size = state.dfb_size;
     program_config.cross_node_dfb_offset = state.cross_node_dfb_offset;
-    program_config.prefetcher_pipe_offset = state.prefetcher_pipe_offset;
     program_config.kernel_text_offset = state.kernel_text_offset;
     program_config.kernel_text_size = state.kernel_text_size;
     program_config_sizes_[index] = state.offset;
@@ -3159,20 +2968,12 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         // CrossNodeDFB dense index; full pages live in program-owned config Buffers.
-        // cross_node_dfb_offset is REMOTE_DFB_OFFSET_NONE if there are no participants.
+        // cross_node_dfb_offset is CROSS_NODE_DFB_OFFSET_NONE if there are no participants.
         uint32_t prev_offset_before_cross_node_dfb = state.offset;
         state.offset = program_dispatch::finalize_cross_node_dfbs(metal_ctx, index, programs, state.offset);
         state.cross_node_dfb_offset = (state.offset > prev_offset_before_cross_node_dfb)
                                           ? (prev_offset_before_cross_node_dfb - state.config_base_offset)
-                                          : REMOTE_DFB_OFFSET_NONE;
-
-        TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
-
-        uint32_t prev_offset_before_prefetcher_pipe = state.offset;
-        state.offset = program_dispatch::finalize_prefetcher_pipes(metal_ctx, index, programs, state.offset);
-        state.prefetcher_pipe_offset = (state.offset > prev_offset_before_prefetcher_pipe)
-                                           ? (prev_offset_before_prefetcher_pipe - state.config_base_offset)
-                                           : REMOTE_DFB_OFFSET_NONE;
+                                          : CROSS_NODE_DFB_OFFSET_NONE;
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 

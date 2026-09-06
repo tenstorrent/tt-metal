@@ -20,6 +20,7 @@
 #include "ttnn/distributed/types.hpp"                // ttnn::MeshCoordinate
 #include "ttnn/operations/ccl/ccl_common.hpp"        // get_linearized_index_from_physical_coord
 #include "indexer_score_device_operation_types.hpp"  // operation_attributes_t, Tensor
+#include "kernels/indexer_score_causal_geometry.hpp"  // shared host/device causal closed form
 
 namespace ttnn::operations::experimental::indexer_score::program {
 
@@ -104,70 +105,36 @@ inline KMcastBBox k_mcast_bbox(
 // block_cyclic_chunk_local == tp*Sq) keeps the prior linear+straddle form; fused full-mesh is the exception and
 // uses rotation-exact SP ownership. Shared by create_at (device_index from the coordinate) and override (stored
 // device_index).
-struct DeviceCausalGeometry {
-    uint32_t chunk_start_tiles;    // global position of this device's q-row 0 (tiles)
-    uint32_t straddle_q_tile;      // q-tile-row at/after which the diagonal jumps (only when this device straddles)
-    uint32_t straddle_jump_tiles;  // diagonal jump in tiles (0 unless this device straddles)
-};
+using DeviceCausalGeometry = CausalGeometryTiles;
+
+// Unpack and validate host attributes before calling the shared causal-geometry implementation.
+static_assert(
+    kCausalTileWidth == tt::constants::TILE_WIDTH,
+    "indexer_score causal geometry assumes TILE_WIDTH == 32 (the shared kernel-includable header cannot "
+    "include tt-metalium constants)");
+
+// A fused full-mesh ring has no named SP axis, but every canonical tensor rank is an SP rank and
+// block-cyclic ownership is the same rotation-exact mapping as the named-axis case, so it must NOT go
+// through the flat both-axes approximation. The metadata path hands this same predicate to the reader as a
+// compile-time argument, so host and device select the same branch by construction.
+inline bool rotation_exact_sp_geometry(const operation_attributes_t& args) {
+    return args.sp_axis().has_value() || (args.has_fused_ring() && args.fused_ring->full_mesh);
+}
+
 inline DeviceCausalGeometry device_causal_geometry(
     const operation_attributes_t& args, uint32_t device_index, uint32_t tp_index, uint32_t Sq) {
-    const uint32_t TW = tt::constants::TILE_WIDTH;
-    if (!args.block_cyclic.has_value()) {
-        // Contiguous K -> linear diagonal at chunk_start + (seq-shard rank)*Sq. The rank is device_index for an
-        // SP-only seq shard; but a 2D SP×TP sub-shard whose SP axis is size-1 (e.g. QuietBox sp=1) is stored
-        // as no-block-cyclic (identity permutation), and there the query is seq-sharded over the TP axis, so the
-        // rank is tp_index. The two are mutually exclusive nonzero here (tp_index!=0 requires block_cyclic_sp_axis
-        // set with sp==1, which forces device_index==0; no sub-shard -> tp_index==0), so their sum is the rank.
-        return {(args.chunk_start_idx + (device_index + tp_index) * Sq) / TW, 0u, 0u};
-    }
-    const uint32_t sp = args.block_cyclic->sp;
-    const uint32_t chunk_local = args.block_cyclic->chunk_local;  // cache per-shard slab width (elements)
-    const uint32_t chunk_global = sp * chunk_local;
-
-    // A fused full-mesh ring has no named SP axis, but every canonical tensor rank is an SP rank and
-    // block-cyclic ownership is the same rotation-exact mapping as the named-axis case. Do not send it
-    // through the flat both-axes approximation below: rotated starts would assign every causal diagonal
-    // to the wrong tensor rank (and could spuriously mark every rank as straddling).
-    const bool rotation_exact_sp_geometry =
-        args.sp_axis().has_value() || (args.has_fused_ring() && args.fused_ring->full_mesh);
-    if (rotation_exact_sp_geometry) {
-        TT_FATAL(
-            device_index < sp,
-            "indexer_score: device_index {} out of range for block-cyclic sp={} (check seq_shard_axes[0] vs "
-            "block_cyclic_sp_axis)",
-            device_index,
-            sp);
-        // Block-cyclic, named SP axis. device_index is the SP-ring index; its slab starts at the writer's
-        // update_idxt (== rotated_chip_positions[device_index][0]), handling the boundary_chip rotation the
-        // linear form misses. tp_index (SP×TP 2D sub-shard) selects this device's Sq-row sub-range within that
-        // slab: it owns local rows [tp_index*Sq, (tp_index+1)*Sq). lr0 is its first slab-local row; the mapping
-        // and straddle below are EXACT for both the SP-only case (tp_index==0, Sq==chunk_local) and the 2D case.
-        const uint32_t boundary_slab = args.chunk_start_idx / chunk_global;
-        const uint32_t boundary_chip = (args.chunk_start_idx / chunk_local) % sp;
-        const uint32_t offset = args.chunk_start_idx % chunk_local;
-        const uint32_t update_idxt = device_index < boundary_chip    ? (boundary_slab + 1) * chunk_local
-                                     : device_index == boundary_chip ? boundary_slab * chunk_local + offset
-                                                                     : boundary_slab * chunk_local;
-        const uint32_t lr0 = update_idxt + tp_index * Sq;  // this device's first slab-local row (TP sub-offset)
-        const uint32_t loff = lr0 % chunk_local;           // its offset within the current slab
-        const uint32_t logical_start = (lr0 / chunk_local) * chunk_global + device_index * chunk_local + loff;
-        uint32_t straddle_q_tile = 0, straddle_jump_tiles = 0;
-        if (loff != 0 && loff + Sq > chunk_local) {  // this device's Sq rows cross a slab boundary
-            straddle_q_tile = (chunk_local - loff) / TW;
-            straddle_jump_tiles = (chunk_global - chunk_local) / TW;
-        }
-        return {logical_start / TW, straddle_q_tile, straddle_jump_tiles};
-    }
-
-    // Both-axes (SP axis unset): prior linear + within-block straddle geometry.
-    const uint32_t chunk_start = args.chunk_start_idx + device_index * Sq;
-    const uint32_t offset = chunk_start % chunk_local;
-    uint32_t straddle_q_tile = 0, straddle_jump_tiles = 0;
-    if (offset != 0 && offset + Sq > chunk_local) {
-        straddle_q_tile = (chunk_local - offset) / TW;
-        straddle_jump_tiles = (chunk_global - chunk_local) / TW;
-    }
-    return {chunk_start / TW, straddle_q_tile, straddle_jump_tiles};
+    const bool has_bc = args.block_cyclic.has_value();
+    const bool rotation_exact = rotation_exact_sp_geometry(args);
+    const uint32_t sp = has_bc ? args.block_cyclic->sp : 1u;
+    const uint32_t chunk_local = has_bc ? args.block_cyclic->chunk_local : 0u;
+    TT_FATAL(
+        !(has_bc && rotation_exact) || device_index < sp,
+        "indexer_score: device_index {} out of range for block-cyclic sp={} (check seq_shard_axes[0] vs "
+        "block_cyclic_sp_axis)",
+        device_index,
+        sp);
+    return causal_geometry_tiles(
+        args.chunk_start_idx, has_bc, rotation_exact, sp, chunk_local, device_index, tp_index, Sq);
 }
 
 // This device's linearized SP-ring index; 0 on a single device (no coordinate lookup needed).

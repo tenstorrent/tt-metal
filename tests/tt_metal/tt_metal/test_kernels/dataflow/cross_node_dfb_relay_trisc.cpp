@@ -27,7 +27,7 @@ void kernel_main() {
     constexpr uint16_t batch_size = get_compile_time_arg_val(2);
     constexpr uint32_t delay_iterations = get_compile_time_arg_val(3);
 
-    DataflowBuffer relay(RelayDFBBindingToken{relay_dfb_id});
+    DataflowBuffer relay(relay_dfb_id);
     volatile tt_l1_ptr uint32_t* result = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(0));
 
     uint32_t checksum = 0;

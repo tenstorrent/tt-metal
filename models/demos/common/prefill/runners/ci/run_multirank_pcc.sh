@@ -26,15 +26,30 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MGD="${MGD_DIR}/kimi27_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1; export PREFILL_LAYER_ACK_D2H=1;"
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
     ;;
   glm52)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
     MGD="${MGD_DIR}/glm52_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/glm52.json"
+    # main's KV-dedup default for this leg (#51968 / #55458); kept as-is.
     TP_SHARD_KV_DEFAULT=1
-    RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1;"
+    # Traced prefill, as the kimi27 leg above runs it. The sparse/DSA indexer ops read their per-chunk
+    # scalars (chunk start, cache slot, top-k bound, gather extent) on-device from the metadata tensors,
+    # so ONE captured forward replays for every chunk -- which is what makes this leg the end-to-end gate
+    # on that path: the KV write is metadata-driven either way, so a frozen host runtime argument would
+    # show up here as a wrong-slot or short-prefix READ, and the PCC gate below is what catches it.
+    #
+    # TRACE ONLY. PREFILL_LAYER_ACK_D2H=1 (which main sets here) is NOT combined with it:
+    # capture_trace()'s D2H warm pass fires warmup_ack_count() real records that prefill_runner then
+    # drains, and that drain spins forever on a traced GLM run -- verified locally, the runner sits in
+    # read_metadata() at 100% CPU after a clean capture. No leg on main runs both flags together, so the
+    # combination is untested; keep them apart until the warm-pass drain is fixed.
+    RUNNER_ENV="export PREFILL_USE_TRACE=1;"
+    # Sparse DSA: TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over the
+    # 21 `full` layers), both PCC'd. The trace must be the indexer-K dump -- the adapter's default golden
+    # carries no dsa/indexer_k_layer_*, which would silently downgrade this leg to a KVPE-only check.
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
     ;;
