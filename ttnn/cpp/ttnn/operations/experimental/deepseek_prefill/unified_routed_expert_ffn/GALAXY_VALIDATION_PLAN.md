@@ -1,5 +1,8 @@
 # Grouped `unified_routed_expert_ffn`: Galaxy (32 x P150) validation hand-off
 
+> Executed 2026-09-06 on a 32 x P150 galaxy (14 Gbps DDR): results, decisions and follow-ups in
+> `GROUPED_FFN_GALAXY_P150.md`. Steps 0-3 pass; band mode (Step 1) hangs and is now refused at validation.
+
 Branch `zbaczewski/moe-ffn-grouped` (8 commits on top of `main` 28238f903b3). Everything below was
 measured on ONE P100 (11x10 grid, 7 DRAM channels, 448 GB/s). Read `GROUPED_FFN_PERF_P100.md` first; this
 file is the to-do list for the first Galaxy session. Nothing here has run on a P150 yet.
