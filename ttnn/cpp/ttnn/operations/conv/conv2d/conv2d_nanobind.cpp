@@ -228,6 +228,35 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("compute_config") = nb::none(),
         nb::arg("slice_config") = nb::none());
 
+    mod.def(
+        "determine_conv2d_dram_slice_config",
+        &ttnn::operations::conv::conv2d::determine_conv2d_dram_slice_config,
+        nb::kw_only(),
+        nb::arg("input_tensor"),
+        nb::arg("weight_tensor"),
+        nb::arg("device"),
+        nb::arg("in_channels"),
+        nb::arg("out_channels"),
+        nb::arg("batch_size"),
+        nb::arg("input_height"),
+        nb::arg("input_width"),
+        nb::arg("kernel_size"),
+        nb::arg("stride"),
+        nb::arg("padding"),
+        nb::arg("dilation"),
+        nb::arg("groups"),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("bias_tensor") = nb::none(),
+        nb::arg("conv_config") = nb::none(),
+        nb::arg("compute_config") = nb::none(),
+        nb::arg("slice_config") = nb::none(),
+        R"doc(
+        Preview the slice decision conv2d's DRAM path would make for these arguments, without running the
+        conv: the Conv2dSliceConfig it would use, or None when no slice count fits in L1 (where conv2d
+        itself would fail with "DRAM Auto slice could not find valid slice configuration"). Arguments
+        mirror conv2d's; the weight and bias tensors are only referenced, never read.
+        )doc");
+
     export_enum<ttnn::operations::sliding_window::PaddingMode>(mod, "PaddingMode");
 
     auto py_conv_config = nb::class_<Conv2dConfig>(

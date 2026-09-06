@@ -59,6 +59,16 @@ Op2DSliceConfig determine_slice_config(
     tt::tt_metal::Layout output_layout,
     tt::tt_metal::distributed::MeshDevice* device);
 
+// The same search as determine_slice_config, returning nullopt (instead of throwing) when no slice
+// count fits in L1.
+std::optional<Op2DSliceConfig> try_determine_slice_config(
+    OpSliceAttr* op_slice_attr,
+    const ttnn::Shape& input_shape,
+    const ttnn::Shape& output_shape,
+    std::optional<Op2DSliceConfig> slice_config_,
+    tt::tt_metal::Layout output_layout,
+    tt::tt_metal::distributed::MeshDevice* device);
+
 void run_sliced_op(
     const ttnn::Tensor& input_tensor,
     std::vector<OpSliceAttr::RefTensor>& output_tensor,
