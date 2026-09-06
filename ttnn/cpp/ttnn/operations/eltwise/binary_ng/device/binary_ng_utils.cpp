@@ -247,19 +247,29 @@ OpConfig::OpConfig(
             process_rhs = unary::UnaryOpType::EXP2;
             binary_op = EnumT::MUL;
             break;
-        // log( exp(a) + exp(b) )
+        // max(a, b) + log1p(exp(-|a - b|)): the composed log(exp(a) + exp(b)) form
+        // overflows at |x| > 88.7 even though the result is bounded by its inputs.
         case BinaryOpType::LOGADDEXP:
-            process_lhs = unary::UnaryOpType::EXP;
-            process_rhs = unary::UnaryOpType::EXP;
-            binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::LOG;
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGADDEXP;
+            } else {
+                process_lhs = unary::UnaryOpType::EXP;
+                process_rhs = unary::UnaryOpType::EXP;
+                binary_op = EnumT::ADD;
+                postprocess = unary::UnaryOpType::LOG;
+            }
             break;
-        // log2( 2**a + 2**b )
+        // max(a, b) + log2(1 + 2**-|a - b|): the composed log2(2**a + 2**b) form
+        // overflows at |x| > 127, one binade earlier than logaddexp's 88.7.
         case BinaryOpType::LOGADDEXP2:
-            process_lhs = unary::UnaryOpType::EXP2;
-            process_rhs = unary::UnaryOpType::EXP2;
-            binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::LOG2;
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGADDEXP2;
+            } else {
+                process_lhs = unary::UnaryOpType::EXP2;
+                process_rhs = unary::UnaryOpType::EXP2;
+                binary_op = EnumT::ADD;
+                postprocess = unary::UnaryOpType::LOG2;
+            }
             break;
         case BinaryOpType::BITWISE_AND:
             if (is_sfpu_op()) {
@@ -461,6 +471,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"rsub_binary_tile_init();", fmt::format("rsub_binary_tile<{}>", kRneDstRoundingMode)};
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
+        case LOGADDEXP: return {"logaddexp_binary_tile_init();", "logaddexp_binary_tile"};
+        case LOGADDEXP2: return {"logaddexp2_binary_tile_init();", "logaddexp2_binary_tile"};
         case LEFT_SHIFT:
             return {
                 "binary_shift_tile_init();",
