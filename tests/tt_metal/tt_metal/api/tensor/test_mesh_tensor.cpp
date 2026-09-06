@@ -36,6 +36,8 @@
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/allocator.hpp>
+#include "tt_metal/impl/tensor/mesh_tensor_impl.hpp"
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -105,6 +107,53 @@ auto create_mesh_buffer(
     distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
 
     return distributed::MeshBuffer::create(buffer_config, local_config, &mesh_device);
+}
+
+TEST_F(MeshDevice1x1Fixture, FreshAllocationSharedOwnerSurvivesTensorMovesAndDestruction) {
+    auto& cq = mesh_device_->mesh_command_queue();
+    cq.finish();
+    const auto allocated_bytes = [&] {
+        return mesh_device_->allocator()->get_statistics(BufferType::DRAM).total_allocated_bytes;
+    };
+    const auto initial_bytes = allocated_bytes();
+    const TensorSpec spec(Shape{1, 1, 32, 32}, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    std::vector<uint32_t> pattern(1024);
+    std::iota(pattern.begin(), pattern.end(), 17u);
+    std::shared_ptr<distributed::MeshBuffer> retained;
+    std::weak_ptr<distributed::MeshBuffer> original_weak, replaced_weak;
+    {
+        auto original = allocate_mesh_tensor_on_device_with_topology(*mesh_device_, spec, TensorTopology{});
+        retained = original.impl().raw_mesh_buffer();
+        original_weak = retained;
+        const auto* identity = retained.get();
+        const auto address = retained->address();
+        cq.enqueue_write_mesh_buffer(retained, pattern.data(), /*blocking=*/true);
+        MeshTensor moved(std::move(original));
+        EXPECT_TRUE(original.is_valueless_after_move());
+        auto destination = allocate_mesh_tensor_on_device_with_topology(*mesh_device_, spec, TensorTopology{});
+        replaced_weak = destination.impl().raw_mesh_buffer();
+        destination = std::move(moved);
+        EXPECT_TRUE(moved.is_valueless_after_move());
+        EXPECT_EQ(destination.impl().raw_mesh_buffer().get(), identity);
+        EXPECT_EQ(destination.address(), address);
+        cq.finish();
+        EXPECT_TRUE(replaced_weak.expired());
+        std::vector<uint32_t> actual(pattern.size());
+        cq.enqueue_read_mesh_buffer(actual.data(), retained, /*blocking=*/true);
+        EXPECT_EQ(actual, pattern);
+    }
+    // The independent shared owner must keep device storage live after all tensors die.
+    EXPECT_FALSE(original_weak.expired());
+    ASSERT_TRUE(retained->is_allocated());
+    EXPECT_GT(allocated_bytes(), initial_bytes);
+    std::vector<uint32_t> actual(pattern.size());
+    cq.enqueue_read_mesh_buffer(actual.data(), retained, /*blocking=*/true);
+    EXPECT_EQ(actual, pattern);
+    cq.finish();
+    retained.reset();
+    cq.finish();
+    EXPECT_TRUE(original_weak.expired());
+    EXPECT_EQ(allocated_bytes(), initial_bytes);
 }
 
 TEST_F(MeshTensorDeviceTest, ConstructionWithMeshBuffer) {

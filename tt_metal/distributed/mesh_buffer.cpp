@@ -300,9 +300,16 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
 }
 
 void MeshBuffer::initialize_device_buffers() {
-    auto init_device_buffer_at_address = [this](const MeshCoordinate& coord) {
+    // Hold the mesh alive while constructing its device wrappers. Each wrapper belongs to
+    // the same mesh, so acquiring its weak pointer again for every coordinate is redundant.
+    auto mesh_device = mesh_device_.lock();
+    if (mesh_device == nullptr) {
+        return;
+    }
+    auto& mesh_impl = mesh_device->impl();
+    auto init_device_buffer_at_address = [this, &mesh_impl](const MeshCoordinate& coord) {
         std::shared_ptr<Buffer> buffer = Buffer::create(
-            device()->impl().get_device(coord),
+            mesh_impl.get_device(coord),
             address_,
             device_local_size_,
             device_local_config_.page_size,
@@ -322,10 +329,8 @@ void MeshBuffer::initialize_device_buffers() {
     };
 
     for (auto& [coord, device_buffer] : buffers_) {
-        if (auto mesh_device = mesh_device_.lock(); mesh_device != nullptr) {
-            if (mesh_device->impl().is_local(coord)) {
-                device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(init_device_buffer_at_address(coord));
-            }
+        if (mesh_impl.is_local(coord)) {
+            device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(init_device_buffer_at_address(coord));
         }
     }
 
@@ -334,9 +339,7 @@ void MeshBuffer::initialize_device_buffers() {
     // Only L1 buffers need mirroring — DRAM buffers use a separate address space.
     // Note: we check HYBRID via rtoptions rather than mesh_device->allocator_impl() because
     // allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
-    if (auto mesh_device = mesh_device_.lock();
-        mesh_device != nullptr && std::holds_alternative<OwnedBufferState>(state_) &&
-        device_local_config_.buffer_type == BufferType::L1 &&
+    if (std::holds_alternative<OwnedBufferState>(state_) && device_local_config_.buffer_type == BufferType::L1 &&
         MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid()) {
         auto* backing = get_backing_buffer();
         auto alloc_size = backing->aligned_size_per_bank();

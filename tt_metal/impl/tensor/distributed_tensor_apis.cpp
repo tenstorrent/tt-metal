@@ -48,7 +48,7 @@ MeshTensor allocate_mesh_tensor_on_device_with_topology(
             mesh_device.arch());
     }
     auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
-    return mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), std::move(spec), std::move(topology));
+    return MeshTensor(std::move(mesh_buffer), std::move(spec), std::move(topology));
 }
 
 // ======================================================================================
