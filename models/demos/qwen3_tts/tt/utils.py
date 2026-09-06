@@ -28,6 +28,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
+from models.demos.qwen3_tts.tt.mesh_utils import to_torch_chip0 as _mesh_to_torch_chip0
 
 try:
     from tracy import signpost as _signpost
@@ -168,6 +169,47 @@ def ar_decode_loop(
     }
     frame_breakdown_frames = 0
 
+    # Identity of the trailing-text host row last uploaded; the rows past the trailing
+    # text are one shared object, so the H2D is skipped once it is already on device.
+    _last_trail_host = None
+    # QWEN3_TTS_TRAIL_SKIP=0 re-uploads it every frame — the A/B that shows the skip is
+    # bit-exact (nothing on device clobbers trail_row_tt between frames).
+    _trail_skip = os.environ.get("QWEN3_TTS_TRAIL_SKIP", "1") != "0"
+
+    # True when the Talker decode trace samples codec0 itself, straight into
+    # fused_cp.tok_bufs[0] (see codec0_in_talker_trace in server.py).
+    _codec0_in_talker_trace = (
+        state.fused_cp is not None
+        and state.talker_codec0_token_tt is not None
+        and state.talker_codec0_token_tt is state.fused_cp.tok_bufs[0]
+    )
+
+    # QWEN3_TTS_HOST_PROF=1: per-frame host-side breakdown of everything that is NOT
+    # the two trace replays. The traced AR frame replays in 38.9 ms on N300 while the
+    # demo reports ~45 ms/frame, so ~6 ms/frame lives in these host steps; this names
+    # which ones. Off by default (adds ~12 perf_counter calls per frame).
+    _host_prof = os.environ.get("QWEN3_TTS_HOST_PROF", "0") == "1"
+    _hp = dict.fromkeys(
+        (
+            "cp_noise",
+            "cp_tok0_h2d",
+            "cp_trail_h2d",
+            "cp_trace",
+            "cp_tokens_d2h",
+            "talker_h2d",
+            "talker_trace",
+            "codec0_d2h",
+            "codec0_cpu",
+            "talker_h2d_cos",
+            "talker_h2d_sin",
+            "talker_h2d_pos",
+            "talker_h2d_mask",
+            "tail",
+        ),
+        0.0,
+    )
+    _hp_frames = 0
+
     all_codes: List[List[int]] = []
     generated_code0_tokens: List[int] = []
     t_first_decode_end = 0.0
@@ -209,7 +251,7 @@ def ar_decode_loop(
         if _dev_cls == "MeshDevice" and device.get_num_devices() > 1:
             _mesh_mapper = ttnn.ReplicateTensorToMesh(device)
         _tok0_cpu = torch.zeros(1, 1, dtype=torch.int32)
-        _n_cp_tokens = config.num_code_groups - 1
+        _n_cp_tokens = config.num_code_groups
         # QWEN3_TTS_CP_CHECK_CHIPS=1: with TP>1 every chip runs the sampling kernel on
         # its own copy of the logits. If they ever disagree, each chip embeds a
         # DIFFERENT token on-device and the tensor-parallel halves silently diverge.
@@ -246,17 +288,21 @@ def ar_decode_loop(
     for step in range(config.max_new_tokens):
         if use_2cq:
             ttnn.wait_for_event(1, trace_cq0_idle)
-        else:
-            ttnn.synchronize_device(device)
+        # 1-CQ: no sync here. The Talker block below already ends with a full
+        # synchronize_device, and nothing between it and here touches the device, so
+        # this was a second (and the one at the end of the body a third) full mesh
+        # sync per frame -- ~0.4 ms each of pure fixed cost.
         t_step_start = time.time()
         _step_pc = time.perf_counter()
 
         # === CodePredictor: generate codes 1-15 ===
         if fused_cp is not None:
-            # One trace does the entire CP frame. Host per frame: a fresh Gumbel
-            # noise tile, the code-0 token id, this step's trailing-text row, one
-            # execute_trace, and one D2H of the 15 sampled ids.
-            fused_cp.sampler.refresh_noise()
+            # One trace does the entire CP frame. Host per frame, once everything
+            # below has had its turn: upload a pre-drawn Gumbel tile, one
+            # execute_trace, and one D2H of all 16 sampled ids. The code-0 H2D and
+            # the trailing-text H2D are both usually skipped (see below).
+            fused_cp.sampler.refresh_noise(step)
+            _hp_t_noise = time.perf_counter()
             if not fused_cp.restores_in_trace:
                 ttnn.assign(state.cp_trace_prefill_mask_host, state.cp_trace_prefill_mask_tt)
                 ttnn.assign(state.cp_trace_prefill_cos_host, state.cp_trace_prefill_cos_tt)
@@ -264,13 +310,25 @@ def ar_decode_loop(
                 for (k_zero, v_zero), (k_cache, v_cache) in zip(state.cp_kv_zero_hosts, state.cp_kv_caches_persistent):
                     ttnn.assign(k_zero, k_cache)
                     ttnn.assign(v_zero, v_cache)
-            _tok0_cpu[0, 0] = token_0
-            _tok0_host = ttnn.from_torch(
-                _tok0_cpu, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=_mesh_mapper
-            )
-            ttnn.copy_host_to_device_tensor(_tok0_host, fused_cp.tok_bufs[0])
-            ttnn.copy_host_to_device_tensor(fused_cp.trail_row_h2d[step], fused_cp.trail_row_tt)
+            if not _codec0_in_talker_trace or step == 0:
+                # With codec0 sampled inside the Talker trace, tok_bufs[0] already holds
+                # this frame's code 0 — written on device at the end of the previous
+                # frame — so the H2D is only needed to seed frame 0 from prefill.
+                _tok0_cpu[0, 0] = token_0
+                _tok0_host = ttnn.from_torch(
+                    _tok0_cpu, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=_mesh_mapper
+                )
+                ttnn.copy_host_to_device_tensor(_tok0_host, fused_cp.tok_bufs[0])
+            _hp_t_tok0 = time.perf_counter()
+            _trail_host = fused_cp.trail_row_h2d[step]
+            if _trail_host is not _last_trail_host or not _trail_skip:
+                ttnn.copy_host_to_device_tensor(_trail_host, fused_cp.trail_row_tt)
+                _last_trail_host = _trail_host
             _t_fused_h2d = time.perf_counter()
+            if _host_prof:
+                _hp["cp_noise"] += _hp_t_noise - _step_pc
+                _hp["cp_tok0_h2d"] += _hp_t_tok0 - _hp_t_noise
+                _hp["cp_trail_h2d"] += _t_fused_h2d - _hp_t_tok0
             _prof_frame = step == _profile_cp_frame
             if _prof_frame:
                 _signpost("cp_frame_start")
@@ -313,8 +371,20 @@ def ar_decode_loop(
                         print(f"     chip{c}: {r}")
                 _tok_row = _all[0].flatten()[:_n_cp_tokens]
             else:
-                _tok_row = _mesh_to_torch(fused_cp.tokens_out).flatten()[:_n_cp_tokens]
-            code_row = [token_0] + [int(t) for t in _tok_row.tolist()]
+                # Chip-0-only read: every chip holds the same sampled ids (the sampler
+                # runs on all-gathered logits), and pulling both costs ~0.4 ms/frame.
+                _tok_row = _mesh_to_torch_chip0(fused_cp.tokens_out).flatten()[:_n_cp_tokens]
+            code_row = [int(t) for t in _tok_row.tolist()]
+            if _codec0_in_talker_trace:
+                # code_row[0] is this frame's code 0, sampled on device by the PREVIOUS
+                # frame's Talker trace — so the loop never reads it separately.
+                token_0 = code_row[0]
+                generated_code0_tokens.append(token_0)
+                if token_0 == config.codec_eos_id:
+                    print(f"  EOS at step {step + 1}")
+                    break
+            else:
+                code_row[0] = token_0
             if state.canary_tt is not None and step < 3:
                 _cv = _mesh_to_torch(state.canary_tt).float()
                 _n = int((_cv != state.canary_ref.float()).sum())
@@ -366,6 +436,9 @@ def ar_decode_loop(
                             print(f"     dev[:4]={_dev_t[:4].tolist()}")
                             print(f"     exp[:4]={_exp_t[:4].tolist()}")
             _t_fused_d2h = time.perf_counter()
+            if _host_prof:
+                _hp["cp_trace"] += _t_fused_trace - _t_fused_h2d
+                _hp["cp_tokens_d2h"] += _t_fused_d2h - _t_fused_trace
             frame_breakdown_sums["cp_fused_h2d_ms"] += (_t_fused_h2d - _step_pc) * 1000
             frame_breakdown_sums["cp_fused_trace_ms"] += (_t_fused_trace - _t_fused_h2d) * 1000
             frame_breakdown_sums["cp_fused_d2h_ms"] += (_t_fused_d2h - _t_fused_trace) * 1000
@@ -529,10 +602,20 @@ def ar_decode_loop(
             ttnn.wait_for_event(1, trace_cq0_idle)
         if _probe_steps and step < _probe_steps:
             _tbl_probe("before Talker H2Ds", step)
+        _hp_t_th2d0 = time.perf_counter()
         ttnn.copy_host_to_device_tensor(cos_host, state.trace_cos_tt, cq_id=h2d_cq)
+        _hpa = time.perf_counter()
         ttnn.copy_host_to_device_tensor(sin_host, state.trace_sin_tt, cq_id=h2d_cq)
+        _hpb = time.perf_counter()
         ttnn.copy_host_to_device_tensor(cur_pos_host, state.trace_cur_pos_tt, cq_id=h2d_cq)
+        _hpc = time.perf_counter()
         ttnn.copy_host_to_device_tensor(mask_host, state.trace_mask_tt, cq_id=h2d_cq)
+        _hp_t_th2d1 = time.perf_counter()
+        if _host_prof:
+            _hp["talker_h2d_cos"] += _hpa - _hp_t_th2d0
+            _hp["talker_h2d_sin"] += _hpb - _hpa
+            _hp["talker_h2d_pos"] += _hpc - _hpb
+            _hp["talker_h2d_mask"] += _hp_t_th2d1 - _hpc
         if use_2cq:
             write_ev = ttnn.record_event(device, 1)
             ttnn.wait_for_event(0, write_ev)
@@ -578,6 +661,10 @@ def ar_decode_loop(
         else:
             ttnn.synchronize_device(device)
         t_talker_end = time.time()
+        if _host_prof:
+            _hp_t_tend = time.perf_counter()
+            _hp["talker_h2d"] += _hp_t_th2d1 - _hp_t_th2d0
+            _hp["talker_trace"] += _hp_t_tend - _hp_t_th2d1
         state.talker_times_ms.append((t_talker_end - t_cp_end) * 1000)
         state.cp_times_ms.append((t_cp_end - t_step_start) * 1000)
 
@@ -649,14 +736,17 @@ def ar_decode_loop(
         # need a small int D2H instead of a full vocab D2H blocking on the
         # async Talker exec.
         _c0_sp: dict = {}
-        if state.talker_codec0_token_tt is not None:
+        if _codec0_in_talker_trace:
+            # Already read (and EOS-checked) from tokens_out at the top of this frame.
+            _t_after_codec0_d2h = _t_after_codec0_cpu = time.perf_counter()
+        elif state.talker_codec0_token_tt is not None:
             _t_c00 = time.perf_counter()
             token_0 = _read_device_token(state.talker_codec0_token_tt, index=0)
             _c0_sp["device_logits"] = time.perf_counter() - _t_c00
             _t_after_codec0_d2h = time.perf_counter()
             _t_after_codec0_cpu = _t_after_codec0_d2h
         else:
-            _codec0_logits_torch = _mesh_to_torch(state.trace_codec_logits_out, dtype=torch.float32)
+            _codec0_logits_torch = _mesh_to_torch_chip0(state.trace_codec_logits_out, dtype=torch.float32)
             _t_after_codec0_d2h = time.perf_counter()
             token_0 = sample_token_fn(
                 _codec0_logits_torch.flatten(),
@@ -667,7 +757,8 @@ def ar_decode_loop(
                 generated_code0_tokens,
             )
             _t_after_codec0_cpu = time.perf_counter()
-        generated_code0_tokens.append(token_0)
+        if not _codec0_in_talker_trace:
+            generated_code0_tokens.append(token_0)
 
         # Frame breakdown (printed at end by caller).
         frame_breakdown_sums["cp_input_prep_ms"] += (_t_after_cp_input - _step_pc) * 1000
@@ -688,9 +779,13 @@ def ar_decode_loop(
             print(f"  EOS at step {step + 1}")
             break
 
-        if not use_2cq:
-            ttnn.synchronize_device(device)
         t_step_end = time.time()
+        if _host_prof:
+            _hp_t_end = time.perf_counter()
+            _hp["codec0_d2h"] += _t_after_codec0_d2h - _hp_t_tend
+            _hp["codec0_cpu"] += _t_after_codec0_cpu - _t_after_codec0_d2h
+            _hp["tail"] += _hp_t_end - _t_after_codec0_cpu
+            _hp_frames += 1
         step_ms = (t_step_end - t_step_start) * 1000
         if step == 0:
             t_first_decode_end = t_step_end
@@ -699,6 +794,17 @@ def ar_decode_loop(
 
         if (step + 1) % 20 == 0:
             print(f"  Generated {step + 1} frames...")
+
+    if _host_prof and _hp_frames:
+        print(f"  --- Host-side per-frame profile (QWEN3_TTS_HOST_PROF, {_hp_frames} frames) ---")
+        _tot = 0.0
+        for _k, _v in _hp.items():
+            _ms = _v / _hp_frames * 1000
+            # talker_h2d_* break down talker_h2d; don't double-count them.
+            if not _k.startswith("talker_h2d_"):
+                _tot += _ms
+            print(f"    {_k:<18} {_ms:8.3f} ms")
+        print(f"    {'TOTAL':<18} {_tot:8.3f} ms")
 
     # Write back mutated state for callers that want to inspect.
     state.talker_hidden_tt = talker_hidden_tt
