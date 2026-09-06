@@ -247,9 +247,7 @@ class RunTimeOptions {
     bool streaming_profiler_tracy_enabled = false;
     uint32_t streaming_profiler_num_relays = 0;
     uint32_t streaming_profiler_spool_mb = 128;
-    uint32_t streaming_profiler_fifo_mb = 64;
-    uint32_t streaming_profiler_ring_mb = 512;
-    uint32_t streaming_profiler_decode_threads = 2;
+    uint32_t streaming_profiler_fifo_mb = 256;
     std::string streaming_profiler_ops_csv_path;
     std::string streaming_profiler_zone_csv_path;
     bool experimental_noc_debug_dump_enabled = false;
@@ -709,8 +707,6 @@ public:
     uint32_t get_streaming_profiler_num_relays() const { return streaming_profiler_num_relays; }
     uint32_t get_streaming_profiler_spool_mb() const { return streaming_profiler_spool_mb; }
     uint32_t get_streaming_profiler_fifo_mb() const { return streaming_profiler_fifo_mb; }
-    uint32_t get_streaming_profiler_ring_mb() const { return streaming_profiler_ring_mb; }
-    uint32_t get_streaming_profiler_decode_threads() const { return streaming_profiler_decode_threads; }
     const std::string& get_streaming_profiler_ops_csv_path() const { return streaming_profiler_ops_csv_path; }
     const std::string& get_streaming_profiler_zone_csv_path() const { return streaming_profiler_zone_csv_path; }
     void set_experimental_noc_debug_dump_enabled(bool enabled);

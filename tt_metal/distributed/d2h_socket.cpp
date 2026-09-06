@@ -788,6 +788,11 @@ uint32_t D2HSocket::pages_available() {
     return bytes_recv / page_size_;
 }
 
+std::span<std::byte> D2HSocket::host_fifo() const {
+    TT_FATAL(!using_hugepage_, "D2HSocket::host_fifo: the hugepage fallback is not cache-coherent; use read()");
+    return {reinterpret_cast<std::byte*>(host_buffer_.get()), fifo_size_};
+}
+
 std::vector<MeshCoreCoord> D2HSocket::get_active_cores() const { return {sender_core_}; }
 
 MeshDevice* D2HSocket::get_mesh_device() const { return mesh_device_; }

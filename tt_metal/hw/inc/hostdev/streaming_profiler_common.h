@@ -78,7 +78,9 @@ static_assert(
 // switch that abandons the waits and hands the NIU back.
 static constexpr std::uint32_t kRelayStopQuiesce = 1;
 static constexpr std::uint32_t kRelayStopRelease = 2;
-// Relay->host completion word, published only after the socket barrier; the host matches the high half.
+// Relay->host completion words; the host matches the high half. Drained: the relay's last page is out and the host
+// may return every credit. Done follows the socket barrier.
+static constexpr std::uint32_t kRelayDrainedWord = 0xD09D0000u;
 static constexpr std::uint32_t kRelayDoneWord = 0xD09E0000u;
 static constexpr std::uint32_t kRelayDoneMask = 0xFFFF0000u;
 // Each relay control word owns a 64 B pad, so the words that share it (the sync rendezvous triple behind

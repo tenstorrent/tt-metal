@@ -6,6 +6,7 @@
 #include "llrt/hal.hpp"  // Hal — needed for ParseAllFeatureEnv, ParseFeatureEnv, ParseFeatureRiscvMask
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -131,11 +132,9 @@ enum class EnvVarID {
     TT_METAL_STREAMING_PROFILER_TRACY,             // Attach the streaming profiler's Tracy sink
     TT_METAL_STREAMING_PROFILER_DRAM_MB,           // Streaming profiler per-relay GDDR spool ring, MiB
     TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host FIFO per D2H socket, MiB
-    TT_METAL_STREAMING_PROFILER_RING_MB,           // Streaming profiler host frame ring, MiB
     TT_METAL_STREAMING_PROFILER_OPS_CSV,           // Streaming profiler ops CSV path
     TT_METAL_STREAMING_PROFILER_ZONE_CSV,          // Streaming profiler zone CSV path
     TT_METAL_STREAMING_PROFILER_NRELAYS,           // Streaming profiler DRISC relay count (0 = auto)
-    TT_METAL_STREAMING_PROFILER_DECODE_THREADS,    // Streaming profiler decode threads per device
     TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
@@ -1005,35 +1004,20 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER_FIFO_MB
-        // Host FIFO per D2H socket, in MiB. It is the pipeline's only elasticity in a direct-push run, and
-        // it is plain mmap + IOMMU host RAM reached by a full 64-bit NoC/PCIe address, so it costs no TLB
-        // window and has no channel cap. Capped at 3584 (3.5 GiB): the socket's byte size and the device's
-        // wrap-safe credit arithmetic (bytes_sent - bytes_acked) are 32-bit.
-        // Default: 64
-        // Usage: export TT_METAL_STREAMING_PROFILER_FIFO_MB=128
-        case EnvVarID::TT_METAL_STREAMING_PROFILER_FIFO_MB:
-            this->streaming_profiler_fifo_mb =
-                std::clamp<uint32_t>(parse_env_u32("TT_METAL_STREAMING_PROFILER_FIFO_MB", value), 1, 3584);
+        // Host FIFO per D2H socket, in MiB: the device DMA-writes it and the consumers decode it in place, so it
+        // is the capture's whole elastic buffer. Readers may lag by all but a 64 MiB runway (a quarter of a
+        // smaller FIFO); at ~9.8 wire bytes per zone the default holds ~25 M zones per stream. A power of two,
+        // since the ring indexes it; at most 2048 (the socket's byte size and the device's credit arithmetic are
+        // 32-bit).
+        // Default: 256
+        // Usage: export TT_METAL_STREAMING_PROFILER_FIFO_MB=1024
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_FIFO_MB: {
+            const uint32_t mb =
+                std::clamp<uint32_t>(parse_env_u32("TT_METAL_STREAMING_PROFILER_FIFO_MB", value), 1, 2048);
+            TT_FATAL(std::has_single_bit(mb), "TT_METAL_STREAMING_PROFILER_FIFO_MB='{}' is not a power of two", value);
+            this->streaming_profiler_fifo_mb = mb;
             break;
-
-        // TT_METAL_STREAMING_PROFILER_RING_MB
-        // Host-side verbatim-frame ring the receiver thread fills and the decode threads drain, in MiB. It
-        // is the capture's elastic buffer; at ~9.8 wire bytes per zone the default holds ~55 M zones per stream.
-        // Default: 512
-        // Usage: export TT_METAL_STREAMING_PROFILER_RING_MB=1024
-        case EnvVarID::TT_METAL_STREAMING_PROFILER_RING_MB:
-            this->streaming_profiler_ring_mb =
-                std::max<uint32_t>(parse_env_u32("TT_METAL_STREAMING_PROFILER_RING_MB", value), 1);
-            break;
-
-        // TT_METAL_STREAMING_PROFILER_DECODE_THREADS
-        // Decode threads per device, clamped by bring-up to the number of relay streams.
-        // Default: 2
-        // Usage: export TT_METAL_STREAMING_PROFILER_DECODE_THREADS=4
-        case EnvVarID::TT_METAL_STREAMING_PROFILER_DECODE_THREADS:
-            this->streaming_profiler_decode_threads =
-                std::max<uint32_t>(parse_env_u32("TT_METAL_STREAMING_PROFILER_DECODE_THREADS", value), 1);
-            break;
+        }
 
         // TT_METAL_STREAMING_PROFILER_OPS_CSV
         // Path for the per-op CSV consumer; empty leaves it unregistered.

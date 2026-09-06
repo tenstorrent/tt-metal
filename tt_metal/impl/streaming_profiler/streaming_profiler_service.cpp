@@ -226,7 +226,6 @@ void Service::consumer_thread(Consumer& c) {
     tracy::SetThreadName(name.c_str());
     set_os_thread_name(name);
     t_in_consumer = true;
-    std::vector<RingLine> lines(kConsumerLineBatch);
     std::vector<Rec> scratch(kConsumerScratchRecs + profiler::kSpscSinkSlackRecs);  // slack, not capacity
     std::vector<experimental::streaming_profiler::Clock> clocks;
     std::vector<Attached> attached;
@@ -285,7 +284,7 @@ void Service::consumer_thread(Consumer& c) {
     auto pass = [&](Attached& a) {
         bool any = false;
         for (size_t i = 0; i < a.readers.size(); i++) {
-            any |= a.walkers[i].pass(a.readers[i], lines, a.decs[i], [&](uint64_t dd) { deliver(a, i, dd); });
+            any |= a.walkers[i].pass(a.readers[i], a.decs[i], [&](uint64_t dd) { deliver(a, i, dd); });
         }
         return any;
     };

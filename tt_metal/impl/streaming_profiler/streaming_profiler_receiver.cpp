@@ -16,7 +16,6 @@
 #include <thread>
 #include <utility>
 #include <vector>
-#include <sys/mman.h>
 #include <sys/prctl.h>
 #include <pthread.h>
 #include <x86intrin.h>
@@ -29,7 +28,6 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 
 #include "tt_metal/common/broadcast_ring.hpp"
-#include "impl/threading/thread_pool.hpp"
 #include "context/metal_context.hpp"
 #include "llrt/zone_meta.hpp"
 #include "impl/streaming_profiler/spsc_packet.h"
@@ -38,12 +36,11 @@ namespace tt::tt_metal::streaming_profiler {
 
 namespace {
 
-// pop+ack every 8 decoded frames (about one relay push) so the device sees credit at decode pace.
+// Credits go back about once per relay push rather than per poll.
 constexpr uint32_t kAckBatchPages = 8 * profiler::kSpscMaxFramePages;
-// Pages peeked but not consumed are clflushed again by the next peek, so the only re-flush waste is a partial
-// tail frame.
-constexpr uint32_t kMaxPagesPerPass = 64 * profiler::kSpscMaxFramePages;
 constexpr uint32_t kPageBytes = kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4;
+// 64 MiB is ~1.6 ms of device egress at 40 GB/s: the ingest stall the device rides out before it backpressures.
+constexpr uint64_t kRunwayPages = (64ull << 20) / kPageBytes;
 // Idle probe period. Under ~50 us sleep_for rounds up unless the timer slack is shrunk; raising it to 200 us
 // doubled the relays' worst credit wait, since no credit returns during the sleep.
 constexpr uint32_t kProbeSleepCapUs = 5;
@@ -77,13 +74,14 @@ Receiver::Receiver(std::vector<ReceiverDeviceConfig> devices) : devices_(std::mo
         kStreamingProfilerMaxDevices);
     // The scalar decode packs meta through the bit-field; the vector paths pack it by hand, so pin the layout.
     static_assert(static_cast<uint32_t>(RecType::Zone) == profiler::kSpscRecTypeZone);
+    static_assert(static_cast<uint32_t>(RecType::Data) == profiler::kSpscRecTypeData);
+    static_assert(static_cast<uint32_t>(RecType::Event) == profiler::kSpscRecTypeEvent);
+    static_assert(static_cast<uint32_t>(RecType::Ext) == profiler::kSpscRecTypeExt);
+    static_assert(static_cast<uint32_t>(RecType::Cont) == profiler::kSpscRecTypeCont);
     const RecMeta meta_probe{0, 5, 2, RecType::Data};
     TT_FATAL(
         std::bit_cast<uint32_t>(meta_probe) == ((5u << 16) | (2u << 26) | (2u << 29)),
         "RecMeta bit-field layout does not match the vectorized packer");
-    const auto& rtoptions = MetalContext::instance().rtoptions();
-    const uint64_t ring_mb = rtoptions.get_streaming_profiler_ring_mb();
-    const uint64_t ring_lines = std::bit_ceil(ring_mb << 14);
     for (uint32_t d = 0; d < devices_.size(); d++) {
         auto& dev = devices_[d];
         const uint32_t nl = dev.num_cores * profiler::kSpscNRiscDecode;
@@ -103,14 +101,24 @@ Receiver::Receiver(std::vector<ReceiverDeviceConfig> devices) : devices_(std::mo
             s->sock = dev.sockets[sk].get();
             s->dev = d;
             s->sock_idx = sk;
-            s->ring_node = dev.numa_node;
+            const std::span<std::byte> fifo = s->sock->host_fifo();
+            TT_FATAL(
+                s->sock->get_fifo_curr_size() == fifo.size() && fifo.size() % kPageBytes == 0,
+                "streaming profiler: the host FIFO must be a whole number of pages");
+            s->capacity = fifo.size() / kPageBytes;
+            TT_FATAL(
+                std::has_single_bit(s->capacity),
+                "TT_METAL_STREAMING_PROFILER_FIFO_MB must be a power of two: the FIFO is the frame ring");
+            s->keep = s->capacity - std::min<uint64_t>(kRunwayPages, s->capacity / 4);
+            s->claim = s->capacity;
+            s->ring =
+                std::make_unique<BroadcastRing<RingLine>>(s->capacity, fifo, BroadcastRing<RingLine>::AdoptStorage{});
             s->decode.reset(dev.num_cores);
             s->decode.core_of_xy.load(dev.core_of_xy);
             s->last_zone_ts.assign(nl, 0);
             streams_.push_back(std::move(s));
         }
     }
-    create_rings(ring_lines);
     for (const auto& st : streams_) {
         streams_view_.push_back({st->ring.get(), st->dev});
     }
@@ -170,161 +178,61 @@ void Receiver::stop() {
     }
 }
 
-Receiver::MappedRegion::~MappedRegion() {
-    if (base != nullptr) {
-        ::munmap(base, bytes);
-    }
-}
-
-// Each ring is a private anonymous mapping bound to its device's NUMA node before the ring constructor faults
-// it, so placement does not depend on which thread touches it first; the rings are constructed in parallel
-// because faulting tens of GB is the slow part. Huge pages need a 2 MiB-aligned start, hence the over-map.
-void Receiver::create_rings(uint64_t ring_lines) {
-    using Ring = BroadcastRing<RingLine>;
-    constexpr size_t kHugePage = size_t{2} << 20;
-    const size_t bytes = Ring::storage_bytes(ring_lines);
-    std::vector<std::thread> workers;
-    workers.reserve(streams_.size());
-    for (auto& s : streams_) {
-        workers.emplace_back([st = s.get(), bytes, ring_lines]() {
-            const size_t map_bytes = bytes + kHugePage;
-            void* base = ::mmap(nullptr, map_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-            TT_FATAL(base != MAP_FAILED, "streaming profiler: mmap of a {} MB ring failed", bytes >> 20);
-            st->ring_storage.base = base;
-            st->ring_storage.bytes = map_bytes;
-            auto* aligned =
-                reinterpret_cast<std::byte*>((reinterpret_cast<uintptr_t>(base) + kHugePage - 1) & ~(kHugePage - 1));
-            ::madvise(aligned, bytes, MADV_HUGEPAGE);
-            bind_memory_to_numa_node(aligned, bytes, st->ring_node);
-            st->ring = std::make_unique<Ring>(ring_lines, std::span<std::byte>(aligned, bytes));
-        });
-    }
-    for (auto& w : workers) {
-        w.join();
-    }
-}
-
 void Receiver::start() {
-    const uint32_t nthreads = std::clamp<uint32_t>(
-        MetalContext::instance().rtoptions().get_streaming_profiler_decode_threads(), 1, streams_.size());
-    nthreads_ = nthreads;
     // The audit attaches before ingest starts so its readers see the ring from line 0.
     audit_thread_ = std::thread(&Receiver::audit_thread, this);
-    for (uint32_t t = 0; t < nthreads; t++) {
+    for (uint32_t d = 0; d < devices_.size(); d++) {
         std::vector<Stream*> owned;
-        for (uint32_t i = t; i < streams_.size(); i += nthreads) {
-            owned.push_back(streams_[i].get());
-        }
-        decode_threads_.emplace_back(&Receiver::decode_thread, this, std::move(owned));
-    }
-}
-
-namespace {
-// Whole aligned lines, one NT store each: the ring is written at wire rate and read back cold, so cached
-// stores would pollute both sides (memcpy measured 28% slower per thread). The distance prefetch runs past the
-// run's end into the pages behind it in the FIFO.
-__attribute__((target("avx512f"))) void ingest_copy_lines_512(std::byte* dst, const uint32_t* src, uint32_t nlines) {
-    for (uint32_t k = 0; k < nlines; k++) {
-        _mm_prefetch(reinterpret_cast<const char*>(src + 16ull * k) + 4096, _MM_HINT_T0);
-        _mm512_stream_si512(reinterpret_cast<__m512i*>(dst + 64ull * k), _mm512_loadu_si512(src + 16ull * k));
-    }
-}
-void ingest_copy_lines_256(std::byte* dst, const uint32_t* src, uint32_t nlines) {
-    for (uint32_t k = 0; k < nlines; k++) {
-        _mm_prefetch(reinterpret_cast<const char*>(src + 16ull * k) + 4096, _MM_HINT_T0);
-        const uint8_t* line = reinterpret_cast<const uint8_t*>(src) + 64ull * k;
-        std::byte* out = dst + 64ull * k;
-        _mm256_stream_si256(
-            reinterpret_cast<__m256i*>(out), _mm256_loadu_si256(reinterpret_cast<const __m256i*>(line)));
-        _mm256_stream_si256(
-            reinterpret_cast<__m256i*>(out + 32), _mm256_loadu_si256(reinterpret_cast<const __m256i*>(line + 32)));
-    }
-}
-// Lines [first, first + count) of the peeked pages, which may span the FIFO's own wrap, into contiguous dst.
-template <typename Segments>
-void ingest_copy_lines(std::byte* dst, const Segments& segments, size_t first, size_t count, bool use512) {
-    size_t seg_first = 0;
-    for (const std::span<const uint32_t> segment : segments) {
-        const size_t seg_lines = segment.size() / kernel_profiler::SPSC_SPAN_PAGE_WORDS;
-        const size_t lo = std::max(first, seg_first);
-        const size_t hi = std::min(first + count, seg_first + seg_lines);
-        if (lo < hi) {
-            const uint32_t* src = segment.data() + (lo - seg_first) * kernel_profiler::SPSC_SPAN_PAGE_WORDS;
-            std::byte* out = dst + (lo - first) * 64;
-            if (use512) {
-                ingest_copy_lines_512(out, src, static_cast<uint32_t>(hi - lo));
-            } else {
-                ingest_copy_lines_256(out, src, static_cast<uint32_t>(hi - lo));
+        for (auto& s : streams_) {
+            if (s->dev == d) {
+                owned.push_back(s.get());
             }
         }
-        seg_first += seg_lines;
+        if (!owned.empty()) {
+            decode_threads_.emplace_back(&Receiver::decode_thread, this, std::move(owned));
+        }
     }
 }
-}  // namespace
 
+// The device is the ring's writer. Its progress is the socket's bytes_sent; the pages it may still write or
+// overwrite are bounded by the credits the host returned, so the ring's horizon is acked + capacity and credits are
+// returned only up to arrived - keep. That keeps `keep` pages behind the device intact for lagging readers while
+// the device always has the runway ahead. Once the relay has published drained it writes nothing more, so everything
+// is acked for its socket barrier and the horizon stays where it is.
 bool Receiver::ingest_pass(Stream& s) {
-    const uint32_t avail = s.sock->pages_available();
-    if (avail == 0) {
+    // pages_available counts from the last ack, so it includes the pages already published
+    const uint64_t arrived = s.acked + s.sock->pages_available();
+    const bool drained = s.drained.load(std::memory_order_acquire);
+    if (arrived == s.arrived) {
+        if (drained && s.acked < arrived) {
+            s.sock->pop(static_cast<uint32_t>(arrived - s.acked), true);
+            s.acked = arrived;
+        }
         if (s.producers_done.load(std::memory_order_acquire)) {
             s.retired = true;
         }
         return false;
     }
-
-    const uint32_t np = std::min(avail, kMaxPagesPerPass);
-    const uint64_t t0 = tsc_now();
+    s.arrived = arrived;
+    s.pages = arrived;
     auto& w = s.ring->writer();
-    // A FIFO page is a ring line, so the pages stream straight into the ring, a chunk at a time. Frames start on a
-    // line and never straddle the FIFO wrap, so each header is read from the FIFO source right after its lines
-    // are copied, while they are still cached; the ring copy is never read back. Credit goes back per chunk.
-    const bool use512 = profiler::spsc_host_avx512();
-    const uint64_t end = s.wpos + np;
-    uint64_t lpos = s.frame_end;  // next frame boundary, possibly beyond the lines written so far
-    uint32_t frames = 0;
-    for (uint64_t pos = s.wpos; pos < end;) {
-        const uint32_t pages = std::min<uint32_t>(end - pos, kAckBatchPages);
-        const auto segments = s.sock->peek(pages).base();
-        w.publish_direct(pages, [&](std::span<std::byte> run, size_t first) {
-            ingest_copy_lines(run.data(), segments, first, run.size() / sizeof(RingLine), use512);
-        });
-        for (const std::span<const uint32_t> segment : segments) {
-            const uint32_t nlines = segment.size() / kernel_profiler::SPSC_SPAN_PAGE_WORDS;
-            const uint64_t seg_end = pos + nlines;
-            while (lpos < seg_end) {
-                const uint32_t* hdr = segment.data() + (lpos - pos) * kernel_profiler::SPSC_SPAN_PAGE_WORDS;
-                const uint32_t w1 = hdr[1];
-                if (!pp_is_bulkspan(hdr[0]) || w1 < kernel_profiler::SPSC_SPAN_WIRE_CTRL_WORDS ||
-                    w1 > profiler::kSpscMaxPayloadWords) {
-                    // Framing is lost; the line is in the ring anyway and the consumers' resync skips it.
-                    s.bad_frames++;
-                    lpos++;
-                    continue;
-                }
-                lpos += kernel_profiler::spsc_span_frame_words(w1) / kernel_profiler::SPSC_SPAN_PAGE_WORDS;
-                frames++;
-            }
-            pos = seg_end;
-        }
-        s.sock->pop(pages, true);
+    if (drained) {
+        w.publish_external(arrived, s.claim);
+        s.sock->pop(static_cast<uint32_t>(arrived - s.acked), true);
+        s.acked = arrived;
+        return true;
     }
-    s.wpos = end;
-    s.frame_end = lpos;
-    s.decode_ticks += tsc_now() - t0;
-    s.pages += np;
-    s.frames += frames;
-    if (frames == 0 && s.producers_done.load(std::memory_order_acquire)) {
-        if (!s.desync_warned && lpos > end) {
-            s.desync_warned = true;
-            log_warning(
-                tt::LogMetal,
-                "[streaming profiler receiver] d{}/s{}: the last frame is {} lines short after the relays "
-                "finished -- flow control desynchronized",
-                s.dev,
-                s.sock_idx,
-                lpos - end);
-        }
-        s.retired = true;
-        return false;
+    // The credit write may go through a write-combining PCIe window, which x86 does not order behind the cached
+    // claim store; the sfence keeps the horizon visible before the device can act on the credit.
+    const uint64_t ack_to = arrived > s.keep ? arrived - s.keep : 0;
+    if (ack_to - s.acked >= kAckBatchPages) {
+        s.claim = ack_to + s.capacity;
+        w.publish_external(arrived, s.claim);
+        tt_driver_atomics::sfence();
+        s.sock->pop(static_cast<uint32_t>(ack_to - s.acked), true);
+        s.acked = ack_to;
+    } else {
+        w.publish_external(arrived, s.claim);
     }
     return true;
 }
@@ -372,9 +280,6 @@ void Receiver::decode_thread(std::vector<Stream*> streams) {
     }
 }
 
-// Baseline code: no AVX-512 target attribute here, or the compiler could emit it into paths that run on any
-// host. The 512-bit kernels are separate attributed functions gated on spsc_host_avx512().
-
 std::vector<experimental::streaming_profiler::Clock> Receiver::clocks() const {
     std::lock_guard<std::mutex> lk(clocks_mu_);
     return clocks_;
@@ -388,7 +293,6 @@ void Receiver::audit_thread() {
     for (auto& s : streams_) {
         readers.push_back(s->ring->make_reader());
     }
-    std::vector<RingLine> lines(kConsumerLineBatch);
     std::vector<FrameWalker> walkers(streams_.size());
     std::vector<StreamDecoder<profiler::SpscNullRecSink>> decs(streams_.size());
     for (size_t i = 0; i < streams_.size(); i++) {
@@ -407,7 +311,7 @@ void Receiver::audit_thread() {
     auto pass_all = [&] {
         bool any = false;
         for (size_t i = 0; i < readers.size(); i++) {
-            any |= walkers[i].pass(readers[i], lines, decs[i], [&](uint64_t) { publish(i); });
+            any |= walkers[i].pass(readers[i], decs[i], [&](uint64_t) { publish(i); });
         }
         return any;
     };
@@ -428,6 +332,14 @@ void Receiver::audit_thread() {
     }
     for (const auto& r : readers) {
         audit_dropped_ += r.dropped();
+    }
+}
+
+void Receiver::notify_producers_drained(uint32_t device_index, uint32_t socket_index) {
+    for (auto& s : streams_) {
+        if (s->dev == device_index && s->sock_idx == socket_index) {
+            s->drained.store(true, std::memory_order_release);
+        }
     }
 }
 
@@ -473,29 +385,21 @@ std::vector<uint32_t> Receiver::final_lane_heads(uint32_t device_index) const {
 }
 
 void Receiver::log_report() const {
-    uint64_t pages = 0, wire_words = 0, zones = 0, records = 0, frames = 0;
+    uint64_t pages = 0, zones = 0, records = 0;
     uint64_t resync_words = 0, order_regressions = 0, bad_frames = 0, anomalies = 0, unknown_core_frames = 0;
     uint64_t epoch_fixes = 0;
-    // Busy is the busiest thread, so ticks group by owning thread (stream i -> thread i % nthreads_); with fewer
-    // threads than sockets a per-stream max understates busy.
-    std::vector<uint64_t> thread_ticks(std::max<uint32_t>(nthreads_, 1), 0);
     for (size_t i = 0; i < streams_.size(); i++) {
         const Stream& s = *streams_[i];
         pages += s.pages;
-        wire_words += s.decode.live_words;
         zones += s.zones;
         records += s.records;
-        frames += s.frames;
         resync_words += s.decode.resync_words;
         order_regressions += s.order_regressions;
         epoch_fixes += s.epoch_fixes;
         bad_frames += s.bad_frames;
         anomalies += s.decode.anomalies;
         unknown_core_frames += s.decode.unknown_core_frames;
-        thread_ticks[i % thread_ticks.size()] += s.decode_ticks;
     }
-    const double busy_ms = ticks_to_ms(*std::max_element(thread_ticks.begin(), thread_ticks.end()));
-    auto rate = [busy_ms](double num) { return busy_ms > 0.0 ? num / (busy_ms / 1e3) : 0.0; };
     log_info(
         tt::LogMetal,
         "[streaming profiler] capture: {} zones, {} records, {:.1f} MB from {} device(s)",
@@ -503,14 +407,6 @@ void Receiver::log_report() const {
         records,
         pages * static_cast<double>(kPageBytes) / 1e6,
         devices_.size());
-    log_debug(
-        tt::LogMetal,
-        "[streaming profiler] ingest: {} frames, busy {:.1f} ms -> {:.2f} GB/s D2H, {:.2f} GB/s wire, {:.2f} Mzones/s",
-        frames,
-        busy_ms,
-        rate(pages * static_cast<double>(kPageBytes) / 1e9),
-        rate(wire_words * 4.0 / 1e9),
-        rate(zones / 1e6));
     if (epoch_fixes != 0) {
         log_info(
             tt::LogMetal, "[streaming profiler] {} timestamps repaired for the wall-clock latch race", epoch_fixes);

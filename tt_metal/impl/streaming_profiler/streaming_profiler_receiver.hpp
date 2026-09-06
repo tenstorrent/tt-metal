@@ -56,7 +56,6 @@ struct ReceiverDeviceConfig {
     std::vector<LaneInfo> lane_table;                   // size num_cores * 5
     std::unordered_map<uint32_t, uint32_t> core_of_xy;  // incl. DRISC self-zone cores
     experimental::streaming_profiler::Clock clock;
-    int numa_node = -1;  // host node closest to this device; -1 leaves the ring unbound
 };
 
 class Devices;
@@ -72,6 +71,9 @@ public:
     Receiver(const Receiver&) = delete;
     Receiver& operator=(const Receiver&) = delete;
 
+    // The relay owning (device, socket) has pushed its last page and waits on its socket barrier: ingest returns
+    // every credit from here on instead of holding back the readers' lag budget.
+    void notify_producers_drained(uint32_t device_index, uint32_t socket_index);
     // Every relay owning (device, socket) has published done, so the device saw all its bytes acked and the
     // stream retires after one final empty check.
     void notify_producers_done(uint32_t device_index, uint32_t socket_index);
@@ -90,40 +92,32 @@ private:
     // Joins ingest once every stream has retired, then the audit.
     void shutdown();
     void log_report() const;
-    struct MappedRegion {
-        void* base = nullptr;
-        size_t bytes = 0;
-        MappedRegion() = default;
-        MappedRegion(const MappedRegion&) = delete;
-        MappedRegion& operator=(const MappedRegion&) = delete;
-        ~MappedRegion();
-    };
 
     struct Stream {
         distributed::D2HSocket* sock = nullptr;
         uint32_t dev = 0;
         uint32_t sock_idx = 0;
-        int ring_node = -1;         // node this stream's ring is bound to
-        MappedRegion ring_storage;  // declared before `ring`, which must be destroyed first
+        // The socket's FIFO adopted as the ring: the device writes it, readers decode it in place, and ingest_pass
+        // publishes the device's progress and returns credits behind the readers' lag budget.
         std::unique_ptr<BroadcastRing<RingLine>> ring;
+        uint64_t capacity = 0;  // pages
+        uint64_t keep = 0;      // pages a reader may lag before the horizon passes it: capacity minus the runway
         // Written by the audit consumer, never by ingest.
         profiler::SpanDecodeState decode;
         std::vector<uint64_t> last_zone_ts;  // per lane, order invariant (must never regress)
+        std::atomic<bool> drained{false};
         std::atomic<bool> producers_done{false};
         bool retired = false;
 
-        uint64_t frames = 0, pages = 0, records = 0, zones = 0;
-        uint64_t decode_ticks = 0;
-        uint64_t wpos = 0;       // ring lines written
-        uint64_t frame_end = 0;  // where the frame under construction ends; == wpos when none is pending
+        uint64_t pages = 0, records = 0, zones = 0;
+        uint64_t arrived = 0, acked = 0;  // absolute pages: published to readers, credited back to the device
+        uint64_t claim = 0;               // the ring's published overwrite horizon plus capacity
         uint64_t order_regressions = 0, bad_frames = 0, epoch_fixes = 0;
-        bool desync_warned = false;
     };
 
-    void create_rings(uint64_t ring_lines);
     void decode_thread(std::vector<Stream*> streams);
-    // One poll+decode+ack pass over a stream. Returns true if it moved data; sets
-    // s.retired when the stream is finished.
+    // One poll+publish+ack pass over a stream. Returns true if pages arrived; sets s.retired when the stream is
+    // finished.
     bool ingest_pass(Stream& s);
     // The wire audit: decodes every stream with a null sink and is the only writer of the decode-quality fields
     // on Stream.
@@ -144,7 +138,6 @@ private:
 
     std::atomic<bool> stop_{false};
     std::atomic<bool> shutdown_done_{false};
-    uint32_t nthreads_ = 0;  // decode threads; stream i belongs to thread i % nthreads_
 };
 
 }  // namespace streaming_profiler

@@ -241,7 +241,6 @@ std::vector<ReceiverDeviceConfig> Devices::boot(const std::shared_ptr<distribute
                 .anchor_host_ns = ctx.anchor_host_ns,
                 .chip_id = ctx.chip_id,
                 .measured = ctx.clock_synced};
-            rd.numa_node = static_cast<int>(cluster.get_numa_node_for_device(ctx.chip_id));
             rd.lane_table.reserve(ctx.nl);
             for (uint32_t ci = 0; ci < rd.num_cores; ci++) {
                 const auto [lx, ly] = ctx.core_logical[ci];
@@ -919,11 +918,17 @@ void Devices::quiesce(Receiver* receiver) {
                 &quiesce, sizeof(uint32_t), drisc, ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]));
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
             uint32_t done = 0;
+            bool drained = false;
             while (std::chrono::steady_clock::now() < deadline) {
                 cluster.read_core(
                     &done, sizeof(uint32_t), drisc, ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]));
                 if ((done & kernel_profiler::kRelayDoneMask) == kernel_profiler::kRelayDoneWord) {
                     break;
+                }
+                if (!drained && receiver != nullptr &&
+                    (done & kernel_profiler::kRelayDoneMask) == kernel_profiler::kRelayDrainedWord) {
+                    receiver->notify_producers_drained(static_cast<uint32_t>(&ctx - devices_.data()), d);
+                    drained = true;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }

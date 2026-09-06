@@ -326,6 +326,13 @@ public:
     uint32_t pages_available();
 
     /**
+     * @brief The FIFO's data region in host memory, for a reader that decodes pages in place instead of read():
+     *        byte N of the stream lives at offset N mod fifo_size. Only the pinned, cache-coherent backing supports
+     *        this; the hugepage fallback fatals.
+     */
+    std::span<std::byte> host_fifo() const;
+
+    /**
      * @brief Discards any currently-available pages WITHOUT reading the data
      *        region.  Rebases the host's bytes_acked counter to the current
      *        bytes_sent value (and notifies the device), which is the correct

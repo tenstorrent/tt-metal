@@ -25,8 +25,8 @@
 namespace tt::tt_metal::streaming_profiler {
 
 inline constexpr size_t kConsumerScratchRecs = 1 << 16;
-// Ring lines per consumer read (256 KB scratch), and the most records one frame can decode to (payload <= 2640
-// words, 2 words per record, plus DATA expansion slack).
+// Ring lines per peek (256 KB): bounds what one lapped commit can lose. kMaxFrameRecs is the most records one frame
+// can decode to (payload <= 2640 words, 2 words per record, plus DATA expansion slack).
 inline constexpr size_t kConsumerLineBatch = 1 << 12;
 inline constexpr size_t kMaxFrameRecs = 2048;
 inline constexpr uint32_t kEmptyPollsBeforeSleep = 1000;
@@ -91,7 +91,6 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
     // Raw locals: the emitters store through casted pointers, so anything reached via `this` would be reloaded
     // after every store.
     const uint32_t d = dev;
-    const bool k512 = profiler::spsc_host_avx512();
     Sink sk = sink;  // a copy: through a reference, every store via sk.buf would force sk.off to reload
     uint64_t zm = 0, sz = 0, oreg = 0, rc = 0, fixes = 0;
     uint64_t mn = min_ts, mx = max_ts;
@@ -115,6 +114,13 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
             lrec[lane] = (seq << 32) | lane_rec;
         }
     };
+    auto sk_off_or_zero = [&]() -> uint64_t {
+        if constexpr (Sink::kStores) {
+            return sk.off;
+        } else {
+            return 0;
+        }
+    };
     auto rec_at = [&](uint64_t byte_off) -> uint64_t* {
         if constexpr (Sink::kStores) {
             return reinterpret_cast<uint64_t*>(sk.buf + byte_off);
@@ -126,18 +132,20 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
     // 2^32 high (kernel_profiler_streaming.hpp read_wall_clock), so the previous record borrowed the next epoch
     // and this one proves it. An S/ATOMIC start is derived from its end and a point is its timestamp, so those
     // move down whole; a ZONE_L's start was read separately, so only its inflated duration moves.
-    auto regressed = [&](uint64_t prev, uint64_t ts) {
-        lane_ts = ts;
+    // noinline: inlined at its five sites, the repair body inflated the walk's register pressure (+6% on the point
+    // path); out of line it is the cold call it should be.
+    // `rec_off` is the sink offset just past the record to repair, 0 when it is not at hand.
+    auto repair_prev = [&](uint64_t prev, uint64_t ts, uint64_t rec_off) __attribute__((noinline)) {
         if (prev < kEpoch || prev - ts > kEpoch) {
             oreg++;
             return;
         }
         if constexpr (Sink::kStores) {
-            if (lane_rec == 0) {
+            if (rec_off == 0) {
                 oreg++;
                 return;
             }
-            uint64_t* rec = rec_at(lane_rec - profiler::kSpscRecBytes);
+            uint64_t* rec = rec_at(rec_off - profiler::kSpscRecBytes);
             if (rec[1] >= kEpoch) {
                 rec[1] -= kEpoch;
             } else if (rec[0] >= kEpoch) {
@@ -149,154 +157,269 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
         }
         fixes++;
     };
-    const auto meta_of = [d](uint32_t lane, RecType t) {
-        return static_cast<uint64_t>((lane << 16) | (d << 26) | (static_cast<uint32_t>(t) << 29)) << 32;
+    auto regressed = [&](uint64_t prev, uint64_t ts) {
+        repair_prev(prev, ts, lane_rec);
+        lane_ts = ts;
     };
-
-    auto emit = [&](uint32_t lane, uint32_t zone_id, uint64_t end, uint32_t prog, uint64_t dur, bool two_reads) {
-        zm++;
-        sz += zone_id == profiler::kSpscStallZoneId;
-        if (mn == 0) {
-            mn = end;
+    // A block's first record against the lane's last, then each in-block step back against the record before it
+    // (the kernel's regress mask), each repairing that record when the epoch rule allows.
+    auto block_ts = [&](uint64_t ts_first, uint64_t ts_last) {
+        if (ts_first < lane_ts) {
+            regressed(lane_ts, ts_first);
         }
-        mx = end;
-        // A ZONE_L whose start read borrowed the next epoch has an elapsed time in [-2^32, -1].
-        if (two_reads && dur >= 0ull - kEpoch) {
-            if (end >= dur + kEpoch) {
-                dur += kEpoch;
-                fixes++;
-            } else {
-                oreg++;
+        lane_ts = ts_last;
+    };
+    // A kernel flagged a step back somewhere in its run: find each one, record k against record k-1.
+    auto block_regress = [&](const uint32_t* src, uint32_t stride, uint32_t n, uint64_t th_hi, uint64_t first_rec) {
+        for (uint32_t k = 1; k < n; k++) {
+            if (src[stride * k + 1u] < src[stride * (k - 1u) + 1u]) {
+                repair_prev(
+                    th_hi | src[stride * (k - 1u) + 1u],
+                    th_hi | src[stride * k + 1u],
+                    first_rec + profiler::kSpscRecBytes * k);
             }
-        }
-        if (end < lane_ts) {
-            // The one legitimate regression: a ZONE_L close reads its end before reserving ring space, so a stall
-            // zone raised by that reservation precedes it with a later end.
-            bool after_stall = two_reads;
-            if constexpr (Sink::kStores) {
-                if (two_reads && lane_rec != 0) {
-                    const uint64_t* prev = rec_at(lane_rec - profiler::kSpscRecBytes);
-                    after_stall = (prev[2] >> 61) == static_cast<uint32_t>(RecType::Zone) &&
-                                  (static_cast<uint32_t>(prev[2]) & 0x07FFFFFFu) == profiler::kSpscStallZoneId;
-                }
-            }
-            if (after_stall) {
-                oreg++;
-                lane_ts = end;
-            } else {
-                regressed(lane_ts, end);
-            }
-        } else {
-            lane_ts = end;
-        }
-        rc++;
-        if constexpr (Sink::kStores) {
-            sk.put4(end - dur, dur, meta_of(lane, RecType::Zone) | zone_id, prog);
-            lane_rec = sk.off;
         }
     };
-    auto emit_data = [&](uint32_t lane,
-                         uint32_t type,
-                         uint32_t id,
-                         uint64_t ts,
-                         uint32_t prog,
-                         const uint32_t* payload,
-                         uint32_t n) {
-        const uint64_t pg = prog;
-        // Points pay one compare each; the hint keeps the repair body out of the point path.
+    // Timestamp order for one record against the lane's last, then it becomes the last.
+    auto one_ts = [&](uint64_t ts) {
         if (__builtin_expect(ts < lane_ts, 0)) {
             regressed(lane_ts, ts);
         } else {
             lane_ts = ts;
         }
-        // PP_EVENT is payload-less: one record is the whole packet, no Ext or Cont follows.
-        if (type != PP_DATA) {
-            rc++;
+    };
+    struct Emitters {
+        decltype(block_ts)& block_ts_;
+        decltype(block_regress)& block_regress_;
+        decltype(one_ts)& one_ts_;
+        decltype(repair_prev)& repair_prev_;
+        decltype(rec_at)& rec_at_;
+        decltype(sk_off_or_zero)& sk_off_or_zero_;
+        Sink& sk;
+        uint64_t& zm;
+        uint64_t& sz;
+        uint64_t& rc;
+        uint64_t& mn;
+        uint64_t& mx;
+        uint64_t& oreg;
+        uint64_t& fixes;
+        uint64_t& lane_ts;
+        uint64_t& lane_rec;
+
+        uint32_t atomic8(
+            uint32_t, const profiler::SpscLaneConsts& c, const uint32_t* src, uint32_t avail, uint32_t max_recs) {
+            const uint64_t first_rec = sk_off_or_zero_();
+            const auto a = profiler::spsc_atomic8(src, avail, max_recs, c, sk);
+            if (a.n == 0) {
+                return 0;
+            }
+            const uint64_t ts_first = c.th_hi | src[1];
+            zm += a.n;
+            sz += a.stalls;
+            block_ts_(ts_first, a.ts_last);
+            if (__builtin_expect(a.regress != 0, 0)) {
+                block_regress_(src, 3, a.n, c.th_hi, first_rec);
+            }
+            if (mn == 0) {
+                mn = ts_first;
+            }
+            mx = a.ts_last;
+            rc += a.n;
             if constexpr (Sink::kStores) {
-                sk.put4(ts, 0, meta_of(lane, RecType::Event) | id, pg);
                 lane_rec = sk.off;
             }
-            return;
+            return a.n;
         }
-        rc += 2 + (n > 2 ? (n - 1) / 2 : 0);
-        if constexpr (Sink::kStores) {
-            // Ext carries the payload count in its id and payload words 1-2 in its ts, so a short DATA is two records.
-            const uint64_t hi0 = n >= 1 ? payload[0] : 0;
-            const uint64_t lo0 = n >= 2 ? payload[1] : 0;
-            sk.put4(ts, 0, meta_of(lane, RecType::Data) | id, pg);
-            lane_rec = sk.off;
-            sk.put4((hi0 << 32) | lo0, 0, meta_of(lane, RecType::Ext) | n, pg);
-            for (uint32_t k = 2; k < n; k += 2) {
-                const uint64_t hi = payload[k];
-                const uint64_t lo = (k + 1 < n) ? payload[k + 1] : 0;
-                sk.put4((hi << 32) | lo, 0, meta_of(lane, RecType::Cont), pg);
+        uint64_t atomic1(uint32_t, const profiler::SpscLaneConsts& c, const uint32_t* src, uint32_t readable) {
+            const uint64_t end = c.th_hi | src[1];
+            zm++;
+            if constexpr (Sink::kStores) {
+                sz += (src[0] & 0x07FFFFFFu) == profiler::kSpscStallZoneId;
             }
-        } else {
-            (void)payload;
+            if (mn == 0) {
+                mn = end;
+            }
+            mx = end;
+            one_ts_(end);
+            rc++;
+            profiler::spsc_atomic1(src, readable, c, sk);
+            if constexpr (Sink::kStores) {
+                lane_rec = sk.off;
+            }
+            return end;
         }
-    };
-
-    auto emit_atomic16 =
-        [&](uint32_t lane, uint32_t th, uint32_t prog, const uint32_t* src, uint32_t avail, uint32_t max_recs)
-        -> uint32_t {
-        const auto a = k512 ? profiler::spsc_atomic16_avx512(src, avail, max_recs, th, prog, lane, d, sk)
-                            : profiler::spsc_atomic8_avx2(src, avail, max_recs, th, prog, lane, d, sk);
-        if (a.n == 0) {
-            return 0;
+        uint32_t event16(
+            uint32_t, const profiler::SpscLaneConsts& c, const uint32_t* src, uint32_t avail, uint32_t max_recs) {
+            const uint64_t first_rec = sk_off_or_zero_();
+            const auto a = profiler::spsc_event16(src, avail, max_recs, c, sk);
+            if (a.n == 0) {
+                return 0;
+            }
+            block_ts_(c.th_hi | src[1], a.ts_last);
+            if (__builtin_expect(a.regress != 0, 0)) {
+                block_regress_(src, 2, a.n, c.th_hi, first_rec);
+            }
+            rc += a.n;
+            if constexpr (Sink::kStores) {
+                lane_rec = sk.off;
+            }
+            return a.n;
         }
-        zm += a.n;
-        sz += a.stalls;
-        if (a.ts_first < lane_ts) {
-            regressed(lane_ts, a.ts_first);
+        void point(
+            uint32_t,
+            const profiler::SpscLaneConsts& c,
+            const uint32_t* src,
+            uint32_t readable,
+            uint32_t dm,
+            uint32_t n) {
+            one_ts_(c.th_hi | src[1]);
+            const uint64_t head_off = sk_off_or_zero_();
+            rc += profiler::spsc_point(src, readable, dm, n, c, sk);
+            if constexpr (Sink::kStores) {
+                lane_rec = head_off + profiler::kSpscRecBytes;  // the head, not a DATA's Ext/Cont
+            }
         }
-        lane_ts = a.ts_last;
-        if (__builtin_expect(a.near_wrap, 0)) {
-            for (uint32_t k = 1; k < a.n; k++) {
-                if (src[3u * k + 1u] < src[3u * k - 2u] && src[3u * k - 2u] >= profiler::kLatchWindow) {
-                    fixes++;
+        // A ZONE_L's start was read separately from its end, so its duration is two reads apart: one that borrowed
+        // the next epoch shows as an elapsed time in [-2^32, -1] and moves down whole. Its end may legitimately
+        // precede the previous record's when that record is the stall zone raised by this zone's own ring
+        // reservation.
+        void zone_l_checks(const uint32_t* src, uint32_t n, uint64_t first_rec, bool wrapped, bool back) {
+            if (wrapped) {
+                for (uint32_t k = 0; k < n; k++) {
+                    if (src[5u * k + 4u] != 0xFFFFFFFFu) {
+                        continue;
+                    }
+                    const uint64_t end = (static_cast<uint64_t>(src[5u * k + 2u]) << 32) | src[5u * k + 1u];
+                    const uint64_t dur = (static_cast<uint64_t>(src[5u * k + 4u]) << 32) | src[5u * k + 3u];
+                    if (end >= dur + (1ull << 32)) {
+                        fixes++;
+                        if constexpr (Sink::kStores) {
+                            uint64_t* rec = rec_at_(first_rec + profiler::kSpscRecBytes * k);
+                            rec[1] = dur + (1ull << 32);
+                            rec[0] = end - rec[1];
+                        }
+                    } else {
+                        oreg++;
+                    }
+                }
+            }
+            if (back) {
+                for (uint32_t k = 0; k < n; k++) {
+                    const uint64_t end = (static_cast<uint64_t>(src[5u * k + 2u]) << 32) | src[5u * k + 1u];
+                    const uint64_t prev_ts =
+                        k == 0 ? lane_ts : ((static_cast<uint64_t>(src[5u * k - 3u]) << 32) | src[5u * k - 4u]);
+                    if (!(end < prev_ts)) {
+                        continue;
+                    }
+                    const uint64_t prev_off = k == 0 ? lane_rec : first_rec + profiler::kSpscRecBytes * k;
+                    bool after_stall = true;
                     if constexpr (Sink::kStores) {
-                        rec_at(sk.off - profiler::kSpscRecBytes * (a.n - k + 1u))[0] -= kEpoch;
+                        if (prev_off != 0) {
+                            const uint64_t* prev = rec_at_(prev_off - profiler::kSpscRecBytes);
+                            after_stall = (prev[2] >> 61) == static_cast<uint32_t>(RecType::Zone) &&
+                                          (static_cast<uint32_t>(prev[2]) & 0x07FFFFFFu) == profiler::kSpscStallZoneId;
+                        }
+                    }
+                    if (after_stall) {
+                        oreg++;
+                    } else {
+                        repair_prev_(prev_ts, end, prev_off);
                     }
                 }
             }
         }
-        if (mn == 0) {
-            mn = a.ts_first;
+        uint32_t zone_l8(
+            uint32_t, const profiler::SpscLaneConsts& c, const uint32_t* src, uint32_t avail, uint32_t max_recs) {
+            const uint64_t first_rec = sk_off_or_zero_();
+            const auto a = profiler::spsc_zone_l8(src, avail, max_recs, c, sk);
+            if (a.n == 0) {
+                return 0;
+            }
+            const uint64_t ts_first = (static_cast<uint64_t>(src[2]) << 32) | src[1];
+            zm += a.n;
+            sz += a.stalls;
+            const bool back = ts_first < lane_ts || a.regress != 0;
+            if (__builtin_expect(a.wrapped != 0 || back, 0)) {
+                zone_l_checks(src, a.n, first_rec, a.wrapped != 0, back);
+            }
+            lane_ts = a.ts_last;
+            if (mn == 0) {
+                mn = ts_first;
+            }
+            mx = a.ts_last;
+            rc += a.n;
+            if constexpr (Sink::kStores) {
+                lane_rec = sk.off;
+            }
+            return a.n;
         }
-        mx = a.ts_last;
-        rc += a.n;
-        if constexpr (Sink::kStores) {
-            lane_rec = sk.off;
+        void zone_l1(uint32_t, const profiler::SpscLaneConsts& c, const uint32_t* src, uint32_t readable) {
+            const uint64_t first_rec = sk_off_or_zero_();
+            const uint64_t end = (static_cast<uint64_t>(src[2]) << 32) | src[1];
+            zm++;
+            if constexpr (Sink::kStores) {
+                sz += (src[0] & 0x07FFFFFFu) == profiler::kSpscStallZoneId;
+            }
+            profiler::spsc_zone_l1(src, readable, c, sk);
+            const bool wrapped = src[4] == 0xFFFFFFFFu;
+            const bool back = end < lane_ts;
+            if (__builtin_expect(wrapped || back, 0)) {
+                zone_l_checks(src, 1, first_rec, wrapped, back);
+            }
+            lane_ts = end;
+            if (mn == 0) {
+                mn = end;
+            }
+            mx = end;
+            rc++;
+            if constexpr (Sink::kStores) {
+                lane_rec = sk.off;
+            }
         }
-        return a.n;
-    };
-    auto emit_zone_s16 =
-        [&](uint32_t lane, uint64_t cursor, uint32_t prog, const uint32_t* src, uint32_t avail, uint32_t max_recs)
-        -> profiler::SpscZoneS16Result {
-        const auto z = k512 ? profiler::spsc_zone_s16_avx512(src, avail, max_recs, cursor, prog, lane, d, sk)
-                            : profiler::spsc_zone_s16_avx2(src, avail, max_recs, cursor, prog, lane, d, sk);
-        if (z.n == 0) {
+        profiler::SpscZoneS16Result zone_s16(
+            uint32_t,
+            uint64_t cursor,
+            const profiler::SpscLaneConsts& c,
+            const uint32_t* src,
+            uint32_t avail,
+            uint32_t max_recs) {
+            const auto z = profiler::spsc_zone_s16(src, avail, max_recs, cursor, c, sk);
+            if (z.n == 0) {
+                return z;
+            }
+            const uint64_t ts_first = cursor + (src[1] >> 16);
+            zm += z.n;
+            // Exact, not sampled: in-block ends are cursor + positive deltas.
+            block_ts_(ts_first, z.ts_last);
+            if (mn == 0) {
+                mn = ts_first;
+            }
+            mx = z.ts_last;
+            rc += z.n;
+            if constexpr (Sink::kStores) {
+                lane_rec = sk.off;
+            }
             return z;
         }
-        zm += z.n;
-        // Exact, not sampled: in-block ends are cursor + positive deltas.
-        if (z.ts_first < lane_ts) {
-            regressed(lane_ts, z.ts_first);
-        }
-        lane_ts = z.ts_last;
-        if (mn == 0) {
-            mn = z.ts_first;
-        }
-        mx = z.ts_last;
-        rc += z.n;
-        if constexpr (Sink::kStores) {
-            lane_rec = sk.off;
-        }
-        return z;
-    };
+    } em{
+        block_ts,
+        block_regress,
+        one_ts,
+        repair_prev,
+        rec_at,
+        sk_off_or_zero,
+        sk,
+        zm,
+        sz,
+        rc,
+        mn,
+        mx,
+        oreg,
+        fixes,
+        lane_ts,
+        lane_rec};
 
-    const uint32_t payload = profiler::spsc_decode_frame(
-        *st, frame, emit, emit_data, emit_atomic16, emit_zone_s16, enter_lane, leave_lane, fw);
+    const uint32_t payload = profiler::spsc_decode_frame(*st, frame, d, em, enter_lane, leave_lane, fw);
     sink = sk;
     zones += zm;
     stall_zones += sz;
@@ -313,36 +436,95 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
 // as a resync.
 class FrameWalker {
 public:
-    // One read of the ring: returns false when nothing moved. Whole frames decode in place from the batch; only a
-    // frame cut by the batch end waits in pending_ for the next pass. `deliver(dropped_delta)` runs at the end of
-    // the pass and, for a storing sink, whenever the scratch is within one frame of full; it must reset the sink.
+    // One peek of the ring: returns false when nothing moved. Frames decode in place from the ring's memory, which
+    // the device may be rewriting, so nothing leaves the decoder until the reader commits the frames it consumed;
+    // a failed commit rolls the sink and the decoder's counters back to the last delivery and the reader resyncs.
+    // Only a frame cut by the peek's end (the ring's wrap, or pages still landing) is copied, into pending_.
+    // `deliver(dropped_delta)` runs after a successful commit at the end of the pass and, for a storing sink,
+    // whenever the scratch is within one frame of full; it must reset the sink.
     template <typename Dec, typename Deliver>
-    bool pass(BroadcastRing<RingLine>::Reader& reader, std::span<RingLine> lines, Dec& dec, Deliver&& deliver) {
-        const auto got = reader.read_batch(lines);
-        const uint64_t dropped_total = reader.dropped();
-        uint64_t dd = dropped_total - last_dropped_;
-        last_dropped_ = dropped_total;
-        if (got.empty() && dd == 0) {
-            return false;
-        }
-        if (dd != 0) {
+    bool pass(BroadcastRing<RingLine>::Reader& reader, Dec& dec, Deliver&& deliver) {
+        const auto view = reader.peek(kConsumerLineBatch);
+        // Drops are reported at delivery, so a failed commit's are simply carried into the next pass.
+        auto deliver_now = [&] {
+            const uint64_t dd = reader.dropped() - last_dropped_;
+            last_dropped_ = reader.dropped();
+            deliver(dd);
+        };
+        if (reader.dropped() != last_dropped_) {
             pending_.clear();
             scanning_ = true;
         }
+        if (view.empty()) {
+            if (reader.dropped() == last_dropped_) {
+                return false;
+            }
+            deliver_now();
+            return true;
+        }
+        struct Snapshot {
+            uint64_t off, recs, zones, stall_zones, order_regressions, bad_frames, epoch_fixes, min_ts, max_ts;
+        };
+        auto snapshot = [&] {
+            uint64_t off = 0;
+            if constexpr (Dec::SinkT::kStores) {
+                off = dec.sink.off;
+            }
+            return Snapshot{
+                off,
+                dec.recs,
+                dec.zones,
+                dec.stall_zones,
+                dec.order_regressions,
+                dec.bad_frames,
+                dec.epoch_fixes,
+                dec.min_ts,
+                dec.max_ts};
+        };
+        auto restore = [&](const Snapshot& sn) {
+            if constexpr (Dec::SinkT::kStores) {
+                dec.sink.off = sn.off;
+            }
+            dec.recs = sn.recs;
+            dec.zones = sn.zones;
+            dec.stall_zones = sn.stall_zones;
+            dec.order_regressions = sn.order_regressions;
+            dec.bad_frames = sn.bad_frames;
+            dec.epoch_fixes = sn.epoch_fixes;
+            dec.min_ts = sn.min_ts;
+            dec.max_ts = sn.max_ts;
+        };
+        Snapshot sn = snapshot();
+        size_t consumed = 0;  // lines decoded since the last commit
+        // False when the reader was lapped: what was decoded since the last delivery is discarded.
+        auto commit = [&] {
+            if (reader.commit(consumed)) {
+                consumed = 0;
+                return true;
+            }
+            restore(sn);
+            pending_.clear();
+            scanning_ = true;
+            return false;
+        };
         auto decode = [&](const uint32_t* frame, uint32_t fw) {
             if constexpr (Dec::SinkT::kStores) {
                 if (dec.sink.off / sizeof(Rec) + kMaxFrameRecs > kConsumerScratchRecs) {
-                    deliver(dd);
-                    dd = 0;
+                    if (!commit()) {
+                        return false;
+                    }
+                    deliver_now();
+                    sn = snapshot();
                 }
             }
             const uint32_t payload = dec.decode_frame(frame, fw);
             if (payload != 0 && payload != frame[1]) {
                 dec.st->anomalies++;
             }
+            return true;
         };
-        const uint32_t* const w = reinterpret_cast<const uint32_t*>(got.data());
-        const size_t words = got.size() * kernel_profiler::SPSC_SPAN_PAGE_WORDS;
+        const uint32_t* const w = reinterpret_cast<const uint32_t*>(view.data());
+        const size_t words = view.size() * kernel_profiler::SPSC_SPAN_PAGE_WORDS;
         size_t off = 0;
         if (!pending_.empty()) {
             // Frames start on a line and the prefix is one line, so a waiting head always carries its length.
@@ -350,11 +532,16 @@ public:
             const size_t take = std::min<size_t>(fw - pending_.size(), words);
             pending_.insert(pending_.end(), w, w + take);
             off = take;
+            consumed = take / kernel_profiler::SPSC_SPAN_PAGE_WORDS;
             if (pending_.size() < fw) {
-                deliver(dd);
+                if (commit()) {
+                    deliver_now();
+                }
                 return true;
             }
-            decode(pending_.data(), fw);
+            if (!decode(pending_.data(), fw)) {
+                return true;
+            }
             pending_.clear();
         }
         while (words - off >= kernel_profiler::SPSC_SPAN_PREFIX_WORDS) {
@@ -366,18 +553,25 @@ public:
                     dec.bad_frames++;
                 }
                 off += kernel_profiler::SPSC_SPAN_PAGE_WORDS;
+                consumed++;
                 continue;
             }
             scanning_ = false;
             const uint32_t fw = kernel_profiler::spsc_span_frame_words(w1);
             if (words - off < fw) {
                 pending_.assign(w + off, w + words);
+                consumed += (words - off) / kernel_profiler::SPSC_SPAN_PAGE_WORDS;
                 break;
             }
-            decode(w + off, fw);
+            if (!decode(w + off, fw)) {
+                return true;
+            }
             off += fw;
+            consumed += fw / kernel_profiler::SPSC_SPAN_PAGE_WORDS;
         }
-        deliver(dd);
+        if (commit()) {
+            deliver_now();
+        }
         return true;
     }
 

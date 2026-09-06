@@ -652,6 +652,7 @@ static FORCE_INLINE void finish(
         if constexpr (!kSpool) {
             pump.notify();
         }
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr) = kernel_profiler::kRelayDrainedWord;
         socket_barrier(sender);
     }
     while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
