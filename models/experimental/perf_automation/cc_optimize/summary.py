@@ -2338,13 +2338,33 @@ def _roofline_tables(
     if _fid:
         _top = max(_fid, key=lambda r: r[1])
         _in_use = str(_top[0]) if _top[1] else ""
+
     # AND SAY WHEN IT IS ONE VERDICT FOR EVERY STACK. Without stage signposts the capture cannot
     # attribute an op to a stage, so this whole-profile figure is stamped across encode, prefill and
     # decode alike -- stacks that do not share a rung. voxtral: 60.3% of matmul FLOPs are LoFi and
     # 39.7% HiFi4, so every stack was priced at LoFi's 702 TFLOPS while encode and prefill run HiFi4
     # at 175.5, a ceiling 4x too generous. The fallback is correct (inventing a per-stage peak would
     # be worse); printing it as though it were three measurements is not.
-    _shared_peak = bool(_in_use) and not any((_roofs.get(_s) or {}).get("peak_stage") for _s in (_roofs or {}))
+    # DOES EVERY STACK REALLY SHARE ONE PEAK? Ask whether a per-stage peak EXISTS, not whether one was
+    # DERIVED. peak_stage holds the rung a stage worked out for itself and is empty exactly when that
+    # stage's peak is PINNED -- the comment where it is written says so. The two questions had the
+    # same answer only while per-stage pinning was broken; once it works, every stage reports no rung
+    # and the caveat fires on a report whose three stacks each have their own anchor. Measured on
+    # voxtral_mini_3b_2507 2026-09-06: encode, prefill and decode each hold a peak_flops anchor, all
+    # at 175.5 TFLOPS because the model began HiFi4 throughout, and the caveat still claimed there
+    # was no per-stage attribution. Agreeing is not the same as sharing.
+    def _has_own_peak(_s) -> bool:
+        if str((_roofs.get(_s) or {}).get("peak_stage") or "").strip():
+            return True
+        try:
+            _led = _ledger()
+            return bool(
+                _led.anchor_value(_led.KIND_PEAK_FLOPS, depth=str(_s or "").strip().lower(), model=model, task=task)
+            )
+        except Exception:  # noqa: BLE001 -- a ledger that cannot be read states nothing either way
+            return False
+
+    _shared_peak = bool(_in_use) and not any(_has_own_peak(_s) for _s in (_roofs or {}))
 
     # BOTH ROOFS, BOTH STAGES. Only the WINNING floor used to survive `annotate_op`, so compute was
     # the only renderable term and the report printed a compute band over a memory-bound stage. Being
