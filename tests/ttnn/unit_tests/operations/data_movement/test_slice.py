@@ -1968,3 +1968,45 @@ def test_slice_rm_wide_row_chunking(device, last_dim):
     ttnn_output = ttnn.slice(ttnn_input, begins, ends, step, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     assert torch.equal(torch_output, ttnn.to_torch(ttnn_output))
+
+
+@pytest.mark.parametrize("T, C, K", [(2048, 5120, 4)])
+def test_slice_tile_input_row_window_under_l1_pressure(T, C, K, device):
+    """Slicing rows (non-tile-aligned begin) at full width of a wide TILE input takes the rm
+    path, which converts the whole tensor to ROW_MAJOR before slicing; under L1 pressure the
+    untilize's per-core circular buffers cross concurrently resident L1 buffers and the
+    launch-time CB/L1 clash check fails ("static circular buffers ... clash with L1 buffers").
+    The rm path now carves the minimal tile-aligned row window before the ROW_MAJOR hop,
+    shrinking the untilize by the row ratio. Mirrors the GDN conv-state carry extraction
+    (rows T-(K-1)..T of [1, T, C]) with ~21 MiB of resident L1 tensors - the minimum
+    reproducing pressure before the fix."""
+    torch.manual_seed(2005)
+    torch_input = torch.randn(1, T, C, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # L1 residents (kept alive across the slice) sized like the demo's qkvzab activations:
+    # 2 x [1, T/2, C] TILE bf16 ~= 21 MiB.
+    l1_interleaved = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    residents = [
+        ttnn.empty(
+            [1, T // 2, C],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=l1_interleaved,
+        )
+        for _ in range(2)
+    ]
+
+    torch_output = torch_input[:, T - (K - 1) : T, :]
+    ttnn_output = ttnn.slice(ttnn_input, (0, T - (K - 1), 0), (1, T, C))
+
+    tt_output = ttnn.to_torch(ttnn_output)
+    assert tt_output.shape == torch_output.shape
+    assert_with_pcc(torch_output, tt_output, 0.999)
