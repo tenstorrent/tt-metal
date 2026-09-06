@@ -1561,7 +1561,8 @@ def test_binary_remainder_fmod_int32_float_scalar(ttnn_op, layout, use_sub_core_
         pytest.param(ttnn.ROW_MAJOR_LAYOUT, False, id="row_major"),
     ],
 )
-def test_binary_remainder_int32_float_scalar_optional_int32_output(layout, use_sub_core_grids, device):
+@pytest.mark.parametrize("scalar", [1.5, -1.5, 1.75, -1.75])
+def test_binary_remainder_int32_float_scalar_optional_int32_output(layout, use_sub_core_grids, scalar, device):
     torch_input_tensor = torch.tensor([-5, -4, -1, 0, 1, 4, 5], dtype=torch.int32)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -1578,7 +1579,8 @@ def test_binary_remainder_int32_float_scalar_optional_int32_output(layout, use_s
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    scalar = 1.5
+    # Negative scalars cover negative intermediates; +/-1.75 also distinguishes
+    # truncation from round-to-nearest-even (unlike the 0.5 remainders for +/-1.5).
     expected = torch.remainder(torch_input_tensor, scalar).to(torch.int32)
     sub_core_grids = None
     if use_sub_core_grids:

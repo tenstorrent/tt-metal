@@ -771,6 +771,8 @@ Tensor fmod(
             output_mem_config,
             operation_sub_core_grids);
     }
+    // The unary SFPU fast path does not support INT32. Float scalars promote INT32 inputs
+    // above; integral scalars must route through binary_ng, as must explicit subdevice dispatch.
     if (input.dtype() == DataType::INT32 || sub_device_id.has_value()) {
         return ttnn::detail::invoke_binary_ng(
             input,
