@@ -85,19 +85,24 @@ Knob map (all tunable parameters, none inlined):
   derived block factors
     BLOCK_ROWS   tile-rows per compute block = min(per-core assignment,
                  the coarsest chunk that fits the L1 budget)
-    WT_CHUNK     width tiles per compute block = Wt in the RESIDENT regime;
-                 the coarsest DIVISOR of Wt that fits L1 in ROW_RESIDENT / STREAM
-    NUM_W_CHUNKS = Wt // WT_CHUNK
+    WT_CHUNK     width tiles per compute block = Wt in the RESIDENT regime; the
+                 coarsest chunk that fits L1 in ROW_RESIDENT / STREAM -- a DIVISOR
+                 of Wt (D1) unless the ragged/padded split is coarser (D33)
+    NUM_W_CHUNKS = ceil(Wt / WT_CHUNK).  NUM_W_CHUNKS * WT_CHUNK is the PADDED
+                 width; the excess (WT_PAD) is pad tiles the core does not own
+    WT_PAD       = NUM_W_CHUNKS * WT_CHUNK - wt_per_core (D33).  0 on every
+                 divisor build.  The reader zeroes those tiles so they add exactly
+                 0 to sum(t^2); the writer never ships them
     X_RESIDENT   whether cb_input_tiles / cb_gamma_tiles are HELD across pass A
                  and pass B.  Since Refinement 4 this is DECOUPLED from
                  NUM_W_CHUNKS == 1 (that decoupling is the third regime -- D14)
-    x_hold_wt    width tiles the two held CBs span: wt_per_core when X_RESIDENT,
-                 else WT_CHUNK.  ONE source of truth for both CB sizes and the
-                 kernels' final pops
+    x_hold_wt    width tiles the two held CBs span: the PADDED per-core width
+                 (NUM_W_CHUNKS * WT_CHUNK) when X_RESIDENT, else WT_CHUNK.  ONE
+                 source of truth for both CB sizes and the kernels' final pops
 
 Deviations from op_design.md section 1.4 (advisory: CB sizing / knob selection;
 the scheme, topology, work split and helper mapping are unchanged).  D1..D28 are
-the SEED's, preserved verbatim; D29..D32 at the end are this op's own, and each
+the SEED's, preserved verbatim; D29..D33 at the end are this op's own, and each
 is priced in l1_ledger.md's "Deviations" table with its measurement:
 
   D1  WT_CHUNK is constrained to a DIVISOR of Wt, so every width chunk is the
@@ -111,6 +116,14 @@ is priced in l1_ledger.md's "Deviations" table with its measurement:
           the CB ring, i.e. the ring size must be a multiple of the push unit.
       WT_CHUNK is still the coarsest value the L1 budget allows (largest
       admissible divisor), so the knob is not collapsed.
+
+      SUPERSEDED BY D33 for tile-aligned widths.  The divisor clamp is a
+      GRANULARITY CLIFF at a prime Wt -- 127 has no divisor between 1 and 127, so
+      any cap below the whole row collapses the chunk to ONE tile.  D33 keeps all
+      three mechanisms above (the chunk stays UNIFORM) by padding the last chunk
+      instead of raggedizing it.  D1 still governs a non-tile-aligned width, where
+      the reduce's partial scaler / 0-1 mask is aimed at the last tile of the block
+      and a pad tile there would silently drop the mask.
   D2  The STREAM chunk-size solve counts the ROW_MAJOR staging CBs at
       WT_CHUNK tiles (what is actually allocated), not at Wt.
   D3  RESOLVED by Refinement 1b.  accumulate_reduce_block() used not to expose
@@ -709,6 +722,49 @@ is priced in l1_ledger.md's "Deviations" table with its measurement:
       new chain seam.  Recorded as a follow-up with the measurement to take (
       cb_x_sum at depth 2 with a pack-side base, against the serial order),
       never as a finished trade.  Every build without a residual is unchanged.
+  D33 Refinement 4 -- THE RAGGED (PADDED) WIDTH CHUNK, which removes D1's prime-Wt
+      granularity cliff.  `_width_chunk` takes the coarsest BALANCED chunk
+      `ceil(wt_core / ceil(wt_core / cap))` and pads the last one out to it, so
+      every chunk -- and therefore every CB ring, every helper block width and
+      every batched NoC group -- stays UNIFORM and all three D1 mechanisms hold
+      unchanged.  The compute kernel is byte-for-byte untouched: `X_HOLD_WT` was
+      already `WT_CHUNK * NUM_W_CHUNKS`.
+
+      WHO OWNS THE PAD.  The reader: pad tiles are never read from the tensor and
+      pass A sums x^2 over the whole padded chunk, so they must be exactly ZERO,
+      not merely finite.  It zeroes them with the device zero API on the pages it
+      just reserved -- the same mechanism as `publish_native_shard`'s ragged-SHARD
+      pad and the RM rings' boot zero.  The writer skips them with the predicate it
+      already had (`wt < WT`) on the TILE path, and writes the tail chunk's real
+      bytes at the PADDED stride on the ROW_MAJOR one.  The pad is bounded by
+      construction: pad < NUM_W_CHUNKS, i.e. under 1/cap of the width (ONE tile in
+      128 at Wt = 127).
+
+      GATED on `kernel_partial_w == 0` (see D1's supersession note) and, on the L5
+      path, RE-CAPPED against its own pad: the held CBs span the padded row, so the
+      first candidate at Wt = 127 can miss by one tile of L1 -- and the divisor
+      below it is 1, the very cliff -- so the solve shrinks the cap and retries
+      rather than falling straight back.  `RAGGED_WIDTH_CHUNK = 0` restores D1
+      exactly.
+
+      MEASURED (blackhole p150b 1350 MHz, ragged vs the divisor clamp, min over 2
+      reps of median-of-5):
+        shape                       layout  mode                 divisor   ragged
+        (1,1,32,4064)   Wt=127      RM      gamma_bias_residual   590592    56486  10.46x
+        (1,1,32,4064)   Wt=127      RM      gamma                 376319    37950   9.92x
+        (1,1,3104,4064) Wt=127      RM      gamma_bias_residual  1991000   216590   9.19x
+        (1,1,3104,2848) Wt=89       RM      gamma                 805205    98090   8.21x
+        (1,1,3104,4064) Wt=127      RM      gamma                1145067   138309   8.28x
+        (1,1,32,4064)   Wt=127      TILE    no_gamma              101279    16616   6.10x
+        (1,1,32,4064)   Wt=127      TILE    gamma                 148493    33278   4.46x
+        (1,1,3104,4064) Wt=127      TILE    gamma                 213058   150576   1.42x
+        (1,1,3104,4064) Wt=127      TILE    gamma_bias_residual   329830   246944   1.34x
+        (1,1,1024,16384) Wt=512     TILE    gamma_bias_residual   525549   498670   1.05x
+      The last row is a NON-prime width: 512's coarsest divisor under the cap (32)
+      is not its coarsest FITTING chunk (57), so D33 pays there too.  pcc IMPROVES
+      on every one of them (0.99987 -> 0.99999 at Wt=127): a coarse chunk clears
+      D7/D8's reduce-datapath floors, which is the precision lever Refinement 1
+      built.  Fourteen guard cases 0.99-1.01x.
 
 """
 
@@ -891,7 +947,7 @@ WIDTH_SPLIT_MAX_GROUP_CORES = 16
 # Rt >= num_cores) on the untouched Phase-0 path.
 WIDTH_SPLIT_MIN_GAIN = 4
 
-# Refinement 4 (D32) -- THE RAGGED (PADDED) WIDTH CHUNK.  1 = a chunked width may
+# Refinement 4 (D33) -- THE RAGGED (PADDED) WIDTH CHUNK.  1 = a chunked width may
 # take the coarsest BALANCED chunk and pad the last one out to it; 0 = D1's divisor
 # clamp, exactly as shipped through Refinement 3.  See `_width_chunk` for what the
 # knob decides and `WT_PAD` for what the kernels do with the pad tiles.  Taken only
@@ -1386,7 +1442,7 @@ def _largest_divisor_at_most(n: int, cap: int) -> int:
 
 def _width_chunk(wt_core: int, cap: int, ragged_ok: bool) -> tuple[int, int]:
     """(WT_CHUNK, NUM_W_CHUNKS) for `wt_core` width tiles under an L1 cap of `cap`
-    tiles per chunk.  ONE source of truth for the chunk-count decision (D32).
+    tiles per chunk.  ONE source of truth for the chunk-count decision (D33).
 
     D1 constrained WT_CHUNK to a DIVISOR of wt_core, which is a GRANULARITY CLIFF at
     a prime width: Wt = 127 has no divisor between 1 and 127, so a cap of 32 collapses
@@ -2843,7 +2899,7 @@ def create_program_descriptor(
         must fall back to SCHEME_ROWS (which can chunk `width`).
         """
         wt_core = plan.wt_per_core
-        # D32's gate, in ONE place.  A ragged (padded) chunk needs the pad tiles to
+        # D33's gate, in ONE place.  A ragged (padded) chunk needs the pad tiles to
         # contribute exactly 0 to sum(t^2), which the reader arranges by zeroing them
         # -- and that is only sound when the row's LAST REAL tile is fully valid.  With
         # PARTIAL_W != 0 the reduce's partial scaler / 0-1 mask is aimed at the last
@@ -3000,7 +3056,7 @@ def create_program_descriptor(
             # while cb_input_tiles and cb_residual_tiles become chunked streams.
             # That is why the residual does not simply double the held term.
             #
-            # D32: the HELD CBs span the PADDED row (`NUM_W_CHUNKS * WT_CHUNK`), not
+            # D33: the HELD CBs span the PADDED row (`NUM_W_CHUNKS * WT_CHUNK`), not
             # the real one, so the fixed term is a function of the hold width and the
             # ragged candidate is re-priced against it below.
             def _fixed(hold_wt):
@@ -3069,7 +3125,7 @@ def create_program_descriptor(
         stream_per_row, stream_combine_fixed = _f32_terms(compact=False)
         fixed_stream = scaler_bytes + stream_per_row + stream_combine_fixed
         wt_chunk_l1_max = max(1, (budget - fixed_stream) // per_chunk_tile_bytes)
-        # D1's divisor clamp, or D32's balanced ragged chunk where it is coarser.
+        # D1's divisor clamp, or D33's balanced ragged chunk where it is coarser.
         # STREAM holds nothing, so the pad costs no L1 at all here -- only the pad
         # tiles' (zero-valued) compute.
         wtc, n = _width_chunk(wt_core, wt_chunk_l1_max, ragged_ok)
@@ -3125,7 +3181,7 @@ def create_program_descriptor(
     mcast_pre_handshake = _combine_mcast_pre_handshake(combine, single_round)
     combine_tree = _combine_tree_arity(plan.group_size, 1) if combine else None
     tree_f0, tree_f1 = combine_tree if combine_tree else (0, 0)
-    # D32: PAD tiles the chunking added past the core's real width.  ONE derivation,
+    # D33: PAD tiles the chunking added past the core's real width.  ONE derivation,
     # read by the CB sizes, by both dataflow kernels and by the asserts below; 0 on
     # every divisor build, which is every INPUTS and every perf-group shape.
     wt_pad = wt_chunk * num_w_chunks - wt_per_core
@@ -3355,7 +3411,7 @@ def create_program_descriptor(
         # Same staged tiles, 1/WT_CHUNK of the ring; taken only when the L1 solve
         # asks for it, so every build that already fit is byte-identical.
         1 if narrow_pc_stage else 0,
-        # 29 D32: PAD width tiles in the LAST chunk (0 on every divisor build).  The
+        # 29 D33: PAD width tiles in the LAST chunk (0 on every divisor build).  The
         # reader owns the pad's invariant -- those tiles are never read from the
         # tensor and are zeroed in L1, so they contribute exactly 0 to sum(t^2).
         wt_pad,
@@ -3379,7 +3435,7 @@ def create_program_descriptor(
     writer_ct_args = [
         1 if is_tile else 0,  # 0  IS_TILE
         Wt,  # 1  WT
-        wt_chunk | (wt_pad << 16),  # 2  WT_CHUNK | WT_PAD<<16 (D32)
+        wt_chunk | (wt_pad << 16),  # 2  WT_CHUNK | WT_PAD<<16 (D33)
         num_w_chunks,  # 3  NUM_W_CHUNKS
         _pack_txn_rows(block_rows, dm_txn_rows),  # 4  BLOCK_ROWS | (TXN_ROWS-1)<<16 (R3 lever 3)
         elem_bytes,  # 5  output element bytes

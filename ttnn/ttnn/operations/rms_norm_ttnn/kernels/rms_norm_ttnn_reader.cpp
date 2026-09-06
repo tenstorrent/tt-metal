@@ -309,7 +309,7 @@ FORCE_INLINE void publish_native_shard(uint32_t w_real, uint32_t tile_bytes) {
     cb_push_back(CB, IN_SHARD_PAGES);
 }
 
-// ---- D32: the RAGGED TAIL of a ROW_MAJOR width chunk ------------------------
+// ---- D33: the RAGGED TAIL of a ROW_MAJOR width chunk ------------------------
 // `read_sticks_for_tilize` derives its L1 stride from `row_bytes`, so on a tail
 // chunk that is narrower than WT_CHUNK it would pack the sticks at the REAL width
 // while `tilize<WT_CHUNK>` reads them back at the PADDED one.  The tail therefore
@@ -417,7 +417,7 @@ void kernel_main() {
     constexpr uint32_t BIAS_BLOCKED = get_compile_time_arg_val(27);
     // D30: stage a ROW_MAJOR per-channel operand one tile COLUMN per page.
     constexpr uint32_t NARROW_PC_STAGE = get_compile_time_arg_val(28);
-    // D32 -- THE RAGGED (PADDED) WIDTH CHUNK.  `WT_PAD` is how many of the LAST
+    // D33 -- THE RAGGED (PADDED) WIDTH CHUNK.  `WT_PAD` is how many of the LAST
     // chunk's WT_CHUNK width tiles this core does not own: the descriptor's
     // `_width_chunk` takes the coarsest BALANCED chunk at a prime Wt (127 -> 4 x 32)
     // instead of collapsing to the only divisor (1), and pads the tail out so that
@@ -763,7 +763,7 @@ void kernel_main() {
                 cb_reserve_back(cb_residual_tiles, pages);
                 rl1 = get_write_ptr(cb_residual_tiles);
             }
-            // D32: the ragged tail chunk's trailing WT_PAD tiles are OUTSIDE the row.
+            // D33: the ragged tail chunk's trailing WT_PAD tiles are OUTSIDE the row.
             // Zero them (device zero API, on the pages just reserved) BEFORE issuing
             // any read: the zero borrows the write command buffer and is released only
             // by its own barrier, so it must not be interleaved with the real traffic.
@@ -836,7 +836,7 @@ void kernel_main() {
                     stage_band(cb_residual_sticks, residual_addr, stick_start, sticks);
                 }
             } else {
-                // D32: the ragged tail stages raw at the PADDED stride (see
+                // D33: the ragged tail stages raw at the PADDED stride (see
                 // `stage_ragged_tail_sticks`); every other chunk is the helper's.
                 if constexpr (HAS_WPAD) {
                     if (c + 1 == NUM_W_CHUNKS) {

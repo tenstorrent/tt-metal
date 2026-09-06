@@ -123,7 +123,7 @@ void kernel_main() {
     // ---- compile-time knobs (all from rms_norm_ttnn_program_descriptor.py) -----
     constexpr uint32_t IS_TILE = get_compile_time_arg_val(0);
     constexpr uint32_t WT = get_compile_time_arg_val(1);
-    // D32 -- THE RAGGED (PADDED) WIDTH CHUNK, the writer's half.  Index 2 packs
+    // D33 -- THE RAGGED (PADDED) WIDTH CHUNK, the writer's half.  Index 2 packs
     // WT_CHUNK (low half) with WT_PAD (high half): how many of the LAST chunk's
     // WT_CHUNK width tiles this core does NOT own, because `_width_chunk` took the
     // coarsest BALANCED chunk at a prime Wt (127 -> 8 x 16) instead of collapsing to
@@ -352,7 +352,7 @@ void kernel_main() {
                 if constexpr (BAND_OUT) {
                     write_band(stick_start, sticks);
                 } else if (HAS_WPAD && c + 1 == NUM_W_CHUNKS) {
-                    // D32, the READER's `stage_ragged_tail_sticks` mirrored: the tail
+                    // D33, the READER's `stage_ragged_tail_sticks` mirrored: the tail
                     // chunk's sticks sit at the PADDED stride (untilize<WT_CHUNK> put
                     // them there) and only the real lanes are written back.  The pad
                     // lanes carry a finite product of zero and are simply not shipped.

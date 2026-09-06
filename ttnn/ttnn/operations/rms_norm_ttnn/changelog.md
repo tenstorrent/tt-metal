@@ -540,3 +540,125 @@
     14-case A/B harness (6 interleaved-prefill targets, 2 STREAM, 6 guards) every number
     above came from.
   - Whole unit directory after the change: **601 passed, 1 skipped**.
+
+## Refinement 4 — Remove the prime-`Wt` granularity cliff (ragged width chunk)
+
+- Date: 2026-09-06
+- What was done:
+
+  **The cliff, restated from the code.** `WT_CHUNK` was constrained to a **divisor** of the
+  per-core width (D1), so a prime `Wt` had nothing between 1 and the whole row: at
+  `W = 4064` (`Wt = 127`) every chunked build came out at `WT_CHUNK = 1,
+  NUM_W_CHUNKS = 127`, repaying one per-phase init / reconfig / dst-sync window /
+  pipeline fill-and-drain **per width tile** instead of per chunk. Confirmed on device
+  before touching anything (`RMS_TRACE_BLOCKING`, added as a permanent one-line dump of
+  the solve): `(1,1,32,4064)` and `(1,1,3104,4064)`, TILE and ROW_MAJOR, all at 1×127.
+
+  **What shipped, and what it deliberately is NOT.** The design filed this regime as "a
+  runtime `wt_c` instead of a compile-time divisor", which would have meant changing three
+  helper-side mechanisms (`tilize`/`untilize`'s compile-time `block_width_tiles`, the
+  reduce's `num_pages % cols == 0` assert, and the no-straddle rule on a multi-page
+  reserve). It shipped instead as the **coarsest BALANCED chunk with the last chunk
+  PADDED** — `WT_CHUNK = ceil(wt_c / ceil(wt_c / cap))`, `NUM_W_CHUNKS = ceil(wt_c / WT_CHUNK)` —
+  which keeps every chunk **uniform** and therefore satisfies all three mechanisms
+  verbatim. `127` at a cap of 32 becomes 4 chunks of 32 with **one** pad tile. The pad is
+  bounded by construction (`pad < NUM_W_CHUNKS`, i.e. under `1/cap` of the width), which is
+  why the balanced form and not a greedy `cap`-wide one.
+
+  **The compute kernel is byte-for-byte untouched.** `X_HOLD_WT` was already
+  `WT_CHUNK * NUM_W_CHUNKS`, every chain already takes a runtime `IterationShape::grid`,
+  and the reduce already takes a runtime block shape. Only the two dataflow halves moved,
+  and both moves are the op's **existing ragged-width-SHARD machinery applied one axis
+  over**: the reader zeroes the pad tiles with the device zero API (exactly
+  `publish_native_shard`'s mechanism and exactly its reason — a pad tile that is not
+  *exactly* zero inflates `sum(t²)`), and the writer skips them with the `wt < WT`
+  predicate it already carried. The ROW_MAJOR tail needed one new nine-line pair
+  (`stage_ragged_tail_sticks` + its writer mirror), because
+  `read_sticks_for_tilize` / `write_sticks_after_untilize` derive the L1 **stride** from
+  `row_bytes` and the padded tail needs the two to differ; that is recorded at both sites
+  as a raw-API bypass with the helper gap that would close it.
+
+  **Two knobs, one source of truth each.** `RAGGED_WIDTH_CHUNK` (ships at 1; `0` restores
+  D1 exactly and is what the A/B below flips) and `ROW_RESIDENT_MIN_CHUNK_WT` (ships at 1,
+  its byte-identical default — measured flat once the ragged chunk landed, kept live).
+  `_width_chunk` is the single place the chunk-count decision is made; `wt_pad` is derived
+  once and read by the CB sizes and both kernels. The reader carries `WT_PAD` as its own
+  CT scalar; the **writer packs it into `WT_CHUNK`'s word** (index 2 high half), because
+  the writer's CT-arg list LENGTH is a checked structural property
+  (`test_program_is_structurally_the_seeds`) and index 4 / index 15 already establish that
+  idiom.
+
+  **The gate, and why it is not conservatism.** Ragged is taken only when
+  `PARTIAL_W == 0`. With a non-tile-aligned width the reduce's partial scaler / 0-1 mask is
+  aimed at the **last tile of the block**; padding would make that a pad tile and silently
+  drop the mask off the real last tile. A non-aligned width keeps D1's divisor clamp.
+
+  **One real bug found and fixed on the way.** The first ragged candidate is priced against
+  a hold of `wt_core`, but the held CBs span the **padded** row — so at `Wt = 127` the
+  19×7 candidate (6 pad tiles) missed by one tile of L1, and the fallback was
+  "take the divisor", i.e. **1** — the cliff itself. The solve now re-caps against the
+  candidate's own pad and retries (a strictly-shrinking fixed point), landing on 16×8.
+  That is the difference between the RM `gamma_bias_residual` cells being 9.19× faster and
+  being unchanged.
+
+- Accuracy achieved: PCC **improves** everywhere the chunk coarsened —
+  0.999870 → 0.999988 on `(1,1,3104,4064)` `gamma_bias_residual`, 0.999961 → 0.999987 on
+  `gamma`, 0.999975 → 0.999991 operand-free — because a coarse chunk clears D7/D8's
+  reduce-datapath floors and routes the reduce through `AccumulateViaAdd`, which is the
+  precision lever Refinement 1 built. rel-RMS well inside the 0.04 bound on every prime-`Wt`
+  cell in both layouts; the guard set is bit-for-bit unchanged (`WT_PAD == 0` ⇒ identical
+  program).
+
+  **Measured device-ns** (blackhole p150b 1350 MHz, in-process profiler, min over 2 reps of
+  median-of-5; `RAGGED_WIDTH_CHUNK` 0 vs 1, one fresh-cache measurement per variant):
+
+  | shape | layout | mode | divisor | ragged | speedup |
+  |---|---|---|---:|---:|---:|
+  | `(1,1,32,4064)` | RM | gamma_bias_residual | 590 592 | 56 486 | **10.46x** |
+  | `(1,1,32,4064)` | RM | gamma | 376 319 | 37 950 | **9.92x** |
+  | `(1,1,3104,4064)` | RM | gamma_bias_residual | 1 991 000 | 216 590 | **9.19x** |
+  | `(1,1,3104,4064)` | RM | gamma | 1 145 067 | 138 309 | **8.28x** |
+  | `(1,1,3104,2848)` | RM | gamma | 805 205 | 98 090 | **8.21x** |
+  | `(1,1,3104,4064)` | RM | no_gamma | 992 721 | 133 170 | **7.46x** |
+  | `(1,1,32,4064)` | TILE | no_gamma | 101 279 | 16 616 | **6.10x** |
+  | `(1,1,32,4064)` | TILE | gamma | 148 493 | 33 278 | **4.46x** |
+  | `(1,1,3104,4064)` | TILE | gamma | 213 058 | 150 576 | **1.42x** |
+  | `(1,1,3104,4064)` | TILE | gamma_bias_residual | 329 830 | 246 944 | **1.34x** |
+  | `(1,1,1024,16384)` | TILE | gamma_bias_residual | 525 549 | 498 670 | **1.05x** |
+
+  The last row is a **non-prime** width and was not a target: `Wt = 512`'s coarsest divisor
+  under the cap is 32, but its coarsest *fitting* chunk is 57. D33 pays wherever the two
+  differ, not only at a prime.
+
+  Guards (fourteen cases spanning the interleaved prefill, STREAM, the width-split combine,
+  the 64-core BLOCK shard, and the RM BAND): **0.99–1.05x**, nothing outside noise. The two
+  that looked like dips at 2 reps (`P4` 0.980, `P6` 0.995) both build `NUM_W_CHUNKS == 1` or
+  a divisor chunk — i.e. a byte-identical program — and came back 1.014 / 0.991 at 3 reps.
+
+- Golden test progress: `test_op_loose` **433 passed / 10 failed** — the identical prior
+  figure, and the same 10 harness-attributed failures (`torch.max` on an empty tensor;
+  `CoreRange.end_coord` in the harness's sharded program-config helper). The
+  `resilience` + `perf` + `pad_poison` groups: **384 passed / 3 skipped, 0 failed**. A
+  2 700-cell strict-cartesian slice (`1x1x32x8192`, `1x1x2048x256`, `2x1x64x4096`,
+  `1x1x17x50` × the full axis product): green. Unit directory **1 061 passed / 7 skipped**.
+
+- Issues encountered:
+  1. **The pad re-pricing fallback was the cliff.** See above — fixed by re-capping instead
+     of falling back to the divisor.
+  2. **`read_sticks_for_tilize` cannot express a padded tail.** It derives
+     `padded_row_bytes` (the destination stride) from `row_bytes` (the bytes read), so a
+     tail chunk staged with the real `row_bytes` lands at the *real* stride while
+     `tilize<WT_CHUNK>` reads it back at the *padded* one. Handled with a raw strided read
+     shaped exactly like the BAND scheme's `stage_band`, with a single zero call covering
+     every stick's pad lanes; the helper gap (separate "bytes read" and "stride written"
+     parameters) is recorded at the call site.
+  3. **The writer's CT-arg list length is load-bearing.** Appending a 19th scalar broke
+     `test_program_is_structurally_the_seeds` by construction. Packed into index 2 instead,
+     which is the file's own established idiom.
+
+- Tests added: `tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_ragged_width.py`
+  (174 cases) — `_width_chunk`'s covering/cap/no-worse-than-D1 contract over a
+  width × cap grid, both knobs proven live, the cliff proven gone on every chunked
+  prime-`Wt` build in both layouts, reader/writer pad-count agreement, the `PARTIAL_W != 0`
+  gate, and on-device PCC/rel-RMS at the prime widths across every operand combination.
+  Plus `probes/bench_r4*.py` via `bench_r3.py`'s harness (the A/B above).

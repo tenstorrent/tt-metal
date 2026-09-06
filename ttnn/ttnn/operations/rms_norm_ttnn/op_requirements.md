@@ -485,7 +485,7 @@ finding lives.
 
 ---
 
-### [ ] Refinement 4 — Remove the prime-`Wt` granularity cliff (ragged width chunk)
+### [x] Refinement 4 — Remove the prime-`Wt` granularity cliff (ragged width chunk)
 
 **Type**: perf
 
@@ -524,6 +524,58 @@ does not own — and conflating the two is how a correct `gw` constraint gets re
 layouts, since the resilience group sweeps placement × layout), those cells stay green, no
 perf-group case regresses, `verify_supported`'s categories are unchanged, and no regression
 across the config-spanning guard set or `test_program_is_structurally_the_seeds`.
+
+**Outcome**: **the cheap version the verifier notes told me to check first was not merely
+cheap enough — it was cheaper than a tail instantiation, because it needs no second
+instantiation at all.** `1.34x–10.46x` on the target region, and the compute kernel is
+byte-for-byte unchanged.
+
+*What shipped.* Not the deferred regime's "runtime `wt_c`", and not the notes' compile-time
+tail either. `_width_chunk` takes the coarsest **balanced** chunk
+`ceil(wt_c / ceil(wt_c / cap))` and **pads** the last chunk out to it, so every chunk stays
+**uniform** — which satisfies all three `Mechanism caps` rows verbatim (`tilize`/`untilize`
+keep their compile-time `block_width_tiles`, the reduce's `num_pages % cols == 0` still
+holds, every ring is still a multiple of its push unit) and leaves nothing for a second
+template to do. `Wt = 127` at a cap of 32 becomes 4 chunks of 32 with **one** pad tile; the
+balanced form bounds the pad at `< NUM_W_CHUNKS`, i.e. under `1/cap` of the width. The pad
+tiles are the ragged-**shard** pad this op already carried, moved one axis over: the reader
+zeroes them with the device zero API (`publish_native_shard`'s mechanism, and its reason —
+a pad tile that is not *exactly* zero inflates `sum(t²)`), the writer skips them with the
+`wt < WT` predicate it already had. Only the ROW_MAJOR tail needed new code, and only
+because `read_sticks_for_tilize` / `write_sticks_after_untilize` derive the L1 **stride**
+from `row_bytes`; that helper gap is recorded at both call sites.
+
+*Measured* (blackhole p150b 1350 MHz, `RAGGED_WIDTH_CHUNK` 0 vs 1, min over 2 reps of
+median-of-5). `(1,1,32,4064)` RM `gamma_bias_residual` 590 592 → 56 486 (**10.46x**), RM
+`gamma` 376 319 → 37 950 (9.92x), TILE `no_gamma` 101 279 → 16 616 (6.10x), TILE `gamma`
+148 493 → 33 278 (4.46x). `(1,1,3104,4064)` RM `gamma_bias_residual` 1 991 000 → 216 590
+(9.19x), RM `gamma` 1 145 067 → 138 309 (8.28x), TILE `gamma` 213 058 → 150 576 (1.42x),
+TILE `gamma_bias_residual` 329 830 → 246 944 (1.34x). `(1,1,3104,2848)` (`Wt = 89`, the
+other prime) RM `gamma` 805 205 → 98 090 (8.21x). And a case that was **not** a target:
+`(1,1,1024,16384)` STREAM `gamma_bias_residual` 525 549 → 498 670 (1.05x) — `Wt = 512` is
+not prime, but its coarsest *divisor* under the cap (32) is not its coarsest *fitting*
+chunk (57), so this pays wherever the two differ. pcc **improves** on every cell that
+coarsened (0.99987 → 0.99999 at `Wt = 127`): a coarse chunk clears D7/D8's reduce-datapath
+floors. Fourteen guards spanning the interleaved prefill, STREAM, the width-split combine,
+the 64-core BLOCK shard and the RM BAND: 0.99–1.05x, nothing outside noise (`WT_PAD == 0`
+there ⇒ a byte-identical program). `test_op_loose` 433/443, the identical prior figure with
+the identical 10 harness-attributed failures; `resilience`+`perf`+`pad_poison` 384/384; a
+2 700-cell strict cartesian slice green; unit directory 1 061 passed.
+
+*What the bottleneck is now, and what I would try next.* The TILE cells are the ones that
+moved least (1.34–1.42x) and they are the ones nearest their DRAM roofline:
+`(1,1,3104,4064)` moves 50.4 MB and now runs at 335 GB/s against the ~400 GB/s Refinement 3
+measured as this box's achievable interleaved read+write ceiling, so there is roughly 1.2x
+left there and it is *bandwidth*, not granularity. The RM cells are a different story and
+the number to look at is `(1,1,32,4064)` RM at 37 950 ns for 0.52 MB — **13 GB/s**, three
+orders off the roofline, because `_width_group_cores` is a **divisor** and a prime `Wt`
+therefore runs the whole tensor on **ONE core**. That is the second prime-`Wt` cliff and it
+is a much bigger prize than this one was; the verifier notes explicitly and correctly
+forbade touching it here (an interleaved width-split member has no pad storage, so a ragged
+group member would read x tiles it does not own — a different constraint with a different
+answer, probably a per-member `w_real` plus the same zero-fill this refinement just built).
+Not filed as a follow-up: the trailing perf rounds re-derive the breakdown from scratch and
+this record is where the finding lives.
 
 ---
 
