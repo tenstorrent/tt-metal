@@ -90,7 +90,7 @@ struct UnifiedRoutedExpertFfnParams {
     uint32_t grid_cols = 0;        // 0 => 11. N-column cores used (<= device grid x)
     uint32_t per_core_m_max = 0;   // 0 => 4. CB-sized per-core M cap (tiles); chunk = per_core_m_max * rows/group
     uint32_t weight_cb_depth = 0;  // 0 => 2. Blocks per weight CB (in1 gate/up/down)
-    uint32_t col_strided = 0;      // 1 => bank-strided N ownership (band mode): needs grid_cols == DRAM banks
+    uint32_t col_strided = 0;  // 1 => bank-strided N ownership (band mode); refused: hangs on P150 (see galaxy report)
     uint32_t down_split = 1;       // 1 => the writer RISC reads `down` weights on NoC 1 (like UP_SPLIT)
     uint32_t lpt_fixed_cost_tiles = 0;  // 0 => 32. Per-chunk weight-stream cost (tile-rows) in the LPT balance
 

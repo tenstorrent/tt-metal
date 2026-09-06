@@ -54,6 +54,10 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
             "weight_cb_depth must be 0 (auto) or 2..4, got {}",
             op.weight_cb_depth);
         TT_FATAL(op.col_strided <= 1 && op.down_split <= 1, "col_strided / down_split are 0/1 flags");
+        // Band mode hangs intermittently on P150 (both R=1 and R=2; PCC is clean whenever it completes,
+        // and the full watcher hides it), so it is refused until the race is found. See
+        // GROUPED_FFN_GALAXY_P150.md, "Band mode".
+        TT_FATAL(op.col_strided == 0, "col_strided (band mode) is disabled: it hangs intermittently on P150");
     }
     // Scoped to Blackhole, matching ttnn::softcap / ttnn::situ_glu. The underlying SFPU
     // primitives exist on Wormhole, but that combination is unverified.
