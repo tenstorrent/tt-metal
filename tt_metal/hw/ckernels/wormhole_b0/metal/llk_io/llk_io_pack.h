@@ -44,9 +44,8 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
     std::uint32_t output = operand;
 
     // Tensix uses 4B addresses (tiles_received_ptr byte address but div-by-4)
-    volatile tt_l1_ptr std::uint32_t* tiles_received_ptr_tensix =
-        (volatile tt_l1_ptr std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_received_ptr(operand)) >> 2) &
-                                            0x3ffff);
+    const std::uint32_t tiles_received_addr_tensix = static_cast<std::uint32_t>(
+        (reinterpret_cast<std::uintptr_t>(get_cb_tiles_received_ptr(operand)) >> 2) & 0x3ffff);
 
     // get_local_cb_interface(output).tiles_received is used only by the TRISC2 (the one driving packer)
     // we need it because tiles_received_ptr is updated by the packer, and in cb_reserve_back func (see above) we want
@@ -64,7 +63,7 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
     // and it will eventually see the updated value
     TT_SETDMAREG(0, tiles_received_new, 0, LO_16(p_gpr_pack::NUM_MSGS_RECEIVED));
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
-    TT_STOREREG(p_gpr_pack::NUM_MSGS_RECEIVED, (uint32_t)&tiles_received_ptr_tensix[0]);
+    TT_STOREREG(p_gpr_pack::NUM_MSGS_RECEIVED, tiles_received_addr_tensix);
 }
 
 // Push N tiles to stream buffer (increment write pointer)

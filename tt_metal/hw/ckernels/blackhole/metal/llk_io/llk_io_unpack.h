@@ -36,14 +36,15 @@ inline void llk_pop_tiles(
     const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t block_c_dim = 0) {
     std::uint32_t input = operand;
 
-    volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr =
-        (volatile std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);
+    // Tensix uses 4B addresses (tiles_acked_ptr byte address but div-by-4)
+    const std::uint32_t tiles_acked_addr_tensix =
+        static_cast<std::uint32_t>((reinterpret_cast<std::uintptr_t>(get_cb_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);
     std::uint32_t num_words = num_tiles * get_local_cb_interface(operand).fifo_page_size;
 
     get_local_cb_interface(input).tiles_acked += num_tiles;
     TT_SETDMAREG(0, get_local_cb_interface(input).tiles_acked, 0, LO_16(4));
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
-    TT_STOREREG(4, (std::uint32_t)&tiles_acked_ptr[0]);
+    TT_STOREREG(4, tiles_acked_addr_tensix);
     auto& cb = get_local_cb_interface(input);
 
     LLK_ASSERT(cb.fifo_rd_ptr < cb.fifo_limit, "CB pop_front: fifo_rd_ptr already at or past fifo_limit");
