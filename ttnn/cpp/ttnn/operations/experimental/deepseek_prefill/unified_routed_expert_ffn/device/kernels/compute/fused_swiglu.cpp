@@ -868,14 +868,14 @@ void kernel_main() {
     constexpr uint32_t group_rows = get_named_compile_time_arg_val("group_rows");
     constexpr uint32_t lpt_fixed_cost_tiles = get_named_compile_time_arg_val("lpt_fixed_cost_tiles");
     constexpr uint32_t adaptive_grid_y = group_rows;
-    uint32_t assign[group_assign::kMaxExperts];
+    // Work-item plan (chunk ranges of experts assigned to row groups), built on UNPACK.
+    group_assign::Plan plan;
+    uint32_t n_own_items = 0;
 #else
     constexpr bool kGrouped = false;
     const uint32_t my_group = 0;
     const uint32_t my_mt = 0;
     constexpr uint32_t adaptive_grid_y = adaptive_chunk::kGridY;
-    uint32_t assign[1];
-    (void)assign;
 #endif
     (void)my_group;
     (void)my_mt;
@@ -981,13 +981,15 @@ void kernel_main() {
     counts_scratch_cb.wait_front(1);
     idx_scratch_cb.wait_front(1);
 #ifdef GROUPED
-    // Expert -> row-group assignment, computed on UNPACK from the same L1 pages the
-    // reader and writer use (identical integer code => identical result). MATH/PACK
-    // never need it: they learn each expert's (gated) count via the mailbox below.
+    // Work-item plan (expert chunk ranges -> row groups), built on UNPACK from the same
+    // L1 pages the reader and writer use (identical integer code => identical plan).
+    // MATH/PACK learn how many items this group runs, then one packed descriptor per
+    // item through the mailbox (only OUR items go through it, so the FIFO never
+    // overflows: between items every thread does the item's compute).
     UNPACK(({
         const uint32_t counts_l1_addr = get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4;
         const uint32_t idx_l1_addr = get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4;
-        group_assign::lpt_assign(
+        group_assign::build_plan(
             reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counts_l1_addr),
             reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr),
             experts_per_chip,
@@ -996,8 +998,17 @@ void kernel_main() {
             num_chunks_max,
             m_tiles_full,
             lpt_fixed_cost_tiles,
-            assign);
+            plan);
+        for (uint32_t item = 0; item < plan.n_items; ++item) {
+            if (plan.group[item] == my_group) {
+                ++n_own_items;
+            }
+        }
+        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, n_own_items);
+        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, n_own_items);
     }));
+    MATH(n_own_items = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    PACK(n_own_items = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 #endif
 
     // SiLU is applied as a MATH-thread SFPU pass on dst (silu_tile) between
@@ -1015,15 +1026,56 @@ void kernel_main() {
     silu_tile_init();
 #endif
 
-
-    // ======================= per-local-expert loop =======================
-    // Run the full gate/up/down FFN for every local expert in this program.
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+    // ======================= per-local-expert / work-item loop =======================
+    // Legacy: run the full gate/up/down FFN for every local expert in this program.
+    // GROUPED: run this row group's work items (expert, chunk range) from the plan.
+#ifdef GROUPED
+    const uint32_t loop_count = n_own_items;
+#else
+    const uint32_t loop_count = experts_per_chip;
+#endif
+    for (uint32_t it = 0; it < loop_count; ++it) {
         // This expert's token count via the UNPACK→{MATH,PACK} mailbox (MATH/PACK
         // cannot read the counts/idx L1 via the CB interface).
         // count -> effective_chunks bounds this expert's chunk loop; count=0 => the
         // loop body is skipped entirely.
         uint32_t count_value = 0;
+        uint32_t chunk_b = 0;
+        uint32_t chunk_e = 0;
+#ifdef GROUPED
+        uint32_t packed = 0;
+        UNPACK(({
+            // The it-th item of my group: (expert, chunk_b, chunk_e) packed with the count.
+            uint32_t seen = 0;
+            uint32_t item = 0;
+            for (item = 0; item < plan.n_items; ++item) {
+                if (plan.group[item] == my_group) {
+                    if (seen == it) {
+                        break;
+                    }
+                    ++seen;
+                }
+            }
+            const uint32_t counts_l1_addr = get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4;
+            const uint32_t idx_l1_addr = get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4;
+            const volatile tt_l1_ptr uint32_t* counts_ptr =
+                reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counts_l1_addr);
+            const volatile tt_l1_ptr uint32_t* idx_ptr =
+                reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
+            uint32_t cnt = counts_ptr[idx_ptr[plan.expert[item]]];
+            cnt = (cnt > 0xFFFFu) ? 0xFFFFu : cnt;  // clamp_count_tiles bounds the tiles anyway
+            packed = cnt | (static_cast<uint32_t>(plan.chunk_b[item]) << 16) |
+                     (static_cast<uint32_t>(plan.chunk_e[item]) << 24);
+            ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, packed);
+            ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, packed);
+        }));
+        MATH(packed = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        PACK(packed = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        count_value = packed & 0xFFFFu;
+        chunk_b = (packed >> 16) & 0xFFu;
+        chunk_e = (packed >> 24) & 0xFFu;
+#else
+        const uint32_t local_expert_id = it;
         UNPACK(({
             const uint32_t counts_l1_addr = get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4;
             const uint32_t idx_l1_addr = get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4;
@@ -1033,17 +1085,12 @@ void kernel_main() {
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
             const uint32_t global_expert_id = idx_ptr[local_expert_id];
             count_value = counts_ptr[global_expert_id];
-            if constexpr (kGrouped) {
-                // Foreign expert (another row group) => count 0 => chunk loop skipped.
-                if (assign[local_expert_id] != my_group) {
-                    count_value = 0;
-                }
-            }
             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
         }));
         MATH(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
         PACK(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+#endif
         // count is in TOKEN rows; convert to tile rows (ceil), then let the runtime
         // picker size THIS expert's chunks. The picker derives chunk_M_tiles (hence
         // per_core_M and the chunk count) from this expert's own count, so no
@@ -1062,8 +1109,13 @@ void kernel_main() {
             adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max, m_tiles_full);
         ASSERT(count_tiles == count_tiles_raw);
         const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
+#ifndef GROUPED
+        chunk_e = effective_chunks;  // legacy: the whole expert
+#else
+        (void)effective_chunks;  // this item covers chunks [chunk_b, chunk_e) of the expert
+#endif
 
-        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+        for (uint32_t chunk = chunk_b; chunk < chunk_e; ++chunk) {
             // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller divisor
             // for the tail). The gate/up + multiply phases do per_core_M rows of real
             // work; the down matmul keeps its full compile-time ring and MAC-skips
@@ -1186,13 +1238,12 @@ void kernel_main() {
 
 #ifdef FUSE_BIAS
         // Pop this expert's biases so the reader can refill for the next expert.
-        // GROUPED: the reader skips the bias read for experts this group does not
-        // run (effective_chunks == 0), so skip the matching pop.
-        if (!kGrouped || effective_chunks > 0) {
+        // GROUPED: the reader reads biases only for items with chunks, so pop to match.
+        if (!kGrouped || chunk_e > chunk_b) {
             CircularBuffer(cb_gate_bias).pop_front(g_in1_per_core_w);
             CircularBuffer(cb_up_bias).pop_front(g_in1_per_core_w);
             CircularBuffer(cb_down_bias).pop_front(d_in1_per_core_w);
         }
 #endif
-    }  // end per-local-expert loop
+    }  // end per-local-expert / work-item loop
 }

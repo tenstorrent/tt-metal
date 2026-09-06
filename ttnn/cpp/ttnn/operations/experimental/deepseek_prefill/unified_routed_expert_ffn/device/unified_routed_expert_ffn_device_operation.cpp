@@ -48,11 +48,7 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
             "grid_rows ({}) must be a multiple of num_row_groups ({})",
             rows,
             op.num_row_groups);
-        TT_FATAL(
-            op.per_core_m_max == 0 || op.per_core_m_max == 1 || op.per_core_m_max == 2 || op.per_core_m_max == 4 ||
-                op.per_core_m_max == 8,
-            "per_core_m_max must be 0 (auto), 1, 2, 4 or 8, got {}",
-            op.per_core_m_max);
+        TT_FATAL(op.per_core_m_max <= 8, "per_core_m_max must be 0 (auto) or 1..8, got {}", op.per_core_m_max);
         TT_FATAL(
             op.weight_cb_depth == 0 || (op.weight_cb_depth >= 2 && op.weight_cb_depth <= 4),
             "weight_cb_depth must be 0 (auto) or 2..4, got {}",

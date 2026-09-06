@@ -7,8 +7,8 @@
 // Derived from unified_routed_expert_ffn_reader.cpp. Differences:
 //   * The grid is split into num_row_groups row groups of group_rows (R) M-rows
 //     each; every group runs its own expert loop. Experts are assigned to groups
-//     device-side (group_assign::lpt_assign) from the resident counts page, and a
-//     foreign expert is treated as count 0 (its chunk loop is skipped).
+//     device-side (group_assign::build_plan) from the resident counts page: large
+//     experts are split into chunk-range work items so they spread over groups.
 //   * my_mt is the row WITHIN the group; chunk_M_max = per_core_M_max * R and all
 //     adaptive_chunk calls take R as grid_y.
 //   * The in1 (weight) multicast group is the R rows of this core's column group
@@ -356,8 +356,8 @@ void kernel_main() {
     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
 
     // Device-side expert -> row-group assignment (identical in reader/compute/writer).
-    uint32_t assign[group_assign::kMaxExperts];
-    group_assign::lpt_assign(
+    group_assign::Plan plan;
+    group_assign::build_plan(
         counts_ptr,
         idx_ptr,
         experts_per_chip,
@@ -366,7 +366,7 @@ void kernel_main() {
         num_chunks_max,
         M_tiles_full,
         lpt_fixed_cost_tiles,
-        assign);
+        plan);
 
     const uint32_t x_tile_bytes = get_tile_size(cb_in0_x);
     const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
@@ -389,7 +389,14 @@ void kernel_main() {
     // Per expert we resolve its global id (idx_table[e]), token count
     // (counts[global_id]), region offset (start[global_id]) and per-expert
     // weight base addresses, then drive the same chunked matmul pipeline.
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+    for (uint32_t item = 0; item < plan.n_items; ++item) {
+        // Items of other row groups are skipped entirely (the other kernels skip identically).
+        if (plan.group[item] != my_group) {
+            continue;
+        }
+        const uint32_t local_expert_id = plan.expert[item];
+        const uint32_t item_chunk_b = plan.chunk_b[item];
+        const uint32_t item_chunk_e = plan.chunk_e[item];
         // Per-expert weight accessors, built from the shared layout descriptors
         // and this expert's base addresses (runtime-arg arrays after start).
         const uint32_t gate_addr_e = get_arg_val<uint32_t>(WEIGHTS_RT + 0 * experts_per_chip + local_expert_id);
@@ -410,9 +417,7 @@ void kernel_main() {
         down_bases.init(down_addr_e, /*noc=*/0);
 
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
-        // A foreign expert (assigned to another row group) is a zero-count expert
-        // for this group: num_chunks(0) == 0 skips every loop below.
-        const uint32_t count_value = (assign[local_expert_id] == my_group) ? counts_ptr[global_expert_id] : 0u;
+        const uint32_t count_value = counts_ptr[global_expert_id];
         // counts[] is device-produced and unvalidated: bound it by the capacity
         // this program was built for (num_chunks_max * chunk_M_max tile-rows)
         // BEFORE deriving anything from it. The clamp is arithmetic so it also
@@ -430,6 +435,7 @@ void kernel_main() {
         // per_core_M to the remainder, so per_core_M is per-chunk (see the chunk
         // loop) and adapts to each expert's own load with minimal phantom work.
         const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
+        (void)effective_chunks;  // this item covers chunks [item_chunk_b, item_chunk_e) of the expert
 
         // x-read row offset: this expert's rows begin at start[global_id].
         // Convert the token row to a tile-page offset (row_tile * K_gate_tiles)
@@ -445,7 +451,7 @@ void kernel_main() {
 #ifdef FUSE_BIAS
         // Grouped: skip the bias read for experts this group does not run (the
         // compute kernel skips the matching pop).
-        if (effective_chunks > 0) {
+        if (item_chunk_e > item_chunk_b) {
             // This expert's N-column slice of its (1, N) biases. The compute
             // kernel wait_fronts then pops at the end of this expert so the next
             // expert can reuse the single-buffered bias CBs. Bias is a single
@@ -511,7 +517,7 @@ void kernel_main() {
         // not the max-tokens-padded shape of the input. chunk_M_tiles / per_core_M
         // were picked from the count above; the row mapping is contiguous (core gy
         // owns rows [chunk*chunk_M + gy*per_core_M, + per_core_M)).
-        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+        for (uint32_t chunk = item_chunk_b; chunk < item_chunk_e; ++chunk) {
             // Per-chunk per_core_M: per_core_M_max for full chunks, a smaller divisor
             // for the tail. Chunk starts are UNIFORM at chunk*chunk_M_max (full chunks
             // are max_chunk; the tail is last, so its start is num_full*max_chunk too).
@@ -1058,7 +1064,7 @@ void kernel_main() {
                 cb_in1_down_obj.push_back(d_in1_block_num_tiles);
             }
         }  // end chunk loop
-    }  // end per-local-expert loop
+    }  // end work-item loop
 
     // The last in-flight Semaphore<>::set_multicast (act_valid / in1_valid)
     // is a posted atomic; without an explicit barrier it can still be in

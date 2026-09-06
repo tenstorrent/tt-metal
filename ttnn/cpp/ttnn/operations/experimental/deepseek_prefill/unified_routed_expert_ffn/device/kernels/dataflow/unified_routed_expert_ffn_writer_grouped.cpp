@@ -5,8 +5,8 @@
 // Writer kernel for the GROUPED unified_routed_expert_ffn program factory.
 //
 // Derived from unified_routed_expert_ffn_writer.cpp: row groups of group_rows (R)
-// M-rows, device-side expert -> group assignment (group_assign::lpt_assign, foreign
-// experts are count 0), my_mt is the row within the group, chunk_M_max =
+// M-rows, device-side work-item plan (group_assign::build_plan: expert chunk ranges
+// assigned to groups), my_mt is the row within the group, chunk_M_max =
 // per_core_M_max * R, and column ownership may be strided (col_strided, see
 // group_assign::global_col). The UP_SPLIT reader/writer sequence is kept.
 //
@@ -184,8 +184,8 @@ void kernel_main() {
     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(start_l1);
 
     // Device-side expert -> row-group assignment (identical in reader/compute/writer).
-    uint32_t assign[group_assign::kMaxExperts];
-    group_assign::lpt_assign(
+    group_assign::Plan plan;
+    group_assign::build_plan(
         counts_ptr,
         idx_ptr,
         experts_per_chip,
@@ -194,7 +194,7 @@ void kernel_main() {
         num_chunks_max,
         M_tiles_full,
         lpt_fixed_cost_tiles,
-        assign);
+        plan);
 
     // ---- UP_SPLIT up-weight read setup (see header) ----
     // The writer reads `up` from DRAM on NoC 1 concurrent with the reader's
@@ -218,7 +218,14 @@ void kernel_main() {
     // cores, feed its `up` weights) into the shared output buffer at the
     // expert's region offset. The chunk-loop body below is unchanged from the
     // single-expert kernel — only the per-expert bindings differ.
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+    for (uint32_t item = 0; item < plan.n_items; ++item) {
+        // Items of other row groups are skipped entirely (the other kernels skip identically).
+        if (plan.group[item] != my_group) {
+            continue;
+        }
+        const uint32_t local_expert_id = plan.expert[item];
+        const uint32_t item_chunk_b = plan.chunk_b[item];
+        const uint32_t item_chunk_e = plan.chunk_e[item];
         const auto up_acc = TensorAccessor(up_args, get_arg_val<uint32_t>(UP_RT + local_expert_id), up_tile_bytes);
         const auto down_acc =
             TensorAccessor(down_args, get_arg_val<uint32_t>(DOWN_RT + local_expert_id), down_tile_bytes);
@@ -230,8 +237,7 @@ void kernel_main() {
         fast_il::Bases<kNumDramBanks> down_bases;
         down_bases.init(get_arg_val<uint32_t>(DOWN_RT + local_expert_id), /*noc=*/1);
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
-        // Foreign expert (another row group) => count 0 => chunk loop skipped.
-        const uint32_t count_value = (assign[local_expert_id] == my_group) ? counts_ptr[global_expert_id] : 0u;
+        const uint32_t count_value = counts_ptr[global_expert_id];
         // Same capacity clamp the reader and compute apply to the device-produced
         // count (see adaptive_chunk::clamp_count_tiles): arithmetic, so it bounds
         // the chunk loop in Release too, where ASSERT is a no-op.
@@ -243,9 +249,10 @@ void kernel_main() {
         // and compute kernels run, so all three agree on the row mapping (a
         // mismatch would emit this expert's rows at the wrong token offsets).
         const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
+        (void)effective_chunks;  // this item covers chunks [item_chunk_b, item_chunk_e) of the expert
         const uint32_t row_offset_tiles = start_ptr[global_expert_id] / TILE_HEIGHT;
 
-        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+        for (uint32_t chunk = item_chunk_b; chunk < item_chunk_e; ++chunk) {
             // ---- Phase 1/2 weight feed: writer reads `up` on NoC 1 (UP_SPLIT) ----
             // Streams `up` from DRAM concurrent with the reader's NoC-0 `gate` read.
             // Runs before the cb_out drain.
@@ -440,7 +447,7 @@ void kernel_main() {
                 }
             }
         }  // end chunk loop
-    }  // end per-local-expert loop
+    }  // end work-item loop
     // Ensure all outstanding writes complete at the destination before the
     // kernel returns (the next dispatched op may read this output).
     noc.async_write_barrier();

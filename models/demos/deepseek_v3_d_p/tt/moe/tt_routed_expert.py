@@ -367,6 +367,14 @@ class TtRoutedExpert(LightweightModule):
         self.activation = activation
         # Grouped fused-FFN program factory knobs (Blackhole path only). All zero =
         # legacy full-grid program, byte-identical to before these were added.
+        # TT_MOE_FFN_ROW_GROUPS / TT_MOE_FFN_GRID_ROWS override the constructor values so a
+        # model run can opt in without code changes (e.g. TT_MOE_FFN_ROW_GROUPS=10
+        # TT_MOE_FFN_GRID_ROWS=10 for one expert per row on a 10-row grid).
+        import os
+
+        ffn_num_row_groups = int(os.environ.get("TT_MOE_FFN_ROW_GROUPS", ffn_num_row_groups))
+        ffn_grid_rows = int(os.environ.get("TT_MOE_FFN_GRID_ROWS", ffn_grid_rows))
+        ffn_per_core_m_max = int(os.environ.get("TT_MOE_FFN_PER_CORE_M_MAX", ffn_per_core_m_max))
         self.ffn_kwargs = dict(
             num_row_groups=ffn_num_row_groups,
             grid_rows=ffn_grid_rows,

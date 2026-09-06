@@ -33,25 +33,30 @@ inline uint32_t global_col(uint32_t gx, uint32_t i, uint32_t per_core_N, uint32_
     return strided ? (i * grid_x + gx) : (gx * per_core_N + i);
 }
 
-// Relative cost of one expert on one row group: every M-chunk re-streams the full
-// weights (fixed_cost_tiles, in tile-row-equivalents of compute) plus the rows
-// themselves. Zero-token experts cost nothing and are skipped everywhere.
-inline uint32_t expert_cost(uint32_t count_tiles, uint32_t chunk_M_max, uint32_t fixed_cost_tiles) {
-    if (count_tiles == 0) {
-        return 0;
-    }
-    return adaptive_chunk::num_chunks(count_tiles, chunk_M_max) * fixed_cost_tiles + count_tiles;
+// Work items. A local expert's M-chunks are split into up to `pieces` contiguous ranges
+// ("items") so that a large expert (many chunks) is spread over several row groups instead
+// of serialising on one; every item re-streams the weights once per chunk exactly as the
+// legacy chunk loop does, so the total work is unchanged — only the balance improves.
+// Pieces of one expert touch disjoint token rows, so they may run concurrently.
+constexpr uint32_t kMaxItems = 64;
+
+struct Plan {
+    uint32_t n_items = 0;
+    uint8_t expert[kMaxItems];   // local expert id
+    uint8_t chunk_b[kMaxItems];  // first M-chunk of the item
+    uint8_t chunk_e[kMaxItems];  // one past the last M-chunk
+    uint8_t group[kMaxItems];    // row group that runs it
+};
+
+// Item cost in tile-row-equivalents: every chunk re-streams the full weights
+// (fixed_cost_tiles) plus the token rows it computes.
+inline uint32_t item_cost(uint32_t chunks, uint32_t tiles, uint32_t fixed_cost_tiles) {
+    return chunks * fixed_cost_tiles + tiles;
 }
 
-// Deterministic greedy LPT (longest processing time first): sort local experts by
-// (cost desc, local id asc), then hand each to the least-loaded group (lowest group id
-// on ties). Writes assign[e] in [0, num_groups) for e in [0, num_experts).
-//
-// counts_ptr / idx_ptr are the resident L1 scratch pages every kernel already holds
-// (counts indexed by GLOBAL expert id via idx_ptr[local]). Counts are clamped exactly
-// like the chunk loops clamp them (adaptive_chunk::clamp_count_tiles) so the cost
-// model and the executed work agree.
-inline void lpt_assign(
+// Deterministic plan: identical in reader/compute/writer (same L1 counts page, same
+// integer code). Zero-token experts produce no item.
+inline void build_plan(
     const volatile tt_l1_ptr uint32_t* counts_ptr,
     const volatile tt_l1_ptr uint32_t* idx_ptr,
     uint32_t num_experts,
@@ -60,23 +65,49 @@ inline void lpt_assign(
     uint32_t num_chunks_max,
     uint32_t m_tiles_full,
     uint32_t fixed_cost_tiles,
-    uint32_t* assign) {
-    uint32_t cost[kMaxExperts];
-    uint32_t order[kMaxExperts];
-    uint32_t load[kMaxGroups];
+    Plan& plan) {
+    // At most kMaxItems items in total: cap the pieces per expert accordingly.
+    uint32_t max_pieces = kMaxItems / (num_experts > 0 ? num_experts : 1u);
+    if (max_pieces < 1) {
+        max_pieces = 1;
+    }
+    uint16_t cost[kMaxItems];
+    uint8_t order[kMaxItems];
+    uint32_t n = 0;
     for (uint32_t e = 0; e < num_experts; ++e) {
         const uint32_t count_value = counts_ptr[idx_ptr[e]];
         const uint32_t raw_tiles = (count_value + kTileHeight - 1) / kTileHeight;
         const uint32_t tiles = adaptive_chunk::clamp_count_tiles(raw_tiles, chunk_M_max, num_chunks_max, m_tiles_full);
-        cost[e] = expert_cost(tiles, chunk_M_max, fixed_cost_tiles);
-        order[e] = e;
+        const uint32_t n_chunks = adaptive_chunk::num_chunks(tiles, chunk_M_max);
+        if (n_chunks == 0) {
+            continue;
+        }
+        const uint32_t pieces = (n_chunks < max_pieces) ? n_chunks : max_pieces;
+        const uint32_t base = n_chunks / pieces;
+        const uint32_t rem = n_chunks % pieces;
+        uint32_t c = 0;
+        for (uint32_t pc = 0; pc < pieces && n < kMaxItems; ++pc) {
+            const uint32_t len = base + (pc < rem ? 1u : 0u);
+            const uint32_t c_e = c + len;
+            const uint32_t last_tile = (c_e * chunk_M_max < tiles) ? c_e * chunk_M_max : tiles;
+            const uint32_t item_tiles = last_tile - c * chunk_M_max;
+            plan.expert[n] = static_cast<uint8_t>(e);
+            plan.chunk_b[n] = static_cast<uint8_t>(c);
+            plan.chunk_e[n] = static_cast<uint8_t>(c_e);
+            const uint32_t cst = item_cost(len, item_tiles, fixed_cost_tiles);
+            cost[n] = static_cast<uint16_t>(cst > 0xFFFFu ? 0xFFFFu : cst);
+            order[n] = static_cast<uint8_t>(n);
+            ++n;
+            c = c_e;
+        }
     }
-    // Insertion sort: cost descending, local id ascending on ties.
-    for (uint32_t i = 1; i < num_experts; ++i) {
-        const uint32_t key = order[i];
+    plan.n_items = n;
+    // Insertion sort: cost descending, item id ascending on ties (deterministic).
+    for (uint32_t i = 1; i < n; ++i) {
+        const uint8_t key = order[i];
         uint32_t j = i;
         while (j > 0) {
-            const uint32_t prev = order[j - 1];
+            const uint8_t prev = order[j - 1];
             const bool prev_before_key = (cost[prev] > cost[key]) || (cost[prev] == cost[key] && prev < key);
             if (prev_before_key) {
                 break;
@@ -86,19 +117,21 @@ inline void lpt_assign(
         }
         order[j] = key;
     }
+    // Greedy LPT onto the least-loaded group (lowest group id on ties).
+    uint32_t load[kMaxGroups];
     for (uint32_t g = 0; g < num_groups; ++g) {
         load[g] = 0;
     }
-    for (uint32_t k = 0; k < num_experts; ++k) {
-        const uint32_t e = order[k];
+    for (uint32_t k = 0; k < n; ++k) {
+        const uint8_t it = order[k];
         uint32_t best = 0;
         for (uint32_t g = 1; g < num_groups; ++g) {
             if (load[g] < load[best]) {
                 best = g;
             }
         }
-        assign[e] = best;
-        load[best] += cost[e];
+        plan.group[it] = static_cast<uint8_t>(best);
+        load[best] += cost[it];
     }
 }
 
