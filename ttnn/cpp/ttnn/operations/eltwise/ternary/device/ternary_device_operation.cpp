@@ -549,41 +549,58 @@ Tensor TernaryDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor_a.device());
 }
 
-// Kept (not attribute_names): coarsens the input to its VOLUME (ternary is elementwise — program
-// depends on tile count, not shape). attribute_names can't express that — it only controls the attrs
-// struct, while the input shape is hashed from tensor_args. scalar_input_a/b are excluded here and
-// re-applied via get_dynamic_runtime_args.
+namespace {
+// Sharded common_runtime_args bake tensor_shape_in_pages at build and are never rewritten on hit (#54235).
+std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const tt::tt_metal::TensorSpec& spec) {
+    if (!spec.memory_config().is_sharded()) {
+        return std::nullopt;
+    }
+    // By value: buffer_distribution_spec() returns a ref INTO this temporary; binding it dangles.
+    const auto sharding_args = spec.compute_buffer_sharding_args();
+    const auto& distribution_spec = sharding_args.buffer_distribution_spec();
+    if (!distribution_spec.has_value()) {
+        return std::nullopt;
+    }
+    return distribution_spec->tensor_shape_in_pages();
+}
+
+// Prefer Buffer's spec (set_page_size/set_shard_spec reset it while TensorSpec keeps a stale copy).
+std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const Tensor& tensor) {
+    if (!tensor.memory_config().is_sharded()) {
+        return std::nullopt;
+    }
+    if (tensor.is_allocated() && tensor.storage_type() == StorageType::DEVICE) {
+        const auto& distribution_spec = tensor.buffer()->buffer_distribution_spec();
+        if (distribution_spec.has_value()) {
+            return distribution_spec->tensor_shape_in_pages();
+        }
+    }
+    return sharded_tensor_shape_in_pages(tensor.tensor_spec());
+}
+}  // namespace
+
+// Shape-blind key: interleaved reuses one entry (per-core args re-derive on hit); sharded keys on accessor radix.
 ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_tensor_a;
     const auto& input_b = tensor_args.input_tensor_b;
     const auto& input_c = tensor_args.input_tensor_c;
-    const auto& a_shape = input_a.padded_shape();
     TernaryVariant variant = args.ternary_variant;
 
     TT_FATAL(is_device_tensor(input_a), "Unexpected Tensor type {}", input_a.storage_type());
+    const auto a_shape_in_pages = sharded_tensor_shape_in_pages(input_a);
     ttsl::hash::hash_t hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
-        args, input_a.dtype(), input_a.memory_config(), a_shape.volume());
+        args, input_a.dtype(), input_a.memory_config(), a_shape_in_pages);
 
     if (variant == TernaryVariant::TTT) {
         TT_FATAL(is_device_tensor(*input_b), "Unexpected Tensor type {}", input_b->storage_type());
         TT_FATAL(is_device_tensor(*input_c), "Unexpected Tensor type {}", input_c->storage_type());
 
-        const auto shard_volumes = get_shard_volumes(
-            input_a.tensor_spec(),
-            input_b->tensor_spec(),
-            input_c->tensor_spec(),
-            compute_output_specs(args, tensor_args));
+        const auto output_spec = compute_output_specs(args, tensor_args);
+        const auto shard_volumes =
+            get_shard_volumes(input_a.tensor_spec(), input_b->tensor_spec(), input_c->tensor_spec(), output_spec);
 
-        // Include true/false tensor volumes so "true broadcast, false full" and "true full, false
-        // broadcast" get distinct cache keys (broadcast_type alone is the same for both).
-        // Also include H,W dimensions (last 2 dims) since they determine per-tensor broadcast
-        // configuration (SRC_BCAST_*, SRC_ROW_BCAST_*, SRC_SCALAR_*) in ROW_COL_BCAST kernels.
-        const auto b_shape = input_b->padded_shape();
-        const auto c_shape = input_c->padded_shape();
-
-        // Extract H,W dims (last 2 dimensions) for broadcast configuration differentiation
-        // Use logical_shape() since broadcast logic depends on logical dimensions, not padded
+        // Per-tensor H,W drives SRC_BCAST_* / SRC_ROW_BCAST_* / SRC_SCALAR_* reader defines; use logical, not padded.
         const auto& a_logical = input_a.logical_shape();
         const auto& b_logical = input_b->logical_shape();
         const auto& c_logical = input_c->logical_shape();
@@ -598,61 +615,57 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             args,
             input_a.dtype(),
             input_a.memory_config(),
-            input_b.value().dtype(),
-            input_b.value().memory_config(),
-            input_c.value().dtype(),
-            input_c.value().memory_config(),
-            a_shape.volume(),
-            b_shape.volume(),
-            c_shape.volume(),
-            a_h,
-            a_w,  // Predicate H,W
-            b_h,
-            b_w,  // True tensor H,W
-            c_h,
-            c_w,  // False tensor H,W
-            shard_volumes);
-
-    } else if (variant == TernaryVariant::TTS) {
-        TT_FATAL(is_device_tensor(*input_b), "Unexpected Tensor type {}", input_b->storage_type());
-
-        const auto shard_volumes = get_shard_volumes(
-            input_a.tensor_spec(), input_b->tensor_spec(), std::nullopt, compute_output_specs(args, tensor_args));
-
-        const auto b_shape = input_b->padded_shape();
-
-        // Include H,W dims for broadcast configuration differentiation
-        // Use logical_shape() since broadcast logic depends on logical dimensions, not padded
-        const auto& a_logical = input_a.logical_shape();
-        const auto& b_logical = input_b->logical_shape();
-        const uint32_t a_h = a_logical.rank() >= 2 ? a_logical[-2] : 1;
-        const uint32_t a_w = a_logical[-1];
-        const uint32_t b_h = b_logical.rank() >= 2 ? b_logical[-2] : 1;
-        const uint32_t b_w = b_logical[-1];
-
-        hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
-            args,
-            input_a.dtype(),
-            input_a.memory_config(),
-            input_b.value().dtype(),
-            input_b.value().memory_config(),
-            a_shape.volume(),
-            b_shape.volume(),
+            input_b->dtype(),
+            input_b->memory_config(),
+            input_c->dtype(),
+            input_c->memory_config(),
             a_h,
             a_w,
             b_h,
             b_w,
-            shard_volumes);
+            c_h,
+            c_w,
+            shard_volumes,
+            a_shape_in_pages,
+            sharded_tensor_shape_in_pages(*input_b),
+            sharded_tensor_shape_in_pages(*input_c),
+            sharded_tensor_shape_in_pages(output_spec));
+
+    } else if (variant == TernaryVariant::TTS) {
+        TT_FATAL(is_device_tensor(*input_b), "Unexpected Tensor type {}", input_b->storage_type());
+
+        const auto output_spec = compute_output_specs(args, tensor_args);
+        const auto shard_volumes =
+            get_shard_volumes(input_a.tensor_spec(), input_b->tensor_spec(), std::nullopt, output_spec);
+
+        const auto& a_logical = input_a.logical_shape();
+        const auto& b_logical = input_b->logical_shape();
+        const uint32_t a_h = a_logical.rank() >= 2 ? a_logical[-2] : 1;
+        const uint32_t a_w = a_logical[-1];
+        const uint32_t b_h = b_logical.rank() >= 2 ? b_logical[-2] : 1;
+        const uint32_t b_w = b_logical[-1];
+
+        hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
+            args,
+            input_a.dtype(),
+            input_a.memory_config(),
+            input_b->dtype(),
+            input_b->memory_config(),
+            a_h,
+            a_w,
+            b_h,
+            b_w,
+            shard_volumes,
+            a_shape_in_pages,
+            sharded_tensor_shape_in_pages(*input_b),
+            sharded_tensor_shape_in_pages(output_spec));
     } else if (variant == TernaryVariant::TST) {
         TT_FATAL(is_device_tensor(*input_c), "Unexpected Tensor type {}", input_c->storage_type());
 
-        const auto shard_volumes = get_shard_volumes(
-            input_a.tensor_spec(), std::nullopt, input_c->tensor_spec(), compute_output_specs(args, tensor_args));
+        const auto output_spec = compute_output_specs(args, tensor_args);
+        const auto shard_volumes =
+            get_shard_volumes(input_a.tensor_spec(), std::nullopt, input_c->tensor_spec(), output_spec);
 
-        const auto c_shape = input_c->padded_shape();
-
-        // Include H,W dims for broadcast configuration differentiation
-        // Use logical_shape() since broadcast logic depends on logical dimensions, not padded
         const auto& a_logical = input_a.logical_shape();
         const auto& c_logical = input_c->logical_shape();
         const uint32_t a_h = a_logical.rank() >= 2 ? a_logical[-2] : 1;
@@ -664,15 +677,16 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             args,
             input_a.dtype(),
             input_a.memory_config(),
-            input_c.value().dtype(),
-            input_c.value().memory_config(),
-            a_shape.volume(),
-            c_shape.volume(),
+            input_c->dtype(),
+            input_c->memory_config(),
             a_h,
             a_w,
             c_h,
             c_w,
-            shard_volumes);
+            shard_volumes,
+            a_shape_in_pages,
+            sharded_tensor_shape_in_pages(*input_c),
+            sharded_tensor_shape_in_pages(output_spec));
     }
 
     return hash;
