@@ -147,7 +147,27 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
     const uint32_t fused_tiles = Wt;                           // a + b
 
-    const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // x^2
+    // The x^2 buffer is sized per ROW, so a wide fp32_dest_acc_en row is what pushes this program
+    // past L1 (#54697). Keep the double buffer wherever it fits -- the packer and the unpacker are
+    // different RISCs, so it buys real overlap (measured ~1-3% on shapes that already fit) -- and
+    // fall back to a single buffer only when the double-buffered program would not fit at all,
+    // which today throws at allocation instead of running.
+    const uint32_t x2_tiles_double_buffered = Wt * double_buffer_constant;
+    const uint32_t out0_tiles_estimate = is_rmsnorm ? 1 : 2;
+    const uint32_t static_bytes_double_buffered =
+        in0_tiles * in_single_tile_size + in1_tiles * scaler_tile_size +
+        (fuse_pre_add ? (res_tiles * inb_single_tile_size + fused_tiles * single_tile_size) : 0) +
+        x2_tiles_double_buffered * single_tile_size + out0_tiles_estimate * out_single_tile_size;
+    // Budget is L1 above the reserved base, matching what validate_dataflow_buffer_region compares
+    // against (it checks an absolute region end, so the reserved base must come off the top here).
+    // Deliberately STATIC: shape, dtypes and device config only. Sizing a buffer from dynamic L1
+    // occupancy (lowest_occupied_compute_l1_address) would make the program depend on state the
+    // program-cache key does not cover, so a program built under one occupancy could be replayed
+    // under another -- unsound with the program cache and with tracing.
+    const uint32_t l1_budget = static_cast<uint32_t>(
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+    const uint32_t intermed0_tiles =
+        (static_bytes_double_buffered <= l1_budget) ? x2_tiles_double_buffered : Wt;  // x^2
     uint32_t out0_tiles = 1;
     if (!is_rmsnorm) {
         out0_tiles = 2;
