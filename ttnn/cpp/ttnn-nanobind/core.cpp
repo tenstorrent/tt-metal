@@ -73,6 +73,12 @@ void py_module(nb::module_& mod) {
             &ttnn::Config::set<I>);
     });
     py_config.def_prop_ro("report_path", &ttnn::Config::get<"report_path">);
+    // Read the live flags in one binding call. FastOperation must observe config changes
+    // after registration, so this is deliberately computed rather than cached.
+    py_config.def_prop_ro("requires_slow_runtime", [](const ttnn::Config& config) {
+        return !config.get<"enable_fast_runtime_mode">() || config.get<"enable_comparison_mode">() ||
+               config.get<"enable_logging">();
+    });
     py_config.def(
         "apply_json_overrides",
         &ttnn::Config::apply_json_overrides,

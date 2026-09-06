@@ -613,9 +613,7 @@ class FastOperation:
         return self.python_fully_qualified_name
 
     def _requires_slow_runtime(self) -> bool:
-        return (
-            not ttnn.CONFIG.enable_fast_runtime_mode or ttnn.CONFIG.enable_comparison_mode or ttnn.CONFIG.enable_logging
-        )
+        return ttnn.CONFIG.requires_slow_runtime
 
     def _slow_operation_instance(self) -> "Operation":
         if self._slow_operation is None:
