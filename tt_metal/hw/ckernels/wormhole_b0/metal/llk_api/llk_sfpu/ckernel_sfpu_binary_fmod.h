@@ -27,11 +27,12 @@ sfpi_inline void calculate_fmod_int32_body(
     // Compute unsigned remainder
     sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
 
-    // Reload the sign after the helper to reduce correction-stage register pressure.
-    a_signed = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    // Initialize a fresh value: assignment would retain a_signed for inactive
+    // lanes across the helper, increasing register pressure in full LTO builds.
+    sfpi::vInt a_reloaded = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
 
     // FMOD sign handling (result has the same sign as a)
-    v_if(a_signed < 0) { r = -r; }
+    v_if(a_reloaded < 0) { r = -r; }
     v_endif;
 
     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = r;

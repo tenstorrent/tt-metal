@@ -106,14 +106,15 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     // hi = q2 * b0 + q1 * b1 (high part)
     // lo = q1 * b0 (low part)
     // Interleave independent products and bias additions to avoid multiply-use NOPs.
+    // Fresh stage values avoid inactive-lane dependencies from SFPI assignment,
+    // which otherwise require extra registers when the caller is outlined by LTO.
     sfpi::vFloat hi = q2 * b0;
     sfpi::vFloat lo = q1 * b0;
-    hi += MANTISSA_ALIGNMENT_OFFSET;
-    lo += MANTISSA_ALIGNMENT_OFFSET;
-    hi = q1 * b1 + hi;
+    sfpi::vFloat hi_biased = hi + MANTISSA_ALIGNMENT_OFFSET;
+    sfpi::vFloat lo_biased = lo + MANTISSA_ALIGNMENT_OFFSET;
+    sfpi::vFloat hi_sum = q1 * b1 + hi_biased;
 
-    sfpi::vUInt qb = sfpi::exman(lo) << CHUNK_BITS;
-    qb += sfpi::exman(hi) << HIGH_CHUNK_SHIFT;
+    sfpi::vUInt qb = (sfpi::exman(lo_biased) << CHUNK_BITS) + (sfpi::exman(hi_sum) << HIGH_CHUNK_SHIFT);
 
     // Compute remainder from the retained numerator magnitude.
     sfpi::vInt r{a - qb};
@@ -136,14 +137,17 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     auto correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::Nearest);
     correction_f = sfpi::convert<sfpi::vFloat>(correction, sfpi::RoundMode::Nearest);
 
-    // Recompute chunks from the retained divisor magnitude.
-    b0 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << LOW_CHUNK_SHIFT) >> LOW_CHUNK_SHIFT), sfpi::RoundMode::Nearest);
-    b1 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << MID_CHUNK_SHIFT) >> LOW_CHUNK_SHIFT), sfpi::RoundMode::Nearest);
+    // Use fresh values so SFPI's predicated assignment does not retain the old
+    // chunks across the residual calculation in an outlined/LTO-compiled caller.
+    sfpi::vFloat correction_b0 =
+        sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << LOW_CHUNK_SHIFT) >> LOW_CHUNK_SHIFT), sfpi::RoundMode::Nearest);
+    sfpi::vFloat correction_b1 =
+        sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << MID_CHUNK_SHIFT) >> LOW_CHUNK_SHIFT), sfpi::RoundMode::Nearest);
 
     // tmp = correction * (b2<<22 + b1<<11 + b0)
     // Issue the independent products before consuming them in the bias additions.
-    sfpi::vFloat low = correction_f * b0;
-    sfpi::vFloat mid = correction_f * b1;
+    sfpi::vFloat low = correction_f * correction_b0;
+    sfpi::vFloat mid = correction_f * correction_b1;
     sfpi::vFloat top = correction_f * b2;
     low += MANTISSA_ALIGNMENT_OFFSET;
     mid += MANTISSA_ALIGNMENT_OFFSET;
@@ -215,15 +219,17 @@ sfpi_inline void calculate_remainder_int32_body(
     // Compute unsigned remainder
     sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
 
-    // Reload signs so only their magnitudes remain live through the helper.
-    a_signed = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
-    b_signed = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    // Initialize fresh values for the reloads: SFPI assignment preserves the old
+    // value in inactive lanes, keeping both signed inputs live across the helper
+    // and spilling registers when this function is outlined in a full LTO build.
+    sfpi::vInt a_reloaded = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    sfpi::vInt b_reloaded = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
 
     // First form the truncating remainder, then adjust to the divisor's sign.
-    sfpi::vInt sign = a_signed ^ b_signed;
-    v_if(a_signed < 0) { r = -r; }
+    sfpi::vInt sign = a_reloaded ^ b_reloaded;
+    v_if(a_reloaded < 0) { r = -r; }
     v_endif;
-    v_if(r != 0 && sign < 0) { r += b_signed; }
+    v_if(r != 0 && sign < 0) { r += b_reloaded; }
     v_endif;
 
     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = r;
@@ -254,22 +260,22 @@ sfpi_inline void calculate_remainder_uint32_body(
     sfpi::vInt t = sfpi::vInt(sfpi::vUInt(a) >> 1);
     sfpi::vInt rt = compute_unsigned_remainder_int32<false /* numerator_can_be_int_min */>(t, b);
 
-    // Reload a from DEST instead of keeping it live across the helper
-    a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
-    // The helper retains |b|, so release the raw b until the range reduction.
-    b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    // Fresh initialization avoids SFPI's inactive-lane dependency on the old
+    // inputs, allowing them to die before the helper (including under LTO).
+    sfpi::vInt a_reloaded = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    sfpi::vInt b_reloaded = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
 
     // b < 2^31 uses x = 2*rt + (a & 1); b >= 2^31 keeps x = a
-    v_if(b >= 0) { a = rt + rt + (a & 1); }
+    v_if(b_reloaded >= 0) { a_reloaded = rt + rt + (a_reloaded & 1); }
     v_endif;
 
     // x % b = (x >=u b) ? x - b : x, valid for both regimes since x in [0, 2b)
-    sfpi::vInt r = a;
-    v_if(sfpi::vUInt(a) >= sfpi::vUInt(b)) { r = a - b; }
+    sfpi::vInt r = a_reloaded;
+    v_if(sfpi::vUInt(a_reloaded) >= sfpi::vUInt(b_reloaded)) { r = a_reloaded - b_reloaded; }
     v_endif;
     // The above compare only tests sign(x - b), matching x >=u b except when b >= 2^31 and x < 2^31
     // Then x < b, remainder = x
-    v_if(b < 0 && a >= 0) { r = a; }
+    v_if(b_reloaded < 0 && a_reloaded >= 0) { r = a_reloaded; }
     v_endif;
 
     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = r;
