@@ -740,9 +740,10 @@
   test_group: module
   skus:
     bh_sc4:
-      # Measured test step 8.5 min at 50 chunks; headroom for the up-to-120s producer connect plus
-      # model-load/NFS variance on a 4-galaxy run. Must match the shield/demo budget.
-      timeout: 15
+      # Mesh bringup, weight load and the staggered device teardown dominate the step; the chunk loop
+      # is a couple of minutes of it. Budget covers those plus the up-to-120s producer connect.
+      # Must match the shield/demo budget.
+      timeout: 20
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   sp_config: sc4
@@ -753,7 +754,7 @@
 # its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
 # Both caches are PCC'd: the producer gates on min(config 0, config 1), so this is the only leg that
 # covers the merged multi-cache KV chunk table and the per-stage index-cache numbering.
-- name: "(GLM-5.2-744B) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC4"
+- name: "(GLM-5.2-744B) disaggregated prefill KV accuracy 55k@5k + perf 1M@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -767,10 +768,11 @@
   test_group: module
   skus:
     bh_sc4:
-      # Measured test step 9 min: weight load from the warm 8x4 cache, then 50 chunks over 78 layers
-      # plus both-cache UMD readback. The extra 5 min over the Kimi entry is cold-cache weight-load
-      # insurance. Counts against the shield/demo budget together with the Kimi entry.
-      timeout: 20
+      # 1M at 28 users reaches a PCC verdict in ~16.5 min -- 215 chunks at ~2.3s each, since the
+      # lightning indexer scores the whole prefix and so grows with depth, plus a 143M-entry KV chunk
+      # table for rank 0 to merge and serialize -- and then spends ~7 min unwinding the mesh.
+      # Counts against the shield/demo budget together with the Kimi entry.
+      timeout: 30
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   sp_config: sc4
