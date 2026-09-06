@@ -90,8 +90,6 @@ PromotedScalarInput promote_int32_scalar_input(
             std::nullopt,
             operation_sub_core_grids);
     } else {
-        validate_scalar_typecast(
-            input.layout(), input.is_sharded(), operation_sub_core_grids, "INT32 scalar promotion");
         operation_input =
             ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids);
     }
