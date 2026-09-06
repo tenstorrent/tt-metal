@@ -11344,6 +11344,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             "enough edit-and-recheck attempts."
         ),
     )
+    pe2e.add_argument(
+        "--box",
+        default=None,
+        choices=[b.name for b in HARDWARE],
+        help=(
+            "target hardware, so the builder is given this box's REGISTERED per-chip memory "
+            "instead of deriving its own (a run once capped depth using a 12 GB Wormhole figure "
+            "on a 32 GB Blackhole box). Omit to keep the prompt unchanged."
+        ),
+    )
     pe2e.set_defaults(func=cmd_emit_e2e)
 
     popt = sub.add_parser(

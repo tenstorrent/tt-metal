@@ -1691,6 +1691,7 @@ def _emit_e2e_phase_a(args) -> int:
         parallel_note=_parallel_note,
         trace_note=_trace_note,
         batch_note=_batch_note,
+        hardware_note=_hardware_prompt_block(_resolve_box(getattr(args, "box", None))),
         all_tasks=bool(getattr(args, "all_tasks", False)),
     )
     rc_build, build_final = _run_agent(
@@ -1749,6 +1750,7 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int,
             log_fh = open(log_path, "a", buffering=1, errors="ignore")
         except Exception:
             log_fh = None
+    _cap = _agent_mem_cap_bytes()
     try:
         proc = subprocess.Popen(
             cmd,
@@ -1758,12 +1760,18 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            # Own session so the timeout path can reap the agent's DESCENDANTS
+            # (scripts it writes and runs) without signalling this process group.
+            start_new_session=True,
+            preexec_fn=(_mem_cap_preexec(_cap) if _cap else None),
         )
     except FileNotFoundError:
         print(f"  ✗ agent binary not found: {agent_bin!r}")
         if log_fh:
             log_fh.close()
         return 2, ""
+    if _cap:
+        print(f"  · {label} host-memory cap: {_cap / (1 << 30):.0f} GB (RLIMIT_DATA, inherited by its children)")
 
     final_text = ""
     start = time.monotonic()
@@ -1789,8 +1797,12 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int,
                 last_hb = now
         rc = proc.wait(timeout=timeout_s)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        print(f"\n  ✗ agent exceeded {timeout_s}s; killed")
+        # Not proc.kill(): the agent writes and runs its own scripts, and a bare
+        # kill leaves those holding host memory and the devices.
+        from ..cli import _kill_process_tree
+
+        _kill_process_tree(proc, label=label)
+        print(f"\n  ✗ agent exceeded {timeout_s}s; killed (with descendants)")
         if log_fh:
             log_fh.close()
         return 1, final_text
@@ -1959,6 +1971,112 @@ data-parallel replicas). Place the pipeline on the mesh accordingly:
     expose a shard dim, keep it replicated rather than guessing a split.
   - The e2e PCC gate is unchanged: parity is still measured against the same HF golden. Placing the
     pipeline on more chips must NOT change the numerical result — only where it runs.
+"""
+
+
+_AGENT_MEM_FRACTION_ENV = "TT_HW_PLANNER_AGENT_MEM_FRACTION"
+_AGENT_MEM_FRACTION_DEFAULT = 0.7
+
+
+def _agent_mem_cap_bytes() -> int:
+    """Host-memory ceiling for one agent and everything it spawns, or 0 for no cap.
+
+    The builder writes and runs its own scripts, and one of them grew until the
+    kernel's OOM killer picked it — which failed the enclosing systemd scope and
+    took the whole run down with it, six minutes after the work had succeeded. A
+    ceiling turns that into an allocation error the agent can read and react to.
+
+    ``RLIMIT_DATA`` (not ``RLIMIT_AS``) because it bounds the heap and anonymous
+    mappings, which is where model weights held in host RAM live. Address space is
+    the wrong quantity here: the process that died mapped 463 GB of address space
+    while resident at 199 GB, so an ``RLIMIT_AS`` tuned to real usage would fire on
+    healthy runs that merely map device memory.
+
+    Fraction is env-tunable; set it to 0 to disable."""
+    try:
+        frac = float(os.environ.get(_AGENT_MEM_FRACTION_ENV, _AGENT_MEM_FRACTION_DEFAULT))
+    except ValueError:
+        frac = _AGENT_MEM_FRACTION_DEFAULT
+    if frac <= 0:
+        return 0
+    try:
+        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (OSError, ValueError, AttributeError):
+        return 0
+    if total <= 0:
+        return 0
+    return int(total * min(frac, 1.0))
+
+
+def _mem_cap_preexec(limit_bytes: int):
+    """preexec_fn applying ``limit_bytes`` to the child, inherited by its children.
+
+    Safe here specifically because `_run_agent` consumes the agent's stream on the
+    MAIN thread — it starts no thread of its own, so the documented
+    ``preexec_fn``-with-threads hazard does not apply to this call site."""
+
+    def _apply() -> None:
+        import resource
+
+        try:
+            _soft, hard = resource.getrlimit(resource.RLIMIT_DATA)
+            # Lower the SOFT limit only, and never past an existing hard limit.
+            # Driving the hard limit down is irreversible without privileges, so a
+            # capped process could not raise it even for a legitimate need — and a
+            # caller that applied it to itself would be permanently crippled.
+            target = limit_bytes if hard == resource.RLIM_INFINITY else min(limit_bytes, hard)
+            resource.setrlimit(resource.RLIMIT_DATA, (target, hard))
+        except Exception:
+            pass
+
+    return _apply
+
+
+def _resolve_box(box_name):
+    """The registered box for ``box_name``, or None when it is absent/unknown.
+
+    Returns None rather than raising so a run without ``--box`` keeps working
+    exactly as before — the hardware block is simply omitted."""
+    if not box_name:
+        return None
+    try:
+        from ..hardware import find_box
+
+        return find_box(str(box_name))
+    except Exception:  # noqa: BLE001 -- unknown box must not abort emit-e2e
+        print(
+            f"  [hardware] box {box_name!r} is not registered; builder will not be given " f"per-chip memory figures",
+            file=sys.stderr,
+        )
+        return None
+
+
+def _hardware_prompt_block(box) -> str:
+    """Declare the ACTUAL per-chip memory of the box this run targets.
+
+    Without it the builder derives its own DRAM arithmetic and can pick the wrong
+    board: one run capped a demo's depth using "~12 GB of Wormhole DRAM per chip"
+    on a 32 GB Blackhole box, labelled it "measured not assumed", then spent the
+    rest of the run re-measuring the ceiling it had just invented. The figures come
+    from the registered box, so they stay correct for any board the table knows.
+
+    Returns "" when the box is unknown, keeping the prompt byte-identical to before."""
+    if box is None:
+        return ""
+    return f"""
+
+================ HARDWARE — {box.name} ({box.chips}x {box.arch}) ================
+These are the REGISTERED figures for the box this run targets. Use them; do NOT
+derive per-chip memory from the model name, a sibling board, or your own arithmetic.
+
+  - Chips: {box.chips}
+  - DRAM per chip: {box.hbm_per_chip_gb:.0f} GB (total {box.total_hbm_gb:.0f} GB)
+  - Usable per chip after dispatch/CCL/fragmentation overhead: {box.usable_per_chip_gb(1):.1f} GB
+    at TP=1, {box.usable_per_chip_gb(2):.1f} GB once a CCL axis is in play.
+
+If you record a memory ceiling or a depth cap anywhere (e2e_plan.json, README,
+comments), it MUST be consistent with the numbers above, and say which of them it
+used. Do not claim a figure is "measured" unless this run measured it.
 """
 
 
@@ -2209,6 +2327,7 @@ def _build_agent_prompt(
     parallel_note: str = "",
     trace_note: str = "",
     batch_note: str = "",
+    hardware_note: str = "",
     all_tasks: bool = False,
 ) -> str:
     heads_note = _required_heads_block(model_id, all_tasks)
@@ -2313,7 +2432,7 @@ inventing a new layout. Keep iterating (fix the stub/wiring, re-run on the TT de
 gates pass. Use `./python_env/bin/python -m pytest <file> -s` to run on device.
 Report a final summary: which calls are READY, the FINAL_PCC per call, and
 confirm all graduated modules were invoked.
-{parallel_note}{trace_note}{batch_note}
+{hardware_note}{parallel_note}{trace_note}{batch_note}
 {_TT_ONLY_CONTRACT}
 """
 
