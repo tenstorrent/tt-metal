@@ -129,8 +129,8 @@ def build_and_serialize_kv_chunk_table(
 
     ``tp_shard_kv`` (KV dedup): the table addresses each (row, col) device individually instead of one
     group per SP row. MUST match the layout the caches were allocated with, or every address is wrong.
-    Merged (KVPE + index) table only, and single-stage only (no PP). ``tp_axis`` names the TP mesh axis
-    in either case — it is the dflash head-count geometry and is not itself the dedup switch."""
+    Merged (KVPE + index) table only. ``tp_axis`` names the TP mesh axis in either case — it is the
+    dflash head-count geometry and is not itself the dedup switch."""
     assert chunk_size_global == PREFILL_CHUNK_TOKENS, (
         f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
         f"PREFILL_CHUNK_TOKENS={PREFILL_CHUNK_TOKENS}, but chunk_size_global={chunk_size_global}. "

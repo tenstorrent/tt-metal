@@ -633,7 +633,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Use Ethernet cores for dispatch in tests.
         // Default: Worker cores (default dispatch type)
         // Usage: export TT_METAL_GTEST_ETH_DISPATCH=1
-        case EnvVarID::TT_METAL_GTEST_ETH_DISPATCH: this->dispatch_core_type = tt_metal::DispatchCoreType::ETH; break;
+        case EnvVarID::TT_METAL_GTEST_ETH_DISPATCH:
+            this->dispatch_core_type_override = tt_metal::DispatchCoreType::ETH;
+            break;
 
         // TT_METAL_TENSIX_DISPATCH_CORES
         // Quasar: use interim Tensix dispatch cores from core descriptor YAML instead of soc dispatch-engine cores.
@@ -2312,14 +2314,6 @@ std::string RunTimeOptions::get_sanitizer_hash() const {
     hash_str += optional_hash(san.fault);
     hash_str += optional_hash(san.internal);
     return hash_str;
-}
-
-// Can't create a DispatchCoreConfig as part of the RTOptions constructor because the DispatchCoreConfig constructor
-// depends on RTOptions settings.
-tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
-    tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
-    dispatch_core_config.set_dispatch_core_type(this->dispatch_core_type);
-    return dispatch_core_config;
 }
 
 void RunTimeOptions::set_experimental_noc_debug_dump_enabled(bool enabled) {

@@ -477,7 +477,10 @@ std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
 }
 
 uint32_t finalize_prefetcher_pipes(
-    uint32_t programmable_core_type_index, ttsl::Span<ProgramImpl*> programs, uint32_t base_offset) {
+    const MetalContext& metal_ctx,
+    uint32_t programmable_core_type_index,
+    ttsl::Span<ProgramImpl*> programs,
+    uint32_t base_offset) {
     uint8_t max_num_prefetcher_pipes = 0;
     for (ProgramImpl* program : programs) {
         max_num_prefetcher_pipes = std::max(max_num_prefetcher_pipes, program->num_prefetcher_pipe_slots());
@@ -527,8 +530,7 @@ uint32_t finalize_prefetcher_pipes(
         }
     }
 
-    return tt::align(
-        base_offset + prefetcher_pipe_region_bytes, MetalContext::instance().hal().get_alignment(HalMemType::L1));
+    return tt::align(base_offset + prefetcher_pipe_region_bytes, metal_ctx.hal().get_alignment(HalMemType::L1));
 }
 
 std::vector<uint32_t> build_prefetcher_pipe_config_payload(
@@ -1783,13 +1785,17 @@ private:
 class PrefetcherPipeCommandGenerator {
 public:
     void construct_commands(
-        IDevice* device, const CommandConstants& constants, ProgramImpl& program, BatchedTransfers& batched_transfers) {
+        const MetalContext& metal_ctx,
+        IDevice* device,
+        const CommandConstants& constants,
+        ProgramImpl& program,
+        BatchedTransfers& batched_transfers) {
         const auto& per_core_prefetcher_pipes = program.get_per_core_prefetcher_pipes();
         if (per_core_prefetcher_pipes.empty()) {
             return;
         }
 
-        const auto& hal = MetalContext::instance().hal();
+        const auto& hal = metal_ctx.hal();
         const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         const auto& kernel_groups = program.get_kernel_groups(index);
         const auto& program_config = program.get_program_config(index);
@@ -2679,7 +2685,8 @@ void assemble_device_commands(
         metal_ctx, mesh_device, constants, program, batched_transfers, absolute_cross_node_config_transfers);
 
     PrefetcherPipeCommandGenerator prefetcher_pipe_command_generator;
-    prefetcher_pipe_command_generator.construct_commands(mesh_device, constants, program, batched_transfers);
+    prefetcher_pipe_command_generator.construct_commands(
+        metal_ctx, mesh_device, constants, program, batched_transfers);
 
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(metal_ctx, batched_transfers, program_config_buffer_calculator);

@@ -11,6 +11,17 @@
  * LLK PACK
  *************************************************************************/
 
+/**
+ * @brief No-op pack-side ordering primitive; present only for API parity with Quasar.
+ *
+ * WH/BH have no pack-side WAIT/PUSH ordering requirement, so this has no functional role in a kernel. It
+ * exists only so the shared compute-API dummy_pack() resolves on every architecture; on Quasar the same
+ * call is a required TEN-4746 drain primitive (see that arch's llk_pack_tile_api.h).
+ *
+ * @param pack_output  The output dataflow buffer identifier (unused).
+ */
+inline void llk_pack_dummy([[maybe_unused]] const std::uint32_t pack_output) {}
+
 // Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/). They take
 // already-resolved scalar formats/geometry + the runtime write address; the per-source prologue
 // (resolving these from a CB id, or from an MemDescriptor) lives in the callers.
