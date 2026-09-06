@@ -9,7 +9,7 @@
 #include "internal/hw_thread.h"
 #include "internal/tt-2xx/risc_common.h"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
-#include "internal/tt-2xx/quasar/overlay/meta/registers/overlay_reg_defines_core.h"
+#include "internal/tt-2xx/quasar/overlay/meta/registers/overlay_reg.h"
 
 // DM-side producer for the QuasarDmToTriscMailbox test. Writes one value per receiving TRISC
 // thread into the TRISC mailbox queues of this cluster's NEO0 Tensix engine:
