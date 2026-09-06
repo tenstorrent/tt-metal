@@ -47,29 +47,48 @@ private:
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
     std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
     std::vector<Semaphore>& semaphores();
-    std::vector<uint32_t> get_program_config_sizes();
-    std::unordered_set<SubDeviceId> determine_sub_device_ids(MeshDevice* mesh_device);
-    bool is_finalized() const { return this->finalized_; }
-    void set_finalized() { this->finalized_ = true; };
+    const std::vector<uint32_t>& get_program_config_sizes();
+    const std::unordered_set<SubDeviceId>& determine_sub_device_ids(MeshDevice* mesh_device);
+    bool is_finalized() const { return finalized_metadata_.has_value(); }
+    void set_finalized(uint32_t max_program_kernels_sizeB);
     ProgramBinaryStatus get_program_binary_status(std::size_t mesh_id) const;
     void set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status);
-    ProgramConfig& get_program_config(uint32_t index, bool using_fast_dispatch);
+    ProgramConfig& get_program_config(uint32_t index);
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
+    const std::vector<uint64_t>& get_cross_node_program_ids();
     void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
     void finalize_offsets(MeshDevice* mesh_device);
 
+    struct FinalizedMetadata {
+        std::vector<uint32_t> program_config_sizes;
+        std::vector<uint64_t> cross_node_program_ids;
+        // Total devices covered by all program ranges. Fixed once programs_ is frozen, so enqueue
+        // can compare it against the mesh size instead of re-walking every range.
+        size_t num_program_devices = 0;
+        uint32_t max_program_kernels_sizeB = 0;
+        bool runs_on_noc_multicast_only_cores = false;
+        bool runs_on_noc_unicast_only_cores = false;
+    };
+    FinalizedMetadata& get_finalized_metadata();
+    uint32_t get_max_program_kernels_sizeB() { return get_finalized_metadata().max_program_kernels_sizeB; }
+    size_t get_num_program_devices() { return get_finalized_metadata().num_program_devices; }
+
     std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status_;
+    std::unordered_map<std::size_t, std::unordered_map<uint64_t, std::unordered_set<SubDeviceId>>>
+        sub_device_ids_by_mesh_and_manager_;
     std::shared_ptr<MeshBuffer> kernel_bin_buf_;
     std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
     std::vector<Semaphore> semaphores_;
     std::unordered_map<MeshCoordinateRange, Program> programs_;
-    bool finalized_ = false;
+    // Presence marks the workload finalized and makes all derived enqueue metadata available together.
+    std::optional<FinalizedMetadata> finalized_metadata_;
     std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
     MeshCommandQueue* last_used_command_queue_ = nullptr;
 
-    // Cached service-vs-normal classification (see EnqueueMeshWorkload), computed once and reused so
-    // re-enqueues skip the O(programs*coords*cores) no-mixing scan. nullopt = not yet classified.
+    // Cached service-vs-normal classification (see EnqueueMeshWorkload), computed before normal finalization.
+    // Service workloads bypass finalization, so this state cannot live in finalized_metadata_. nullopt = not yet
+    // classified. Re-enqueues skip the O(programs*coords*cores) no-mixing scan.
     // Classify-once holds because the classification depends only on core placement (fixed at build) and
     // the claimed-core set (worker cores never become service cores, and service workloads are only
     // re-enqueued onto still-claimed cores - which the dispatch path re-checks).
@@ -81,7 +100,6 @@ private:
     friend FDMeshCommandQueue;
     friend class tt::tt_metal::Program;
 
-    uint32_t max_program_kernels_sizeB_ = 0;
     bool use_prefetcher_cache_ = false;
 
 public:
