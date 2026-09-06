@@ -49,8 +49,9 @@ def test_binary_nextafter_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.nextafter)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    # nextafter moves its input by one ULP, so a PCC check cannot referee it: it cannot
+    # separate a+1ulp from a-1ulp, nor either of them from a left alone.
+    assert_with_ulp(golden_tensor, output_tensor, 0)
 
 
 @pytest.mark.parametrize(
