@@ -1561,7 +1561,15 @@
 
 - name: On-device sampling unit tests
   cmd: |
-    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_authoritative_route_decision"
+    exit_code=0
+    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_authoritative_route_decision" || exit_code=$?
+    # Shared-generator behaviour rather than a model's, so it rides along here instead
+    # of reserving its own leg: the async-ahead keep runs before any transformer layer
+    # and reads only torch tensors plus the two device trace-input buffers, so one
+    # device is enough, no weights are loaded, and both files finish in seconds.
+    pytest --timeout 300 models/tt_transformers/tests/test_async_ahead_token_keep_unit.py \
+      models/tt_transformers/tests/test_async_ahead_token_keep_decode.py || exit_code=$?
+    exit $exit_code
   model: tt-model-sampling
   skus:
     wh_n150:
