@@ -41,6 +41,14 @@ sizes:
       bh_loudbox:
         trace_region_size: 90000000
 
+  exaone-4.5-33b:
+    aliases: ["EXAONE-4.5-33B", "LGAI-EXAONE/EXAONE-4.5-33B"]
+    skus:
+      bh_loudbox:
+        # Conservative ceiling matching llama3.1-70b (dynamic allocation also works;
+        # measured demo runs on P150x8 capture prefill 128/1024 + decode traces).
+        trace_region_size: 90000000
+
   llama3.3-70b:
     aliases: ["Llama-3.3-70B", "meta-llama/Llama-3.3-70B-Instruct"]
     skus:

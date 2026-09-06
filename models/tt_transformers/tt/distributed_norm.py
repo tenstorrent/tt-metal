@@ -42,7 +42,20 @@ def galaxy_distributed_norm_core_grid(dim: int) -> tuple[int, int]:
 
 
 class DistributedNorm(LightweightModule):
+    """Wraps a norm with the TP gather it implies.
+
+    ``norm=None`` turns this into a gather-only identity: the input is gathered
+    (or left fractured + gathered after, in distributed-norm mode) exactly as it
+    would be around a real norm, but no normalization is applied. Post-norm
+    decoders (EXAONE-4.x) use this where pre-norm models have input_layernorm /
+    pre_feedforward_layernorm, since those slots double as the fractured->
+    replicated gather points. Note an RMSNorm with all-ones gamma is NOT an
+    identity (it still divides by RMS), hence this explicit mode.
+    """
+
     def __init__(self, norm, args, tt_ccl, prefetcher=None, TG=False, ag_config_key=None, enable_all_gather=True):
+        if norm is None and TG:
+            raise NotImplementedError("Gather-only DistributedNorm (norm=None) is not supported on Galaxy (TG)")
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
@@ -86,6 +99,8 @@ class DistributedNorm(LightweightModule):
         owns no weights of its own). Same HF-format contract: ``(1, 1, 1, dim)``,
         TILE, bf16, DRAM-interleaved, replicated.
         """
+        if self.norm is None:
+            raise ValueError("Gather-only DistributedNorm (norm=None) owns no weights to update")
         self.norm.update(weight=weight)
 
     def forward(self, x, mode: Mode, norm_config=None):
@@ -142,9 +157,14 @@ class DistributedNorm(LightweightModule):
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
 
-        x = self.norm(
-            x, mode=mode, in_sharded=(mode == Mode.DECODE), out_sharded=(mode == Mode.DECODE), norm_config=norm_config
-        )
+        if self.norm is not None:
+            x = self.norm(
+                x,
+                mode=mode,
+                in_sharded=(mode == Mode.DECODE),
+                out_sharded=(mode == Mode.DECODE),
+                norm_config=norm_config,
+            )
 
         # Distributed norm requires a gather
         if self.args.is_distributed_norm(mode) and self.enable_all_gather:
