@@ -198,9 +198,13 @@ void wait_for_go_message() {
 #else
     tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 #endif
-    uint32_t go_message_index = mailboxes->go_message_index;
-
-    while (mailboxes->go_messages[go_message_index].signal != RUN_MSG_GO) {
+    // Re-read go_message_index on every iteration rather than latching it once. Kernels are
+    // preloaded (DISPATCH_ENABLE_FLAG_PRELOAD is set unconditionally), so subordinates reach this
+    // wait before the go signal arrives; latching the index here would make a subordinate that
+    // sampled a stale or out-of-range value poll a slot that is never signalled, and spin forever.
+    // brisc (brisc.cc) and the tt-2xx dm firmware already re-read it per iteration; this keeps the
+    // subordinate path consistent with them.
+    while (mailboxes->go_messages[mailboxes->go_message_index].signal != RUN_MSG_GO) {
         invalidate_l1_cache();
     }
 }
