@@ -252,6 +252,27 @@ TEST_F(MeshDevice2x4Test, GetOptimalDramBankToLogicalWorkerAssignmentPerDevice) 
     }
 }
 
+TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreUsesSelectedDevice) {
+    const CoreCoord logical_core{0, 0};
+    auto& metal_context = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id());
+    const auto& control_plane = metal_context.get_control_plane();
+
+    for (const auto& mesh_coordinate : MeshCoordinateRange(mesh_device_->shape())) {
+        // Derive the expected coordinate from the chip's SoC descriptor rather than from the device
+        // object the implementation itself uses, so the two cannot agree by construction.
+        const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(
+            mesh_device_->impl().get_fabric_node_id(mesh_coordinate));
+        EXPECT_EQ(
+            tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+                mesh_device_.get(), mesh_coordinate, logical_core),
+            metal_context.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                physical_chip_id, logical_core, CoreType::WORKER));
+    }
+
+    EXPECT_ANY_THROW(tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+        mesh_device_.get(), MeshCoordinate{mesh_device_->shape()[0], 0}, logical_core));
+}
+
 TEST(GetWorkerNocHopDistanceAPI, UnitMeshes) {
     auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
     std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());

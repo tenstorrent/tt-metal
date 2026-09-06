@@ -14,6 +14,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -210,6 +211,28 @@ TEST_F(BigMeshDualRankTest2x4, SimpleShardedBufferTest) {
             EXPECT_EQ(dst_vec[i], src_vec[i]) << "Mismatch at index: " << i;
         }
     }
+}
+
+TEST_F(BigMeshDualRankTest2x4, WorkerCoreFromLogicalCoreRejectsCoordinatesOwnedByAnotherRank) {
+    const CoreCoord logical_core{0, 0};
+    int remote_coordinates = 0;
+
+    for (const auto& mesh_coordinate : MeshCoordinateRange(mesh_device_->shape())) {
+        if (mesh_device_->impl().is_local(mesh_coordinate)) {
+            EXPECT_EQ(
+                tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+                    mesh_device_.get(), mesh_coordinate, logical_core),
+                mesh_device_->impl().get_device(mesh_coordinate)->worker_core_from_logical_core(logical_core));
+        } else {
+            ++remote_coordinates;
+            EXPECT_ANY_THROW(tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+                mesh_device_.get(), mesh_coordinate, logical_core));
+        }
+    }
+
+    // The rejection is the point of this test: a binding that gives one rank the whole mesh would
+    // pass every assertion above without exercising it.
+    EXPECT_GT(remote_coordinates, 0);
 }
 
 TEST_F(BigMeshDualRankTest2x4, SubmeshCreationSingleSubmesh) {
