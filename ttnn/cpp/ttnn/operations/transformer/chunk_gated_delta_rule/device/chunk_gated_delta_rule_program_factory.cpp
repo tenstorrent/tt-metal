@@ -20,6 +20,12 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
+// Inversion pipeline selector — MUST match GDN_INVERSE_TRISOLVE in the compute kernel
+// (kernels/compute/chunk_gated_delta_rule.cpp). Sets cb_Tinv/c_13's format:
+//   0 = Horner   -> fp32 T_inv accumulator
+//   1 = triangle_solve -> bf16 L_tri
+#define GDN_INVERSE_TRISOLVE 0
+
 namespace ttnn::prim {
 
 // CB index plan (all fp32). Kept in sync with the compute/reader/writer kernels.
@@ -118,7 +124,11 @@ tt::tt_metal::ProgramDescriptor ChunkGatedDeltaRuleProgramFactory::create_descri
     add_cb(cb::decay_exp, Ct);
     add_cb(cb::decay_row, Ct);
     add_cb(cb::lmask, cc);
-    add_cb(cb::mmat, cc);
+#if GDN_INVERSE_TRISOLVE
+    add_cb(cb::mmat, cc, 1, df_io);  // bf16 L_tri for triangle_solve pipeline
+#else
+    add_cb(cb::mmat, cc);  // fp32 T_inv accumulator for Horner pipeline
+#endif
     add_cb(cb::vbeta, cv);
     add_cb(cb::kbeta, ck);
     add_cb(cb::out, cv, 2, df_io);
