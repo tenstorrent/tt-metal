@@ -56,24 +56,23 @@ protected:
 
 TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFBs) {
     CoreRangeSet cores(CoreRange({1, 1}, {1, 1}));
-    CoreRangeSet cores2(CoreRange({1, 1}, {2, 2}));
     auto mesh_device = devices_[0];
 
-    // Valid 1:1 mapping - should not throw.
+    // Valid 1:1 - should not throw.
     {
-        std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{CoreCoord(0, 0), cores}};
-        EXPECT_NO_THROW(experimental::CrossNodeDFB(mesh_device.get(), mapping, /*entry_size=*/256, /*num_entries=*/4));
+        EXPECT_NO_THROW(experimental::CrossNodeDFB(
+            mesh_device.get(), CoreCoord(0, 0), cores, /*entry_size=*/256, /*num_entries=*/4));
     }
     // Sender core appears in its own receiver CoreRangeSet (sender-receiver overlap).
     {
         CoreRangeSet overlap_cores(CoreRange({0, 0}, {0, 0}));
-        std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{CoreCoord(0, 0), overlap_cores}};
-        EXPECT_THROW(experimental::CrossNodeDFB(mesh_device.get(), mapping, 256, 4), std::exception);
+        EXPECT_THROW(
+            experimental::CrossNodeDFB(mesh_device.get(), CoreCoord(0, 0), overlap_cores, 256, 4), std::exception);
     }
-    // Two senders share a receiver core (receiver sets overlap across senders).
+    // Receiver set must be non-empty.
     {
-        std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{CoreCoord(0, 0), cores}, {CoreCoord(0, 1), cores2}};
-        EXPECT_THROW(experimental::CrossNodeDFB(mesh_device.get(), mapping, 256, 4), std::exception);
+        EXPECT_THROW(
+            experimental::CrossNodeDFB(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet{}, 256, 4), std::exception);
     }
 }
 
@@ -86,9 +85,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
 
     auto mesh_device = devices_[0];
 
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-
-    // Valid: create into program on all mapping cores.
+    // Valid: create into program on sender and receiver cores.
     {
         tt_metal::Program program = CreateProgram();
         tt::tt_metal::CreateKernel(
@@ -98,7 +95,8 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
 
-        const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, mesh_device.get(), mapping, 256, 4);
+        const uint8_t remote_dfb_id =
+            experimental::CreateCrossNodeDFB(program, mesh_device.get(), sender_core, receiver_cores, 256, 4);
         EXPECT_EQ(remote_dfb_id, 0u);
 
         program.impl().compile(mesh_device.get());
@@ -110,7 +108,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
         const auto& kernel_groups = program.impl().get_kernel_groups(index);
         ASSERT_FALSE(kernel_groups.empty());
         EXPECT_NE(
-            kernel_groups[0]->launch_msg.view().kernel_config().cross_node_dfb_offset(), CROSS_NODE_DFB_OFFSET_NONE);
+            kernel_groups[0]->launch_msg.view().kernel_config().cross_node_dfb_offset(), REMOTE_DFB_OFFSET_NONE);
     }
     // UpdateDynamicCrossNodeDFBAddress: valid case - retargets to a distinct matching buffer.
     {
@@ -121,7 +119,8 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
             all_cores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
-        const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, mesh_device.get(), mapping, 256, 4);
+        const uint8_t remote_dfb_id =
+            experimental::CreateCrossNodeDFB(program, mesh_device.get(), sender_core, receiver_cores, 256, 4);
         program.impl().compile(mesh_device.get());
         program.impl().finalize_offsets(mesh_device.get());
 
@@ -131,7 +130,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
         // Shard grid must match the CrossNodeDFB's cores (sender ∪ receivers), which
         // excludes the dummy core the kernel also runs on.
         auto replacement = cross_node_dfb_test::make_cross_node_data_buffer(
-            mesh_device.get(), sender_cores.merge(receiver_cores), /*entry_size=*/256, /*num_entries=*/4);
+            *mesh_device, sender_cores.merge(receiver_cores), /*entry_size=*/256, /*num_entries=*/4);
         ASSERT_NE(static_cast<uint32_t>(replacement->address()), original_data_addr);
 
         EXPECT_NO_THROW(experimental::UpdateDynamicCrossNodeDFBAddress(program, remote_dfb_id, *replacement));
@@ -149,16 +148,17 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
             all_cores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
-        const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, mesh_device.get(), mapping, 256, 4);
+        const uint8_t remote_dfb_id =
+            experimental::CreateCrossNodeDFB(program, mesh_device.get(), sender_core, receiver_cores, 256, 4);
         const CoreRangeSet dummy_all_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0))).merge(dummy_receiver_cores);
         auto dummy_data = cross_node_dfb_test::make_cross_node_data_buffer(
-            mesh_device.get(), dummy_all_cores, /*entry_size=*/256, /*num_entries=*/4);
+            *mesh_device, dummy_all_cores, /*entry_size=*/256, /*num_entries=*/4);
         program.impl().compile(mesh_device.get());
         program.impl().finalize_offsets(mesh_device.get());
         EXPECT_THROW(
             experimental::UpdateDynamicCrossNodeDFBAddress(program, remote_dfb_id, *dummy_data), std::exception);
     }
-    // No CrossNodeDFBs created: cross_node_dfb_offset must be CROSS_NODE_DFB_OFFSET_NONE.
+    // No CrossNodeDFBs created: cross_node_dfb_offset must be REMOTE_DFB_OFFSET_NONE.
     {
         tt_metal::Program program = CreateProgram();
         tt::tt_metal::CreateKernel(
@@ -171,13 +171,13 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
         program.impl().finalize_offsets(mesh_device.get());
         const auto& hal = MetalContext::instance().hal();
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-        EXPECT_EQ(program.impl().get_program_config(index).cross_node_dfb_offset, CROSS_NODE_DFB_OFFSET_NONE);
+        EXPECT_EQ(program.impl().get_program_config(index).cross_node_dfb_offset, REMOTE_DFB_OFFSET_NONE);
     }
 }
 
 // MeshWorkload finalizes offsets across all programs together. Programs can share logical
 // core coordinates across device ranges; a program with no CrossNodeDFB must keep
-// CROSS_NODE_DFB_OFFSET_NONE even when another program in the workload has participants on
+// REMOTE_DFB_OFFSET_NONE even when another program in the workload has participants on
 // the same logical cores.
 TEST_F(CrossNodeDFBFixture, MeshWorkload_CrossNodeOffsetUsesPerProgramParticipants) {
     auto mesh_device = devices_[0];
@@ -185,8 +185,6 @@ TEST_F(CrossNodeDFBFixture, MeshWorkload_CrossNodeOffsetUsesPerProgramParticipan
     CoreCoord sender_core(0, 0);
     CoreRangeSet receiver_cores(CoreRange({1, 0}, {2, 0}));
     auto all_cores = CoreRangeSet(CoreRange(sender_core)).merge(receiver_cores);
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-
     auto make_blank_program = [&]() {
         Program program = CreateProgram();
         CreateKernel(
@@ -198,7 +196,8 @@ TEST_F(CrossNodeDFBFixture, MeshWorkload_CrossNodeOffsetUsesPerProgramParticipan
     };
 
     Program program_with_cn = make_blank_program();
-    const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program_with_cn, mesh_device.get(), mapping, 256, 4);
+    const uint8_t remote_dfb_id =
+        experimental::CreateCrossNodeDFB(program_with_cn, mesh_device.get(), sender_core, receiver_cores, 256, 4);
     EXPECT_EQ(remote_dfb_id, 0u);
 
     Program program_without_cn = make_blank_program();
@@ -225,7 +224,7 @@ TEST_F(CrossNodeDFBFixture, MeshWorkload_CrossNodeOffsetUsesPerProgramParticipan
             kg->launch_msg.view().kernel_config().cross_node_dfb_offset(), static_cast<uint16_t>(kSharedRegionOffset));
     }
     for (const auto& kg : program_without_cn.impl().get_kernel_groups(index)) {
-        EXPECT_EQ(kg->launch_msg.view().kernel_config().cross_node_dfb_offset(), CROSS_NODE_DFB_OFFSET_NONE);
+        EXPECT_EQ(kg->launch_msg.view().kernel_config().cross_node_dfb_offset(), REMOTE_DFB_OFFSET_NONE);
     }
 }
 
@@ -243,8 +242,6 @@ TEST_F(CrossNodeDFBFixture, DispatchPartitionsHeterogeneousKernelGroupByPayload)
     const CoreCoord non_participant_core(3, 0);
     // One kernel covers participant and non-participant cores → one heterogeneous kernel group.
     const CoreRangeSet kernel_cores(CoreRange({0, 0}, {3, 0}));
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-
     Program program = CreateProgram();
     CreateKernel(
         program,
@@ -252,7 +249,8 @@ TEST_F(CrossNodeDFBFixture, DispatchPartitionsHeterogeneousKernelGroupByPayload)
         kernel_cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, mesh_device.get(), mapping, 256, 4);
+    const uint8_t remote_dfb_id =
+        experimental::CreateCrossNodeDFB(program, mesh_device.get(), sender_core, receiver_cores, 256, 4);
     experimental::dfb::DataflowBufferConfig relay_config{.entry_size = 256, .num_entries = 4};
     const uint32_t relay_host_id =
         experimental::CreateCrossNodeRelayDataflowBuffer(program, receiver_cores, relay_config, remote_dfb_id);
@@ -286,7 +284,7 @@ TEST_F(CrossNodeDFBFixture, DispatchPartitionsHeterogeneousKernelGroupByPayload)
     for (const auto& group : groups) {
         EXPECT_FALSE(group.cores.contains(non_participant_core));
         total_cores += group.cores.num_cores();
-        const uint32_t relay_word = group.payload[CROSS_NODE_DFB_REGION_HEADER_WORDS + 2];
+        const uint32_t relay_word = group.payload[REMOTE_DFB_REGION_HEADER_WORDS + 2];
         if (group.cores.contains(sender_core)) {
             EXPECT_EQ(group.cores.num_cores(), 1u);
             EXPECT_EQ(relay_word, std::numeric_limits<uint8_t>::max());
@@ -305,22 +303,12 @@ TEST_F(CrossNodeDFBFixture, DispatchPartitionsHeterogeneousKernelGroupByPayload)
 // Group 2: DFB-specific host-API tests (no kernel execution)
 // ---------------------------------------------------------------------------
 
-TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFBs_MultiSender) {
+TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFBs_OneToMany) {
     auto mesh_device = devices_[0];
 
-    // Valid M:N: 2 independent senders, each with a disjoint CoreRangeSet.
-    {
-        CoreRangeSet recv0(CoreRange({2, 0}, {3, 0}));
-        CoreRangeSet recv1(CoreRange({2, 1}, {3, 1}));
-        std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{CoreCoord(0, 0), recv0}, {CoreCoord(1, 0), recv1}};
-        EXPECT_NO_THROW(experimental::CrossNodeDFB(mesh_device.get(), mapping, 256, 4));
-    }
     // Single sender with 2 receivers: creates without error.
-    {
-        CoreRangeSet recv(CoreRange({1, 0}, {2, 0}));
-        std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{CoreCoord(0, 0), recv}};
-        EXPECT_NO_THROW(experimental::CrossNodeDFB(mesh_device.get(), mapping, 256, 4));
-    }
+    CoreRangeSet recv(CoreRange({1, 0}, {2, 0}));
+    EXPECT_NO_THROW(experimental::CrossNodeDFB(mesh_device.get(), CoreCoord(0, 0), recv, 256, 4));
 }
 
 TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI_SlotAssignment) {
@@ -331,8 +319,6 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI_SlotAssignment) {
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     auto all_cores = sender_cores.merge(receiver_cores);
 
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-
     tt_metal::Program program = CreateProgram();
     tt::tt_metal::CreateKernel(
         program,
@@ -340,7 +326,8 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI_SlotAssignment) {
         all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
-    const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, mesh_device.get(), mapping, 256, 4);
+    const uint8_t remote_dfb_id =
+        experimental::CreateCrossNodeDFB(program, mesh_device.get(), sender_core, receiver_cores, 256, 4);
     EXPECT_EQ(remote_dfb_id, 0u);
 
     detail::ProgramImpl& impl = program.impl();
@@ -375,13 +362,15 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI_IndependentTopologiesUseProg
     const uint8_t slot0 = experimental::CreateCrossNodeDFB(
         program,
         mesh_device.get(),
-        {{sender0, CoreRangeSet(CoreRange(receiver0))}},
+        sender0,
+        CoreRangeSet(CoreRange(receiver0)),
         /*entry_size=*/256,
         /*num_entries=*/4);
     const uint8_t slot1 = experimental::CreateCrossNodeDFB(
         program,
         mesh_device.get(),
-        {{sender1, CoreRangeSet(CoreRange(receiver1))}},
+        sender1,
+        CoreRangeSet(CoreRange(receiver1)),
         /*entry_size=*/256,
         /*num_entries=*/4);
     EXPECT_EQ(slot0, 0u);
@@ -410,14 +399,14 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI_IndependentTopologiesUseProg
     ASSERT_EQ(groups.size(), 2u);
     for (const auto& group : groups) {
         ASSERT_EQ(group.payload[0], 2u);
-        ASSERT_EQ(group.payload.size(), cross_node_dfb_config_region_words(2));
+        ASSERT_EQ(group.payload.size(), remote_dfb_config_region_words(2));
         const bool is_topology0 = group.cores.contains(sender0);
         const uint32_t participant_slot = is_topology0 ? 0u : 1u;
         const uint32_t non_participant_slot = is_topology0 ? 1u : 0u;
         const uint32_t participant_base =
-            CROSS_NODE_DFB_REGION_HEADER_WORDS + participant_slot * CROSS_NODE_DFB_CONFIG_WORDS;
+            REMOTE_DFB_REGION_HEADER_WORDS + participant_slot * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
         const uint32_t non_participant_base =
-            CROSS_NODE_DFB_REGION_HEADER_WORDS + non_participant_slot * CROSS_NODE_DFB_CONFIG_WORDS;
+            REMOTE_DFB_REGION_HEADER_WORDS + non_participant_slot * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
         EXPECT_EQ(
             group.payload[participant_base], program.impl().get_cross_node_dfb(participant_slot).config_address());
         EXPECT_EQ(group.payload[participant_base + 1], 256u);
@@ -436,8 +425,8 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI_IndependentTopologiesUseProg
     constexpr uint32_t kBase = 256;
     const uint32_t next = program_dispatch::finalize_cross_node_dfbs(
         metal_ctx, index, ttsl::Span<detail::ProgramImpl*>(programs, 1), kBase);
-    const uint32_t l1_align = hal.get_alignment(HalMemType::L1);
-    const uint32_t region_bytes = cross_node_dfb_config_region_words(2) * sizeof(uint32_t);
+    const uint32_t l1_align = metal_ctx.hal().get_alignment(HalMemType::L1);
+    const uint32_t region_bytes = remote_dfb_config_region_words(2) * sizeof(uint32_t);
     const uint32_t expected_next = (kBase + region_bytes + l1_align - 1) & ~(l1_align - 1);
     EXPECT_EQ(next, expected_next);
     for (const auto& kg : program.impl().get_kernel_groups(index)) {
@@ -456,11 +445,10 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_RelayDFB_HostRelationshipValidation) {
     auto mesh_device = devices_[0];
     CoreCoord sender_core(0, 0);
     CoreRangeSet receiver_cores(CoreRange({1, 0}, {2, 0}));
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-
     {
         Program program = CreateProgram();
-        const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, mesh_device.get(), mapping, 256, 4);
+        const uint8_t remote_dfb_id =
+            experimental::CreateCrossNodeDFB(program, mesh_device.get(), sender_core, receiver_cores, 256, 4);
         experimental::dfb::DataflowBufferConfig config{.entry_size = 256, .num_entries = 4};
         const uint32_t relay_host_id =
             experimental::CreateCrossNodeRelayDataflowBuffer(program, receiver_cores, config, remote_dfb_id);
@@ -475,7 +463,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_RelayDFB_HostRelationshipValidation) {
             std::numeric_limits<uint8_t>::max());
 
         auto replacement = cross_node_dfb_test::make_cross_node_data_buffer(
-            mesh_device.get(),
+            *mesh_device,
             CoreRangeSet(CoreRange(sender_core)).merge(receiver_cores),
             /*entry_size=*/256,
             /*num_entries=*/4);
@@ -487,7 +475,8 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_RelayDFB_HostRelationshipValidation) {
 
     {
         Program program = CreateProgram();
-        const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, mesh_device.get(), mapping, 256, 4);
+        const uint8_t remote_dfb_id =
+            experimental::CreateCrossNodeDFB(program, mesh_device.get(), sender_core, receiver_cores, 256, 4);
         experimental::dfb::DataflowBufferConfig wrong_size{.entry_size = 128, .num_entries = 4};
         EXPECT_THROW(
             experimental::CreateCrossNodeRelayDataflowBuffer(program, receiver_cores, wrong_size, remote_dfb_id),
@@ -590,17 +579,16 @@ static uint32_t run_1toN_program(
     uint32_t num_entries,
     uint32_t write_primitive,
     uint32_t counter_base = 0) {
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
-
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
 
     const uint32_t num_receivers = static_cast<uint32_t>(corerange_to_cores(receiver_cores).size());
     const uint32_t data_pattern = cross_node_dfb_test::data_pattern_for_write_primitive(write_primitive);
     const uint32_t staging_size =
         cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, num_entries, num_receivers);
     tt_metal::Program program = CreateProgram();
-    const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries);
+    const uint8_t remote_dfb_id =
+        experimental::CreateCrossNodeDFB(program, &device, sender_core, receiver_cores, entry_size, num_entries);
     const auto& gdfb = program.impl().get_cross_node_dfb(remote_dfb_id);
 
     tt::tt_metal::KernelHandle sender_k = tt::tt_metal::CreateKernel(
@@ -718,16 +706,14 @@ static uint32_t run_relay_program(
     TT_FATAL(total_entries % batch_size == 0, "Relay test total_entries must be divisible by batch_size");
     TT_FATAL(ring_depth % batch_size == 0, "Relay test ring_depth must be divisible by batch_size");
 
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
     CoreRangeSet sender_cores{CoreRange(sender_core)};
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-
     // Reserve tracked L1 allocations for sender payload and TRISC results.
     auto staging_buffer =
-        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), sender_cores, entry_size, total_entries);
+        cross_node_dfb_test::make_cross_node_data_buffer(*mesh_device, sender_cores, entry_size, total_entries);
     constexpr uint32_t result_page_size = 32;
     auto result_buffer =
-        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), receiver_cores, result_page_size, 1);
+        cross_node_dfb_test::make_cross_node_data_buffer(*mesh_device, receiver_cores, result_page_size, 1);
 
     const uint32_t num_receivers = receiver_cores.num_cores();
     const auto staging_bytes = cross_node_dfb_test::build_sender_staging_bytes(
@@ -738,10 +724,11 @@ static uint32_t run_relay_program(
     std::vector<uint32_t> staging_words((staging_bytes.size() + sizeof(uint32_t) - 1) / sizeof(uint32_t), 0);
     std::memcpy(staging_words.data(), staging_bytes.data(), staging_bytes.size());
     slow_dispatch::WriteToL1(
-        *mesh_device, sender_core, static_cast<uint32_t>(staging_buffer->address()), staging_words, CoreType::WORKER);
+        device, sender_core, static_cast<uint32_t>(staging_buffer->address()), staging_words, CoreType::WORKER);
 
     Program program = CreateProgram();
-    const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, ring_depth);
+    const uint8_t remote_dfb_id =
+        experimental::CreateCrossNodeDFB(program, &device, sender_core, receiver_cores, entry_size, ring_depth);
 
     experimental::dfb::DataflowBufferConfig relay_config{
         .entry_size = entry_size,
@@ -788,7 +775,7 @@ static uint32_t run_relay_program(
     for (const CoreCoord& receiver_core : corerange_to_cores(receiver_cores)) {
         std::vector<uint32_t> result(2, 0);
         slow_dispatch::ReadFromL1(
-            *mesh_device,
+            device,
             receiver_core,
             static_cast<uint32_t>(result_buffer->address()),
             std::span<uint8_t>(reinterpret_cast<uint8_t*>(result.data()), result.size() * sizeof(uint32_t)),
@@ -971,80 +958,13 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_DecoupledWriteThenCredit) {
     EXPECT_EQ(pass, 4u) << "Decoupled write-then-credit (write_broadcast(n) then push_back(n)) failed";
 }
 
-TEST_F(CrossNodeDFBFixture, CrossNodeDFB_MultipleSenders_MtoN) {
-    auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
-
-    // 2 independent 1:2 channels, disjoint receivers.
-    CoreCoord sender0(0, 0), sender1(0, 1);
-    CoreRangeSet recv0(CoreRange({1, 0}, {2, 0}));
-    CoreRangeSet recv1(CoreRange({1, 1}, {2, 1}));
-    CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender0)).merge(CoreRangeSet(CoreRange(sender1)));
-    CoreRangeSet receiver_cores = recv0.merge(recv1);
-
-    const uint32_t entry_size = 256;
-    const uint32_t num_entries = 4;
-
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender0, recv0}, {sender1, recv1}};
-    tt_metal::Program program = CreateProgram();
-    const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries);
-    const auto& gdfb = program.impl().get_cross_node_dfb(remote_dfb_id);
-
-    auto recvs = corerange_to_cores(receiver_cores);
-    const uint32_t num_receivers = static_cast<uint32_t>(recvs.size());
-    constexpr uint32_t data_pattern = static_cast<uint32_t>(cross_node_dfb_test::SenderDataPattern::MulticastCounter);
-    const uint32_t staging_size =
-        cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, num_entries, num_receivers);
-    tt::tt_metal::KernelHandle sender_k = tt::tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_sender.cpp",
-        sender_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = {remote_dfb_id, entry_size, num_entries, 0u, data_pattern, 0u}});
-    for (uint32_t ri = 0; ri < static_cast<uint32_t>(recvs.size()); ++ri) {
-        CoreRangeSet single = CoreRangeSet(CoreRange(recvs[ri]));
-        tt::tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_receiver.cpp",
-            single,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = {remote_dfb_id, entry_size, num_entries, ri}});
-    }
-
-    cross_node_dfb_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, gdfb, staging_size);
-    cross_node_dfb_test::write_sender_l1_staging(
-        *mesh_device, sender_cores, gdfb, data_pattern, entry_size, num_entries, num_receivers);
-
-    distributed::MeshWorkload workload;
-    Program& program_ref = run_on_mesh_device(mesh_device, std::move(program), workload);
-
-    uint32_t pass_count = 0;
-    for (uint32_t ri = 0; ri < static_cast<uint32_t>(recvs.size()); ++ri) {
-        if (cross_node_dfb_test::verify_receiver_ring(
-                *mesh_device, gdfb, recvs[ri], data_pattern, entry_size, num_entries, ri, num_receivers)) {
-            pass_count++;
-        }
-    }
-    EXPECT_EQ(pass_count, 4u) << "Not all M:N receivers received expected data";
-    EXPECT_TRUE(cross_node_dfb_test::verify_credits_drained(
-        *mesh_device, program_ref, remote_dfb_id, sender0, recv0, entry_size, num_entries))
-        << "M:N sender0 credits not drained";
-    EXPECT_TRUE(cross_node_dfb_test::verify_credits_drained(
-        *mesh_device, program_ref, remote_dfb_id, sender1, recv1, entry_size, num_entries))
-        << "M:N sender1 credits not drained";
-}
-
 TEST_F(CrossNodeDFBFixture, CrossNodeDFB_ProgramInitResetsPointers) {
     // CrossNode is same-program only: program init resets fifo ptrs to fifo_start_addr.
     // Two programs share one borrowed data ring. Program1 writes with counter_base=0;
     // Program2 writes with counter_base=0xA0. Finding 0xA0 at ring start proves the
     // second launch did not continue from a persisted wr_ptr.
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
 
     CoreCoord sender_core(0, 0);
     CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
@@ -1057,14 +977,12 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_ProgramInitResetsPointers) {
     const uint32_t entries_per_program = 4;
     constexpr uint32_t program2_counter_base = 0xA0;
 
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto user_data =
-        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), all_cores, entry_size, num_entries);
+    auto user_data = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
 
     auto build_and_run = [&](uint32_t counter_base) {
         tt_metal::Program program = CreateProgram();
-        const uint8_t remote_dfb_id =
-            experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries, *user_data);
+        const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(
+            program, &device, sender_core, receiver_cores, entry_size, num_entries, *user_data);
         // Copy keeps shared buffer refs alive for host verify after the program is moved.
         experimental::CrossNodeDFB gdfb = program.impl().get_cross_node_dfb(remote_dfb_id);
 
@@ -1143,7 +1061,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_UpdateDynamicCrossNodeDFBAddressFunctio
     // Create on ring A, then UpdateDynamic to ring B before launch.
     // Data must land in B; A must stay untouched. Config sideband address is unchanged.
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
 
     CoreCoord sender_core(0, 0);
     CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
@@ -1156,11 +1074,10 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_UpdateDynamicCrossNodeDFBAddressFunctio
     constexpr uint32_t data_pattern = static_cast<uint32_t>(cross_node_dfb_test::SenderDataPattern::MulticastCounter);
     constexpr uint32_t counter_base = 0x40;
 
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto data_b =
-        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), all_cores, entry_size, num_entries);
+    auto data_b = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
     tt_metal::Program program = CreateProgram();
-    const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries);
+    const uint8_t remote_dfb_id =
+        experimental::CreateCrossNodeDFB(program, &device, sender_core, receiver_cores, entry_size, num_entries);
     // Keep a copy of the original ring for "untouched" checks after UpdateDynamic.
     experimental::CrossNodeDFB gdfb_a = program.impl().get_cross_node_dfb(remote_dfb_id);
     const uint32_t page_size_before = gdfb_a.config_page_size();
@@ -1221,7 +1138,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_UpdateDynamicCrossNodeDFBAddressFunctio
 
 TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BarrierCompletesAll) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
 
     CoreCoord sender_core(0, 0);
     CoreRangeSet receiver_cores(CoreRange({1, 0}, {4, 0}));
@@ -1230,9 +1147,9 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BarrierCompletesAll) {
     const uint32_t entry_size = 256;
     const uint32_t num_entries = 4;
 
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
     tt_metal::Program program = CreateProgram();
-    const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries);
+    const uint8_t remote_dfb_id =
+        experimental::CreateCrossNodeDFB(program, &device, sender_core, receiver_cores, entry_size, num_entries);
     const auto& gdfb = program.impl().get_cross_node_dfb(remote_dfb_id);
 
     constexpr uint32_t data_pattern = static_cast<uint32_t>(cross_node_dfb_test::SenderDataPattern::MulticastCounter);
@@ -1284,7 +1201,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BarrierCompletesAll) {
 
 TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedMemoryPushPop_1to1) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
 
     CoreCoord sender_core(0, 0);
     CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
@@ -1297,12 +1214,10 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedMemoryPushPop_1to1) {
     constexpr uint32_t data_pattern =
         static_cast<uint32_t>(cross_node_dfb_test::SenderDataPattern::PerReceiverConstant);
 
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto user_data =
-        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), all_cores, entry_size, num_entries);
+    auto user_data = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
     tt_metal::Program program = CreateProgram();
-    const uint8_t remote_dfb_id =
-        experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries, *user_data);
+    const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(
+        program, &device, sender_core, receiver_cores, entry_size, num_entries, *user_data);
     const auto& gdfb = program.impl().get_cross_node_dfb(remote_dfb_id);
 
     EXPECT_EQ(gdfb.buffer_address(), static_cast<uint32_t>(user_data->address()));
@@ -1345,73 +1260,73 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedMemoryPushPop_1to1) {
 
 TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFB_BorrowedMismatch_PageSize) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
-    CoreRangeSet all_cores = CoreRangeSet(CoreRange({0, 0}, {0, 0})).merge(CoreRangeSet(CoreRange({1, 0}, {1, 0})));
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
-        {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
+    distributed::MeshDevice& device = *mesh_device;
+    const CoreCoord sender_core(0, 0);
+    const CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
+    CoreRangeSet all_cores = CoreRangeSet(CoreRange({0, 0}, {0, 0})).merge(receiver_cores);
 
     auto bad = Buffer::create(
-        device,
+        &device,
         128 * 2,
         128,  // should be entry_size * num_entries = 256 * 4
         BufferType::L1,
         BufferShardingArgs(
             ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {2, 1}),
             TensorMemoryLayout::HEIGHT_SHARDED));
-    EXPECT_THROW(experimental::CrossNodeDFB(device, mapping, 256, 4, *bad), std::exception);
+    EXPECT_THROW(experimental::CrossNodeDFB(&device, sender_core, receiver_cores, 256, 4, *bad), std::exception);
 }
 
 TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFB_BorrowedMismatch_Cores) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
-    // Mapping uses (0,0)->(1,0); buffer covers a different pair of cores.
+    distributed::MeshDevice& device = *mesh_device;
+    // Topology uses (0,0)->(1,0); buffer covers a different pair of cores.
+    const CoreCoord sender_core(0, 0);
+    const CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
     CoreRangeSet wrong_cores = CoreRangeSet(CoreRange({2, 0}, {2, 0})).merge(CoreRangeSet(CoreRange({3, 0}, {3, 0})));
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
-        {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
     auto bad = Buffer::create(
-        device,
+        &device,
         256 * 4 * 2,
         256 * 4,
         BufferType::L1,
         BufferShardingArgs(
             ShardSpecBuffer(wrong_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {2, 1}),
             TensorMemoryLayout::HEIGHT_SHARDED));
-    EXPECT_THROW(experimental::CrossNodeDFB(device, mapping, 256, 4, *bad), std::exception);
+    EXPECT_THROW(experimental::CrossNodeDFB(&device, sender_core, receiver_cores, 256, 4, *bad), std::exception);
 }
 
 TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFB_BorrowedMismatch_BufferType) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
-        {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
+    distributed::MeshDevice& device = *mesh_device;
+    const CoreCoord sender_core(0, 0);
+    const CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
 
-    auto bad = Buffer::create(device, 256 * 4, 256 * 4, BufferType::DRAM);
-    EXPECT_THROW(experimental::CrossNodeDFB(device, mapping, 256, 4, *bad), std::exception);
+    auto bad = Buffer::create(&device, 256 * 4, 256 * 4, BufferType::DRAM);
+    EXPECT_THROW(experimental::CrossNodeDFB(&device, sender_core, receiver_cores, 256, 4, *bad), std::exception);
 }
 
 TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFB_BorrowedMismatch_Size) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
-    CoreRangeSet all_cores = CoreRangeSet(CoreRange({0, 0}, {0, 0})).merge(CoreRangeSet(CoreRange({1, 0}, {1, 0})));
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
-        {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
+    distributed::MeshDevice& device = *mesh_device;
+    const CoreCoord sender_core(0, 0);
+    const CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
+    CoreRangeSet all_cores = CoreRangeSet(CoreRange({0, 0}, {0, 0})).merge(receiver_cores);
 
     // page_size and grid match, but size is larger than page_size * num_all_cores.
     const uint32_t ring_size = 256 * 4;
     auto bad = Buffer::create(
-        device,
+        &device,
         ring_size * 4,
         ring_size,
         BufferType::L1,
         BufferShardingArgs(
             ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {2, 1}),
             TensorMemoryLayout::HEIGHT_SHARDED));
-    EXPECT_THROW(experimental::CrossNodeDFB(device, mapping, 256, 4, *bad), std::exception);
+    EXPECT_THROW(experimental::CrossNodeDFB(&device, sender_core, receiver_cores, 256, 4, *bad), std::exception);
 }
 
 TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedUpdateDynamic) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
 
     CoreCoord sender_core(0, 0);
     CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
@@ -1424,14 +1339,11 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedUpdateDynamic) {
     constexpr uint32_t data_pattern = static_cast<uint32_t>(cross_node_dfb_test::SenderDataPattern::MulticastCounter);
     constexpr uint32_t counter_base = 0x40;
 
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto user_a =
-        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), all_cores, entry_size, num_entries);
-    auto user_b =
-        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), all_cores, entry_size, num_entries);
+    auto user_a = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
+    auto user_b = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
     tt_metal::Program program = CreateProgram();
-    const uint8_t remote_dfb_id =
-        experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries, *user_a);
+    const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(
+        program, &device, sender_core, receiver_cores, entry_size, num_entries, *user_a);
     experimental::CrossNodeDFB gdfb_a = program.impl().get_cross_node_dfb(remote_dfb_id);
     ASSERT_NE(gdfb_a.buffer_address(), static_cast<uint32_t>(user_b->address()));
     experimental::UpdateDynamicCrossNodeDFBAddress(program, remote_dfb_id, *user_b);
@@ -1483,7 +1395,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedUpdateDynamic) {
 // program launch via the worker config ringbuffer.
 TEST_F(CrossNodeDFBFixture, UpdateDynamicDoesNotEagerlyWriteDeviceConfig) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
 
     CoreCoord sender_core(0, 0);
     CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
@@ -1492,17 +1404,15 @@ TEST_F(CrossNodeDFBFixture, UpdateDynamicDoesNotEagerlyWriteDeviceConfig) {
 
     const uint32_t entry_size = 256;
     const uint32_t num_entries = 4;
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-
-    auto data_b =
-        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), all_cores, entry_size, num_entries);
+    auto data_b = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
     Program program = CreateProgram();
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         all_cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries);
+    const uint8_t remote_dfb_id =
+        experimental::CreateCrossNodeDFB(program, &device, sender_core, receiver_cores, entry_size, num_entries);
     const uint32_t addr_a = program.impl().get_cross_node_dfb(remote_dfb_id).buffer_address();
     ASSERT_NE(addr_a, static_cast<uint32_t>(data_b->address()));
 
@@ -1513,7 +1423,7 @@ TEST_F(CrossNodeDFBFixture, UpdateDynamicDoesNotEagerlyWriteDeviceConfig) {
     std::vector<uint32_t> page_words(
         program_ref.impl().get_cross_node_dfb(remote_dfb_id).config_page_size() / sizeof(uint32_t), 0);
     slow_dispatch::ReadFromL1(
-        *mesh_device,
+        device,
         sender_core,
         page_addr,
         std::span<uint8_t>(reinterpret_cast<uint8_t*>(page_words.data()), page_words.size() * sizeof(uint32_t)),
@@ -1531,7 +1441,7 @@ TEST_F(CrossNodeDFBFixture, UpdateDynamicDoesNotEagerlyWriteDeviceConfig) {
         << "Host config image must reflect the retargeted fifo_start";
 
     slow_dispatch::ReadFromL1(
-        *mesh_device,
+        device,
         sender_core,
         page_addr,
         std::span<uint8_t>(reinterpret_cast<uint8_t*>(page_words.data()), page_words.size() * sizeof(uint32_t)),
@@ -1545,7 +1455,7 @@ TEST_F(CrossNodeDFBFixture, UpdateDynamicDoesNotEagerlyWriteDeviceConfig) {
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload1, false);
     distributed::Finish(mesh_device->mesh_command_queue());
     slow_dispatch::ReadFromL1(
-        *mesh_device,
+        device,
         sender_core,
         page_addr,
         std::span<uint8_t>(reinterpret_cast<uint8_t*>(page_words.data()), page_words.size() * sizeof(uint32_t)),
@@ -1560,7 +1470,7 @@ TEST_F(CrossNodeDFBFixture, UpdateDynamicDoesNotEagerlyWriteDeviceConfig) {
 // the in-flight first launch would be clobbered (hang or lost entries).
 TEST_F(CrossNodeDFBFixture, BackToBackRelaunchOrdersConfigRewrite) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
 
     CoreCoord sender_core(0, 0);
     CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
@@ -1573,9 +1483,9 @@ TEST_F(CrossNodeDFBFixture, BackToBackRelaunchOrdersConfigRewrite) {
     constexpr uint32_t counter_base = 0x40;
     constexpr uint32_t num_launches = 4;
 
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
     tt_metal::Program program = CreateProgram();
-    const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries);
+    const uint8_t remote_dfb_id =
+        experimental::CreateCrossNodeDFB(program, &device, sender_core, receiver_cores, entry_size, num_entries);
     const experimental::CrossNodeDFB gdfb = program.impl().get_cross_node_dfb(remote_dfb_id);
 
     const uint32_t staging_size =
@@ -1658,13 +1568,11 @@ struct CrossNodeTracePushPop {
 
 // Build a 1:1 CrossNode push/pop MeshWorkload. Staging is host-written once and
 // reused across warmup / capture / replay / relaunch.
-CrossNodeTracePushPop make_1to1_trace_push_pop(distributed::MeshDevice& mesh_device) {
+CrossNodeTracePushPop make_1to1_trace_push_pop(distributed::MeshDevice& device) {
     CrossNodeTracePushPop ctx;
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{ctx.sender_core, ctx.receiver_cores}};
-
     Program program = CreateProgram();
-    ctx.remote_dfb_id =
-        experimental::CreateCrossNodeDFB(program, &mesh_device, mapping, ctx.entry_size, ctx.num_entries);
+    ctx.remote_dfb_id = experimental::CreateCrossNodeDFB(
+        program, &device, ctx.sender_core, ctx.receiver_cores, ctx.entry_size, ctx.num_entries);
     ctx.gdfb = program.impl().get_cross_node_dfb(ctx.remote_dfb_id);
 
     const uint32_t staging_size =
@@ -1689,7 +1597,7 @@ CrossNodeTracePushPop make_1to1_trace_push_pop(distributed::MeshDevice& mesh_dev
     cross_node_dfb_test::set_sender_l1_staging_runtime_args(
         program, sender_k, ctx.sender_cores, *ctx.gdfb, staging_size);
     cross_node_dfb_test::write_sender_l1_staging(
-        mesh_device,
+        device,
         ctx.sender_cores,
         *ctx.gdfb,
         ctx.data_pattern,
@@ -1783,7 +1691,7 @@ TEST_F(CrossNodeDFBTraceFixture, ReplayThenRelaunch_OrdersConfigRewrite) {
 // fifo_start (not the original Create-time ring).
 TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_UpdateDynamicSnapshot) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
 
     CoreCoord sender_core(0, 0);
     CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
@@ -1796,12 +1704,11 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_UpdateDynamicSnapshot) {
     constexpr uint32_t data_pattern = static_cast<uint32_t>(cross_node_dfb_test::SenderDataPattern::MulticastCounter);
     constexpr uint32_t counter_base = 0x40;
 
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto data_b =
-        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), all_cores, entry_size, num_entries);
+    auto data_b = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
 
     Program program = CreateProgram();
-    const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries);
+    const uint8_t remote_dfb_id =
+        experimental::CreateCrossNodeDFB(program, &device, sender_core, receiver_cores, entry_size, num_entries);
     experimental::CrossNodeDFB gdfb_a = program.impl().get_cross_node_dfb(remote_dfb_id);
     ASSERT_NE(gdfb_a.buffer_address(), static_cast<uint32_t>(data_b->address()));
 
