@@ -618,9 +618,12 @@ def test_broadcast_ring_l1(
 # once: broadcast dim is 2 (not the innermost), dim0 (2b) and dim3 (E) are > 1 tile, and sp can be 32.
 #
 # broadcast_offset_tiles/broadcast_num_tiles are a FLAT contiguous page range over the whole shard
-# (row-major, width tiles innermost), so a dim-2 sub-range can only be expressed when E/32==1 and
-# dim0*dim1==1. The "subrange" case below therefore fails (xfail: op limitation); the "wholeshard" case
-# broadcasts the whole owner shard and slices dim 2 on host -- correct, and what the pipeline should do.
+# (row-major, width tiles innermost), so a CONTIGUOUS dim-2 sub-range can only be expressed when E/32==1
+# and dim0*dim1==1. The "subrange" case below therefore fails (xfail: contiguous-range limitation). The
+# "blocked" case uses broadcast_stride_pages/broadcast_num_blocks -- one block of frame pages per
+# (dim0, head) with stride = shard rows -- which expresses the dim-2 sub-range exactly (L1 relay only);
+# this is what the production reference-frame path uses. "wholeshard" broadcasts the whole owner shard
+# and slices dim 2 on host -- correct, but moves the whole shard.
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
     [
@@ -633,12 +636,13 @@ def test_broadcast_ring_l1(
     "mode",
     [
         pytest.param("wholeshard", id="wholeshard"),
+        pytest.param("blocked", id="blocked"),
         pytest.param(
             "subrange",
             id="subrange",
             marks=pytest.mark.xfail(
                 reason="broadcast_offset/num_tiles is a flat page range; a dim-2 sub-range across "
-                "dim0/E outer tiles is disjoint pages it cannot express",
+                "dim0/E outer tiles is disjoint pages it cannot express (use the blocked range)",
                 strict=False,
             ),
         ),
@@ -691,6 +695,16 @@ def test_broadcast_ring_reference_frame(mesh_device, sp_axis, tp_axis, device_pa
     )
     if mode == "subrange":
         bcast_kwargs.update(broadcast_offset_tiles=off, broadcast_num_tiles=flen)
+    elif mode == "blocked":
+        # Per-device shard is [n_batch, 1 head, per_dev*T, e_tiles*T]: the frame's seq-tile range
+        # [off, off+flen) is n_batch*1 blocks of flen*e_tiles pages, stride = per_dev*e_tiles pages.
+        bcast_kwargs.update(
+            broadcast_offset_tiles=off * e_tiles,
+            broadcast_num_tiles=flen * e_tiles,
+            broadcast_stride_pages=per_dev * e_tiles,
+            broadcast_num_blocks=n_batch,
+            use_l1_relay=True,
+        )
     full = ttnn.experimental.broadcast_ring(tt_in, **bcast_kwargs)
     ttnn.synchronize_device(mesh_device, sub_device_ids=[wsd_id])
 

@@ -329,11 +329,19 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         max_payload_bytes);
     const uint32_t tiles_per_packet = std::max<uint32_t>(1, max_payload_bytes / page_size);
     const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
+    // Broadcast range: num_blocks blocks of block_pages pages, stride apart (validated in
+    // validate_on_program_cache_miss); num_blocks==1 keeps the plain clamped contiguous range. The kernel
+    // works in LINEAR broadcast indices (chunking, links, credits) and maps linear -> absolute page only
+    // at its DRAM reads/writes, so bcast_count below is the total broadcast page count.
     const uint32_t bcast_offset = operation_attributes.broadcast_offset_tiles;
-    const uint32_t bcast_count =
+    const uint32_t num_blocks = std::max<uint32_t>(1, operation_attributes.broadcast_num_blocks);
+    const uint32_t block_pages =
         operation_attributes.broadcast_num_tiles > 0
-            ? std::min(operation_attributes.broadcast_num_tiles, input_num_pages - bcast_offset)
+            ? (num_blocks > 1 ? operation_attributes.broadcast_num_tiles
+                              : std::min(operation_attributes.broadcast_num_tiles, input_num_pages - bcast_offset))
             : input_num_pages;
+    const uint32_t bcast_stride = operation_attributes.broadcast_stride_pages;
+    const uint32_t bcast_count = block_pages * num_blocks;
 
     // Credit window: num_slots recv-buffer slots (chunks in flight), auto = kL1RelaySlots.
     const uint32_t num_slots = operation_attributes.num_slots > 0 ? operation_attributes.num_slots : kL1RelaySlots;
@@ -379,6 +387,9 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         unicast_backward_args[1],
         num_slots,
         tiles_per_packet,
+        bcast_offset,
+        num_blocks > 1 ? block_pages : 0,  // 0 = contiguous range (no block walking)
+        bcast_stride,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(ct_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(ct_args);
@@ -400,7 +411,9 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         const CoreCoord core = worker_cores[link];
         const CoreCoord ds_core_noc = mesh_device->worker_core_from_logical_core(core);
         const uint32_t local_start = std::min(link * tiles_per_link, bcast_count);
-        const uint32_t tile_start = bcast_offset + local_start;
+        // tile_start/count are LINEAR indices into the broadcast range; the kernel maps linear ->
+        // absolute pages via the CT range descriptor (bcast_offset / block_pages / stride).
+        const uint32_t tile_start = local_start;
         const uint32_t tile_count = std::min(tiles_per_link, bcast_count - local_start);
         // recv_sem is data_ready (upstream inc); cred_* are the backward slot-free credits. All are global
         // sems at the same L1 offset on every core, so one address serves both the local wait and the

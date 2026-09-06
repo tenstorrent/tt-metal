@@ -27,6 +27,29 @@ void BroadcastRingDeviceOperation::validate_on_program_cache_miss(
         "broadcast_ring v1 is one-way and requires Ring topology (wrap link)");
     // Unlike ttnn.broadcast, the orthogonal (tp) axis may be sharded: the op runs per line along the ring
     // axis, so each orthogonal row broadcasts its own data.
+
+    // Blocked range: num_blocks blocks of num_tiles pages, stride apart (see the params struct). Only the
+    // L1 relay kernel maps linear->blocked pages; blocks must be explicit, non-overlapping and in range.
+    if (operation_attributes.broadcast_num_blocks > 1) {
+        TT_FATAL(operation_attributes.use_l1_relay, "broadcast_ring: blocked range requires use_l1_relay");
+        TT_FATAL(
+            operation_attributes.broadcast_num_tiles > 0,
+            "broadcast_ring: blocked range needs an explicit broadcast_num_tiles (pages per block)");
+        TT_FATAL(
+            operation_attributes.broadcast_stride_pages >= operation_attributes.broadcast_num_tiles,
+            "broadcast_ring: broadcast_stride_pages ({}) must be >= pages per block ({})",
+            operation_attributes.broadcast_stride_pages,
+            operation_attributes.broadcast_num_tiles);
+        const uint32_t last_page_end =
+            operation_attributes.broadcast_offset_tiles +
+            (operation_attributes.broadcast_num_blocks - 1) * operation_attributes.broadcast_stride_pages +
+            operation_attributes.broadcast_num_tiles;
+        TT_FATAL(
+            last_page_end <= input_tensor.buffer()->num_pages(),
+            "broadcast_ring: blocked range ends at page {} but the shard has {} pages",
+            last_page_end,
+            input_tensor.buffer()->num_pages());
+    }
 }
 
 tt::tt_metal::TensorSpec BroadcastRingDeviceOperation::compute_output_specs(
@@ -59,6 +82,8 @@ Tensor broadcast_ring(
     uint32_t chunk_size_tiles,
     uint32_t broadcast_offset_tiles,
     uint32_t broadcast_num_tiles,
+    uint32_t broadcast_stride_pages,
+    uint32_t broadcast_num_blocks,
     bool use_l1_relay,
     uint32_t num_slots,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
@@ -85,6 +110,8 @@ Tensor broadcast_ring(
             chunk_size_tiles,
             broadcast_offset_tiles,
             broadcast_num_tiles,
+            broadcast_stride_pages,
+            broadcast_num_blocks,
             use_l1_relay,
             num_slots,
             multi_device_global_semaphore),

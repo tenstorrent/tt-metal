@@ -28,10 +28,16 @@ struct BroadcastRingParams {
     tt::tt_fabric::Topology topology{};
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     uint32_t chunk_size_tiles = 0;  // tiles per relay chunk; 0 = auto. Tuning knob.
-    // Broadcast only [broadcast_offset_tiles, +broadcast_num_tiles) of the sender's shard; the rest of the
-    // output is left untouched. 0 num = whole shard. Cuts data moved when the caller needs a sub-range.
+    // Broadcast range: broadcast_num_blocks blocks of broadcast_num_tiles pages, the b-th block starting
+    // at flat page broadcast_offset_tiles + b*broadcast_stride_pages; the rest of the output is left
+    // untouched. num_blocks==1 (default) is the plain contiguous range [offset, +num) (0 num = whole
+    // shard). Blocks let a caller express a dim-2 (seq) sub-range of a [B, H, S, E] tiled tensor -- one
+    // block per (b, h) with stride = S_rows*E_cols pages -- which a flat contiguous range cannot once
+    // E/32 > 1 or B*H > 1. Blocked ranges are L1-relay only.
     uint32_t broadcast_offset_tiles = 0;
     uint32_t broadcast_num_tiles = 0;
+    uint32_t broadcast_stride_pages = 0;
+    uint32_t broadcast_num_blocks = 1;
     // L1 relay: forward each chunk straight into the downstream's L1 recv buffer (no per-hop DRAM read),
     // gated by a backward credit protocol. Default false keeps the DRAM-output relay. Experimental.
     bool use_l1_relay = false;
@@ -56,6 +62,8 @@ struct BroadcastRingParams {
         uint32_t chunk_size_tiles_ = 0,
         uint32_t broadcast_offset_tiles_ = 0,
         uint32_t broadcast_num_tiles_ = 0,
+        uint32_t broadcast_stride_pages_ = 0,
+        uint32_t broadcast_num_blocks_ = 1,
         bool use_l1_relay_ = false,
         uint32_t num_slots_ = 0,
         std::vector<tt::tt_metal::GlobalSemaphore> multi_device_global_semaphore_ = {}) :
@@ -69,6 +77,8 @@ struct BroadcastRingParams {
         chunk_size_tiles(chunk_size_tiles_),
         broadcast_offset_tiles(broadcast_offset_tiles_),
         broadcast_num_tiles(broadcast_num_tiles_),
+        broadcast_stride_pages(broadcast_stride_pages_),
+        broadcast_num_blocks(broadcast_num_blocks_),
         use_l1_relay(use_l1_relay_),
         num_slots(num_slots_),
         multi_device_global_semaphore(std::move(multi_device_global_semaphore_)) {}
@@ -84,6 +94,8 @@ struct BroadcastRingParams {
         "chunk_size_tiles",
         "broadcast_offset_tiles",
         "broadcast_num_tiles",
+        "broadcast_stride_pages",
+        "broadcast_num_blocks",
         "use_l1_relay",
         "num_slots");
     auto attribute_values() const {
@@ -98,6 +110,8 @@ struct BroadcastRingParams {
             chunk_size_tiles,
             broadcast_offset_tiles,
             broadcast_num_tiles,
+            broadcast_stride_pages,
+            broadcast_num_blocks,
             use_l1_relay,
             num_slots);
     }
