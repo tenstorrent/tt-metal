@@ -242,6 +242,35 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
+# GLM chunked-prefill baselines (test_glm_prefill_transformer_chunked_no_pcc). Same shape as the Kimi
+# tables above -- one baseline median per chunk, one margin, every chunk asserted -- keyed by
+# (variant, num_layers, n_chunks, num_iters) since glm_5_1 and glm_5_2 are different models (5.2 adds
+# DSA cross-layer indexer reuse) and only the variant CI measures is calibrated.
+GLM_BASELINE_CHUNK_TIMES_S = {
+    # test_glm_prefill_transformer_chunked_no_pcc[blackhole-glm52-mesh-8x4-L78-preload0-chunks_eleven-ten_iters]
+    # (55k / code_debug). Per chunk, the MEDIAN OVER 32 green CI runs of that run's own per-chunk median
+    # (2026-08-14..08-18). Deliberately the median over many runs rather than one run's table: an
+    # individual GLM run's per-chunk numbers are spiky (see the calibration note below).
+    ("glm_5_2", 78, 11, 10): [1.769, 1.778, 1.767, 1.771, 1.775, 1.775, 1.761, 1.770, 1.772, 1.774, 1.765],
+}
+# +/- band applied to every chunk; any chunk outside it fails the run.
+#
+# CALIBRATION NOTE -- this band is tighter than the measured CI noise, deliberately. GLM chunked runs
+# FABRIC_2D eager dispatch (no trace-capture mode), so it is host-dispatch bound and pays a fresh op2op
+# gap every iteration: the within-run per-chunk stddev is ~0.29 s, 16.6% of the ~1.77 s median, and the
+# reported median is taken over only 9 post-warmup iterations (num_iters=10). The standard error of that
+# median is therefore ~6.9%, so a 5% band is under one standard error of its own measurement. Measured
+# over 32 green runs, 19 of them have at least one chunk further than 5% from baseline -- the spikes are
+# one-sided, land on an arbitrary chunk (every chunk is hit at least once across the sample), and reach
+# +29.7%. Expect this gate to need triage on healthy code.
+#
+# To make it robust rather than just tight, the fix is to stabilise the statistic, not to widen the band:
+# either raise num_iters (a 5% band needs ~139 post-warmup iterations to be reliably green, vs 9 today)
+# or gate a per-chunk statistic that ignores sporadic slow iterations (minimum or p25 across iterations
+# instead of the median). Widening to ~30% is what the current median would need, which no longer
+# resolves a regression worth catching -- the open one (#53484) is a uniform +12..+16%.
+GLM_PER_CHUNK_MARGIN = 0.05
+
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
 # accumulation headroom is pinned.
 GATED_LAYER_DEPTH = 10
@@ -1846,6 +1875,23 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
     return baseline, (default_margin if perf_margin is None else perf_margin)
 
 
+def glm_chunked_perf_gate(variant_name, num_layers, n_chunks, num_iters, preload_isl):
+    """Resolve the chunked-GLM perf gate for one parametrization: returns
+    ``(baseline_chunk_times_s, margin)`` for run_chunked_transformer_updated, exactly like
+    `kimi_chunked_perf_gate`.
+
+    A baseline of None leaves the run record-only, which is what every combo outside the single
+    calibrated CI config gets: another variant, another depth/chunk-count/iteration-count, or any
+    preload_isl != 0 (the recorded runs all started from an empty cache).
+    """
+    baseline = (
+        GLM_BASELINE_CHUNK_TIMES_S.get((variant_name, num_layers, n_chunks, num_iters))
+        if preload_isl == 0
+        else None
+    )
+    return baseline, (GLM_PER_CHUNK_MARGIN if baseline is not None else None)
+
+
 # No-PCC perf/smoke variant: runs the full n_chunks-chunk prefill `num_iters` times with no golden
 # trace dependency, no intermediate readback, and no PCC. Requires only the Kimi TTNN weight cache (set
 # TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_7_HF_MODEL); the golden trace is optional.
@@ -2171,6 +2217,9 @@ def test_glm_prefill_transformer_chunked_no_pcc(
     topology = per_axis_topology(device_params["fabric_config"])
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
+    baseline_chunk_times_s, perf_margin = glm_chunked_perf_gate(
+        variant.name, num_layers, n_chunks, num_iters, preload_isl
+    )
     run_chunked_transformer_updated(
         variant,
         config_only,
@@ -2183,6 +2232,8 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         topology,
         num_iters,
         routing_use_l1_small_for_semaphores=True,
+        baseline_chunk_times_s=baseline_chunk_times_s,
+        perf_margin=perf_margin,
         preload_isl=preload_isl,
         tp_shard_kv=tp_shard_kv,
     )
