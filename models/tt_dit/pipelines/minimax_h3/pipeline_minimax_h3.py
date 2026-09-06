@@ -47,6 +47,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
@@ -141,6 +142,52 @@ AUDIO_SHIFT = 3.0
 
 _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
 _DEFAULT_AUDIO_T_FACTOR = 8
+
+# Concurrent video/audio decode, selected through the `decode_submeshes` kwarg or MINIMAX_H3_PARALLEL_DECODE.
+#
+# `thread`: both decoders stay on the parent mesh and the audio decode runs on a second host thread while
+# the VAE runs on the main one. The device executes the two streams in the order they are enqueued on the
+# shared queue, so the overlap is the audio decoder's host dispatch (it is ~70 % dispatch-bound) landing
+# in the gaps the VAE's host-side readback and stitch leave the device idle for. No new device state.
+#
+# `4x7` / `2x8` / `3x8`: the two decoders each own a child mesh carved from the 4x8 parent -- entries are
+# ((video shape, video offset), (audio shape, audio offset)) in parent coordinates. `4x7` matches the VAE's
+# 4x7 tile grid and gives the audio decoder the leftover 4x1 column (factor 4 over axis 0); the other two
+# keep a full 8-wide row for the audio decoder at the VAE's expense. **Unsafe on this runtime as it
+# stands, so they are refused unless MINIMAX_H3_PARALLEL_DECODE_SUBMESH_UNSAFE=1**: `create_submesh` gives
+# every child its own `L1BankingAllocator` (mesh_device.cpp `initialize`), and nothing coordinates it with
+# the parent's, so a child's DRAM/L1 allocations land on addresses the resident DiT already holds on the
+# same physical devices. Measured 2026-09-06: with the audio decoder loaded on the 4x1 child, the parent's
+# next collective hung to the device timeout. Making this sound needs a shared or partitioned allocator
+# between a parent and its children, which is a tt-metal change, not a pipeline one.
+_PARALLEL_DECODE_ENV = "MINIMAX_H3_PARALLEL_DECODE"
+_PARALLEL_DECODE_SUBMESH_UNSAFE_ENV = "MINIMAX_H3_PARALLEL_DECODE_SUBMESH_UNSAFE"
+_PARALLEL_DECODE_THREAD = "thread"
+_DECODE_SUBMESH_LAYOUTS: dict[str, tuple[tuple[tuple[int, int], tuple[int, int]], ...]] = {
+    "4x7": (((4, 7), (0, 0)), ((4, 1), (0, 7))),
+    "2x8": (((2, 8), (0, 0)), ((2, 8), (2, 0))),
+    "3x8": (((3, 8), (0, 0)), ((1, 8), (3, 0))),
+}
+
+
+def resolve_parallel_decode_mode(name: str | None) -> str | None:
+    """`None` (sequential), `"thread"`, or `"submesh"` for a named child layout."""
+    if name is None or name.strip().lower() in ("", "0", "off", "none", "false"):
+        return None
+    return _PARALLEL_DECODE_THREAD if name.strip().lower() == _PARALLEL_DECODE_THREAD else "submesh"
+
+
+def resolve_decode_submesh_layout(name: str | None, mesh_shape: tuple[int, ...]):
+    """The named child layout, or None for unset/`off`/`0`/`thread` (no children). Only defined on a 4x8
+    parent; anything else raises rather than carving a child the layouts were never sized for."""
+    if resolve_parallel_decode_mode(name) != "submesh":
+        return None
+    key = name.strip().lower()
+    if key not in _DECODE_SUBMESH_LAYOUTS:
+        raise ValueError(f"unknown decode submesh layout {name!r}; known layouts are {sorted(_DECODE_SUBMESH_LAYOUTS)}")
+    if tuple(mesh_shape) != (4, 8):
+        raise ValueError(f"decode submesh layout {name!r} is defined for a 4x8 parent mesh, got {tuple(mesh_shape)}")
+    return _DECODE_SUBMESH_LAYOUTS[key]
 
 
 def _requested_audio_t_factor(audio_t_factor: int | None, default: int = _DEFAULT_AUDIO_T_FACTOR) -> tuple[int, bool]:
@@ -421,9 +468,11 @@ class MiniMaxH3Pipeline:
         task: str = "t2va",
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
+        decode_submeshes: str | None = None,
         precomputed_adaln: bool = False,
         dit_fsdp: bool = False,
         trace_denoise: bool | None = None,
+        trace_audio: bool | None = None,
         bucket_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
@@ -432,6 +481,41 @@ class MiniMaxH3Pipeline:
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
+        # Decoder meshes. Unset: both decoders share the parent and run one after the other, as
+        # before. Set: the video VAE and the audio decoder each own a child mesh carved from the parent
+        # and `_denoise_and_decode` runs them concurrently. Every decoder-side mesh reference below --
+        # module construction, CCL manager, weight-cache key -- goes through these two, never
+        # `self.mesh_device`: a distributed tensor is bound to the mesh it was created on.
+        layout_name = decode_submeshes if decode_submeshes is not None else os.environ.get(_PARALLEL_DECODE_ENV)
+        self.parallel_decode_mode = resolve_parallel_decode_mode(layout_name)
+        self.decode_submesh_layout = resolve_decode_submesh_layout(layout_name, tuple(mesh_device.shape))
+        self.parallel_decode = self.parallel_decode_mode is not None
+        if self.parallel_decode_mode == _PARALLEL_DECODE_THREAD:
+            self._host_log(
+                "parallel decode (thread): audio decode on a worker thread alongside the video VAE, one mesh"
+            )
+        if self.decode_submesh_layout is not None:
+            if os.environ.get(_PARALLEL_DECODE_SUBMESH_UNSAFE_ENV) != "1":
+                raise ValueError(
+                    f"decode submesh layout {layout_name!r} is refused: a child mesh gets its own allocator and "
+                    "overwrites the parent's resident weights (see the note above _DECODE_SUBMESH_LAYOUTS). "
+                    f"Use MINIMAX_H3_PARALLEL_DECODE=thread, or set {_PARALLEL_DECODE_SUBMESH_UNSAFE_ENV}=1 to "
+                    "experiment anyway."
+                )
+            (video_shape, video_offset), (audio_shape, audio_offset) = self.decode_submesh_layout
+            self.video_mesh = mesh_device.create_submesh(
+                ttnn.MeshShape(*video_shape), ttnn.MeshCoordinate(*video_offset)
+            )
+            self.audio_mesh = mesh_device.create_submesh(
+                ttnn.MeshShape(*audio_shape), ttnn.MeshCoordinate(*audio_offset)
+            )
+            self._host_log(
+                f"parallel decode ({layout_name}): video VAE on a {video_shape} child at {video_offset} "
+                f"(devices {self.video_mesh.get_device_ids()}), audio decoder on a {audio_shape} child at "
+                f"{audio_offset} (devices {self.audio_mesh.get_device_ids()})"
+            )
+        else:
+            self.video_mesh = self.audio_mesh = mesh_device
         # Only consult the preset for what the caller left unset, so an untuned shape with every
         # parallel setting supplied runs rather than raising -- the escape hatch `create_pipeline`
         # documents. `coresident` is residency rather than parallelism and has a safe default, so it
@@ -455,6 +539,14 @@ class MiniMaxH3Pipeline:
         # recapture would swamp replay anyway. Co-residency measurements live in the class docstring.
         self.coresident = coresident
         self.trace_denoise = self.trace_denoise and self.coresident
+        # Replay a captured vocoder graph for the audio decode (`MiniMaxH3AudioDecoder.forward(traced=)`):
+        # the stage is ~70 % host dispatch, so this is its dominant lever, and the more MPI ranks share
+        # the dispatch the more it pays. One capture per clip length (the vocoder keys its trace on the
+        # latent shape), taken on the first call at that length -- warmup and the compile pass, in the
+        # perf flow. Needs a `trace_region_size` on the mesh (~375 MB per captured length in accurate
+        # mode). Off by default: `MINIMAX_H3_TRACE_AUDIO=1` or `trace_audio=True`.
+        env_trace_audio = os.environ.get("MINIMAX_H3_TRACE_AUDIO")
+        self.trace_audio = (env_trace_audio == "1") if trace_audio is None else bool(trace_audio)
         # To be used for JIT compile bucketing without tracing
         self.bucket_denoise = self.trace_denoise or bool(bucket_denoise)
         # False during `warmup`: generation logs (stage times, per-step, VAE profile) are the
@@ -513,8 +605,10 @@ class MiniMaxH3Pipeline:
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(
             audio_t_factor, default=preset.get("audio_t_factor", _DEFAULT_AUDIO_T_FACTOR)
         )
+        # Resolved against the mesh the audio decoder runs on: the 4x1 child of the `4x7` layout has no
+        # 8-wide axis, so the default request of 8 lands on factor 4 over axis 0 there.
         self.audio_t_factor, self._audio_t_axis = _resolve_audio_t_shard(
-            audio_t_factor, shape, self.tp_axis, self.sp_axis
+            audio_t_factor, tuple(self.audio_mesh.shape), self.tp_axis, self.sp_axis
         )
 
         # The trace-bucket ladder and the arena capacities: both are admission limits (a request
@@ -634,12 +728,19 @@ class MiniMaxH3Pipeline:
         yuv = self.vae_output_type == "yuv420"
         unit_pixels = self.vae_output_type in ("uint8", "yuv420")
         self._host_log("building the video VAE")
+        # A carved child is not a ring on the axis it was cut from (the `4x7` row is 7 of 8), so the
+        # child's manager is Linear; the parent's Ring manager stays with the encoders that run on it.
+        self.video_ccl_manager = (
+            CCLManager(mesh_device=self.video_mesh, num_links=num_links, topology=ttnn.Topology.Linear)
+            if self.decode_submesh_layout is not None
+            else self.encoder_ccl_manager
+        )
         self._vae = MiniMaxH3Vae(
             self.vae_config,
             task=self.task,
-            mesh_device=self.mesh_device,
+            mesh_device=self.video_mesh,
             weight_loader=self._cache_submodel,
-            ccl_manager=self.encoder_ccl_manager,
+            ccl_manager=self.video_ccl_manager,
             # Encoder compute dtype (the ViT decoder ignores it). bf16 runs the taps=3 wave
             # 4.2x faster than fp32 (427 vs 1800 ms) and measures PCC 99.998% against the
             # reference on the real checkpoint -- within 0.0003% of the fp32 encoder --
@@ -673,6 +774,7 @@ class MiniMaxH3Pipeline:
             self._prepare_transformer()
         self._prepare_text_encoder()
         self._prepare_audio_decoder()
+        self._rejoin_parent_mesh()
 
         if warmup:
             self._warmup_on_init()
@@ -692,9 +794,11 @@ class MiniMaxH3Pipeline:
         task: str = "t2va",
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
+        decode_submeshes: str | None = None,
         precomputed_adaln: bool = False,
         dit_fsdp: bool = False,
         trace_denoise: bool | None = None,
+        trace_audio: bool | None = None,
         bucket_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
@@ -732,9 +836,11 @@ class MiniMaxH3Pipeline:
             task=task,
             audio_split_mode=audio_split_mode,
             audio_t_factor=audio_t_factor,
+            decode_submeshes=decode_submeshes,
             precomputed_adaln=precomputed_adaln,
             dit_fsdp=dit_fsdp,
             trace_denoise=trace_denoise,
+            trace_audio=trace_audio,
             bucket_denoise=bucket_denoise,
             bucket_ladder=bucket_ladder,
             arena_caps=arena_caps,
@@ -1511,8 +1617,8 @@ class MiniMaxH3Pipeline:
             model_name=MODEL_NAME,
             subfolder=f"{subfolder}_{blocking}" if blocking else subfolder,
             parallel_config=self.vae_parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            mesh_device=self.mesh_device,
+            mesh_shape=tuple(self.video_mesh.shape),
+            mesh_device=self.video_mesh,
             dtype="fp32",  # the whole VAE checkpoint is fp32 and the port keeps it there
             get_torch_state_dict=lambda: state,
         )
@@ -1681,7 +1787,8 @@ class MiniMaxH3Pipeline:
                 else "unsharded (factor 1)"
             )
             _src = f" (from {_AUDIO_T_FACTOR_ENV})" if self._audio_t_factor_from_env else ""
-            self._host_log(f"building the audio decoder ({_shard_desc}{_src})")
+            _traced = ", traced vocoder" if self.trace_audio else ""
+            self._host_log(f"building the audio decoder ({_shard_desc}{_src}{_traced})")
             audio_parallel_config = (
                 ParallelFactor(factor=self.audio_t_factor, mesh_axis=self._audio_t_axis)
                 if self.audio_t_factor > 1
@@ -1690,7 +1797,7 @@ class MiniMaxH3Pipeline:
             # T is a line: DiT's Ring manager would wrap the last (pad) shard onto t=0.
             audio_ccl = (
                 CCLManager(
-                    mesh_device=self.mesh_device,
+                    mesh_device=self.audio_mesh,
                     num_links=self.ccl_manager.num_links,
                     topology=ttnn.Topology.Linear,
                 )
@@ -1705,7 +1812,7 @@ class MiniMaxH3Pipeline:
                 decoder_kernel_sizes=tuple(config["decoder_kernel_sizes"]),
                 resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
                 resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
-                mesh_device=self.mesh_device,
+                mesh_device=self.audio_mesh,
                 parallel_config=audio_parallel_config,
                 ccl_manager=audio_ccl,
                 split_mode=self.audio_split_mode,
@@ -1730,8 +1837,8 @@ class MiniMaxH3Pipeline:
                 # the cache key -- read off the module so the key cannot drift from what was built.
                 subfolder="audio_decoder" + weights_variant(decoder.split_mode, decoder.max_c_in_block),
                 parallel_config=self.vae_parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                mesh_device=self.mesh_device,
+                mesh_shape=tuple(self.audio_mesh.shape),
+                mesh_device=self.audio_mesh,
                 dtype="fp32",
                 get_torch_state_dict=read_state,
             )
@@ -1792,6 +1899,9 @@ class MiniMaxH3Pipeline:
         # during warmup). Under `coresident=False` a reload lands inside the timed row that
         # triggered it.
         on_event = on_event if on_event is not None else null_callback
+        # The previous request's decoders ran on the children; everything from here to the decode
+        # runs on the parent (the ref2va path re-enters through `_call_ref2va`, so it is covered too).
+        self._rejoin_parent_mesh()
 
         if references is not None:
             if image is not None or last_image is not None:
@@ -2104,6 +2214,8 @@ class MiniMaxH3Pipeline:
         `_prepare_*` outside a section, one section per stage -- and two copies of that would drift.
         `condition_spec` is the only thing the tasks differ by here, and only `ref2va` passes one.
         """
+        # fl2va/ref2va just encoded their keyframes/references on the video child; the DiT is parent work.
+        self._rejoin_parent_mesh()
         transformer = self._prepare_transformer()
         with event_section(on_event, "denoising"):
             video_rows, audio_rows = self._denoise(
@@ -2120,15 +2232,19 @@ class MiniMaxH3Pipeline:
 
         # VAE sub-models load on first use inside the section (warmup is what uploads them
         # for a served path; under coresident=False the reload is honest accounting).
-        with event_section(on_event, "vae"):
-            video = self._decode_video(
-                self._vae, video_rows, num_latent_frames, latent_height, latent_width, layout.num_condition_video_rows
-            )
-
-        with event_section(on_event, "audio"):
-            audio = self._decode_audio(
-                self._audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows
-            )
+        decode_video = lambda: self._decode_video(  # noqa: E731
+            self._vae, video_rows, num_latent_frames, latent_height, latent_width, layout.num_condition_video_rows
+        )
+        decode_audio = lambda: self._decode_audio(  # noqa: E731
+            self._audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows
+        )
+        if self.parallel_decode:
+            video, audio = self._decode_concurrently(decode_video, decode_audio, on_event)
+        else:
+            with event_section(on_event, "vae"):
+                video = decode_video()
+            with event_section(on_event, "audio"):
+                audio = decode_audio()
 
         return MiniMaxH3Output(
             video=video,
@@ -2136,6 +2252,64 @@ class MiniMaxH3Pipeline:
             sampling_rate=self.audio_sampling_rate,
             num_frames=video.shape[2],
         )
+
+    def _rejoin_parent_mesh(self) -> None:
+        """Barrier before parent work that follows work on a decoder child (submesh layouts only).
+
+        `MeshDevice` requires `quiesce_devices` when moving between overlapping views in *either*
+        direction: it drains the parent's and the children's queues and resets their in-use state. It
+        is cheap when nothing is in flight, so it runs at every transition. (It did not save the
+        submesh layouts -- the allocator overlap described at `_DECODE_SUBMESH_LAYOUTS` did that.)
+        The `thread` mode has one mesh and needs no barrier.
+        """
+        if self.decode_submesh_layout is not None:
+            self.mesh_device.quiesce_devices()
+
+    def _decode_concurrently(self, decode_video, decode_audio, on_event: PipelineEventCallback):
+        """Run the video VAE and the audio decoder at the same time, the audio on a worker thread.
+
+        `thread` mode: one mesh, so the device runs the two streams in enqueue order on the shared
+        queue; what overlaps is the audio decoder's host-side dispatch (its dominant cost) with the
+        VAE's host-side readback and stitch, during which the device would otherwise sit idle. No
+        barrier is needed. Submesh layouts (unsafe, see `_DECODE_SUBMESH_LAYOUTS`): the parent is
+        quiesced first, the barrier `MeshDevice` requires between work on overlapping views, and no
+        barrier goes between the two launches since the children hold disjoint devices.
+
+        Section accounting: `vae` wraps the video decode as before; `audio` wraps only the wait for
+        the audio thread after the video decode returned, so it measures the audio tail the video
+        did not hide, and the stage rows still sum to the decode wall time.
+        """
+        mark = time.perf_counter()
+        self._rejoin_parent_mesh()  # parent -> children barrier for the submesh layouts; no-op in thread mode
+        t_quiesce = time.perf_counter() - mark
+
+        outcome: dict[str, object] = {}
+
+        def run_audio() -> None:
+            started = time.perf_counter()
+            try:
+                outcome["audio"] = decode_audio()
+            except BaseException as error:  # re-raised on the main thread below
+                outcome["error"] = error
+            outcome["seconds"] = time.perf_counter() - started
+
+        mark = time.perf_counter()
+        worker = threading.Thread(target=run_audio, name="minimax-h3-audio-decode", daemon=True)
+        worker.start()
+        with event_section(on_event, "vae"):
+            video = decode_video()
+        t_video = time.perf_counter() - mark
+        with event_section(on_event, "audio"):
+            worker.join()
+        t_wall = time.perf_counter() - mark
+        if "error" in outcome:
+            raise outcome["error"]
+        t_audio = float(outcome["seconds"])
+        self._log(
+            f"parallel decode: quiesce {t_quiesce:.2f}s | video {t_video:.2f}s | audio {t_audio:.2f}s "
+            f"(concurrent) | wall {t_wall:.2f}s vs {t_video + t_audio:.2f}s if sequential"
+        )
+        return video, outcome["audio"]
 
     @staticmethod
     def _warmup_image(size: int = 512) -> Image.Image:
@@ -2344,6 +2518,8 @@ class MiniMaxH3Pipeline:
         return tracer is not None and tracer.trace_captured
 
     def release_traces(self) -> None:
+        if self._audio_decoder is not None:
+            self._audio_decoder.release_trace()  # safe when nothing was captured
         transformer = self._transformer
         if transformer is None:
             return
@@ -2733,6 +2909,6 @@ class MiniMaxH3Pipeline:
         assert rows.shape[0] == expected, f"expected {expected} target audio rows to decode, got {rows.shape[0]}"
         latents = unpack_audio_tokens(rows, num_audio_latents)
         latents = self._denormalize(latents, self.audio_config["latents_mean"], self.audio_config["latents_std"])
-        waveform = audio_decoder(latents)
+        waveform = audio_decoder(latents, traced=self.trace_audio)
         # The audio VAE is mono and took the two stereo channels as two batch items.
         return waveform.float().permute(1, 0, 2)

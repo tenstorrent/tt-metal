@@ -122,6 +122,11 @@ _ring_8k = {**ring_params_8k_req_exact_devices, "l1_small_size": _L1_SMALL}
 _ring_8k_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 1005_000_000, "l1_small_size": _L1_SMALL}
 
 MESH_4X8_RING = pytest.param((4, 8), _ring_8k, id="4x8")
+# One Galaxy with a trace region, for the perf test's opt-in traced paths (MINIMAX_H3_TRACE_AUDIO,
+# MINIMAX_H3_TRACE_DENOISE). Not in GALAXY_MESHES: the e2e sweep does not need a second 4x8 case.
+# 800 MB: two captured audio lengths (~375 MB each in accurate mode) fit; the quad's 1005 MB also
+# holds denoise traces, which a 4x8 at SP=8 activation sizes may not have DRAM headroom for.
+MESH_4X8_RING_TRACED = pytest.param((4, 8), {**_ring_8k, "trace_region_size": 800_000_000}, id="4x8_TRACED")
 MESH_4X32_RING_TRACED = pytest.param((4, 32), _ring_8k_trace, id="4x32_TRACED")
 MESH_4X32_RING_UNTRACED = pytest.param((4, 32), _ring_8k, id="4x32_UNTRACED")
 
