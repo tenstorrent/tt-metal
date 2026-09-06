@@ -283,11 +283,9 @@ def ledger_path(model: str = "", task: str = "") -> Path:
     if override:
         return Path(override)
     _keyed = bool(model or os.environ.get("PERF_MCP_MODEL_NAME") or os.environ.get("PERF_MCP_MODEL_ROOT"))
-    model = (
-        model
-        or os.environ.get("PERF_MCP_MODEL_NAME")
-        or Path(os.environ.get("PERF_MCP_MODEL_ROOT", "") or "model").name
-    )
+    # The legacy unkeyed filename is spelled HERE, where it is knowingly accepted, rather than
+    # inside the resolver -- see model_key: unknown is "" so a caller that must not guess can refuse.
+    model = model_key(model) or "model"
     task = task or os.environ.get("PERF_MCP_TASK", "main")
     if not _keyed and os.environ.get("PERF_MCP_STRICT_LEDGER_KEY") == "1":
         # An UNKEYED call silently produces perf_measurements_model_main.jsonl -- a file that looks
@@ -392,6 +390,27 @@ def rows(kind: str = "", phase: str = "", model: str = "", task: str = "") -> li
             continue
         out.append(r)
     return out
+
+
+def model_key(model: str = "") -> str:
+    """The (model) half of every per-run artifact key, or "" when nothing states it.
+
+    ONE OWNER FOR ONE FACT. Three places worked this out independently -- perf_mcp at import,
+    ledger_path here, and the run when it stamps its own environment -- each spelling the same
+    "explicit name, else the root's basename" and each free to disagree. That fact has already
+    produced two bugs: a report keyed on the literal "model" reading a file no run writes, and a
+    matmul sweep whose entire pre-pass was invisible for the same reason.
+
+    Returns "" rather than a placeholder. A name that cannot be resolved is UNKNOWN, and the callers
+    that must not guess -- is_identified, _read_stage_doc -- refuse on it. Callers that need a
+    filename for a legacy unkeyed path supply their own fallback, visibly, at the point they accept
+    one.
+    """
+    _name = str(model or "").strip() or str(os.environ.get("PERF_MCP_MODEL_NAME") or "").strip()
+    if _name:
+        return _name
+    _root = str(os.environ.get("PERF_MCP_MODEL_ROOT") or "").strip()
+    return Path(_root).name if _root else ""
 
 
 def is_identified(model: str = "", task: str = "") -> bool:

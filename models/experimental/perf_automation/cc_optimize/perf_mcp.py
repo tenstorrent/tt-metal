@@ -110,6 +110,10 @@ _MODEL_ROOT_STATED = bool(
 # literal "model". Reader and writer then pointed at different files (perf_mcp_baseline_model_main.json
 # appeared beside the real one) and every model would have shared one "model" ledger: the unkeyed bug
 # under a new name. One authoritative source, exported once, read by all three processes.
+# NOT routed through the ledger's model_key, though that owns this fact everywhere else: the ledger
+# is loaded lazily here (see _ledger) and does not exist yet at import. This line is the SOURCE the
+# resolver reads -- it exports PERF_MCP_MODEL_NAME, which model_key prefers -- so the two agree by
+# construction rather than by repeating a rule.
 os.environ.setdefault("PERF_MCP_MODEL_NAME", _MODEL_ROOT.name or "model")
 _ENV = _MANIFEST.get("env", {})
 

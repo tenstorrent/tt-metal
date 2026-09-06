@@ -6468,8 +6468,14 @@ def _stamp_model_root(demo_dir) -> str:
         return ""
     os.environ.setdefault("PERF_MCP_MODEL_ROOT", _root)
     # The key every per-run artifact is NAMED after, kept beside the root that produced it so the two
-    # cannot disagree -- perf_mcp exports the same pair at import for the same reason.
-    os.environ.setdefault("PERF_MCP_MODEL_NAME", Path(os.environ["PERF_MCP_MODEL_ROOT"]).name)
+    # cannot disagree. Resolved by the ledger's model_key, which owns this one fact -- three places
+    # used to spell it out and were free to drift.
+    try:
+        _name = _ledger().model_key()
+    except Exception:  # noqa: BLE001 -- an unloadable ledger must not stop a run from naming itself
+        _name = Path(os.environ["PERF_MCP_MODEL_ROOT"]).name
+    if _name:
+        os.environ.setdefault("PERF_MCP_MODEL_NAME", _name)
     return os.environ["PERF_MCP_MODEL_ROOT"]
 
 
