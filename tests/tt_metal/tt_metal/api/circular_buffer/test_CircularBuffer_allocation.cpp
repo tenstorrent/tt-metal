@@ -262,6 +262,42 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
     }
 }
 
+// Exercise the warm compile path directly: no command is dispatched after a validation failure.
+TEST_F(UnitMeshAnyDispatchFixture, WarmProgramValidationRejectsLateL1Collision) {
+    auto& mesh_device = this->device();
+    Program program;
+    const uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const auto core = mesh_device.allocator()->get_logical_core_from_bank_id(0);
+    initialize_program(program, CoreRangeSet({CoreRange(core, core)}));
+    std::vector<CBHandle> cb_handles;
+    for (uint32_t index = 0; index < 2; ++index) {
+        cb_handles.push_back(CreateCircularBuffer(
+            program,
+            core,
+            CircularBufferConfig(page_size, {{index, tt::DataFormat::Float16_b}}).set_page_size(index, page_size)));
+    }
+    ASSERT_NO_THROW(program.impl().compile_and_allocate(&mesh_device, false));
+    ASSERT_NO_THROW(program.impl().compile_and_allocate(&mesh_device, false));
+
+    const auto base = mesh_device.allocator()->get_base_allocator_addr(HalMemType::L1);
+    const auto l1_size = mesh_device.l1_size_per_core();
+    const auto alignment = mesh_device.allocator()->get_alignment(BufferType::L1);
+    const DeviceAddr size = (l1_size - base - page_size) / alignment * alignment;
+    auto late_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = size},
+        distributed::DeviceLocalBufferConfig{.page_size = size, .buffer_type = BufferType::L1},
+        &mesh_device);
+    EXPECT_ANY_THROW(program.impl().compile_and_allocate(&mesh_device, false));
+    late_buffer.reset();
+    EXPECT_NO_THROW(program.impl().compile_and_allocate(&mesh_device, false));
+
+    // A cached program must also revalidate a changed CB layout.
+    UpdateCircularBufferTotalSize(program, cb_handles.front(), l1_size);
+    EXPECT_ANY_THROW(program.impl().compile_and_allocate(&mesh_device, false));
+    UpdateCircularBufferTotalSize(program, cb_handles.front(), page_size);
+    EXPECT_NO_THROW(program.impl().compile_and_allocate(&mesh_device, false));
+}
+
 TEST_F(MeshDeviceFixture, TensixTestValidUpdateCircularBufferSize) {
     for (auto& device : this->devices_) {
         distributed::MeshWorkload workload;
