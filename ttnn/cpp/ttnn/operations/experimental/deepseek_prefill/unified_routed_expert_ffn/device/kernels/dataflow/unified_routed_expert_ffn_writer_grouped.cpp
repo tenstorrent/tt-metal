@@ -46,6 +46,10 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
+#include "api/debug/ring_buffer.h"
+// Hang-debug tracing (compiles to nothing without the watcher).
+#define RB_SEMV(id) (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)))
+#define RB(tag, v) WATCHER_RING_BUFFER_PUSH((static_cast<uint32_t>(tag) << 28) | ((v) & 0x0FFFFFFFu))
 #include "../adaptive_chunk.hpp"
 #include "../group_assign.hpp"
 #include "../fast_interleaved.hpp"
@@ -280,6 +284,7 @@ void kernel_main() {
                     const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
                     for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
                         ++up_seq;
+                        RB(0xD, (RB_SEMV(up_go_sem_id) & 0xFFFu) | (up_seq << 12));
                         up_go_sem.wait_min(up_seq);
                         uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes +
                                            up_k_b * per_core_N_gu * up_tile_bytes;
@@ -328,6 +333,7 @@ void kernel_main() {
                     const uint32_t down_slot_bytes = d_in1_block_num_tiles * down_tile_bytes;
                     for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
                         ++down_seq;
+                        RB(0xE, (RB_SEMV(down_go_sem_id) & 0xFFFu) | (down_seq << 12));
                         down_go_sem.wait_min(down_seq);
                         // My slice of this block is tile-rows [k_b, k_e) (split-read); the reader
                         // reads [k_b, k_mid) on NoC 0 and the writer [k_mid, k_e) on NoC 1.
@@ -380,7 +386,8 @@ void kernel_main() {
             const uint32_t per_core_M =
                 adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max, group_rows);
             const uint32_t row0 = chunk * chunk_M_max + my_mt * per_core_M;
-            (void)0;  // column mapping below via group_assign::global_col (contiguous or strided)
+            RB(0xF, (item << 16) | (chunk << 8));
+            // Output column mapping via group_assign::global_col (contiguous or strided).
             // The DOWN matmul packs and pushes the FULL compile-time-MAX ring (its
             // L1_ACC needs full-ring cycling), so DRAIN all d_in1_num_subblocks_M
             // rows to keep cb_out balanced — but only WRITE the first per_core_M

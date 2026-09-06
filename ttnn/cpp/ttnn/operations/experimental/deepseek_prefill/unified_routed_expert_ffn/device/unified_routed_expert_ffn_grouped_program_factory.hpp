@@ -18,7 +18,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 //
 // The GRID_X x GRID_Y core grid is split into num_row_groups row groups of R =
 // GRID_Y / num_row_groups M-rows. Every group runs its own expert loop over the
-// experts a device-side greedy balance (group_assign::lpt_assign, computed from the
+// experts a device-side greedy balance (group_assign::build_plan, computed from the
 // resident per-expert token counts) hands it, so up to num_row_groups experts run
 // concurrently. Within a group the data movement is the legacy scheme (x multicast
 // along the row, weights read by the group's first row and multicast down the

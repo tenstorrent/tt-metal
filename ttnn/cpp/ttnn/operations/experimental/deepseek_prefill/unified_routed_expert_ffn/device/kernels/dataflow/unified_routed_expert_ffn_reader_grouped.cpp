@@ -44,6 +44,10 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
+#include "api/debug/ring_buffer.h"
+// Hang-debug tracing (compiles to nothing without the watcher).
+#define RB_SEMV(id) (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)))
+#define RB(tag, v) WATCHER_RING_BUFFER_PUSH((static_cast<uint32_t>(tag) << 28) | ((v) & 0x0FFFFFFFu))
 #include "../adaptive_chunk.hpp"
 #include "../group_assign.hpp"
 #include "../fast_interleaved.hpp"
@@ -384,6 +388,11 @@ void kernel_main() {
     // DOWN_SPLIT handshake counter (separate from up_seq: cb_in1_down has its own
     // slot cadence), kept in lockstep with the writer across all experts.
     uint32_t down_seq = 0;
+    // Split-read block sequence: every weight K-block (gate/up and down) of every item
+    // increments it identically on all rows of a column group. The ready and valid
+    // semaphores are MONOTONIC counters keyed on it (never reset), so no reset can race
+    // with an in-flight increment or flag write.
+    uint32_t in1_block_seq = 0;
 
     // ======================= per-local-expert loop =======================
     // Per expert we resolve its global id (idx_table[e]), token count
@@ -539,6 +548,7 @@ void kernel_main() {
             //   per-K-block elapsed time at small per_core_M where mcast/handshake
             //   overhead dominates compute.
             for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
+                RB(0x1, (item << 16) | (chunk << 8) | kb);
                 x_stage_obj.reserve_back(g_in0_block_tiles_max);
                 cb_in1_gate_obj.reserve_back(g_in1_block_num_tiles);
                 if constexpr (reader_mcasts_up) {
@@ -563,15 +573,13 @@ void kernel_main() {
                     in0_ready_sem.up(noc, in0_sender_nx, in0_sender_ny, 1);
                 }
                 if constexpr (split_read) {
-                    // Every core is a slice sender AND a receiver of the other R-1 slices:
-                    // reset the peers' valid flags (they set them last block) and ack each
-                    // peer's ready counter so it may multicast into our reserved slot.
+                    // Every core is a slice sender AND a receiver of the other R-1 slices: ack
+                    // each peer's ready counter so it may multicast into our reserved slot.
+                    ++in1_block_seq;
                     for (uint32_t r = 0; r < group_rows; ++r) {
                         if (r == my_mt) {
                             continue;
                         }
-                        Semaphore<> peer_valid(get_arg_val<uint32_t>(VALID_RT + r));
-                        peer_valid.set(0);
                         in1_ready_sem.up(
                             noc,
                             get_arg_val<uint32_t>(COL_NOC_RT + 2 * r + 0),
@@ -586,6 +594,7 @@ void kernel_main() {
                 // work begins immediately. For core (0,0) (both senders), in0
                 // runs first then in1, ~60µs sequentially — same as before.
                 if (is_in0_sender) {
+                    RB(0x2, RB_SEMV(in0_ready_sem_id));
                     in0_ready_sem.wait(in0_num_receivers);
                     in0_ready_sem.set(0);
 
@@ -768,11 +777,12 @@ void kernel_main() {
                 // multicast into it (exact R-1 acks; a peer cannot ack block kb+1 before it
                 // has consumed our valid for kb, which we send after this reset).
                 if constexpr (split_read) {
-                    in1_ready_sem.wait(group_rows - 1);
-                    in1_ready_sem.set(0);
+                    RB(0x4, (RB_SEMV(in1_ready_sem_id) & 0xFFFu) | (in1_block_seq << 12));
+                    in1_ready_sem.wait_min((group_rows - 1) * in1_block_seq);
                 }
                 noc_read.async_read_barrier();
                 if constexpr (up_split) {
+                    RB(0x6, (RB_SEMV(up_done_sem_id) & 0xFFFu) | (up_seq << 12));
                     up_done_sem.wait_min(up_seq);  // the writer's `up` slice landed
                 }
                 // Step 2d: multicast my gate+up slices to the other rows of the column
@@ -786,7 +796,7 @@ void kernel_main() {
                     const uint32_t u_off = k_b * per_core_N_gu * up_tile_bytes;
                     const uint32_t u_bytes = (k_e - k_b) * per_core_N_gu * up_tile_bytes;
                     Semaphore<> my_valid(get_arg_val<uint32_t>(VALID_RT + my_mt));
-                    my_valid.set(IN1_VALID);
+                    my_valid.set(in1_block_seq);  // monotonic: receivers wait_min(seq)
                     for (uint32_t rect = 0; rect < 2; ++rect) {
                         const uint32_t r0 = (rect == 0) ? 0 : my_mt + 1;
                         const uint32_t r1 = (rect == 0) ? my_mt : group_rows;  // exclusive
@@ -829,6 +839,7 @@ void kernel_main() {
 
                 // Step 3: receivers wait for both valid semaphores and push.
                 if (!is_in0_sender) {
+                    RB(0x3, RB_SEMV(in0_valid_sem_id));
                     in0_valid_sem.wait(IN0_VALID);
                     x_stage_obj.push_back(g_in0_block_tiles_max);
                 }
@@ -838,9 +849,11 @@ void kernel_main() {
                             continue;
                         }
                         Semaphore<> peer_valid(get_arg_val<uint32_t>(VALID_RT + r));
-                        peer_valid.wait(IN1_VALID);
+                        RB(0x5, (RB_SEMV(get_arg_val<uint32_t>(VALID_RT + r)) & 0xFFFu) | (in1_block_seq << 12));
+                        peer_valid.wait_min(in1_block_seq);
                     }
                 }
+                RB(0xB, (item << 16) | (chunk << 8) | kb);
                 cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
                 cb_in1_up_obj.push_back(g_in1_block_num_tiles);
             }
@@ -866,6 +879,7 @@ void kernel_main() {
             const uint32_t intermed_tile_bytes = cb_in0_down_full_obj.get_tile_size();
 
             for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
+                RB(0x7, (item << 16) | (chunk << 8) | kb);
                 const bool is_act_sender = (my_nt_d == kb);
 
                 cb_in1_down_obj.reserve_back(d_in1_block_num_tiles);
@@ -878,12 +892,11 @@ void kernel_main() {
                 // Without the early act ack the sender would only see receivers
                 // after the in1_down section finishes, serializing the two paths.
                 if constexpr (split_read) {
+                    ++in1_block_seq;
                     for (uint32_t r = 0; r < group_rows; ++r) {
                         if (r == my_mt) {
                             continue;
                         }
-                        Semaphore<> peer_valid(get_arg_val<uint32_t>(VALID_RT + r));
-                        peer_valid.set(0);
                         in1_ready_sem.up(
                             noc,
                             get_arg_val<uint32_t>(COL_NOC_RT + 2 * r + 0),
@@ -892,6 +905,17 @@ void kernel_main() {
                     }
                 }
                 if (!is_act_sender) {
+                    // If this core was the activated sender of the PREVIOUS K-block, its
+                    // act_valid set_multicast may still be queued in the NIU: the NoC reads
+                    // the 4-byte source (act_valid's own L1 word) only when the packet is
+                    // injected, which under heavy NoC-0 load can be later than this reset.
+                    // Resetting first would multicast a 0 and every receiver of that block
+                    // would wait forever (observed as an intermittent hang in two-row groups,
+                    // where the phantom row's compute is idle and reaches this point within
+                    // ~100 cycles of the multicast). Flush the sent-write counter first: the
+                    // set_multicast is a non-posted write, so this returns once its source
+                    // has been read. Cheap when nothing is pending.
+                    noc.async_writes_flushed();
                     act_valid_sem.set(0);
                     const uint32_t sender_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 0);
                     const uint32_t sender_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 1);
@@ -953,18 +977,19 @@ void kernel_main() {
                 // gate/up phase. Runs BEFORE the activated mcast so the down weights (no
                 // compute dependency) are on their way first.
                 if constexpr (split_read) {
-                    in1_ready_sem.wait(group_rows - 1);
-                    in1_ready_sem.set(0);
+                    RB(0x4, (RB_SEMV(in1_ready_sem_id) & 0xFFFu) | (in1_block_seq << 12));
+                    in1_ready_sem.wait_min((group_rows - 1) * in1_block_seq);
                 }
                 noc_read.async_read_barrier();
                 if constexpr (down_split) {
+                    RB(0xA, (RB_SEMV(down_done_sem_id) & 0xFFFu) | (down_seq << 12));
                     down_done_sem.wait_min(down_seq);
                 }
                 if constexpr (split_read) {
                     const uint32_t d_off = k_b * per_core_N_d * down_tile_bytes;
                     const uint32_t d_bytes = (k_e - k_b) * per_core_N_d * down_tile_bytes;
                     Semaphore<> my_valid(get_arg_val<uint32_t>(VALID_RT + my_mt));
-                    my_valid.set(IN1_VALID);
+                    my_valid.set(in1_block_seq);  // monotonic: receivers wait_min(seq)
                     for (uint32_t rect = 0; rect < 2; ++rect) {
                         const uint32_t r0 = (rect == 0) ? 0 : my_mt + 1;
                         const uint32_t r1 = (rect == 0) ? my_mt : group_rows;  // exclusive
@@ -1005,6 +1030,7 @@ void kernel_main() {
                     // MAC-skips the rows past per_core_M.
                     const uint32_t re_act_tiles = per_core_M * in0_block_w_d;
                     cb_activated_obj.wait_front(act_tiles_max);
+                    RB(0x8, RB_SEMV(act_ready_sem_id));
                     act_ready_sem.wait(GRID_X_NOC - 1);
                     act_ready_sem.set(0);
 
@@ -1048,6 +1074,7 @@ void kernel_main() {
 
                 // Step 5: receivers wait for both valid sems and push.
                 if (!is_act_sender) {
+                    RB(0x9, RB_SEMV(act_valid_sem_id));
                     act_valid_sem.wait(ACT_VALID);
                 }
                 cb_in0_down_full_obj.push_back(d_in0_block_num_tiles);
@@ -1058,9 +1085,11 @@ void kernel_main() {
                             continue;
                         }
                         Semaphore<> peer_valid(get_arg_val<uint32_t>(VALID_RT + r));
-                        peer_valid.wait(IN1_VALID);
+                        RB(0x5, (RB_SEMV(get_arg_val<uint32_t>(VALID_RT + r)) & 0xFFFu) | (in1_block_seq << 12));
+                        peer_valid.wait_min(in1_block_seq);
                     }
                 }
+                RB(0xC, (item << 16) | (chunk << 8) | kb);
                 cb_in1_down_obj.push_back(d_in1_block_num_tiles);
             }
         }  // end chunk loop

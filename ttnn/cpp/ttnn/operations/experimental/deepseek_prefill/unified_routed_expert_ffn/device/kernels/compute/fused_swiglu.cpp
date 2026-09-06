@@ -859,7 +859,7 @@ void kernel_main() {
     const uint32_t d_valid_n_subblocks = get_arg_val<uint32_t>(1);
     // GROUPED (grouped program factory only): this core's row group and its row
     // WITHIN the group; a chunk spans group_rows (not kGridY) M-row cores, and
-    // experts are assigned to groups device-side (group_assign::lpt_assign).
+    // work items (expert chunk ranges) are assigned to groups device-side (group_assign::build_plan).
 #ifdef GROUPED
     constexpr bool kGrouped = true;
     const uint32_t my_group = get_arg_val<uint32_t>(2);
@@ -870,7 +870,12 @@ void kernel_main() {
     constexpr uint32_t adaptive_grid_y = group_rows;
     // Work-item plan (chunk ranges of experts assigned to row groups), built on UNPACK.
     group_assign::Plan plan;
-    uint32_t n_own_items = 0;
+    // MATH/PACK learn each of this group's items as one packed mailbox value; the stream
+    // ends with kItemSentinel. Consecutive mailbox writes are always separated by an
+    // item's compute (MATH must read the descriptor before UNPACK can feed it tiles), so
+    // the mailbox FIFO never holds more than one pending value.
+    constexpr uint32_t kItemSentinel = 0xFFFFFFFFu;
+    uint32_t next_item = 0;  // UNPACK's scan cursor over the plan
 #else
     constexpr bool kGrouped = false;
     const uint32_t my_group = 0;
@@ -999,16 +1004,7 @@ void kernel_main() {
             m_tiles_full,
             lpt_fixed_cost_tiles,
             plan);
-        for (uint32_t item = 0; item < plan.n_items; ++item) {
-            if (plan.group[item] == my_group) {
-                ++n_own_items;
-            }
-        }
-        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, n_own_items);
-        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, n_own_items);
     }));
-    MATH(n_own_items = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-    PACK(n_own_items = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 #endif
 
     // SiLU is applied as a MATH-thread SFPU pass on dst (silu_tile) between
@@ -1030,11 +1026,10 @@ void kernel_main() {
     // Legacy: run the full gate/up/down FFN for every local expert in this program.
     // GROUPED: run this row group's work items (expert, chunk range) from the plan.
 #ifdef GROUPED
-    const uint32_t loop_count = n_own_items;
+    for (;;) {
 #else
-    const uint32_t loop_count = experts_per_chip;
+    for (uint32_t it = 0; it < experts_per_chip; ++it) {
 #endif
-    for (uint32_t it = 0; it < loop_count; ++it) {
         // This expert's token count via the UNPACK→{MATH,PACK} mailbox (MATH/PACK
         // cannot read the counts/idx L1 via the CB interface).
         // count -> effective_chunks bounds this expert's chunk loop; count=0 => the
@@ -1045,32 +1040,35 @@ void kernel_main() {
 #ifdef GROUPED
         uint32_t packed = 0;
         UNPACK(({
-            // The it-th item of my group: (expert, chunk_b, chunk_e) packed with the count.
-            uint32_t seen = 0;
-            uint32_t item = 0;
-            for (item = 0; item < plan.n_items; ++item) {
-                if (plan.group[item] == my_group) {
-                    if (seen == it) {
-                        break;
-                    }
-                    ++seen;
-                }
+            // Next item of my group: (expert, chunk_b, chunk_e) packed with the count, or the
+            // sentinel when none is left.
+            uint32_t item = next_item;
+            while (item < plan.n_items && plan.group[item] != my_group) {
+                ++item;
             }
-            const uint32_t counts_l1_addr = get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4;
-            const uint32_t idx_l1_addr = get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4;
-            const volatile tt_l1_ptr uint32_t* counts_ptr =
-                reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counts_l1_addr);
-            const volatile tt_l1_ptr uint32_t* idx_ptr =
-                reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
-            uint32_t cnt = counts_ptr[idx_ptr[plan.expert[item]]];
-            cnt = (cnt > 0xFFFFu) ? 0xFFFFu : cnt;  // clamp_count_tiles bounds the tiles anyway
-            packed = cnt | (static_cast<uint32_t>(plan.chunk_b[item]) << 16) |
-                     (static_cast<uint32_t>(plan.chunk_e[item]) << 24);
+            if (item >= plan.n_items) {
+                packed = kItemSentinel;
+            } else {
+                next_item = item + 1;
+                const uint32_t counts_l1_addr = get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4;
+                const uint32_t idx_l1_addr = get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4;
+                const volatile tt_l1_ptr uint32_t* counts_ptr =
+                    reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counts_l1_addr);
+                const volatile tt_l1_ptr uint32_t* idx_ptr =
+                    reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
+                uint32_t cnt = counts_ptr[idx_ptr[plan.expert[item]]];
+                cnt = (cnt > 0xFFFFu) ? 0xFFFFu : cnt;  // clamp_count_tiles bounds the tiles anyway
+                packed = cnt | (static_cast<uint32_t>(plan.chunk_b[item]) << 16) |
+                         (static_cast<uint32_t>(plan.chunk_e[item]) << 24);
+            }
             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, packed);
             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, packed);
         }));
         MATH(packed = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
         PACK(packed = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        if (packed == kItemSentinel) {
+            break;
+        }
         count_value = packed & 0xFFFFu;
         chunk_b = (packed >> 16) & 0xFFu;
         chunk_e = (packed >> 24) & 0xFFu;
