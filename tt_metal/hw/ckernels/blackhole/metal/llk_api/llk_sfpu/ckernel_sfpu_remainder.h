@@ -113,20 +113,26 @@ inline void calculate_remainder() {
         v_endif;
         v = v - quotient * s;
 
-        v_if(val < 0 && v != 0) { v = s - v; }
-        v_endif;
-
-        v_if(value_tmp < 0 && v != 0) { v = v + value_tmp; }
-        v_endif;
-        v = sfpi::copysgn(v, value_tmp);
-        v_if(s == 0) { v = std::numeric_limits<float>::quiet_NaN(); }
-        v_endif;
-
+        // Normalize residual to [0, s) with bidirectional reduction before
+        // sign adjustment. Fixes large quotients (>2^23) where the initial
+        // estimate can be off by more than one divisor width.
         constexpr auto iter = 10;
         for (int l = 0; l < iter; l++) {
             v_if(v >= s) { v = v - s; }
+            v_elseif(v < 0) { v = v + s; }
             v_endif;
         }
+
+        // Sign handling after normalization
+        v_if(val < 0 && v != 0) { v = s - v; }
+        v_endif;
+
+        // Remainder has the same sign as the divisor
+        v_if(value_tmp < 0) { v = -v; }
+        v_endif;
+        v_if(s == 0) { v = std::numeric_limits<float>::quiet_NaN(); }
+        v_endif;
+
         v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }
         v_endif;
         sfpi::dst_reg[0] = v;
