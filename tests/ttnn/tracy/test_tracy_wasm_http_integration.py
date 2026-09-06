@@ -500,3 +500,92 @@ def test_kill_previous_server_is_port_scoped(tmp_path):
         assert proc.poll() is not None, "port-scoped cleanup must reap the matching-port server"
     finally:
         _terminate_serve_wasm(proc)
+
+
+# ---------------------------------------------------------------------------
+# Web-UI kill switch (--no-web-server / TRACY_NO_WEB_SERVER=1).
+#
+# The WASM server is a daemon, so it outlives the `python -m tracy` run that
+# started it and can be left listening on :8080 long after pytest exits. Headless
+# CI and measurement loops need a way to never start it -- these lock in that the
+# switch binds no port and spawns nothing, rather than starting-then-stopping.
+# ---------------------------------------------------------------------------
+
+
+def test_web_server_disabled_reads_env():
+    """web_server_disabled() honours the documented truthy spellings, and nothing else."""
+    from tracy.serve_wasm import web_server_disabled
+
+    prev = os.environ.get("TRACY_NO_WEB_SERVER")
+    try:
+        for value in ("1", "true", "TRUE", "Yes", "on", " 1 "):
+            os.environ["TRACY_NO_WEB_SERVER"] = value
+            assert web_server_disabled(), f"{value!r} should disable the web UI"
+        for value in ("", "0", "false", "no", "off"):
+            os.environ["TRACY_NO_WEB_SERVER"] = value
+            assert not web_server_disabled(), f"{value!r} should leave the web UI enabled"
+        os.environ.pop("TRACY_NO_WEB_SERVER", None)
+        assert not web_server_disabled(), "unset must leave the web UI enabled (default is on)"
+    finally:
+        os.environ.pop("TRACY_NO_WEB_SERVER", None)
+        if prev is not None:
+            os.environ["TRACY_NO_WEB_SERVER"] = prev
+
+
+@pytest.mark.timeout(120)
+def test_no_web_server_env_starts_nothing(tmp_path):
+    """TRACY_NO_WEB_SERVER=1 must return without spawning a server or binding the port."""
+    if not SERVE_WASM.is_file():
+        pytest.skip(f"serve_wasm.py not found: {SERVE_WASM}")
+
+    _make_wasm_serve_dir(tmp_path)
+    port = _find_free_port_pair()
+    snippet = (
+        "import os\n"
+        "os.environ['TRACY_NO_WEB_SERVER'] = '1'\n"
+        "from tracy.serve_wasm import launch_server_subprocess\n"
+        f"r = launch_server_subprocess(port={port})\n"
+        "print('DISABLED' if r is None else 'SPAWNED:%s' % r.pid)\n"
+    )
+    res = _run_in_serve_wasm_env(snippet, tmp_path)
+    assert res.returncode == 0, res.stderr
+    assert "DISABLED" in res.stdout, f"expected no spawn, got stdout={res.stdout!r} stderr={res.stderr!r}"
+    # The point of the switch is that nothing is left listening afterwards.
+    assert _port_free(port), f"HTTP port {port} was bound despite TRACY_NO_WEB_SERVER=1"
+    assert _port_free(port + 1), f"WebSocket port {port + 1} was bound despite TRACY_NO_WEB_SERVER=1"
+
+
+@pytest.mark.timeout(120)
+def test_no_web_server_flag_starts_nothing_with_env_unset(tmp_path):
+    """enabled=False (what --no-web-server passes) disables on its own, no env var needed."""
+    if not SERVE_WASM.is_file():
+        pytest.skip(f"serve_wasm.py not found: {SERVE_WASM}")
+
+    _make_wasm_serve_dir(tmp_path)
+    port = _find_free_port_pair()
+    snippet = (
+        "import os\n"
+        "os.environ.pop('TRACY_NO_WEB_SERVER', None)\n"
+        "from tracy.serve_wasm import launch_server_subprocess\n"
+        f"r = launch_server_subprocess(port={port}, enabled=False)\n"
+        "print('DISABLED' if r is None else 'SPAWNED:%s' % r.pid)\n"
+    )
+    res = _run_in_serve_wasm_env(snippet, tmp_path)
+    assert res.returncode == 0, res.stderr
+    assert "DISABLED" in res.stdout, f"expected no spawn, got stdout={res.stdout!r} stderr={res.stderr!r}"
+    assert _port_free(port), f"HTTP port {port} was bound despite enabled=False"
+    assert _port_free(port + 1), f"WebSocket port {port + 1} was bound despite enabled=False"
+
+
+def test_tracy_cli_exposes_no_web_server_flag():
+    """``python -m tracy --help`` must advertise the switch (this is the user-facing contract)."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(TOOLS_DIR) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env.setdefault("TT_METAL_HOME", str(REPO_ROOT))
+    res = subprocess.run(
+        [sys.executable, "-m", "tracy", "--help"], env=env, capture_output=True, text=True, timeout=120
+    )
+    if res.returncode != 0:
+        pytest.skip(f"`python -m tracy --help` unavailable in this environment: {res.stderr[-400:]}")
+    assert "--no-web-server" in res.stdout, "python -m tracy must expose --no-web-server"
+    assert "TRACY_NO_WEB_SERVER" in res.stdout, "the --no-web-server help must name the env-var equivalent"
