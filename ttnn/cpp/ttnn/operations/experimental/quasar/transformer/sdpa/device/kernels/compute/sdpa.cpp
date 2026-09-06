@@ -129,6 +129,9 @@ void kernel_main() {
         if (use_chunk_start_idx_tensor != 0) {
             dfb_chunk_start_idx_obj.wait_front(1);
             uint32_t chunk_start_idx = ckernel::read_tile_value(dfb_chunk_start_idx, 0, 0);
+            // TEN-4746 (#48552): read_tile_value is a plain L1 load (no UNPACR), so this wait_front->pop_front
+            // is bare; dummy_unpack issues an UNPACR_NOP that orders POP after WAIT.
+            dummy_unpack(dfb_chunk_start_idx);
             dfb_chunk_start_idx_obj.pop_front(1);
             const uint32_t q_chunk_size = Sq_chunk_t * TILE_HEIGHT;
             chunked_q_chunk_offset_phase_1 = chunk_start_idx / q_chunk_size;

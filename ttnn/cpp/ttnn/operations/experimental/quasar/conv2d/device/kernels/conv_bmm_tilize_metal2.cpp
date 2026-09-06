@@ -612,6 +612,11 @@ void kernel_main() {
                 uint32_t in0_index_subblock_offset = 0;
 #ifdef CHECK_SKIP_COMPUTE
                 if (skip_compute) {
+                    // TEN-4746 (#48552): on the skip_compute path nothing unpacks cb_mm_in0 between the
+                    // wait_front above and this pop_front, so the bare pair would trap the Quasar unpacker
+                    // (POP_TILES races past WAIT_TILES). dummy_unpack() issues an UNPACR_NOP that orders POP
+                    // after WAIT; it reads nothing, no-op on WH/BH.
+                    dummy_unpack(mm_in0_cb_id);
                     cb_mm_in0.pop_front(in0_block_num_tiles);
                     continue;
                 }
@@ -780,28 +785,13 @@ void kernel_main() {
                 if constexpr (packer_l1_acc) {
                     if constexpr (fuse_bias) {
                         if (in0_block_w_i < in0_num_blocks_w - 1) {
-#ifdef ARCH_QUASAR
-                            // TEN-4746: a bare wait_front->pop_front traps the Quasar unpacker (POP_TILES races
-                            // past WAIT_TILES). Interpose a REAL unpack TDMA (dummy copy_tile of tile 0); NOP/
-                            // TTI_NOP are INSUFFICIENT (LLK-team guidance + abhullar/pop-wait-fix 69014037a).
-                            // Reconfig srcA to partials for the copy, then restore srcA + re-init the matmul.
-                            reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
-                            copy_init(matmul_partials_cb);
-#endif
+                            // TEN-4746 (#48552): a bare wait_front->pop_front traps the Quasar unpacker
+                            // (POP_TILES races past WAIT_TILES). dummy_unpack() issues an UNPACR_NOP that orders
+                            // POP after WAIT; it reads nothing and needs no reconfig/re-init (replaces the old
+                            // copy_tile drain idiom). No-op on WH/BH.
                             cb_matmul_partials.wait_front(out_block_num_tiles);
-#ifdef ARCH_QUASAR
-                            tile_regs_acquire();
-                            copy_tile(matmul_partials_cb, /*in_tile_index=*/0, /*dst_tile_index=*/0);
-                            tile_regs_commit();
-                            tile_regs_wait();
-                            tile_regs_release();
-#endif
+                            dummy_unpack(matmul_partials_cb);
                             cb_matmul_partials.pop_front(out_block_num_tiles);
-#ifdef ARCH_QUASAR
-                            reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
-                            matmul_block_init(
-                                mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-#endif
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
                                 PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials));
@@ -810,26 +800,11 @@ void kernel_main() {
                         enable_reload = false;
                     } else {
                         if (in0_block_w_i < in0_num_blocks_w - 2) {
-#ifdef ARCH_QUASAR
-                            // TEN-4746 (see above): REAL unpack TDMA (dummy copy_tile) between the bare
-                            // wait_front/pop_front; NOP/TTI_NOP insufficient.
-                            reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
-                            copy_init(matmul_partials_cb);
-#endif
+                            // TEN-4746 (#48552, see above): dummy_unpack() orders POP after WAIT via an
+                            // UNPACR_NOP; replaces the old copy_tile drain idiom. No-op on WH/BH.
                             cb_matmul_partials.wait_front(out_block_num_tiles);
-#ifdef ARCH_QUASAR
-                            tile_regs_acquire();
-                            copy_tile(matmul_partials_cb, /*in_tile_index=*/0, /*dst_tile_index=*/0);
-                            tile_regs_commit();
-                            tile_regs_wait();
-                            tile_regs_release();
-#endif
+                            dummy_unpack(matmul_partials_cb);
                             cb_matmul_partials.pop_front(out_block_num_tiles);
-#ifdef ARCH_QUASAR
-                            reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
-                            matmul_block_init(
-                                mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-#endif
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
                                 PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials));

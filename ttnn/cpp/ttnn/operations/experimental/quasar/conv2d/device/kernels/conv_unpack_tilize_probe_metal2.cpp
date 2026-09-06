@@ -84,6 +84,8 @@ void kernel_main() {
     DataflowBuffer out_cb(out_cb_id);
 
     in_scalar_cb.reserve_back(1);
+    // TEN-4746 pack-side drain (dummy_pack helper pending).
+    dummy_pack(in_scalar_cb_id);
     in_scalar_cb.push_back(1);
     in_scalar_cb.wait_front(1);
 
