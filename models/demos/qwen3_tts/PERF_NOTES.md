@@ -32,6 +32,10 @@ per-layer time.** The CodePredictor is the first thing to optimise.
 A second observation: in the CP decode layer, roughly 60 % of the time was *not* matmul. It
 was layout churn and collectives — ops that move or reshape data rather than compute with it.
 
+A third, and it is not in any op profile: **the demo spent 5.8 ms/frame outside the two trace
+replays** — host D2H/H2D round trips and redundant syncs. See 2.6. Always compare the demo's
+reported ms/frame against a bare replay of the same traces before tuning another op.
+
 ---
 
 ## 2. What was changed
@@ -352,6 +356,83 @@ The Gumbel noise row was sliced out of a `[1, 1, 32, 64]` tile with
 `ttnn.slice(noise, [0,0,slot,0], ...)`, which is a non-tile-aligned row slice and lowered to
 **Untilize -> Slice -> Tilize, 10.8 us x 14 = 0.15 ms/frame**. Fixed: noise is now
 `[1, 32, 1, 64]` with dim-1 slices (tile-aligned).
+
+---
+
+### 2.6 The AR loop's host side — the 5.8 ms/frame that is in no op profile
+
+Everything above tunes device ops. But on N300 the demo reported **45.0 ms/frame** while the
+same two traces, replayed back to back by `tests/test_qwen3_tts_perf_report.py -k
+test_decode_frame`, measured **38.92 ms**. Prefill was worse in relative terms: a 16.16 ms
+traced replay against **23.6 ms** reported. That gap is host-side and invisible to
+`tt-perf-report`, which only sees what the device ran.
+
+`QWEN3_TTS_HOST_PROF=1` (in `ar_decode_loop`) breaks the frame into every host step that is
+not a trace replay. The baseline, 256 frames on N300:
+
+| | ms/frame |
+|---|--:|
+| CP trace replay | 26.54 |
+| Talker trace replay | 12.48 |
+| **codec0: D2H of `[1,1,1,3072]` logits + host top-k/softmax/multinomial** | **2.23** |
+| CP tokens D2H (15 ids) | 0.87 |
+| Gumbel noise: `torch.rand` + `from_torch` + H2D | 0.85 |
+| Talker H2D x4 (cos, sin, cur_pos, mask) | 0.83 |
+| code-0 H2D, trailing-text H2D, 2 redundant syncs, tail | 1.00 |
+
+**The unit cost that matters is per CALL, not per byte.** Measured standalone on this host:
+an H2D is 0.2-0.33 ms whether it carries 256 B or 22 KB; a D2H is 0.4-1.0 ms for a 4-byte
+token id just as for 3072 logits; `synchronize_device` on an *idle* mesh is 0.32 ms. Making
+the decode mask bf16 and single-head cut its transfer from 490 to ~50 us in isolation and
+moved the frame by **nothing**. So the lever is removing round trips, not shrinking them.
+
+What was done, in descending value:
+
+| change | mechanism | ms/frame |
+|---|---|--:|
+| codec0 sampled in the Talker trace | The 15 CP codebooks already sampled on device; codec0 alone still went to the host. `_DeviceSampler.append_sampling` on the Talker's codec logits, into `tok_bufs[0]` — the buffer the fused CP trace reads. Kills the logits D2H, the host sample, AND the code-0 H2D. Noise slot 15 of the tile the CP already uploads, so no extra H2D. Costs ~0.6 ms of in-trace topk at width 4096. | **-1.4** |
+| code 0 folded into `tokens_out` | One element added to a concat the CP trace already builds, so ONE D2H returns all 16 codes. EOS moves to `code_row[0]`, one frame earlier, which keeps exactly the same rows. | **-1.0** |
+| chip-0-only D2H (`mesh_utils.to_torch_chip0`) | `to_torch` went through `ConcatMeshToTensor`, pulling the tensor off *every* chip and discarding all but the first. Post-all-reduce the chips agree, so chip 0 is the whole answer. Bit-exact. | **-0.6** |
+| Gumbel tiles pre-drawn at setup | The draw and the host tilize/replicate depend on nothing the frame computes. A private `torch.Generator` seeded off the global RNG keeps `--seed` reproducible. | **-0.5** |
+| trailing-text row uploaded only when it changes | Past `trailing_len` every frame re-uploaded the SAME pad row. Shared host object + identity check. `QWEN3_TTS_TRAIL_SKIP=0` is the A/B: all 73x16 codes byte-identical either way, so nothing clobbers `trail_row_tt` between frames. | **-0.3** |
+| two redundant `synchronize_device` | The Talker block already ends with one; the loop tail and the loop top each did another. Three full mesh syncs per frame at 0.32 ms of fixed cost each. | **-0.2** |
+
+And on prefill, which runs **once** per utterance:
+
+| change | ms |
+|---|--:|
+| Feed the prefill trace by D2D `ttnn.assign`. It was `_mesh_to_torch(inputs_embeds_tt)` -> `from_torch` -> H2D, i.e. a full host round trip of a tensor already sitting on device in the trace buffer's exact shape, dtype and layout. | -2.5 |
+| Slice the one sampled row out of `[1,1,bucket,3072]` on device before the D2H, instead of reading all 64 rows to use one. | -1.2 |
+
+> **A one-shot path pays JIT compile for any op that is not already in the program cache.**
+> The first version of the two prefill fixes made prefill **2312 ms**: `assign` and `slice`
+> were new programs, and prefill runs exactly once, so it ate the whole compile. Both are now
+> warmed on the real shapes just before the timed region. Nothing about the ops was wrong —
+> the *placement* was.
+
+**Result on N300** (`tests/test_qwen3_tts_perf_device.py`, 3 runs each):
+
+| | before | after |
+|---|--:|--:|
+| Talker prefill | 23.6 ms | **19.0 - 19.6 ms** |
+| steady decode | 45.0 ms | **42.1 - 42.4 ms** |
+
+Host time outside the two replays went **5.8 -> 2.3 ms/frame**. The traces themselves are
+untouched except for the +0.6 ms the in-trace codec0 sampler adds to the Talker.
+
+**What is left, and why it is harder.** 2.3 ms remains: one D2H (0.83, needed for the EOS
+check), four Talker H2Ds (1.05 — cos/sin/mask are all bf16 TILE now and could be packed into
+one upload sliced inside the trace, worth ~0.45), and the noise H2D (0.35). The structural
+answer to all of it is a **second command queue**, which would overlap every H2D with trace
+execution — `use_2cq` exists but `capture_fused_cp_trace` disables it. That is the next move,
+and it is worth roughly the whole 2.3 ms.
+
+**Accuracy.** `test_qwen3_tts_pcc.py`: 4 passed, PCC digit-for-digit unchanged (model math is
+untouched). `test_qwen3_tts_voice_quality.py` on the generated wav: **SIM 0.9350** (gate 0.80),
+**WER 0.0 %**, 0 substitutions / deletions / insertions. Every change above is bit-exact except
+codec0's sampler, which moves from host multinomial over the top-50 softmax to the same
+Gumbel-max top-k chain the CodePredictor's 15 codebooks have used since 2.x — the same
+distribution, a different draw, so the audio differs while the words do not.
 
 ---
 
