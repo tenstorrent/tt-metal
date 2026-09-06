@@ -19,6 +19,18 @@ class MiniMaxM3Config:
 
     # FFN dimensions
     MOE_INTERMEDIATE_SIZE = 3072  # Routed-expert FFN hidden dimension
+    # Routed-expert hybrid split: experts with <= this many active tokens go to
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. Measured crossover on the
+    # 6144x3072 routed-expert shape, where the composite's cost is flat inside a 1024-token
+    # chunk while the fused op's rises linearly, so the winner alternates rather than crossing
+    # once. 1536 is the aggregate-optimal cut over that sawtooth rather than the first crossing
+    # (1024): it beats the conservative 768 both on total cost (+0.3% against a per-count oracle
+    # vs +1.1%) and on worst single count (+8.8% at 1024 vs +25.6% at 1280).
+    # Not enabled: TtRoutedExpert rejects a threshold on any activation moe_fused_swiglu does not
+    # implement, and M3's routed experts run SwiGluOai. The measured crossover is kept under
+    # _MEASURED so it is not re-derived; rename it back to ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD
+    # if the fused op gains swigluoai.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 1536
     SHARED_INTERMEDIATE_SIZE = 3072  # Always-on shared expert
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
