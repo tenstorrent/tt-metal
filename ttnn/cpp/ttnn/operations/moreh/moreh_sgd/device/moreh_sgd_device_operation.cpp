@@ -11,6 +11,12 @@
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_sgd {
+
+MorehSgdOperation::program_factory_t MorehSgdOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return MorehSgdProgramFactory{};
+}
+
 void MorehSgdOperation::validate_inputs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& params_in = tensor_args.param_in;

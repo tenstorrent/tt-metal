@@ -7,39 +7,28 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t i = 0;
-    uint32_t param_out_addr = get_arg_val<uint32_t>(i);
-    i++;
-    uint32_t momentum_out_addr = get_arg_val<uint32_t>(i);
-    i++;
-    uint32_t num_tiles = get_arg_val<uint32_t>(i);
-    i++;
-    uint32_t tile_offset = get_arg_val<uint32_t>(i);
-    i++;
-
-    constexpr auto cb_param_out = tt::CBIndex::c_16;
-    constexpr auto cb_momentum_out = tt::CBIndex::c_17;
+    const uint32_t num_tiles = get_arg(args::num_tiles);
+    const uint32_t tile_offset = get_arg(args::tile_offset);
 
     constexpr uint32_t onetile = 1;
 
-    // param_out
-    constexpr auto param_out_args = TensorAccessorArgs<0>();
-    auto param_out = TensorAccessor(param_out_args, param_out_addr);
+    // param_out (base address + layout supplied by the TensorBinding).
+    const auto param_out = TensorAccessor(tensor::param_out);
 
-// param_out
+// momentum_out
 #if defined(MOMENTUM)
-    constexpr auto momentum_out_args = TensorAccessorArgs<param_out_args.next_compile_time_args_offset()>();
-    auto momentum_out = TensorAccessor(momentum_out_args, momentum_out_addr);
+    const auto momentum_out = TensorAccessor(tensor::momentum_out);
 #endif
 
     Noc noc;
-    DataflowBuffer dfb_param_out_obj(cb_param_out);
-    const auto param_out_tile_bytes = get_tile_size(cb_param_out);
+    DataflowBuffer dfb_param_out_obj(dfb::param_out);
+    const auto param_out_tile_bytes = dfb_param_out_obj.get_tile_size();
 #if defined(MOMENTUM)
-    DataflowBuffer dfb_momentum_out_obj(cb_momentum_out);
-    const auto momentum_out_tile_bytes = get_tile_size(cb_momentum_out);
+    DataflowBuffer dfb_momentum_out_obj(dfb::momentum_out);
+    const auto momentum_out_tile_bytes = dfb_momentum_out_obj.get_tile_size();
 #endif
 
     uint32_t tile_idx = tile_offset;
