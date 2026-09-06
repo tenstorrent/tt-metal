@@ -15,6 +15,7 @@
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
+#include "rtoptions.hpp"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
 #include "overlay/meta/registers/overlay_reg_defines_core.h"
@@ -337,6 +338,7 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        defines.push_back("NOC_API_V" + std::to_string(params.rtoptions.get_quasar_noc_api_version()));
         return defines;
     }
 
