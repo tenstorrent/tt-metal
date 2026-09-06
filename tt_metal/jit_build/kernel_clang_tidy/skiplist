@@ -19,6 +19,12 @@
 -/opt/tenstorrent/sfpi/*
 -/usr/*
 
-# Machine-generated JIT glue (chlkc_* headers and friends) emitted per compile
-# into the kernel cache. Findings belong to the generator, not the output.
--*/tt-metal-cache/*
+# The machine-generated JIT glue in the kernel cache (chlkc_*.cpp prologs, the
+# generated kernel_main() shim, chlkc_descriptors.h format tables) is analyzed
+# deliberately: a generator that emits bad code is still a bug worth filing.
+# Two consequences to expect in the report. Cache paths embed the kernel name
+# and two content hashes, so one generator defect appears once per kernel
+# variant rather than collapsing under deduplication; and the cache lives on the
+# test runner while only plists are uploaded, so these findings have no
+# browsable source in the rendered report. Both are accepted for now — see
+# tech_reports/code-indexing/kernel-clang-tidy.md.

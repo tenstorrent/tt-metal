@@ -263,11 +263,14 @@ Rendering needs the analyzed sources at the same absolute paths the legs used,
 which is why this job runs in the ci-test container with `setup-job` installing
 the wheel, rather than on a bare `ubuntu-latest`. Two roots cover everything:
 `/opt/venv/...` (16,829 of the 19,835 unique findings, wheel-installed headers)
-and `/work/...` (3,006, the checkout). Nothing resolves into the per-leg
-tt-metal-cache, because the skiplist excludes generated JIT glue. Skip the
-sources and `--export html` silently produces `index.html` and `statistics.html`
-with **zero** finding pages — measured, not assumed, which is what an earlier
-attempt to merge on `ubuntu-latest` got wrong.
+and `/work/...` (3,006, the checkout). Skip the sources and `--export html`
+silently produces `index.html` and `statistics.html` with **zero** finding pages
+— measured, not assumed, which is what an earlier attempt to merge on
+`ubuntu-latest` got wrong.
+
+The exception is the generated JIT glue, which is analyzed (see below) but lives
+in the kernel cache on the test runner, and only plists are uploaded. Those
+findings therefore appear in the tables and statistics with no browsable source.
 
 The JSON export runs before the render and uploads unconditionally: it is the
 machine-readable form of the same data, and it is what to point an agent at.
@@ -339,8 +342,24 @@ replaced `HeaderFilterRegex`. Two reasons the skiplist is the better mechanism
 here: it also drops `clang-diagnostic-*` findings, which a header filter
 structurally cannot (hence the SFPI and glibc parse noise in earlier reports),
 and it keeps scope in one reviewable file. The list is exclusion-only — the
-same shape as tt-umd's `.codechecker.skiplist` — covering upstream SFPI, host
-libc, and the generated JIT glue in the kernel cache. Worth knowing why an
+same shape as tt-umd's `.codechecker.skiplist` — and now covers only upstream
+SFPI and host libc, neither of which is fixable in this repo.
+
+The machine-generated JIT glue in the kernel cache used to be excluded too, on
+the grounds that findings there belong to the generator rather than the output.
+That was the wrong call: `genfiles.cpp` emits the `chlkc_*.cpp` prologs, the
+`kernel_main()` shim for `TT_KERNEL`-tagged entries and the
+`chlkc_descriptors.h` format tables, and a generator emitting bad code is a bug
+worth filing. It is analyzed now. Two consequences are accepted deliberately:
+cache paths embed the kernel name and two content hashes, so one generator
+defect lands once per kernel variant instead of collapsing under deduplication;
+and those findings have no browsable source in the report, per the note above.
+If the volume proves unmanageable, the fix is to canonicalise cache paths during
+the merge and ship one representative copy of the generated tree — not to stop
+looking. Note this does not affect coverage of the kernels themselves, which
+resolve to wheel or checkout paths and were always analyzed.
+
+Worth knowing why an
 allow-list is not an option here: the translation units are the firmware
 wrappers under `tt_metal/hw/firmware/src/`, with kernels `#include`d into them,
 so no TU path contains `kernels/` and an allow-list keyed on it would analyze
