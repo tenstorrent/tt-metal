@@ -16,12 +16,6 @@
 #include "internal/circular_buffer_interface.h"
 #endif
 
-// PrefetcherPipe-relay checkpoint align, called from the RelayDFBBindingToken constructor on
-// TRISC (unpack/pack). DM aligns in PrefetcherPipe::bind_relay().
-#if defined(COMPILE_FOR_TRISC) && !defined(ARCH_QUASAR) && !defined(UCK_CHLKC_MATH)
-#include "internal/prefetcher_pipe_init.h"
-#endif
-
 #ifndef COMPILE_FOR_TRISC
 #include "api/dataflow/noc.h"
 #include "tools/profiler/noc_debugging_profiler.hpp"
@@ -102,31 +96,6 @@ private:
     uint16_t id_;
 };
 
-// Compile-time handle for a CrossNode/PrefetcherPipe *relay* local DFB binding.
-// Distinct from DFBBindingToken so kernels cannot silently treat a normal DFB as a
-// relay (or vice versa) without a cast — no runtime "am I a relay?" check needed.
-// Emitted into kernel_bindings_generated.h when the host DFB was created as a relay.
-//
-// PrefetcherPipe relays additionally carry the prefetcher_pipe_id so the TRISC-side
-// DataflowBuffer constructor can O(1)-index that slot in the launch-msg persistent
-// region and snap the borrowed local iface to the durable fifo_ptr checkpoint.
-// CrossNode relays omit it (NO_PREFETCHER_PIPE): CrossNode state is re-zeroed every
-// launch, so the dispatch-written local CB config is already correct.
-struct RelayDFBBindingToken {
-    static constexpr uint8_t NO_PREFETCHER_PIPE = 0xFF;
-
-    explicit constexpr RelayDFBBindingToken(uint16_t id, uint8_t prefetcher_pipe_id = NO_PREFETCHER_PIPE) noexcept :
-        id_(id), prefetcher_pipe_id_(prefetcher_pipe_id) {}
-
-    constexpr operator uint32_t() const noexcept { return id_; }
-
-    constexpr uint8_t prefetcher_pipe_id() const noexcept { return prefetcher_pipe_id_; }
-
-private:
-    uint16_t id_;
-    uint8_t prefetcher_pipe_id_;
-};
-
 class DataflowBuffer {
 public:
 #ifdef ARCH_QUASAR
@@ -140,19 +109,7 @@ public:
     //   DataflowBuffer dfb(my_dfb_name);
     DataflowBuffer(DFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
 
-    // Relay local DFB (CrossNode / PrefetcherPipe bridge to compute). Same runtime object;
-    // the token type is how the host marks the binding as a relay at compile time.
-    // For PrefetcherPipe relays on TRISC, construction snaps the borrowed local iface to the
-    // durable checkpoint via a launch-msg slot lookup keyed by token.prefetcher_pipe_id()
-    DataflowBuffer(RelayDFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {
-#if defined(COMPILE_FOR_TRISC) && !defined(ARCH_QUASAR) && !defined(UCK_CHLKC_MATH)
-        if (token.prefetcher_pipe_id() != RelayDFBBindingToken::NO_PREFETCHER_PIPE) {
-            experimental::align_local_dfb_to_prefetcher_pipe_slot(logical_dfb_id_, token.prefetcher_pipe_id());
-        }
-#endif
-    }
-
-    // Low-level constructor: prefer DFBBindingToken / RelayDFBBindingToken for new kernel code.
+    // Low-level constructor: prefer DFBBindingToken overload above for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
 
     uint16_t get_id() const { return logical_dfb_id_; }

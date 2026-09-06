@@ -25,7 +25,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -135,42 +134,6 @@ TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
     for (uint32_t i = 0; i < num_cores; i++) {
         auto pc_addr = per_core::get_per_core_address(*per_core_buf, cores[i]);
         EXPECT_NE(lockstep_addr, pc_addr) << "Lockstep address overlaps per-core address at core " << i;
-    }
-}
-
-TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "PrefetcherPipe is not supported on Quasar yet";
-    }
-    ASSERT_GE(this->devices_[0]->compute_with_storage_grid_size().x, 2);
-
-    auto* mesh_device = this->devices_[0].get();
-    const CoreCoord sender(0, 0);
-    const CoreCoord receiver(1, 0);
-    auto pipe = experimental::CreatePrefetcherPipe(
-        mesh_device, sender, CoreRangeSet(CoreRange(receiver)), /*ring_size=*/1024);
-
-    const CoreRangeSet pipe_cores = CoreRangeSet(CoreRange(sender, receiver));
-    ShardSpecBuffer shard_spec(pipe_cores, {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
-    auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
-    experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
-    // Allocate through the MeshDevice allocator that owns the pipe's persistent L1.
-    auto buf = Buffer::create(mesh_device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, shard_args);
-
-    const DeviceAddr per_core_size = buf->aligned_size_per_bank();
-    const DeviceAddr ring_begin = pipe.buffer_address();
-    const DeviceAddr ring_end = ring_begin + pipe.ring_size();
-    const DeviceAddr config_begin = pipe.config_address();
-    const DeviceAddr config_end = config_begin + pipe.config_page_size();
-    auto overlaps = [](DeviceAddr addr, DeviceAddr size, DeviceAddr begin, DeviceAddr end) {
-        return addr < end && addr + size > begin;
-    };
-    for (const auto& core : corerange_to_cores(pipe_cores)) {
-        const DeviceAddr addr = per_core::get_per_core_address(*buf, core);
-        EXPECT_FALSE(overlaps(addr, per_core_size, ring_begin, ring_end))
-            << "per-core L1 overlaps PrefetcherPipe ring on " << core.str();
-        EXPECT_FALSE(overlaps(addr, per_core_size, config_begin, config_end))
-            << "per-core L1 overlaps PrefetcherPipe config on " << core.str();
     }
 }
 

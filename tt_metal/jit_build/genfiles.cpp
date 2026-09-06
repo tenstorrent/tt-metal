@@ -14,7 +14,6 @@
 #include <filesystem>
 #include <functional>
 #include <iterator>
-#include <tuple>
 // Blaze-only experimental named args (removal tracked by issue #50953): <map>/<set> below
 #include <map>
 #include <set>
@@ -188,14 +187,10 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     struct DfbEntry {
         string name;
         uint16_t id;
-        bool is_relay;
-        uint8_t prefetcher_pipe_id;
     };
     vector<DfbEntry> dfb_entries;
     settings.process_dataflow_buffer_binding_handles(
-        [&dfb_entries](const string& name, uint16_t id, bool is_relay, uint8_t prefetcher_pipe_id) {
-            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id});
-        });
+        [&dfb_entries](const string& name, uint16_t id) { dfb_entries.push_back({name, id}); });
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Get the semaphore bindings from the settings callback
@@ -318,18 +313,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Emit DFB bindings
     content << "namespace dfb {\n";
     for (const auto& entry : dfb_entries) {
-        if (entry.is_relay) {
-            // PrefetcherPipe relays bake the persistent slot into the token so the TRISC
-            // constructor can O(1)-align to the durable checkpoint; CrossNode relays
-            // use the single-arg form (NO_PREFETCHER_PIPE default, no align needed).
-            content << "constexpr RelayDFBBindingToken " << entry.name << "{" << entry.id;
-            if (entry.prefetcher_pipe_id != 0xFF) {
-                content << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
-            }
-            content << "};\n";
-        } else {
-            content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
-        }
+        content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
     }
     emit_programmatic_binding_token_getter(content, dfb_entries, "DFBBindingToken");
     content << "}  // namespace dfb\n";
