@@ -1,0 +1,36 @@
+# Minimal reproducer for tt-metal #55180 (Blackhole).
+#
+# Operation 1 of tiny_tiles_multi_op only -- ops 2-5 removed, they are not needed
+# to reproduce. Op 1 is at its floor: the hang needs >= 2 blocks of >= 2 tiles, and
+# [32,64] with block_size [32,32] is exactly 2 x 2. One block, or one tile per
+# block, does not reproduce.
+#
+# Build with -DTT55180_REPRO_NOPS=6 (or 7) and run TWICE after a device reset.
+# See tt55180/RUNBOOK.md.
+supported_archs: ["wormhole", "blackhole"]
+
+operands:
+  - name: "datacopy_in_A"
+    dims: [32, 64]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+  - name: "datacopy_out"
+    dims: [32, 64]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+
+operations:
+  - math:
+      - type: "Fpu"
+        in0: "datacopy_in_A"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+      - type: "UnarySfpu"
+        operation: "Exp"
+        approximation_mode: false
+        iterations: 16
+    block_size: [32, 32]
+    pack:
+      - output: "datacopy_out"
+        packer: "Packer"

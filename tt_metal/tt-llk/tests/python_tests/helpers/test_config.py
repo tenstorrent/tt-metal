@@ -552,6 +552,10 @@ class TestConfig:
             f"{no_wh_ebreak_fixup}"
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
+            # Extra -D flags from the environment, so a build variant can be selected
+            # without editing source. The value lands in the JIT hash, so each variant
+            # gets its own build.
+            f" {os.environ.get('TT_LLK_EXTRA_DEFINES', '')}"
         )
         TestConfig.INCLUDES = (
             [

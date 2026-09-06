@@ -449,8 +449,49 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
         }
     }
 
+    // ---- tt-metal #55180 reproducer / candidate fix. Both default OFF. ----
+    // TT55180_REPRO_NOPS: N pure UNP_NOP words on unpacker 1 here. 6 or 7 reproduce
+    // the hang; 0-5 and 8-20 do not. Run twice after a device reset -- the second
+    // run is the one that hangs. See tests/python_tests/tt55180/RUNBOOK.md.
+#ifndef TT55180_REPRO_NOPS
+#define TT55180_REPRO_NOPS 0
+#endif
+#if TT55180_REPRO_NOPS >= 1
+    TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::UNP_NOP);
+#endif
+#if TT55180_REPRO_NOPS >= 2
+    TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::UNP_NOP);
+#endif
+#if TT55180_REPRO_NOPS >= 3
+    TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::UNP_NOP);
+#endif
+#if TT55180_REPRO_NOPS >= 4
+    TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::UNP_NOP);
+#endif
+#if TT55180_REPRO_NOPS >= 5
+    TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::UNP_NOP);
+#endif
+#if TT55180_REPRO_NOPS >= 6
+    TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::UNP_NOP);
+#endif
+#if TT55180_REPRO_NOPS >= 7
+    TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::UNP_NOP);
+#endif
+#if TT55180_REPRO_NOPS >= 8
+    TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::UNP_NOP);
+#endif
+
+    // TT55180_FIX_UNPACK_STALL: also wait on the unpackers here. Makes the
+    // reproducer pass.
+#ifndef TT55180_FIX_UNPACK_STALL
+#define TT55180_FIX_UNPACK_STALL 0
+#endif
     // Stall unpacker until pending CFG writes from Trisc have completed
+#if TT55180_FIX_UNPACK_STALL
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG | p_stall::UNPACK);
+#else
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+#endif
 
     // Run MOP
     ckernel::ckernel_template::run();
