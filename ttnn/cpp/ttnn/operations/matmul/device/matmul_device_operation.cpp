@@ -1357,11 +1357,14 @@ void validate_matmul_dram_sharded_config(
         config_name,
         K,
         program_config.in0_block_w);
+    // A block is either a fraction of one storage shard or a whole number of consecutive shards.
+    const uint32_t in0_shard_width_tiles = shard_shape[1] / in0_tile.get_width();
     TT_FATAL(
-        (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0,
-        "{}: shard_shape[1] / in0_tile.get_width() ({}) must be divisible by in0_block_w ({})",
+        in0_shard_width_tiles % program_config.in0_block_w == 0 ||
+            program_config.in0_block_w % in0_shard_width_tiles == 0,
+        "{}: shard_shape[1] / in0_tile.get_width() ({}) and in0_block_w ({}) must divide one another",
         config_name,
-        (shard_shape[1] / in0_tile.get_width()),
+        in0_shard_width_tiles,
         program_config.in0_block_w);
 
     // tensor in1
