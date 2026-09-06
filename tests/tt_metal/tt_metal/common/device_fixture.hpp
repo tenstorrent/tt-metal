@@ -219,9 +219,6 @@ protected:
     }
 };
 
-// Quasar-gated single unit mesh that runs under either dispatch mode. QuasarMeshDeviceSingleCardFixture
-// sits on UnitMeshFixture, whose slow-dispatch gate it bypasses by overriding SetUp -- which also skips
-// DetectDispatchMode. Deriving from UnitMeshAnyDispatchFixture keeps that detection.
 class QuasarAnyDispatchMeshDeviceSingleCardFixture : public UnitMeshAnyDispatchFixture {
 protected:
     void SetUp() override {
