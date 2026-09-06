@@ -187,7 +187,20 @@ void kernel_main() {
     // not select the tree for is the same kernel it was before D28.
     constexpr uint32_t TREE_F0 = get_compile_time_arg_val(16);
     constexpr uint32_t TREE_F1 = get_compile_time_arg_val(17);
-    constexpr auto mc = dataflow_kernel_lib::McastArgs</*CT=*/18, /*RT=*/12>();
+    // D32 -- THE RAGGED (PADDED) WIDTH CHUNK, the writer's half.  `WT_PAD` is how many
+    // of the LAST chunk's WT_CHUNK width tiles this core does not own.  The TILE path
+    // already skipped them (`wt < WT`, the ragged-shard guard); the ROW_MAJOR path
+    // needs the count, because `write_sticks_after_untilize` derives its L1 SOURCE
+    // stride from `row_bytes` while `untilize<WT_CHUNK>` wrote at the padded one.
+    // 0 on every divisor build, which elides all of this.
+    constexpr uint32_t WT_PAD = get_compile_time_arg_val(18);
+    constexpr bool HAS_WPAD = (WT_PAD != 0);
+    static_assert(WT_PAD < WT_CHUNK, "rms_norm_ttnn: a width chunk that is ALL pad is not a chunk");
+    static_assert(!HAS_WPAD || BLOCK_ROWS == 1, "rms_norm_ttnn: a ragged width chunk holds ONE tile-row per block");
+    static_assert(!HAS_WPAD || NUM_W_CHUNKS > 1, "rms_norm_ttnn: a one-chunk width is never padded");
+    static_assert(!HAS_WPAD || BAND == 0, "rms_norm_ttnn: the BAND scheme's width is shard-derived, never chunked");
+    static_assert(!HAS_WPAD || COMBINE == 0, "rms_norm_ttnn: a width-split core takes its slice in one chunk");
+    constexpr auto mc = dataflow_kernel_lib::McastArgs</*CT=*/19, /*RT=*/12>();
     constexpr auto out_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
 
     constexpr bool RM = (IS_TILE == 0);
@@ -330,6 +343,24 @@ void kernel_main() {
                 }
                 if constexpr (BAND_OUT) {
                     write_band(stick_start, sticks);
+                } else if (HAS_WPAD && c + 1 == NUM_W_CHUNKS) {
+                    // D32, the READER's `stage_ragged_tail_sticks` mirrored: the tail
+                    // chunk's sticks sit at the PADDED stride (untilize<WT_CHUNK> put
+                    // them there) and only the real lanes are written back.  The pad
+                    // lanes carry a finite product of zero and are simply not shipped.
+                    // Same raw-API justification as the read half: `row_bytes` is the
+                    // helper's one source for both the bytes written and the source
+                    // stride, and here the two differ.
+                    cb_wait_front(cb_output_sticks, WT_CHUNK);
+                    const uint32_t src = get_read_ptr(cb_output_sticks);
+                    for (uint32_t i = 0; i < sticks; ++i) {
+                        noc_async_write(
+                            src + i * CHUNK_ROW_BYTES,
+                            out_acc.get_noc_addr(stick_start + i, c * CHUNK_ROW_BYTES),
+                            LAST_CHUNK_ROW_BYTES);
+                    }
+                    noc_async_write_barrier();
+                    cb_pop_front(cb_output_sticks, WT_CHUNK);
                 } else {
                     const uint32_t row_bytes = (c + 1 == NUM_W_CHUNKS) ? LAST_CHUNK_ROW_BYTES : CHUNK_ROW_BYTES;
                     dataflow_kernel_lib::write_sticks_after_untilize<cb_output_sticks>(

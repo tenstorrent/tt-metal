@@ -309,6 +309,40 @@ FORCE_INLINE void publish_native_shard(uint32_t w_real, uint32_t tile_bytes) {
     cb_push_back(CB, IN_SHARD_PAGES);
 }
 
+// ---- D32: the RAGGED TAIL of a ROW_MAJOR width chunk ------------------------
+// `read_sticks_for_tilize` derives its L1 stride from `row_bytes`, so on a tail
+// chunk that is narrower than WT_CHUNK it would pack the sticks at the REAL width
+// while `tilize<WT_CHUNK>` reads them back at the PADDED one.  The tail therefore
+// stages RAW -- one read per stick into a WT_CHUNK-wide row -- which is exactly the
+// shape of the BAND scheme's `stage_band`, with the trailing pad lanes zeroed so
+// they contribute exactly 0 to sum(t^2).
+//
+// RAW-API JUSTIFICATION (the helper cannot express this): the destination stride is
+// the only thing that differs from the helper's TILE mode, and `row_bytes` is the
+// helper's ONE source for both the bytes read and the stride written.  A helper that
+// took them separately would close the gap; until it does, this is the same
+// nine-line strided read the band already runs.
+template <uint32_t CB, uint32_t WT_CHUNK, uint32_t CHUNK_ROW_BYTES, uint32_t REAL_ROW_BYTES, typename Acc>
+FORCE_INLINE void stage_ragged_tail_sticks(const Acc& acc, uint32_t sticks, uint32_t stick_start, uint32_t byte_off) {
+    cb_reserve_back(CB, WT_CHUNK);
+    {
+        // ONE zero call, not one per stick: everything from the first stick's pad
+        // lanes to the end of the reserved region covers every stick's pad lanes, and
+        // the real lanes it also touches are overwritten by the reads below -- which
+        // are issued only after the zero's own barrier, as the zero API requires.
+        Noc noc;
+        DataflowBuffer dfb(CB);
+        noc.async_write_zeros(dfb, WT_CHUNK * get_tile_size(CB) - REAL_ROW_BYTES, {.offset_bytes = REAL_ROW_BYTES});
+        noc.write_zeros_l1_barrier();
+    }
+    const uint32_t dst = get_write_ptr(CB);
+    for (uint32_t i = 0; i < sticks; ++i) {
+        noc_async_read(acc.get_noc_addr(stick_start + i, byte_off), dst + i * CHUNK_ROW_BYTES, REAL_ROW_BYTES);
+    }
+    noc_async_read_barrier();
+    cb_push_back(CB, WT_CHUNK);
+}
+
 void kernel_main() {
     // ---- compile-time knobs (all from rms_norm_ttnn_program_descriptor.py) -----
     constexpr uint32_t IS_TILE = get_compile_time_arg_val(0);
@@ -383,10 +417,33 @@ void kernel_main() {
     constexpr uint32_t BIAS_BLOCKED = get_compile_time_arg_val(27);
     // D30: stage a ROW_MAJOR per-channel operand one tile COLUMN per page.
     constexpr uint32_t NARROW_PC_STAGE = get_compile_time_arg_val(28);
+    // D32 -- THE RAGGED (PADDED) WIDTH CHUNK.  `WT_PAD` is how many of the LAST
+    // chunk's WT_CHUNK width tiles this core does not own: the descriptor's
+    // `_width_chunk` takes the coarsest BALANCED chunk at a prime Wt (127 -> 4 x 32)
+    // instead of collapsing to the only divisor (1), and pads the tail out so that
+    // every CB ring, every helper block width and every batched NoC group stays
+    // UNIFORM.  0 on every divisor build, which elides all of this.
+    //
+    // THE READER OWNS THE PAD'S INVARIANT.  Pad tiles are never read from the tensor
+    // -- their tile ids are outside the row -- and pass A sums x^2 over the whole
+    // padded chunk, so they must be exactly ZERO, not merely finite.  Zeroing is the
+    // device zero API on the reserved pages, the same mechanism (and the same
+    // reason) as `publish_native_shard`'s ragged-shard pad and the RM rings' boot
+    // zero.  Pass B's product for those columns lands in the writer's skipped
+    // region and is never read back.
+    constexpr uint32_t WT_PAD = get_compile_time_arg_val(29);
+    constexpr bool HAS_WPAD = (WT_PAD != 0);
+    constexpr uint32_t WT_REAL_TAIL = WT_CHUNK - WT_PAD;
+    static_assert(WT_PAD < WT_CHUNK, "rms_norm_ttnn: a width chunk that is ALL pad is not a chunk");
+    static_assert(!HAS_WPAD || PARTIAL_W == 0, "rms_norm_ttnn: a ragged width chunk requires a tile-aligned width");
+    static_assert(!HAS_WPAD || BLOCK_ROWS == 1, "rms_norm_ttnn: a ragged width chunk holds ONE tile-row per block");
+    static_assert(!HAS_WPAD || NUM_W_CHUNKS > 1, "rms_norm_ttnn: a one-chunk width is never padded");
+    static_assert(!HAS_WPAD || BAND == 0, "rms_norm_ttnn: the BAND scheme's width is shard-derived, never chunked");
+    static_assert(!HAS_WPAD || NATIVE_IN == 0, "rms_norm_ttnn: a zero-copy x is resident, never chunked");
     // FOUR accessor arg blocks, chained at compile time and ALWAYS declared --
     // never inside an `if constexpr`, or an absent operand would shift every
     // later block's offset.  The descriptor emits the NULL form for an absent one.
-    constexpr auto x_args = TensorAccessorArgs<29>();
+    constexpr auto x_args = TensorAccessorArgs<30>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto residual_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
@@ -706,11 +763,36 @@ void kernel_main() {
                 cb_reserve_back(cb_residual_tiles, pages);
                 rl1 = get_write_ptr(cb_residual_tiles);
             }
+            // D32: the ragged tail chunk's trailing WT_PAD tiles are OUTSIDE the row.
+            // Zero them (device zero API, on the pages just reserved) BEFORE issuing
+            // any read: the zero borrows the write command buffer and is released only
+            // by its own barrier, so it must not be interleaved with the real traffic.
+            // `w_lim` then stops the read loop at the real tiles.  Both fold away at
+            // WT_PAD == 0, which is every divisor build.
+            const uint32_t w_lim = (HAS_WPAD && c + 1 == NUM_W_CHUNKS) ? WT_REAL_TAIL : WT_CHUNK;
+            if constexpr (HAS_WPAD) {
+                if (w_lim != WT_CHUNK) {
+                    Noc noc;
+                    const uint32_t pad_bytes = (WT_CHUNK - w_lim) * x_tile_bytes;
+                    for (uint32_t g = 0; g < n; ++g) {
+                        const uint32_t off = (g * WT_CHUNK + w_lim) * x_tile_bytes;
+                        if constexpr (!NATIVE_X) {
+                            DataflowBuffer xdfb(cb_input_tiles);
+                            noc.async_write_zeros(xdfb, pad_bytes, {.offset_bytes = off});
+                        }
+                        if constexpr (HAS_R && !NATIVE_R) {
+                            DataflowBuffer rdfb(cb_residual_tiles);
+                            noc.async_write_zeros(rdfb, pad_bytes, {.offset_bytes = off});
+                        }
+                    }
+                    noc.write_zeros_l1_barrier();
+                }
+            }
             for (uint32_t g = 0; g < n; ++g) {
                 // + w_start: this core's width slice under a cross-core width split
                 // (0 on the whole-row schemes).
                 const uint32_t tile_base = (first_tile_row + r + g) * WT + w_start + c * WT_CHUNK;
-                for (uint32_t w = 0; w < WT_CHUNK; ++w) {
+                for (uint32_t w = 0; w < w_lim; ++w) {
                     if constexpr (!NATIVE_X) {
                         noc_async_read_tile(tile_base + w, xa, xl1);
                         xl1 += x_tile_bytes;
@@ -720,6 +802,10 @@ void kernel_main() {
                         rl1 += x_tile_bytes;
                     }
                 }
+                // Step over the (already zeroed) pad pages so the next tile-row starts
+                // at its own WT_CHUNK-aligned base.  Zero-width off the ragged path.
+                xl1 += (WT_CHUNK - w_lim) * x_tile_bytes;
+                rl1 += (WT_CHUNK - w_lim) * x_tile_bytes;
             }
             noc_async_read_barrier();
             if constexpr (!NATIVE_X) {
@@ -750,6 +836,23 @@ void kernel_main() {
                     stage_band(cb_residual_sticks, residual_addr, stick_start, sticks);
                 }
             } else {
+                // D32: the ragged tail stages raw at the PADDED stride (see
+                // `stage_ragged_tail_sticks`); every other chunk is the helper's.
+                if constexpr (HAS_WPAD) {
+                    if (c + 1 == NUM_W_CHUNKS) {
+                        stage_ragged_tail_sticks<cb_input_sticks, WT_CHUNK, CHUNK_ROW_BYTES, LAST_CHUNK_ROW_BYTES>(
+                            x_acc, sticks, stick_start, c * CHUNK_ROW_BYTES);
+                        if constexpr (HAS_R) {
+                            const auto r_acc = TensorAccessor(residual_args, residual_addr);
+                            stage_ragged_tail_sticks<
+                                cb_residual_sticks,
+                                WT_CHUNK,
+                                CHUNK_ROW_BYTES,
+                                LAST_CHUNK_ROW_BYTES>(r_acc, sticks, stick_start, c * CHUNK_ROW_BYTES);
+                        }
+                        return;
+                    }
+                }
                 const uint32_t row_bytes = (c + 1 == NUM_W_CHUNKS) ? LAST_CHUNK_ROW_BYTES : CHUNK_ROW_BYTES;
                 dataflow_kernel_lib::read_sticks_for_tilize<cb_input_sticks>(
                     x_acc, sticks, row_bytes, stick_start, /*byte_offset_within_page=*/c * CHUNK_ROW_BYTES);

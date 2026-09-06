@@ -714,6 +714,7 @@ is priced in l1_ledger.md's "Deviations" table with its measurement:
 
 from __future__ import annotations
 
+import os
 import struct
 from pathlib import Path
 from typing import NamedTuple
@@ -889,6 +890,15 @@ WIDTH_SPLIT_MAX_GROUP_CORES = 16
 # count adds the combine for nothing, so 2 keeps grid-filling shapes (prefill:
 # Rt >= num_cores) on the untouched Phase-0 path.
 WIDTH_SPLIT_MIN_GAIN = 4
+
+# Refinement 4 (D32) -- THE RAGGED (PADDED) WIDTH CHUNK.  1 = a chunked width may
+# take the coarsest BALANCED chunk and pad the last one out to it; 0 = D1's divisor
+# clamp, exactly as shipped through Refinement 3.  See `_width_chunk` for what the
+# knob decides and `WT_PAD` for what the kernels do with the pad tiles.  Taken only
+# where the divisor is strictly coarser-limited AND the width is tile-aligned
+# (PARTIAL_W == 0), so every shape whose Wt already had a coarse divisor -- which is
+# every INPUTS and every perf case -- builds a byte-identical program.
+RAGGED_WIDTH_CHUNK = 1
 
 # reduce() input policy knob: 1 = BulkWaitBulkPop (bulk wait/indexed/bulk pop),
 # 0 = WaitAndPopPerTile.  Bulk is the coarse default (op_design.md section 1.4).
@@ -1361,6 +1371,34 @@ def _largest_divisor_at_most(n: int, cap: int) -> int:
         if n % d == 0:
             return d
     return 1
+
+
+def _width_chunk(wt_core: int, cap: int, ragged_ok: bool) -> tuple[int, int]:
+    """(WT_CHUNK, NUM_W_CHUNKS) for `wt_core` width tiles under an L1 cap of `cap`
+    tiles per chunk.  ONE source of truth for the chunk-count decision (D32).
+
+    D1 constrained WT_CHUNK to a DIVISOR of wt_core, which is a GRANULARITY CLIFF at
+    a prime width: Wt = 127 has no divisor between 1 and 127, so a cap of 32 collapses
+    the chunk to ONE tile and repays every per-phase init / reconfig / pipeline
+    fill-and-drain 127 times per block.  The ragged split instead takes the coarsest
+    BALANCED chunk `ceil(wt_core / ceil(wt_core / cap))` and PADS the last chunk out to
+    it, so every chunk -- and therefore every CB ring, every helper block width and
+    every batched NoC group -- stays uniform.  127 at cap 32 becomes 4 chunks of 32
+    with ONE pad tile, i.e. 0.8% of wasted width against 32x fewer chunks.
+
+    The balanced form is what keeps the pad negligible: pad = n*wtc - wt_core < n, so
+    the wasted fraction is under 1/cap.  Returns the divisor whenever the divisor is
+    at least as coarse, so every shape that already had one is byte-identical.
+    """
+    cap = max(1, min(cap, wt_core))
+    div = _largest_divisor_at_most(wt_core, cap)
+    if not RAGGED_WIDTH_CHUNK or not ragged_ok or div >= cap:
+        return div, wt_core // div
+    n = _div_up(wt_core, cap)  # chunks the cap forces
+    wtc = _div_up(wt_core, n)  # balanced -> the smallest pad for that chunk count
+    if wtc <= div:
+        return div, wt_core // div
+    return wtc, n
 
 
 def _norm_cb_depth(has_gamma: bool, has_bias: bool, block_rows: int = 0) -> int:
@@ -2553,12 +2591,12 @@ def _zero_volume_descriptor(all_cores, compute_kernel_config):
     null_acc = list(ttnn.TensorAccessorArgs().get_compile_time_args())
 
     reader_ct = [1, 1, 1, 1, 1, 0, 0, 0, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0]
-    reader_ct += [0, 0, 0, 0, 0, 0, 0, 0]
+    reader_ct += [0, 0, 0, 0, 0, 0, 0, 0, 0]
     assert len(reader_ct) == READER_CT_SCALARS
     reader_ct += null_acc * 4
 
-    writer_ct = [1, 1, 1, 1, 1, 2, 0, 1, 0, 0, 0, 1, 0, 0, 0, GATHER_FACES, 0, 0]
-    assert len(writer_ct) == 18
+    writer_ct = [1, 1, 1, 1, 1, 2, 0, 1, 0, 0, 0, 1, 0, 0, 0, GATHER_FACES, 0, 0, 0]
+    assert len(writer_ct) == 19
     writer_ct += [0] * 6 + null_acc
 
     compute_ct = [1, 1, 1, 1, 0, 0, 0, _f32_bits(1.0), _f32_bits(0.0), REDUCE_BULK, 0, 1, 0, 1, 1, 1, 0, 0, 0]
@@ -2609,7 +2647,7 @@ def _zero_volume_descriptor(all_cores, compute_kernel_config):
 # The kernels read their accessor args at TensorAccessorArgs<N>(), so N must
 # equal the scalar count exactly.  Named here (and asserted at both emission
 # sites) so appending an arg fails in Python instead of mis-parsing on device.
-READER_CT_SCALARS = 29
+READER_CT_SCALARS = 30
 COMPUTE_CT_SCALARS = 26
 
 
@@ -2794,6 +2832,13 @@ def create_program_descriptor(
         must fall back to SCHEME_ROWS (which can chunk `width`).
         """
         wt_core = plan.wt_per_core
+        # D32's gate, in ONE place.  A ragged (padded) chunk needs the pad tiles to
+        # contribute exactly 0 to sum(t^2), which the reader arranges by zeroing them
+        # -- and that is only sound when the row's LAST REAL tile is fully valid.  With
+        # PARTIAL_W != 0 the reduce's partial scaler / 0-1 mask is aimed at the last
+        # tile of the block, which padding would make a pad tile rather than the real
+        # one, so a non-tile-aligned width keeps D1's divisor clamp.
+        ragged_ok = kernel_partial_w == 0
         avail = ttnn.get_max_worker_l1_unreserved_size()
         if plan.l1_reserved:
             avail -= plan.l1_reserved + L1_CB_ARENA_BASE_RESERVE
@@ -2937,15 +2982,22 @@ def create_program_descriptor(
         # the whole row of each per-channel operand resident, and chunk only the
         # DERIVED CBs, so pass B re-reads NOTHING.
         def _row_resident_chunk(depth_x, depth_out):
-            """Coarsest admissible WT_CHUNK for the L5 regime, or 0 if it cannot fit."""
+            """(WT_CHUNK, NUM_W_CHUNKS) for the L5 regime, or None if it cannot fit."""
+
             # A1: with a residual the HELD role moves from cb_input_tiles to
             # cb_x_sum -- which is depth 1 (compute-private) rather than depth_x --
             # while cb_input_tiles and cb_residual_tiles become chunked streams.
             # That is why the residual does not simply double the held term.
-            held = (1 if has_residual else depth_x) * wt_core * bt
-            held += _per_channel_bytes(wt_core, 0)
-            per_row_bytes, combine_fixed = _f32_terms(compact=False)
-            fixed = held + scaler_bytes + per_row_bytes + combine_fixed
+            #
+            # D32: the HELD CBs span the PADDED row (`NUM_W_CHUNKS * WT_CHUNK`), not
+            # the real one, so the fixed term is a function of the hold width and the
+            # ragged candidate is re-priced against it below.
+            def _fixed(hold_wt):
+                held = (1 if has_residual else depth_x) * hold_wt * bt
+                held += _per_channel_bytes(hold_wt, 0)
+                per_row_bytes, combine_fixed = _f32_terms(compact=False)
+                return held + scaler_bytes + per_row_bytes + combine_fixed
+
             # Per width tile of a CHUNK: cb_x_squared + cb_normalized(+in-place
             # depth) + cb_output_tiles, the two streamed activations when a
             # residual is present, the per-channel stick rings, and the ROW_MAJOR
@@ -2956,19 +3008,31 @@ def create_program_descriptor(
                 + _per_channel_bytes(0, 1)
                 + (rm_stage_rings * CB_RM_STAGE_DEPTH * bt if not is_tile else 0)
             )
-            room = (budget - fixed) // per_chunk_tile
+            room = (budget - _fixed(wt_core)) // per_chunk_tile
             if room < 1:
-                return 0
-            wtc = _largest_divisor_at_most(wt_core, min(room, wt_core - 1) if wt_core > 1 else 1)
-            return wtc if (wtc >= 1 and wt_core % wtc == 0 and wtc < wt_core) else 0
+                return None
+            cap = min(room, wt_core - 1) if wt_core > 1 else 1
+            wtc, n = _width_chunk(wt_core, cap, ragged_ok)
+            if wtc < 1 or wtc >= wt_core or n <= 1:
+                return None
+            pad = n * wtc - wt_core
+            if pad:
+                # The pad tiles are held too -- re-price and fall back to the divisor
+                # if the padded hold no longer fits.  Conservative by construction.
+                if wtc > (budget - _fixed(wt_core + pad)) // per_chunk_tile:
+                    wtc = _largest_divisor_at_most(wt_core, cap)
+                    if wtc < 1 or wtc >= wt_core:
+                        return None
+                    n = wt_core // wtc
+            return wtc, n
 
         stream_depth = depth_candidates[0]
         for depth in tuple(dict.fromkeys(depth_candidates + (1,))):
             if depth < stream_depth and max_rows < ROW_RESIDENT_MIN_ROWS_PER_CORE:
                 continue
-            wtc = _row_resident_chunk(depth, depth)
-            if wtc:
-                return 1, wtc, wt_core // wtc, depth, depth, True, CB_RM_STAGE_DEPTH, False
+            fit = _row_resident_chunk(depth, depth)
+            if fit:
+                return 1, fit[0], fit[1], depth, depth, True, CB_RM_STAGE_DEPTH, False
 
         # STREAM: not even ONE tile-row of the X-role CB fits -> chunk it and
         # re-read x (and the residual) in pass B.  An L1 fallback, not a
@@ -2981,8 +3045,11 @@ def create_program_descriptor(
         stream_per_row, stream_combine_fixed = _f32_terms(compact=False)
         fixed_stream = scaler_bytes + stream_per_row + stream_combine_fixed
         wt_chunk_l1_max = max(1, (budget - fixed_stream) // per_chunk_tile_bytes)
-        wtc = _largest_divisor_at_most(wt_core, wt_chunk_l1_max)  # D1
-        return 1, wtc, wt_core // wtc, depth, depth, False, CB_RM_STAGE_DEPTH, False
+        # D1's divisor clamp, or D32's balanced ragged chunk where it is coarser.
+        # STREAM holds nothing, so the pad costs no L1 at all here -- only the pad
+        # tiles' (zero-valued) compute.
+        wtc, n = _width_chunk(wt_core, wt_chunk_l1_max, ragged_ok)
+        return 1, wtc, n, depth, depth, False, CB_RM_STAGE_DEPTH, False
 
     solved = _solve_blocking(plan)
     if solved is None:
@@ -3034,9 +3101,31 @@ def create_program_descriptor(
     mcast_pre_handshake = _combine_mcast_pre_handshake(combine, single_round)
     combine_tree = _combine_tree_arity(plan.group_size, 1) if combine else None
     tree_f0, tree_f1 = combine_tree if combine_tree else (0, 0)
-    # Width tiles the HELD CBs span.  Equals wt_chunk in both Phase-0 regimes.
-    x_hold_wt = wt_per_core if x_resident else wt_chunk
-    assert x_hold_wt == wt_chunk * num_w_chunks if x_resident else x_hold_wt == wt_chunk
+    # D32: PAD tiles the chunking added past the core's real width.  ONE derivation,
+    # read by the CB sizes, by both dataflow kernels and by the asserts below; 0 on
+    # every divisor build, which is every INPUTS and every perf-group shape.
+    wt_pad = wt_chunk * num_w_chunks - wt_per_core
+    assert wt_pad >= 0, "rms_norm_ttnn: the width chunking cannot be NARROWER than the core's width"
+    assert wt_pad == 0 or (kernel_partial_w == 0 and block_rows == 1 and not combine), (
+        "rms_norm_ttnn: a ragged width chunk requires a tile-aligned width, one tile-row "
+        "per block and no cross-core width combine"
+    )
+    # Width tiles the HELD CBs span -- the PADDED row when the chunking is ragged,
+    # because chunk c indexes them at c * WT_CHUNK and the last chunk runs to the pad.
+    x_hold_wt = wt_chunk * num_w_chunks if x_resident else wt_chunk
+
+    # A one-line, env-gated dump of the blocking solve.  Not a knob and not read by
+    # anything -- it exists so a perf round can see WHICH regime and WHICH chunk a
+    # shape resolved to without re-deriving the solve by hand.
+    if os.environ.get("RMS_TRACE_BLOCKING"):
+        print(
+            f"RMS_BLOCKING scheme={plan.scheme} cores={len(assignment)} "
+            f"wt_per_core={wt_per_core} BLOCK_ROWS={block_rows} WT_CHUNK={wt_chunk} "
+            f"NUM_W_CHUNKS={num_w_chunks} X_RESIDENT={int(x_resident)} "
+            f"depth=({cb_x_depth},{cb_out_depth}) partial_w={kernel_partial_w} "
+            f"rows_max={max((a.row_count for a in assignment), default=0)}",
+            flush=True,
+        )
 
     # ---- pass A's square: fold into DEST, or pack to L1?  (Lamp L6d, D12) ---
     # With the fold on, `square` runs DestAccumulation::PerRow: the chunk's width
@@ -3242,6 +3331,10 @@ def create_program_descriptor(
         # Same staged tiles, 1/WT_CHUNK of the ring; taken only when the L1 solve
         # asks for it, so every build that already fit is byte-identical.
         1 if narrow_pc_stage else 0,
+        # 29 D32: PAD width tiles in the LAST chunk (0 on every divisor build).  The
+        # reader owns the pad's invariant -- those tiles are never read from the
+        # tensor and are zeroed in L1, so they contribute exactly 0 to sum(t^2).
+        wt_pad,
     ]
     assert (
         len(reader_ct_args) == READER_CT_SCALARS
@@ -3281,8 +3374,12 @@ def create_program_descriptor(
         _combine_gather_faces_ct(combine, compact_combine),
         tree_f0,  # 16/17 the SLOT TREE's arity (D28); 0 == keep the flat root
         tree_f1,
+        # 18 D32: PAD width tiles in the LAST chunk (0 on every divisor build).  The
+        # writer's TILE half already skipped them (`wt < WT`); the ROW_MAJOR half needs
+        # the count to write the tail chunk's real bytes at the PADDED stride.
+        wt_pad,
     ]
-    assert len(writer_ct_args) == 18, "rms_norm_ttnn_writer.cpp expects McastArgs<18, 12>()"
+    assert len(writer_ct_args) == 19, "rms_norm_ttnn_writer.cpp expects McastArgs<19, 12>()"
     assert (
         writer_ct_args[WRITER_CT_OUT_SHARD_ROW_BYTES] == plan.out_shard_row_bytes
     ), "WRITER_CT_OUT_SHARD_ROW_BYTES index drifted"
