@@ -7,7 +7,6 @@
 
 #include <cstdlib>
 #include <cstring>
-#include <functional>
 #include <numeric>
 #include <optional>
 #include <string>
@@ -17,13 +16,8 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include "tests/tt_metal/tt_metal/api/allocator/hybrid_allocator_fixture.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
-#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
@@ -31,6 +25,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -39,11 +34,39 @@ namespace tt::tt_metal {
 
 namespace per_core = experimental::per_core_allocation;
 
-// The fixture is shared with test_range_lockstep_allocation.cpp; the name is kept so the
-// existing test ids do not move.
-using PerCoreAllocationTest = HybridAllocatorTest;
+class PerCoreAllocationTest : public MeshDeviceSingleCardBufferFixture {
+protected:
+    void SetUp() override {
+        // Enable HYBRID allocator mode before device creation.
+        setenv("TT_METAL_ALLOCATOR_MODE_HYBRID", "1", /*overwrite=*/1);
 
-static constexpr DeviceAddr PAGE_SIZE = HYBRID_TEST_PAGE_SIZE;
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        std::vector<ChipId> ids;
+        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+            ids.push_back(id);
+        }
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
+        id_to_device_ = distributed::MeshDevice::create_unit_meshes(
+            ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config, {}, DEFAULT_WORKER_L1_SIZE);
+        devices_.clear();
+        for (const auto& [device_id, device] : id_to_device_) {
+            devices_.push_back(device);
+        }
+        init_max_cbs();
+    }
+
+    void TearDown() override {
+        MeshDeviceSingleCardBufferFixture::TearDown();
+        unsetenv("TT_METAL_ALLOCATOR_MODE_HYBRID");
+    }
+};
+
+// Use 1024-byte page size to be safely above all alignment requirements
+// (FreeListOpt internally uses DRAM alignment which may be larger than L1 alignment)
+static constexpr DeviceAddr PAGE_SIZE = 1024;
 
 TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
     auto* device = this->devices_[0]->get_devices()[0];
@@ -112,6 +135,42 @@ TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
     for (uint32_t i = 0; i < num_cores; i++) {
         auto pc_addr = per_core::get_per_core_address(*per_core_buf, cores[i]);
         EXPECT_NE(lockstep_addr, pc_addr) << "Lockstep address overlaps per-core address at core " << i;
+    }
+}
+
+TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "PrefetcherPipe is not supported on Quasar yet";
+    }
+    ASSERT_GE(this->devices_[0]->compute_with_storage_grid_size().x, 2);
+
+    auto* mesh_device = this->devices_[0].get();
+    const CoreCoord sender(0, 0);
+    const CoreCoord receiver(1, 0);
+    auto pipe = experimental::CreatePrefetcherPipe(
+        mesh_device, sender, CoreRangeSet(CoreRange(receiver)), /*ring_size=*/1024);
+
+    const CoreRangeSet pipe_cores = CoreRangeSet(CoreRange(sender, receiver));
+    ShardSpecBuffer shard_spec(pipe_cores, {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
+    auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
+    // Allocate through the MeshDevice allocator that owns the pipe's persistent L1.
+    auto buf = Buffer::create(mesh_device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, shard_args);
+
+    const DeviceAddr per_core_size = buf->aligned_size_per_bank();
+    const DeviceAddr ring_begin = pipe.buffer_address();
+    const DeviceAddr ring_end = ring_begin + pipe.ring_size();
+    const DeviceAddr config_begin = pipe.config_address();
+    const DeviceAddr config_end = config_begin + pipe.config_page_size();
+    auto overlaps = [](DeviceAddr addr, DeviceAddr size, DeviceAddr begin, DeviceAddr end) {
+        return addr < end && addr + size > begin;
+    };
+    for (const auto& core : corerange_to_cores(pipe_cores)) {
+        const DeviceAddr addr = per_core::get_per_core_address(*buf, core);
+        EXPECT_FALSE(overlaps(addr, per_core_size, ring_begin, ring_end))
+            << "per-core L1 overlaps PrefetcherPipe ring on " << core.str();
+        EXPECT_FALSE(overlaps(addr, per_core_size, config_begin, config_end))
+            << "per-core L1 overlaps PrefetcherPipe config on " << core.str();
     }
 }
 

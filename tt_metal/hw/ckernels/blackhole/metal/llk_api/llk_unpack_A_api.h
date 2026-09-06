@@ -6,6 +6,10 @@
 #include <cstdint>
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
+// llk_unpack_dummy(): debug-only SrcA flush on WH/BH (no WAIT/POP ordering role), defined in the debug
+// folder. Pulled in only so the shared compute-API dummy_unpack() resolves; on Quasar the same call is a
+// required TEN-4746 drain primitive defined inline in that arch's llk_unpack_A_api.h.
+#include "debug/llk_unpack_dummy.h"
 
 /*************************************************************************
  * LLK UNPACK A

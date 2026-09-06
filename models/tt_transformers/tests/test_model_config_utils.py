@@ -2,9 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import pytest
 
 from models.tt_transformers.tt.model_config import (
+    ModelArgs,
+    TensorGroup,
     compute_galaxy_padded_vocab_size,
     compute_galaxy_width_shard_cores,
     compute_padded_vocab_size,
@@ -135,3 +139,40 @@ def test_should_pad_sampling_logits_to_power_of_2(base_model_name, padded_vocab_
 def test_should_pad_sampling_logits_to_power_of_2_rejects_invalid_sampling_splits(expect_error):
     with expect_error(ValueError, "sampling_splits must be >= 1"):
         should_pad_sampling_logits_to_power_of_2("Llama-3.1-70B", 128256, 0)
+
+
+def _llama_model_args(device_name="P150"):
+    args = object.__new__(ModelArgs)
+    args.model_name = "Llama-3.1-8B-Instruct"
+    args.device_name = device_name
+    args.dram_grid_size = SimpleNamespace(x=8)
+    return args
+
+
+@pytest.mark.parametrize(
+    ("tensor_group", "n"),
+    [
+        (TensorGroup.WQKV, 6144),
+        (TensorGroup.WO, 4096),
+        (TensorGroup.FF2, 4096),
+        (TensorGroup.FF1_FF3, 14336),
+    ],
+)
+def test_llama31_8b_p150_uses_projection_specific_dram_reader_counts(tensor_group, n):
+    args = _llama_model_args()
+
+    assert args.get_dram_sharded_matmul_num_workers(tensor_group, n) == 2
+
+
+def test_llama31_8b_p150_uses_one_dram_reader_when_padded_shards_cannot_split_evenly():
+    args = _llama_model_args()
+
+    # PAD_MLP_CORES=9 pads the gate/up width to 14,400, or 57 tiles per P150 DRAM bank.
+    assert args.get_dram_sharded_matmul_num_workers(TensorGroup.FF1_FF3, 14400) == 1
+
+
+def test_llama31_8b_dram_reader_counts_remain_default_on_unvalidated_devices():
+    args = _llama_model_args(device_name="P300")
+
+    for tensor_group in (TensorGroup.WQKV, TensorGroup.WO, TensorGroup.FF1_FF3, TensorGroup.FF2):
+        assert args.get_dram_sharded_matmul_num_workers(tensor_group, 14336) == 1
