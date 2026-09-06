@@ -113,10 +113,13 @@ class ProgramConfig:
         """
         device_grid = mesh_device.compute_with_storage_grid_size()
         grid_8x8 = ttnn.CoreCoord(8, 8)
-        if batch_size % 32 == 0 or batch_size <= 8 or device_grid.x == grid_8x8.x:
-            sdpa_grid = grid_8x8
-        else:
-            sdpa_grid = ttnn.CoreCoord(device_grid.x, device_grid.y)
+        # RotarySetup's rule (see docstring): 8x8 for multiples of 32; the first row of any grid coincides with the
+        # 8x8 layout for <= 8 users; on an 8-wide device grid both layouts are the same anyway.
+        rope_uses_8x8 = batch_size % 32 == 0
+        fits_first_row = batch_size <= 8
+        device_is_8_wide = device_grid.x == grid_8x8.x
+        uses_8x8_grid = rope_uses_8x8 or fits_first_row or device_is_8_wide
+        sdpa_grid = grid_8x8 if uses_8x8_grid else ttnn.CoreCoord(device_grid.x, device_grid.y)
         user_cores = ttnn.num_cores_to_corerangeset(batch_size, sdpa_grid, row_wise=True)
         return user_cores, sdpa_grid
 

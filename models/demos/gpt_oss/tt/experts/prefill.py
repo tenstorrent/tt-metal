@@ -341,6 +341,8 @@ def _add_folded_down_bias(reduced, routing_tokens_all, token_offset, split_len, 
 
 
 _SORTED_MOE_DEBUG = os.getenv("GPT_OSS_SORTED_MOE_DEBUG", "0") == "1"
+# Last plan chosen by _sorted_moe_plan ({"split", "cap", "hot"}); read by tests to assert which path ran.
+LAST_SORTED_MOE_PLAN = {}
 _SORTED_MOE_MAX_HOT = 16  # more hot experts than this -> dense per-expert loop for the split
 # Cost model (ms per 1024-token split, P150, 120B shapes) used to pick the hot/cold threshold on the host:
 _SORTED_FIXED_MS, _SORTED_PER_KROW_MS, _HOT_FIXED_MS, _HOT_PER_EXPERT_MS = 2.5, 0.27, 1.0, 0.25
@@ -364,6 +366,10 @@ def _sorted_moe_plan(routing_tokens_all, token_offset, split_len, config):
     E = config.num_experts
     if E < _SORTED_MOE_MIN_EXPERTS:
         return None
+    # This does a device->host read of the per-expert counts, so it must never run under trace capture (a captured
+    # plan would be replayed for other prompts). It cannot: the sorted path is only taken for splits longer than
+    # _DENSE_BMM_MAX_TOKENS (256) and the only traced prefill length is 128 tokens.
+    assert split_len > _DENSE_BMM_MAX_TOKENS, "the sorted MoE path is for eager (untraced) long splits only"
     routing_tokens = ttnn.slice(routing_tokens_all, [0, 0, token_offset, 0], [1, 1, token_offset + split_len, E])
     routing_t = ttnn.transpose(routing_tokens, 2, 3)  # [1, 1, E, split]
     if split_len != routing_tokens_all.shape[2]:  # a full-range slice aliases its input
@@ -398,6 +404,7 @@ def _sorted_moe_plan(routing_tokens_all, token_offset, split_len, config):
         return None
     _, cap, n_hot = best
     hot_ids = [int(e) for e in torch.nonzero(counts_host > cap).reshape(-1).tolist()]
+    LAST_SORTED_MOE_PLAN.update(split=split_len, cap=cap, hot=n_hot)
     if _SORTED_MOE_DEBUG:
         top = counts_host.topk(min(4, E)).values.tolist()
         logger.info(

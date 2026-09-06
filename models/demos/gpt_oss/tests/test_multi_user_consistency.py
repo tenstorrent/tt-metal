@@ -237,6 +237,14 @@ def test_multi_user_isolation(mesh_device, device_params, batch_size, num_tokens
         filler_slots[1:],
     )
 
+    # Thresholds. Same-slot repeats of the same prompt on P150x8 (bf8 activations, non-deterministic CCL reduction
+    # order) measure mean logit PCC ~0.993-1.000 and top-1 agreement ~0.95-1.00 (20B is the noisier of the two
+    # models); the absolute floors sit a few points below that noise floor to catch gross mixing, and the
+    # baseline-relative bounds allow only that run-to-run noise on top of the same-slot baseline. A real
+    # cross-user leak collapses per-step PCC far below 0.7 (observed <0.3 with the 13-wide-grid placement bug).
+    MIN_MEAN_PCC, MAX_MEAN_PCC_DROP = 0.98, 0.01
+    MIN_STEP_PCC = 0.7
+    MIN_TOP1_AGREEMENT, MAX_TOP1_AGREEMENT_DROP = 0.85, 0.08
     problems = []
     for name, pcc, agree, pcc_ref, agree_ref in [
         ("rotated slots", pcc_rot, agree_rot, pcc_base, agree_base),
@@ -246,12 +254,12 @@ def test_multi_user_isolation(mesh_device, device_params, batch_size, num_tokens
         mean_pcc, ref_mean_pcc = pcc.mean().item(), pcc_ref.mean().item()
         rate, ref_rate = agree.float().mean().item(), agree_ref.float().mean().item()
         # Absolute floors (gross mixing) and baseline-relative bounds (noise-level differences only).
-        if mean_pcc < 0.98 or mean_pcc < ref_mean_pcc - 0.01:
+        if mean_pcc < MIN_MEAN_PCC or mean_pcc < ref_mean_pcc - MAX_MEAN_PCC_DROP:
             problems.append(f"{name}: mean logit PCC {mean_pcc:.4f} vs same-slot baseline {ref_mean_pcc:.4f}")
-        if pcc.min() < 0.7:
-            bad = (pcc < 0.7).nonzero().tolist()
+        if pcc.min() < MIN_STEP_PCC:
+            bad = (pcc < MIN_STEP_PCC).nonzero().tolist()
             problems.append(f"{name}: logit PCC collapsed at (prompt, step) {bad[:10]} (min {pcc.min():.3f})")
-        if rate < 0.85 or rate < ref_rate - 0.08:
+        if rate < MIN_TOP1_AGREEMENT or rate < ref_rate - MAX_TOP1_AGREEMENT_DROP:
             problems.append(f"{name}: top-1 agreement {rate:.3f} vs same-slot baseline {ref_rate:.3f}")
     assert not problems, "Cross-user contamination detected:\n" + "\n".join(problems)
     logger.info(f"All {batch_size} users are slot-independent over {num_tokens} teacher-forced steps")

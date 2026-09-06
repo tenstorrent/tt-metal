@@ -32,6 +32,12 @@ def decode_forward(
     users == 1 (hidden_states [1, 1, 1, hidden]) runs the original single-token path;
     1 < users <= 32 (hidden_states [1, 1, users, hidden]) runs _decode_forward_batched.
 
+    The two paths share the fused gate/up -> SwiGLU -> down -> bias-fold sequence but are kept separate on
+    purpose: the batched path additionally builds the union-of-experts mask, multiplies every (user, expert)
+    output by its routing weight and reduces over experts (fast_reduce_nc), all of which the single-user path
+    can skip (its selected experts are exactly the active ones and its down output is already the answer).
+    Unifying them would cost the batch-1 case those extra passes.
+
     Args:
         hidden_states: Input tensor [1, 1, users, hidden_size]
         routing_weights: Dense router output [users, num_experts] (0 for unselected experts)

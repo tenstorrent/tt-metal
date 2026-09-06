@@ -41,7 +41,7 @@ def apply_swiglu(gate, up, config: ExpertConfig):
 
 def apply_swiglu_fused(gate, up, config: ExpertConfig):
     """Same math as apply_swiglu in ONE binary op (consumes nothing; returns a new tensor):
-    out = clamp(up, -L, L) + 1) * silu(alpha * clamp(gate, max=L)) / alpha, using binary_ng's per-input unary
+    out = (clamp(up, -L, L) + 1) * silu(alpha * clamp(gate, max=L)) / alpha, using binary_ng's per-input unary
     activation chains. Measured 2.3 -> 0.8 ms per 1024-token split on P150 (120B) with equal accuracy."""
     limit, alpha = float(config.swiglu_limit), float(config.alpha)
     U = ttnn.UnaryOpType

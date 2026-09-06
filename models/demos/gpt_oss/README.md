@@ -1,6 +1,6 @@
 # GPT-OSS: Mixture of Experts Language Model
 
-Inference implementation for GPT-OSS models on Tenstorrent Wormhole accelerators.
+Inference implementation for GPT-OSS models on Tenstorrent Wormhole and Blackhole accelerators.
 
 **Model Source**: [GPT-OSS on HuggingFace](https://huggingface.co/gpt-oss) (custom MoE architecture)
 

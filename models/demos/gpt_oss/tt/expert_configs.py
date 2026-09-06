@@ -45,6 +45,9 @@ def gpt_oss_program_config(mesh_device) -> GPTOSSProgramConfig:
     output tile per core on a 9x10 grid: measured 385 -> 289 us per layer at batch 32 with all 128
     experts active on P150x8. Single-user decode keeps 5x6 (the 128-slot sparsity scan is cheaper
     with fewer multicast receivers: 120 vs 174 us per layer), as does Wormhole's 8x8 grid.
+    9x10 is an exactly-filled 90-core rectangle inside the 13x10 grid (the sparse-matmul factory requires
+    the cores with work to fill the multicast rectangle exactly); 10x9 would qualify as well, 9x10 uses
+    the full height of the grid.
     """
     grid = mesh_device.compute_with_storage_grid_size()
     if grid.x >= 9 and grid.y >= 10:
