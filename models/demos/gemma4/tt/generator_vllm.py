@@ -2043,6 +2043,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         self._spec_decoder = dec
         self._spec_active = True
         self._spec_first_step = True
+        self._spec_last_pt = None
         # verify masks/tables were sized for this horizon; past it the packed
         # verify would attend past its capture -- end the request cleanly then.
         self._spec_budget_end = int(start) + self._spec_horizon - self._SPEC_N - 1
@@ -2127,8 +2128,25 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             out = torch.full((1, self._SPEC_N), -1, dtype=torch.int32)
             out[0, 0] = int(eos)
             return out
+        # Refresh the verify page tables from vLLM's CURRENT per-request block
+        # table when it CHANGES (the KV manager allocates a new block only every
+        # ~block_size tokens, so this is rare). Refreshing every step is pure
+        # host overhead -- copying the tables to device dominates the iteration.
+        cur_pt = kwargs.get("page_table")
+        if cur_pt is not None:
+            row = cur_pt[:1] if cur_pt.dim() > 1 else cur_pt
+            prev = getattr(self, "_spec_last_pt", None)
+            if prev is None or not torch.equal(prev, row):
+                dec.refresh_page_tables(row)
+                self._spec_last_pt = row.clone()
+        import time as _t
+
+        _s0 = _t.perf_counter()
         accepted, bonus, produced = dec.step(first=self._spec_first_step)
         self._spec_first_step = False
+        self._spec_iters = getattr(self, "_spec_iters", 0) + 1
+        self._spec_tokens = getattr(self, "_spec_tokens", 0) + produced
+        self._spec_steptime = getattr(self, "_spec_steptime", 0.0) + (_t.perf_counter() - _s0)
         row = list(accepted) + [bonus]
         # defensive: never let an out-of-vocab id reach the token buffer
         row = [t if 0 <= t < dec.drafter.vocab else int(bonus if 0 <= bonus < dec.drafter.vocab else 1) for t in row]
@@ -2144,6 +2162,18 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
     # -- plugin lifecycle hooks (block-output contract) -----------------------
     def release_request(self, row: int) -> None:
         """Request finished: tear down its spec session (B=1 -> row ignored)."""
+        it = getattr(self, "_spec_iters", 0)
+        if it:
+            tk = self._spec_tokens
+            st = self._spec_steptime
+            logger.info(
+                f"Gemma4DFlash decode summary: {it} iters, {tk} tokens, "
+                f"{tk/max(1,it):.2f} tokens/iter, {st/max(1,it)*1000:.0f} ms/iter (device+host in decode_forward), "
+                f"{tk/max(1e-9,st):.1f} tok/s (decode_forward-only)"
+            )
+        self._spec_iters = 0
+        self._spec_tokens = 0
+        self._spec_steptime = 0.0
         self._spec_pending = None
         self._spec_release_decoder()
 

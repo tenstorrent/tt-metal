@@ -1566,6 +1566,41 @@ class DFlashFusedDecoder:
         src = ttnn.get_device_tensors(t)[0] if self._tp > 1 else t
         return ttnn.to_torch(src).reshape(-1).to(torch.int64).tolist()
 
+    def refresh_page_tables(self, page_table_torch):
+        """Copy the CURRENT per-request block table into the persistent verify
+        page-table buffers so the captured trace reads whatever physical blocks
+        the KV manager has (lazily) allocated for this request.
+
+        The harness pre-allocates a full contiguous table, so it never needs
+        this; a vLLM server allocates blocks on demand and hands a different,
+        possibly non-contiguous table each step. Without the refresh the trace
+        reads the block IDs frozen at capture (only the prompt's block), so
+        every position past the first block reads the stale null block.
+        Widths are fixed (set at capture), so this is an in-place copy.
+        """
+        flat = (page_table_torch[0] if page_table_torch.dim() > 1 else page_table_torch).to(torch.int64)
+        self.page_table_torch = page_table_torch
+        w = int(self.v_pt.shape[-1])
+        pad = w - int(flat.numel())
+        frow = flat if pad <= 0 else torch.cat([flat, torch.zeros(pad, dtype=flat.dtype)])
+        pt = frow[:w].to(torch.int32).reshape(1, w).repeat(self.K + 1, 1)
+        h = ttnn.from_torch(pt, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper)
+        ttnn.copy_host_to_device_tensor(h, self.v_pt)
+        h.deallocate(True)
+        if getattr(self, "pv_tables", None):
+            seen = set()
+            for buf in self.pv_tables:
+                if buf is None or id(buf) in seen:
+                    continue
+                seen.add(id(buf))
+                pw = int(buf.shape[-1])
+                p2 = pw - int(flat.numel())
+                r = flat if p2 <= 0 else torch.cat([flat, torch.zeros(p2, dtype=flat.dtype)])
+                row = r[:pw].to(torch.int32).reshape(1, pw)
+                h = ttnn.from_torch(row, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper)
+                ttnn.copy_host_to_device_tensor(h, buf)
+                h.deallocate(True)
+
     def step(self, first=False):
         """One iteration: (replay unless first) -> acceptance -> commit -> host updates.
 
