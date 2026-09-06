@@ -174,6 +174,40 @@ bool is_local = tensor_accessor.is_local_shard(shard_id);
 
 Note: In case containers size is compile-time, then shapes, strides, coords are `std::array<uint32_t, rank/num_banks>`, otherwise `Span<uint32_t>`
 
+### Contiguous pages
+
+`num_contiguous_pages` reports how many pages, starting at a given page, form one unbroken stretch of memory. Use it to replace a run of per-page transfers with a single large one.
+
+```c++
+// Sharded: end_page_id defaults to the tensor volume
+uint32_t pages = tensor_accessor.num_contiguous_pages(page_id);
+// Interleaved: end_page_id is required, the accessor carries no shape
+uint32_t pages = tensor_accessor.num_contiguous_pages(page_id, total_pages);
+
+// Those are the page ids { page_id + k * contiguous_page_stride() } for k in [0, pages),
+// living at { get_noc_addr(page_id) + k * aligned_page_size }.
+noc_async_read(tensor_accessor.get_noc_addr(page_id), l1_write_addr, pages * aligned_page_size);
+```
+
+`contiguous_page_stride()` is the page-id step between those pages. It is a property of the accessor, not of the page, so a caller reads it once. It is `1` for most sharded tensors, `tensor_shape[-1]` for a one-page-wide shard (what row-major width- and block-sharded tensors land on), and `num_banks` for interleaved tensors, where pages are round-robined across banks so what is contiguous within one bank is every `num_banks`'th page. When the stride is greater than 1 the pages arrive in stride order rather than tensor order, and the consumer has to account for that.
+
+Two things to get right when sizing the transfer:
+
+- Pages are `aligned_page_size` apart, not `page_size` apart. The two differ whenever a tensor's page size is not a multiple of the allocator alignment, and a bulk transfer then carries the padding between pages along with the data. That is exactly right when the destination has the same layout, but a consumer that expects tightly packed pages in L1 has to account for it. Padding never shortens a run — the count is the same whether or not the page size is aligned — so a caller that needs tightly packed pages has to fall back to per-page transfers.
+- Cap `end_page_id` by what the destination can actually hold, not just by your logical range. A single shard can be far larger than a CB, and `noc_async_read` will happily issue the whole thing.
+
+For sharded tensors the run is the longest one that stays inside one shard, walking the innermost dimension the shard actually spans. It extends past that dimension when the shard covers it exactly, so a shard whose shape matches the tensor in every dimension but the first yields runs a whole shard long. Padding in edge shards and shard boundaries both cut a run short. One case is deliberately conservative: when shards sit next to each other in a bank (shard-contiguous placement, or a single bank), a run could carry on past the shard edge, but it stops at the edge.
+
+A run is always the longest one a constant page-id step can describe, which is not always the longest one in memory. You get the whole shard exactly when the shard is one-dimensional in page terms: every dimension but one is a single page, or the shard matches the tensor exactly in every dimension inside the outermost one it splits. Otherwise the shard is a multi-dimensional block — the rest of it is still contiguous in memory, but its page ids are not an arithmetic sequence, so no stride can reach them. Use [`shard_pages()`](./tensor_accessor_iterator.md) to walk a whole shard in memory order in that case. Between the two, every layout is covered:
+
+| Layout | `num_contiguous_pages` | Use `shard_pages()` instead |
+| --- | --- | --- |
+| Interleaved | whole bank run | n/a |
+| Height sharded (tile and row-major) | whole shard | no |
+| Row-major width / block sharded | whole shard, stride `tensor_shape[-1]` | no |
+| Row-major ND sharded | whole shard if only one shard dimension exceeds a page, else that dimension's extent | only if more than one does |
+| Tile block sharded | one shard row | yes, for the whole shard |
+
 ## Tensor Accessor iterators
 You can use TensorAccessor iterators to speed up and/or simplify iteration over pages in a tensor.
 [Tensor Accessor iterators documentation.](./tensor_accessor_iterator.md)
