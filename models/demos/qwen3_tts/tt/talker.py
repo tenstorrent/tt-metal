@@ -10,6 +10,7 @@ and generates hidden states for the CodePredictor.
 Supports both prefill mode (full sequence) and decode mode (single token with KV cache).
 """
 
+import os
 from typing import List, Optional, Tuple
 
 import torch
@@ -97,9 +98,10 @@ class Talker(LightweightModule):
             self.text_embedding = None
             self.text_vocab_size = 0
 
-        # Decoder layers — matmul (QKV/o_proj/MLP) weights at bfloat16.
-        # RMSNorm weights stay bfloat16 (small, dynamic-range-sensitive).
-        _matmul_dtype = ttnn.bfloat16
+        # Decoder layers — matmul (QKV/o_proj/MLP) weights. QWEN3_TTS_BF8_WEIGHTS=1
+        # stores them as bfloat8_b; see the note in code_predictor.py. RMSNorm weights
+        # stay bfloat16 (small, dynamic-range-sensitive).
+        _matmul_dtype = ttnn.bfloat8_b if os.environ.get("QWEN3_TTS_BF8_WEIGHTS", "0") == "1" else ttnn.bfloat16
         self.layers = []
         for i in range(self.num_layers):
             layer = DecoderLayer(
