@@ -1220,7 +1220,7 @@ FORCE_INLINE void assert_walker_matches(
 // Issues one page read. flags says which of the address registers this read still has to program.
 //
 // noc_read_with_state counts one read per call, which on tt-1xx is exactly the one response a burst draws. Quasar's
-// overlay instead packetizes a page longer than NOC_V2_MAX_BYTES_IN_PACKET and answers each packet separately, so
+// overlay instead packetizes a page longer than NOC_OVERLAY_MAX_BYTES_IN_PACKET and answers each packet separately, so
 // there the count runs low, where noc_async_read would have counted per packet. Nothing depends on the difference:
 // v2 answers ncrisc_noc_reads_flushed() from the hardware's outstanding-transaction count, so the barrier waits on
 // the responses themselves rather than on noc_reads_num_issued.
