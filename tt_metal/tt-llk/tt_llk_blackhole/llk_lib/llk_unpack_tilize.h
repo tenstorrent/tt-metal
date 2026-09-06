@@ -356,13 +356,15 @@ inline void _llk_unpack_tilize_(
 /**
  * @brief Restore unpacker state after a tilize operation.
  *
- * Reverts the tile descriptor Z-dimension to default and rewrites the unpack config (clearing
- * tilize mode) so subsequent ops see a normal tile layout. x-start/x-end is transient and
- * reprogrammed by the next operation's init (see tt-llk#1036), so it is not restored here.
+ * Re-establishes the tile-descriptor X/Z dimensions that tilize init wrote (to the canonical
+ * per-operand baseline, not to a snapshot) and rewrites the unpack config (clearing tilize mode)
+ * so subsequent ops see a normal tile layout. The descriptor Y-dim is not tilize's to touch and is
+ * left alone. x-start/x-end is transient and reprogrammed by the next operation's init (see
+ * tt-llk#1036), so it is not restored here.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
- * @param tensor_shape: Tile geometry; total_num_faces() restores the Z dimension (valid values
- *                      = <1, 2, 4>) and face_r_dim restores the canonical Tile_x_dim.
+ * @param tensor_shape: Tile geometry; total_num_faces() re-establishes the descriptor Z dimension
+ *                      (valid values = <1, 2, 4>) and face_r_dim restores the canonical Tile_x_dim.
  * @note Call @ref _llk_unpack_tilize_init_ before this function.
  */
 inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
@@ -373,11 +375,19 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    // Restore tile-descriptor Z and X dim to the canonical baseline programmed by
-    // configure_unpack_AB. Z-dim equals the operand's num_faces; X-dim is 0 because the
-    // per-context override in Tile_x_dim_cntx0 (set below) is what the unpacker actually
-    // consumes for srcA. The non-8-bit init path mutates X-dim (to face_r_dim*num_faces*FACE_C_DIM)
-    // so it must be reverted here too to keep the operand operation-restorable.
+    // Re-establish the tile-descriptor Z and X dim to the canonical per-operand baseline
+    // configure_unpack_AB programs: Z-dim = this operand's num_faces and X-dim = 0 (the per-context
+    // Tile_x_dim_cntx0 set below is what the unpacker actually consumes for srcA).
+    //
+    // Unlike Wormhole, Blackhole tilize does write this word in init, so uninit must re-establish it
+    // (cf. tt-llk#1161):
+    //   - both paths: init unconditionally sets Z-dim = num_faces (see _llk_unpack_tilize_init_);
+    //   - non-8-bit path additionally sets X-dim = face_r_dim*num_faces*FACE_C_DIM and Z-dim = 1
+    //     for the whole-tile unpack workaround, destroying the baseline.
+    // Note this re-establishes the canonical baseline, it does not restore a snapshot: init never
+    // reads the word back, and num_faces comes from the caller's tensor_shape, not from the value
+    // present on entry. A following op whose operand has a different num_faces still needs its own
+    // configure_unpack_AB / reconfig_full_operand — uninit only guarantees this operand's baseline.
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 16, TILE_DESC_UPPER_HALFWORD_MASK>(CANONICAL_UNPA_TILE_X_DIM);
 

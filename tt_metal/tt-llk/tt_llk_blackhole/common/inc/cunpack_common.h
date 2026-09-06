@@ -258,12 +258,15 @@ inline constexpr std::uint32_t canonical_unpA_z_stride(const std::uint32_t unpac
 }
 
 // Canonical srcA tile-descriptor baseline programmed by configure_unpack_AB.
-// Per-op uninits restore the tile descriptor to this state.
 //
 // Y-dim (lower 16 bits of TileDescriptor word 1): always 1.
 // X-dim (upper 16 bits of TileDescriptor word 0): 0 for srcA because Tile_x_dim_cntx0 overrides it.
 // Z-dim (upper 16 bits of TileDescriptor word 1): equals the operand's num_faces (used directly at call sites).
-constexpr std::uint32_t CANONICAL_UNPA_TILE_Y_DIM = 1;
+//
+// An op's uninit re-establishes this baseline only for the descriptor fields its own init wrote:
+// Blackhole tilize init writes X/Z-dim, so its uninit re-establishes them; Wormhole tilize never
+// touches the descriptor, so its uninit leaves the word alone (tt-llk#1161). Y-dim has no
+// re-establishing writer outside configure_unpack_AB, which is why no constant is exported for it.
 constexpr std::uint32_t CANONICAL_UNPA_TILE_X_DIM = 0;
 
 // Mask for the upper halfword of a TileDescriptor config word, where the X/Y/Z dim fields live.
