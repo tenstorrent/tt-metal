@@ -238,16 +238,22 @@ Tensor clamp(
             output_memory_config);
     }
     Tensor a_max = ttnn::minimum(input_a, max.value(), std::nullopt, output_memory_config);
-    Tensor temp = ttnn::where(
-        ttnn::eq(min.value(), 0.0f, std::nullopt, output_memory_config),
-        ttnn::relu(a_max, output_memory_config),
-        ttnn::maximum(a_max, min.value(), std::nullopt, output_memory_config),
-        output_memory_config);
-    return ttnn::where(
+    // relu(a_max) is maximum(a_max, 0) for every operand but one: a NaN with the
+    // sign bit set. min and max are a single SFPSWAP, which orders by bit
+    // pattern, so that NaN sorts below every finite number and maximum drops it
+    // where relu keeps it. The where was carrying NaN through for the negative
+    // half of the NaN patterns, and only where min was 0.
+    //
+    // Neither arm is what torch.clamp does, which is to return NaN for a NaN
+    // input whatever the bounds are, so the choice between them is replaced by
+    // one guard that covers every NaN input and every pair of bounds.
+    Tensor temp = ttnn::maximum(a_max, min.value(), std::nullopt, output_memory_config);
+    temp = ttnn::where(
         ttnn::gt(min.value(), max.value(), std::nullopt, output_memory_config),
         max.value(),
         temp,
         output_memory_config);
+    return ttnn::where(ttnn::isnan(input_a, output_memory_config), std::nanf(""), temp, output_memory_config);
 }
 
 // Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
