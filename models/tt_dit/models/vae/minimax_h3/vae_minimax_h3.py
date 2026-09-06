@@ -103,13 +103,16 @@ class MiniMaxH3VaeConfig:
 _DECODE_TORCH_THREADS = 8
 
 # Host post-processing of the decode (upcast, unpatchify, stitch) on a worker thread, overlapped with
-# the main thread's wave enqueue and readback -- see `_decode_units_async_stitch`. Opt-in until it is
-# measured against the serial schedule on the same host.
+# the main thread's wave enqueue and readback -- see `_decode_units_async_stitch`. On by default;
+# `=0` restores the serial schedule.
 _ASYNC_STITCH_ENV = "MINIMAX_H3_VAE_ASYNC_STITCH"
 # With the async stitch: untilize each wave on device and read it back as per-device shards
 # (`fast_device_to_host_shards`) instead of one host-untilized, concatenated tensor -- the CPU untilize
 # and the wave-sized memcpy were the bulk of "readback", and the per-tile unpatchify undid the concat
-# anyway. Opt-in for the same reason; single-host only.
+# anyway. On by default on a single host (`=0` to disable); the multi-host readback keeps the gathering
+# path. Measured 2026-09-06 on a 4x8 against the untouched branch, bit-identical frames and audio:
+# VAE decode 4.54 -> 3.18 s at 768P/5 s and 11.45 -> 7.92 s at 15 s (the worker alone was a wash --
+# it only pays once the readback stops being CPU work).
 _SHARD_READBACK_ENV = "MINIMAX_H3_VAE_SHARD_READBACK"
 
 
@@ -373,9 +376,9 @@ class MiniMaxH3Vae:
         # bigger matmuls and fewer waves; 1 is the original one-tile-per-device schedule.
         assert waves_per_device >= 1, f"waves_per_device must be >= 1, got {waves_per_device}"
         self.waves_per_device = waves_per_device
-        self.async_stitch = os.environ.get(_ASYNC_STITCH_ENV, "0") == "1"
+        self.async_stitch = os.environ.get(_ASYNC_STITCH_ENV, "1") == "1"
         self.shard_readback = (
-            self.async_stitch and os.environ.get(_SHARD_READBACK_ENV, "0") == "1" and not ttnn.using_distributed_env()
+            self.async_stitch and os.environ.get(_SHARD_READBACK_ENV, "1") == "1" and not ttnn.using_distributed_env()
         )
         # Pipeline warmup turns this off so the compile-pass decode does not dump a profile.
         self.log_profile = True
