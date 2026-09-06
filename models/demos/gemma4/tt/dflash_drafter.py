@@ -1601,6 +1601,66 @@ class DFlashFusedDecoder:
                 ttnn.copy_host_to_device_tensor(h, buf)
                 h.deallocate(True)
 
+    def step_submit(self, first=False):
+        """Async submit half of one iteration: upload this step's inputs and
+        launch the fused trace NON-BLOCKING. Returns the persistent device
+        output tensor (draft+posterior ids) that ``step_accept`` reads once the
+        device is done. Splitting submit from accept lets the server overlap
+        the vLLM engine loop with the device forward.
+        """
+        if not first:
+            self._upload_iter_inputs(self.anchor, self.start)
+            ttnn.execute_trace(self.mesh_device, self.trace, cq_id=0, blocking=False)
+        return self._out[0]
+
+    def step_accept(self, ids=None):
+        """Accept half: read the draft+posterior ids (blocks only until the
+        already-launched device forward completes), run greedy acceptance,
+        commit taps on device, advance state. ``ids`` may be a preread host
+        list; otherwise it is read here. Returns (accepted, bonus, produced).
+        """
+        if ids is None:
+            ids = self._read_ids(self._out[0])
+        drafts = ids[: self.V]
+        posterior = ids[self.K : self.K + self.P_v]
+        if _os.environ.get("GEMMA4_DFLASH_DEBUG_STEP") == "1":
+            print(f"[dbg] start={self.start} drafts={drafts} posterior={posterior}", flush=True)
+        acc = 0
+        for dtok, ptok in zip(drafts, posterior[:-1]):
+            if dtok == ptok:
+                acc += 1
+            else:
+                break
+        bonus = posterior[acc]
+        produced = acc + 1
+        win_len = self.ctx_len - self.win_first
+        idx = torch.arange(self.cap, dtype=torch.int64)
+        if win_len + produced <= self.cap:
+            m = idx.clone()
+            m[win_len : win_len + produced] = self.cap + torch.arange(produced)
+        else:
+            shift = win_len + produced - self.cap
+            keep_n = self.cap - produced
+            m = torch.empty(self.cap, dtype=torch.int64)
+            m[:keep_n] = idx[:keep_n] + shift
+            m[keep_n:] = self.cap + torch.arange(produced)
+            self.win_first += shift
+        h = ttnn.from_torch(
+            m.reshape(1, self.cap), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper
+        )
+        ttnn.copy_host_to_device_tensor(h, self.merge_idx)
+        h.deallocate(True)
+        if self.ctx_cache:
+            cp = torch.arange(self.start, self.start + self.P_v, dtype=torch.int64).reshape(1, self.P_v)
+            h = ttnn.from_torch(cp, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper)
+            ttnn.copy_host_to_device_tensor(h, self.commit_pos)
+            h.deallocate(True)
+        self.ctx_len = self.start + produced
+        accepted = drafts[:acc]
+        self.anchor = bonus
+        self.start = self.start + produced
+        return accepted, bonus, produced
+
     def step(self, first=False):
         """One iteration: (replay unless first) -> acceptance -> commit -> host updates.
 

@@ -1917,7 +1917,12 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
 
     model_capabilities = {
         **Gemma4ForCausalLM.model_capabilities,
-        "supports_async_decode": False,  # host acceptance loop each step
+        # Async-capable: dFlash owns its decode state (advisory-input contract),
+        # so vLLM can reschedule the next step ahead with a placeholder token
+        # and dec.step still advances correctly -- the async data dependency is
+        # sidestepped. Overlap hides the ~80ms/iter vLLM engine loop behind the
+        # device forward. GEMMA4_SPEC_ASYNC=0 forces the sync path.
+        "supports_async_decode": os.environ.get("GEMMA4_SPEC_ASYNC", "0") != "0",
         "supports_sample_on_device": True,  # decode returns TOKENS (host)
         "output_tokens_per_step": _SPEC_N,
         "tt_spec_variable_output": True,
@@ -2113,11 +2118,60 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
                 f"Gemma4DFlash: runner anchor {anchor_from_runner} != session anchor "
                 f"{dec.anchor}; trusting the session (advisory-input contract)"
             )
-        if dec.start >= self._spec_budget_end:
-            # Horizon exhausted: emit EOS so vLLM finishes the request instead
-            # of the verify reading past its captured masks (DG's one-request-
-            # costs-one-request contract). Raise GEMMA4_DFLASH_SERVE_HORIZON
-            # for longer generations.
+        # Refresh the verify page tables from vLLM's CURRENT per-request block
+        # table when it CHANGES (the KV manager allocates a new block only every
+        # ~block_size tokens, so this is rare).
+        cur_pt = kwargs.get("page_table")
+        if cur_pt is not None:
+            row = cur_pt[:1] if cur_pt.dim() > 1 else cur_pt
+            prev = getattr(self, "_spec_last_pt", None)
+            if prev is None or not torch.equal(prev, row):
+                dec.refresh_page_tables(row)
+                self._spec_last_pt = row.clone()
+        # SUBMIT ONLY: launch the fused trace non-blocking and return the device
+        # output. The readback + acceptance are deferred to process_decode_output_
+        # host + accept_spec_decode_output, which the runner calls at OUTPUT time
+        # -- after the vLLM engine loop, so async scheduling overlaps that loop
+        # with this device forward.
+        self._spec_exhausted = dec.start >= self._spec_budget_end
+        if not self._spec_exhausted:
+            dec.step_submit(first=self._spec_first_step)
+        self._spec_first_step = False
+        return dec._out[0]
+
+    def process_decode_output_host(self, tt_out, is_tokens=True, *_, **__):
+        # Read the (tiny) draft+posterior id block to host. Runs at output
+        # resolution, by which point the deferred device forward has finished,
+        # so this blocks only briefly. Returns a host [1, K+P_v] int tensor.
+        dec = self._spec_decoder
+        if dec is None or isinstance(tt_out, torch.Tensor):
+            # Session was torn down before this deferred step resolved (async
+            # release race), or the output is already host: pass through.
+            return tt_out if isinstance(tt_out, torch.Tensor) else torch.zeros(1, 1, dtype=torch.int32)
+        src = ttnn.get_device_tensors(tt_out)[0] if dec.drafter.tp > 1 else tt_out
+        return ttnn.to_torch(src).reshape(1, -1).to(torch.int32)
+
+    def read_decode_output(self, tt_out, async_read=False, *_, **__):
+        # The device output is read at output-resolution time (deferred), so
+        # there is nothing to read here; return no events so the controller
+        # overlaps the engine loop with the device forward.
+        return (tt_out, []) if async_read else tt_out
+
+    def accept_spec_decode_output(self, host_out):
+        """Runner hook (spec-variable): turn the read-back draft+posterior ids
+        into this step's committed token block [1, N] (accepted prefix + bonus,
+        padded to N with -1). Runs the greedy acceptance and advances the
+        fused decoder's state."""
+        dec = self._spec_decoder
+        if dec is None:
+            # Deferred step resolved after the session was released; the request
+            # is already finished, so emit a benign EOS block.
+            eos = getattr(self.model[0].hf_config, "eos_token_id", 1)
+            eos = eos[0] if isinstance(eos, (list, tuple)) else eos
+            out = torch.full((1, self._SPEC_N), -1, dtype=torch.int32)
+            out[0, 0] = int(eos)
+            return out
+        if self._spec_exhausted:
             eos = getattr(self.model[0].hf_config, "eos_token_id", 1)
             if isinstance(eos, (list, tuple)):
                 eos = eos[0]
@@ -2128,52 +2182,25 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             out = torch.full((1, self._SPEC_N), -1, dtype=torch.int32)
             out[0, 0] = int(eos)
             return out
-        # Refresh the verify page tables from vLLM's CURRENT per-request block
-        # table when it CHANGES (the KV manager allocates a new block only every
-        # ~block_size tokens, so this is rare). Refreshing every step is pure
-        # host overhead -- copying the tables to device dominates the iteration.
-        cur_pt = kwargs.get("page_table")
-        if cur_pt is not None:
-            row = cur_pt[:1] if cur_pt.dim() > 1 else cur_pt
-            prev = getattr(self, "_spec_last_pt", None)
-            if prev is None or not torch.equal(prev, row):
-                dec.refresh_page_tables(row)
-                self._spec_last_pt = row.clone()
-        import time as _t
-
-        _s0 = _t.perf_counter()
-        accepted, bonus, produced = dec.step(first=self._spec_first_step)
-        self._spec_first_step = False
+        ids = host_out.reshape(-1).tolist()
+        accepted, bonus, produced = dec.step_accept(ids)
         self._spec_iters = getattr(self, "_spec_iters", 0) + 1
         self._spec_tokens = getattr(self, "_spec_tokens", 0) + produced
-        self._spec_steptime = getattr(self, "_spec_steptime", 0.0) + (_t.perf_counter() - _s0)
         row = list(accepted) + [bonus]
-        # defensive: never let an out-of-vocab id reach the token buffer
         row = [t if 0 <= t < dec.drafter.vocab else int(bonus if 0 <= bonus < dec.drafter.vocab else 1) for t in row]
         out = torch.full((1, self._SPEC_N), -1, dtype=torch.int32)
         out[0, : len(row)] = torch.tensor(row, dtype=torch.int32)
         return out
-
-    def read_decode_output(self, tt_out, *_, **__):
-        # decode_forward already returns host tensors; passthrough for any
-        # caller that still asks.
-        return tt_out
 
     # -- plugin lifecycle hooks (block-output contract) -----------------------
     def release_request(self, row: int) -> None:
         """Request finished: tear down its spec session (B=1 -> row ignored)."""
         it = getattr(self, "_spec_iters", 0)
         if it:
-            tk = self._spec_tokens
-            st = self._spec_steptime
-            logger.info(
-                f"Gemma4DFlash decode summary: {it} iters, {tk} tokens, "
-                f"{tk/max(1,it):.2f} tokens/iter, {st/max(1,it)*1000:.0f} ms/iter (device+host in decode_forward), "
-                f"{tk/max(1e-9,st):.1f} tok/s (decode_forward-only)"
-            )
+            tk = getattr(self, "_spec_tokens", 0)
+            logger.info(f"Gemma4DFlash decode summary: {it} iters, {tk} tokens, " f"{tk/max(1,it):.2f} tokens/iter")
         self._spec_iters = 0
         self._spec_tokens = 0
-        self._spec_steptime = 0.0
         self._spec_pending = None
         self._spec_release_decoder()
 
@@ -2196,7 +2223,7 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
 
     model_capabilities = {
         **Gemma4ForCausalLM.model_capabilities,
-        "supports_async_decode": False,
+        "supports_async_decode": os.environ.get("GEMMA4_SPEC_ASYNC", "0") != "0",
         "supports_sample_on_device": True,
         "output_tokens_per_step": _SPEC_N,
         "tt_spec_variable_output": True,
@@ -2323,8 +2350,8 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         out[0, : len(committed)] = torch.tensor(committed, dtype=torch.int32)
         return out
 
-    def read_decode_output(self, tt_out, *_, **__):
-        return tt_out
+    def read_decode_output(self, tt_out, async_read=False, *_, **__):
+        return (tt_out, []) if async_read else tt_out
 
     # -- plugin lifecycle hooks (block-output contract) -----------------------
     def release_request(self, row: int) -> None:
