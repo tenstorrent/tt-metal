@@ -137,9 +137,14 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
         case TransposeOpParallelizationStrategy::MULTI_CORE_WH:
             if (use_sharded_wh) {
                 if (is_row_major) {
-                    return TransposeWHShardedRMProgramFactory{};
+                    // TransposeWHShardedRMProgramFactory computes num_hw_blocks_per_core = shard_height/H;
+                    // truncates to 0 when H is split across cores (silent all-zero output, see #55582).
+                    if (input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard) {
+                        return TransposeWHShardedRMProgramFactory{};
+                    }
+                } else {
+                    return TransposeWHShardedProgramFactory{};
                 }
-                return TransposeWHShardedProgramFactory{};
             }
             return TransposeWHProgramFactory{};
 
