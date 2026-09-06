@@ -51,8 +51,8 @@ struct Harness {
         off += kp::spsc_span_pack_pad(head, off);
         std::copy(w.begin(), w.end(), f.begin() + off);
         f[1] = off + w.size() - kp::SPSC_SPAN_PREFIX_WORDS;
-        const uint32_t got = dec.decode_frame(f.data(), kp::spsc_span_frame_words(f[1]));
-        check(got == f[1] && dec.stats.anomalies == 0, "wire geometry");
+        dec.decode_frame(f.data(), kp::spsc_span_frame_words(f[1]));
+        check(dec.stats.anomalies == 0, "wire geometry");
         head += w.size();
     }
     void new_batch() { dec.end_batch(); }

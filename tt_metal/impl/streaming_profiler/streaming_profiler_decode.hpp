@@ -92,11 +92,13 @@ struct Repairs {
     uint32_t fixes = 0, regressions = 0;
 };
 
-// A ZONE_L's start was read separately from its end, so its duration is two reads apart: one that borrowed the next
-// epoch shows as an elapsed time in [-2^32, -1] and moves down whole. Its end may legitimately precede the previous
-// record's when that record is the stall zone raised by this zone's own ring reservation. `lane_ts` / `lane_rec` are
-// the lane's last record before this run of `n`, whose first record sits at sink offset `first_rec`.
-__attribute__((noinline)) inline Repairs zone_l_repairs(
+// A format whose duration is read in two halves (dur_hi present) reads its start separately from its end, so its
+// duration is two reads apart: one that borrowed the next epoch shows as an elapsed time in [-2^32, -1] and moves
+// down whole. Its end may legitimately precede the previous record's when that record is the stall zone raised by
+// this zone's own ring reservation. `lane_ts` / `lane_rec` are the lane's last record before this run of `n`, whose
+// first record sits at sink offset `first_rec`.
+template <profiler::PacketFormat F>
+__attribute__((noinline)) inline Repairs zone_repairs64(
     uint8_t* buf,
     const uint32_t* src,
     uint32_t n,
@@ -105,19 +107,19 @@ __attribute__((noinline)) inline Repairs zone_l_repairs(
     bool back,
     uint64_t lane_ts,
     uint64_t lane_rec) {
+    static_assert(F.has_dur_hi());
     constexpr uint32_t kRec = profiler::kSpscRecBytes;
     Repairs out;
     const auto rec_at = [buf](uint64_t off) { return reinterpret_cast<uint64_t*>(buf + off); };
-    const auto end_of = [src](uint32_t k) {
-        return (static_cast<uint64_t>(src[5u * k + 2u]) << 32) | src[5u * k + 1u];
-    };
+    const auto end_of = [src](uint32_t k) { return profiler::spsc_ts_at<F>(src, k, 0); };
     if (wrapped) {
         for (uint32_t k = 0; k < n; k++) {
-            if (src[5u * k + 4u] != 0xFFFFFFFFu) {
+            const uint32_t* r = src + F.words * k;
+            if (r[F.dur_hi] != 0xFFFFFFFFu) {
                 continue;
             }
             const uint64_t end = end_of(k);
-            const uint64_t dur = (static_cast<uint64_t>(src[5u * k + 4u]) << 32) | src[5u * k + 3u];
+            const uint64_t dur = (static_cast<uint64_t>(r[F.dur_hi]) << 32) | r[F.dur_lo];
             if (end >= dur + kEpoch) {
                 out.fixes++;
                 uint64_t* rec = rec_at(first_rec + kRec * k);
@@ -164,7 +166,7 @@ struct StreamDecoder {
     StreamStats stats;
     uint64_t stall_zones = 0, stall_mark = 0;
 
-    uint32_t decode_frame(const uint32_t* frame, uint32_t frame_words);
+    void decode_frame(const uint32_t* frame, uint32_t frame_words);
 
     // Closes the batch in the sink: its record count and the stalls since the previous close; the sink restarts.
     struct BatchEnd {
@@ -180,13 +182,13 @@ struct StreamDecoder {
     }
 };
 
-// Decodes one packed BULK_SPAN frame in place. Every record composes through a vector kernel: a run of two or more
-// same-type records through its block kernel, a lone zone through its one-record composer, a point packet (EVENT or
-// DATA) through spsc_point. Returns the payload words the control vector implies, which the caller checks against
-// the frame's length field (a pack-rule disagreement desynchronizes every later lane), or 0 for an unknown core.
-// Decode starts at the larger of the head mirror and the extent's start: the mirror runs behind after an upstream
-// loss (adopt and count), the extent after a lagging head write-back (skip the overlap).
-inline uint32_t StreamDecoder::decode_frame(const uint32_t* frame, uint32_t frame_words) {
+// Decodes one packed BULK_SPAN frame in place. Every packet is decoded through its kFormats row: a run of fixed-size
+// records through spsc_block, a lone one through spsc_one, a point through spsc_point, a sticky into the lane's
+// state. Decode starts at the larger of the head mirror and the extent's start: the mirror runs behind after an
+// upstream loss (adopt and count), the extent after a lagging head write-back (skip the overlap). The frame is read
+// in place from a ring the device may be overwriting, and a lapped reader only learns so at commit, so the walk
+// bounds every read by the frame and every packet by its run and stops on the first word it cannot decode.
+inline void StreamDecoder::decode_frame(const uint32_t* frame, uint32_t frame_words) {
     namespace kp = kernel_profiler;
     using namespace profiler;
     static_assert((kConsumerScratchRecs + kMaxFrameRecs) * kSpscRecBytes < kEpoch);
@@ -195,7 +197,7 @@ inline uint32_t StreamDecoder::decode_frame(const uint32_t* frame, uint32_t fram
     const uint32_t core = S.core_of_xy.find(ctrl[kp::SPSC_WIRE_XY]);
     if (core == CoreTable::kNone) {
         stats.unknown_core_frames++;
-        return 0;
+        return;
     }
     // Raw locals for everything the hot walk touches: the kernels store through the sink's byte pointer, and a
     // member reached through `this` would be reloaded after every such store.
@@ -213,25 +215,6 @@ inline uint32_t StreamDecoder::decode_frame(const uint32_t* frame, uint32_t fram
             oreg += !fixed;
         }
         lane_ts = ts_last;
-    };
-    // A kernel flagged a step back somewhere in its run: find each one, record k against record k-1.
-    const auto block_regress = [&](const uint32_t* src, uint32_t stride, uint32_t n, uint64_t th_hi, uint64_t first) {
-        for (uint32_t k = 1; k < n; k++) {
-            if (src[stride * k + 1u] < src[stride * (k - 1u) + 1u]) {
-                const bool fixed = repair_prev_record(
-                    sk.buf,
-                    th_hi | src[stride * (k - 1u) + 1u],
-                    th_hi | src[stride * k + 1u],
-                    first + kSpscRecBytes * k);
-                fixes += fixed;
-                oreg += !fixed;
-            }
-        }
-    };
-    const auto zone_l_fix = [&](const uint32_t* src, uint32_t n, uint64_t first, bool wrapped, bool back) {
-        const Repairs r = zone_l_repairs(sk.buf, src, n, first, wrapped, back, lane_ts, lane_rec);
-        fixes += r.fixes;
-        oreg += r.regressions;
     };
     const auto zones_emitted = [&](uint32_t n) {
         zm += n;
@@ -316,117 +299,114 @@ inline uint32_t StreamDecoder::decode_frame(const uint32_t* frame, uint32_t fram
             const uint32_t readable = static_cast<uint32_t>(rd_end - src);
             const uint32_t left = run - i;
             uint32_t got = 0;
-            if (t == PP_ZONE_S) {
-                const auto z = spsc_zone_s16(src, readable, left / 2u, cur, lc, sk);
-                if (z.n != 0) {
-                    // Exact, not sampled: in-block ends are cursor + positive deltas.
-                    order(cur + (src[1] >> 16), z.ts_last);
-                    zones_emitted(z.n);
-                    cur = z.ts_last;
-                    got = 2u * z.n;
+            // A block kernel flagged a step back somewhere in its run: find each one, record k against record k-1.
+            const auto block_regress = [&]<PacketFormat F>(uint32_t n, uint64_t first) __attribute__((always_inline)) {
+                for (uint32_t k = 1; k < n; k++) {
+                    const uint64_t a = spsc_ts_at<F>(src, k - 1u, lc.th_hi), b = spsc_ts_at<F>(src, k, lc.th_hi);
+                    if (b < a) {
+                        const bool fixed = repair_prev_record(sk.buf, a, b, first + kSpscRecBytes * k);
+                        fixes += fixed;
+                        oreg += !fixed;
+                    }
                 }
-            } else if (t == PP_ZONE_ATOMIC) {
-                if (left >= 3u) {
-                    if (left > 3u && pp_type(src[3]) == PP_ZONE_ATOMIC) {
+            };
+            const auto repairs64 =
+                [&]<PacketFormat F>(uint32_t n, uint64_t first, bool wrapped, bool back)
+                    __attribute__((always_inline)) {
+                        const Repairs x = zone_repairs64<F>(sk.buf, src, n, first, wrapped, back, lane_ts, lane_rec);
+                        fixes += x.fixes;
+                        oreg += x.regressions;
+                    };
+            if ((kSpscPointTypes >> t) & 1u) {
+                // Points: the same head record for every point kind, Data with a payload behind its size word. One
+                // branch for them all keeps random alternation from mispredicting, so the run gate below tests the
+                // words for a run of four of each fixed-size point kind without branching on t first.
+                bool blocked = false;
+                spsc_for_each_format<spsc_is_point>([&]<PacketFormat F>() __attribute__((always_inline)) {
+                    if (!blocked && left >= 4u * F.words && readable >= 8u && spsc_run4<F>(src)) {
+                        blocked = true;
                         const uint64_t first = sk.off;
-                        const auto a = spsc_atomic8(src, readable, left / 3u, lc, sk);
+                        const auto a = spsc_block<F>(src, readable, left / F.words, cur, lc, sk);
                         if (a.n != 0) {
-                            sz += a.stalls;
-                            order(lc.th_hi | src[1], a.ts_last);
+                            order(spsc_ts_at<F>(src, 0, lc.th_hi), a.ts_last);
                             if (__builtin_expect(a.regress != 0, 0)) {
-                                block_regress(src, 3, a.n, lc.th_hi, first);
+                                block_regress.template operator()<F>(a.n, first);
                             }
-                            zones_emitted(a.n);
-                            // A block is atomics only (a sticky ends it), so th is constant across it and the last
-                            // end re-anchors the lane cursor.
-                            cur = a.ts_last;
-                            got = 3u * a.n;
+                            rc += a.n;
+                            lane_rec = sk.off;
+                            got = F.words * a.n;
                         }
-                    } else {
-                        const uint64_t end = lc.th_hi | src[1];
-                        sz += (src[0] & 0x07FFFFFFu) == kSpscStallZoneId;
-                        order(end, end);
-                        spsc_atomic1(src, readable, lc, sk);
-                        zones_emitted(1);
-                        cur = end;
-                        got = 3;
                     }
-                }
-            } else if (t == PP_EVENT || t == PP_DATA) {
-                // Both are points: the same head record, DATA with a payload behind a size word. One branch for the
-                // pair keeps random alternation from mispredicting; only an EVENT run of four takes the block kernel.
-                // Tested for both types so the branch does not follow the type: false for any DATA.
-                if (left >= 8u && readable >= 8u && spsc_event_run4(src)) {
-                    const uint64_t first = sk.off;
-                    const auto a = spsc_event16(src, readable, left / 2u, lc, sk);
-                    if (a.n != 0) {
-                        order(lc.th_hi | src[1], a.ts_last);
-                        if (__builtin_expect(a.regress != 0, 0)) {
-                            block_regress(src, 2, a.n, lc.th_hi, first);
-                        }
-                        rc += a.n;
-                        lane_rec = sk.off;
-                        got = 2u * a.n;
-                    }
-                } else {
-                    // No branch follows the type from here: the DATA-only quantities are masked, not selected.
-                    const uint32_t dm = 0u - static_cast<uint32_t>(t == PP_DATA);
-                    const uint32_t w2 = src[readable >= 3u ? 2u : 1u];
-                    const uint32_t n = pp_data_size(w2) & dm;
-                    const uint32_t words = 2u + (dm & (1u + n));
+                });
+                if (!blocked) {
+                    // No branch follows the type from here: the Data-only quantities are masked, not selected.
+                    const uint32_t dm = kSpscDataMaskOfType[t];
+                    const uint32_t size_word = std::min<uint32_t>(kSpscDataFormat.size_word, readable - 1u);
+                    const uint32_t n =
+                        ((src[size_word] >> kSpscDataFormat.size_shift) & kSpscDataFormat.size_mask) & dm;
+                    const uint32_t words = kSpscWordsOfType[t] + n;
                     if (left >= words) {
-                        const uint64_t ts = lc.th_hi | src[1];
+                        const uint64_t ts = lc.th_hi | src[kSpscDataFormat.ts_lo];
                         order(ts, ts);
                         const uint64_t head_off = sk.off;
                         rc += spsc_point(src, readable, dm, n, lc, sk);
-                        lane_rec = head_off + kSpscRecBytes;  // the head, not a DATA's Ext/Cont
+                        lane_rec = head_off + kSpscRecBytes;  // the head, not a Data's Ext/Cont
                         got = words;
                     }
                 }
-            } else if (t == PP_ZONE_L) {
-                if (left >= 5u) {
-                    const uint64_t first = sk.off;
-                    if (left > 5u && pp_type(src[5]) == PP_ZONE_L) {
-                        const auto a = spsc_zone_l8(src, readable, left / 5u, lc, sk);
+            } else {
+                spsc_for_format<spsc_is_zone_or_sticky>(t, [&]<PacketFormat F>() __attribute__((always_inline)) {
+                    if (left < F.words) {
+                        return;
+                    }
+                    if constexpr (F.kind == Kind::Sticky) {
+                        const uint32_t value = F.value_word == 0 ? pp_low27(src[0]) : src[F.value_word];
+                        if constexpr (F.sets == PacketFormat::Sets::TimerHi) {
+                            th = value;
+                            spsc_lane_consts_th(lc, th);
+                        } else {
+                            pg = value;
+                            spsc_lane_consts_prog(lc, pg);
+                        }
+                        got = F.words;
+                    } else if constexpr (F.delta16) {
+                        // The block kernel takes every run length; its ends are exact, not sampled: in-block ends
+                        // are cursor + positive deltas.
+                        const auto a = spsc_block<F>(src, readable, left / F.words, cur, lc, sk);
                         if (a.n != 0) {
-                            const uint64_t ts_first = (static_cast<uint64_t>(src[2]) << 32) | src[1];
-                            sz += a.stalls;
-                            const bool back = ts_first < lane_ts || a.regress != 0;
-                            if (__builtin_expect(a.wrapped != 0 || back, 0)) {
-                                zone_l_fix(src, a.n, first, a.wrapped != 0, back);
-                            }
-                            lane_ts = a.ts_last;
+                            order(cur + (src[1] >> 16), a.ts_last);
                             zones_emitted(a.n);
-                            got = 5u * a.n;  // the cursor is untouched
+                            cur = a.ts_last;
+                            got = F.words * a.n;
                         }
                     } else {
-                        const uint64_t end = (static_cast<uint64_t>(src[2]) << 32) | src[1];
-                        sz += (src[0] & 0x07FFFFFFu) == kSpscStallZoneId;
-                        spsc_zone_l1(src, readable, lc, sk);
-                        const bool wrapped = src[4] == 0xFFFFFFFFu;
-                        const bool back = end < lane_ts;
-                        if (__builtin_expect(wrapped || back, 0)) {
-                            zone_l_fix(src, 1, first, wrapped, back);
+                        const uint64_t first = sk.off;
+                        const bool run = left > F.words && pp_type(src[F.words]) == F.type;
+                        const SpscBlockResult a = run ? spsc_block<F>(src, readable, left / F.words, cur, lc, sk)
+                                                      : spsc_one<F>(src, readable, lc, sk);
+                        if (a.n == 0) {
+                            return;
                         }
-                        lane_ts = end;
-                        zones_emitted(1);
-                        got = 5;
+                        sz += a.stalls;
+                        if constexpr (F.has_dur_hi()) {
+                            const bool back = spsc_ts_at<F>(src, 0, lc.th_hi) < lane_ts || a.regress != 0;
+                            if (__builtin_expect(a.wrapped != 0 || back, 0)) {
+                                repairs64.template operator()<F>(a.n, first, a.wrapped != 0, back);
+                            }
+                            lane_ts = a.ts_last;
+                        } else {
+                            order(spsc_ts_at<F>(src, 0, lc.th_hi), a.ts_last);
+                            if (__builtin_expect(a.regress != 0, 0)) {
+                                block_regress.template operator()<F>(a.n, first);
+                            }
+                        }
+                        zones_emitted(a.n);
+                        if constexpr (F.reanchor) {
+                            cur = a.ts_last;
+                        }
+                        got = F.words * a.n;
                     }
-                }
-            } else if (t == PP_STICKY_TIMER) {
-                th = pp_timer_hi(src[0]);
-                spsc_lane_consts_th(lc, th);
-                got = 1;
-            } else if (t == PP_STICKY_PROG) {
-                pg = pp_low27(src[0]);
-                spsc_lane_consts_prog(lc, pg);
-                got = 1;
-            } else if (t == PP_STICKY_PROG_EXT) {
-                if (left >= 2u) {
-                    pg = src[1];
-                    spsc_lane_consts_prog(lc, pg);
-                    got = 2;
-                }
+                });
             }
             if (got == 0) {
                 stats.anomalies++;  // undecodable word, or a record cut by the run's end
@@ -446,7 +426,6 @@ inline uint32_t StreamDecoder::decode_frame(const uint32_t* frame, uint32_t fram
     stats.order_regressions += oreg;
     stats.epoch_fixes += fixes;
     stall_zones += sz;
-    return off - kp::SPSC_SPAN_PREFIX_WORDS;
 }
 
 // Reassembles whole frames from one ring's lines and feeds them to a decoder. After a drop the position is
@@ -502,10 +481,7 @@ public:
                 deliver_now();
                 saved = dec;
             }
-            const uint32_t payload = dec.decode_frame(frame, fw);
-            if (payload != 0 && payload != frame[1]) {
-                dec.stats.anomalies++;
-            }
+            dec.decode_frame(frame, fw);
             return true;
         };
         const uint32_t* const w = reinterpret_cast<const uint32_t*>(view.data());
