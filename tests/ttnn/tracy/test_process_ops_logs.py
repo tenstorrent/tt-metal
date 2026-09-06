@@ -5,11 +5,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import csv
+import json
+import os
 from pathlib import Path
 
 import pytest
 
 from tracy import process_ops_logs
+from tracy.process_ops_logs import (
+    RUN_SESSION_ID_ENV,
+    SESSION_MANIFEST_FILENAME,
+    get_or_create_session_id,
+    validate_session_id,
+    write_session_manifest,
+)
 
 
 # class for mocking creation of npe data
@@ -161,10 +170,11 @@ def test_build_sub_device_id_lookup_ignores_manager_id_only_rows(tmp_path):
     assert lookup[(0, 42, 0, 1)] == 0
 
 
-def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
+def test_generate_reports_writes_multicast_noc_util_column(tmp_path, monkeypatch):
     log_folder = tmp_path / "logs"
     report_folder = tmp_path / "reports"
     log_folder.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv(RUN_SESSION_ID_ENV, "session-123")
 
     ops = {
         1: {
@@ -200,3 +210,45 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         row = next(reader)
         assert "MULTICAST NOC UTIL (%)" in reader.fieldnames
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
+        assert "SESSION ID" not in reader.fieldnames
+
+    with (report_folder / SESSION_MANIFEST_FILENAME).open() as manifest_file:
+        assert json.load(manifest_file) == {"session_id": "session-123"}
+
+
+def test_get_or_create_session_id_publishes_generated_id(monkeypatch):
+    monkeypatch.delenv(RUN_SESSION_ID_ENV, raising=False)
+
+    session_id = get_or_create_session_id()
+
+    assert len(session_id) == 32
+    assert set(session_id) <= set("0123456789abcdef")
+    assert os.environ[RUN_SESSION_ID_ENV] == session_id
+
+
+def test_get_or_create_session_id_reuses_environment(monkeypatch):
+    monkeypatch.setenv(RUN_SESSION_ID_ENV, "job-42")
+
+    assert get_or_create_session_id() == "job-42"
+
+
+@pytest.mark.parametrize("session_id", ["has space", "has,comma", "has;semicolon", "line\nbreak", "a" * 129])
+def test_validate_session_id_rejects_unsafe_metadata(session_id, expect_error):
+    with expect_error(ValueError, "Session ID must be 1-128 ASCII"):
+        validate_session_id(session_id)
+
+
+def test_write_session_manifest(tmp_path, monkeypatch):
+    monkeypatch.setenv(RUN_SESSION_ID_ENV, "session-123")
+
+    manifest_path = write_session_manifest(tmp_path)
+
+    with manifest_path.open() as manifest_file:
+        assert json.load(manifest_file) == {"session_id": "session-123"}
+
+
+def test_write_session_manifest_skips_when_session_id_is_unset(tmp_path, monkeypatch):
+    monkeypatch.delenv(RUN_SESSION_ID_ENV, raising=False)
+
+    assert write_session_manifest(tmp_path) is None
+    assert not (tmp_path / SESSION_MANIFEST_FILENAME).exists()
