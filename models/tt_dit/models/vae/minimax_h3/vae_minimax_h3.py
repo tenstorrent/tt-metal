@@ -106,9 +106,10 @@ _DECODE_TORCH_THREADS = 8
 # the main thread's wave enqueue and readback -- see `_decode_units_async_stitch`. Opt-in until it is
 # measured against the serial schedule on the same host.
 _ASYNC_STITCH_ENV = "MINIMAX_H3_VAE_ASYNC_STITCH"
-# With the async stitch: read each wave back as per-device shards (`fast_device_to_host_shards`) instead
-# of one concatenated tensor, skipping a host memcpy of the whole wave that the per-tile unpatchify
-# undid anyway. Opt-in for the same reason; single-host only.
+# With the async stitch: untilize each wave on device and read it back as per-device shards
+# (`fast_device_to_host_shards`) instead of one host-untilized, concatenated tensor -- the CPU untilize
+# and the wave-sized memcpy were the bulk of "readback", and the per-tile unpatchify undid the concat
+# anyway. Opt-in for the same reason; single-host only.
 _SHARD_READBACK_ENV = "MINIMAX_H3_VAE_SHARD_READBACK"
 
 
@@ -904,6 +905,13 @@ class MiniMaxH3Vae:
 
             mark = time.perf_counter()
             decoded = decoder(tokens)
+            if self.shard_readback and not postprocess:
+                # Untilize on device so the host receives row-major and the readback is a zero-copy
+                # DMA. Read back tiled, `to_torch_with_padded_shape` untilizes every wave on the CPU
+                # (`convert_to_row_major_host_buffer`), which is what made "readback" 400-700 ms/wave
+                # for 717 MB -- far below PCIe -- and what the async worker's memory traffic slowed
+                # further. The device-stitched path already does this conversion at the same point.
+                decoded = ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT)
             if attribute:
                 ttnn.synchronize_device(self.mesh_device)
             elapsed = time.perf_counter() - mark
