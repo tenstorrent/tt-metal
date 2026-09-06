@@ -430,7 +430,7 @@ void kernel_main() {
         down_bases.init(down_addr_e, /*noc=*/0);
 
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
-        const uint32_t count_value = counts_ptr[global_expert_id];
+        const uint32_t count_value_raw = counts_ptr[global_expert_id];
         // counts[] is device-produced and unvalidated: bound it by the capacity
         // this program was built for (num_chunks_max * chunk_M_max tile-rows)
         // BEFORE deriving anything from it. The clamp is arithmetic so it also
@@ -438,10 +438,15 @@ void kernel_main() {
         // hard-fails a mismatch in watcher builds. Compute and writer clamp
         // identically, so all three keep the same row mapping (see
         // adaptive_chunk::clamp_count_tiles).
-        const uint32_t count_tiles_raw = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
+        const uint32_t count_tiles_raw = (count_value_raw + TILE_HEIGHT - 1) / TILE_HEIGHT;
         const uint32_t count_tiles =
             adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max, M_tiles_full);
         ASSERT(count_tiles == count_tiles_raw);
+        // The token count must be clamped consistently with the tile count: the row-major x
+        // stick reads and the in0 multicast size derive from it, and an over-capacity count
+        // would size the last tile-row's sticks past the x_stage block (L1 overrun).
+        const uint32_t count_value =
+            (count_value_raw > count_tiles * TILE_HEIGHT) ? count_tiles * TILE_HEIGHT : count_value_raw;
         // Runtime chunk layout from THIS expert's actual token count (identical
         // math in the compute and writer kernels, so all three agree on the row
         // mapping). Full chunks span chunk_M_max tile-rows; the tail chunk shrinks

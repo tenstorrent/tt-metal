@@ -182,7 +182,15 @@ def test_grouped_routed_expert_cache_hit_varying_counts(device, num_row_groups, 
     out = case.run()
     case.check(out)
     entries = device.num_program_cache_entries()
-    for new_counts in ([107] * 12, [0] * 12, [32, 0, 640, 0, 160, 0, 96, 0, 64, 0, 0, 0], counts):
+    # New counts must stay within each expert's region (the offsets are fixed by `counts`, as the
+    # dispatch would do in production); the LPT plan and chunk geometry change with every set.
+    for new_counts in (
+        [max(0, c - 5) for c in counts],
+        [0] * 12,
+        [32, 0, 224, 0, 96, 0, 64, 0, 32, 0, 0, 0],
+        [c // 2 for c in counts],
+        counts,
+    ):
         out = case.run(new_counts)
         if any(c > 0 for c in new_counts):
             case.check(out, new_counts)
