@@ -830,6 +830,28 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
+- name: GPT-OSS 120B accuracy tests
+  cmd: |
+    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2
+    # Tensor cache is pre-built on the NAS — skip loading model weights by default.
+    # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
+    SKIP_MODEL_LOAD="--skip-model-load"
+    [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
+    pytest models/demos/gpt_oss/tests/accuracy/test_model.py --timeout 1200 $SKIP_MODEL_LOAD
+  model: gpt-oss-120b
+  model_family: GPT-OSS
+  skus:
+    wh_galaxy_perf:
+      timeout: 20
+      tier: 1
+      release_ready: false
+    bh_quietbox_2:
+      timeout: 20
+      tier: 1
+      release_ready: false
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
 # ── Whisper ────────────────────────────────────────────────────────
 
 - name: Whisper e2e tests
