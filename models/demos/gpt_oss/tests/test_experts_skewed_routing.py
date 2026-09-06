@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Expert-sorted prefill MoE under SKEWED routing: exercises the hot-expert branch of
 models/demos/gpt_oss/tt/experts/prefill.py (_sorted_moe_plan / _sorted_moe_forward) and compares against the
 transformers reference. The uniform random routing of the experts unit test never produces hot experts, so the
