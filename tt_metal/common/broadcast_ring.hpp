@@ -8,7 +8,6 @@
 #include <array>
 #include <atomic>
 #include <bit>
-#include <concepts>
 #include <cstring>
 #include <cstddef>
 #include <cstdint>
@@ -20,17 +19,9 @@
 #include <utility>
 
 #include <tt_stl/assert.hpp>
-#include <umd/device/driver_atomics.hpp>
 #include <tt_stl/tt_pause.hpp>
 
 namespace tt::tt_metal {
-
-/**
- * @brief A writer for BroadcastRing::Writer::publish_direct: `write(run, first)` fills one contiguous run of raw slot
- *        storage with the batch's items [first, first + run.size() / sizeof(T)).
- */
-template <typename F>
-concept BroadcastRingSlotWriter = std::invocable<F, std::span<std::byte>, size_t>;
 
 /**
  * @brief Single-producer, multi-consumer broadcast ring buffer.
@@ -72,21 +63,10 @@ public:
      * @param capacity Requested slot count; gets rounded up to the next power of two.
      */
     explicit BroadcastRing(size_t capacity) :
-        BroadcastRing(capacity, std::make_unique<std::byte[]>(storage_bytes(capacity))) {}
-
-    /** @brief Bytes of caller-provided memory a ring of @p capacity slots needs, alignment slack included. */
-    static size_t storage_bytes(size_t capacity) noexcept {
-        return round_capacity(capacity) * sizeof(Slot) + kFalseSharingSize - 1;
-    }
-
-    /**
-     * @brief Constructs a broadcast ring in caller-provided memory of at least storage_bytes(capacity) bytes that
-     *        outlives the ring. The slots are constructed here, so placement policy on the pages (NUMA binding,
-     *        huge pages) is applied before this call.
-     */
-    BroadcastRing(size_t capacity, std::span<std::byte> storage) :
-        capacity_(round_capacity(capacity)), slots_(aligned_slots(storage)), writer_(&shared_state_, view()) {
-        TT_FATAL(storage.size() >= storage_bytes(capacity), "BroadcastRing storage is smaller than storage_bytes()");
+        capacity_(capacity ? std::bit_ceil(capacity) : 1),
+        owned_(std::make_unique<std::byte[]>(capacity_ * sizeof(Slot) + kFalseSharingSize - 1)),
+        slots_(aligned_slots(owned_.get())),
+        writer_(&shared_state_, view()) {
         std::uninitialized_default_construct_n(slots_, capacity_);
     }
 
@@ -150,33 +130,6 @@ public:
         {
             static_assert(kMoveStoreNoexcept, "T must be nothrow-movable");
             publish_impl(items);
-        }
-
-        /**
-         * @brief Publishes @p n items (at most capacity()) that the caller writes into slot storage itself, for
-         *        writers that stream (e.g. non-temporal stores). @p write runs once per contiguous run, at most two
-         *        (split where the ring wraps), and the publish is ordered after it. Does not wake readers; see
-         *        wake_readers().
-         */
-        template <BroadcastRingSlotWriter Write>
-        void publish_direct(size_t n, Write write) noexcept {
-            static_assert(
-                kTriviallyCopyable && sizeof(T) == sizeof(Slot),
-                "direct emit needs items that are their slot's exact storage");
-            const uint64_t head = head_cache_;
-            shared_state_->claim.store(head + n, std::memory_order_relaxed);
-            std::atomic_thread_fence(std::memory_order_release);
-            const size_t first_run = std::min<size_t>(n, view_.capacity - (head & (view_.capacity - 1)));
-            write(std::span<std::byte>(reinterpret_cast<std::byte*>(&view_.slot_at(head)), first_run * sizeof(T)), 0);
-            if (first_run < n) {
-                write(
-                    std::span<std::byte>(reinterpret_cast<std::byte*>(view_.slots), (n - first_run) * sizeof(T)),
-                    first_run);
-            }
-            tt_driver_atomics::sfence();  // the store fence also drains non-temporal stores
-            shared_state_->head.store(head + n, std::memory_order_release);
-            shared_state_->claim.store(head + n, std::memory_order_relaxed);
-            head_cache_ = head + n;
         }
 
         /**
@@ -538,14 +491,9 @@ private:
 
     SlotsView view() const noexcept { return {slots_, capacity_}; }
 
-    static size_t round_capacity(size_t capacity) noexcept { return capacity ? std::bit_ceil(capacity) : 1; }
-    static Slot* aligned_slots(std::span<std::byte> storage) noexcept {
-        const uintptr_t base = reinterpret_cast<uintptr_t>(storage.data());
+    static Slot* aligned_slots(std::byte* storage) noexcept {
+        const uintptr_t base = reinterpret_cast<uintptr_t>(storage);
         return reinterpret_cast<Slot*>((base + kFalseSharingSize - 1) & ~uintptr_t{kFalseSharingSize - 1});
-    }
-    BroadcastRing(size_t capacity, std::unique_ptr<std::byte[]> owned) :
-        BroadcastRing(capacity, std::span<std::byte>(owned.get(), storage_bytes(capacity))) {
-        owned_ = std::move(owned);
     }
 
     const size_t capacity_;

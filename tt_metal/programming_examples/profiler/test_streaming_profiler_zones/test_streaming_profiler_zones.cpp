@@ -6,9 +6,17 @@
 // on all 5 RISCs of a small grid. Run with TT_METAL_STREAMING_PROFILER=1 (its own mode; do not combine it with
 // the mutually exclusive TT_METAL_DEVICE_PROFILER); add TT_METAL_STREAMING_PROFILER_TRACY=1 to check against a
 // connected tracy-capture. Grid and iterations via argv.
+//
+// --bench K prices one marker kind on the device instead: K = 0 spin only, 1 empty DeviceZoneScopedN, 2 DeviceFlag,
+// 3 DeviceTimestampedData. Each RISC times bursts against its wall clock and the host prints cycles per marker; the
+// K = 0 run with the same --benchdelay is the loop's own cost to subtract. Measure on a 1x1 grid with a paced
+// --benchdelay (20 is enough) and no "profiler stalls" or "FAILED TO START" in the log, or the number is the stall.
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <string>
@@ -21,267 +29,53 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/mesh_device.hpp>
-
-// --clkprobe only: reads a tile debug register over NoC, which is not a public-API operation.
-#include <chrono>
-#include <thread>
-#include "impl/context/metal_context.hpp"
-#include "distributed/mesh_device_impl.hpp"
-#include "llrt/tt_cluster.hpp"
-
-// --empty only: registers a stats consumer to measure the profiler's own per-zone overhead.
-#include <algorithm>
-#include <mutex>
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
 
-namespace {
-
-// RISCV_DEBUG_REG_WALL_CLOCK_L/H. Reading L latches H, so L must be read first.
-constexpr uint64_t kWallClockL = 0xFFB121F0ULL;
-constexpr uint64_t kWallClockH = 0xFFB121F8ULL;
-
-std::string fmt_label(const std::string& what, const CoreCoord& virt) {
-    return what + " v(" + std::to_string(virt.x) + "," + std::to_string(virt.y) + ")";
-}
-
-uint64_t read_wall_clock(tt::Cluster& cluster, const tt_cxy_pair& target) {
-    uint32_t lo = 0, hi = 0;
-    cluster.read_reg(&lo, target, kWallClockL);
-    cluster.read_reg(&hi, target, kWallClockH);
-    return (static_cast<uint64_t>(hi) << 32) | lo;
-}
-
-// Probes whether a DRAM tile answers RISCV_DEBUG_REG_WALL_CLOCK (documented as a Tensix register): raw counter,
-// advance over a known interval, and DRAM-minus-worker offset. No relay is booted, so a hang here indicts the
-// register read alone.
-void clock_probe(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    const auto context_id = mesh_device->impl().get_context_id();
-    auto& cluster = MetalContext::instance(context_id).get_cluster();
-    IDevice* device = mesh_device->get_devices().front();
-    const uint32_t chip = static_cast<uint32_t>(device->id());
-    const auto& soc = cluster.get_soc_desc(chip);
-    const double aiclk = cluster.get_device_aiclk(chip);
-
-    struct Target {
-        std::string label;
-        tt_cxy_pair core;
-    };
-    std::vector<Target> targets;
-
-    // Worker reference: the core sync_device_clock() samples, core_virt[0].
-    const CoreCoord w = device->virtual_core_from_logical_core(CoreCoord{0, 0}, CoreType::WORKER);
-    targets.push_back(Target{fmt_label("WORKER", w), tt_cxy_pair(chip, w)});
-
-    const uint32_t nbanks = static_cast<uint32_t>(soc.get_num_dram_views());
-    for (uint32_t bank = 0; bank < nbanks; bank++) {
-        const CoreCoord lg = mesh_device->impl().pick_unused_dram_logical_core(device, bank);
-        const CoreCoord dv = device->virtual_core_from_logical_core(lg, CoreType::DRAM);
-        targets.push_back(Target{fmt_label("DRAM bank " + std::to_string(bank), dv), tt_cxy_pair(chip, dv)});
-    }
-
-    printf("[clkprobe] chip %u  aiclk %.1f MHz  %u DRAM views\n", chip, aiclk, nbanks);
-    printf(
-        "[clkprobe] reading RISCV_DEBUG_REG_WALL_CLOCK (0x%llx) on %zu cores\n",
-        (unsigned long long)kWallClockL,
-        targets.size());
-    fflush(stdout);
-
-    std::vector<uint64_t> t0(targets.size()), t1(targets.size());
-    for (size_t i = 0; i < targets.size(); i++) {
-        printf("[clkprobe]   reading %s ...\n", targets[i].label.c_str());
-        fflush(stdout);  // if the read hangs, the log still names the core it hung on
-        t0[i] = read_wall_clock(cluster, targets[i].core);
-        printf(
-            "[clkprobe]   %s -> 0x%016llx (%llu)\n",
-            targets[i].label.c_str(),
-            (unsigned long long)t0[i],
-            (unsigned long long)t0[i]);
-        fflush(stdout);
-    }
-
-    constexpr int kSleepMs = 500;
-    const auto h0 = std::chrono::steady_clock::now();
-    std::this_thread::sleep_for(std::chrono::milliseconds(kSleepMs));
-    for (size_t i = 0; i < targets.size(); i++) {
-        t1[i] = read_wall_clock(cluster, targets[i].core);
-    }
-    const auto h1 = std::chrono::steady_clock::now();
-    const double host_ns = (double)std::chrono::duration_cast<std::chrono::nanoseconds>(h1 - h0).count();
-
-    printf("\n[clkprobe] %-22s %20s %20s %14s %12s\n", "core", "t0 (cycles)", "t1 (cycles)", "delta", "implied MHz");
-    for (size_t i = 0; i < targets.size(); i++) {
-        const uint64_t d = t1[i] - t0[i];
-        printf(
-            "[clkprobe] %-22s %20llu %20llu %14llu %12.1f\n",
-            targets[i].label.c_str(),
-            (unsigned long long)t0[i],
-            (unsigned long long)t1[i],
-            (unsigned long long)d,
-            (double)d / host_ns * 1000.0);
-    }
-    printf("\n[clkprobe] offset vs WORKER at a common instant (cycles, and ns at aiclk):\n");
-    for (size_t i = 1; i < targets.size(); i++) {
-        const int64_t off = (int64_t)t0[i] - (int64_t)t0[0];
-        printf(
-            "[clkprobe]   %-22s %+20lld cycles  %+15.3f ms\n",
-            targets[i].label.c_str(),
-            (long long)off,
-            (double)off / aiclk / 1000.0);
-    }
-    fflush(stdout);
-}
-
-// --empty (ZONE_MODE=3) emits 10 unrolled empty zones per iteration, so the stream measures the profiler itself.
-// Per lane, sorted by start: duration = one zone's close cost up to the clock read; gap = the close's post-clock
-// work plus the next open's clock read. duration + gap is the full cost one zone adds at max rate. Negative
-// gaps are nested pairs (the kernel wrapper zone) and are dropped.
-struct EmptyZoneStats {
-    std::mutex mu;  // register/unregister lifetime only; batches arrive on a single consumer thread
-    // Keyed (chip << 24) | (y << 16) | (x << 8) | risc: (start, duration) of every zone seen.
-    std::map<uint32_t, std::vector<std::pair<uint64_t, uint64_t>>> lanes;
-    double frequency_ghz = 0.0;
-
-    void operator()(
-        const experimental::streaming_profiler::Batch<experimental::streaming_profiler::Channel::Zones>& b) {
-        std::lock_guard<std::mutex> lk(mu);
-        for (const auto& z : b.zones) {
-            if (frequency_ghz == 0.0) {
-                frequency_ghz = z.clock.get().frequency_ghz;
-            }
-            const uint32_t key = (z.core.chip_id << 24) | (z.core.logical.y << 16) | (z.core.logical.x << 8) |
-                                 static_cast<uint32_t>(z.core.risc);
-            lanes[key].push_back({z.start_timestamp, z.end_timestamp - z.start_timestamp});
-        }
-    }
-
-    static uint64_t median(std::vector<uint64_t>& v) {
-        if (v.empty()) {
-            return 0;
-        }
-        std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
-        return v[v.size() / 2];
-    }
-
-    void report() {
-        std::lock_guard<std::mutex> lk(mu);
-        const double ghz = frequency_ghz > 0.0 ? frequency_ghz : 1.35;
-        static const char* kRisc[5] = {"BRISC ", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
-        printf(
-            "\n[empty-zone overhead] per-RISC, cycles @ %.4f GHz (median [mean]); duration = in-zone "
-            "(room check + clock read), gap = close+reopen (ring stores + publish + clock read)\n",
-            ghz);
-        printf(
-            "[empty-zone overhead] %-7s %8s %22s %22s %22s\n",
-            "risc",
-            "zones",
-            "duration cyc (ns)",
-            "gap cyc (ns)",
-            "dur+gap cyc (ns)");
-        for (uint32_t risc = 0; risc < 5; risc++) {
-            std::vector<uint64_t> durs, gaps;
-            uint64_t dur_sum = 0, gap_sum = 0;
-            for (auto& [key, zones] : lanes) {
-                if ((key & 0xFF) != risc || zones.size() < 2) {
-                    continue;
-                }
-                std::sort(zones.begin(), zones.end());
-                for (size_t i = 0; i < zones.size(); i++) {
-                    durs.push_back(zones[i].second);
-                    if (i + 1 < zones.size()) {
-                        const uint64_t end = zones[i].first + zones[i].second;
-                        if (zones[i + 1].first >= end) {
-                            gaps.push_back(zones[i + 1].first - end);
-                        }
-                    }
-                }
-                // Drop the kernel-wrapper zone (the per-lane max) so it does not dwarf the stats.
-                if (!durs.empty()) {
-                    auto mx = std::max_element(durs.begin(), durs.end());
-                    durs.erase(mx);
-                }
-            }
-            if (durs.empty()) {
-                continue;
-            }
-            for (uint64_t d : durs) {
-                dur_sum += d;
-            }
-            for (uint64_t g : gaps) {
-                gap_sum += g;
-            }
-            const uint64_t dmed = median(durs), gmed = median(gaps);
-            const double dmean = durs.empty() ? 0.0 : (double)dur_sum / durs.size();
-            const double gmean = gaps.empty() ? 0.0 : (double)gap_sum / gaps.size();
-            printf(
-                "[empty-zone overhead] %-7s %8zu %9llu (%5.1f) [%6.1f] %9llu (%5.1f) [%6.1f] %9llu (%5.1f)\n",
-                kRisc[risc],
-                durs.size(),
-                (unsigned long long)dmed,
-                dmed / ghz,
-                dmean,
-                (unsigned long long)gmed,
-                gmed / ghz,
-                gmean,
-                (unsigned long long)(dmed + gmed),
-                (dmed + gmed) / ghz);
-        }
-        fflush(stdout);
-    }
-};
-
-}  // namespace
-
 int main(int argc, char** argv) {
     // --delay sets uniform nop-iterations per zone; 0 is a valid setting meaning max rate. Omitting it
     // selects a separate mode: graduated ~1..100 us wall-clock zone durations.
     uint32_t gx = 2, gy = 2, n_iters = 50, zone_cyc = 0;
-    uint32_t bench_mode =
-        0;  // --bench: ZONE_MODE 2 microbench; 0 = spin only, 1 = empty zone, 2 = DeviceFlag, 3 = Data
-    uint32_t bench_delay = 0;  // --benchdelay: nop iterations between bench markers
-    bool bench_requested = false;
     bool knee_mode = false;     // set by --delay, including --delay 0
-    bool clkprobe = false;      // --clkprobe 1: read wall clocks and exit, no workload
     uint32_t emit_markers = 0;  // --markers 1: emit the point-marker trio (Flag/Data/Iter) per iteration
-    uint32_t empty_mode = 0;    // --empty 1: unrolled empty zones + stats consumer -> profiler self-overhead
-                                // --empty 2: same, plus one extra wall-clock read pair per zone body, so the
-                                //            duration delta vs --empty 1 prices read_wall_clock itself
+    bool bench = false;         // --bench K: the marker-cost microbench, K the marker kind
+    uint32_t bench_kind = 0, bench_delay = 0;
+    constexpr uint32_t kBenchAddr = 0x170000;  // L1 scratch the bench kernels leave {cycles, markers} per RISC in
     for (int i = 1; i + 1 < argc; i += 2) {
         std::string a = argv[i];
         uint32_t v = (uint32_t)std::strtoul(argv[i + 1], nullptr, 10);
-        if (a == "--clkprobe") {
-            clkprobe = v != 0;
-        } else if (a == "--gx") {
+        if (a == "--gx") {
             gx = v;
         } else if (a == "--gy") {
             gy = v;
         } else if (a == "--iters") {
             n_iters = v;
-        } else if (a == "--bench") {
-            bench_mode = v;
-            bench_requested = true;
-        } else if (a == "--benchdelay") {
-            bench_delay = v;
         } else if (a == "--delay") {
             zone_cyc = v;
             knee_mode = true;  // not `zone_cyc != 0`: --delay 0 is a real knee point (max rate)
-        } else if (a == "--empty") {
-            empty_mode = v;
         } else if (a == "--markers") {
             emit_markers = v;
+        } else if (a == "--bench") {
+            bench = true;
+            bench_kind = v;
+        } else if (a == "--benchdelay") {
+            bench_delay = v;
         }
     }
 
-    auto empty_stats = std::make_shared<EmptyZoneStats>();
-    experimental::streaming_profiler::SubscriptionHandle empty_handle = 0;
-    if (empty_mode != 0 || bench_requested) {
-        using experimental::streaming_profiler::Batch;
-        using experimental::streaming_profiler::Channel;
-        empty_handle = experimental::streaming_profiler::Subscribe(
-            "empty-zone-overhead", [empty_stats](const Batch<Channel::Zones>& b) { (*empty_stats)(b); });
-    }
+    // A counting subscriber: the capture is decoded and totalled even with no sink armed.
+    struct Totals {
+        std::atomic<uint64_t> zones{0}, points{0}, stalls{0};
+    } totals;
+    using experimental::streaming_profiler::Batch;
+    using experimental::streaming_profiler::Channel;
+    const auto sub = experimental::streaming_profiler::Subscribe("zones-example", [&](const Batch<Channel::All>& b) {
+        totals.zones += b.zones.size();
+        totals.points += b.events.size() + b.timestamped_data.size();
+        totals.stalls += b.stall_count;
+    });
 
     const char* sd = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     const bool slow_dispatch = sd != nullptr && *sd != '\0' && *sd != '0';
@@ -302,11 +96,6 @@ int main(int argc, char** argv) {
         mesh_device = distributed::MeshDevice::create_unit_mesh(
             device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, /*num_command_queues=*/1);
     }
-    if (clkprobe) {
-        clock_probe(mesh_device);
-        mesh_device->close();
-        return 0;
-    }
     Program program = CreateProgram();
 
     // --gx 0 / --gy 0, or an over-large value, means the full grid; a CoreRange past the grid would throw.
@@ -320,13 +109,12 @@ int main(int argc, char** argv) {
     CoreRange cores(CoreCoord{0, 0}, CoreCoord{gx - 1, gy - 1});
     std::map<std::string, std::string> defs{
         {"N_ITERS", std::to_string(n_iters) + "u"},
-        {"ZONE_MODE",
-         empty_mode >= 2 ? "4" : (empty_mode != 0 ? "3" : (bench_requested ? "2" : (knee_mode ? "1" : "0")))},
+        {"ZONE_MODE", bench ? "2" : (knee_mode ? "1" : "0")},
         {"EMIT_MARKERS", emit_markers != 0 ? "1" : "0"},
-        {"BENCH_KIND", std::to_string(bench_mode)},
-        {"BENCH_DELAY", std::to_string(bench_delay)},
         {"ZONE_CYC", std::to_string(zone_cyc) + "u"},
-        {"BENCH_ADDR", "0x170000u"}};
+        {"BENCH_KIND", std::to_string(bench_kind)},
+        {"BENCH_DELAY", std::to_string(bench_delay)},
+        {"BENCH_ADDR", std::to_string(kBenchAddr) + "u"}};
     const std::string kdir = "tt_metal/programming_examples/profiler/test_streaming_profiler_zones/kernels/";
 
     CreateKernel(
@@ -387,30 +175,34 @@ int main(int argc, char** argv) {
     printf(
         "[streaming profiler zones] workload done in %.1f ms; closing device.\n",
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_launch).count());
-    if (bench_requested) {
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        IDevice* d0 = mesh_device->get_devices().front();
-        const CoreCoord wv = d0->virtual_core_from_logical_core(CoreCoord{0, 0}, CoreType::WORKER);
-        const tt_cxy_pair tgt(d0->id(), wv);
-        for (uint32_t slot = 0; slot < 5u; slot++) {
-            uint32_t cyc = 0, zn = 0;
-            cluster.read_reg(&cyc, tgt, 0x170000ULL + slot * 8ULL);
-            cluster.read_reg(&zn, tgt, 0x170000ULL + slot * 8ULL + 4ULL);
-            if (zn != 0) {
+    if (bench) {
+        static const char* const kRisc[5] = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
+        std::vector<uint32_t> slots(10, 0);
+        detail::ReadFromDeviceL1(
+            mesh_device->get_devices().front(),
+            CoreCoord{0, 0},
+            kBenchAddr,
+            static_cast<uint32_t>(slots.size() * sizeof(uint32_t)),
+            slots);
+        for (uint32_t slot = 0; slot < 5; slot++) {
+            const uint32_t cycles = slots[2 * slot], markers = slots[2 * slot + 1];
+            if (markers != 0) {
                 printf(
-                    "[zonebench] %s: %u markers, %u cycles, %.2f cycles/marker\n",
-                    (const char*[]){"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"}[slot],
-                    zn,
-                    cyc,
-                    static_cast<double>(cyc) / zn);
+                    "[zonebench] kind %u %-6s %u markers, %u cycles, %.2f cycles/marker (spin included)\n",
+                    bench_kind,
+                    kRisc[slot],
+                    markers,
+                    cycles,
+                    static_cast<double>(cycles) / markers);
             }
         }
     }
     mesh_device->close();
-    if (empty_mode != 0 || bench_requested) {
-        // close() joined the delivery threads, so the stats are complete.
-        experimental::streaming_profiler::Unsubscribe(empty_handle);
-        empty_stats->report();
-    }
+    experimental::streaming_profiler::Unsubscribe(sub);
+    printf(
+        "[streaming profiler zones] subscriber saw %llu zones, %llu points, %llu stalls\n",
+        (unsigned long long)totals.zones.load(),
+        (unsigned long long)totals.points.load(),
+        (unsigned long long)totals.stalls.load());
     return 0;
 }

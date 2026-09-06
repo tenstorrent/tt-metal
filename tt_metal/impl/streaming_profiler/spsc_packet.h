@@ -67,11 +67,7 @@
 static inline uint32_t pp_type(uint32_t w0) { return (w0 >> PP_TYPE_SHIFT) & PP_TYPE_MASK; }
 static inline uint32_t pp_low27(uint32_t w0) { return w0 & PP_LOW27_MASK; }
 static inline uint32_t pp_timer_hi(uint32_t w0) { return pp_low27(w0); }
-static inline uint32_t pp_point_id(uint32_t w0) { return pp_low27(w0); }
 static inline uint32_t pp_data_size(uint32_t w2) { return (w2 >> PP_DATA_SIZE_SHIFT) & PP_DATA_SIZE_MASK; }
-/* ZONE_S: word0 = type | id; word1 packs the end's cursor delta (hi16) and the duration (lo16). */
-static inline uint32_t pp_zone_s_delta(uint32_t w1) { return w1 >> 16; }
-static inline uint32_t pp_zone_s_dur(uint32_t w1) { return w1 & 0xFFFFu; }
 
 static inline int pp_is_bulkspan(uint32_t w0) { return pp_type(w0) == PP_BULK_SPAN; }
 

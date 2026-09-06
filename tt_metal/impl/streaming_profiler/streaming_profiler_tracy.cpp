@@ -56,7 +56,6 @@ constexpr tracy::RiscType kRisc[5] = {
     tracy::RiscType::TRISC_1,
     tracy::RiscType::TRISC_2};
 constexpr uint32_t kRiscColor[5] = {0xEE9A00u, 0x43CD80u, 0x6CA6CDu, 0x00E5EEu, 0x98F5FFu};
-constexpr const char* kRiscName[5] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
 #endif
 
 }  // namespace
@@ -73,8 +72,8 @@ TracySink::TracySink(Service& service) : service_(service), srcloc_table_(kSrclo
 TracySink::~TracySink() {
     service_.remove_consumer(handle_);
 #if defined(TRACY_ENABLE)
-    for (auto& entry : contexts_) {
-        TracyTTDestroy(entry.second);
+    for (auto& [key, core] : cores_) {
+        TracyTTDestroy(core.ctx);
     }
 #endif
 }
@@ -163,35 +162,32 @@ int64_t TracySink::to_timeline(int64_t steady_ns) const {
     return ns < 0 ? 0 : ns;  // a record cannot predate the capture; clamp rather than wrap
 }
 
-const TracySink::Lane& TracySink::lane(const Core& core) {
+TracySink::Lane TracySink::lane(const Core& core) {
     const uint64_t key = lane_key(core);
     if (key == lane_key_) {
         return lane_hit_;
     }
-    auto it = lanes_.find(key);
-    if (it == lanes_.end()) {
-        Lane ln;
+    Lane ln;
+    ln.risc = static_cast<uint32_t>(core.risc) % 5;
 #if defined(TRACY_ENABLE)
-        const uint64_t core_key = key & ~uint64_t{0xFF};
-        auto cit = contexts_.find(core_key);
-        if (cit == contexts_.end()) {
-            TracyTTCtx ctx = TracyTTContext();
-            // Timestamps arrive already on the host timeline in nanoseconds from anchor_tracy_: identity mapping, and
-            // calibrated so the GUI offers no drift control. Everything the sink emits goes through this thread's
-            // lock-free queue, whose FIFO order is what keeps the context ahead of the zones that reference it.
-            TracyTTContextPopulateCalibratedLockfree(ctx, anchor_tracy_, 0.0, 1.0);
-            const std::string name = fmt::format(
-                "Device: {}, Logical ({},{}) Physical ({},{})",
-                core.chip_id,
-                core.logical.x,
-                core.logical.y,
-                core.physical.x,
-                core.physical.y);
-            TracyTTContextNameLockfree(ctx, name.c_str(), name.size());
-            cit = contexts_.emplace(core_key, ctx).first;
-        }
-        ln.ctx = cit->second;
-        ln.risc = static_cast<uint32_t>(core.risc) % 5;
+    auto [it, fresh] = cores_.try_emplace(key & ~uint64_t{0xFF});
+    CoreEntry& ce = it->second;
+    if (fresh) {
+        ce.ctx = TracyTTContext();
+        // Timestamps arrive already on the host timeline in nanoseconds from anchor_tracy_: identity mapping, and
+        // calibrated so the GUI offers no drift control. Everything the sink emits goes through this thread's
+        // lock-free queue, whose FIFO order is what keeps the context ahead of the zones that reference it.
+        TracyTTContextPopulateCalibratedLockfree(ce.ctx, anchor_tracy_, 0.0, 1.0);
+        const std::string name = fmt::format(
+            "Device: {}, Logical ({},{}) Physical ({},{})",
+            core.chip_id,
+            core.logical.x,
+            core.logical.y,
+            core.physical.x,
+            core.physical.y);
+        TracyTTContextNameLockfree(ce.ctx, name.c_str(), name.size());
+    }
+    if ((ce.named & (1u << ln.risc)) == 0) {
         // Same thread-id packing as the marker path (TTDeviceMarker::get_thread_id), so zones and markers share the
         // per-RISC row.
         tracy::TTDeviceMarker tm;
@@ -199,14 +195,16 @@ const TracySink::Lane& TracySink::lane(const Core& core) {
         tm.core_x = core.logical.x;
         tm.core_y = core.logical.y;
         tm.risc = kRisc[ln.risc];
-        ln.thread = tm.get_thread_id();
-        tracy::SetThreadName(ln.thread, kRiscName[ln.risc]);
-#endif
-        it = lanes_.emplace(key, ln).first;
+        ce.thread[ln.risc] = tm.get_thread_id();
+        tracy::SetThreadName(ce.thread[ln.risc], kRiscNames[ln.risc]);
+        ce.named |= static_cast<uint8_t>(1u << ln.risc);
     }
+    ln.ctx = ce.ctx;
+    ln.thread = ce.thread[ln.risc];
+#endif
     lane_key_ = key;
-    lane_hit_ = it->second;
-    return lane_hit_;
+    lane_hit_ = ln;
+    return ln;
 }
 
 const void* TracySink::srcloc(std::string_view name, uint32_t color, uint32_t risc) {
@@ -277,7 +275,7 @@ void TracySink::push_zone(
     [[maybe_unused]] int64_t end_ns,
     [[maybe_unused]] uint32_t color) {
 #if defined(TRACY_ENABLE)
-    const Lane& ln = lane(core);
+    const Lane ln = lane(core);
     TracyTTPushZone(
         ln.ctx,
         static_cast<const tracy::SourceLocationData*>(srcloc(name, color, ln.risc)),

@@ -734,14 +734,6 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
 }
 
 void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
-    auto* dst = static_cast<uint32_t*>(data);
-    for (const std::span<const uint32_t> segment : this->peek(num_pages).base()) {
-        dst = std::ranges::copy(segment, dst).out;
-    }
-    this->pop(num_pages, notify_sender);
-}
-
-D2HSocket::PeekRange D2HSocket::peek(uint32_t num_pages) {
     TT_FATAL(page_size_ > 0, "Page size must be set before reading.");
     const uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot read more pages than the socket FIFO size.");
@@ -760,9 +752,9 @@ D2HSocket::PeekRange D2HSocket::peek(uint32_t num_pages) {
         }
         _mm_lfence();
     }
-    return std::views::join(std::array{
-        std::span<const uint32_t>(head, head_bytes / sizeof(uint32_t)),
-        std::span<const uint32_t>(base, tail_bytes / sizeof(uint32_t))});
+    std::memcpy(data, head, head_bytes);
+    std::memcpy(static_cast<char*>(data) + head_bytes, base, tail_bytes);
+    this->pop(num_pages, notify_sender);
 }
 
 void D2HSocket::pop(uint32_t num_pages, bool notify_sender) {

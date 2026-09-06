@@ -27,4 +27,3 @@ foreach(TEST_SRC ${PROFILER_TEST_SRCS})
                 ${TEST_NAME}
     )
 endforeach()
-

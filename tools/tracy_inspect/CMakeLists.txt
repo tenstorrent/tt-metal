@@ -1,13 +1,13 @@
-# GUI-free Tracy .tracy file inspectors used by the streaming-profiler tests and by hand.
+# GUI-free .tracy inspector used by the streaming-profiler test and by hand.
 #
-# They link the same TracyServer library that tracy-capture / tracy-csvexport use (defined by
+# It links the same TracyServer library that tracy-capture / tracy-csvexport use (defined by
 # tt_metal/third_party/tracy/cmake/server.cmake when tt_metal/third_party adds those tools), so the
 # Tracy struct layouts match the writer's -- compiling the server sources separately with different
-# flags is an ODR trap.  Binaries land next to tracy-capture in build/tools/profiler/bin so Python
+# flags is an ODR trap.  The binary lands next to tracy-capture in build/tools/profiler/bin so Python
 # tooling can find them via tools.tracy.common.PROFILER_BIN_DIR.
 
 if(NOT TARGET TracyServer)
-    message(STATUS "TracyServer target not available; skipping the tracy_inspect tools")
+    message(STATUS "TracyServer target not available; skipping tracy_zone_csv")
     return()
 endif()
 
@@ -24,43 +24,31 @@ if(NOT _tt_tracy_ipo)
     set(_tt_tracy_ipo OFF)
 endif()
 
-foreach(_tt_tracy_tool IN ITEMS tracy_ctx_inspect tracy_plot_check tracy_zone_csv)
-    add_executable(${_tt_tracy_tool} ${CMAKE_CURRENT_SOURCE_DIR}/${_tt_tracy_tool}/${_tt_tracy_tool}.cpp)
-    # Sources include "server/TracyWorker.hpp" and "public/common/TracyTTDeviceData.hpp" relative to the
-    # Tracy root; TracyServer only exports its public/common and server dirs themselves.
-    target_include_directories(${_tt_tracy_tool} SYSTEM PRIVATE ${_tt_tracy_root})
-    target_link_libraries(
-        ${_tt_tracy_tool}
-        PRIVATE
-            TracyServer
-            Threads::Threads
-            ${CMAKE_DL_LIBS}
-    )
-    # Same suppressions/baseline tt_metal/third_party applies to the Tracy CLI targets.
-    target_compile_options(${_tt_tracy_tool} PRIVATE -Wno-deprecated-declarations)
-    if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
-        target_compile_options(${_tt_tracy_tool} PRIVATE -march=x86-64-v2)
-    endif()
-    set_target_properties(
-        ${_tt_tracy_tool}
-        PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY
-                "${_tt_tracy_cli_bin_dir}"
-            INTERPROCEDURAL_OPTIMIZATION
-                ${_tt_tracy_ipo}
-    )
-endforeach()
-
-# Aggregate, mirroring tracy_profiler_cli_tools in tt_metal/third_party.
-add_custom_target(
-    tracy_inspect_tools
-    DEPENDS
-        tracy_ctx_inspect
-        tracy_plot_check
-        tracy_zone_csv
+add_executable(tracy_zone_csv ${CMAKE_CURRENT_SOURCE_DIR}/tracy_zone_csv/tracy_zone_csv.cpp)
+# The source includes "server/TracyWorker.hpp" and "public/common/TracyTTDeviceData.hpp" relative to the Tracy
+# root; TracyServer only exports its public/common and server dirs themselves.
+target_include_directories(tracy_zone_csv SYSTEM PRIVATE ${_tt_tracy_root})
+target_link_libraries(
+    tracy_zone_csv
+    PRIVATE
+        TracyServer
+        Threads::Threads
+        ${CMAKE_DL_LIBS}
+)
+# Same suppressions/baseline tt_metal/third_party applies to the Tracy CLI targets.
+target_compile_options(tracy_zone_csv PRIVATE -Wno-deprecated-declarations)
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+    target_compile_options(tracy_zone_csv PRIVATE -march=x86-64-v2)
+endif()
+set_target_properties(
+    tracy_zone_csv
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            "${_tt_tracy_cli_bin_dir}"
+        INTERPROCEDURAL_OPTIMIZATION
+            ${_tt_tracy_ipo}
 )
 
-unset(_tt_tracy_tool)
 unset(_tt_tracy_root)
 unset(_tt_tracy_cli_bin_dir)
 unset(_tt_tracy_ipo)

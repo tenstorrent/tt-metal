@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <span>
@@ -39,6 +40,12 @@ private:
         uint32_t thread = 0;
         uint32_t risc = 0;
     };
+    // One Tracy context per core; each RISC's timeline row is created and named on first use.
+    struct CoreEntry {
+        TracyTTCtx ctx = nullptr;
+        std::array<uint32_t, 5> thread{};
+        uint8_t named = 0;
+    };
     struct SrclocEntry {
         const char* name = nullptr;
         uint64_t key = 0;
@@ -63,7 +70,7 @@ private:
     void start_capture_map();
     void refine_map();
     int64_t to_timeline(int64_t steady_ns) const;
-    const Lane& lane(const Core& core);
+    Lane lane(const Core& core);
     const void* srcloc(std::string_view name, uint32_t color, uint32_t risc);
     const void* srcloc_slow(std::string_view name, uint32_t color, uint32_t risc);
     void push_zone(const Core& core, std::string_view name, int64_t start_ns, int64_t end_ns, uint32_t color);
@@ -85,9 +92,8 @@ private:
     int64_t next_refine_ns_ = 0;
     uint64_t lane_key_ = ~uint64_t{0};
     Lane lane_hit_;
-    std::unordered_map<uint64_t, Lane> lanes_;
-    std::unordered_map<uint64_t, TracyTTCtx> contexts_;
-    // Keyed by the name's address: a subscriber's names are the ZoneNameMirror's strings, which never move or die.
+    std::unordered_map<uint64_t, CoreEntry> cores_;
+    // Keyed by the name's address: a subscription's name strings never move or die while it lives.
     std::vector<SrclocEntry> srcloc_table_;  // open addressing, power-of-two size, at most half full
     size_t srcloc_count_ = 0;
     std::unordered_map<std::string, const void*> srclocs_;

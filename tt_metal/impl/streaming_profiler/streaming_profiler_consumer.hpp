@@ -12,18 +12,16 @@
 //  - A Data head is followed immediately by one Ext record (id = payload word count, data.ext = payload words
 //    1-2 as (hi << 32) | lo) and then Cont records for words 3 and up (one uint64 each, hi word first), with
 //    nothing interleaved. An Event is complete in itself.
-//  - Every id is the 27-bit structural zone id (hostdevcommon/profiler_zone_id.h) and resolves to a name via
-//    ZoneNameMirror; an unnamed id is a bug.
+//  - Every id is the 27-bit structural zone id (hostdevcommon/profiler_zone_id.h) and resolves to a name through
+//    the zone-meta registry (llrt/zone_meta.hpp); an unnamed id is a bug.
 // In-process only, never serialized; the static_asserts pin the size.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <span>
-#include <string>
-#include <string_view>
 #include <type_traits>
-#include <unordered_map>
 #include <vector>
 
 #include <tt-metalium/experimental/streaming_profiler.hpp>
@@ -66,6 +64,8 @@ static_assert(std::is_trivially_copyable_v<Rec>);
 
 inline constexpr uint32_t kStreamingProfilerMaxLanes = 1u << 10;
 inline constexpr uint32_t kStreamingProfilerMaxDevices = 1u << 3;
+// Indexed by LaneInfo::risc; the order is tracy::RiscType's.
+inline constexpr std::array<const char*, 5> kRiscNames = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
 
 struct LaneInfo {
     uint32_t chip_id = 0;
@@ -75,41 +75,13 @@ struct LaneInfo {
 };
 
 // Immutable once the receiver starts. Zone names are not here: they arrive per ELF as binaries JIT-load, so
-// each consumer keeps its own ZoneNameMirror.
+// each subscription mirrors the registry for itself (streaming_profiler_api.cpp).
 struct CaptureContext {
     struct Device {
-        uint32_t chip_id = 0;
-        std::vector<LaneInfo> lanes;                   // index by RecMeta::lane
-        std::unordered_map<uint32_t, uint32_t> core_of_xy;  // packed (y << 16) | x -> dense core index
+        std::vector<LaneInfo> lanes;    // index by RecMeta::lane
+        std::vector<uint32_t> core_xy;  // core index -> packed NoC (y << 16) | x, the identity a frame carries
     };
     std::vector<Device> devices;
-};
-
-// Per-consumer mirror of the process-wide per-ELF zone-name registry; each consumer runs on its own thread, so
-// lookups need no lock. refresh() once per batch, lookup() per record. Names register at load, strictly before a
-// binary can emit, so a miss is a binary without .tt_zone_meta or a tu_id collision.
-class ZoneNameMirror {
-public:
-    struct Site {
-        std::string name;
-        std::string file;
-        uint32_t line = 0;
-    };
-
-    void refresh();
-    // nullptr for an unnamed id.
-    const Site* lookup_site(uint32_t id) const {
-        const auto it = sites_.find(id);
-        return it != sites_.end() ? &it->second : nullptr;
-    }
-    std::string_view lookup(uint32_t id) const {
-        const Site* s = lookup_site(id);
-        return s != nullptr ? std::string_view(s->name) : std::string_view{};
-    }
-
-private:
-    std::unordered_map<uint32_t, Site> sites_;
-    uint32_t cursor_ = 0;
 };
 
 struct RecordBatch {
@@ -123,5 +95,14 @@ struct RecordBatch {
 
 using RecordCallback = std::function<void(const RecordBatch&)>;
 using ConsumerHandle = uint64_t;
+
+// One decoder's wire-integrity totals for one stream and, once it detaches, each lane's words-consumed mirror (0 for
+// a lane it never saw) and the ring lines its reader lost.
+struct StreamStats {
+    uint64_t records = 0, zones = 0, order_regressions = 0, bad_frames = 0, epoch_fixes = 0;
+    uint64_t resync_words = 0, anomalies = 0, unknown_core_frames = 0;
+    uint64_t dropped = 0;
+    std::vector<uint32_t> heads;
+};
 
 }  // namespace tt::tt_metal::streaming_profiler

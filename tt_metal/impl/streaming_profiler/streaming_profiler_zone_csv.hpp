@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -41,10 +42,11 @@ private:
         // runtime_id goes in `trace id`, not `run host ID`: that column means which host run produced the row, and
         // an op id there trips the reader's concatenated-capture warning.
         uint32_t prog = 0;
-        std::string zone_name;
+        std::string_view zone_name;  // the subscription's copy of the name, alive until it ends
         const char* type = "";  // ZONE_START | ZONE_END | TS_DATA
     };
 
+    static Row row_for(const experimental::streaming_profiler::Core& core);
     static uint32_t sync_legacy_id(std::string_view name);
     static uint32_t name_hash(std::string_view name);
 

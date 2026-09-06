@@ -16,18 +16,6 @@ namespace api = experimental::streaming_profiler;
 
 namespace {
 
-// risc index -> the classic CSV's name; the index order is tracy::RiscType.
-const char* risc_name(uint8_t risc) {
-    switch (risc) {
-        case 0: return "BRISC";
-        case 1: return "NCRISC";
-        case 2: return "TRISC_0";
-        case 3: return "TRISC_1";
-        case 4: return "TRISC_2";
-        default: return "UNKNOWN";
-    }
-}
-
 // Sync events by name with the legacy numeric id the classic reader keys on. Only payload-carrying events are
 // listed; the wait-half ids stay reserved so a stale reader keying on them cannot pick up something else.
 struct SyncName {
@@ -66,6 +54,17 @@ uint32_t ZoneCsvConsumer::name_hash(std::string_view name) {
     return (h & 0x7FFFFFFu) | 0x8000000u;  // outside the legacy sync-id range
 }
 
+ZoneCsvConsumer::Row ZoneCsvConsumer::row_for(const api::Core& core) {
+    Row r;
+    r.chip = core.chip_id;
+    r.core_x = static_cast<uint16_t>(core.physical.x);
+    r.core_y = static_cast<uint16_t>(core.physical.y);
+    r.logical_x = static_cast<uint16_t>(core.logical.x);
+    r.logical_y = static_cast<uint16_t>(core.logical.y);
+    r.risc = static_cast<uint8_t>(core.risc);
+    return r;
+}
+
 void ZoneCsvConsumer::operator()(const Batch& batch) {
     dropped_ += batch.dropped;
     if (freq_mhz_ == 0.0 && !batch.clocks.empty()) {
@@ -75,17 +74,11 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
         // Both rows emitted: the classic reader pairs ZONE_START with ZONE_END itself.
         const uint32_t id = name_hash(z.site.name);
         for (int end = 0; end < 2; end++) {
-            Row& r = rows_.emplace_back();
-            r.chip = z.core.chip_id;
-            r.core_x = static_cast<uint16_t>(z.core.physical.x);
-            r.core_y = static_cast<uint16_t>(z.core.physical.y);
-            r.logical_x = static_cast<uint16_t>(z.core.logical.x);
-            r.logical_y = static_cast<uint16_t>(z.core.logical.y);
-            r.risc = static_cast<uint8_t>(z.core.risc);
+            Row& r = rows_.emplace_back(row_for(z.core));
             r.timer_id = id;
             r.timestamp = end ? z.end_timestamp : z.start_timestamp;
             r.prog = z.runtime_id;
-            r.zone_name = std::string(z.site.name);
+            r.zone_name = z.site.name;
             r.type = end ? "ZONE_END" : "ZONE_START";
         }
     }
@@ -99,13 +92,7 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
             empty_payloads_++;  // a semaphore event at address 0 would invent a dependency
             continue;
         }
-        Row& r = rows_.emplace_back();
-        r.chip = d.core.chip_id;
-        r.core_x = static_cast<uint16_t>(d.core.physical.x);
-        r.core_y = static_cast<uint16_t>(d.core.physical.y);
-        r.logical_x = static_cast<uint16_t>(d.core.logical.x);
-        r.logical_y = static_cast<uint16_t>(d.core.logical.y);
-        r.risc = static_cast<uint8_t>(d.core.risc);
+        Row& r = rows_.emplace_back(row_for(d.core));
         r.timer_id = legacy;
         r.timestamp = d.timestamp;
         r.data = d.payload.front();
@@ -134,17 +121,18 @@ void ZoneCsvConsumer::write_csv(const std::string& path) const {
     for (const Row& r : rows_) {
         std::fprintf(
             f,
-            "%u, %u, %u, %s, %u, %llu, %llu, %u, %u, 0, %s, %s, 0, streaming, , %u, %u\n",
+            "%u, %u, %u, %s, %u, %llu, %llu, %u, %u, 0, %.*s, %s, 0, streaming, , %u, %u\n",
             r.chip,
             r.core_x,
             r.core_y,
-            risc_name(r.risc),
+            r.risc < kRiscNames.size() ? kRiscNames[r.risc] : "UNKNOWN",
             r.timer_id,
             static_cast<unsigned long long>(r.timestamp),
             static_cast<unsigned long long>(r.data),
             run_id,
             r.prog,
-            r.zone_name.c_str(),
+            static_cast<int>(r.zone_name.size()),
+            r.zone_name.empty() ? "" : r.zone_name.data(),
             r.type,
             r.logical_x,
             r.logical_y);

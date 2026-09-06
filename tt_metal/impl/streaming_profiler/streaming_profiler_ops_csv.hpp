@@ -46,8 +46,6 @@ private:
         double frequency_ghz = 0.0;
     };
 
-    enum class ZoneClass : uint8_t { Unseen = 0, Other, Kernel };
-
     std::map<std::tuple<uint32_t, uint32_t, uint32_t>, OpAgg> ops_;  // (chip, runtime host-id, execution)
     std::unordered_map<uint64_t, uint32_t> pair_count_;              // (chip, core, risc, prog) -> completed pairs
     // Snapshot: the clocks live on the receiver and are gone by the exit-path write_csv.

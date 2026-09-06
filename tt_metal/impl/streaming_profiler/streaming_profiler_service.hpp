@@ -45,7 +45,9 @@ public:
     virtual ~Producer() = default;
     virtual std::span<const ProducerStream> streams() const = 0;
     virtual const CaptureContext& capture_context() const = 0;
-    virtual std::vector<experimental::streaming_profiler::Clock> clocks() const = 0;
+    virtual std::span<const experimental::streaming_profiler::Clock> clocks() const = 0;
+    // A subscriber's totals for one of streams(), delivered on its thread as it releases the producer's rings.
+    virtual void finish_stream(uint32_t stream, const StreamStats& stats) = 0;
 };
 
 // Wraps a public-batch callback as an internal record consumer: decodes the records of the subscribed channels,
@@ -89,14 +91,8 @@ public:
 
 private:
     struct Consumer;
-    struct FileSink {
-        std::string name;
-        std::string path;
-        std::shared_ptr<void> owner;
-        std::function<void(const std::string&)> write;
-    };
     void consumer_thread(Consumer& c);
-    void post_control(Consumer& c, Producer* attach, Producer* detach);
+    void post_control(Consumer& c, Producer* producer, bool attach);
     void wait_acks(std::unique_lock<std::mutex>& lk);
     void log_consumer_drops() const;
 
@@ -109,7 +105,7 @@ private:
     alignas(64) std::atomic<uint32_t> wake_gen_{0};
     std::vector<std::unique_ptr<Consumer>> consumers_;
     std::vector<Producer*> producers_;
-    std::vector<FileSink> sinks_;
+    std::vector<std::function<void()>> file_sinks_;
     std::unique_ptr<TracySink> tracy_;
     ConsumerHandle next_handle_ = 1;
     bool builtins_registered_ = false;

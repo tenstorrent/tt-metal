@@ -29,17 +29,14 @@ void check(bool v, const char* why) {
 
 struct Harness {
     profiler::SpanDecodeState st;
-    uint64_t lts[5]{}, lrec[5]{};
     std::vector<uint64_t> buf = std::vector<uint64_t>(2048 * 4);
-    streaming_profiler::StreamDecoder<profiler::SpscRecSink> dec;
+    streaming_profiler::StreamDecoder dec;
     uint32_t head = 0;
 
     Harness() {
         st.reset(1);
         st.core_of_xy[0x30002] = 0;
         dec.st = &st;
-        dec.last_ts = lts;
-        dec.last_rec = lrec;
         dec.sink.buf = reinterpret_cast<uint8_t*>(buf.data());
     }
     // One frame carrying `w` as lane 0's new words.
@@ -55,13 +52,10 @@ struct Harness {
         std::copy(w.begin(), w.end(), f.begin() + off);
         f[1] = off + w.size() - kp::SPSC_SPAN_PREFIX_WORDS;
         const uint32_t got = dec.decode_frame(f.data(), kp::spsc_span_frame_words(f[1]));
-        check(got == f[1] && st.anomalies == 0, "wire geometry");
+        check(got == f[1] && dec.stats.anomalies == 0, "wire geometry");
         head += w.size();
     }
-    void new_batch() {
-        dec.sink.off = 0;
-        ++dec.batch_seq;
-    }
+    void new_batch() { dec.end_batch(); }
     uint64_t start(size_t rec) const { return buf[4 * rec]; }
     uint64_t dur(size_t rec) const { return buf[4 * rec + 1]; }
 };
@@ -70,7 +64,7 @@ int main() {
     {
         Harness h;
         h.feed({sticky(1), word(PP_EVENT), kNear, word(PP_EVENT), 4});
-        check(h.dec.epoch_fixes == 1 && h.start(0) == M - 16 && h.start(1) == M + 4, "torn EVENT, EVENT witness");
+        check(h.dec.stats.epoch_fixes == 1 && h.start(0) == M - 16 && h.start(1) == M + 4, "torn EVENT, EVENT witness");
     }
     {
         Harness h;
@@ -86,7 +80,7 @@ int main() {
              word(PP_ZONE_ATOMIC),
              4,
              2});
-        check(h.dec.epoch_fixes == 1 && h.start(0) == M - 16, "torn DATA, zone witness");
+        check(h.dec.stats.epoch_fixes == 1 && h.start(0) == M - 16, "torn DATA, zone witness");
         check(h.start(1) == (0x11ull << 32 | 0x22) && h.start(2) == (0x33ull << 32 | 0x44), "payload untouched");
     }
     {
@@ -102,40 +96,40 @@ int main() {
              2u << PP_DATA_SIZE_SHIFT,
              0x11,
              0x22});
-        check(h.dec.epoch_fixes == 1 && h.start(0) == M - 24 && h.dur(0) == 8, "torn zone, DATA witness");
+        check(h.dec.stats.epoch_fixes == 1 && h.start(0) == M - 24 && h.dur(0) == 8, "torn zone, DATA witness");
     }
     {
         Harness h;
         h.feed({sticky(1), word(PP_EVENT), 100, word(PP_EVENT), 200});
-        check(h.dec.epoch_fixes == 0 && h.start(0) == M + 100, "ordered events untouched");
+        check(h.dec.stats.epoch_fixes == 0 && h.start(0) == M + 100, "ordered events untouched");
     }
     {
         Harness h;
         h.feed({sticky(1), word(PP_EVENT), 0x10000000u, word(PP_EVENT), 4});
-        check(h.dec.epoch_fixes == 1 && h.start(0) == 0x10000000u, "regression far from the wrap still repairs");
+        check(h.dec.stats.epoch_fixes == 1 && h.start(0) == 0x10000000u, "regression far from the wrap still repairs");
     }
     {
         Harness h;
         h.feed({sticky(1), word(PP_EVENT), kNear, word(PP_STICKY_PROG, 2), sticky(1), word(PP_EVENT), 4});
-        check(h.dec.epoch_fixes == 1 && h.start(0) == M - 16, "metadata between point and witness");
+        check(h.dec.stats.epoch_fixes == 1 && h.start(0) == M - 16, "metadata between point and witness");
     }
     {
         Harness h;
         h.feed({sticky(1), word(PP_EVENT), kNear});
         h.feed({word(PP_ZONE_ATOMIC), 4, 8});
-        check(h.dec.epoch_fixes == 1 && h.start(0) == M - 16, "witness in a later frame of the same batch");
+        check(h.dec.stats.epoch_fixes == 1 && h.start(0) == M - 16, "witness in a later frame of the same batch");
     }
     {
         Harness h;
         h.feed({sticky(3), word(PP_EVENT), kNear});
         const uint64_t dur = M + 100;
         h.feed({word(PP_ZONE_L), 4, 3, uint32_t(dur), uint32_t(dur >> 32)});
-        check(h.dec.epoch_fixes == 1 && h.start(0) == 3 * M - 16, "a ZONE_L witnesses a torn point");
+        check(h.dec.stats.epoch_fixes == 1 && h.start(0) == 3 * M - 16, "a ZONE_L witnesses a torn point");
     }
     {
         Harness h;
         h.feed({sticky(1), word(PP_EVENT), kNear});
-        check(h.dec.epoch_fixes == 0 && h.start(0) == 2 * M - 16, "uncovered: final point with no witness");
+        check(h.dec.stats.epoch_fixes == 0 && h.start(0) == 2 * M - 16, "uncovered: final point with no witness");
     }
     {
         Harness h;
@@ -143,7 +137,7 @@ int main() {
         h.new_batch();
         h.feed({word(PP_ZONE_ATOMIC), 4, 0});
         check(
-            h.dec.epoch_fixes == 0 && h.dec.order_regressions == 1 && h.start(0) == M + 4,
+            h.dec.stats.epoch_fixes == 0 && h.dec.stats.order_regressions == 1 && h.start(0) == M + 4,
             "uncovered: target already delivered counts a regression, touches nothing");
     }
     {
@@ -153,38 +147,42 @@ int main() {
         h.feed({word(PP_ZONE_ATOMIC), 4, 2});
         h.feed({word(PP_ZONE_ATOMIC), 8, 2});
         check(
-            h.dec.epoch_fixes == 0 && h.dec.order_regressions == 1 && h.start(0) == M + 2,
+            h.dec.stats.epoch_fixes == 0 && h.dec.stats.order_regressions == 1 && h.start(0) == M + 2,
             "a failed repair does not retarget the next record");
     }
     {
         Harness h;
         h.feed({sticky(2), word(PP_ZONE_ATOMIC), 16, 32});
-        check(h.dec.epoch_fixes == 0 && h.start(0) == 2 * M - 16, "uncovered: torn start with no later record");
+        check(h.dec.stats.epoch_fixes == 0 && h.start(0) == 2 * M - 16, "uncovered: torn start with no later record");
     }
     {
         Harness h;
         const uint64_t dur = uint64_t(20) - M;
         h.feed({word(PP_ZONE_L), 4, 1, uint32_t(dur), uint32_t(dur >> 32)});
-        check(h.dec.epoch_fixes == 1 && h.start(0) == M - 16 && h.dur(0) == 20, "ZONE_L torn start: negative elapsed");
+        check(
+            h.dec.stats.epoch_fixes == 1 && h.start(0) == M - 16 && h.dur(0) == 20,
+            "ZONE_L torn start: negative elapsed");
     }
     {
         Harness h;
         const uint64_t dur = uint64_t(0) - 2 * M;
         h.feed({word(PP_ZONE_L), 4, 3, uint32_t(dur), uint32_t(dur >> 32)});
-        check(h.dec.epoch_fixes == 0 && h.dur(0) == dur, "an elapsed time below -2^32 is not a tear");
+        check(h.dec.stats.epoch_fixes == 0 && h.dur(0) == dur, "an elapsed time below -2^32 is not a tear");
     }
     {
         Harness h;
         const uint64_t dur = uint64_t(0) - 20;
         h.feed({word(PP_ZONE_L), 4, 0, uint32_t(dur), uint32_t(dur >> 32)});
-        check(h.dec.epoch_fixes == 0 && h.dec.order_regressions == 1, "a repair cannot place a start before zero");
+        check(
+            h.dec.stats.epoch_fixes == 0 && h.dec.stats.order_regressions == 1,
+            "a repair cannot place a start before zero");
     }
     {
         Harness h;
         const uint64_t dur = M + 100;
         h.feed({sticky(3), word(PP_ZONE_L), kNear, 3, uint32_t(dur), uint32_t(dur >> 32), word(PP_ZONE_ATOMIC), 4, 8});
         check(
-            h.dec.epoch_fixes == 1 && h.dur(0) == 100 && h.start(0) == 3 * M - 116,
+            h.dec.stats.epoch_fixes == 1 && h.dur(0) == 100 && h.start(0) == 3 * M - 116,
             "ZONE_L torn end: the inflated duration moves, the start stays");
     }
     {
@@ -201,26 +199,30 @@ int main() {
              uint32_t(dur),
              uint32_t(dur >> 32)});
         check(
-            h.dec.epoch_fixes == 0 && h.dec.order_regressions == 1 && h.start(0) == 4 * M - 24,
+            h.dec.stats.epoch_fixes == 0 && h.dec.stats.order_regressions == 1 && h.start(0) == 4 * M - 24,
             "a ZONE_L behind a later stall zone is ordering, not a tear");
     }
     {
         Harness h;
         h.feed({sticky(3), word(PP_ZONE_ATOMIC, 1), kNear, 8, word(PP_ZONE_L), kNear + 8, 2, 100, 0});
         check(
-            h.dec.epoch_fixes == 1 && h.dec.order_regressions == 0 && h.start(0) == 3 * M - 24,
+            h.dec.stats.epoch_fixes == 1 && h.dec.stats.order_regressions == 0 && h.start(0) == 3 * M - 24,
             "a ZONE_L behind a torn ordinary zone repairs it");
     }
     {
         Harness h;
         h.feed({sticky(2), word(PP_ZONE_ATOMIC), kNear, 0xffffffffu, word(PP_ZONE_ATOMIC), 4, 8});
-        check(h.dec.epoch_fixes == 1 && h.start(0) == M - 15 && h.dur(0) == 0xffffffffu, "saturated stall, torn end");
+        check(
+            h.dec.stats.epoch_fixes == 1 && h.start(0) == M - 15 && h.dur(0) == 0xffffffffu,
+            "saturated stall, torn end");
     }
     {
         Harness h;
         h.feed({sticky(2), word(PP_ZONE_ATOMIC), 32, 8});
         h.feed({sticky(3), word(PP_EVENT), kNear, word(PP_ZONE_S), (1u << 16) | 1u});
-        check(h.dec.epoch_fixes == 0 && h.dec.order_regressions == 1, "a regression beyond one epoch is not a tear");
+        check(
+            h.dec.stats.epoch_fixes == 0 && h.dec.stats.order_regressions == 1,
+            "a regression beyond one epoch is not a tear");
     }
     {
         Harness h;
@@ -231,7 +233,7 @@ int main() {
             w.push_back(8);
         }
         h.feed(w);
-        check(h.dec.epoch_fixes == 1 && h.start(7) == 3 * M - 16, "in-block tear across the wrap repairs");
+        check(h.dec.stats.epoch_fixes == 1 && h.start(7) == 3 * M - 16, "in-block tear across the wrap repairs");
     }
     std::puts("PASS");
 }

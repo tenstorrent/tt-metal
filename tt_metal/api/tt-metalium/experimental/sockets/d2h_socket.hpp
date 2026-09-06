@@ -8,8 +8,6 @@
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/device_types.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <array>
-#include <ranges>
 #include <span>
 #include <memory>
 #include <utility>
@@ -285,23 +283,8 @@ public:
     void read(void* data, uint32_t num_pages, bool notify_sender = true);
 
     /**
-     * @brief The words of a peek(): one range that runs straight across the FIFO's wrap point. Bulk copiers can
-     *        take base() instead, the one or two contiguous spans the words sit in.
-     */
-    using PeekRange = decltype(std::views::join(std::declval<std::array<std::span<const uint32_t>, 2>>()));
-
-    /**
-     * @brief Zero-copy read: blocks until `num_pages` are available and returns them in place, consuming
-     *        nothing. The range stays valid until pop() retires the pages, and a second peek() before that
-     *        returns the same words.
-     *
-     * @throws TT_FATAL if page_size has not been set or num_pages exceeds FIFO capacity.
-     */
-    PeekRange peek(uint32_t num_pages);
-
-    /**
      * @brief Consumes `num_pages` from the read position; with `notify_sender`, also returns their space to the
-     *        device. read() is peek(), a copy, and pop().
+     *        device. read() is a copy followed by pop().
      */
     void pop(uint32_t num_pages, bool notify_sender = true);
 

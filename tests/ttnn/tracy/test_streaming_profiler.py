@@ -7,7 +7,7 @@
 Runs the ``test_streaming_profiler_zones`` workload with ``TT_METAL_STREAMING_PROFILER=1`` and
 ``TT_METAL_STREAMING_PROFILER_TRACY=1`` under a connected ``tracy-capture``, and checks that the relays go
 resident at bring-up and that the capture holds device zones across the workload's per-core contexts. Needs a
-Blackhole box with DRAM programmable cores and a built ``tracy_ctx_inspect`` (in ``build/tools/profiler/bin``); device work runs
+Blackhole box with DRAM programmable cores and a built ``tracy_zone_csv`` (in ``build/tools/profiler/bin``); device work runs
 in a subprocess so the pytest parent never takes the PCIe lock.
 """
 
@@ -26,7 +26,7 @@ from tools.tracy.common import PROFILER_ARTIFACTS_DIR, PROFILER_BIN_DIR, TT_META
 
 CAPTURE_TOOL = PROFILER_BIN_DIR / "tracy-capture"
 WORKLOAD_BIN = Path(TT_METAL_HOME) / "build_Release" / "programming_examples" / "test_streaming_profiler_zones"
-CTX_INSPECT = PROFILER_BIN_DIR / "tracy_ctx_inspect"  # built by tools/tracy_inspect/CMakeLists.txt next to tracy-capture
+ZONE_INSPECT = PROFILER_BIN_DIR / "tracy_zone_csv"  # built by tools/tracy_inspect/CMakeLists.txt next to tracy-capture
 ARTIFACTS = PROFILER_ARTIFACTS_DIR / "streaming_profiler_tests"
 
 
@@ -44,11 +44,11 @@ def _free_port() -> str:
 
 
 def _gpu_context_stats(tracy_file: Path) -> tuple[int, int]:
-    """Return (num_gpu_contexts, num_contexts_with_zones) via tracy_ctx_inspect."""
-    out = subprocess.run([str(CTX_INSPECT), str(tracy_file)], capture_output=True, text=True, timeout=120).stdout
-    m = re.search(r"GPU contexts:\s*(\d+)", out)
+    """Return (num_gpu_contexts, num_contexts_with_zones) from tracy_zone_csv's per-context summary."""
+    out = subprocess.run([str(ZONE_INSPECT), str(tracy_file)], capture_output=True, text=True, timeout=120).stdout
+    m = re.search(r"^contexts (\d+)", out, re.M)
     n_ctx = int(m.group(1)) if m else 0
-    n_with_zones = sum(1 for c in re.findall(r"count=(\d+)", out) if int(c) > 0)
+    n_with_zones = sum(1 for c in re.findall(r"zones=(\d+)", out) if int(c) > 0)
     return n_ctx, n_with_zones
 
 
@@ -105,12 +105,12 @@ def test_streaming_profiler_zones_capture(gx, gy, iters):
     assert "active on 1 device(s)" in log, "streaming profiler did not report active"
     assert out_tracy.exists() and out_tracy.stat().st_size > 4096, "no/empty Tracy capture produced"
 
-    if not CTX_INSPECT.exists():
+    if not ZONE_INSPECT.exists():
         pytest.fail(
-            f"tracy_ctx_inspect not built at {CTX_INSPECT} -- the device-zone assertions cannot run and "
+            f"tracy_zone_csv not built at {ZONE_INSPECT} -- the device-zone assertions cannot run and "
             f"this test would otherwise verify only that the capture exceeds 4096 bytes. It is a normal "
             f"CMake target (tools/tracy_inspect/CMakeLists.txt) that ./build_metal.sh builds next to tracy-capture; "
-            f"rebuild, or `cmake --build build --target tracy_ctx_inspect`."
+            f"rebuild, or `cmake --build build --target tracy_zone_csv`."
         )
 
     n_ctx, n_with_zones = _gpu_context_stats(out_tracy)

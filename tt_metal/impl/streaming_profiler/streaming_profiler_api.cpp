@@ -4,11 +4,11 @@
 
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 
-#include <functional>
 #include <atomic>
+#include <functional>
 #include <memory>
-#include <mutex>
-#include <optional>
+#include <span>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -16,6 +16,7 @@
 #include "impl/streaming_profiler/spsc_marker_decode.hpp"
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
+#include "llrt/zone_meta.hpp"
 
 namespace tt::tt_metal::experimental::streaming_profiler {
 
@@ -31,12 +32,37 @@ Core core_of(const internal::LaneInfo& li) {
         .risc = static_cast<Risc>(li.risc)};
 }
 
-Site site_of(const internal::ZoneNameMirror::Site* s) {
-    if (s == nullptr) {
-        return {};
+// Per-subscription mirror of the process-wide per-ELF zone-name registry; a subscription runs on its own thread, so
+// lookups need no lock. refresh() once per batch, lookup() per record. Names register at load, strictly before a
+// binary can emit, so a miss is a binary without .tt_zone_meta or a tu_id collision. The strings never move or die
+// while the subscription lives; the Tracy sink keys on their addresses.
+class ZoneNameMirror {
+public:
+    struct Entry {
+        std::string name;
+        std::string file;
+        uint32_t line = 0;
+    };
+
+    void refresh() {
+        std::vector<tt::llrt::ZoneMetaEntry> delta;
+        cursor_ = tt::llrt::ZoneMetaRegistry::instance().additions_since(cursor_, delta);
+        for (auto& e : delta) {
+            sites_.emplace(e.zone_id, Entry{std::move(e.name), std::move(e.file), e.line});
+        }
     }
-    return Site{.name = s->name, .location = {.file = s->file, .line = s->line}};
-}
+    Site lookup(uint32_t id) const {
+        const auto it = sites_.find(id);
+        if (it == sites_.end()) {
+            return {};
+        }
+        return Site{.name = it->second.name, .location = {.file = it->second.file, .line = it->second.line}};
+    }
+
+private:
+    std::unordered_map<uint32_t, Entry> sites_;
+    uint32_t cursor_ = 0;
+};
 
 }  // namespace
 
@@ -52,20 +78,25 @@ public:
         names_.refresh();
         zones_.clear();
         events_.clear();
-        staged_.clear();
+        data_.clear();
         arena_.clear();
+        // Every Ext and Cont record adds at most one payload element, so the arena never reallocates under the
+        // spans handed out below.
+        arena_.reserve(batch.records.size());
         const internal::CaptureContext& ctx = *batch.context;
-        clocks_ = batch.clocks;
-        for (const internal::Rec& r : batch.records) {
+        const std::span<const internal::Rec> recs = batch.records;
+        for (size_t i = 0; i < recs.size(); i++) {
+            const internal::Rec& r = recs[i];
             const internal::LaneInfo& lane = ctx.devices[r.meta.dev].lanes[r.meta.lane];
+            const Clock& clock = batch.clocks[r.meta.dev];
             switch (r.meta.type) {
                 case T::Zone:
                     if (detail::has(channels_, Channel::Zones)) {
                         const bool is_stall = r.id == profiler::kSpscStallZoneId;
                         zones_.push_back(Zone{
-                            .site = is_stall ? Site{.name = kStallZoneName} : site_of(names_.lookup_site(r.id)),
+                            .site = is_stall ? Site{.name = kStallZoneName} : names_.lookup(r.id),
                             .core = core_of(lane),
-                            .clock = std::cref(batch.clocks[r.meta.dev]),
+                            .clock = std::cref(clock),
                             .start_timestamp = r.data.zone.start,
                             .end_timestamp = r.data.zone.start + r.data.zone.duration,
                             .runtime_id = r.prog,
@@ -75,32 +106,44 @@ public:
                 case T::Event:
                     if (detail::has(channels_, Channel::Events)) {
                         events_.push_back(Event{
-                            .site = site_of(names_.lookup_site(r.id)),
+                            .site = names_.lookup(r.id),
                             .core = core_of(lane),
-                            .clock = std::cref(batch.clocks[r.meta.dev]),
+                            .clock = std::cref(clock),
                             .timestamp = r.data.ts,
                             .runtime_id = r.prog});
                     }
                     break;
-                case T::Data:
-                case T::Ext:
-                case T::Cont:
-                    if (detail::has(channels_, Channel::TimestampedData)) {
-                        assemble(lane, r);
+                case T::Data: {
+                    // The head's Ext (payload words 0-1 and the word count) and Conts follow it directly: the decoder
+                    // writes the group in one call and batches split only between frames.
+                    const size_t first = arena_.size();
+                    size_t j = i + 1;
+                    if (j < recs.size() && recs[j].meta.type == T::Ext) {
+                        if (recs[j].id != 0) {
+                            arena_.push_back(recs[j].data.ext);
+                        }
+                        for (j++; j < recs.size() && recs[j].meta.type == T::Cont; j++) {
+                            arena_.push_back(recs[j].data.payload);
+                        }
                     }
+                    if (detail::has(channels_, Channel::TimestampedData)) {
+                        data_.push_back(TimestampedData{
+                            .site = names_.lookup(r.id),
+                            .core = core_of(lane),
+                            .payload = std::span<const uint64_t>(arena_.data() + first, arena_.size() - first),
+                            .clock = std::cref(clock),
+                            .timestamp = r.data.ts,
+                            .runtime_id = r.prog});
+                    }
+                    i = j - 1;
                     break;
-                default: break;
+                }
+                case T::Ext:
+                case T::Cont: break;  // consumed with their Data head
             }
         }
-        const bool any = !zones_.empty() || !events_.empty() || !staged_.empty();
-        if (!any && batch.dropped_delta == 0 && batch.stall_delta == 0) {
+        if (zones_.empty() && events_.empty() && data_.empty() && batch.dropped_delta == 0 && batch.stall_delta == 0) {
             return;
-        }
-        data_.clear();
-        for (const Staged& s : staged_) {
-            data_.push_back(s.record);
-            data_.back().clock = std::cref(clocks_[s.dev]);  // a head from an earlier batch takes this batch's clock
-            data_.back().payload = std::span<const uint64_t>(arena_.data() + s.payload_offset, s.payload_len);
         }
         Batch<Channel::All> full;
         full.zones = zones_;
@@ -113,73 +156,13 @@ public:
     }
 
 private:
-    // A Data head, its Ext and its Conts can straddle batches, so one assembly per lane persists across calls.
-    // Payload spans point into arena_, which only grows until the batch is delivered.
-    struct Pending {
-        bool active = false;
-        uint32_t dev = 0;
-        std::optional<TimestampedData> head;
-        uint32_t want = 0;
-        std::vector<uint64_t> payload;
-    };
-    struct Staged {
-        TimestampedData record;
-        uint32_t dev = 0;
-        size_t payload_offset = 0;
-        size_t payload_len = 0;
-    };
-
-    void complete(Pending& p) {
-        p.active = false;
-        staged_.push_back(Staged{*p.head, p.dev, arena_.size(), p.payload.size()});
-        arena_.insert(arena_.end(), p.payload.begin(), p.payload.end());
-    }
-
-    void assemble(const internal::LaneInfo& lane, const internal::Rec& r) {
-        using T = internal::RecType;
-        Pending& p = pending_[(r.meta.dev << 10) | r.meta.lane];
-        if (r.meta.type == T::Data) {
-            if (p.active) {
-                complete(p);  // a new head ends a truncated predecessor
-            }
-            p.active = true;
-            p.dev = r.meta.dev;
-            p.want = 0;
-            p.payload.clear();
-            p.head = TimestampedData{
-                .site = site_of(names_.lookup_site(r.id)),
-                .core = core_of(lane),
-                .clock = std::cref(clocks_[r.meta.dev]),
-                .timestamp = r.data.ts,
-                .runtime_id = r.prog};
-            return;
-        }
-        if (!p.active) {
-            return;
-        }
-        if (r.meta.type == T::Ext) {
-            p.want = (r.id + 1) / 2;  // payload words, two per element
-            if (p.want != 0) {
-                p.payload.push_back(r.data.ext);
-            }
-        } else {
-            p.payload.push_back(r.data.payload);
-        }
-        if (p.payload.size() >= p.want) {
-            complete(p);
-        }
-    }
-
     const Channel channels_;
     const std::function<void(const Batch<Channel::All>&)> cb_;
-    std::span<const Clock> clocks_;  // this batch's
-    internal::ZoneNameMirror names_;
-    std::unordered_map<uint32_t, Pending> pending_;  // keyed (dev << 10) | lane
+    ZoneNameMirror names_;
     std::vector<Zone> zones_;
     std::vector<Event> events_;
-    std::vector<Staged> staged_;
-    std::vector<uint64_t> arena_;
     std::vector<TimestampedData> data_;
+    std::vector<uint64_t> arena_;  // the batch's payloads, which data_'s spans point into
 };
 
 }  // namespace tt::tt_metal::experimental::streaming_profiler

@@ -14,9 +14,6 @@ target_include_directories(
     test_streaming_profiler_zones
     PRIVATE
         ${PROJECT_SOURCE_DIR}/tt_metal
-        # --clkprobe reaches into llrt/tt_cluster.hpp and the MeshDevice impl (a tile debug-register read is
-        # not public API); those headers include their siblings unprefixed, hence tt_metal/impl on the path.
-        ${PROJECT_SOURCE_DIR}/tt_metal/impl
         ${PROJECT_SOURCE_DIR}/tt_metal/api
         ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc

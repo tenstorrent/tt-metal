@@ -14,7 +14,7 @@
 // ZONE_CYC == 0 is a legitimate rate point (max rate, no spin), so it cannot double as "use the graduated
 // table"; ZONE_MODE selects the body instead.
 #ifndef ZONE_MODE
-#define ZONE_MODE 0  // 0 = graduated wall-clock durations, 1 = uniform nop spin (knee sweeps)
+#define ZONE_MODE 0  // 0 = graduated wall-clock durations, 1 = uniform nop spin (knee sweeps), 2 = marker-cost bench
 #endif
 #ifndef ZONE_CYC
 #define ZONE_CYC 0u
@@ -54,39 +54,18 @@ static constexpr int kWallClockLowIdx = 0;
         }                                                                 \
     }
 
-// Empty body (ZONE_MODE == 3): the pure-overhead microbenchmark; zones_dm.cpp documents the duration/gap
-// decomposition it measures.
-#define ZONE_EMPTY(NAME)         \
-    {                            \
-        DeviceZoneScopedN(NAME); \
-    }
-
-// ZONE_MODE == 4: the empty zone plus one extra latched wall-clock read pair in the body, so
-// duration(mode 4) - duration(mode 3) is the cost of one wall-clock read on this RISC.
-#define ZONE_PRICE_CLOCK(NAME)                                                             \
-    {                                                                                      \
-        DeviceZoneScopedN(NAME);                                                           \
-        volatile tt_reg_ptr uint32_t* _pwc =                                               \
-            reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); \
-        uint32_t _plo = _pwc[0];                                                           \
-        uint32_t _phi = _pwc[1];                                                           \
-        asm volatile("" ::"r"(_plo), "r"(_phi));                                           \
-    }
-
 // ZONE_MODE == 0 keeps the wall-clock spin: it needs durations calibrated in microseconds, which a
 // nop-iteration count cannot express.
-#if ZONE_MODE == 4
-#define ZONE(NAME, GRADUATED) ZONE_PRICE_CLOCK(NAME)
-#elif ZONE_MODE == 3
-#define ZONE(NAME, GRADUATED) ZONE_EMPTY(NAME)
-#elif ZONE_MODE
+#if ZONE_MODE
 #define ZONE(NAME, GRADUATED) ZONE_NOPS(NAME, ZONE_CYC)
 #else
 #define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)
 #endif
 
-// ZONE_MODE == 2: the DeviceZoneScopedN microbench, same shape as zones_dm.cpp. Slots 2..4 of BENCH_ADDR, so
-// all five lanes of a core report side by side.
+// Marker-cost microbench (--bench): bursts of one marker kind, each burst timed against the wall clock, the totals
+// left in L1 at BENCH_ADDR (slot per RISC; DPRINT and the profiler are mutually exclusive). A burst stays under the
+// 512-word ring so it never blocks, and BENCH_DELAY paces it so the relay keeps up: with a stall anywhere the
+// number is the stall, not the marker.
 #if ZONE_MODE == 2
 void kernel_main() {
     volatile tt_reg_ptr uint32_t* wc = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
@@ -98,18 +77,29 @@ void kernel_main() {
     constexpr uint32_t kSlot = 4;
 #endif
     volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(BENCH_ADDR) + kSlot * 2u;
-    constexpr uint32_t kBurst = 100;
-    uint32_t cycles = 0, zones = 0;
+    // BENCH_KIND 0 = spin only, 1 = empty zone (3 words), 2 = DeviceFlag (3 words), 3 = DeviceTimestampedData
+    // (6 words); the burst stays under the 512-word ring so it never blocks.
+    constexpr uint32_t kBurst = BENCH_KIND == 3 ? 64 : 100;
+    uint32_t cycles = 0, markers = 0;
     for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
         const uint32_t t0 = wc[kWallClockLowIdx];
         for (uint32_t i = 0; i < kBurst; i++) {
+#if BENCH_KIND == 3
+            DeviceTimestampedData(ZTAG "_BENCH", (uint64_t)i);
+#elif BENCH_KIND == 2
+            DeviceFlag(ZTAG "_BENCH");
+#elif BENCH_KIND == 1
             DeviceZoneScopedN(ZTAG "_BENCH");
+#endif
+            for (uint32_t d = 0; d < (uint32_t)BENCH_DELAY; d++) {
+                asm volatile("nop");
+            }
         }
         cycles += (uint32_t)(wc[kWallClockLowIdx] - t0);
-        zones += kBurst;
+        markers += kBurst;
     }
     out[0] = cycles;
-    out[1] = zones;
+    out[1] = markers;
 }
 #else
 void kernel_main() {
