@@ -739,6 +739,36 @@ def fast_device_to_host(
     return _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype)
 
 
+def fast_device_to_host_shards(
+    tt_tensor: ttnn.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    *,
+    pre_transfer_fn: Callable[[ttnn.Tensor], ttnn.Tensor] | None = None,
+) -> list[torch.Tensor]:
+    """The per-device shards of a mesh tensor as zero-copy torch tensors, in row-major mesh order, no concat.
+
+    `fast_device_to_host` reassembles the shards into one tensor, which is a full host memcpy of the
+    wave; a caller that slices the result straight back into per-shard pieces (the VAE decode's
+    per-tile unpatchify) pays that copy for nothing. This returns the shards themselves -- each a
+    view of its DMA buffer, which the torch tensor keeps alive -- trimmed to the logical shape as the
+    concatenating path does. Shard `r * cols + c` is the piece `ShardTensorToMesh(dim=0)` handed to
+    device `(r, c)`, so the list is in unit order. Single-host only: on a multi-host mesh a rank can
+    only see its own shards, and the concatenating path's inter-host gather is what makes it whole.
+    """
+    if ttnn.using_distributed_env():
+        raise NotImplementedError("fast_device_to_host_shards is single-host only; use fast_device_to_host")
+    mesh_coords = list(tt_tensor.tensor_topology().mesh_coords())
+    if pre_transfer_fn is not None:
+        tt_tensor = pre_transfer_fn(tt_tensor)
+    host_tensor = tt_tensor.cpu(blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    host_shards = ttnn.get_device_tensors(host_tensor)
+    logical_shape = list(host_shards[0].shape)
+    trim = tuple(slice(0, d) for d in logical_shape)
+    order = sorted(range(len(host_shards)), key=lambda i: (int(mesh_coords[i][0]), int(mesh_coords[i][1])))
+    return [_to_torch_zero_copy(host_shards[i])[trim] for i in order]
+
+
 def upsample(
     x: ttnn.Tensor,
     /,

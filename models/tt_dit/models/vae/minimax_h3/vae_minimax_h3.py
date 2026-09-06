@@ -45,7 +45,7 @@ from loguru import logger
 
 import ttnn
 
-from ....utils.tensor import fast_device_to_host, float_to_uint8, local_device_to_torch
+from ....utils.tensor import fast_device_to_host, fast_device_to_host_shards, float_to_uint8, local_device_to_torch
 from ....utils.yuv_d2h import fast_device_to_host_yuv
 from .encoder_minimax_h3 import MiniMaxH3Encoder3d
 
@@ -106,6 +106,10 @@ _DECODE_TORCH_THREADS = 8
 # the main thread's wave enqueue and readback -- see `_decode_units_async_stitch`. Opt-in until it is
 # measured against the serial schedule on the same host.
 _ASYNC_STITCH_ENV = "MINIMAX_H3_VAE_ASYNC_STITCH"
+# With the async stitch: read each wave back as per-device shards (`fast_device_to_host_shards`) instead
+# of one concatenated tensor, skipping a host memcpy of the whole wave that the per-tile unpatchify
+# undid anyway. Opt-in for the same reason; single-host only.
+_SHARD_READBACK_ENV = "MINIMAX_H3_VAE_SHARD_READBACK"
 
 
 def split_tiles(length: int, tile_size: int, min_overlap: int, ratio: int) -> tuple[list[int], list[int], list[int]]:
@@ -369,6 +373,9 @@ class MiniMaxH3Vae:
         assert waves_per_device >= 1, f"waves_per_device must be >= 1, got {waves_per_device}"
         self.waves_per_device = waves_per_device
         self.async_stitch = os.environ.get(_ASYNC_STITCH_ENV, "0") == "1"
+        self.shard_readback = (
+            self.async_stitch and os.environ.get(_SHARD_READBACK_ENV, "0") == "1" and not ttnn.using_distributed_env()
+        )
         # Pipeline warmup turns this off so the compile-pass decode does not dump a profile.
         self.log_profile = True
         self._encoder_state: dict[str, torch.Tensor] | None = None
@@ -835,13 +842,21 @@ class MiniMaxH3Vae:
 
         def read_wave(decoded, count: int) -> list[torch.Tensor]:
             mark = time.perf_counter()
-            out = self._read_wave_units(decoded)
+            if self.shard_readback and not postprocess:
+                # A list of per-device shards, each `[waves_per_device, N, C]`, in unit order.
+                out = fast_device_to_host_shards(
+                    decoded, self.mesh_device, pre_transfer_fn=float_to_uint8 if self.readback_uint8 else None
+                )
+                nbytes = sum(s.numel() * s.element_size() for s in out)
+            else:
+                out = self._read_wave_units(decoded)
+                nbytes = out.numel() * out.element_size()
             elapsed = time.perf_counter() - mark
             profile["readback"] += elapsed
             profile["readback_each"].append(elapsed)
             profile["shape"] = tuple(decoded.shape)
             profile["dtype"] = str(decoded.dtype)
-            profile["readback_mb"] += out.numel() * out.element_size() / 1e6
+            profile["readback_mb"] += nbytes / 1e6
             if not postprocess:
                 return [(out, count)]
 
@@ -931,11 +946,16 @@ class MiniMaxH3Vae:
         clips: list[torch.Tensor] = []
         buffered: list[torch.Tensor] = []
 
-        def post_process(out: torch.Tensor, count: int) -> None:
+        def post_process(out, count: int) -> None:
             mark = time.perf_counter()
+            if isinstance(out, list):
+                # Per-device shards in unit order (shard readback); the padded tail is the last shards.
+                units = (shard[b : b + 1] for shard in out for b in range(shard.shape[0]))
+            else:
+                units = (out[index : index + 1] for index in range(count))
             tiles = [
                 unpatchify(
-                    out[index : index + 1].float(),
+                    unit.float(),
                     num_frames=num_frames,
                     height=height,
                     width=width,
@@ -943,7 +963,7 @@ class MiniMaxH3Vae:
                     patch_size=config.spatial_compression_ratio,
                     patch_size_t=config.temporal_compression_ratio,
                 )
-                for index in range(count)
+                for unit, _ in zip(units, range(count))
             ]
             profile["unpatchify"] += time.perf_counter() - mark
             buffered.extend(tiles)
