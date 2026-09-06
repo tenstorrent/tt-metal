@@ -90,6 +90,38 @@ Timing was never recorded (the sweep died before the first band-mode record), so
 stays open; with 12 worker columns available and band mode limited to 8, the ceiling result above (bank-direct
 16 KB bursts 438 vs all-core dual-NoC 436 GB/s) says there is no bandwidth left for it to win on this DDR speed.
 
+### 12 columns (`grid_cols=12`, the full P150 worker width)
+
+Same sweep with the twelfth worker column in use (raw rows `perf_data/ab_c12_p150.jsonl`; 13 is not available,
+dispatch owns one of the 13 Tensix columns). PCC clean everywhere (min 0.9799). Device time in us, speedup vs legacy:
+
+| case | dtype | legacy | G5r10 (11 col) | G5r10 c12 | G10r10 c12 | G4r8 c12 |
+|---|---|---|---|---|---|---|
+| kimi_u | bf4 | 2379 | 1008 (2.36x) | 1013 (2.35x) | 1088 (2.19x) | 992 (2.40x) |
+| kimi_u | bf8 | 3449 | 1657 (2.08x) | 1663 (2.07x) | 1618 (2.13x) | 1644 (2.10x) |
+| kimi_zipf | bf4 | 2171 | 1069 (2.03x) | 1081 (2.01x) | 1309 (1.66x) | 1181 (1.84x) |
+| kimi_zipf | bf8 | 3105 | 1779 (1.75x) | 1769 (1.76x) | 2247 (1.38x) | 1884 (1.65x) |
+| kimi_e24 | bf4 | 4741 | 1851 (2.56x) | 1879 (2.52x) | 1897 (2.50x) | 1986 (2.39x) |
+| kimi_e24 | bf8 | 6907 | 3131 (2.21x) | 3193 (2.16x) | 3136 (2.20x) | 3288 (2.10x) |
+| m3_u4 | bf4 | 1084 | 473 (2.29x) | **437 (2.48x)** | 734 (1.48x) | 436 (2.49x) |
+| m3_u4 | bf8 | 2430 | 693 (3.50x) | **676 (3.60x)** | 1285 (1.89x) | 672 (3.62x) |
+| m3_u8 | bf4 | 2208 | 925 (2.39x) | **866 (2.55x)** | 1458 (1.51x) | 876 (2.52x) |
+| m3_u8 | bf8 | 4846 | 1402 (3.46x) | **1329 (3.65x)** | 2583 (1.88x) | 1350 (3.59x) |
+| m3_u16 | bf4 | 4379 | 1890 (2.32x) | **1811 (2.42x)** | 2979 (1.47x) | 1737 (2.52x) |
+| m3_u16 | bf8 | 9680 | 2849 (3.40x) | **2735 (3.54x)** | 5263 (1.84x) | 2665 (3.63x) |
+| m3_skew8 | bf4 | 2137 | 1131 (1.89x) | **1080 (1.98x)** | 1550 (1.38x) | 1130 (1.89x) |
+| m3_skew8 | bf8 | 4924 | 1863 (2.64x) | **1780 (2.77x)** | 2676 (1.84x) | 1815 (2.71x) |
+
+Geomean G5r10 c12 / G5r10 11-col: Kimi 0.99 (bf4) / 0.99 (bf8), **M3 1.06 (bf4) / 1.04 (bf8)**. That is exactly
+what the N padding predicts: the per-column tile count only drops when `ceil(N/12) < ceil(N/11)`. Kimi gate/up
+stays at 6 tiles per column (64 tiles), only down goes 21 -> 19, and the extra column's share of the
+multicast/handshake traffic eats that. M3 goes 9 -> 8 (gate/up, 96 tiles) and 18 -> 16 (down, 192 tiles) and
+gains 4-6%. The L1 guard narrows the M3 gate/up K-block to 12 at 12 columns (logged `in0_block_w_gu=12`),
+so part of the potential is left on the table.
+
+Recommendation: `ffn_grid_cols=12` for MiniMax-M3 on P150 (and any model whose hidden/emb tile counts
+divide better by 12 than 11); keep 11 for Kimi. It must stay 11 on P100 (11 worker columns).
+
 ## Step 2: does the model tolerate 10 rows?
 
 - `TtMoe` creates its dispatch/shared-expert sub-devices only for the overlap phase and calls
@@ -163,8 +195,9 @@ the expectation (expert FFN 3.4x faster on the uniform EP32 case).
   Predicted CI values from the measured ratios: K2.7 5,413,674 x 0.766 = ~4.14 ms, K3 8,369,824 x 0.730 =
   ~6.11 ms. Suggested as the next PR: flip the defaults and re-centre both gates from that run.
 - Band mode: refused at validation (this commit); NoC-level stall documented above, fix direction given.
-- `grid_cols` default 11 leaves one of the 12 worker columns idle on P150 (13 minus the dispatch column); using
-  12 needs the N-padding assumptions (`N_tiles` padded to a multiple of `grid_cols`) re-checked, untested here.
+- `grid_cols=12` is validated (PCC clean) and worth 4-6% for M3 dims, nothing for Kimi (see "12 columns");
+  `grid_cols=13` cannot be used on P150 because dispatch owns one Tensix column. Promote it together with the
+  row-group default for M3.
 - Re-measure the DRAM-bound cases (bf8) on a 16 Gbps P150 galaxy; expect up to 8/7 on those only.
 - Legacy-reader race ports (report section "Races") are still open; both legacy gates passed here, so there is
   no evidence they fire on Galaxy under this workload.
