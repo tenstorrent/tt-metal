@@ -508,6 +508,7 @@ Transformer
    ttnn.transformer.chunked_flash_mla_prefill
    ttnn.transformer.chunked_scaled_dot_product_attention
    ttnn.transformer.concatenate_heads
+   ttnn.transformer.decode_gated_delta_rule
    ttnn.transformer.flash_mla_prefill
    ttnn.transformer.flash_multi_latent_attention_decode
    ttnn.transformer.gated_delta_attn_seq
