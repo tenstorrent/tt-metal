@@ -35,6 +35,20 @@ for _p in (str(PERF), str(PERF.parent.parent.parent), str(_CC)):
         sys.path.insert(0, _p)
 
 
+def _own(monkeypatch, *names):
+    """Make monkeypatch OWN these variables, absent or not, so teardown really removes them.
+
+    delenv(raising=False) does not record a key that was already absent -- pytest has nothing to
+    restore, so it tracks nothing. Importing perf_mcp then setdefaults PERF_MCP_MODEL_NAME into the
+    real environment and it survives the test, which is how this file made
+    test_stage_ms_belongs_to_a_run fail two files later. setenv first, then delenv, and the key is
+    tracked either way.
+    """
+    for _n in names:
+        monkeypatch.setenv(_n, "_owned_by_test")
+        monkeypatch.delenv(_n, raising=False)
+
+
 def _state(tmp_path):
     """A run's state dir, as the server would have written it."""
     root = tmp_path / "some_model"
@@ -57,8 +71,7 @@ def _writer(monkeypatch, tmp_path, tag, *, stamp_first: bool):
     root = _state(tmp_path)
     monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("PERF_MCP_TASK", "main")
-    for _k in ("PERF_MCP_MODEL_ROOT", "PERF_MCP_MODEL_NAME", "PERF_MCP_RUN_ID"):
-        monkeypatch.delenv(_k, raising=False)
+    _own(monkeypatch, "PERF_MCP_MODEL_ROOT", "PERF_MCP_MODEL_NAME", "PERF_MCP_RUN_ID")
     if stamp_first:
         import run as _run
 
@@ -87,17 +100,20 @@ def test_the_run_resolves_the_model_before_anything_reads_it(monkeypatch, tmp_pa
     assert m._MODEL_ROOT.name == "some_model"
 
 
-def test_setting_it_after_the_import_is_not_enough(monkeypatch, tmp_path):
-    """The failure mode itself, pinned: a later assignment leaves the frozen value in place."""
+def test_a_root_that_arrives_after_the_import_is_still_picked_up(monkeypatch, tmp_path):
+    """BEHAVIOUR CHANGE (2026-09-06), deliberate. This case pinned the old failure -- a late root was
+    ignored because _MODEL_ROOT is frozen at import and eleven paths read it directly. Those paths now
+    resolve the key at CALL time, so the module recovers instead of naming a file no run writes. The
+    frozen attribute is still frozen; nothing reads it for a path any more."""
     root = _state(tmp_path)
     monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("PERF_MCP_TASK", "main")
-    for _k in ("PERF_MCP_MODEL_ROOT", "PERF_MCP_MODEL_NAME"):
-        monkeypatch.delenv(_k, raising=False)
+    _own(monkeypatch, "PERF_MCP_MODEL_ROOT", "PERF_MCP_MODEL_NAME")
     m = _load_perf_mcp("late")
+    assert m._MODEL_ROOT.name == "" and m.read_stage_batch() == 0
     monkeypatch.setenv("PERF_MCP_MODEL_ROOT", str(root))
-    assert m._MODEL_ROOT.name == "", "if this ever passes, the value is no longer frozen and the stamp can move"
-    assert m.read_stage_batch() == 0
+    assert m._MODEL_ROOT.name == "", "the import-time attribute is still frozen, by design"
+    assert m.read_stage_batch() == 8, "but the PATH is resolved at call time and recovers"
 
 
 def test_an_operator_who_named_the_root_outranks_the_inference(monkeypatch, tmp_path):
@@ -106,8 +122,8 @@ def test_an_operator_who_named_the_root_outranks_the_inference(monkeypatch, tmp_
 
     other = tmp_path / "stated_elsewhere"
     other.mkdir()
+    _own(monkeypatch, "PERF_MCP_MODEL_NAME")
     monkeypatch.setenv("PERF_MCP_MODEL_ROOT", str(other))
-    monkeypatch.delenv("PERF_MCP_MODEL_NAME", raising=False)
     _run._stamp_model_root(tmp_path / "inferred")
     import os as _os
 
@@ -117,8 +133,7 @@ def test_an_operator_who_named_the_root_outranks_the_inference(monkeypatch, tmp_
 def test_an_unusable_path_states_nothing(monkeypatch):
     import run as _run
 
-    for _k in ("PERF_MCP_MODEL_ROOT", "PERF_MCP_MODEL_NAME"):
-        monkeypatch.delenv(_k, raising=False)
+    _own(monkeypatch, "PERF_MCP_MODEL_ROOT", "PERF_MCP_MODEL_NAME")
     assert _run._stamp_model_root(None) == ""
 
 
@@ -128,8 +143,7 @@ def test_the_name_is_kept_beside_the_root_that_produced_it(monkeypatch, tmp_path
 
     import run as _run
 
-    for _k in ("PERF_MCP_MODEL_ROOT", "PERF_MCP_MODEL_NAME"):
-        monkeypatch.delenv(_k, raising=False)
+    _own(monkeypatch, "PERF_MCP_MODEL_ROOT", "PERF_MCP_MODEL_NAME")
     root = tmp_path / "named_model"
     root.mkdir()
     _run._stamp_model_root(root)

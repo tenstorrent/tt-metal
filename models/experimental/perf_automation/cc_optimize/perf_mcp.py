@@ -114,18 +114,56 @@ _MODEL_ROOT_STATED = bool(
 # is loaded lazily here (see _ledger) and does not exist yet at import. This line is the SOURCE the
 # resolver reads -- it exports PERF_MCP_MODEL_NAME, which model_key prefers -- so the two agree by
 # construction rather than by repeating a rule.
-os.environ.setdefault("PERF_MCP_MODEL_NAME", _MODEL_ROOT.name or "model")
+# ONLY A REAL NAME. Exporting the literal "model" here poisons every later reader: model_key prefers
+# this variable, so a process that imported before the root was known published "model" and then kept
+# answering "model" even once the root arrived. An unset variable lets the root be consulted; a set
+# one never does.
+if _MODEL_ROOT.name:
+    os.environ.setdefault("PERF_MCP_MODEL_NAME", _MODEL_ROOT.name)
 _ENV = _MANIFEST.get("env", {})
 
 
 # where profile_model stashes the current baseline so measure_candidate can compare structurally
+def _model_key() -> str:
+    """The (model) half of every per-run path, resolved at CALL time.
+
+    ELEVEN paths spelled `_MODEL_ROOT.name if _MODEL_ROOT else "model"` -- one frozen expression,
+    copied. _MODEL_ROOT is resolved at IMPORT from PERF_MCP_MODEL_ROOT, so a process that learns the
+    root afterwards keeps "" for its whole life, and "" falls through to the literal "model": every
+    one of those paths then names a file no run writes.
+
+    It is not theoretical and it is not once. The final report read a stage doc that was never
+    written under that name and printed a roofline with no batch, per-token labels on every stage and
+    an empty ladder. The round gate wrote 185 refusals to perf_mcp_round_finish_model_main.json while
+    the loop read the model's own file, last touched two days earlier by a different run, and
+    reported five clean finishes on a run that never finished anything. A matmul sweep before that
+    was invisible for the same reason.
+
+    Delegates to the ledger's model_key, which owns "what is this model called" and reads the live
+    environment. Falls back to the import-time value, then to the legacy filename -- spelled here,
+    once, where the paths that still need a name can see it.
+    """
+    # THIS MODULE'S OWN ROOT FIRST, when it resolved one. It was read from the same environment at
+    # import, so it is the same answer, and preferring it keeps a path from following a variable that
+    # some other part of the process changed underneath it. Only a module that imported BLIND -- the
+    # case this exists for -- has nothing to offer and asks the ledger, which reads the live value.
+    _own = _MODEL_ROOT.name if _MODEL_ROOT else ""
+    if _own:
+        return _own
+    try:
+        _k = _ledger().model_key()
+    except Exception:  # noqa: BLE001 -- an unloadable ledger must not break path resolution
+        _k = ""
+    return _k or "model"
+
+
 def _baseline_path():
     """Per-(model, task) device_ms baseline. Was a single global file, unlike the already-keyed
     the measurement ledger / _throughput_path(), and nothing reset it at task start -- so the
     baseline a candidate was compared against could belong to a previous model, a previous
     module, or a concurrent optimize on the same box. A leftover SLOWER baseline books the
     first candidate of the new run as a large fake win."""
-    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    model = _model_key()
     task = os.environ.get("PERF_MCP_TASK", "main")
     return state_dir() / ("perf_mcp_baseline_%s_%s.json" % (model, task))
 
@@ -206,7 +244,7 @@ def _promote_baseline(prof: dict) -> dict:
 # actual reading was ~23.9 ms, and two concurrent optimize runs would have done the same to each
 # other. A scoreboard that any other process can write is not a scoreboard.
 def _fullpipe_baseline_1cq_path():
-    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    model = _model_key()
     task = os.environ.get("PERF_MCP_TASK", "main")
     return state_dir() / ("perf_mcp_full_pipeline_baseline_1cq_%s_%s.json" % (model, task))
 
@@ -1079,7 +1117,7 @@ def _read_baseline_profile():
 def _throughput_path():
     """Per-(model, task) path for the STATIC roofline-target snapshot the report renders. Keyed like
     the baseline path so a per-module run never reads another module's target."""
-    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    model = _model_key()
     task = os.environ.get("PERF_MCP_TASK", "main")
     return state_dir() / ("perf_mcp_throughput_%s_%s.json" % (model, task))
 
@@ -2429,7 +2467,7 @@ def _workload_failure_tail(out: str, keep: int = 12) -> str:
 
 def _stage_ms_path():
     """Where the MEASURED per-phase timings live, keyed like every other per-run artifact."""
-    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    model = _model_key()
     task = os.environ.get("PERF_MCP_TASK", "main")
     return state_dir() / ("perf_mcp_stage_ms_%s_%s.json" % (model, task))
 
@@ -2478,7 +2516,7 @@ def _read_stage_doc(state_dir_path=None, model="", task="") -> dict:
         # already refuses on for the same reason; one definition, used by both.
         if not _ledger().is_identified(model):
             return {}
-        m = model or _MODEL_ROOT.name
+        m = model or _model_key()
         t = task or os.environ.get("PERF_MCP_TASK", "main")
         doc = json.loads((base / ("perf_mcp_stage_ms_%s_%s.json" % (m, t))).read_text())
         if not isinstance(doc, dict):
@@ -3954,7 +3992,7 @@ def _fullpipe_gate_log():
 
 def _gate_verdict_path():
     """Where every gate's LAST verdict is recorded, keyed like every other per-run artifact."""
-    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    model = _model_key()
     task = os.environ.get("PERF_MCP_TASK", "main")
     return state_dir() / ("perf_mcp_gate_verdicts_%s_%s.json" % (model, task))
 
@@ -4100,7 +4138,7 @@ def _fullpipe_reference_ms(fp: dict):
             return None
     try:
         led = _ledger()
-        model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+        model = _model_key()
         row = led.first(led.KIND_FULLPIPE, led.PHASE_BEFORE, model=model, task=os.environ.get("PERF_MCP_TASK", "main"))
         return float(row["value_ms"]) if row else None
     except Exception:  # noqa: BLE001
@@ -4872,7 +4910,7 @@ def hitl_gate(
 
 
 def _untracked_baseline_path() -> Path:
-    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    model = _model_key()
     task = os.environ.get("PERF_MCP_TASK", "main")
     return state_dir() / ("perf_mcp_untracked_%s_%s.json" % (model, task))
 
@@ -5139,8 +5177,7 @@ def _baseline_at_record():
 
 def _consumed_verdict_path():
     return state_dir() / (
-        "perf_mcp_fullpipe_consumed_%s_%s.json"
-        % (_MODEL_ROOT.name if _MODEL_ROOT else "model", os.environ.get("PERF_MCP_TASK", "main"))
+        "perf_mcp_fullpipe_consumed_%s_%s.json" % (_model_key(), os.environ.get("PERF_MCP_TASK", "main"))
     )
 
 
@@ -5761,7 +5798,7 @@ def distill_knob(
     raises into the loop."""
     try:
         gdir = _PKG / "GUIDELINES"
-        model = _MODEL_ROOT.name or "model"
+        model = _model_key()
         result: dict = {"written": None, "graduated": None}
         if (fires_when or recipe) and op_class:
             bkt = (bucket or op_class).strip()
@@ -6977,7 +7014,7 @@ def _stages_short_of_achievable() -> list:
             _unit,
             _read_baseline_profile(),
             _sms,
-            model=(_MODEL_ROOT.name if _MODEL_ROOT else "model"),
+            model=_model_key(),
             task=os.environ.get("PERF_MCP_TASK", "main"),
         )
         out = []
@@ -7071,7 +7108,7 @@ def _stage_gap_share(profile) -> dict:
 
 def _round_finish_path():
     """Where finish_round's last verdict is written, keyed like every other per-run state file."""
-    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    model = _model_key()
     task = os.environ.get("PERF_MCP_TASK", "main")
     return state_dir() / ("perf_mcp_round_finish_%s_%s.json" % (model, task))
 
