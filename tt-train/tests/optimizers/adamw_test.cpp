@@ -7,10 +7,19 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <cstdint>
+#include <optional>
+#include <tuple>
+#include <vector>
+
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/optimizers/adamw/adamw.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
 struct AdamWCase {
@@ -41,7 +50,21 @@ void PrintTo(const AdamWCase& pc, std::ostream* os) {
         pc.amsgrad);
 }
 
-class AdamWComparisonTest : public ::testing::TestWithParam<AdamWCase> {
+// How the step-varying scalars reach the kernel: as float runtime args (lr, beta1_pow,
+// beta2_pow, weight_decay), or pre-combined into single-element f32 device tensors
+// (step_size, inv_sqrt_bc2, decay_factor). Every case below is run both ways.
+enum class ScalarSource : std::uint8_t { Float, Tensor };
+
+static std::string_view scalar_source_name(ScalarSource source) {
+    return source == ScalarSource::Float ? "FloatScalars" : "TensorScalars";
+}
+
+// Custom printer for ScalarSource used by gtest to make test output readable
+void PrintTo(const ScalarSource& source, std::ostream* os) {
+    *os << scalar_source_name(source);
+}
+
+class AdamWComparisonTest : public ::testing::TestWithParam<std::tuple<AdamWCase, ScalarSource>> {
 public:
     static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
@@ -58,6 +81,18 @@ protected:
 
 static ttnn::Tensor to_tt_bf16(const xt::xarray<float>& x) {
     return ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(x, &ttml::autograd::ctx().get_device());
+}
+
+// from_xtensor() always converts to bf16, so the op-level paths (which also need fp32 params)
+// build their tensors from a flat vector with an explicit spec.
+static ttnn::Tensor make_device_tensor(const std::vector<float>& data, const ttnn::Shape& shape, ttnn::DataType dtype) {
+    const auto spec = tt::tt_metal::TensorSpec(
+        shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG));
+    return ttnn::Tensor::from_vector(data, spec, &ttml::autograd::ctx().get_device());
+}
+
+static ttnn::Tensor to_scalar_tensor(float value) {
+    return make_device_tensor({value}, ttnn::Shape({1, 1, 1, 1}), ttnn::DataType::FLOAT32);
 }
 
 // CPU reference implementation of AdamW
@@ -161,7 +196,121 @@ static ErrorMetrics compute_error_metrics(
     return {mean_error, max_error, name};
 }
 
-static void run_step_and_compare(const AdamWCase& pc) {
+static ErrorMetrics compute_error_metrics(
+    const xt::xarray<float>& reference, const std::vector<float>& actual, const std::string& name) {
+    float sum_error = 0.0f;
+    float max_error = 0.0f;
+    const size_t count = reference.size();
+
+    for (size_t i = 0; i < count; ++i) {
+        const float error = std::abs(reference.data()[i] - actual[i]);
+        sum_error += error;
+        max_error = std::max(max_error, error);
+    }
+
+    return {sum_error / static_cast<float>(count), max_error, name};
+}
+
+struct DeviceStepResult {
+    std::vector<float> param;
+    std::vector<float> exp_avg;
+    std::vector<float> exp_avg_sq;
+    std::vector<float> max_exp_avg_sq;  // empty unless amsgrad is enabled
+};
+
+// One ttml::metal::adamw step at `step` on freshly allocated device tensors, with the
+// step-varying scalars delivered as floats or as single-element f32 tensors. `keep_alive`,
+// when non-null, retains the tensors so a following call is forced to allocate at different
+// addresses (which is what exercises override_runtime_arguments on a program cache hit).
+static DeviceStepResult run_device_step(
+    const AdamWCase& pc,
+    size_t step,
+    ScalarSource scalar_source,
+    ttnn::DataType param_dtype,
+    const xt::xarray<float>& w0,
+    const xt::xarray<float>& g0,
+    const xt::xarray<float>& m0,
+    const xt::xarray<float>& v0,
+    const xt::xarray<float>& max_v0,
+    std::vector<ttnn::Tensor>* keep_alive = nullptr) {
+    const ttnn::Shape shape(
+        {static_cast<uint32_t>(pc.shape[0]),
+         static_cast<uint32_t>(pc.shape[1]),
+         static_cast<uint32_t>(pc.shape[2]),
+         static_cast<uint32_t>(pc.shape[3])});
+    const auto flatten = [](const xt::xarray<float>& x) { return std::vector<float>(x.begin(), x.end()); };
+
+    auto param = make_device_tensor(flatten(w0), shape, param_dtype);
+    // Gradients are always bf16.
+    auto grad = make_device_tensor(flatten(g0), shape, ttnn::DataType::BFLOAT16);
+    auto exp_avg = make_device_tensor(flatten(m0), shape, param_dtype);
+    auto exp_avg_sq = make_device_tensor(flatten(v0), shape, param_dtype);
+    std::optional<ttnn::Tensor> max_exp_avg_sq;
+    if (pc.amsgrad) {
+        max_exp_avg_sq = make_device_tensor(flatten(max_v0), shape, param_dtype);
+    }
+
+    const float beta1_pow = std::pow(pc.beta1, static_cast<float>(step));
+    const float beta2_pow = std::pow(pc.beta2, static_cast<float>(step));
+
+    std::optional<ttnn::Tensor> step_size;
+    std::optional<ttnn::Tensor> inv_sqrt_bc2;
+    std::optional<ttnn::Tensor> decay_factor;
+    ttnn::Tensor param_out;
+    if (scalar_source == ScalarSource::Tensor) {
+        step_size = to_scalar_tensor(pc.lr / (1.0F - beta1_pow));
+        inv_sqrt_bc2 = to_scalar_tensor(1.0F / std::sqrt(1.0F - beta2_pow));
+        decay_factor = to_scalar_tensor(1.0F - pc.lr * pc.weight_decay);
+        param_out = ttml::metal::adamw(
+            param,
+            grad,
+            exp_avg,
+            exp_avg_sq,
+            max_exp_avg_sq,
+            *step_size,
+            *inv_sqrt_bc2,
+            *decay_factor,
+            pc.beta1,
+            pc.beta2,
+            pc.epsilon);
+    } else {
+        param_out = ttml::metal::adamw(
+            param,
+            grad,
+            exp_avg,
+            exp_avg_sq,
+            max_exp_avg_sq,
+            pc.lr,
+            pc.beta1,
+            pc.beta2,
+            beta1_pow,
+            beta2_pow,
+            pc.epsilon,
+            pc.weight_decay);
+    }
+
+    // exp_avg / exp_avg_sq (/ max_exp_avg_sq) are updated in place.
+    DeviceStepResult result;
+    result.param = param_out.to_vector<float>();
+    result.exp_avg = exp_avg.to_vector<float>();
+    result.exp_avg_sq = exp_avg_sq.to_vector<float>();
+    if (max_exp_avg_sq.has_value()) {
+        result.max_exp_avg_sq = max_exp_avg_sq->to_vector<float>();
+    }
+
+    if (keep_alive != nullptr) {
+        keep_alive->insert(keep_alive->end(), {param, grad, exp_avg, exp_avg_sq});
+        if (max_exp_avg_sq.has_value()) {
+            keep_alive->push_back(*max_exp_avg_sq);
+        }
+        if (step_size.has_value()) {
+            keep_alive->insert(keep_alive->end(), {*step_size, *inv_sqrt_bc2, *decay_factor});
+        }
+    }
+    return result;
+}
+
+static void run_step_and_compare(const AdamWCase& pc, ScalarSource scalar_source) {
     using namespace ttml;
 
     ttml::autograd::ctx().set_seed(123U);
@@ -192,50 +341,70 @@ static void run_step_and_compare(const AdamWCase& pc) {
     CPUAdamW cpu_opt(pc.lr, pc.beta1, pc.beta2, pc.epsilon, pc.weight_decay, pc.amsgrad);
     cpu_opt.set_state(m0, v0, initial_steps, pc.amsgrad ? max_v0 : xt::xarray<float>{});
 
-    // AdamW implementation
-    auto theta_fused = autograd::create_tensor(to_tt_bf16(w0), true);
-    theta_fused->set_grad(to_tt_bf16(g0));
-    ttml::serialization::NamedParameters params_fused{{"theta", theta_fused}};
-
-    ttml::optimizers::AdamWConfig fused_cfg;
-    fused_cfg.lr = pc.lr;
-    fused_cfg.beta1 = pc.beta1;
-    fused_cfg.beta2 = pc.beta2;
-    fused_cfg.epsilon = pc.epsilon;
-    fused_cfg.weight_decay = pc.weight_decay;
-    fused_cfg.amsgrad = pc.amsgrad;
-
-    ttml::optimizers::AdamW opt_fused(params_fused, fused_cfg);
-
-    // Inject momentum state for AdamW
-    {
-        auto m0_tensor = autograd::create_tensor(to_tt_bf16(m0), false);
-        auto v0_tensor = autograd::create_tensor(to_tt_bf16(v0), false);
-        serialization::StateDict fused_state;
-        fused_state["exp_avg"] = serialization::NamedParameters{{"theta", m0_tensor}};
-        fused_state["exp_avg_sq"] = serialization::NamedParameters{{"theta", v0_tensor}};
-        fused_state["steps"] = initial_steps;
-        fused_state["lr"] = pc.lr;
-        fused_state["beta1"] = pc.beta1;
-        fused_state["beta2"] = pc.beta2;
-        fused_state["epsilon"] = pc.epsilon;
-        fused_state["weight_decay"] = pc.weight_decay;
-        fused_state["amsgrad"] = pc.amsgrad;
-        fused_state["stochastic_rounding"] = false;
-        if (pc.amsgrad) {
-            auto max_v0_tensor = autograd::create_tensor(to_tt_bf16(max_v0), false);
-            fused_state["max_exp_avg_sq"] = serialization::NamedParameters{{"theta", max_v0_tensor}};
-        }
-        opt_fused.set_state_dict(fused_state);
-    }
-
     cpu_opt.step(w_cpu, g_cpu);
-    opt_fused.step();
 
-    auto result_fused = theta_fused->get_value();
-    auto result_fused_cpu = core::to_xtensor(result_fused);
+    ErrorMetrics fused_metrics{};
+    if (scalar_source == ScalarSource::Float) {
+        // AdamW implementation
+        auto theta_fused = autograd::create_tensor(to_tt_bf16(w0), true);
+        theta_fused->set_grad(to_tt_bf16(g0));
+        ttml::serialization::NamedParameters params_fused{{"theta", theta_fused}};
 
-    auto fused_metrics = compute_error_metrics(w_cpu, result_fused_cpu, "AdamW");
+        ttml::optimizers::AdamWConfig fused_cfg;
+        fused_cfg.lr = pc.lr;
+        fused_cfg.beta1 = pc.beta1;
+        fused_cfg.beta2 = pc.beta2;
+        fused_cfg.epsilon = pc.epsilon;
+        fused_cfg.weight_decay = pc.weight_decay;
+        fused_cfg.amsgrad = pc.amsgrad;
+
+        ttml::optimizers::AdamW opt_fused(params_fused, fused_cfg);
+
+        // Inject momentum state for AdamW
+        {
+            auto m0_tensor = autograd::create_tensor(to_tt_bf16(m0), false);
+            auto v0_tensor = autograd::create_tensor(to_tt_bf16(v0), false);
+            serialization::StateDict fused_state;
+            fused_state["exp_avg"] = serialization::NamedParameters{{"theta", m0_tensor}};
+            fused_state["exp_avg_sq"] = serialization::NamedParameters{{"theta", v0_tensor}};
+            fused_state["steps"] = initial_steps;
+            fused_state["lr"] = pc.lr;
+            fused_state["beta1"] = pc.beta1;
+            fused_state["beta2"] = pc.beta2;
+            fused_state["epsilon"] = pc.epsilon;
+            fused_state["weight_decay"] = pc.weight_decay;
+            fused_state["amsgrad"] = pc.amsgrad;
+            fused_state["stochastic_rounding"] = false;
+            if (pc.amsgrad) {
+                auto max_v0_tensor = autograd::create_tensor(to_tt_bf16(max_v0), false);
+                fused_state["max_exp_avg_sq"] = serialization::NamedParameters{{"theta", max_v0_tensor}};
+            }
+            opt_fused.set_state_dict(fused_state);
+        }
+
+        opt_fused.step();
+
+        auto result_fused = theta_fused->get_value();
+        auto result_fused_cpu = core::to_xtensor(result_fused);
+
+        fused_metrics = compute_error_metrics(w_cpu, result_fused_cpu, "AdamW");
+    } else {
+        // The optimizer only drives the float-scalar overload, so the tensor-scalar variant is
+        // exercised at the op level with the scalars the optimizer would have produced at this step.
+        const size_t step = initial_steps + 1;
+        const auto float_scalars =
+            run_device_step(pc, step, ScalarSource::Float, ttnn::DataType::BFLOAT16, w0, g0, m0, v0, max_v0);
+        const auto tensor_scalars =
+            run_device_step(pc, step, ScalarSource::Tensor, ttnn::DataType::BFLOAT16, w0, g0, m0, v0, max_v0);
+
+        // Both overloads feed the kernel the same three immediates, so results are bit-identical.
+        EXPECT_EQ(float_scalars.param, tensor_scalars.param);
+        EXPECT_EQ(float_scalars.exp_avg, tensor_scalars.exp_avg);
+        EXPECT_EQ(float_scalars.exp_avg_sq, tensor_scalars.exp_avg_sq);
+        EXPECT_EQ(float_scalars.max_exp_avg_sq, tensor_scalars.max_exp_avg_sq);
+
+        fused_metrics = compute_error_metrics(w_cpu, tensor_scalars.param, "AdamW");
+    }
 
     const float mean_error_tolerance = 1e-3f;
     const float max_error_tolerance = 1e-2f;
@@ -244,14 +413,27 @@ static void run_step_and_compare(const AdamWCase& pc) {
     EXPECT_LE(fused_metrics.max_error, max_error_tolerance) << "AdamW max error exceeds tolerance";
 }
 
-static std::string CaseName(const ::testing::TestParamInfo<AdamWCase>& info) {
-    const auto& c = info.param;
-    return fmt::format("{}_B{}H{}S{}C{}", c.name, c.shape[0], c.shape[1], c.shape[2], c.shape[3]);
+static std::string CaseName(const ::testing::TestParamInfo<std::tuple<AdamWCase, ScalarSource>>& info) {
+    const auto& [c, scalar_source] = info.param;
+    return fmt::format(
+        "{}_B{}H{}S{}C{}_{}",
+        c.name,
+        c.shape[0],
+        c.shape[1],
+        c.shape[2],
+        c.shape[3],
+        scalar_source_name(scalar_source));
+}
+
+// Both scalar sources are covered for every case, so each shape / hyperparameter / amsgrad
+// combination is checked against the CPU reference with float scalars and with tensor scalars.
+static auto scalar_sources() {
+    return ::testing::Values(ScalarSource::Float, ScalarSource::Tensor);
 }
 
 TEST_P(AdamWComparisonTest, CompareImplementations) {
-    const auto& pc = GetParam();
-    run_step_and_compare(pc);
+    const auto& [pc, scalar_source] = GetParam();
+    run_step_and_compare(pc, scalar_source);
 }
 
 // Note: In the following test suites there are no test cases with beta2=0. When beta2=0, denom = |g_t| + eps which can
@@ -283,7 +465,11 @@ static const AdamWCase kBasicCases[] = {
     {{1, 8, 128, 512}, 1e-3f, 0.0f, 0.999f, 1e-6f, 0.0f, false, "NIGHTLY_Beta2_eps1e6"},
 };
 
-INSTANTIATE_TEST_SUITE_P(AdamWBasicComparison, AdamWComparisonTest, ::testing::ValuesIn(kBasicCases), CaseName);
+INSTANTIATE_TEST_SUITE_P(
+    AdamWBasicComparison,
+    AdamWComparisonTest,
+    ::testing::Combine(::testing::ValuesIn(kBasicCases), scalar_sources()),
+    CaseName);
 
 // ====================================================================
 // Weight Decay Tests
@@ -303,7 +489,11 @@ static const AdamWCase kWeightDecayCases[] = {
     {{1, 8, 64, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.5f, false, "NIGHTLY_VeryHighWD_0p5"},
 };
 
-INSTANTIATE_TEST_SUITE_P(AdamWWeightDecay, AdamWComparisonTest, ::testing::ValuesIn(kWeightDecayCases), CaseName);
+INSTANTIATE_TEST_SUITE_P(
+    AdamWWeightDecay,
+    AdamWComparisonTest,
+    ::testing::Combine(::testing::ValuesIn(kWeightDecayCases), scalar_sources()),
+    CaseName);
 
 // ====================================================================
 // weight_decay_skip_1d Tests
@@ -618,7 +808,11 @@ static const AdamWCase kAMSGradCases[] = {
     {{2, 8, 64, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "NIGHTLY_Large_4D"},
 };
 
-INSTANTIATE_TEST_SUITE_P(AdamWAMSGrad, AdamWComparisonTest, ::testing::ValuesIn(kAMSGradCases), CaseName);
+INSTANTIATE_TEST_SUITE_P(
+    AdamWAMSGrad,
+    AdamWComparisonTest,
+    ::testing::Combine(::testing::ValuesIn(kAMSGradCases), scalar_sources()),
+    CaseName);
 
 // ====================================================================
 // Stochastic Rounding Tests
@@ -752,4 +946,123 @@ TEST_F(StochasticRoundingTest, NIGHTLY_ErrorComparisonOverMultipleSteps) {
 
     EXPECT_LT(stoch_metrics.mean_error, det_metrics.mean_error);
     EXPECT_LT(stoch_metrics.max_error, det_metrics.max_error);
+}
+
+// ====================================================================
+// Tensor-scalar overload
+// Coverage the parameterized suite above cannot express: fp32 params (that harness is
+// bf16-only), program-cache reuse across steps, and scalar-tensor validation.
+// ====================================================================
+
+class AdamWTensorScalarsTest : public ::testing::Test {
+public:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+
+protected:
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+    }
+};
+
+static void expect_scalar_source_parity(const AdamWCase& pc, ttnn::DataType param_dtype) {
+    ttml::autograd::ctx().set_seed(123U);
+    auto& g = ttml::autograd::ctx().get_generator();
+    const uint32_t seed_param = g();
+    const uint32_t seed_grad = g();
+    const uint32_t seed_first_moment = g();
+    const uint32_t seed_second_moment = g();
+    const uint32_t seed_max_second_moment = g();
+
+    xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_param);
+    xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_grad);
+    xt::xarray<float> m0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_first_moment);
+    xt::xarray<float> v0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, 0.0F, 1.0F, seed_second_moment);
+    xt::xarray<float> max_v0 =
+        ttml::test_utils::make_uniform_xarray<float>(pc.shape, 0.0F, 1.0F, seed_max_second_moment);
+
+    // Step 10 compiles and caches the program; step 11 hits the program cache with freshly
+    // allocated scalar tensors holding different values, so it exercises
+    // override_runtime_arguments updating the scalar-tensor addresses. Every tensor is kept
+    // alive so later runs land at genuinely different addresses -- otherwise the allocator
+    // would hand back the freed addresses and a broken override_runtime_arguments (reading
+    // new values from old addresses) would still pass.
+    std::vector<ttnn::Tensor> keep_alive;
+    for (const size_t step : {size_t{10}, size_t{11}}) {
+        const auto float_scalars =
+            run_device_step(pc, step, ScalarSource::Float, param_dtype, w0, g0, m0, v0, max_v0, &keep_alive);
+        const auto tensor_scalars =
+            run_device_step(pc, step, ScalarSource::Tensor, param_dtype, w0, g0, m0, v0, max_v0, &keep_alive);
+
+        EXPECT_EQ(float_scalars.param, tensor_scalars.param) << "step " << step;
+        EXPECT_EQ(float_scalars.exp_avg, tensor_scalars.exp_avg) << "step " << step;
+        EXPECT_EQ(float_scalars.exp_avg_sq, tensor_scalars.exp_avg_sq) << "step " << step;
+        EXPECT_EQ(float_scalars.max_exp_avg_sq, tensor_scalars.max_exp_avg_sq) << "step " << step;
+    }
+}
+
+TEST_F(AdamWTensorScalarsTest, MatchesFloatScalars_FP32) {
+    expect_scalar_source_parity(
+        {{1, 1, 64, 96}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, /*amsgrad=*/false, "FP32"},
+        ttnn::DataType::FLOAT32);
+}
+
+TEST_F(AdamWTensorScalarsTest, MatchesFloatScalars_FP32_AmsGrad) {
+    expect_scalar_source_parity(
+        {{1, 1, 64, 96}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, /*amsgrad=*/true, "FP32_AmsGrad"},
+        ttnn::DataType::FLOAT32);
+}
+
+TEST_F(AdamWTensorScalarsTest, RejectsMultiElementScalarTensor) {
+    const ttnn::Shape shape({1, 1, 32, 32});
+    const auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.0F, 1.0F, /*seed=*/0U);
+    auto param = make_device_tensor(data, shape, ttnn::DataType::BFLOAT16);
+    auto grad = make_device_tensor(data, shape, ttnn::DataType::BFLOAT16);
+    auto exp_avg = make_device_tensor(data, shape, ttnn::DataType::BFLOAT16);
+    auto exp_avg_sq = make_device_tensor(data, shape, ttnn::DataType::BFLOAT16);
+
+    auto bad_step_size = make_device_tensor({1.0F, 2.0F}, ttnn::Shape({1, 1, 1, 2}), ttnn::DataType::FLOAT32);
+    auto inv_sqrt_bc2 = to_scalar_tensor(1.0F);
+    auto decay_factor = to_scalar_tensor(1.0F);
+    EXPECT_ANY_THROW(ttml::metal::adamw(
+        param,
+        grad,
+        exp_avg,
+        exp_avg_sq,
+        std::nullopt,
+        bad_step_size,
+        inv_sqrt_bc2,
+        decay_factor,
+        0.9F,
+        0.999F,
+        1e-8F));
+}
+
+TEST_F(AdamWTensorScalarsTest, RejectsNonFloat32ScalarTensor) {
+    const ttnn::Shape shape({1, 1, 32, 32});
+    const auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.0F, 1.0F, /*seed=*/0U);
+    auto param = make_device_tensor(data, shape, ttnn::DataType::BFLOAT16);
+    auto grad = make_device_tensor(data, shape, ttnn::DataType::BFLOAT16);
+    auto exp_avg = make_device_tensor(data, shape, ttnn::DataType::BFLOAT16);
+    auto exp_avg_sq = make_device_tensor(data, shape, ttnn::DataType::BFLOAT16);
+
+    auto bad_step_size = make_device_tensor({1.0F}, ttnn::Shape({1, 1, 1, 1}), ttnn::DataType::BFLOAT16);
+    auto inv_sqrt_bc2 = to_scalar_tensor(1.0F);
+    auto decay_factor = to_scalar_tensor(1.0F);
+    EXPECT_ANY_THROW(ttml::metal::adamw(
+        param,
+        grad,
+        exp_avg,
+        exp_avg_sq,
+        std::nullopt,
+        bad_step_size,
+        inv_sqrt_bc2,
+        decay_factor,
+        0.9F,
+        0.999F,
+        1e-8F));
 }
