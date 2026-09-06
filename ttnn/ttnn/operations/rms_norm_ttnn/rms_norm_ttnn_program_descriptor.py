@@ -900,6 +900,17 @@ WIDTH_SPLIT_MIN_GAIN = 4
 # every INPUTS and every perf case -- builds a byte-identical program.
 RAGGED_WIDTH_CHUNK = 1
 
+# Refinement 4, the OTHER half of the same cliff.  The L5 / ROW_RESIDENT regime holds
+# the whole tile-row of x (and of every per-channel operand) and chunks only the
+# derived CBs -- which is pure profit while the chunk stays coarse, but at a chunk of
+# ONE tile the hold has eaten so much L1 that the regime is paying 127 per-phase init
+# / reconfig / pipeline fill-and-drain cycles to save a re-read.  This is the SMALLEST
+# chunk at which L5 is still taken; below it the solve declines and falls through to
+# STREAM, which holds nothing and can therefore afford a far coarser chunk (it pays a
+# pass-B re-read of x and the residual instead).  1 == the pre-Refinement-4 behaviour
+# (L5 at any chunk); see the changelog for the A/B that set it.
+ROW_RESIDENT_MIN_CHUNK_WT = 1
+
 # reduce() input policy knob: 1 = BulkWaitBulkPop (bulk wait/indexed/bulk pop),
 # 0 = WaitAndPopPerTile.  Bulk is the coarse default (op_design.md section 1.4).
 REDUCE_BULK = 1
@@ -2595,8 +2606,8 @@ def _zero_volume_descriptor(all_cores, compute_kernel_config):
     assert len(reader_ct) == READER_CT_SCALARS
     reader_ct += null_acc * 4
 
-    writer_ct = [1, 1, 1, 1, 1, 2, 0, 1, 0, 0, 0, 1, 0, 0, 0, GATHER_FACES, 0, 0, 0]
-    assert len(writer_ct) == 19
+    writer_ct = [1, 1, 1, 1, 1, 2, 0, 1, 0, 0, 0, 1, 0, 0, 0, GATHER_FACES, 0, 0]
+    assert len(writer_ct) == 18
     writer_ct += [0] * 6 + null_acc
 
     compute_ct = [1, 1, 1, 1, 0, 0, 0, _f32_bits(1.0), _f32_bits(0.0), REDUCE_BULK, 0, 1, 0, 1, 1, 1, 0, 0, 0]
@@ -3012,18 +3023,31 @@ def create_program_descriptor(
             if room < 1:
                 return None
             cap = min(room, wt_core - 1) if wt_core > 1 else 1
-            wtc, n = _width_chunk(wt_core, cap, ragged_ok)
-            if wtc < 1 or wtc >= wt_core or n <= 1:
+            # The pad tiles are HELD too, so the cap and the chunk it admits are
+            # mutually dependent: price each candidate's OWN pad and re-cap until it
+            # fits.  Every step strictly shrinks `cap`, so this terminates -- and in
+            # practice it takes one step, because pad < NUM_W_CHUNKS.  Re-capping
+            # rather than falling straight back to the divisor is what keeps the fix
+            # a fix: at Wt = 127 the first candidate (19 x 7, 6 pad tiles) misses by
+            # one tile of L1, and the divisor below it is 1 -- the very cliff.
+            while True:
+                wtc, n = _width_chunk(wt_core, cap, ragged_ok)
+                if wtc < 1 or wtc >= wt_core or n <= 1:
+                    return None
+                pad = n * wtc - wt_core
+                if pad == 0:
+                    break
+                room_pad = (budget - _fixed(wt_core + pad)) // per_chunk_tile
+                if wtc <= room_pad:
+                    break
+                cap = min(cap - 1, room_pad)
+                if cap < 1:
+                    return None
+            if wtc < ROW_RESIDENT_MIN_CHUNK_WT:
+                # L5's hold has priced the chunk below the granularity floor: decline
+                # the regime rather than the chunk, so STREAM -- which holds nothing --
+                # can take a coarse one.
                 return None
-            pad = n * wtc - wt_core
-            if pad:
-                # The pad tiles are held too -- re-price and fall back to the divisor
-                # if the padded hold no longer fits.  Conservative by construction.
-                if wtc > (budget - _fixed(wt_core + pad)) // per_chunk_tile:
-                    wtc = _largest_divisor_at_most(wt_core, cap)
-                    if wtc < 1 or wtc >= wt_core:
-                        return None
-                    n = wt_core // wtc
             return wtc, n
 
         stream_depth = depth_candidates[0]
@@ -3355,7 +3379,7 @@ def create_program_descriptor(
     writer_ct_args = [
         1 if is_tile else 0,  # 0  IS_TILE
         Wt,  # 1  WT
-        wt_chunk,  # 2  WT_CHUNK
+        wt_chunk | (wt_pad << 16),  # 2  WT_CHUNK | WT_PAD<<16 (D32)
         num_w_chunks,  # 3  NUM_W_CHUNKS
         _pack_txn_rows(block_rows, dm_txn_rows),  # 4  BLOCK_ROWS | (TXN_ROWS-1)<<16 (R3 lever 3)
         elem_bytes,  # 5  output element bytes
@@ -3374,12 +3398,8 @@ def create_program_descriptor(
         _combine_gather_faces_ct(combine, compact_combine),
         tree_f0,  # 16/17 the SLOT TREE's arity (D28); 0 == keep the flat root
         tree_f1,
-        # 18 D32: PAD width tiles in the LAST chunk (0 on every divisor build).  The
-        # writer's TILE half already skipped them (`wt < WT`); the ROW_MAJOR half needs
-        # the count to write the tail chunk's real bytes at the PADDED stride.
-        wt_pad,
     ]
-    assert len(writer_ct_args) == 19, "rms_norm_ttnn_writer.cpp expects McastArgs<19, 12>()"
+    assert len(writer_ct_args) == 18, "rms_norm_ttnn_writer.cpp expects McastArgs<18, 12>()"
     assert (
         writer_ct_args[WRITER_CT_OUT_SHARD_ROW_BYTES] == plan.out_shard_row_bytes
     ), "WRITER_CT_OUT_SHARD_ROW_BYTES index drifted"

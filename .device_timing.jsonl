@@ -242,3 +242,15 @@
 {"source":"tt-probe","pid":1730763,"started_at_ms":1788686990989,"wait_ms":276,"run_ms":48434,"test_path":"rms_norm_ttnn","exit_code":0}
 {"source":"tt-probe","pid":1733475,"started_at_ms":1788687451218,"wait_ms":304,"run_ms":25606,"test_path":"rms_norm_ttnn","exit_code":0}
 {"source":"tt-probe","pid":1734720,"started_at_ms":1788687562251,"wait_ms":276,"run_ms":21397,"test_path":"rms_norm_ttnn","exit_code":0}
+{"source":"tt-probe","pid":1736584,"started_at_ms":1788687624397,"wait_ms":285,"run_ms":57481,"test_path":"rms_norm_ttnn","exit_code":0}
+{"source":"tt-probe","pid":1737980,"started_at_ms":1788687690961,"wait_ms":298,"run_ms":55801,"test_path":"rms_norm_ttnn","exit_code":0}
+{"source":"tt-probe","pid":1739239,"started_at_ms":1788687787345,"wait_ms":310,"run_ms":71305,"test_path":"rms_norm_ttnn","exit_code":0}
+{"source":"tt-probe","pid":1740223,"started_at_ms":1788687879175,"wait_ms":296,"run_ms":16544,"test_path":"rms_norm_ttnn","exit_code":0}
+{"source":"tt-probe","pid":1741069,"started_at_ms":1788687971401,"wait_ms":291,"run_ms":15294,"test_path":"rms_norm_ttnn","exit_code":0}
+{"source":"tt-probe","pid":1741613,"started_at_ms":1788688035379,"wait_ms":295,"run_ms":31506,"test_path":"rms_norm_ttnn","exit_code":0}
+{"source":"tt-probe","pid":1742542,"started_at_ms":1788688080385,"wait_ms":284,"run_ms":58442,"test_path":"rms_norm_ttnn","exit_code":0}
+{"source":"tt-probe","pid":1743548,"started_at_ms":1788688149694,"wait_ms":296,"run_ms":63178,"test_path":"rms_norm_ttnn","exit_code":0}
+{"source":"tt-probe","pid":1744369,"started_at_ms":1788688221757,"wait_ms":298,"run_ms":43877,"test_path":"rms_norm_ttnn","exit_code":0}
+{"source":"run_safe_pytest","pid":1745186,"started_at_ms":1788688324707,"wait_ms":4,"run_ms":65619,"test_path":"tests/ttnn/unit_tests/operations/rms_norm_ttnn/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok","precompile_s":39,"precompile_programs":351}
+{"source":"run_safe_pytest","pid":1748052,"started_at_ms":1788688466749,"wait_ms":3,"run_ms":30397,"test_path":"tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_ragged_width.py","exit_code":1,"precompile_mode":"farm","precompile_reason":"ok","precompile_s":19,"precompile_programs":20}
+{"source":"run_safe_pytest","pid":1748829,"started_at_ms":1788688520628,"wait_ms":4,"run_ms":22317,"test_path":"tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_ragged_width.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok","precompile_s":11,"precompile_programs":20}

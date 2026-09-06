@@ -123,7 +123,19 @@ void kernel_main() {
     // ---- compile-time knobs (all from rms_norm_ttnn_program_descriptor.py) -----
     constexpr uint32_t IS_TILE = get_compile_time_arg_val(0);
     constexpr uint32_t WT = get_compile_time_arg_val(1);
-    constexpr uint32_t WT_CHUNK = get_compile_time_arg_val(2);
+    // D32 -- THE RAGGED (PADDED) WIDTH CHUNK, the writer's half.  Index 2 packs
+    // WT_CHUNK (low half) with WT_PAD (high half): how many of the LAST chunk's
+    // WT_CHUNK width tiles this core does NOT own, because `_width_chunk` took the
+    // coarsest BALANCED chunk at a prime Wt (127 -> 8 x 16) instead of collapsing to
+    // the only divisor (1) and padded the tail out so every ring and every batched
+    // NoC group stays uniform.  PACKED rather than appended for the same reason
+    // index 4 packs TXN_ROWS and index 15 packs two face counts: the writer's CT-arg
+    // LIST LENGTH is a checked structural property (test_program_is_structurally_the_seeds),
+    // and at WT_PAD == 0 -- every divisor build -- the word IS `wt_chunk`.
+    constexpr uint32_t WT_CHUNK_CT = get_compile_time_arg_val(2);
+    constexpr uint32_t WT_CHUNK = WT_CHUNK_CT & 0xFFFFu;
+    constexpr uint32_t WT_PAD = WT_CHUNK_CT >> 16;
+    constexpr bool HAS_WPAD = (WT_PAD != 0);
     constexpr uint32_t NUM_W_CHUNKS = get_compile_time_arg_val(3);
     // Refinement 3 / lever 3: index 4 packs BLOCK_ROWS with the NoC TRANSACTION UNIT
     // minus one -- the reader's word, decoded identically, so neither NoC half is the
@@ -187,20 +199,16 @@ void kernel_main() {
     // not select the tree for is the same kernel it was before D28.
     constexpr uint32_t TREE_F0 = get_compile_time_arg_val(16);
     constexpr uint32_t TREE_F1 = get_compile_time_arg_val(17);
-    // D32 -- THE RAGGED (PADDED) WIDTH CHUNK, the writer's half.  `WT_PAD` is how many
-    // of the LAST chunk's WT_CHUNK width tiles this core does not own.  The TILE path
-    // already skipped them (`wt < WT`, the ragged-shard guard); the ROW_MAJOR path
-    // needs the count, because `write_sticks_after_untilize` derives its L1 SOURCE
-    // stride from `row_bytes` while `untilize<WT_CHUNK>` wrote at the padded one.
-    // 0 on every divisor build, which elides all of this.
-    constexpr uint32_t WT_PAD = get_compile_time_arg_val(18);
-    constexpr bool HAS_WPAD = (WT_PAD != 0);
+    // The TILE write path already skips the pad tiles (`wt < WT`, the ragged-SHARD
+    // guard, which is the same predicate); the ROW_MAJOR path needs the count,
+    // because `write_sticks_after_untilize` derives its L1 SOURCE stride from
+    // `row_bytes` while `untilize<WT_CHUNK>` wrote at the padded one.
     static_assert(WT_PAD < WT_CHUNK, "rms_norm_ttnn: a width chunk that is ALL pad is not a chunk");
     static_assert(!HAS_WPAD || BLOCK_ROWS == 1, "rms_norm_ttnn: a ragged width chunk holds ONE tile-row per block");
     static_assert(!HAS_WPAD || NUM_W_CHUNKS > 1, "rms_norm_ttnn: a one-chunk width is never padded");
     static_assert(!HAS_WPAD || BAND == 0, "rms_norm_ttnn: the BAND scheme's width is shard-derived, never chunked");
     static_assert(!HAS_WPAD || COMBINE == 0, "rms_norm_ttnn: a width-split core takes its slice in one chunk");
-    constexpr auto mc = dataflow_kernel_lib::McastArgs</*CT=*/19, /*RT=*/12>();
+    constexpr auto mc = dataflow_kernel_lib::McastArgs</*CT=*/18, /*RT=*/12>();
     constexpr auto out_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
 
     constexpr bool RM = (IS_TILE == 0);
