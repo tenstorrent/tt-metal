@@ -1277,7 +1277,28 @@ int main(int argc, char* argv[]) {
         }
         ChipState chip;
         chip.chip_id = chip_id;
-        chip.asic_id = static_cast<uint64_t>(chip_id);
+        // THE SHM ID IS THE COEXISTENCE CONTRACT, not a display detail. The viewer globs
+        // /dev/shm/tt_device_*_util and sorts by this value, and ShmPublisher's exclusive
+        // flock only protects a file of the same NAME. So two publishers that pick
+        // different ids for the same physical die create two files, the lock never fires,
+        // and the viewer shows that die twice.
+        //
+        // This was the UMD chip INDEX, which contradicted shm_schema.hpp's own definition
+        // of the field ("chip unique id from UMD") and made exactly that happen against
+        // any other publisher that followed the schema. It also collides across cards --
+        // every host's first chip is 0 -- so the files were never unique in the namespace
+        // they are published into.
+        //
+        // get_chip_unique_ids() is what the schema names. On an n300 the local die sorts
+        // before the remote one, so the viewer's chip 0/1 keeps matching tt-smi's [L]/[R].
+        const auto& unique_ids = cluster_desc->get_chip_unique_ids();
+        const auto uid_it = unique_ids.find(chip_id);
+        if (uid_it == unique_ids.end()) {
+            std::cerr << "ttnvtop-collector: no unique id for chip " << chip_id
+                      << "; skipping it rather than publishing under an id that collides.\n";
+            continue;
+        }
+        chip.asic_id = uid_it->second;
         chip.arch = arch;
         chip.is_remote = dev->is_remote();
 
