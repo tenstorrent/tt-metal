@@ -223,8 +223,18 @@ class Model:
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
         )
 
-        # Initialize on-device sampling (supported when padded per-device vocab fits in 64K)
-        self._supports_on_device_sampling = per_device_padded <= 64 * 1024
+        # Initialize on-device sampling. The 64K bound is a ttnn.topk constraint: its
+        # multi-core bitonic path needs a power-of-2 width and 16-bit indices, so it
+        # falls back to single core at or above 65536. ttnn.argmax has no width bound,
+        # so greedy decode can stay on device at widths topk cannot handle. gpt-oss at
+        # TP=1 pads to 262144, which is exactly that case.
+        #
+        # Single device only: the force-argmax path all-gathers logits when
+        # num_devices > 1, which needs a real tt_ccl, and this call site passes
+        # tt_ccl=None.
+        self._supports_on_device_topk = per_device_padded <= 64 * 1024
+        self._greedy_fastpath_only = not self._supports_on_device_topk and mesh_device.get_num_devices() == 1
+        self._supports_on_device_sampling = self._supports_on_device_topk or self._greedy_fastpath_only
         self._prefill_sampling_active = False
         # sampling_dp: number of independent sampling groups (one per mesh row for row-sharded users)
         self.sampling_dp = mesh_device.shape[0] if users_row_sharded else 1
@@ -263,7 +273,21 @@ class Model:
         args.sampling_all_gather_axis = 1
         args.num_devices = mesh_device.get_num_devices()
         args.is_galaxy = mesh_device.shape[0] > 1
-        args.model_config = {}  # No SAMPLING_AG_CONFIG → regular sampling path always used
+        if self._greedy_fastpath_only:
+            # Enables the single all-gather + argmax path in TTSampling. The CCL keys
+            # are required by its config reader but are unused on one device, where
+            # the all-gather is skipped.
+            args.model_config = {
+                "SAMPLING_AG_CONFIG": {
+                    "allow_force_argmax": True,
+                    "num_links": 1,
+                    "chunks_per_sync": 10,
+                    "num_workers_per_link": 1,
+                    "topology": ttnn.Topology.Linear,
+                }
+            }
+        else:
+            args.model_config = {}  # No SAMPLING_AG_CONFIG → regular sampling path always used
         # sampling_dp: number of independent sampling groups (one per mesh row)
         # Only use row-sharded sampling when users_row_sharded is active
         args.sampling_dp = self.sampling_dp
