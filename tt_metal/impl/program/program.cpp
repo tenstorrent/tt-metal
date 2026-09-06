@@ -3189,7 +3189,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         uint32_t prev_offset_before_prefetcher_pipe = state.offset;
-        state.offset = program_dispatch::finalize_prefetcher_pipes(index, programs, state.offset);
+        state.offset = program_dispatch::finalize_prefetcher_pipes(metal_ctx, index, programs, state.offset);
         state.prefetcher_pipe_offset = (state.offset > prev_offset_before_prefetcher_pipe)
                                            ? (prev_offset_before_prefetcher_pipe - state.config_base_offset)
                                            : REMOTE_DFB_OFFSET_NONE;

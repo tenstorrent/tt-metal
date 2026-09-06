@@ -14,17 +14,19 @@ models. It owns mechanics that are common to autoregressive LLM inference:
 - data-parallel lane fanout; and
 - deterministic cleanup of TT resources.
 
-It deliberately does **not** contain a generic model executor. Each model owns
-its concrete executor and cleanup root. For example,
-[`Llama3Executor`](../models/llama3_8b/executor.py) composes these runtime
-pieces for Llama 3.1 8B.
+It deliberately does **not** contain a generic model executor. Shared model
+composition lives one layer above at
+[`models/common/models/executor.py`](../models/executor.py). A demonstrated
+family may add a small policy facade in the model layer, while a model with
+distinct orchestration may compose these runtime modules directly.
 
 ## Design principles
 
 ### The model owns orchestration
 
 The common package supplies focused components, not a single common LLM
-executor. A model-owned executor decides:
+executor. A shared model-layer executor, family facade, or direct model-owned
+executor decides:
 
 - which tensor model is being executed;
 - how model metadata becomes runtime config;
@@ -35,7 +37,8 @@ executor. A model-owned executor decides:
 - the cleanup order.
 
 This keeps model-specific decisions out of common runtime mechanics while
-allowing different model families to reuse those mechanics.
+allowing deliberate reuse at either the model-composition or individual
+runtime-module boundary.
 
 ### Resolve static policy at construction
 
@@ -542,7 +545,7 @@ concurrently per lane and return one combined external contract.
 | `LaneGroupExecutor` | model generator/facade | Present multiple lanes as one execution target |
 | `VLLMAdapter` | model-owned vLLM facade | Normalize vLLM calls and validate legacy KV specs |
 
-Callers outside this package should normally use a model-owned executor or
+Callers outside this package should normally use a model-layer executor or
 generator instead of invoking `PrefillRuntime`, `DecodeRuntime`,
 `ProgramCompiler`, or `TraceCompiler` directly.
 
@@ -558,10 +561,13 @@ A new model family should provide:
    block size, and maximum blocks;
 5. model methods used by prefill/decode staging and post-processing;
 6. an optional resolved device-sampling module;
-7. a concrete model-owned executor that composes this package; and
+7. either the shared model-layer `ModelExecutor`, a justified family policy
+   facade, or a concrete model-owned executor that composes this package
+   directly; and
 8. a server-specific facade that normalizes external calls and selects eager
    or traced execution.
 
-Do not solve reuse by adding a generic aggregate executor to this directory.
-Share mechanics here; keep model and server policy at their respective
-boundaries.
+Do not add a generic aggregate executor to this directory. Share model
+composition in `models/common/models` when the lifecycle is demonstrated to be
+common; otherwise compose the focused modules directly. Keep family/model and
+server policy at their respective boundaries.

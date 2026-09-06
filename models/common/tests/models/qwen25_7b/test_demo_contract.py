@@ -138,7 +138,7 @@ def test_demo_warmup_uses_lane_group_capacity_and_lane_trace_policy():
     assert all(kwargs["kv_cache"] is kv_cache for _, kwargs in calls)
 
 
-def test_eval_prefill_signature_multiset_is_rotation_invariant_and_not_static_warmup_shaped():
+def test_eval_prefill_signature_multiset_is_rotation_invariant_and_respects_the_bucket_cap():
     tokens = torch.zeros((32, 700), dtype=torch.long)
     prompt_lens = torch.tensor([64] * 30 + [400, 700])
     page_table = torch.zeros((32, 64), dtype=torch.int32)
@@ -165,7 +165,10 @@ def test_eval_prefill_signature_multiset_is_rotation_invariant_and_not_static_wa
             for request in requests
         )
 
-    expected = [(128, 8, 6), (128, 8, 8), (128, 8, 8), (128, 8, 8), (1024, 2, 2)]
+    # A bucket is one planner wave, never a sequence of synthetic sub-buckets.
+    # Since 30 rows exceed this product's batch-8 cap, those rows use the
+    # sequential path; the independent two-row Q1024 bucket remains batched.
+    expected = [(128, 1, 1)] * 30 + [(1024, 2, 2)]
     assert planned_shapes(0) == expected
     assert planned_shapes(1) == expected
     assert planned_shapes(2) == expected
