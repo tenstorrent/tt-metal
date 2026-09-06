@@ -654,10 +654,12 @@ def build_talker_decode_profile_buffers(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    # bf16 single-head, matching build_talker_decode_trace_h2d_constants (the mask
+    # holds only 0.0 and -inf, and every head held an identical row).
     trace_mask_tt = ttnn.from_torch(
-        torch.full((1, num_heads, 1, max_talker_seq_len), float("-inf")),
+        torch.full((1, 1, 1, max_talker_seq_len), float("-inf")).bfloat16(),
         device=device,
-        dtype=ttnn.float32,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
