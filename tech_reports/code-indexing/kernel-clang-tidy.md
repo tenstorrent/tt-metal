@@ -223,12 +223,25 @@ mid-render. Profiling the cause rather than trimming checkers:
   parsing and 82s was CodeChecker's own per-diagnostic processing.
 
 `.github/scripts/utils/merge_kernel_tidy_plists.py` therefore drops duplicates
-before CodeChecker sees them, across all cores, keying on file, line, column,
-checker and message. The XML parse is embarrassingly parallel and the runner has
-64 cores, so the merge itself costs 3.8s and shrinks 588 MB to 31 MB. `parse`
-then drops from **115s to 6.7s, a 17x speedup, with zero findings lost or gained
-— the unique finding set is identical.** The saving grows with leg count, since
-cross-leg repetition is most of the redundancy.
+before CodeChecker sees them, keying on file, line, column, checker and message.
+It shrinks 588 MB to 31 MB, after which `parse` drops from **115s to 6.7s, a 17x
+speedup, with zero findings lost or gained — the unique finding set is
+identical.** The saving grows with leg count, since cross-leg repetition is most
+of the redundancy.
+
+Note where that 17x comes from: feeding CodeChecker 19,863 diagnostics instead
+of 370,060. It does not depend on the core count. Only the merge itself is
+parallel (the XML parse is embarrassingly so), and it is the cheap half —
+measured on two legs at 3.8s with 64 workers and **21s with 4**, against a
+budget that was blowing past 90 minutes. It is therefore safe on a small runner;
+`consolidate-report` currently uses `tt-ubuntu-2204-large-stable`, but a
+4-core GitHub-hosted runner would cost only a couple of minutes at 15 legs.
+
+Worker count comes from `os.sched_getaffinity` and the cgroup v2 CPU quota, not
+`cpu_count()`: inside a CPU-limited container the latter reports the host's
+cores, which would oversubscribe and multiply peak memory by the same factor.
+Peak RSS is modest regardless — ~70 MB for the largest single plist, ~135 MB for
+the whole run.
 
 This is why no checker is disabled for volume: report size no longer drives CI
 cost, and the point of the report is a complete database of problems to fix.

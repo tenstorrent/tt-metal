@@ -21,11 +21,32 @@ from __future__ import annotations
 
 import argparse
 import multiprocessing
+import os
 import pathlib
 import plistlib
 import shutil
 import sys
 from typing import Any
+
+
+def usable_cpus() -> int:
+    """CPUs this process may actually use.
+
+    ``cpu_count()`` reports the host's cores, which in a CPU-limited container
+    means oversubscribing by an order of magnitude and multiplying peak memory
+    by the same factor. Honour CPU affinity and the cgroup v2 quota instead.
+    """
+    try:
+        n = len(os.sched_getaffinity(0))
+    except AttributeError:  # not Linux
+        n = os.cpu_count() or 1
+    try:
+        quota, period = pathlib.Path("/sys/fs/cgroup/cpu.max").read_text().split()
+        if quota != "max":
+            n = min(n, max(1, int(int(quota) / int(period))))
+    except (OSError, ValueError):
+        pass
+    return max(1, n)
 
 # A finding is identified by where it is, what fired, and what it said. Message
 # is included because a handful of checkers report distinct problems at one
@@ -83,11 +104,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input", type=pathlib.Path, help="directory tree of per-leg plists")
     ap.add_argument("output", type=pathlib.Path, help="directory to write deduplicated plists into")
-    ap.add_argument("-j", "--jobs", type=int, default=0, help="worker processes (default: all cores)")
+    ap.add_argument("-j", "--jobs", type=int, default=0, help="worker processes (default: usable cores)")
     args = ap.parse_args()
 
-    jobs = args.jobs or multiprocessing.cpu_count()
     sources = sorted(args.input.rglob("*.plist"))
+    # No point starting more workers than there are plists; each holds one
+    # parsed plist in memory (~70 MB for the largest observed).
+    jobs = max(1, min(args.jobs or usable_cpus(), len(sources) or 1))
     if not sources:
         print(f"no plists under {args.input}", file=sys.stderr)
         return 1
