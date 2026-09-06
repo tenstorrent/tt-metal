@@ -583,7 +583,8 @@ struct Metal2BindingsSnapshot {
             s += ":dfb:" + name + "=" + std::to_string(id);
             if (dfb_accessor_is_relay.contains(name) && dfb_accessor_is_relay.at(name)) {
                 s += ":relay";
-                if (dfb_accessor_prefetcher_pipe_id.contains(name) && dfb_accessor_prefetcher_pipe_id.at(name) != 0xFF) {
+                if (dfb_accessor_prefetcher_pipe_id.contains(name) &&
+                    dfb_accessor_prefetcher_pipe_id.at(name) != 0xFF) {
                     s += ":prefetcher_pipe" + std::to_string(dfb_accessor_prefetcher_pipe_id.at(name));
                 }
             }
@@ -908,8 +909,9 @@ static void emit_metal2_namespaces(
         for (const auto& [name, id] : s.dfb_accessors) {
             const bool is_relay = s.dfb_accessor_is_relay.contains(name) && s.dfb_accessor_is_relay.at(name);
             if (is_relay) {
-                const uint8_t prefetcher_pipe_id =
-                    s.dfb_accessor_prefetcher_pipe_id.contains(name) ? s.dfb_accessor_prefetcher_pipe_id.at(name) : 0xFF;
+                const uint8_t prefetcher_pipe_id = s.dfb_accessor_prefetcher_pipe_id.contains(name)
+                                                       ? s.dfb_accessor_prefetcher_pipe_id.at(name)
+                                                       : 0xFF;
                 f << "constexpr RelayDFBBindingToken " << name << "{" << id;
                 if (prefetcher_pipe_id != 0xFF) {
                     f << ", " << static_cast<uint32_t>(prefetcher_pipe_id);

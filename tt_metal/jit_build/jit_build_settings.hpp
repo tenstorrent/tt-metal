@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -15,6 +16,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include "impl/metal2_host_api/llk_metadata.hpp"
 
 // Host-side mirror of the device SemScope enum.
 // Codegen spells the scope by name.
@@ -144,10 +146,12 @@ public:
     //  - Tensor bindings
     // prefetcher_pipe_id is 0xFF unless the binding is a PrefetcherPipe relay, in which case
     // it identifies the persistent slot the relay-token constructor aligns from on TRISC.
-    virtual void process_dataflow_buffer_binding_handles(
-        std::function<
-            void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_relay, uint8_t prefetcher_pipe_id)>)
-        const {}
+    virtual void process_dataflow_buffer_binding_handles(std::function<void(
+                                                             const std::string& accessor_name,
+                                                             uint16_t logical_dfb_id,
+                                                             bool is_relay,
+                                                             uint8_t prefetcher_pipe_id,
+                                                             const std::optional<LLKMetadata>&)>) const {}
     virtual void process_semaphore_binding_handles(
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
@@ -163,20 +167,26 @@ public:
     //    slot for runtime accessor fields (currently: shape, for sharded TensorParameters with
     //    dynamic_tensor_shape=true). The binding occupies (1 + num_runtime_field_crta_words)
     //    CRTA words in total.
+    //  - llk_metadata: the operand's host format, tile, and face geometry, baked onto the binding token.
     // (The tensor_parameter_name is also part of TensorBindingHandle, but we don't need it for codegen.)
     virtual void process_tensor_binding_handles(std::function<void(
                                                     const std::string& accessor_name,
                                                     uint32_t cta_offset,
                                                     uint32_t addr_crta_offset,
-                                                    uint32_t num_runtime_field_crta_words)>) const {}
+                                                    uint32_t num_runtime_field_crta_words,
+                                                    const std::optional<LLKMetadata>&)>) const {}
 
     // Scratchpad binding callback emits the codegen-relevant fields:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `scratch::` namespace
     //  - size_bytes: the scratchpad's per-node size, emitted as the binding token's compile-time size
     //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
     //    scratchpad's (framework-allocated) L1 base address
-    virtual void process_scratchpad_binding_handles(
-        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
+    //  - llk_metadata: the operand's host format, tile, and face geometry, baked onto the binding token.
+    virtual void process_scratchpad_binding_handles(std::function<void(
+                                                        const std::string& accessor_name,
+                                                        uint32_t size_bytes,
+                                                        uint32_t addr_crta_word,
+                                                        const std::optional<LLKMetadata>&)>) const {}
 
     // Tensor binding sequence callback: sequence_name + ordered member TensorBinding accessor names.
     // Emitted as constexpr std::tuple tokens in the `tensor::` namespace (user order; no sort).
