@@ -93,6 +93,7 @@
 // stay commented in the committed tree.
 // #define RMS_ABLATE_ROOT_SUM
 // #define RMS_ABLATE_ROOT_FINALIZE
+// #define RMS_ABLATE_RECONFIG
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -655,6 +656,30 @@ void kernel_main() {
     constexpr uint32_t CB_A = RM ? cb_input_sticks : cb_input_tiles;
     compute_kernel_hw_startup(CB_A, cb_scaler, cb_output_tiles);
 
+    // ==== Refinement 3 / lever 1: DATA-FORMAT RECONFIG, one named constant per
+    // ==== boundary ==========================================================
+    //
+    // Every chain in this kernel emits its dtype reconfig ONCE per CALL (the
+    // eltwise_chain fold is boot-hoisted -- chain.inl `emit_pre_element_transitions`
+    // runs in the one-time setup, not per tile), so the cost is
+    // `stages x num_blocks x NUM_W_CHUNKS` per core, not `stages x tiles`.  The
+    // constants below exist so that (a) the boundaries are NAMED rather than a
+    // repeated literal, and (b) the ablation switch above can strip all of them in
+    // one place to bound what the lever can ever be worth.  RMS_ABLATE_RECONFIG is a
+    // MEASUREMENT-ONLY build: with the formats not programmed the op is numerically
+    // wrong wherever any two of the CBs differ, which is exactly the set of builds
+    // the elision predicate would have to exclude.
+    //
+    // The shipped default is Enabled on every boundary.  See the changelog for the
+    // measured ablation number that justifies leaving it there.
+#ifdef RMS_ABLATE_RECONFIG
+    constexpr auto DFR = ckl::DataFormatReconfig::Disabled;
+    constexpr auto REDUCE_RECONFIG = ckl::ReduceDataFormatReconfigMode::NONE;
+#else
+    constexpr auto DFR = ckl::DataFormatReconfig::Enabled;
+    constexpr auto REDUCE_RECONFIG = ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
+#endif
+
     // ---- policy / shape knobs --------------------------------------------
     constexpr auto REDUCE_POLICY =
         (REDUCE_BULK != 0) ? ckl::ReduceInputPolicy::BulkWaitBulkPop : ckl::ReduceInputPolicy::WaitAndPopPerTile;
@@ -723,7 +748,7 @@ void kernel_main() {
         cb_x_squared,
         ckl::ReservePolicy::PerOuter,
         ckl::PushPolicy::PerOuter,
-        ckl::DataFormatReconfig::Enabled,
+        DFR,
         ckl::PackRelu::Disabled,
         ckl::L1Accumulation::Disabled,
         ckl::DestAccumulation::PerRow);
@@ -741,26 +766,17 @@ void kernel_main() {
     // (compile-time-elided) `+ base` on the tile index -- there is no second
     // code path.  base is 0 whenever XOFF is Unset, and `tile_base_value<Unset>`
     // folds the whole term away.
-    constexpr auto X_IN_A = ckl::input(
-        CB_T, ckl::WaitPolicy::Upfront, PASS_A_POP, ckl::OperandKind::Block, ckl::DataFormatReconfig::Enabled, AOFF);
+    constexpr auto X_IN_A = ckl::input(CB_T, ckl::WaitPolicy::Upfront, PASS_A_POP, ckl::OperandKind::Block, DFR, AOFF);
     // ---- A1: `residual_add_block`'s two operands, and its output ------------
     // BOTH activation streams are consumed and POPPED here, whatever the regime:
     // the held role has moved to cb_x_sum, so nothing downstream indexes back
     // into either of them.  Under NATIVE_IN they are the zero-copy shard CBs --
     // already resident, published once by the reader -- and this pop is what
     // advances their front from one row-block to the next.
-    constexpr auto R_X_IN = ckl::input(
-        cb_input_tiles,
-        ckl::WaitPolicy::Upfront,
-        ckl::PopPolicy::AtEnd,
-        ckl::OperandKind::Block,
-        ckl::DataFormatReconfig::Enabled);
-    constexpr auto R_R_IN = ckl::input(
-        cb_residual_tiles,
-        ckl::WaitPolicy::Upfront,
-        ckl::PopPolicy::AtEnd,
-        ckl::OperandKind::Block,
-        ckl::DataFormatReconfig::Enabled);
+    constexpr auto R_X_IN =
+        ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block, DFR);
+    constexpr auto R_R_IN =
+        ckl::input(cb_residual_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block, DFR);
     // ONE reserve and ONE push for the whole chunk -- `Upfront`/`AtEnd`, NOT the
     // `PerBlockSize` pair pass B's stages use.
     //
@@ -799,26 +815,16 @@ void kernel_main() {
     // the sanctioned pattern for a lifetime no single PopPolicy can express), so
     // that a chunk's `AtEnd` cannot pop the base tiles the next chunk still needs.
     constexpr auto PASS_B_X_POP = ROW_RESIDENT ? ckl::PopPolicy::None : ckl::PopPolicy::AtEnd;
-    constexpr auto X_IN_B = ckl::input(
-        CB_T, ckl::WaitPolicy::Upfront, PASS_B_X_POP, ckl::OperandKind::Block, ckl::DataFormatReconfig::Enabled, XOFF);
-    constexpr auto G_IN = ckl::input(
-        cb_gamma_tiles,
-        ckl::WaitPolicy::Upfront,
-        ckl::PopPolicy::None,
-        ckl::OperandKind::Row,
-        ckl::DataFormatReconfig::Enabled,
-        XOFF);
+    constexpr auto X_IN_B =
+        ckl::input(CB_T, ckl::WaitPolicy::Upfront, PASS_B_X_POP, ckl::OperandKind::Block, DFR, XOFF);
+    constexpr auto G_IN =
+        ckl::input(cb_gamma_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Row, DFR, XOFF);
     // A2: the bias CB mirrors gamma's spec exactly -- same Row broadcast, same
     // held lifetime -- at its OWN data format.  The chain's reconfig fold must NOT
     // elide the second format switch: `weight` and `bias` may be at different
     // dtypes, so the packer/unpacker really does change twice per chunk.
-    constexpr auto B_IN = ckl::input(
-        cb_bias_tiles,
-        ckl::WaitPolicy::Upfront,
-        ckl::PopPolicy::None,
-        ckl::OperandKind::Row,
-        ckl::DataFormatReconfig::Enabled,
-        XOFF);
+    constexpr auto B_IN =
+        ckl::input(cb_bias_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Row, DFR, XOFF);
     // Pass-B output routing, stated ONCE.  Let S = [scale] if HAS_G + [bias] if
     // HAS_B.  `normalize_block` writes cb_output_tiles when S is empty, else
     // cb_normalized; each stage in S except the LAST writes cb_normalized IN
@@ -1137,7 +1143,7 @@ void kernel_main() {
                 cb_scaler,
                 CB_REDUCE_ACC,
                 REDUCE_POLICY,
-                ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                REDUCE_RECONFIG,
                 ReduceFp32Mode::Fast,
                 REDUCE_ALGO>(ckl::ReduceInputBlockShape::of(rows, X_SQUARED_WT), c, NUM_W_CHUNKS, PARTIAL_SCALER);
         }
