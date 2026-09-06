@@ -30,6 +30,7 @@
 #include "tanh_bw/device/tanh_bw_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/hal.hpp>
+#include <cstdint>
 
 namespace ttnn {
 
@@ -579,36 +580,40 @@ std::vector<Tensor> cos_bw(
 std::vector<Tensor> acosh_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor in_sq = ttnn::square(input, output_mem_config);
-    Tensor in_rsqrt =
-        ttnn::rsqrt(ttnn::subtract(in_sq, 1.0f, std::nullopt, output_mem_config), false, output_mem_config);
-    Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
     float t_nan = tt::tt_metal::hal::get_nan();
     float t_inf = tt::tt_metal::hal::get_inf();
 
-    Tensor check_condition =
-        ttnn::multiply(ttnn::signbit(grad, output_mem_config), -1.0f, std::nullopt, output_mem_config);
+    // Every unary step below is one operand's activation on the binary op that
+    // reads it, so none of them needs a dispatch. The square is computed twice
+    // rather than kept in a tensor, which is what dropped in_sq.
+    const std::array square_it = {EltwiseUnaryWithParam{UnaryOpType::SQUARE}};
+    const std::array rsqrt_it = {EltwiseUnaryWithParam{UnaryOpType::RSQRT, 0.0f}};
+    const std::array signbit_it = {EltwiseUnaryWithParam{UnaryOpType::SIGNBIT}};
+    const std::array is_zero = {EltwiseUnaryWithParam{UnaryOpType::EQZ}};
+    const std::array is_one = {EltwiseUnaryWithParam{UnaryOpType::UNARY_EQ, 1.0f}};
+    const std::array at_most_one = {EltwiseUnaryWithParam{UnaryOpType::UNARY_LE, 1.0f}};
+    const std::array at_least_minus_one = {EltwiseUnaryWithParam{UnaryOpType::UNARY_GE, -1.0f}};
+
+    Tensor in_rsqrt = ttnn::subtract(input, 1.0f, std::nullopt, output_mem_config, std::nullopt, rsqrt_it, square_it);
+    Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
+
+    Tensor check_condition = ttnn::multiply(grad, -1.0f, std::nullopt, output_mem_config, std::nullopt, {}, signbit_it);
 
     grad_a = ttnn::where(
         ttnn::logical_or(
-            ttnn::lt(in_sq, 1.0f, std::nullopt, output_mem_config),
-            ttnn::logical_and(
-                ttnn::eq(input, 1.0f, std::nullopt, output_mem_config),
-                ttnn::eqz(grad, output_mem_config),
-                std::nullopt,
-                output_mem_config),
+            ttnn::lt(input, 1.0f, std::nullopt, output_mem_config, std::nullopt, {}, square_it),
+            ttnn::logical_and(input, grad, std::nullopt, output_mem_config, std::nullopt, {}, is_one, is_zero),
             std::nullopt,
             output_mem_config),
         t_nan,
         ttnn::where(
             ttnn::logical_and(
-                ttnn::le(input, 1.0f, std::nullopt, output_mem_config),
-                ttnn::ge(input, -1.0f, std::nullopt, output_mem_config),
-                std::nullopt,
-                output_mem_config),
+                input, input, std::nullopt, output_mem_config, std::nullopt, {}, at_most_one, at_least_minus_one),
             ttnn::multiply(
                 ttnn::add(
-                    check_condition, ttnn::eqz(check_condition, output_mem_config), std::nullopt, output_mem_config),
+                    check_condition, check_condition, std::nullopt, output_mem_config, std::nullopt, {}, {}, is_zero),
                 t_inf,
                 std::nullopt,
                 output_mem_config),
@@ -624,29 +629,39 @@ std::vector<Tensor> acosh_bw(
 std::vector<Tensor> acos_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor neg_in = ttnn::neg(input, output_mem_config);
-    Tensor in_rsqrt = ttnn::rsqrt(
-        ttnn::add(
-            ttnn::multiply(neg_in, input, std::nullopt, output_mem_config), 1.0f, std::nullopt, output_mem_config),
-        false,
-        output_mem_config);
-    in_rsqrt = ttnn::neg(in_rsqrt, output_mem_config);
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+
+    const std::array negate_it = {EltwiseUnaryWithParam{UnaryOpType::NEG}};
+    const std::array rsqrt_then_negate = {
+        EltwiseUnaryWithParam{UnaryOpType::RSQRT, 0.0f}, EltwiseUnaryWithParam{UnaryOpType::NEG}};
+    const std::array sign_of_it = {EltwiseUnaryWithParam{UnaryOpType::SIGN}};
+    const std::array below_minus_one = {EltwiseUnaryWithParam{UnaryOpType::UNARY_LT, -1.0f}};
+    const std::array above_one = {EltwiseUnaryWithParam{UnaryOpType::UNARY_GT, 1.0f}};
+    // x == 1 or x == -1 is abs(x) == 1, and both arms of the two wheres wrote
+    // the same value, so the pair of tests and the pair of wheres are one each.
+    const std::array abs_is_one = {
+        EltwiseUnaryWithParam{UnaryOpType::ABS}, EltwiseUnaryWithParam{UnaryOpType::UNARY_EQ, 1.0f}};
+
+    Tensor in_rsqrt = ttnn::add(
+        ttnn::multiply(input, input, std::nullopt, output_mem_config, std::nullopt, {}, negate_it),
+        1.0f,
+        std::nullopt,
+        output_mem_config,
+        std::nullopt,
+        rsqrt_then_negate);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
     Tensor t_inf = ttnn::multiply(
-        ttnn::sign(grad, output_mem_config), -std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
+        grad, -std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config, std::nullopt, {}, sign_of_it);
     grad_a = where(
-        ttnn::logical_or(
-            ttnn::lt(input, -1.0f, std::nullopt, output_mem_config),
-            ttnn::gt(input, 1.0f, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
+        ttnn::logical_or(input, input, std::nullopt, output_mem_config, std::nullopt, {}, below_minus_one, above_one),
         std::nanf(" "),
         grad_a,
         output_mem_config);
     grad_a = where(
-        ttnn::eq(input, -1.0f, std::nullopt, output_mem_config),
+        ttnn::eq(input, 1.0f, std::nullopt, output_mem_config, std::nullopt, {}, abs_is_one),
         t_inf,
-        where(ttnn::eq(input, 1.0f, std::nullopt, output_mem_config), t_inf, grad_a, output_mem_config),
+        grad_a,
         output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
@@ -967,27 +982,40 @@ std::vector<Tensor> atanh_bw(
         EltwiseUnaryWithParam{UnaryOpType::NEG},
         EltwiseUnaryWithParam{UnaryOpType::RECIP}};
 
+    const std::array is_zero = {EltwiseUnaryWithParam{UnaryOpType::EQZ}};
+    const std::array is_nonzero = {EltwiseUnaryWithParam{UnaryOpType::NEZ}};
+    const std::array is_negative = {EltwiseUnaryWithParam{UnaryOpType::LTZ}};
+    // x == 1 or x == -1 is abs(x) == 1, so the two eq and the logical_or that
+    // joined them are one operand activation.
+    const std::array abs_is_one = {
+        EltwiseUnaryWithParam{UnaryOpType::ABS}, EltwiseUnaryWithParam{UnaryOpType::UNARY_EQ, 1.0f}};
+
     Tensor grad_a =
         ttnn::multiply(grad, unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
-    grad_a = where(ttnn::eqz(grad, output_mem_config), t_nan, grad_a, output_mem_config);
+    Tensor grad_is_zero = ttnn::eqz(grad, output_mem_config);
+    grad_a = where(grad_is_zero, t_nan, grad_a, output_mem_config);
     grad_a = where(
-        ttnn::logical_and(ttnn::eqz(grad, output_mem_config), ttnn::eqz(input, output_mem_config)),
+        ttnn::logical_and(grad, input, std::nullopt, output_mem_config, std::nullopt, {}, is_zero, is_zero),
         0.f,
         grad_a,
         output_mem_config);
     grad_a = where(
-        ttnn::logical_and(
-            ttnn::logical_or(
-                ttnn::eq(input, 1, std::nullopt, output_mem_config),
-                ttnn::eq(input, -1, std::nullopt, output_mem_config),
-                std::nullopt,
-                output_mem_config),
-            ttnn::nez(grad, output_mem_config)),
+        ttnn::logical_and(input, grad, std::nullopt, output_mem_config, std::nullopt, {}, abs_is_one, is_nonzero),
         t_inf,
         grad_a,
         output_mem_config);
+    // The eq against inf stays a binary op. As a UNARY_EQ activation it does not
+    // match inf, which left the sign of the +-inf at the boundary unflipped.
     grad_a = where(
-        ttnn::logical_and(ttnn::eq(grad_a, t_inf, std::nullopt, output_mem_config), ttnn::ltz(grad, output_mem_config)),
+        ttnn::logical_and(
+            ttnn::eq(grad_a, t_inf, std::nullopt, output_mem_config),
+            grad,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            {},
+            {},
+            is_negative),
         -t_inf,
         grad_a,
         output_mem_config);
@@ -1602,7 +1630,7 @@ std::vector<Tensor> repeat_bw(
         return grad_tensor;
     }
     if (shape[0] > 1) {
-        ttsl::SmallVector<int64_t> dim = {0};
+        ttsl::SmallVector<std::int64_t> dim = {0};
         TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[1], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
         const auto required = ttnn::Shape(intended_shape_array);
@@ -1617,7 +1645,7 @@ std::vector<Tensor> repeat_bw(
         return grad_tensor;
     }
     if (shape[1] > 1) {
-        ttsl::SmallVector<int64_t> dim = {1};
+        ttsl::SmallVector<std::int64_t> dim = {1};
         TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[0], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
         const auto required = ttnn::Shape(intended_shape_array);
@@ -1657,7 +1685,7 @@ namespace ttnn {
 std::vector<Tensor> prod_bw(
     const Tensor& grad,
     const Tensor& input,
-    const std::optional<int64_t> dim,
+    const std::optional<std::int64_t> dim,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(
@@ -1684,13 +1712,13 @@ std::vector<Tensor> prod_bw(
 
     // all_dimensions = False
     Tensor updated_grad = prod_result;
-    auto step = ttsl::SmallVector<uint32_t>({1, 1, 1, 1});
+    auto step = ttsl::SmallVector<std::uint32_t>({1, 1, 1, 1});
     if (prod_result.logical_shape() != grad.padded_shape()) {
         if (*dim == 3 || *dim == -1) {
-            ttsl::SmallVector<int64_t> after_permute_dims = {0, 3, 1, 2};
+            ttsl::SmallVector<std::int64_t> after_permute_dims = {0, 3, 1, 2};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
-            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttsl::SmallVector<uint32_t> end_index = {
+            ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
+            ttsl::SmallVector<std::uint32_t> end_index = {
                 grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[2]};
             Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
             after_permute_dims = {0, 2, 3, 1};
@@ -1701,10 +1729,10 @@ std::vector<Tensor> prod_bw(
                 updated_grad = pad_updated_grad.to_device(input.device());
             }
         } else if (*dim == 2 || *dim == -2) {
-            ttsl::SmallVector<int64_t> after_permute_dims = {0, 2, 1, 3};
+            ttsl::SmallVector<std::int64_t> after_permute_dims = {0, 2, 1, 3};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
-            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttsl::SmallVector<uint32_t> end_index = {
+            ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
+            ttsl::SmallVector<std::uint32_t> end_index = {
                 grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[3]};
             Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
@@ -1738,11 +1766,11 @@ std::vector<Tensor> prod_bw(
     if (*dim == 1 || *dim == -3) {
         Tensor tensor_1_temp = reciprocal_input;
         if (reciprocal_input.padded_shape()[1] % 32 != 0) {
-            ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
+            ttsl::SmallVector<std::array<std::uint32_t, 2>> padding = {
                 {0, 0}, {0, 32 - (reciprocal_input.padded_shape()[1] % 32)}, {0, 0}, {0, 0}};
             tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, true, std::nullopt);
         }
-        ttsl::SmallVector<int64_t> after_permute_dims = {0, 2, 3, 1};
+        ttsl::SmallVector<std::int64_t> after_permute_dims = {0, 2, 3, 1};
         Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
         Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_memory_config);
 
@@ -1776,10 +1804,10 @@ std::vector<Tensor> prod_bw(
             output_memory_config);
         Tensor grad_result = result;
         if (reciprocal_input.padded_shape()[1] % 32 != 0) {
-            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttsl::SmallVector<uint32_t> end_index = {
+            ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
+            ttsl::SmallVector<std::uint32_t> end_index = {
                 input.padded_shape()[0], input.padded_shape()[1], input.padded_shape()[2], input.padded_shape()[3]};
-            auto step = ttsl::SmallVector<uint32_t>({1, 1, 1, 1});
+            auto step = ttsl::SmallVector<std::uint32_t>({1, 1, 1, 1});
             grad_result = ttnn::slice(result, start_index, end_index, step, std::nullopt);
         }
         grad_tensor.emplace_back(grad_result);
@@ -1788,11 +1816,11 @@ std::vector<Tensor> prod_bw(
     // dim 0
     Tensor tensor_1_temp = reciprocal_input;
     if (reciprocal_input.padded_shape()[0] % 32 != 0) {
-        ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
+        ttsl::SmallVector<std::array<std::uint32_t, 2>> padding = {
             {0, (32 - (reciprocal_input.padded_shape()[0] % 32))}, {0, 0}, {0, 0}, {0, 0}};
         tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, false, std::nullopt);
     }
-    ttsl::SmallVector<int64_t> after_permute_dims = {3, 1, 2, 0};
+    ttsl::SmallVector<std::int64_t> after_permute_dims = {3, 1, 2, 0};
     Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
     Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_memory_config);
 
@@ -1825,8 +1853,8 @@ std::vector<Tensor> prod_bw(
         output_memory_config);
     Tensor grad_result = result;
     if (reciprocal_input.padded_shape()[0] % 32 != 0) {
-        ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        ttsl::SmallVector<uint32_t> end_index = {
+        ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
+        ttsl::SmallVector<std::uint32_t> end_index = {
             input.padded_shape()[0], input.padded_shape()[1], input.padded_shape()[2], input.padded_shape()[3]};
         grad_result = ttnn::slice(result, start_index, end_index, step, std::nullopt);
     }
