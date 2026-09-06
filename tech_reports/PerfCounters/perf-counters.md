@@ -565,17 +565,17 @@ MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / ref_cnt * 100
 
 ---
 
-**22. RISC Core L1 Util**
+**22. L1 TDMA Packer Port Util**
 
-RISC core L1 memory access utilization.
+TDMA packer 2 L1 port utilization (port 8).
 
 | | |
 |---|---|
-| **Architectures** | Blackhole only |
+| **Architectures** | Wormhole, Blackhole |
 | **Counter group** | L1_1 |
 
 ```
-RISC Core L1 Util = L1_1_RISC_CORE / ref_cnt * 100
+L1 TDMA Packer Port Util = L1_1_TDMA_PACKER_2 / ref_cnt * 100
 ```
 
 - **High value (>10%)**: RISC core is actively accessing L1. Indicates firmware memory overhead.
@@ -598,7 +598,7 @@ Fraction of cycles each L1 port had a transaction attempt.
 
 ```
 L1 Unpacker Port Util = L1_0_UNPACKER_0 / ref_cnt * 100
-L1 Packer Port Util = L1_0_PORT1 / ref_cnt * 100
+L1 Packer Port Util = L1_0_PORT1 / ref_cnt * 100   # Wormhole only; Blackhole's port 1 is unpacker 1 and folds into L1 Unpacker Port Util
 ```
 
 - **High value (>20%)**: Port is heavily used. Matmul shows 15% on unpacker.
