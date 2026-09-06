@@ -29,8 +29,8 @@ The counters are built from a reusable RTL module (`tt_perf_cnt`) that provides 
 ### How to Run
 
 ```bash
-# Capture all counter groups (fpu, pack, unpack, l1_0, instrn)
-python -m tracy --profiler-capture-perf-counters=all \
+# Capture every counter group; all needs several passes, so opt in to the workload replay
+python -m tracy --profiler-capture-perf-counters=all --perf-counter-multipass \
     -m "pytest your_test.py -x -v"
 ```
 
@@ -52,10 +52,10 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 | `1 << 7` | 128 | L1 bank 3 (BH only: NOC Ring 3) |
 | `1 << 8` | 256 | L1 bank 4 (BH only: misc ports) |
 
-Recommended value for a broad capture: `47` (`0x2F`) — FPU | PACK | UNPACK | L1_0 | INSTRN.
+The BRISC firmware fits the readout code for 3 groups per run (a 4th overflows `.text` on Blackhole), so a mask with more than three groups is not usable directly; `python -m tracy --perf-counter-multipass` schedules the passes and merges the logs instead. A three-group example: `7` (`0x7`) — FPU | PACK | UNPACK.
 
 ```bash
-export TT_METAL_PROFILE_PERF_COUNTERS=47
+export TT_METAL_PROFILE_PERF_COUNTERS=7
 ```
 
 **L1 bank mutual exclusion:** all L1 banks share the same hardware mux (selected via `MUX_CTRL`), so only one L1 bank may be enabled per run. The env-var path throws if more than one L1 bit is set. To capture multiple L1 banks, run the profiler twice and merge results; the `python -m tracy --profiler-capture-perf-counters=...` CLI does this automatically when both `l1_0` and `l1_1` are requested (see `process_model_log.run_device_profiler`).
