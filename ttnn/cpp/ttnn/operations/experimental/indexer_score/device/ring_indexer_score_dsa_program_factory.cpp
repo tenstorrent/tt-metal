@@ -960,6 +960,12 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         if (tensors.has_cache_slot_metadata()) {
             const uint32_t ag_meta_base = ag_rt::reader_metadata_base(/*num_inputs=*/1);  // gathers k_local alone
             uint32_t layer_idx_patched = 0;
+            // An in-range but WRONG base is the dangerous failure: the count check below still passes
+            // while the patch lands on a neighbouring word. Word 0 of the block is the slot tensor's
+            // buffer address (kept current by the descriptor framework), so it identifies the block
+            // unambiguously -- anchor on it before writing anything.
+            const uint32_t expected_slot_addr =
+                static_cast<uint32_t>(tensors.cache_batch_idx_tensor->buffer()->address());
             for (const uint32_t ag_reader_kernel : {3u, 5u}) {
                 patch_ag_field(
                     ag_reader_kernel,
@@ -970,6 +976,15 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
                     for (auto& core_args : col_args) {
                         const uint32_t slot = ag_meta_base + ag_rt::kReaderMetadataLayerIdxOffset;
                         if (core_args.size() > slot) {
+                            TT_FATAL(
+                                core_args[ag_meta_base + ag_rt::kReaderMetadataSlotIdOffset] == expected_slot_addr,
+                                "indexer_score fused override: the all-gather reader's metadata block is not at "
+                                "the derived base {} -- word 0 holds {:#x}, expected the slot tensor address "
+                                "{:#x}. The reader runtime-arg layout drifted; re-derive reader_metadata_base "
+                                "(it must follow the per-input descriptor width used on the metadata path).",
+                                ag_meta_base,
+                                core_args[ag_meta_base + ag_rt::kReaderMetadataSlotIdOffset],
+                                expected_slot_addr);
                             core_args[slot] = args.index_cache_layer_idx;
                             ++layer_idx_patched;
                         }

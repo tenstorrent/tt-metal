@@ -151,8 +151,13 @@ constexpr uint32_t kReaderMetadataChunkLocalTilesOffset = 2;
 constexpr uint32_t kReaderMetadataNumLayersOffset = 3;
 constexpr uint32_t kReaderMetadataLayerIdxOffset = 4;
 
+// The metadata block is appended only on the metadata path, and that is exactly the path where every
+// per-input descriptor carries the extra input_cache_batch_extent word (offset 8). So the block always
+// sits behind kMetadataTensorDescriptorFieldCount-wide descriptors -- using the plain
+// kTensorDescriptorFieldCount here lands num_inputs words short, silently re-patching the wrong slot.
 inline uint32_t reader_metadata_base(uint32_t num_inputs) {
-    return kReaderRuntimeArgHeaderCount + num_inputs * (kTensorDescriptorFieldCount + kReaderAccessorWordsPerInput);
+    return kReaderRuntimeArgHeaderCount +
+           num_inputs * (kMetadataTensorDescriptorFieldCount + kReaderAccessorWordsPerInput);
 }
 
 inline uint32_t input_batch_base_pages(uint32_t batch_idx, uint32_t num_heads, uint32_t Ht, uint32_t Wt) {
