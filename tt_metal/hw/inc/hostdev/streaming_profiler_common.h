@@ -13,7 +13,7 @@
 //
 // Consumers: the SPSC producer (kernel_profiler_streaming.hpp), the DRISC relay kernel
 // (tools/profiler/kernels/streaming_profiler_relay.cpp) and the host receiver
-// (tools/profiler/streaming_profiler_receiver.cpp, spsc_marker_decode.hpp).
+// (impl/streaming_profiler/streaming_profiler_receiver.cpp, spsc_marker_decode.hpp).
 
 #include <cstdint>
 
@@ -88,7 +88,7 @@ static constexpr std::uint32_t kRelayCtrlWordStride = 64;
 // STICKY_META (SPSC/drainer backend, legacy / synthetic bench path only): an 8B context packet whose high
 // word carries (core_x, core_y, risc) + this type and whose low word is a 32-bit host-side ID. The host
 // forward-fills that identity onto the following timing markers. Its type sits in the same bits as a
-// marker's type. Value 6 == PP_STICKY_META in tools/profiler/spsc_packet.h (which is plain C and cannot
+// marker's type. Value 6 == PP_STICKY_META in impl/streaming_profiler/spsc_packet.h (which is plain C and cannot
 // include this header); spsc_marker_decode.hpp static_asserts the two agree. This used to be a trailing
 // enumerator on the DRAM profiler's PacketTypes; it never belonged to that wire.
 static constexpr std::uint32_t SPSC_TYPE_STICKY_META = 6;
@@ -112,7 +112,7 @@ static constexpr std::uint32_t SPSC_TYPE_STICKY_META = 6;
 // spsc_span_pack_pad() skipped words, never written; the host reads past them. The 16-word prefix puts the
 // control block at 64 B and the payload at 320 B, both L1_ALIGNMENT multiples.
 constexpr static std::uint32_t SPSC_SPAN_PREFIX_WORDS = 16;
-// Wire type code. Must equal PP_BULK_SPAN in tt_metal/tools/profiler/spsc_packet.h, which is plain C and
+// Wire type code. Must equal PP_BULK_SPAN in tt_metal/impl/streaming_profiler/spsc_packet.h, which is plain C and
 // cannot include this header; spsc_marker_decode.hpp static_asserts that the two agree.
 constexpr static std::uint32_t SPSC_SPAN_PACKET_TYPE = 13;
 // Where the packet type sits in word0 of every packet in this stream (PP_TYPE_SHIFT in spsc_packet.h).

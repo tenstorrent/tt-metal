@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tools/profiler/streaming_profiler_receiver.hpp"
+#include "impl/streaming_profiler/streaming_profiler_receiver.hpp"
 
-#include "tools/profiler/streaming_profiler_decode.hpp"
-#include "tools/profiler/streaming_profiler_device.hpp"
+#include "impl/streaming_profiler/streaming_profiler_decode.hpp"
+#include "impl/streaming_profiler/streaming_profiler_device.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include <tt-metalium/mesh_device.hpp>
 
@@ -32,7 +32,7 @@
 #include "impl/threading/thread_pool.hpp"
 #include "context/metal_context.hpp"
 #include "llrt/zone_meta.hpp"
-#include "tools/profiler/spsc_packet.h"
+#include "impl/streaming_profiler/spsc_packet.h"
 
 namespace tt::tt_metal::streaming_profiler {
 

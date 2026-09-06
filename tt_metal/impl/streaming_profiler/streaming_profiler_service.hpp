@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-#include "tools/profiler/streaming_profiler_consumer.hpp"
+#include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 
 namespace tt::llrt {
 class RunTimeOptions;

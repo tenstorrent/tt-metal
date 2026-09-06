@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tools/profiler/streaming_profiler_service.hpp"
+#include "impl/streaming_profiler/streaming_profiler_service.hpp"
 
 #include <algorithm>
 #include <thread>
@@ -14,10 +14,10 @@
 #include <tt_stl/indestructible.hpp>
 
 #include "llrt/rtoptions.hpp"
-#include "tools/profiler/streaming_profiler_decode.hpp"
-#include "tools/profiler/streaming_profiler_ops_csv.hpp"
-#include "tools/profiler/streaming_profiler_tracy.hpp"
-#include "tools/profiler/streaming_profiler_zone_csv.hpp"
+#include "impl/streaming_profiler/streaming_profiler_decode.hpp"
+#include "impl/streaming_profiler/streaming_profiler_ops_csv.hpp"
+#include "impl/streaming_profiler/streaming_profiler_tracy.hpp"
+#include "impl/streaming_profiler/streaming_profiler_zone_csv.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 

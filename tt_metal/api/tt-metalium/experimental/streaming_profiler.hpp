@@ -16,7 +16,7 @@
 // Records from the streaming profiler, delivered to subscribers in batches:
 //
 //     auto handle = Subscribe("my-tool", [](const Batch<Channel::Zones | Channel::Stalls>& b) {
-//         for (const Zone& z : b.zones) { use(z.site.name, z.core.coord, z.duration()); }
+//         for (const Zone& z : b.zones) { use(z.site.name, z.core.logical, z.duration()); }
 //         for (const Stall& s : b.stalls) { ... }
 //         stalls += b.stall_count;
 //     });
@@ -44,14 +44,16 @@ struct Site {
 };
 
 /**
- * @brief The core a record came from, by the coordinate a program addresses it with.
+ * @brief The core a record came from, in both coordinate systems: `logical` is the coordinate a program addresses it
+ *        with; `physical` is its NoC 0 position on the die, which is what routing distance and harvesting act on.
  */
 struct Core {
-    CoreCoord coord;
+    CoreCoord logical;
+    CoreCoord physical;
     uint32_t chip_id = 0;
     Risc risc = Risc::BRISC;
 };
-static_assert(sizeof(Core) == 24);
+static_assert(sizeof(Core) == 40);
 
 /**
  * @brief Converts a chip's device timestamps to host time.
@@ -92,7 +94,7 @@ struct Zone {
     std::chrono::steady_clock::time_point start_time() const { return clock.get().host_time(start_timestamp); }
     std::chrono::steady_clock::time_point end_time() const { return clock.get().host_time(end_timestamp); }
 };
-static_assert(sizeof(Zone) == 96);
+static_assert(sizeof(Zone) == 112);
 
 /**
  * @brief One DeviceTimestampedData marker with its payload, two 32-bit words per element, first word in the low half.

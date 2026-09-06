@@ -24,9 +24,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "tools/profiler/streaming_profiler_consumer.hpp"
-#include "tools/profiler/streaming_profiler_service.hpp"
-#include "tools/profiler/spsc_marker_decode.hpp"
+#include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
+#include "impl/streaming_profiler/streaming_profiler_service.hpp"
+#include "impl/streaming_profiler/spsc_marker_decode.hpp"
 
 namespace tt::tt_metal {
 

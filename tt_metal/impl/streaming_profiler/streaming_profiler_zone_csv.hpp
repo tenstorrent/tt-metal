@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "tools/profiler/streaming_profiler_consumer.hpp"
+#include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -33,6 +33,7 @@ private:
     struct Row {
         uint32_t chip = 0;
         uint16_t core_x = 0, core_y = 0;
+        uint16_t logical_x = 0, logical_y = 0;
         uint8_t risc = 0;
         uint32_t timer_id = 0;
         uint64_t timestamp = 0;

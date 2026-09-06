@@ -69,6 +69,7 @@ inline constexpr uint32_t kStreamingProfilerMaxDevices = 1u << 3;
 struct LaneInfo {
     uint32_t chip_id = 0;
     uint16_t logical_x = 0, logical_y = 0;
+    uint16_t physical_x = 0, physical_y = 0;  // NoC 0
     uint8_t risc = 0;
 };
 

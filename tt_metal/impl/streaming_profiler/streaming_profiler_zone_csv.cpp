@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tools/profiler/streaming_profiler_zone_csv.hpp"
+#include "impl/streaming_profiler/streaming_profiler_zone_csv.hpp"
 
 #include <unistd.h>
 
@@ -77,8 +77,10 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
         for (int end = 0; end < 2; end++) {
             Row& r = rows_.emplace_back();
             r.chip = z.core.chip_id;
-            r.core_x = static_cast<uint16_t>(z.core.coord.x);
-            r.core_y = static_cast<uint16_t>(z.core.coord.y);
+            r.core_x = static_cast<uint16_t>(z.core.physical.x);
+            r.core_y = static_cast<uint16_t>(z.core.physical.y);
+            r.logical_x = static_cast<uint16_t>(z.core.logical.x);
+            r.logical_y = static_cast<uint16_t>(z.core.logical.y);
             r.risc = static_cast<uint8_t>(z.core.risc);
             r.timer_id = id;
             r.timestamp = end ? z.end_timestamp : z.start_timestamp;
@@ -99,8 +101,10 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
         }
         Row& r = rows_.emplace_back();
         r.chip = d.core.chip_id;
-        r.core_x = static_cast<uint16_t>(d.core.coord.x);
-        r.core_y = static_cast<uint16_t>(d.core.coord.y);
+        r.core_x = static_cast<uint16_t>(d.core.physical.x);
+        r.core_y = static_cast<uint16_t>(d.core.physical.y);
+        r.logical_x = static_cast<uint16_t>(d.core.logical.x);
+        r.logical_y = static_cast<uint16_t>(d.core.logical.y);
         r.risc = static_cast<uint8_t>(d.core.risc);
         r.timer_id = legacy;
         r.timestamp = d.timestamp;
@@ -115,21 +119,22 @@ void ZoneCsvConsumer::write_csv(const std::string& path) const {
         std::fprintf(stderr, "[streaming profiler zone-csv] cannot open %s\n", path.c_str());
         return;
     }
-    // Only CHIP_FREQ is parsed downstream; the shape is kept so an existing reader needs no special case.
+    // core_x/core_y are the NoC 0 coordinate, as in the device profiler log this file mirrors, so a reader of that
+    // log needs no special case; the logical coordinate rides in two trailing columns.
     std::fprintf(
         f, "ARCH: blackhole, CHIP_FREQ[MHz]: %.0f, Max Compute Cores: 0\n", freq_mhz_ > 0.0 ? freq_mhz_ : 1000.0);
     std::fprintf(
         f,
         "PCIe slot, core_x, core_y, RISC processor type, timer_id, "
         "time[cycles since reset], data, run host ID, trace id, trace id counter, "
-        "zone name, type, source line, source file, meta data\n");
+        "zone name, type, source line, source file, meta data, logical_x, logical_y\n");
     // The PID, not a constant: two hand-concatenated captures then carry different ids and the reader's
     // multi-run warning still fires.
     const uint32_t run_id = static_cast<uint32_t>(::getpid());
     for (const Row& r : rows_) {
         std::fprintf(
             f,
-            "%u, %u, %u, %s, %u, %llu, %llu, %u, %u, 0, %s, %s, 0, streaming, \n",
+            "%u, %u, %u, %s, %u, %llu, %llu, %u, %u, 0, %s, %s, 0, streaming, , %u, %u\n",
             r.chip,
             r.core_x,
             r.core_y,
@@ -140,7 +145,9 @@ void ZoneCsvConsumer::write_csv(const std::string& path) const {
             run_id,
             r.prog,
             r.zone_name.c_str(),
-            r.type);
+            r.type,
+            r.logical_x,
+            r.logical_y);
     }
     std::fclose(f);
     std::fprintf(

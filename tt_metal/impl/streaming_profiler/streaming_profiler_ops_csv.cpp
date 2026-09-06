@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tools/profiler/streaming_profiler_ops_csv.hpp"
+#include "impl/streaming_profiler/streaming_profiler_ops_csv.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -20,7 +20,7 @@ void OpsCsvConsumer::operator()(const Batch& batch) {
             continue;
         }
         const uint32_t risc = static_cast<uint32_t>(z.core.risc);
-        const uint32_t core_key = (static_cast<uint32_t>(z.core.coord.y) << 16) | static_cast<uint32_t>(z.core.coord.x);
+        const uint32_t core_key = (static_cast<uint32_t>(z.core.logical.y) << 16) | static_cast<uint32_t>(z.core.logical.x);
         // The wrapper zone never self-nests, so the k-th one on a lane for a prog is execution k.
         uint32_t& completed = pair_count_
             [(static_cast<uint64_t>(z.core.chip_id) << 56) | (static_cast<uint64_t>(core_key) << 24) |

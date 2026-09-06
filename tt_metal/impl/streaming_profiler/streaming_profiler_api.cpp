@@ -13,8 +13,8 @@
 #include <utility>
 #include <vector>
 
-#include "tools/profiler/streaming_profiler_consumer.hpp"
-#include "tools/profiler/streaming_profiler_service.hpp"
+#include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
+#include "impl/streaming_profiler/streaming_profiler_service.hpp"
 
 namespace tt::tt_metal::experimental::streaming_profiler {
 
@@ -24,7 +24,10 @@ namespace internal = tt::tt_metal::streaming_profiler;
 
 Core core_of(const internal::LaneInfo& li) {
     return Core{
-        .coord = CoreCoord(li.logical_x, li.logical_y), .chip_id = li.chip_id, .risc = static_cast<Risc>(li.risc)};
+        .logical = CoreCoord(li.logical_x, li.logical_y),
+        .physical = CoreCoord(li.physical_x, li.physical_y),
+        .chip_id = li.chip_id,
+        .risc = static_cast<Risc>(li.risc)};
 }
 
 Site site_of(const internal::ZoneNameMirror::Site* s) {

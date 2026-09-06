@@ -16,7 +16,7 @@
 #include "hostdev/streaming_profiler_common.h"
 
 #include <tt-metalium/core_coord.hpp>
-#include "tools/profiler/streaming_profiler_receiver.hpp"
+#include "impl/streaming_profiler/streaming_profiler_receiver.hpp"
 
 namespace tt::tt_metal {
 
@@ -73,8 +73,9 @@ private:
         uint32_t stop_addr[kMaxRelays] = {};  // host writes 1 to quiesce, 2 to release the NIU
         uint32_t done_addr[kMaxRelays] = {};  // relay publishes 0xD09E**** once its last page is out
         uint32_t n_drisc = 0;                 // relays (= sockets) in use, [1, kMaxRelays]; set once by boot_device
-        // Per core index: logical (x,y) [the public Core::coord] and virtual [what the SRC lane resolves to].
-        std::vector<std::pair<uint32_t, uint32_t>> core_logical, core_virt;
+        // Per core index: logical and NoC 0 physical (x,y) [the public Core] and virtual [what the SRC lane
+        // resolves to].
+        std::vector<std::pair<uint32_t, uint32_t>> core_logical, core_physical, core_virt;
         std::unordered_map<uint32_t, uint32_t> core_of_xy;  // packed (y<<16)|x -> dense core index
         bool active = false;
         bool clock_synced = false;

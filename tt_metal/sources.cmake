@@ -175,15 +175,15 @@ set(TT_METAL_SOURCES
     impl/host_api/tt_metal.cpp
     impl/experimental/offline_compile/offline_kernel_compile.cpp
     impl/graph/graph_tracking.cpp
+    impl/streaming_profiler/streaming_profiler_api.cpp
+    impl/streaming_profiler/streaming_profiler_consumer.cpp
+    impl/streaming_profiler/streaming_profiler_device.cpp
+    impl/streaming_profiler/streaming_profiler_ops_csv.cpp
+    impl/streaming_profiler/streaming_profiler_receiver.cpp
+    impl/streaming_profiler/streaming_profiler_service.cpp
+    impl/streaming_profiler/streaming_profiler_tracy.cpp
+    impl/streaming_profiler/streaming_profiler_zone_csv.cpp
     hal.cpp
-    tools/profiler/streaming_profiler_device.cpp
-    tools/profiler/streaming_profiler_api.cpp
-    tools/profiler/streaming_profiler_consumer.cpp
-    tools/profiler/streaming_profiler_ops_csv.cpp
-    tools/profiler/streaming_profiler_receiver.cpp
-    tools/profiler/streaming_profiler_service.cpp
-    tools/profiler/streaming_profiler_zone_csv.cpp
-    tools/profiler/streaming_profiler_tracy.cpp
 )
 
 set(JITAPI_FILES

@@ -273,7 +273,7 @@ either way.
 
 ### 1.6 The call pattern
 
-The ops-CSV consumer in `tt_metal/tools/profiler/streaming_profiler_ops_csv.{hpp,cpp}` is the full working
+The ops-CSV consumer in `tt_metal/impl/streaming_profiler/streaming_profiler_ops_csv.{hpp,cpp}` is the full working
 reference.
 
 ```cpp
@@ -392,7 +392,9 @@ bank and pumps them to the host FIFO over a D2H socket.
 
 ### 2.3 The host
 
-- `tt_metal/tools/profiler/streaming_profiler.{hpp,cpp}` — control plane: one `StreamingProfiler` per
+Host files live in `tt_metal/impl/streaming_profiler/`.
+
+- `streaming_profiler_device.{hpp,cpp}` — control plane: one `StreamingProfiler` per
   `MeshDevice`. Constructing it boots the relays on every eligible local Blackhole device and starts the
   receiver; destroying it (or `stop()`) quiesces the relays, drains the receiver, verifies capture
   completeness (every worker lane's tail against the receiver's consumed mirror) and leaves the resident
@@ -462,7 +464,7 @@ Names in the historical text and what they are today:
 |---|---|
 | `drisc_profiler_drain.cpp` (the filler/mover kernel, role by `kRole` compile arg), `drisc_profiler_filler.cpp` | `tt_metal/tools/profiler/kernels/streaming_profiler_relay.cpp` |
 | `drisc_drain_common.hpp`, `test_kernels/misc/drisc_drain_frame.h`, the streaming constants that were in `profiler_common.h` | `tt_metal/hw/inc/hostdev/streaming_profiler_common.h` (the DRAM profiler keeps `profiler_common.h`) |
-| `perf_debug_profiler.{hpp,cpp}`, `PerfDebugProfiler` | `tt_metal/tools/profiler/streaming_profiler_device.{hpp,cpp}`, `streaming_profiler::Devices` |
+| `perf_debug_profiler.{hpp,cpp}`, `PerfDebugProfiler` | `tt_metal/impl/streaming_profiler/streaming_profiler_device.{hpp,cpp}`, `streaming_profiler::Devices` |
 | `PerfDebugTracyHandler`, `perf_debug_tracy_handler` | `TracySink`, `streaming_profiler_tracy.{hpp,cpp}` |
 | the host "writer"/"decoder" threads, `D2HSocket::read()` memcpy path, receiver v2 | `streaming_profiler_receiver.{hpp,cpp}` |
 | host record ring of 24 B `Rec` (`BroadcastRing`, `RING_RECS`) | per-stream `BroadcastRing` of verbatim frames (`RING_MB`); records are decoded per consumer |

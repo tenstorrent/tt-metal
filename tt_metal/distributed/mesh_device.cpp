@@ -50,7 +50,7 @@
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
 #include "distributed/trace_allocation_tracker.hpp"
-#include "tools/profiler/streaming_profiler_receiver.hpp"
+#include "impl/streaming_profiler/streaming_profiler_receiver.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"

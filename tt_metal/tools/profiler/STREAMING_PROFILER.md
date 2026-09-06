@@ -32,7 +32,7 @@ auto h = Subscribe("zone-sink", [](const Batch<Channel::Zones>& b) {
     for (const Zone& z : b.zones) {
         fmt::print("{}: {} ns on chip {} core ({},{}) {} (op {})\n",
             z.site.name,                 // "compute"
-            z.duration().count(), z.core.chip_id, z.core.coord.x, z.core.coord.y,
+            z.duration().count(), z.core.chip_id, z.core.logical.x, z.core.logical.y,
             static_cast<int>(z.core.risc), z.runtime_id);
     }
 });
@@ -93,7 +93,7 @@ auto h = Subscribe("flag-sink", [](const Batch<Channel::Events>& b) {
     for (const Event& e : b.events) {
         fmt::print("{} @ {} on core ({},{})\n",
             e.site.name, e.time().time_since_epoch().count(),   // "LOOP-START" @ host time
-            e.core.coord.x, e.core.coord.y);
+            e.core.logical.x, e.core.logical.y);
     }
 });
 ```

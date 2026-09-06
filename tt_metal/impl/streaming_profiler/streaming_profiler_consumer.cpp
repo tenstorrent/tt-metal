@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tools/profiler/streaming_profiler_consumer.hpp"
+#include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 
 #include <utility>
 

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tools/profiler/streaming_profiler_device.hpp"
+#include "impl/streaming_profiler/streaming_profiler_device.hpp"
 
 #include <algorithm>
 #include <array>
@@ -46,10 +46,10 @@
 #include "llrt/tt_cluster.hpp"
 #include "hostdev/streaming_profiler_common.h"
 
-#include "tools/profiler/spsc_marker_decode.hpp"
-#include "tools/profiler/streaming_profiler_consumer.hpp"
-#include "tools/profiler/streaming_profiler_receiver.hpp"
-#include "tools/profiler/spsc_packet.h"
+#include "impl/streaming_profiler/spsc_marker_decode.hpp"
+#include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
+#include "impl/streaming_profiler/streaming_profiler_receiver.hpp"
+#include "impl/streaming_profiler/spsc_packet.h"
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -245,9 +245,15 @@ std::vector<ReceiverDeviceConfig> Devices::boot(const std::shared_ptr<distribute
             rd.lane_table.reserve(ctx.nl);
             for (uint32_t ci = 0; ci < rd.num_cores; ci++) {
                 const auto [lx, ly] = ctx.core_logical[ci];
+                const auto [px, py] = ctx.core_physical[ci];
                 for (uint32_t r = 0; r < kNRisc; r++) {
                     rd.lane_table.push_back(streaming_profiler::LaneInfo{
-                        ctx.chip_id, static_cast<uint16_t>(lx), static_cast<uint16_t>(ly), static_cast<uint8_t>(r)});
+                        ctx.chip_id,
+                        static_cast<uint16_t>(lx),
+                        static_cast<uint16_t>(ly),
+                        static_cast<uint16_t>(px),
+                        static_cast<uint16_t>(py),
+                        static_cast<uint8_t>(r)});
                 }
             }
             for (uint32_t sk = 0; sk < ctx.n_drisc; sk++) {
@@ -485,6 +491,7 @@ void Devices::enumerate_worker_grid(
     plan.num_cores = static_cast<uint64_t>(gx) * gy;
     ctx.nl = static_cast<uint32_t>(plan.num_cores) * kNRisc;
     ctx.core_logical.resize(plan.num_cores);
+    ctx.core_physical.resize(plan.num_cores);
     ctx.core_virt.resize(plan.num_cores);
     plan.coords.assign(plan.num_cores, 0);
     plan.zero_ctrl.assign(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, 0);
@@ -500,6 +507,9 @@ void Devices::enumerate_worker_grid(
         cluster.write_core(
             plan.zero_ctrl.data(), (uint32_t)plan.zero_ctrl.size(), tt_cxy_pair(device_id, v), plan.prof_l1);
         ctx.core_logical[idx] = {lx, ly};
+        const CoreCoord p = cluster.get_physical_coordinate_from_logical_coordinates(
+            device_id, CoreCoord{lx, ly}, CoreType::WORKER, /*no_warn=*/true);
+        ctx.core_physical[idx] = {static_cast<uint32_t>(p.x), static_cast<uint32_t>(p.y)};
         ctx.core_virt[idx] = {vx, vy};
     }
 

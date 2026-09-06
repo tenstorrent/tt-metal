@@ -151,7 +151,7 @@ struct EmptyZoneStats {
             if (frequency_ghz == 0.0) {
                 frequency_ghz = z.clock.get().frequency_ghz;
             }
-            const uint32_t key = (z.core.chip_id << 24) | (z.core.coord.y << 16) | (z.core.coord.x << 8) |
+            const uint32_t key = (z.core.chip_id << 24) | (z.core.logical.y << 16) | (z.core.logical.x << 8) |
                                  static_cast<uint32_t>(z.core.risc);
             lanes[key].push_back({z.start_timestamp, z.end_timestamp - z.start_timestamp});
         }

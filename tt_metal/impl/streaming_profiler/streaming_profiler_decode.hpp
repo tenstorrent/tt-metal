@@ -19,8 +19,8 @@
 #include <tt_stl/tt_pause.hpp>
 
 #include "tt_metal/common/broadcast_ring.hpp"
-#include "tools/profiler/spsc_marker_decode.hpp"
-#include "tools/profiler/streaming_profiler_receiver.hpp"
+#include "impl/streaming_profiler/spsc_marker_decode.hpp"
+#include "impl/streaming_profiler/streaming_profiler_receiver.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 

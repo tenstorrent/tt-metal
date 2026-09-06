@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tools/profiler/streaming_profiler_tracy.hpp"
+#include "impl/streaming_profiler/streaming_profiler_tracy.hpp"
 
 #include <cstring>
 #include <limits>
@@ -16,7 +16,7 @@
 #include <client/TracyProfiler.hpp>
 #endif
 
-#include "tools/profiler/streaming_profiler_service.hpp"
+#include "impl/streaming_profiler/streaming_profiler_service.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -37,8 +37,8 @@ int64_t ns_since_epoch(std::chrono::steady_clock::time_point t) {
 }
 
 uint64_t lane_key(const api::Core& core) {
-    return (static_cast<uint64_t>(core.chip_id) << 32) | ((static_cast<uint64_t>(core.coord.x) & 0xFFFu) << 20) |
-           ((static_cast<uint64_t>(core.coord.y) & 0xFFFu) << 8) | (static_cast<uint64_t>(core.risc) & 0xFFu);
+    return (static_cast<uint64_t>(core.chip_id) << 32) | ((static_cast<uint64_t>(core.logical.x) & 0xFFFu) << 20) |
+           ((static_cast<uint64_t>(core.logical.y) & 0xFFFu) << 8) | (static_cast<uint64_t>(core.risc) & 0xFFu);
 }
 
 uint64_t srcloc_key(std::string_view name, uint32_t color, uint32_t risc) {
@@ -57,6 +57,7 @@ constexpr tracy::RiscType kRisc[5] = {
     tracy::RiscType::TRISC_1,
     tracy::RiscType::TRISC_2};
 constexpr uint32_t kRiscColor[5] = {0xEE9A00u, 0x43CD80u, 0x6CA6CDu, 0x00E5EEu, 0x98F5FFu};
+constexpr const char* kRiscName[5] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
 #endif
 
 }  // namespace
@@ -182,8 +183,13 @@ const TracySink::Lane& TracySink::lane(const Core& core) {
             // calibrated so the GUI offers no drift control. Everything the sink emits goes through this thread's
             // lock-free queue, whose FIFO order is what keeps the context ahead of the zones that reference it.
             TracyTTContextPopulateCalibratedLockfree(ctx, anchor_tracy_, 0.0, 1.0);
-            const std::string name =
-                fmt::format("Device: {} Logical ({},{})", core.chip_id, core.coord.x, core.coord.y);
+            const std::string name = fmt::format(
+                "Device: {}, Logical ({},{}) Physical ({},{})",
+                core.chip_id,
+                core.logical.x,
+                core.logical.y,
+                core.physical.x,
+                core.physical.y);
             TracyTTContextNameLockfree(ctx, name.c_str(), name.size());
             cit = contexts_.emplace(core_key, ctx).first;
         }
@@ -193,10 +199,11 @@ const TracySink::Lane& TracySink::lane(const Core& core) {
         // per-RISC row.
         tracy::TTDeviceMarker tm;
         tm.chip_id = core.chip_id;
-        tm.core_x = core.coord.x;
-        tm.core_y = core.coord.y;
+        tm.core_x = core.logical.x;
+        tm.core_y = core.logical.y;
         tm.risc = kRisc[ln.risc];
         ln.thread = tm.get_thread_id();
+        tracy::SetThreadName(ln.thread, kRiscName[ln.risc]);
 #endif
         it = lanes_.emplace(key, ln).first;
     }
@@ -293,8 +300,8 @@ void TracySink::push_marker(
     TracyTTCtx ctx = lane(core).ctx;
     tracy::TTDeviceMarker marker;
     marker.chip_id = core.chip_id;
-    marker.core_x = core.coord.x;
-    marker.core_y = core.coord.y;
+    marker.core_x = core.logical.x;
+    marker.core_y = core.logical.y;
     marker.risc = kRisc[static_cast<uint32_t>(core.risc) % 5];
     marker.timestamp = static_cast<uint64_t>(to_timeline(timestamp_ns));
     marker.runtime_host_id = runtime_id;
