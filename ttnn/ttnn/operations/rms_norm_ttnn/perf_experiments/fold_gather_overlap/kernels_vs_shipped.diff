@@ -1,0 +1,354 @@
+--- kernels/rms_norm_ttnn_writer.cpp	2026-09-06 11:48:59.740565626 +0000
++++ perf_experiments/fold_gather_overlap/kernels/rms_norm_ttnn_writer.cpp	2026-09-06 18:08:51.040663115 +0000
+@@ -160,6 +160,24 @@
+     // the focus shape's 8), so it is byte-identical there.  The pad-free alternative (a
+     // `copy_tile` DEST seed) was built and MEASURED SLOWER -- see combine_fold.
+     constexpr uint32_t GATHER_SLOTS = GROUP_SIZE + GROUP_SIZE % 2;
++    // ---- BAKE-OFF (perf_experiments/fold_gather_overlap): THE PREFIX FOLD ---------------
++    // 0 == the op's current approach, and every body below is `if constexpr`-ed away, so an
++    // un-defined build is the kernel it was.  R > 1 cuts the GATHER_SLOTS ring into R
++    // contiguous runs of FOLD_RUN slots and gives each its OWN arrival semaphore -- D28's
++    // mechanism ("a single cumulative counter would satisfy the level-0 wait with a slot
++    // that has not landed"), WITHOUT the tree's extra NoC hop.  The root then publishes each
++    // run the instant it is complete instead of waiting out the whole group, and compute
++    // folds run r into the SAME DEST window while runs r+1.. are still in flight.
++#if defined(RMS_FOLD_RUNS)
++    constexpr uint32_t FOLD_RUNS = RMS_FOLD_RUNS;
++#else
++    constexpr uint32_t FOLD_RUNS = 0;
++#endif
++    constexpr uint32_t FOLD_RUNS_NZ = FOLD_RUNS ? FOLD_RUNS : 1;
++    constexpr uint32_t FOLD_RUN = GATHER_SLOTS / FOLD_RUNS_NZ;
++    static_assert(
++        FOLD_RUNS == 0 || (GATHER_SLOTS % FOLD_RUNS_NZ == 0 && FOLD_RUN % 2 == 0),
++        "rms_norm_ttnn: the prefix fold needs R even runs that tile the gather ring");
+     constexpr uint32_t OUT_SHARD_PAGES = get_compile_time_arg_val(12);
+     // Refinement 2b: BAND == 1 means the output goes back stick-by-stick into this
+     // core's own band -- straight into the resident output shard when
+@@ -412,8 +430,12 @@
+     // fold a slot that has not landed.  Consecutive ids from GATHER_SEM_ID (the descriptor
+     // allocates both), so the mcast helper's two are still disjoint.
+     Semaphore<> gather_sem_l1(TREE ? GATHER_SEM_ID + 1 : 0);
++    // BAKE-OFF: the run semaphore THIS core signals.  Identical to `gather_sem` when the
++    // prefix fold is off (FOLD_RUN == GATHER_SLOTS => my_slot / FOLD_RUN == 0).
++    Semaphore<> gather_sem_mine(CROSS_CORE ? (GATHER_SEM_ID + my_slot / FOLD_RUN) : 0);
+     uint32_t arrivals = 0;
+     uint32_t arrivals_l1 = 0;
++    uint32_t arrivals_run[FOLD_RUNS ? FOLD_RUNS : 1] = {0};
+
+     if constexpr (CROSS_CORE) {
+         const uint32_t stat_bytes = get_tile_size(cb_stat_handoff);
+@@ -423,6 +445,23 @@
+         // disagree about how many bytes a receiver's landing page actually holds.
+         const uint32_t mcast_bytes =
+             (!COMPACT && MCAST_FACES != 0 && MCAST_FACES < 4) ? (MCAST_FACES * (stat_bytes / 4)) : stat_bytes;
++#if defined(RMS_MCAST_NO_COPY)
++        // BAKE-OFF option (d): the landing ring's BASE and PAGE COUNT, snapshotted BEFORE
++        // any round -- which is the only race-free way for THIS kernel to name round blk's
++        // landing page on the ROOT, where compute (not the writer) owns that CB.
++        //
++        // `get_read_ptr(CB_MCAST_LAND)` looked equivalent and IS NOT: on the root the
++        // un-permute pops that CB, so a compute thread that has run ahead into round blk+1
++        // (D25 pipelines exactly that) moves the read pointer under the writer and the
++        // multicast ships the WRONG page.  MEASURED: correct at 1 and 2 rounds, pcc 0.9106
++        // / rel-RMS 0.413 at 3 rounds ((1,1,7168,1024) BLOCK, BLOCK_ROWS 11 of 28 rows).
++        // Derived identically on every core -- a member's own reserve/push walks the same
++        // ring one page per round -- so the root's address equals the members' and the send
++        // stays src == dst (the EXCLUDE-source path).
++        const uint32_t mcast_land_base = get_write_ptr(CB_MCAST_LAND);
++        const uint32_t mcast_land_pages = DataflowBuffer(CB_MCAST_LAND).get_total_size_bytes() / stat_bytes;
++        uint32_t mcast_land_page = 0;
++#endif
+         // ---- THE COMPACT GATHER (Perf 3, descriptor D27) --------------------
+         // The gather is the only per-GROUP_SIZE term in the combine: every member ships
+         // into ONE root, so the root's L1 ingress carries (GROUP_SIZE - 1) transfers per
+@@ -716,6 +755,18 @@
+                         // included): slot 0 is the unique last-level gatherer, so the tree
+                         // hands it the same one finalized tile the flat root produced.
+                         MaybeDeviceZoneScope("writer_mcast_send");
++#if defined(RMS_MCAST_NO_COPY)
++                        // option (d) on the TREE's root: identical to the flat tail below.
++                        // The last-level fold already packed the finalized stat into the
++                        // landing page, so cb_stat_handoff is only the ready token here.
++                        cb_wait_front(cb_stat_handoff, 1);
++                        const uint32_t stat_dst = mcast_land_base + mcast_land_page * stat_bytes;
++                        mcast_land_page = (mcast_land_page + 1 == mcast_land_pages) ? 0 : (mcast_land_page + 1);
++                        if constexpr (mc.active) {
++                            sender.send(stat_dst, stat_dst, mcast_bytes);
++                        }
++                        cb_pop_front(cb_stat_handoff, 1);
++#else
+                         cb_wait_front(cb_stat_handoff, 1);
+                         cb_reserve_back(CB_MCAST_LAND, 1);
+                         const uint32_t stat_dst = get_write_ptr(CB_MCAST_LAND);
+@@ -726,6 +777,7 @@
+                             sender.send(stat_dst, stat_dst, mcast_bytes);
+                         }
+                         cb_pop_front(cb_stat_handoff, 1);
++#endif
+                     }
+                     write_block(blk);
+                 }
+@@ -768,11 +820,50 @@
+                 cb_pop_front(CB_GATHER_SRC, 1);
+
+                 // 2. publish the gathered round once every member has landed.
+-                {
++                if constexpr (FOLD_RUNS == 0) {
+                     MaybeDeviceZoneScope("writer_gather_wait");
+                     arrivals += GROUP_SIZE - 1;
+                     gather_sem.wait_min(arrivals);
+                     cb_push_back(cb_partials_gathered, GATHER_SLOTS);
++                } else {
++                    // BAKE-OFF, THE PREFIX FOLD.  Run r is published the moment ITS OWN
++                    // semaphore has seen every real member of run r -- so compute starts
++                    // folding while runs r+1.. are still converging.  A run whose slots are
++                    // all pad (odd GROUP_SIZE) or that holds only the root waits for nobody.
++                    MaybeDeviceZoneScope("writer_gather_wait");
++#if defined(RMS_FOLD_NOPIPE)
++                    // CONTROL: every wait first, then every push.  Same R semaphores, same R
++                    // CB publishes, ZERO overlap -- so (nopipe - base) IS the publish overhead
++                    // and (pipe - nopipe) IS the overlap gain.
++                    for (uint32_t r = 0; r < FOLD_RUNS; ++r) {
++                        const uint32_t base = r * FOLD_RUN;
++                        const uint32_t real = (GROUP_SIZE > base) ? (GROUP_SIZE - base) : 0;
++                        const uint32_t cnt = (real > FOLD_RUN) ? FOLD_RUN : real;
++                        const uint32_t want = (r == 0) ? (cnt ? cnt - 1 : 0) : cnt;
++                        if (want != 0) {
++                            arrivals_run[r] += want;
++                            Semaphore<> sem_r(GATHER_SEM_ID + r);
++                            sem_r.wait_min(arrivals_run[r]);
++                        }
++                    }
++                    for (uint32_t r = 0; r < FOLD_RUNS; ++r) {
++                        cb_push_back(cb_partials_gathered, FOLD_RUN);
++                    }
++#else
++                    for (uint32_t r = 0; r < FOLD_RUNS; ++r) {
++                        const uint32_t base = r * FOLD_RUN;
++                        const uint32_t real = (GROUP_SIZE > base) ? (GROUP_SIZE - base) : 0;
++                        const uint32_t cnt = (real > FOLD_RUN) ? FOLD_RUN : real;
++                        // the root's own slot (slot 0, run 0) was written synchronously.
++                        const uint32_t want = (r == 0) ? (cnt ? cnt - 1 : 0) : cnt;
++                        if (want != 0) {
++                            arrivals_run[r] += want;
++                            Semaphore<> sem_r(GATHER_SEM_ID + r);
++                            sem_r.wait_min(arrivals_run[r]);
++                        }
++                        cb_push_back(cb_partials_gathered, FOLD_RUN);
++                    }
++#endif
+                 }
+
+                 // 3. multicast the finalized stat back to the whole group.
+@@ -791,11 +882,39 @@
+                     // cb_mcast_in (not cb_row_final): compute un-permutes it into the
+                     // `rows` column-shaped tiles pass B reads, so cb_row_final is now
+                     // compute-private.
++#if defined(RMS_MCAST_NO_COPY)
++                    // BAKE-OFF option (d): DELETE THE ROOT'S OWN L1->L1 PUBLISH.
++                    // Compute's fold now PACKS STRAIGHT INTO the multicast landing page
++                    // (CB_MCAST_LAND) and pushes it, so D24's "publish the root's own copy
++                    // before the broadcast" happens for free inside the pack that already
++                    // existed.  cb_stat_handoff degenerates to a one-page READY TOKEN -- its
++                    // bytes are never read -- which is what gives this kernel the address and
++                    // the happens-before it used to get from the copy.
++                    //   * the landing page's ADDRESS is the same on every core of the group
++                    //     (same CB, same depth, one push and one pop per round everywhere),
++                    //     so the root's `get_read_ptr` equals a member's `get_write_ptr` and
++                    //     the send stays src == dst -- the EXCLUDE-source path both mcast
++                    //     emitters take, so the root is neither served twice nor skipped.
++                    //   * the ROOT never reserves / pushes CB_MCAST_LAND here: compute is its
++                    //     sole producer on this core.  On a member the writer still is.
++                    cb_wait_front(cb_stat_handoff, 1);
++                    const uint32_t stat_dst = mcast_land_base + mcast_land_page * stat_bytes;
++                    mcast_land_page = (mcast_land_page + 1 == mcast_land_pages) ? 0 : (mcast_land_page + 1);
++                    if constexpr (mc.active) {
++                        sender.send(stat_dst, stat_dst, mcast_bytes);
++                    }
++                    cb_pop_front(cb_stat_handoff, 1);
++#else
+                     cb_wait_front(cb_stat_handoff, 1);
+                     cb_reserve_back(CB_MCAST_LAND, 1);
+                     const uint32_t stat_dst = get_write_ptr(CB_MCAST_LAND);
++#if !defined(RMS_ABLATE_MCAST_COPY)
++                    // BAKE-OFF ABLATION (perf ceiling only; the op is WRONG with it on):
++                    // strip the root's own L1->L1 publish of the stat, keeping the reserve,
++                    // the push and the multicast itself.  Its delta prices option (d).
+                     noc_async_write(get_read_ptr(cb_stat_handoff), get_noc_addr(stat_dst), mcast_bytes);
+                     noc_async_write_barrier();
++#endif
+                     // Perf 2 (D24): PUBLISH THE ROOT'S OWN COPY BEFORE THE BROADCAST.
+                     // The root's un-permute (and behind it its pass B) blocks on this push,
+                     // so pushing after the send made the root wait out the whole multicast
+@@ -816,6 +935,7 @@
+                         sender.send(stat_dst, stat_dst, mcast_bytes);
+                     }
+                     cb_pop_front(cb_stat_handoff, 1);
++#endif
+                 }
+
+                 // 4. drain THIS block's output before the next combine round, so
+@@ -841,7 +961,7 @@
+                         get_noc_addr(root_x, root_y, get_write_ptr(cb_partials_gathered)),
+                         my_slot);
+                     noc_async_write_barrier();  // data before signal
+-                    gather_sem.up(noc, root_x, root_y, 1);
++                    gather_sem_mine.up(noc, root_x, root_y, 1);
+                     cb_pop_front(CB_GATHER_SRC, 1);
+                 }
+
+--- kernels/rms_norm_ttnn_compute.cpp	2026-09-06 01:08:08.959877843 +0000
++++ perf_experiments/fold_gather_overlap/kernels/rms_norm_ttnn_compute.cpp	2026-09-06 18:04:08.430835179 +0000
+@@ -477,6 +477,78 @@
+     cb_pop_front(CB_IN, SLOTS);
+ }
+
++// =======================================================================================
++// BAKE-OFF (perf_experiments/fold_gather_overlap) -- THE PREFIX FOLD
++// =======================================================================================
++// Same arithmetic as `combine_fold` above, same DEST window, same finalize, same ONE pack
++// -- the ONLY difference is WHEN the addends become visible.  `combine_fold` waits for the
++// whole GATHER_SLOTS window and then does every add; this waits for one RUN at a time and
++// accumulates into the SAME DEST slot across the waits, so run r's adds run while runs
++// r+1.. are still converging over the NoC.  The writer publishes each run under its own
++// arrival semaphore (see the writer's FOLD_RUNS block), which is what makes a prefix
++// window MEAN something: a single cumulative counter says HOW MANY partials landed, not
++// WHICH, so `wait_min(k)` could be satisfied by a slot outside the prefix.
++//
++// BIT-FOR-BIT IDENTICAL TO `combine_fold` ONLY WHEN RUNS == 1: the pairwise walk is now
++// per-run (r-th run halves within itself and accumulates onto the running DEST value), so
++// the summation TREE has a different shape.  fp add is not associative, so the result can
++// differ in the last bits -- measured as rel-RMS in the bench, never assumed.
++// Nothing here reads or changes fp32_dest_acc_en / math_fidelity / math_approx_mode.
++template <
++    uint32_t CB_IN,
++    uint32_t SLOTS,
++    uint32_t RUNS,
++    uint32_t CB_OUT,
++    bool FINALIZE,
++    bool COMPACT_SCOPE,
++    bool WIDE_SCOPE,
++    uint32_t IW_BITS,
++    uint32_t EP_BITS>
++ALWI void combine_fold_prefix() {
++    constexpr uint32_t RUN = SLOTS / RUNS;
++    constexpr uint32_t HALF = RUN / 2;
++    static_assert(
++        SLOTS % RUNS == 0 && RUN % 2 == 0 && HALF >= 1,
++        "rms_norm_ttnn: the prefix fold needs even runs that tile the gather ring");
++    // The first run is waited BEFORE the format reconfigs purely so the ordering matches
++    // `combine_fold`'s (wait, then reconfig, then acquire) and the two are comparable.
++    cb_wait_front(CB_IN, RUN);
++    reconfig_data_format(CB_IN, CB_IN);
++    pack_reconfig_data_format(CB_OUT);
++    add_tiles_init(CB_IN, CB_IN, /*acc_to_dest=*/true);
++    if constexpr (FINALIZE) {
++        rsqrt_tile_init();
++    }
++    tile_regs_acquire();
++    for (uint32_t r = 0; r < RUNS; ++r) {
++        if (r != 0) {
++            // UNPACK-thread wait INSIDE the MATH thread's DEST window -- the same shape a
++            // streaming reduce uses (wait one page, unpack, pop, repeat, one acquire).  The
++            // two threads are independent, so the math never waits on itself.
++            cb_wait_front(CB_IN, RUN);
++        }
++        for (uint32_t p = 0; p < HALF; ++p) {
++            add_tiles(CB_IN, CB_IN, p, HALF + p, 0);
++        }
++        // Frees the run's pages immediately; the tile indices above are relative to the
++        // CB's FRONT, which the pop advances to the next run.
++        cb_pop_front(CB_IN, RUN);
++    }
++    if constexpr (FINALIZE) {
++        if constexpr (COMPACT_SCOPE) {
++            compact_finalize_payload<IW_BITS, EP_BITS, WIDE_SCOPE>(0);
++        } else {
++            stat_finalize_payload<IW_BITS, EP_BITS>(0);
++        }
++    }
++    tile_regs_commit();
++    cb_reserve_back(CB_OUT, 1);
++    tile_regs_wait();
++    pack_tile(0, CB_OUT);
++    tile_regs_release();
++    cb_push_back(CB_OUT, 1);
++}
++
+ void kernel_main() {
+     // ---- compile-time knobs (all from rms_norm_ttnn_program_descriptor.py) -----
+     constexpr uint32_t IS_TILE = get_compile_time_arg_val(0);
+@@ -948,6 +1020,12 @@
+     // (The half-stride itself now lives inside `combine_fold`, which derives it from the
+     // window it is folding -- one definition for the flat root and both tree levels.)
+     constexpr uint32_t GATHER_SLOTS = GROUP_SIZE + GROUP_SIZE % 2;
++    // BAKE-OFF: the prefix fold's run count (0 == the op's current whole-window fold).
++#if defined(RMS_FOLD_RUNS)
++    constexpr uint32_t FOLD_RUNS = RMS_FOLD_RUNS;
++#else
++    constexpr uint32_t FOLD_RUNS = 0;
++#endif
+     // Perf 3 (descriptor D27) -- the COMPACT partial's two derived knobs.
+     //
+     // COMPACT_FIN_WIDE: which VectorMode the compact finalize needs.  A compact stat tile
+@@ -1503,6 +1581,16 @@
+                 // interior fold and this one are ONE implementation.  What the tree changes
+                 // here is only WHICH RING the root reads and HOW MANY pages are in it: the
+                 // level-1 ring of TREE_SL1 forwarded sums instead of GATHER_SLOTS partials.
++                // BAKE-OFF option (d): under RMS_MCAST_NO_COPY the fold PACKS STRAIGHT INTO
++                // the multicast landing page and cb_stat_handoff becomes a READY TOKEN, so
++                // the root's own D24 publish costs nothing (it IS the pack that already
++                // existed) and the writer's 3 kB L1->L1 copy + barrier is deleted.
++#if defined(RMS_MCAST_NO_COPY)
++                constexpr uint32_t CB_FOLD_OUT = COMPACT ? cb_mcast_in : cb_row_final;
++                static_assert(!FIN_SPREAD, "rms_norm_ttnn: nocopy assumes the ROOT finalizes");
++#else
++                constexpr uint32_t CB_FOLD_OUT = cb_stat_handoff;
++#endif
+                 MaybeDeviceZoneScope("compute_root_fused");
+ #if defined(RMS_ABLATE_ROOT_SUM) || defined(RMS_ABLATE_ROOT_FINALIZE)
+                 // ABLATION (temporary, /perf-measure): payload removed, every CB handshake
+@@ -1530,7 +1618,18 @@
+                     combine_fold<
+                         cb_gather_l1,
+                         TREE_SL1,
+-                        cb_stat_handoff,
++                        CB_FOLD_OUT,
++                        /*FINALIZE=*/!FIN_SPREAD,
++                        COMPACT,
++                        COMPACT_FIN_WIDE,
++                        INV_W_BITS,
++                        EPS_BITS>();
++                } else if constexpr (FOLD_RUNS != 0) {
++                    combine_fold_prefix<
++                        cb_partials_gathered,
++                        GATHER_SLOTS,
++                        FOLD_RUNS,
++                        CB_FOLD_OUT,
+                         /*FINALIZE=*/!FIN_SPREAD,
+                         COMPACT,
+                         COMPACT_FIN_WIDE,
+@@ -1540,7 +1639,7 @@
+                     combine_fold<
+                         cb_partials_gathered,
+                         GATHER_SLOTS,
+-                        cb_stat_handoff,
++                        CB_FOLD_OUT,
+                         /*FINALIZE=*/!FIN_SPREAD,
+                         COMPACT,
+                         COMPACT_FIN_WIDE,
+@@ -1548,6 +1647,13 @@
+                         EPS_BITS>();
+                 }
+ #endif
++#if defined(RMS_MCAST_NO_COPY)
++                // The one-page READY TOKEN.  Its bytes are never read: the writer waits it
++                // only to learn that CB_FOLD_OUT holds this round's finalized stat, then
++                // multicasts out of that page (src == dst, the EXCLUDE-source path).
++                cb_reserve_back(cb_stat_handoff, 1);
++                cb_push_back(cb_stat_handoff, 1);
++#endif
+             }
+
+             // ---- LAMP L-FIN: the SPREAD finalize (Refinement 2) ---------------------

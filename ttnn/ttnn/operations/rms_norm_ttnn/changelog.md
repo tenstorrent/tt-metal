@@ -742,3 +742,276 @@
   the macro is still discoverable, and adds a pre-flight check on the accumulated
   `zone_src_locations.log` that fails with the exact purge command when the machine is in the
   state that killed the Refinement 4 run.
+
+## Perf 1 — The reader was holding the compute kernel hostage
+
+- Date: 2026-09-06
+- Type: perf tournament, round 1 of 3. **No `SUPPORTED` / `EXCLUSIONS` change** — nothing in
+  the registry declarations was edited, so `verify_supported`'s categories are untouched by
+  construction. The signal is device-ns.
+- Box: blackhole p150b, measured AICLK **1350 MHz = the reference clock**, so every
+  clock-scale factor below is exactly 1.0000.
+
+### Focus shape — chosen by the mandated ranking, not by judgement
+
+No `feature_spec.LOOSE_CASES` entry for this op carries an `attention:` note, so step 1 falls
+through to its second branch. Every one of the **19 `perf`-group cases** was measured and
+divided by its own clock-scaled `achievable_ns` (÷ `minimum_expected_speedup` where present).
+All 19 were already under their ceiling; the largest ratio was
+
+> **`(1,1,32,7168)` WIDTH_SHARDED, shard `[32,256]`, grid `(7,4)` = 28 cores, `gamma`
+> (bf16 TILE weight), bf16 / HiFi2 / `fp32_dest_acc_en=False` / `math_approx_mode=False`
+> — 5463 ns against a 5481 ns ceiling, ratio 0.997.**
+
+Every knob that case declares is in `SUPPORTED`, so it was optimized at its exact config; no
+proxy was substituted. Regime: SHARD_W native + cross-core width combine, `GROUP_SIZE = 28`,
+exactly **one** combine round, `BLOCK_ROWS = 1` (so the COMPACT permute is the identity) and
+the combine tree OFF (`_combine_tree_arity` refuses at G=28 — already measured, every arity
+loses there).
+
+### Measured breakdown — a critical-path timeline, not a stage histogram
+
+`RMS_STAGE_ZONES=1`, one fresh-cache run, all 41 zones parsed out of
+`profile_log_device.csv` and laid out as an absolute per-core timeline (which is what makes
+the *dependency* stalls visible rather than merely the occupancies). Critical path on a plain
+member core, ns from BRISC-FW start; whole op 5408 ns median:
+
+| window | stage | ns | |
+|---|---|---:|---|
+| 0 – 556 | dispatch / firmware preamble | 556 | not ours |
+| 607 – 914 | `reader_scaler_boot` | 307 | |
+| 947 – 2007 | `reader_read_gamma` | **1060** | **blocks the x publish** |
+| 2032 – 2110 | `reader_native_publish` | 78 | what compute is waiting on |
+| 2110 – 2491 | `compute_square` + `compute_reduce` (pass A) | 381 | |
+| 2491 – 2794 | `writer_gather_ship` | 303 | |
+| → 3765 | root `writer_gather_wait` | 971 | bounded by the SLOWEST member |
+| 3765 – 4333 | root `compute_root_fused` (fold 27 + fused rsqrt) | 568 | |
+| 4333 – 4915 | root `writer_mcast_send` | 582 | |
+| 4931 – 5126 | `compute_scale` real work after recv | 195 | |
+| 5150 – 5559 | `compute_gamma_mul` | 409 | |
+| 5559 – 5976 | kernel / firmware teardown | 417 | not ours |
+
+`reader_read_x` and `writer_write` measure **~0 ns** — the shard is native/zero-copy on both
+ends, so the sharding precondition holds and there is no escaped completeness bug to report.
+
+**The ranked bottleneck was a serialization, not a cost.** `reader_read_gamma`'s cross-core
+END spread is **541 ns**, and that spread propagates verbatim into `compute_reduce` END
+(spread 541) and `writer_gather_ship` END (spread 827) — so the root's 971 ns arrival window
+was bounded by the slowest member's *gamma read*, not by ingress bandwidth. Confirmed by
+ablation: **removing gamma entirely (read + multiply) is 5408 → 3829 ns, 29% of the op.**
+
+Roofline gate (`/perf-ceiling-dm`): the gather ships 2 faces × 1024 B per member
+(`GATHER_FACES = 2`), i.e. 27 × 2048 B in 971 ns ≈ 57 GB/s — **not** byte-bound, which
+reproduces D13's own finding, so no idea was spent on shrinking its bytes. The 1 KB gamma
+read taking 1060 ns is pure DRAM *latency*, which is a thing to overlap, not to speed up.
+
+### Portfolio floated (6 ideas, one `perf-part-optimizer` each, in parallel)
+
+| # | idea | tier | verdict |
+|---|---|---|---|
+| 1 | `reader_boot_order` — hand the resident shard to compute FIRST | T1 | **WIN 1.295x** |
+| 2 | `gather_transport` — cut the member→root gather | T2 | **WIN 1.038x** |
+| 3 | `fold_gather_overlap` — fold partials as they land | T3 | **split: NULL + WIN 1.013x** |
+| 4 | `mcast_transport` — cut the 582 ns stat broadcast | T2 | NULL |
+| 5 | `passb_fusion` — one DEST window for normalize × scale × shift | T2 | REGRESSION (+ a WIN side finding) |
+| 6 | `per_channel_reuse_mcast` — the standing reuse-shared broadcast | T3 | WIN in domain, **not graduated** |
+
+Ideas 1 and 6 deliberately overlapped (both attack the per-channel read); 3 and 4 both attack
+the combine's tail. Overlap was resolved at aggregation, never among subagents.
+
+### Per-idea results
+
+**1 — `reader_boot_order`. WIN, and the round's headline.** The `NATIVE_X`
+`publish_native_shard` block moved from the bottom of the reader to the top. Four options
+measured: (a) publish first **4121 ns**, (b) scaler → publish → per-channel 4247, (c) split
+the per-channel NoC issue from its barrier 4687, (d) = (a)+(c) **4118**. Graduated **(a)**:
+(d) is +3 ns on the focus shape for ~198 diff lines and a `capability` bypass of
+`stage_per_channel_chunk`, and its real value (1.04x) is confined to the interleaved
+prefill — **parked and recorded**, not lost. Structural floor for reference: the `no_gamma`
+build is 3767 ns, and (a) reaches 4121 *with* gamma, so the read is essentially fully hidden.
+Bit-identical output at every option.
+
+**2 — `gather_transport`. WIN.** `Noc::async_writes_flushed()` ("departed") replaces
+`noc_async_write_barrier()` ("acknowledged") before the gather semaphore on every REMOTE
+ship. Isolated 28-core bench 1827 → 1680 ns (1.087x); whole op 5342 → 5145. Also priced, and
+recorded so nobody re-derives them: `GATHER_FACES` 3 and 4 re-confirmed slower (0.839x /
+0.730x); a dual-NoC gather is worth ~400 ns more but `get_noc_addr(..., noc=1)` from the
+BRISC writer **hangs** under `DM_DEDICATED_NOC` and is a two-kernel shape that would also
+break `COMBINE_MCAST_FIRE_AND_FORGET`'s ordering licence; `llk_math_transpose_dest` inside
+the fold's DEST window **hangs** on a `TTI_STALLWAIT` for `SRCA_VLD` that `add_tiles` has
+just cleared.
+
+**3 — `fold_gather_overlap`. Half NULL, half WIN.** The idea proper — prefix/threshold
+folding — is a **measured null with an exact explanation**: the overlap gain (fold 565 → 321
+ns) equals the extra publish overhead (6 × ~39 ns = 234 ns) at every run count, and it cannot
+do better because arrival *order* is uncorrelated with slot order, so every run of k slots
+completes at the max of k arrivals. It stays null on a de-skewed build too. The WIN is
+option (d), a different change found on the way: **delete the root's serial 3 kB L1→L1
+publish** of the multicast landing page by having the fold pack straight into it. 1.013x–
+1.025x on the focus shape, 1.006x–1.024x on every other combine geometry, bit-identical.
+
+**4 — `mcast_transport`. NULL, and it re-attributed a stage.** Seven correct transports
+measured (one-packet local publish, caller-managed flush, 4 faces, raw one-packet bypass,
+`MCAST_INCL_SRC` loopback, …); every one landed at 0 ± noise or worse (loopback −2.1%,
+faces4 −1.0%, raw one-packet −0.9%). The **ceiling** for any transport rewrite, from an
+ablation that deletes the broadcast entirely, is 246 ns / 1.048x. More useful than the null:
+only ~330 ns of the 582 ns `writer_mcast_send` stage is transport — the other ~250 ns is the
+root waiting on its own fold, which is idea 3's territory, and the two are additive.
+
+**5 — `passb_fusion`. REGRESSION.** Fusing `normalize × gamma [+ bias]` into one DEST window
+is 0.972x on the focus shape and **0.818x** on the 64-core BLOCK shard. This independently
+reproduces the 0.84x already in `op_design.md`, at a different geometry and by a different
+mechanism, and the mechanism is the finding: pass B's three compute threads are **already
+balanced** (unpack 8520 / math 8556 / pack 8110 ns per core), so the unpack and pack the
+fusion deletes were free; and `eltwise_binary_run_with_dest_reuse` restarts the MOP **per
+face** with a `move_d2a_fixed_face` + `TT_ZEROACC`, so the DEST-reuse mul is ~71 ns/tile
+against the helper's one-MOP bcast mul at ~32 ns/tile. Not graduated. **Its side finding was
+graduated** — see 5b.
+
+**5b — `PASS_B_BLK` re-sweep on the *shipped* kernel. WIN, bit-identical.** Measured on the
+baseline kernel with no fusion at all: the auto rule wants to be the *smallest* divisor ≥ 2 at
+`BLOCK_ROWS == 1` and D21's largest divisor above it. Graduated as D38.
+
+**6 — `per_channel_reuse_mcast`. WIN in its domain; NOT graduated.** The op's standing
+reuse-shared broadcast idea, built against `op_design.md`'s deferred `GAMMA_MCAST` row. It
+closes that deferral with numbers: **+2.2% to +7.4%** on the row-split interleaved prefill
+against a same-build control (boot per-channel read 34.4 µs → 5.7 µs per core, 6×, converting
+to only ~5% of the op because those shapes are DRAM-throughput-bound and the freed DRAM time
+is re-absorbed by `reader_read_x`). It is **structurally inapplicable at the focus shape** —
+one tile-row means all 28 cores own disjoint width slices, so there is no reuse to remove —
+and a **measured regression on BLOCK shards** (−1.6% / −2.3% vs same-build: a 4-tile per-core
+slice is latency-bound tiny reads, and the mcast adds a handshake plus an 8-of-64-core boot
+straggler). **Blocked on integration, not on the idea**: the candidate carries an
+unattributed same-build overhead that regresses *non-engaged* plans ~4–5% against the shipped
+baseline (focus 5363 → 5577, BLOCK 22881 → 23975, BAND 23000 → 24172), i.e. its off path is
+not yet byte-identical. Graduating that would have regressed supported cells, so it is
+requeued for round 2 with "make the off build byte-identical" as the entry condition. Largest
+remaining prize it identified: **STREAM, +20.1% ablation ceiling**, the biggest in the op.
+
+### What graduated, and how widely
+
+Four changes, all as **one unqualified path**, with the code they replace deleted. Three carry
+no predicate at all; one carries a single carve-out earned by a measured regression.
+
+| # | change | domain | carve-out |
+|---|---|---|---|
+| D35 | the reader publishes the resident shard FIRST | every plan, all layouts/placements. `if constexpr (NATIVE_X)` already scopes the *block*; the ordering is unconditional | none |
+| D36 | the gather signals on *departed* | every remote gather ship: flat member, tree level-0 leaf, tree level-1 forward. Non-combine plans byte-identical | **local** ships keep the barrier — a gatherer writing its own L1 has no atomic to order against and its own fold reads those bytes back. That is *feasibility*, not a perf exception |
+| D37 | the root's fold packs into the multicast landing page; the 3 kB L1→L1 copy is **deleted** | every combine geometry: flat and tree, identity and COMPACT, 1 / 2 / 3 rounds, both `fp32_dest_acc_en` | `static_assert(!FIN_SPREAD)` — under the spread finalize the last level forwards a RAW sum so its pack is not the stat. `COMBINE_FIN_SPREAD` is measured off, so this guards a **dead path**, not a live regime |
+| D38 | pass B's auto DEST block is the smallest divisor ≥ 2 | every `BLOCK_ROWS == 1` block — WIDTH shards, the HEIGHT shard, interleaved decode, and every untested regime with one tile-row | **`BLOCK_ROWS > 1` keeps D21's largest-divisor rule**, earned by a MEASURED regression (0.958x on `(1,1,8192,1024)` BLOCK 64c, 0.976x on `(1,1,7168,1024)` BLOCK gbr). Written as `if (cannot) { legacy } else { new }` so the exception shrinks, not the win |
+
+The tree's **level-1 forward** was outside the subagent's measured set and got D36 anyway: the
+safety argument is identical and fencing it off would have frozen the win at the size of the
+test matrix. It is covered by the G=32 tree cell below.
+
+**A latent bug the round exposed, and fixed.** D35 deleted an *implicit* ordering nobody had
+written down: `cb_scaler` and `cb_bank` are reader-synthesized constants the compute kernel
+reads with **no wait of its own** — the reduce helper's contract puts that on the caller
+(`reduce_helpers_compute.hpp:37`) and `matmul_tiles` has no CB lifecycle at all — so their
+availability was guaranteed only by the publish running last. Hoisting it produced a
+**non-deterministic** corruption on the COMPACT combine path: `1x1x2048x256` and
+`4x1x512x512` BLOCK_SHARDED at pcc 0.08–0.12 / rel-RMS 1e5, with a *different* set of cells
+failing on every run, because the permutation matmul was multiplying against a bank the reader
+had not finished zeroing. The op now waits both fronts **explicitly, one-shot, at first use**
+(`scaler_ready` / `bank_ready`). At first use and not in a joint prologue: a prologue makes
+`compute_square` — which needs neither constant — block on both, and that cost 7–8% on the
+COMPACT BLOCK shards (22001 vs 20453 ns on `(1,1,8192,1024)` BLOCK 64c). One-shot and not
+per-chunk so the streaming regimes pay it once rather than hundreds of times per core. The
+zones were extended to every changed path and `test_rms_norm_ttnn_zone_hashes.py` re-run
+green after each edit.
+
+### Whole-op result — all 19 `perf` cases, before → after
+
+Median of 3, in-process profiler, `DEVICE KERNEL DURATION`. `ratio` = measured / clock-scaled
+ceiling.
+
+| # | case | before | after | x | ratio before → after |
+|---|---|---:|---:|---:|---|
+| 11 | **`(1,1,32,7168)` W `[32,256]` (7,4) 28c — FOCUS** | **5463** | **3801** | **1.437** | **0.997 → 0.693** |
+| 16 | `(1,1,32,5120)` W `[32,160]` (8,4) gbr fp32_dest=True | 6076 | 4177 | 1.455 | 0.927 → 0.637 |
+| 9 | `(1,1,32,2304)` W `[32,256]` (9,1) 9c | 4256 | 3002 | 1.418 | 0.922 → 0.650 |
+| 8 | `(1,1,32,1024)` W `[32,128]` (8,1) 8c | 3504 | 2624 | 1.335 | 0.853 → 0.638 |
+| 10 | `(1,1,32,5120)` W `[32,160]` (8,4) 32c (tree on) | 4601 | 3498 | 1.315 | 0.874 → 0.664 |
+| 12 | `(1,1,8192,1024)` BLOCK `[1024,128]` (8,8) 64c | 22961 | 20448 | 1.123 | 0.802 → 0.714 |
+| 17 | `(1,1,7168,1024)` BLOCK `[896,128]` (8,8) gbr | 32346 | 29027 | 1.114 | 0.936 → 0.840 |
+| 0 | `(1,1,32,1024)` INTERLEAVED | 4651 | 4335 | 1.073 | 0.508 → 0.474 |
+| 1 | `(1,1,32,2304)` INTERLEAVED | 5471 | 5183 | 1.056 | 0.322 → 0.305 |
+| 2 | `(1,1,32,5120)` INTERLEAVED | 7419 | 7047 | 1.053 | 0.098 → 0.093 |
+| 3 | `(1,1,32,7168)` INTERLEAVED (≥7x cell) | 8792 | 8494 | 1.035 | 0.590 → 0.570 |
+| 13 | `(1,1,32,5120)` INTERLEAVED gbr fp32_dest=True | 9930 | 9525 | 1.043 | 0.063 → 0.060 |
+| 14 | `(1,1,8192,5120)` INTERLEAVED gbr fp32_dest=True | 669301 | 651473 | 1.027 | 0.509 → 0.496 |
+| 18 | `(1,1,128,4096)` INTERLEAVED, ROW_MAJOR weight | 11421 | 11276 | 1.013 | 0.175 → 0.173 |
+| 4 | `(1,1,8192,1024)` INTERLEAVED prefill | 86992 | 86996 | 1.000 | 0.899 → 0.899 |
+| 7 | `(1,1,8192,7168)` INTERLEAVED prefill | 578937 | 578296 | 1.001 | 0.561 → 0.560 |
+| 15 | `(1,1,8192,7168)` INTERLEAVED gbr | 1582835 | 1584244 | 0.999 | 0.861 → 0.862 |
+| 5 | `(1,1,8192,2304)` INTERLEAVED prefill | 190242 | 191531 | 0.993 | 0.900 → 0.906 |
+| 6 | `(1,1,8192,5120)` INTERLEAVED prefill | 416449 | 419723 | 0.992 | 0.564 → 0.568 |
+
+**Every case is under its ceiling and the worst ratio moves 0.997 → 0.906.** The two cells
+below 1.00x (#5 at 0.993 and #6 at 0.992) are not regressions and the reason is structural,
+not statistical: on a `(1,1,8192,W)` interleaved prefill the row split fills the grid, so
+`CROSS_CORE == 0` and `NATIVE_X == 0`, which `if constexpr`-eliminates **every** graduated
+hunk except a moved `x_tile_bytes` declaration and one one-shot `cb_wait_front`. Those two
+programs are functionally the shipped ones. Across four measurement sessions of this build
+#6 read 417281 / 421490 / 421949 / 419723 (spread 1.1%) and #5 read 191845 / 188984 / 191227
+/ 191531 (spread 1.4%), which brackets both deltas; and Refinement 3 already established that
+these shapes sit AT the box's ~400 GB/s DRAM roofline, where there is nothing left to move.
+
+### Guard set — one representative per distinct kernel path × layout × placement
+
+Measured against a true HEAD build of the same cases (not against the perf-case table).
+
+| path | before | after | x |
+|---|---:|---:|---:|
+| HEIGHT shard, native, no combine — `(1,1,2048,256)` | 4876 | 3510 | **1.389** |
+| ROW_MAJOR BAND, WIDTH-sharded — `(1,1,256,512)` 64c | 23141 | 22599 | **1.024** |
+| interleaved decode + AUTO width split — `(1,1,32,7168)` | 8792 | 8411 | **1.045** |
+| interleaved, TILE weight, fp32_dest=True — `(1,1,128,4096)` | 11951 | 11603 | **1.030** |
+| STREAM, `gamma_bias_residual` — `(1,1,1024,16384)` | 501587 | 504124 | 0.995 (flat) |
+| ragged-`Wt` interleaved — `(1,1,32,4064)` | 32358 | 32339 | 1.001 (flat) |
+
+Plus the four combine topologies exercised above: flat root at G=8/9/28, the slot tree at
+G=32, COMPACT at 2 and 3 rounds, both `fp32_dest_acc_en`. **No material regression anywhere.**
+
+### Golden
+
+`scripts/run_safe_pytest.sh --run-all eval/golden_tests/rms_norm_ttnn/`, run as 10
+`pytest-split` shards (the suite exceeds a single foreground window):
+
+> **PASSED = 23348, FAILED = 19, ERRORS = 0, HANGS = 0.**
+
+That is **byte-identical to the Phase-0 / Refinement-1 / -2 / -3 / -4b figure**, in count and
+in identity — the same three harness defects Phase 0 reproduced outside the op and recorded in
+`verification_report.md`: `CoreRange.end_coord` on a build exposing `.start`/`.end` (7 loose
+cells + 3 validation tests, which never reach the op), `torch.max()` on a zero-element readback
+in `eval/metrics.py` (the zero-volume cells, which fail *after* the op returned a correct empty
+tensor), and `test_regression.py` calling `check_output` without `tolerance=` so it scores the
+op's own default cell against `DEFAULT_TOLERANCES[float32]` rather than the feature spec's
+declared `TOLERANCE_OVERRIDES[(float32, False)]`. **Zero op-attributed failures, zero hangs.**
+The op's own unit directory is **1067 passed / 7 skipped**.
+
+### Helper bypasses
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `dataflow_kernel_lib::stage_per_channel_chunk` (and `read_sticks_for_tilize` beneath its RM-flat form) | capability | Owns `reserve → issue → noc_async_read_barrier() → cb_push_back` as one indivisible unit and exposes no parameter, overload or template knob that returns *after issue but before the barrier*. An issue/finish split — the only way to drain a per-channel operand's DRAM latency under a later stage — is inexpressible through it. | 4121 | 4118 | **not graduated** — variant (d), `perf_experiments/reader_boot_order/k_d/rms_norm_ttnn_reader.cpp`. Reported honestly: on the focus shape the pair is a **3 ns tie**; the raw split's whole value is 8676 → 8362 ns interleaved, so the gap is real but confined, and nothing was graduated on it |
+| `compute_kernel_lib::reduce` (via `rms_norm_local::accumulate_reduce_block`) | ergonomics | Its scaler CB is a **caller-owned lifecycle**: `reduce_helpers_compute.hpp:37` states "the scaler CB must contain the scaling factor tile BEFORE calling reduce()", and the helper issues no `cb_wait_front` of its own. Nothing at the call site looks like a missing wait, so the requirement is satisfiable only by out-of-band reasoning about the *reader's* statement order — which is exactly what this round changed, and the failure mode is a silent non-deterministic wrong answer rather than a hang or an assert. | — | — | `rms_norm_ttnn_compute.cpp` — the `scaler_ready` one-shot front in `pass_a`. **No bypass was written**; the helper is still used. The gap is that the op must supply the ordering the helper documents but does not enforce, and the two ns are *equal by construction* — the cost here is author and maintenance cost, not device time |
+| `compute_kernel_lib` — no helper covers a **one-hot column permutation** (the `matmul_block` / eltwise / bcast / reduce families all preserve or collapse the column axis, and `transpose_wh` is a different map) | capability | Pre-existing from D27 and unchanged by this round, but this round added a second symptom worth recording: because `matmul_tiles` carries **no CB lifecycle at all**, a bank operand has no wait, no pop and no policy — so a raw permutation's operand ordering is entirely the caller's to establish. Separately, `llk_math_transpose_dest` cannot be used to permute a value already in DEST: `_llk_math_transpose_dest_`'s `TTI_STALLWAIT` waits on `SRCA_VLD\|SRCB_VLD`, which `add_tiles` has just cleared, and `llk_unpack_set_srcb_dummy_valid()` covers SrcB only — there is no SrcA equivalent, so it **hangs**. That missing capability is what would make the root's back-permute free (223 ns) and flip the gather payload-shrink option into the lead. | — | 1368 (through a CB round trip) vs 1258 (dual-NoC, no permute) | `rms_norm_ttnn_compute.cpp` `member_pack` / `compute_recv_unpack`; negative recorded at the tail of `rms_norm_ttnn_writer.cpp` |
+| `dataflow_kernel_lib::SenderPipe::send` (`mcast_pipe.inl`) | capability | `send_data_` hard-codes `max_page_size` at its default `NOC_MAX_BURST_SIZE + 1`, which forces `ncrisc_noc_fast_write_any_len`. A caller that knows its payload is a single packet (3072 B against Blackhole's 16 kB burst) has no way to ask for `noc_async_write_multicast_one_packet` — the parameter is not on `SenderPipe`'s API. | 5324 | 5380 | **not graduated** — the raw path **LOSES by ~56 ns** (`SenderPipe`'s ctor precomputes the rect/in-rect arithmetic the raw version redoes per round, and the one-packet path's `noc_cmd_buf_ready` spin costs more than the any-len loop saves). Recorded as a gap because it is one; not as a win, because it is not |
+| `ckl::DestReuseBinary` (`chain.hpp:526`) and the metal `{mul,add}_reuse_dest_{init,tiles}` pair | capability | Takes a plain `InputSpec`, which carries **no `BroadcastDim`** — unlike `BinaryFpu`, whose B side takes a `BinaryFpuInputSpec` (`input(cb, BroadcastDim::Row)`). So `((x * stat<Col>) * gamma<Row>) [+ bias<Row>]` cannot be spelled as one chain. This is a *different* shape from the one Lamp L-RES-FUSE refuted (broadcast on the first element there, on the reuse element here) and the pack-cohort constraint does not bite. Missing piece is one template parameter, not a hardware path: `llk_unpack_A` is already templated on `BroadcastType` **and** `EltwiseBinaryReuseDestType`. | 8.5 µs/core (un-fused pair) | 13.5 µs/core (raw fused) | **not graduated** — `perf_experiments/passb_fusion/k_fuse/`. **Recommendation to the helper library: do NOT add the parameter on this evidence** — the capability it would expose is measurably slower than the two-chain form it would replace, at least for FPU binaries over 4-face tiles |
+
+An LLK defect found on the way and worth an owner: on the **broadcast** dest-reuse path, at
+`dst_index == MAX_TILES_IN_HALF_DEST - 1` the runner's per-face `TT_ZEROACC` does not clear
+DEST face `(limit-1)*4+3`, so the accumulating ELWMUL MOP returns `y = n*(g+1)` there. Purely
+additive signature; bit-identical at every smaller block. Not reachable from any shipped path
+(no helper reaches that combination) and not reachable from this op, which caps its fused
+block below the limit — recorded, not worked around.
+
+### Round 2 entry state
+
+Re-ranked, the worst `perf` cells are now `(1,1,8192,2304)` and `(1,1,8192,1024)`
+INTERLEAVED prefill at 0.906 / 0.899 — the DRAM-saturated regime Refinement 3 measured at the
+box's ~400 GB/s roofline, where `ttnn.clone` on the same tensors is no faster. The live
+follow-ups, all measured this round: idea 6's STREAM variant (**+20.1% ablation ceiling**, the
+largest single number in the op), idea 6's integration overhead, the dual-NoC gather as a
+two-kernel shape, and idea 1's variant (d) for the interleaved prefill.

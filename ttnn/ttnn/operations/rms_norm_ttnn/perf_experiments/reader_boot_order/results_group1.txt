@@ -1,0 +1,53 @@
+RESULT case                         base  a_pub_first b_scaler_pub      c_splitd_pub_first_split
+RESULT F_w7168_28c                  5345         4132         4276         4687         4151
+RESULT F_w7168_28c_nog              3767         3668         3784         3794         3693
+RESULT G_w1024_8c                   3441         2848         2933         3164         2906
+RESULT G_w5120_32c                  4511         3767         3788         4096         3766
+RESULT G_w5120_32c_gbr              5973         4456         4533         5096         4439
+RESULT I_int7168_1row               8719         8676         8691         8354         8362
+RESULT G_int4064_ragged            32239        32217        32230        32227        32236
+RESULT --- speedup vs base (>1 = faster) ---
+RESULT F_w7168_28c                 1.000        1.294        1.250        1.140        1.288
+RESULT F_w7168_28c_nog             1.000        1.027        0.996        0.993        1.020
+RESULT G_w1024_8c                  1.000        1.208        1.173        1.088        1.184
+RESULT G_w5120_32c                 1.000        1.198        1.191        1.101        1.198
+RESULT G_w5120_32c_gbr             1.000        1.340        1.318        1.172        1.346
+RESULT I_int7168_1row              1.000        1.005        1.003        1.044        1.043
+RESULT G_int4064_ragged            1.000        1.001        1.000        1.000        1.000
+RESULT --- accuracy (worst pcc / worst rel-RMS over reps) ---
+RESULT ACC F_w7168_28c          base          pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c          a_pub_first   pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c          b_scaler_pub  pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c          c_split       pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c          d_pub_first_split pcc 0.999985  relrms 6.276e-03
+RESULT ACC F_w7168_28c_nog      base          pcc 0.999991  relrms 4.259e-03
+RESULT ACC F_w7168_28c_nog      a_pub_first   pcc 0.999991  relrms 4.259e-03
+RESULT ACC F_w7168_28c_nog      b_scaler_pub  pcc 0.999991  relrms 4.259e-03
+RESULT ACC F_w7168_28c_nog      c_split       pcc 0.999991  relrms 4.259e-03
+RESULT ACC F_w7168_28c_nog      d_pub_first_split pcc 0.999991  relrms 4.259e-03
+RESULT ACC G_w1024_8c           base          pcc 0.999986  relrms 6.258e-03
+RESULT ACC G_w1024_8c           a_pub_first   pcc 0.999986  relrms 6.258e-03
+RESULT ACC G_w1024_8c           b_scaler_pub  pcc 0.999986  relrms 6.258e-03
+RESULT ACC G_w1024_8c           c_split       pcc 0.999986  relrms 6.258e-03
+RESULT ACC G_w1024_8c           d_pub_first_split pcc 0.999986  relrms 6.258e-03
+RESULT ACC G_w5120_32c          base          pcc 0.999987  relrms 6.117e-03
+RESULT ACC G_w5120_32c          a_pub_first   pcc 0.999987  relrms 6.117e-03
+RESULT ACC G_w5120_32c          b_scaler_pub  pcc 0.999987  relrms 6.117e-03
+RESULT ACC G_w5120_32c          c_split       pcc 0.999987  relrms 6.117e-03
+RESULT ACC G_w5120_32c          d_pub_first_split pcc 0.999987  relrms 6.117e-03
+RESULT ACC G_w5120_32c_gbr      base          pcc 0.999988  relrms 5.508e-03
+RESULT ACC G_w5120_32c_gbr      a_pub_first   pcc 0.999988  relrms 5.508e-03
+RESULT ACC G_w5120_32c_gbr      b_scaler_pub  pcc 0.999988  relrms 5.508e-03
+RESULT ACC G_w5120_32c_gbr      c_split       pcc 0.999988  relrms 5.508e-03
+RESULT ACC G_w5120_32c_gbr      d_pub_first_split pcc 0.999988  relrms 5.508e-03
+RESULT ACC I_int7168_1row       base          pcc 0.999986  relrms 6.512e-03
+RESULT ACC I_int7168_1row       a_pub_first   pcc 0.999986  relrms 6.512e-03
+RESULT ACC I_int7168_1row       b_scaler_pub  pcc 0.999986  relrms 6.512e-03
+RESULT ACC I_int7168_1row       c_split       pcc 0.999986  relrms 6.512e-03
+RESULT ACC I_int7168_1row       d_pub_first_split pcc 0.999986  relrms 6.512e-03
+RESULT ACC G_int4064_ragged     base          pcc 0.999985  relrms 8.379e-03
+RESULT ACC G_int4064_ragged     a_pub_first   pcc 0.999985  relrms 8.379e-03
+RESULT ACC G_int4064_ragged     b_scaler_pub  pcc 0.999985  relrms 8.379e-03
+RESULT ACC G_int4064_ragged     c_split       pcc 0.999985  relrms 8.379e-03
+RESULT ACC G_int4064_ragged     d_pub_first_split pcc 0.999985  relrms 8.379e-03
+RESULT CORRECTNESS-OK (all variants pcc >= 0.9995)

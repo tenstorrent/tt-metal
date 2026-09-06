@@ -1,0 +1,37 @@
+RESULT variant=base case=F_w7168_28c ns=5594.0
+RESULT ---- zone timeline, ns from each core's OWN first marker (run 2048) ----
+RESULT zone                        risc       n start_med  end_med  dur_med end_spread
+RESULT BRISC-FW                    BRISC     28         0     5973     5973        349
+RESULT NCRISC-FW                   NCRISC    28        96     2463     2365        613
+RESULT TRISC-FW                    TRISC_0   28       179     5783     5606        348
+RESULT TRISC-FW                    TRISC_1   28       182     5676     5494        347
+RESULT TRISC-FW                    TRISC_2   28       182     5871     5689        350
+RESULT TRISC-KERNEL                TRISC_1   28       347     5583     5200        347
+RESULT compute_square              TRISC_1   28       439     2509     2039        613
+RESULT NCRISC-KERNEL               NCRISC    28       515     2436     1911        613
+RESULT TRISC-KERNEL                TRISC_0   28       540     5751     5213        347
+RESULT TRISC-KERNEL                TRISC_2   28       569     5836     5267        348
+RESULT reader_scaler_boot          NCRISC    28       570      879      307         27
+RESULT BRISC-KERNEL                BRISC     28       623     5866     5242        348
+RESULT writer_gather_ship          BRISC     28       698     3166     2471        831
+RESULT compute_square              TRISC_0   28       720     2532     1803        613
+RESULT compute_square              TRISC_2   28       759     1036      278         19
+RESULT reader_read_gamma           NCRISC    28       912     2255     1336        613
+RESULT compute_reduce              TRISC_2   28      1073     2740     1664        612
+RESULT reader_native_publish       NCRISC    28      2280     2358       78        613
+RESULT reader_read_x               NCRISC    28      2393     2406       13        613
+RESULT compute_root_fused          TRISC_1    1      2522     4260     1738          0
+RESULT compute_reduce              TRISC_1   28      2539     2642      103        613
+RESULT compute_reduce              TRISC_0   28      2556     2717      162        618
+RESULT compute_root_fused          TRISC_0    1      2592     4140     1548          0
+RESULT compute_root_fused          TRISC_2    1      2625     2809      184          0
+RESULT compute_scale               TRISC_1   28      2709     5123     2440        353
+RESULT compute_scale               TRISC_0   28      2785     5155     2395        350
+RESULT writer_gather_wait          BRISC      1      2799     3686      887          0
+RESULT compute_scale               TRISC_2   28      2812     5336     2548        350
+RESULT writer_mcast_recv           BRISC     27      3201     4927     1745        115
+RESULT writer_mcast_send           BRISC      1      3704     4843     1139          0
+RESULT writer_write                BRISC     28      4944     4958       13        115
+RESULT compute_gamma_mul           TRISC_1   28      5147     5556      409        347
+RESULT compute_gamma_mul           TRISC_0   28      5179     5654      476        347
+RESULT compute_gamma_mul           TRISC_2   28      5364     5801      437        350
