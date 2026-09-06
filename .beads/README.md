@@ -79,3 +79,28 @@ bd create "Try out Beads"
 ---
 
 *Beads: Issue tracking that moves at the speed of thought* ⚡
+
+## Resume this repository in another checkout
+
+Task data is published separately from code through the Dolt Git remote
+`git+https://github.com/tenstorrent/tt-metal.git` (`refs/dolt/data`). A normal
+Git branch push does not publish the task database, and checking out a code
+branch does not restore it automatically. The task database is shared across
+code branches, rather than being a per-code-branch snapshot.
+
+With Beads 1.2.2 (the version used to verify recovery), initialize a fresh clone:
+
+```sh
+bd init --remote git+https://github.com/tenstorrent/tt-metal.git --skip-hooks --skip-agents --non-interactive
+bd ready --json
+bd list --status=in_progress --json
+```
+
+For a checkout that already has a Beads database, use `bd dolt pull` instead of
+initializing it again. Preserve local task edits and resolve any sync conflicts.
+To publish subsequent task updates, use `bd dolt push` as well as the normal code
+branch push. Both operations require access to this GitHub repository.
+
+Local Git stashes and ignored profiling output do not travel with a branch push.
+Keep experiment archives separately; task descriptions and notes contain the
+scope, outcomes, and references needed to resume the work.
