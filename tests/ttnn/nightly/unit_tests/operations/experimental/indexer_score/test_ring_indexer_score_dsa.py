@@ -862,24 +862,47 @@ def test_indexer_score_ring8_partial_readiness_reference_cache_hit(mesh_device):
     indirect=True,
 )
 @pytest.mark.parametrize("traced", [False, True])
-def test_indexer_score_galaxy_runtime_arguments(mesh_device, traced):
+@pytest.mark.parametrize("k_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bfp8"])
+def test_indexer_score_galaxy_runtime_arguments(mesh_device, traced, k_dtype):
     mesh_device.quiesce_devices()
     mesh_device.clear_program_cache()
     child = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
     try:
-        _run_ring8_runtime_arguments(child, traced)
+        _run_ring8_runtime_arguments(child, traced, k_dtype=k_dtype)
     finally:
         mesh_device.quiesce_devices()
         child.clear_program_cache()
 
 
-def _run_ring8_runtime_arguments(mesh_device, traced):
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "trace_region_size": 1540000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("k_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bfp8"])
+def test_indexer_score_galaxy_old_trace_after_fresh_cache_update(mesh_device, k_dtype):
+    """Captured A retains its bindings/scalars after cached B uses fresh buffers and semaphores."""
+    mesh_device.quiesce_devices()
+    mesh_device.clear_program_cache()
+    child = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
+    try:
+        _run_ring8_runtime_arguments(child, traced=True, replay_old_trace=True, k_dtype=k_dtype)
+    finally:
+        mesh_device.quiesce_devices()
+        child.clear_program_cache()
+
+
+def _run_ring8_runtime_arguments(mesh_device, traced, replay_old_trace=False, k_dtype=ttnn.bfloat16):
     """Reference-check the production Ring two-marker protocol, including its cache-hit runtime patch.
 
-    This test keeps query work small while using a large BF16 K capacity to exercise the bank-owned schedule's
+    This test keeps query work small while using a large K capacity to exercise the bank-owned schedule's
     midpoint/completion protocol. Two runtime prefixes exercise different marker locations on one cached program.
     Sampled first/last rows on every rank cover both directions without constructing a capacity-sized CPU score.
     """
+    assert not replay_old_trace or traced
+    retained_trace = []
+    retained_outputs = []
     sp = mesh_device.shape[0]
     heads = 4
     q_per_rank = 32
@@ -915,7 +938,7 @@ def _run_ring8_runtime_arguments(mesh_device, traced):
                 k_bc,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
+                dtype=k_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=sp_shard,
             )
@@ -923,7 +946,7 @@ def _run_ring8_runtime_arguments(mesh_device, traced):
                 torch.zeros_like(k_nat),
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
+                dtype=k_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
@@ -973,23 +996,22 @@ def _run_ring8_runtime_arguments(mesh_device, traced):
                 ttnn.synchronize_device(mesh_device, sub_device_ids=stall_group)
                 out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
             finally:
-                if trace_id is not None:
-                    ttnn.release_trace(mesh_device, trace_id)
-                ttnn.deallocate(out)
+                if replay_old_trace and dispatch == 0 and trace_id is not None:
+                    retained_trace.append((trace_id, out))
+                else:
+                    if trace_id is not None:
+                        ttnn.release_trace(mesh_device, trace_id)
+                    if replay_old_trace:
+                        # Keep B's destination alive while replaying A: a stale
+                        # binding must fail numerically, never write freed storage.
+                        retained_outputs.append(out)
+                    else:
+                        ttnn.deallocate(out)
             return out_t, chunk_start
 
-        entries_before = mesh_device.num_program_cache_entries()
-        for dispatch, kv_len in enumerate(kv_lens):
+        def check_reference(out_t, dispatch, kv_len):
             q_g, k_nat, w_g = reference_sets[dispatch]
-            out_t, chunk_start = _score(kv_len, dispatch)
-            if dispatch == 0:
-                entries_after_compile = mesh_device.num_program_cache_entries()
-                assert entries_after_compile > entries_before
-            else:
-                assert (
-                    mesh_device.num_program_cache_entries() == entries_after_compile
-                ), "changing kv_len/midpoint recompiled instead of patching the cached Ring program"
-
+            chunk_start = kv_len - chunk_global
             for rank in range(sp):
                 for local_row in (0, q_per_rank - 1):
                     global_row = rank * q_per_rank + local_row
@@ -1001,8 +1023,47 @@ def _run_ring8_runtime_arguments(mesh_device, traced):
                         chunk_start + global_row,
                     )
                     assert_indexer_match(out_t[:, :, row, :kv_len], ref, sq=1, t=kv_len, check_neg=False)
+
+        entries_before = mesh_device.num_program_cache_entries()
+        for dispatch, kv_len in enumerate(kv_lens):
+            q_g, k_nat, w_g = reference_sets[dispatch]
+            out_t, chunk_start = _score(kv_len, dispatch)
+            if dispatch == 0:
+                entries_after_compile = mesh_device.num_program_cache_entries()
+                assert entries_after_compile > entries_before
+                if replay_old_trace:
+                    old_output_poison = ttnn.from_torch(
+                        torch.full_like(out_t, float("nan")),
+                        dtype=retained_trace[0][1].dtype,
+                        layout=retained_trace[0][1].layout,
+                        tile=retained_trace[0][1].tile,
+                        mesh_mapper=sp_shard,
+                    )
+            else:
+                assert (
+                    mesh_device.num_program_cache_entries() == entries_after_compile
+                ), "changing kv_len/midpoint recompiled instead of patching the cached Ring program"
+
+            check_reference(out_t, dispatch, kv_len)
+            if replay_old_trace and dispatch == 1:
+                old_trace_id, old_output = retained_trace[0]
+                # Poison A's destination so replay must actually refresh it; a stale
+                # correct A output cannot hide a trace that writes B's destination.
+                ttnn.copy_host_to_device_tensor(old_output_poison, old_output)
+                ttnn.synchronize_device(mesh_device, sub_device_ids=stall_group)
+                ttnn.execute_trace(mesh_device, old_trace_id, cq_id=0, blocking=True)
+                old_result = ttnn.to_torch(old_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+                check_reference(old_result, 0, kv_lens[0])
+                assert mesh_device.num_program_cache_entries() == entries_after_compile
+
         logger.info("Ring-8 partial readiness matched sampled reference across a kv_len cache hit")
     finally:
+        for trace_id, _ in retained_trace:
+            ttnn.release_trace(mesh_device, trace_id)
+        for _, output in retained_trace:
+            ttnn.deallocate(output)
+        for output in retained_outputs:
+            ttnn.deallocate(output)
         mesh_device.reset_sub_device_stall_group()
         mesh_device.clear_loaded_sub_device_manager()
 
