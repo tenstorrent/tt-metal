@@ -452,7 +452,22 @@ inline void set_packer_config(
     bool is_int8_format = pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8);
 
     dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = is_32b_format || is_fp32_dest_acc_en;
-    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8     = !(is_fp32_dest_acc_en || is_32b_format) && is_int8_format;
+    // An identity pack, meaning a 16-bit float format packed to itself, needs no conversion, but the
+    // default rounding path still flushes denormals, folds -0 to +0 and maps NaN to infinity. Select
+    // the identity path for it. Blackhole names this bit Read_int8; the ISA documentation calls it
+    // Read_raw and lists Read_raw=true as "Identity (i.e. preserve denormals and NaN)" for exactly
+    // the two pairs tested below, BF16 -> BF16 and FP16 -> FP16.
+    // Ref: tt-isa-documentation WormholeB0/TensixTile/TensixCoprocessor/Packers/FormatConversion.md
+    //
+    // The format pair has to be one of those two. Equality alone is not sufficient: a BFP output
+    // reports pack_src_format equal to pack_dst_format (see get_single_pack_src_format in
+    // jit_build/data_format.cpp), yet the packer still performs the block-float conversion, so
+    // reading Dst raw there changes the packed mantissas.
+    const bool is_identity_16b_float_pack = ((pack_src_format & 0x1F) == (pack_dst_format & 0x1F)) &&
+                                            (((pack_src_format & 0x1F) == to_underlying(DataFormat::Float16_b)) ||
+                                             ((pack_src_format & 0x1F) == to_underlying(DataFormat::Float16)));
+    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8 =
+        !(is_fp32_dest_acc_en || is_32b_format) && (is_int8_format || is_identity_16b_float_pack);
 
     if (pack_dst_format == to_underlying(DataFormat::UInt8))
     {
@@ -522,7 +537,22 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     bool is_int8_format = pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8);
 
     dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = is_32b_format || is_fp32_dest_acc_en;
-    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8     = !(is_fp32_dest_acc_en || is_32b_format) && is_int8_format;
+    // An identity pack, meaning a 16-bit float format packed to itself, needs no conversion, but the
+    // default rounding path still flushes denormals, folds -0 to +0 and maps NaN to infinity. Select
+    // the identity path for it. Blackhole names this bit Read_int8; the ISA documentation calls it
+    // Read_raw and lists Read_raw=true as "Identity (i.e. preserve denormals and NaN)" for exactly
+    // the two pairs tested below, BF16 -> BF16 and FP16 -> FP16.
+    // Ref: tt-isa-documentation WormholeB0/TensixTile/TensixCoprocessor/Packers/FormatConversion.md
+    //
+    // The format pair has to be one of those two. Equality alone is not sufficient: a BFP output
+    // reports pack_src_format equal to pack_dst_format (see get_single_pack_src_format in
+    // jit_build/data_format.cpp), yet the packer still performs the block-float conversion, so
+    // reading Dst raw there changes the packed mantissas.
+    const bool is_identity_16b_float_pack = ((pack_src_format & 0x1F) == (pack_dst_format & 0x1F)) &&
+                                            (((pack_src_format & 0x1F) == to_underlying(DataFormat::Float16_b)) ||
+                                             ((pack_src_format & 0x1F) == to_underlying(DataFormat::Float16)));
+    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8 =
+        !(is_fp32_dest_acc_en || is_32b_format) && (is_int8_format || is_identity_16b_float_pack);
 
     if (pack_dst_format == to_underlying(DataFormat::UInt8))
     {
@@ -540,10 +570,17 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     static_assert(
         PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Round_10b_mant_ADDR32,
         "PCK_DEST_RD_CTRL_Read_32b_data and Round_10b_mant must share ADDR32 for combined RMW");
+    static_assert(
+        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_int8_ADDR32,
+        "PCK_DEST_RD_CTRL_Read_32b_data and Read_int8 must share ADDR32 for combined RMW");
+    // Read_int8 has to be in the mask. Without it the bit keeps whatever set_packer_config left,
+    // so a kernel that initialises with an identity pack and later reconfigures to a narrowing
+    // output format would pack that output with Read_raw still set.
     cfg_reg_rmw_tensix<
         PCK_DEST_RD_CTRL_Read_32b_data_ADDR32,
         PCK_DEST_RD_CTRL_Read_32b_data_SHAMT,
-        PCK_DEST_RD_CTRL_Read_32b_data_MASK | PCK_DEST_RD_CTRL_Read_unsigned_MASK | PCK_DEST_RD_CTRL_Round_10b_mant_MASK>(dest_rd_ctrl.val);
+        PCK_DEST_RD_CTRL_Read_32b_data_MASK | PCK_DEST_RD_CTRL_Read_unsigned_MASK | PCK_DEST_RD_CTRL_Read_int8_MASK |
+            PCK_DEST_RD_CTRL_Round_10b_mant_MASK>(dest_rd_ctrl.val);
 
     if (IS_BFP_FORMAT(pack_output_dst_format))
     {
