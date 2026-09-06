@@ -476,7 +476,7 @@ std::vector<ParsedTestConfig> expand_channel_trimming(std::vector<ParsedTestConf
     expanded.reserve(configs.size() * 2);
 
     for (auto& config : configs) {
-        if (config.fabric_setup.enable_channel_trimming) {
+        if (config.fabric_setup.enable_channel_trimming.value_or(false)) {
             auto capture_config = config;
             capture_config.channel_trimming_mode = ChannelTrimmingMode::CAPTURE;
             capture_config.parametrized_name = config.name + "_capture";
@@ -2969,8 +2969,8 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const TestFabricSetup
     }
     out << YAML::Key << "num_links";
     out << YAML::Value << config.num_links;
-    if (config.enable_channel_trimming) {
-        out << YAML::Key << "enable_channel_trimming" << YAML::Value << true;
+    if (config.enable_channel_trimming.has_value()) {
+        out << YAML::Key << "enable_channel_trimming" << YAML::Value << *config.enable_channel_trimming;
     }
     if (config.use_vc2) {
         out << YAML::Key << "use_vc2" << YAML::Value << true;

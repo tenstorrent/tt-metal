@@ -922,8 +922,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         // VC1 is serviced when:
         // - Intra-mesh router with full mesh VC1, or
         // - Inter-mesh router with pass-through VC1
-        bool vc1_serviced = (!is_inter_mesh_ && intermesh_config.requires_vc1_full_mesh) ||
-                            (is_inter_mesh_ && intermesh_config.requires_vc1_mesh_pass_through);
+        bool vc1_serviced = intermesh_config.vc1_serviced_for(is_inter_mesh_);
 
         if (vc1_serviced) {
             defines["FABRIC_2D_VC1_SERVICED"] = "";
@@ -937,7 +936,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
 
         // FABRIC_2D_VC0_CROSSOVER_TO_VC1: Set for inter-mesh routers that perform VC0→VC1 crossover
         // Inter-mesh routers crossover incoming VC0 traffic to downstream intra-mesh VC1
-        bool vc0_crossover_to_vc1 = is_inter_mesh_ && intermesh_config.requires_vc1_full_mesh;
+        bool vc0_crossover_to_vc1 = intermesh_config.vc0_crossover_to_vc1_for(is_inter_mesh_);
         if (vc0_crossover_to_vc1) {
             defines["FABRIC_2D_VC0_CROSSOVER_TO_VC1"] = "";
         }
