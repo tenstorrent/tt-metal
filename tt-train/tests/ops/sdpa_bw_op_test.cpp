@@ -575,8 +575,11 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const auto grad_output = core::from_xtensor(grad_output_tensor, device);
 
     // ========== Pure Float Reference (Ground Truth) ==========
+    // For AttentionMaskType::None, skip masking here too, or this compares against the wrong ground truth.
+    const std::optional<xt::xarray<float>> float_ref_mask =
+        mask_type == ttml::metal::AttentionMaskType::None ? std::nullopt : std::make_optional(attn_mask_tensor);
     auto float_gradients =
-        float_sdpa_backward(query_tensor, key_tensor, value_tensor, grad_output_tensor, attn_mask_tensor);
+        float_sdpa_backward(query_tensor, key_tensor, value_tensor, grad_output_tensor, float_ref_mask);
     const auto& float_dQ = float_gradients[0];
     const auto& float_dK = float_gradients[1];
     const auto& float_dV = float_gradients[2];
@@ -584,7 +587,11 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const auto& float_attn_output = float_gradients[4];
 
     // ========== Composite Implementation (uses ttnn ops) ==========
-    auto composite_output = composite_sdpa(query, key, value, grad_output, attn_mask, /*return_intermediate=*/true);
+    // Same reasoning as float_ref_mask above.
+    const std::optional<ttnn::Tensor> composite_ref_mask =
+        mask_type == ttml::metal::AttentionMaskType::None ? std::nullopt : std::make_optional(attn_mask);
+    auto composite_output =
+        composite_sdpa(query, key, value, grad_output, composite_ref_mask, /*return_intermediate=*/true);
     const auto composite_attn_output = /* attn_output */ composite_output[0];
     [[maybe_unused]] auto composite_lse = /* logsumexp */ composite_output[1];
     const auto dL_dQ = /* dL_dQ */ composite_output[2];
@@ -851,6 +858,49 @@ TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_LargerSequence) {
         .dropout_prob = 0.0F,
         .test_name = "CausalMask_LargerSeq (B=4, S=1024, D=128, H=8)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
+    run_sdpa_backward_test(config);
+}
+
+// ========== No-Mask (AttentionMaskType::None) Tests ==========
+//
+// Bidirectional attention: no mask tensor and no on-device causal mask, every query row attends
+// to every key. The float and composite references above are also run unmasked for this mode.
+//
+// Shape mirrors a ViT-L MAE encoder (B=24, H=16, S=544, D=64). With NC*St = 384*17 rows spread
+// over the core grid, each core's row range spans several (batch, head) groups, which exercises
+// the group-boundary handling in the KV kernel's work split for the unmasked path.
+TEST_F(SDPABackwardTest, NIGHTLY_NoMask_ProductionEncoderShape) {
+    SDPABackwardTestConfig config{
+        .batch_size = 24U,
+        .sequence_length = 544U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 16U,
+        .num_kv_heads = 16U,
+        .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .fw_atol = 3e-2F,
+        .fw_rtol = 3e-2F,
+        .test_name = "NoMask_ProductionEncoderShape (B=24, S=544, D=64, H=16, mask=None)",
+        .mask_type = ttml::metal::AttentionMaskType::None};
+    run_sdpa_backward_test(config);
+}
+
+// Small per-PR shape for the unmasked path (same shape as DISABLED_SmallBatch above).
+TEST_F(SDPABackwardTest, NoMask_SmallBatch) {
+    SDPABackwardTestConfig config{
+        .batch_size = 2U,
+        .sequence_length = 128U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 4U,
+        .num_kv_heads = 4U,
+        .dropout_prob = 0.0F,
+        .atol = 2e-2F,
+        .rtol = 2e-2F,
+        .test_name = "NoMask_SmallBatch (B=2, S=128, D=64, H=4, mask=None)",
+        .mask_type = ttml::metal::AttentionMaskType::None};
     run_sdpa_backward_test(config);
 }
 

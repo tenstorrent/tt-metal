@@ -44,7 +44,6 @@ constexpr auto kKeyCbIndex = tt::CBIndex::c_3;
 constexpr auto kValueCbIndex = tt::CBIndex::c_4;
 constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_5;
 constexpr auto kIntermediatesCbIndex = tt::CBIndex::c_6;
-constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_7;
 constexpr auto kGradQueryAccumCbIndex = tt::CBIndex::c_8;
 constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_9;
 constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_10;
@@ -371,15 +370,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             precise_data_format,
             float32_single_tile_size_bytes,
             2 * kNumOfIntermCBTiles);
-
-    [[maybe_unused]] auto cb_mat_mul_reduce =  // CBIndex::c_7
-        create_circular_buffer(
-            program,
-            all_cores,
-            kMatMulReduceCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kSingleTileBuffer);
 
     [[maybe_unused]] auto cb_grad_query_accum =  // CBIndex::c_8
         create_circular_buffer(

@@ -75,7 +75,6 @@ constexpr uint32_t cb_value = tt::CBIndex::c_4;        // Original value
 constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;  // Attention mask (causal or arbitrary)
 #endif
 constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;       // Forward pass intermediates
-constexpr uint32_t cb_mat_mul_reduction = tt::CBIndex::c_7;   // Temporary computations
 constexpr uint32_t cb_grad_query_accum = tt::CBIndex::c_8;    // L1 accumulator for grad_query
 constexpr uint32_t cb_attention_weights = tt::CBIndex::c_9;   // Recomputed attention weights = softmax(QK^T / sqrt(Et))
 constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_10;  // Gradient w.r.t. attention: dL/dP
@@ -103,14 +102,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     cb_wait_front(cb_grad_output, v_tiles);
     cb_wait_front(cb_query, qk_tiles);
 
-    compute_u_scalar_row(
-        cb_grad_output,
-        cb_attn_output,
-        cb_u_scalar_row,
-        cb_mat_mul_reduction,
-        v_tiles,
-        scaler_bits,
-        cb_u_scaler_output);
+    compute_u_scalar_row(cb_grad_output, cb_attn_output, cb_u_scalar_row, v_tiles, scaler_bits, cb_u_scaler_output);
 
     const uint32_t q_row_tile = global_row_idx % Ht;
 
@@ -209,7 +201,6 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_grad_output, cb_query, cb_key);
     copy_init(cb_query);
 
-    cb_wait_front(cb_mat_mul_reduction, onetile);
     // compute_kernel_hw_startup above does the one-time HW config; each matmul site below
     // re-establishes its state with reconfig_data_format + matmul_init.
     matmul_init(cb_query, cb_key);
