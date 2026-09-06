@@ -72,7 +72,7 @@ EmbeddingBackwardDeviceOperation::spec_return_value_t EmbeddingBackwardDeviceOpe
     const auto& grad_tensor = tensor_args.grad_tensor;
     auto embedding_dim = grad_tensor.logical_shape()[-1];
 
-    ttnn::Shape output_shape({1, 1, operation_attributes.num_embeddings, embedding_dim});
+    ttnn::Shape output_shape({operation_attributes.num_embeddings, embedding_dim});
     return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(
