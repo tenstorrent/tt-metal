@@ -87,10 +87,9 @@ def torch_random_with_zeros(shape, low, high, dtype, zero_fraction=0.1):
     # Shuffle the tensor
     shuffled = combined[torch.randperm(combined.size(0))]
 
-    # Reshape to the desired shape
+    # Reshape to the desired shape. Tensor.to is not in-place, so return the converted tensor.
     result_tensor = shuffled.view(shape)
-    result_tensor.to(dtype)
-    return result_tensor
+    return result_tensor.to(dtype)
 
 
 ### Profiling ###
