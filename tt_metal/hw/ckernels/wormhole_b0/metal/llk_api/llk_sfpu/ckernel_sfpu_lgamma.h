@@ -19,9 +19,20 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_lgamma_stirling() {
     constexpr float LOG_SQRT_2PI = 0.9189385332046727f;
 
-    // Minimal coefficients for 0-3 ULP
     constexpr float r0 = 0.0833333333f;   // 1/12
     constexpr float r1 = -0.0027777777f;  // -1/360
+    constexpr float r2 = 0.0007936507f;   // 1/1260
+    constexpr float r3 = -0.0005952380f;  // -1/1680
+
+    // Chebyshev fit for (w-1)(w-2)*Q(w-1.5) on [1, 2]
+    constexpr float c0 = 4.8312890043e-01f;
+    constexpr float c1 = -1.4595974798e-01f;
+    constexpr float c2 = 6.2918526481e-02f;
+    constexpr float c3 = -3.1317045370e-02f;
+    constexpr float c4 = 1.6643589408e-02f;
+    constexpr float c5 = -9.2951826577e-03f;
+    constexpr float c6 = 6.4672372806e-03f;
+    constexpr float c7 = -3.9237047468e-03f;
 
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
@@ -31,16 +42,33 @@ inline void calculate_lgamma_stirling() {
         v_if(in < 0.5f) { z = 1.0f - in; }
         v_endif;
 
-        // 2. Stirling base: (z - 0.5) * log(z) - z + log(sqrt(2*pi))
-        sfpi::vFloat res = ((z - 0.5f) * _calculate_log_body_no_init_(z) - z + LOG_SQRT_2PI);
+        sfpi::vFloat res = 0.0f;
 
-        // 3. Bernoulli correction: (1/z)(r0 + r1/z^2).
-        sfpi::vFloat inv_z = sfpu_reciprocal_iter<2>(z);
-        sfpi::vFloat correction = inv_z * (r0 + (inv_z * inv_z) * r1);
-        res = res + correction;
+        v_if(z < 2.0f) {
+            sfpi::vFloat w = z;
+            v_if(z < 1.0f) {
+                w = z + 1.0f;
+            }
+            v_endif;
 
-        // TODO: use a polynomial bridge here instead
-        v_if(in == 1.0f || in == 2.0f) { res = 0.0f; }
+            sfpi::vFloat t = w - 1.5f;
+            sfpi::vFloat t2_minus_quarter = t * t - 0.25f;
+            sfpi::vFloat q = PolynomialEvaluator::eval(t, c0, c1, c2, c3, c4, c5, c6, c7);
+            sfpi::vFloat poly_res = t2_minus_quarter * q;
+
+            res = poly_res;
+            v_if(z < 1.0f) {
+                res = poly_res - _calculate_log_body_no_init_(z);
+            }
+            v_endif;
+        }
+        v_else {
+            res = ((z - 0.5f) * _calculate_log_body_no_init_(z) - z + LOG_SQRT_2PI);
+            sfpi::vFloat inv_z = sfpu_reciprocal_iter<2>(z);
+            sfpi::vFloat inv_z2 = (inv_z * inv_z);
+            sfpi::vFloat correction = PolynomialEvaluator::eval(inv_z2, r0, r1, r2, r3);
+            res = res + inv_z * correction;
+        }
         v_endif;
 
         // reflection adjustment for inputs < 0.5 are done in calculate_lgamma_adjusted.
@@ -57,14 +85,24 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_lgamma_stirling_fp32(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr float LOG_SQRT_2PI = 0.9189385332046727f;
-    constexpr float LOG_SQRT_PI = 0.57236494f;  // lgamma(0.5) = ln(sqrt(pi))
     constexpr uint dst_tile_size_sfpi = 32;
 
-    // Minimal coefficients for 0-3 ULP
     constexpr float r0 = 0.0833333333f;   // 1/12
     constexpr float r1 = -0.0027777777f;  // -1/360
     constexpr float r2 = 0.0007936507f;   // 1/1260
     constexpr float r3 = -0.0005952380f;  // -1/1680
+    constexpr float r4 = 0.0008417508f;   // 1/1188
+    constexpr float r5 = -0.0019175269f;  // -691/360360
+
+    // Chebyshev fit for (w-1)(w-2)*Q(w-1.5) on [1, 2]
+    constexpr float c0 = 4.8312890043e-01f;
+    constexpr float c1 = -1.4595974798e-01f;
+    constexpr float c2 = 6.2918526481e-02f;
+    constexpr float c3 = -3.1317045370e-02f;
+    constexpr float c4 = 1.6643589408e-02f;
+    constexpr float c5 = -9.2951826577e-03f;
+    constexpr float c6 = 6.4672372806e-03f;
+    constexpr float c7 = -3.9237047468e-03f;
 
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
@@ -75,47 +113,33 @@ inline void calculate_lgamma_stirling_fp32(
         v_if(in < 0.5f) { z = 1.0f - in; }
         v_endif;
 
-        sfpi::vFloat d1 = z - 1.0f;
-        sfpi::vFloat d2 = z - 2.0f;
-        sfpi::vFloat abs_range1 = sfpi::abs(d1);
-        sfpi::vFloat abs_range2 = sfpi::abs(d2);
+        sfpi::vFloat res = 0.0f;
 
-        sfpi::vFloat res = z;
+        v_if(z < 2.0f) {
+            sfpi::vFloat w = z;
+            v_if(z < 1.0f) {
+                w = z + 1.0f;
+            }
+            v_endif;
 
-        // Polynomial bridge for small range inputs (z near 1 or 2 only)
+            sfpi::vFloat t = w - 1.5f;
+            sfpi::vFloat t2_minus_quarter = t * t - 0.25f;
+            sfpi::vFloat q = PolynomialEvaluator::eval(t, c0, c1, c2, c3, c4, c5, c6, c7);
+            sfpi::vFloat poly_res = t2_minus_quarter * q;
 
-        v_if(abs_range1 <= 0.25f) {
-            // Taylor Expansion around z=1 (d = z - 1.0)
-            constexpr float p0 = -0.57721566f;  // -gamma
-            constexpr float p1 = 0.82246703f;   // zeta(2)/2
-            constexpr float p2 = -0.40068563f;  // -zeta(3)/3
-            constexpr float p3 = 0.27058081f;   // zeta(4)/4
-            constexpr float p4 = -0.20738555f;  // -zeta(5)/5
-            // res = d * (p0 + d * (p1 + d * (p2 + d * (p3 + d * p4))));
-            res = d1 * PolynomialEvaluator::eval(d1, p0, p1, p2, p3, p4);
-        }
-        v_elseif(abs_range2 <= 0.25f) {
-            // Taylor Expansion around z=2 (d = z - 2.0)
-            constexpr float q0 = 0.42278434f;   // 1 - gamma
-            constexpr float q1 = 0.32246703f;   // (zeta(2)-1)/2
-            constexpr float q2 = -0.06735230f;  // -(zeta(3)-1)/3
-            constexpr float q3 = 0.02058081f;   // (zeta(4)-1)/4
-            constexpr float q4 = -0.00738555f;  // -(zeta(5)-1)/5
-            res = d2 * PolynomialEvaluator::eval(d2, q0, q1, q2, q3, q4);
+            res = poly_res;
+            v_if(z < 1.0f) {
+                res = poly_res - log_z;
+            }
+            v_endif;
         }
         v_else {
-            // Stirling base + Bernoulli correction
             res = ((z - 0.5f) * log_z - z + LOG_SQRT_2PI);
             sfpi::vFloat inv_z = sfpu_reciprocal_iter<2>(z);
             sfpi::vFloat inv_z2 = (inv_z * inv_z);
-            // Bernoulli correction: r0 + inv_z2 * (inv_z2 * (r2 + inv_z2 * r3) + r1);
-            sfpi::vFloat correction = PolynomialEvaluator::eval(inv_z2, r0, r1, r2, r3);
+            sfpi::vFloat correction = PolynomialEvaluator::eval(inv_z2, r0, r1, r2, r3, r4, r5);
             res = res + inv_z * correction;
         }
-        v_endif;
-
-        // Handle boundary case
-        v_if(sfpi::abs(z - 0.5f) < 0.01f) { res = LOG_SQRT_PI; }
         v_endif;
 
         // reflection adjustment for inputs < 0.5 are done in calculate_lgamma_adjusted.
