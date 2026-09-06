@@ -2,13 +2,15 @@
 #
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
-#   cmd: The exact command to run (env vars must be inlined).
+#   cmd: The exact command to run (env vars must be inlined). Use placeholders
+#     like {mesh_device} to inject per-SKU values; define the key under each sku.
 #   model: Model identifier for filtering (workflow_dispatch model selection).
 #   model_family: (optional) Human-facing model family for grouping/reporting (e.g. Llama, Qwen, Gemma). Omit when a test spans multiple families.
 #   skus: A mapping of SKU names to their configuration:
 #     timeout: Job timeout in minutes.
 #     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
 #     release_ready: Whether this SKU leg is included in package-and-release (default false).
+#     mesh_device: (optional) MESH_DEVICE value; use with export MESH_DEVICE={mesh_device} in cmd.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
 
@@ -18,15 +20,18 @@
 
 - name: Llama 3.1-8B e2e tests
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    # The DRAM prefetcher does not yet support more than one repeat batch (issue #47820):
-    # cover the eval repeat-batch loop with the prefetcher DISABLED (perf reporting skipped
-    # so only the prefetcher run sets perf), and cover the prefetcher path with a SINGLE
-    # repeat batch (this run reports/validates perf). See #47820 for the multi-batch work.
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --skip_perf_report
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+    export HF_HUB_OFFLINE=1
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.1-8B-Instruct
+    export MESH_DEVICE={mesh_device}
+    export SAMPLING_MODE=on_device_topk
+    export PIPELINE_READBACK=1
+    pytest --timeout 420 models/common/tests/demos/llama3_8b/demo.py -k "performance and token-accuracy-repeat_batch-1-prefetcher-off"
+    pytest --timeout 600 models/common/tests/demos/llama3_8b/demo.py -k "performance and eval-32-repeat_batch-3-prefetcher-off-perf-report-off"
+    pytest --timeout 600 models/common/tests/demos/llama3_8b/demo.py -k "performance and eval-32-repeat_batch-1-prefetcher-off-perf-report-on"
+    # Keep this TTTv1 leg until TTTv2 supports native HF-layout RoPE:
+    # https://github.com/tenstorrent/tt-metal/issues/51374
+    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
   model: llama3.1-8b
   model_family: Llama
   skus:
@@ -34,18 +39,22 @@
       timeout: 11
       tier: 1
       release_ready: true
+      mesh_device: N150
     bh_p150:
       timeout: 11
       tier: 1
       release_ready: true
+      mesh_device: P150
     wh_llmbox_perf:
       timeout: 11
       tier: 2
       release_ready: false
+      mesh_device: T3K
     bh_quietbox_2:
       timeout: 20
       tier: 2
       release_ready: false
+      mesh_device: P150x4
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -79,8 +88,9 @@
 # TODO: Move DP tests to sweep pipelines when those come online
 - name: Llama 3.1-8B data-parallel e2e tests
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP-4 or performance-ci-b1-DP-8" --timeout 1000
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.1-8B-Instruct MESH_DEVICE={mesh_device} SAMPLING_MODE=on_device_topk PIPELINE_READBACK=1
+    pytest --timeout 1000 models/common/tests/demos/llama3_8b/demo.py -k "performance and ci-b1-DP-4"
+    pytest --timeout 1000 models/common/tests/demos/llama3_8b/demo.py -k "performance and ci-b1-DP-8"
   model: llama3.1-8b-dp
   model_family: Llama
   skus:
@@ -88,6 +98,7 @@
       timeout: 20
       tier: 2
       release_ready: false
+      mesh_device: T3K
     # bh_quietbox_2 is 4-chip: the DP-8 case is auto-skipped when the chip count
     # is below the DP factor, so it effectively runs the DP-4 case only.
     # Migrated from the legacy blackhole_demo_tests.yaml DP entries.
@@ -95,14 +106,18 @@
       timeout: 20
       tier: 2
       release_ready: false
+      mesh_device: P150x4
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
 # TODO: Move DP tests to sweep pipelines when those come online
 - name: Llama 3.1-8B data-parallel e2e tests (Galaxy)
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.1-8B-Instruct MESH_DEVICE=TG SAMPLING_MODE=on_device_topk PIPELINE_READBACK=1
+    pytest --timeout 1000 models/common/tests/demos/llama3_8b/demo.py -k "performance and ci-b1-DP-4"
+    pytest --timeout 1000 models/common/tests/demos/llama3_8b/demo.py -k "performance and ci-b1-DP-8"
+    pytest --timeout 1000 models/common/tests/demos/llama3_8b/demo.py -k "performance and ci-b1-DP-16"
+    pytest --timeout 1000 models/common/tests/demos/llama3_8b/demo.py -k "performance and ci-b1-DP-32"
   model: llama3.1-8b-dp-galaxy
   model_family: Llama
   skus:
@@ -176,9 +191,14 @@
 # on the 8-device Wormhole mesh. https://github.com/tenstorrent/tt-metal/issues/47126
 - name: Llama 3.3-70B e2e tests
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct
+    export HF_HUB_OFFLINE=1
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.3-70B-Instruct
+    export MESH_DEVICE=P150x4
+    export SAMPLING_MODE=on_device_topk
+    export PIPELINE_READBACK=1
+    pytest --timeout 1800 models/common/tests/demos/llama33_70b/demo.py -k "token-accuracy and performance"
+    pytest --timeout 1800 models/common/tests/demos/llama33_70b/demo.py -k "eval-32-perf-report and performance"
   model: llama3.3-70b
   model_family: Llama
   skus:
@@ -223,13 +243,12 @@
 # ── Qwen ───────────────────────────────────────────────────────────
 
 - name: Qwen3-32B e2e tests
-  # TTTv2 substitution (wh_llmbox_perf / T3K only — the TTTv2 qwen3_32b demo is T3K-only: 64 attn / 8 KV
-  # heads need 8-way TP and the 32B weights don't fit < 8 devices). ci-token-matching -> token-accuracy,
-  # ci-eval-32 -> eval-32; both under the performance optimization, matching the TTTv1 leg's cases.
-  # One pytest process per case (matching the Qwen2.5-Coder-32B leg below): grouping demo configs in a
-  # single process on the 8-device Wormhole mesh has wedged an ETH core, so each case opens its own mesh.
+  # Same TTTv2 demo on T3K (TP8) and P150x4 (TP4). ci-token-matching -> token-accuracy,
+  # ci-eval-32 -> eval-32; both under the performance optimization.
+  # One pytest process per case: grouping demo configs in a single process on the
+  # 8-device Wormhole mesh has wedged an ETH core, so each case opens its own mesh.
   cmd: |
-    export HF_MODEL=Qwen/Qwen3-32B HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen3-32B MESH_DEVICE=T3K
+    export HF_MODEL=Qwen/Qwen3-32B HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen3-32B MESH_DEVICE={mesh_device}
     pytest --timeout 1800 models/common/tests/demos/qwen3_32b/demo.py -k "token-accuracy and performance"
     pytest --timeout 1800 models/common/tests/demos/qwen3_32b/demo.py -k "eval-32 and performance"
   model: qwen3-32b
@@ -239,23 +258,12 @@
       timeout: 15
       tier: 2
       release_ready: false
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-
-- name: Qwen3-32B e2e tests (Blackhole)
-  # The TTTv2 qwen3_32b demo is T3K-only, so the Blackhole (bh_quietbox_2) SKU keeps its TTTv1
-  # simple_text_demo leg until a Blackhole TTTv2 bring-up exists — no coverage dropped.
-  cmd: |
-    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
-    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
-  model: qwen3-32b
-  model_family: Qwen
-  skus:
+      mesh_device: T3K
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
       tier: 2
       release_ready: false
+      mesh_device: P150x4
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
