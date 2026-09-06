@@ -355,6 +355,11 @@ def from_torch(
         # float32 as an intermediate type is not used due to limited amount of L1 memory.
         tensor = torch.from_numpy(tensor)
 
+    if isinstance(tensor, torch.Tensor) and type(tensor) is not torch.Tensor:
+        # nanobind picks its torch importer by type(tensor).__module__ starting with "torch", so a subclass defined
+        # elsewhere (ttnn.torch_tracer.TracedTorchTensor, model-side wrappers) is not converted and fails to import.
+        tensor = tensor.as_subclass(torch.Tensor)
+
     # FP8_E4M3 host-side construction is narrowed to float32 input only. The FLOAT32 -> FP8_E4M3
     # path is wired up in transform_buffers via static_cast<float8_e4m3>; other source dtypes
     # either fail at the dlpack importer (torch.float8_e4m3fn, code 10 not yet handled) or hit
