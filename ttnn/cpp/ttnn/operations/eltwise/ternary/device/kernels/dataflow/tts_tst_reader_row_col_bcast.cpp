@@ -7,6 +7,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/nd_indexing.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -33,6 +34,8 @@ void kernel_main() {
     const uint32_t tensor_num_tiles = get_arg_val<uint32_t>(19);
     const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
     const uint32_t src_num_tiles = get_arg_val<uint32_t>(26);
+    const uint32_t nd_broadcast_factor = get_arg_val<uint32_t>(27);
+    const uint32_t tensor_nd_broadcast_factor = get_arg_val<uint32_t>(28);
 
     constexpr auto predicate_cb = get_compile_time_arg_val(0);
     constexpr auto tensor_cb = get_compile_time_arg_val(1);
@@ -70,24 +73,27 @@ void kernel_main() {
     uint32_t start_tw = offset_c % Wt;
     uint32_t end_tw = (dst_shard_width != 0) ? (start_tw + dst_shard_width) : Wt;
 
-    uint32_t tile_offset = start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
+    uint32_t input_nd = get_input_nd_index(start_nd, nd_broadcast_factor);
+    uint32_t tensor_input_nd = get_input_nd_index(start_nd, tensor_nd_broadcast_factor);
+
+    uint32_t tile_offset = input_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
 #if !SRC_BCAST_A && !SRC_ROW_BCAST_A
     tile_offset += start_th * Wt;
 #endif
     uint32_t next_c_shift = c_stride - HtWt;
     uint32_t next_n_shift = n_stride - c_stride * C;
     uint32_t next_d_shift = d_stride - n_stride * N;
-    uint32_t next_nd_shift = nD_stride - d_stride * D;
+    const uint32_t d_span = d_stride * D;
 
-    uint32_t tensor_tile_offset =
-        start_nd * tensor_nD_stride + start_d * tensor_d_stride + start_n * tensor_n_stride + start_c * tensor_c_stride;
+    uint32_t tensor_tile_offset = tensor_input_nd * tensor_nD_stride + start_d * tensor_d_stride +
+                                  start_n * tensor_n_stride + start_c * tensor_c_stride;
 #if !SRC_BCAST_CB1 && !SRC_ROW_BCAST_CB1
     tensor_tile_offset += start_th * Wt;
 #endif
     uint32_t tensor_next_c_shift = tensor_c_stride - HtWt;
     uint32_t tensor_next_n_shift = tensor_n_stride - tensor_c_stride * C;
     uint32_t tensor_next_d_shift = tensor_d_stride - tensor_n_stride * N;
-    uint32_t tensor_next_nd_shift = tensor_nD_stride - tensor_d_stride * D;
+    const uint32_t tensor_d_span = tensor_d_stride * D;
 
     uint32_t num_tiles_read = 0;
     for (uint32_t nd = start_nd; nd < cND && num_tiles_read < num_tiles; ++nd, start_d = 0) {
@@ -185,7 +191,12 @@ void kernel_main() {
             tile_offset += next_d_shift;
             tensor_tile_offset += tensor_next_d_shift;
         }
-        tile_offset += next_nd_shift;
-        tensor_tile_offset += tensor_next_nd_shift;
+        const uint32_t next_input_nd = get_input_nd_index(nd + 1, nd_broadcast_factor);
+        const uint32_t next_tensor_input_nd = get_input_nd_index(nd + 1, tensor_nd_broadcast_factor);
+        tile_offset = advance_nd_offset(tile_offset, input_nd, next_input_nd, nD_stride, d_span);
+        tensor_tile_offset = advance_nd_offset(
+            tensor_tile_offset, tensor_input_nd, next_tensor_input_nd, tensor_nD_stride, tensor_d_span);
+        input_nd = next_input_nd;
+        tensor_input_nd = next_tensor_input_nd;
     }
 }
