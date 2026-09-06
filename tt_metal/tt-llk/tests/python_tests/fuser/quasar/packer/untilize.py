@@ -70,4 +70,7 @@ class PackUntilize(Packer):
         )
         l1_row_idx = f"{y_stride} * ({block.block_y} + tile_y) + {block.block_x}"
 
-        return f"_llk_pack_untilize_({block.tile_id_block}, {l1_row_idx});\n"
+        return (
+            f"_llk_pack_untilize_set_dst_offset_({tile_shape.cpp_value}, {l1_row_idx});\n"
+            f"_llk_pack_untilize_({block.tile_id_block}, 0);\n"
+        )

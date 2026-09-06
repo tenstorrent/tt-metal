@@ -610,17 +610,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     const uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
     const uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
-    // WORKAROUND (Quasar), from sjovic/quasar-resnet 057e1792f0a: force out_subblock to 1x1. The Quasar
-    // compute dest-sync (MATH_PACK / SrcA handshake) in conv_bmm_tilize_metal2 deadlocks the three compute
-    // threads whenever the matmul_partials spill/reload handles more than one tile per subblock
-    // (out_subblock_num_tiles > 1). Constraining to 1x1 makes partials flow one tile at a time so the
-    // compute pipeline drains. Verified there: the resnet stem conv passes single-core AND full 32-core
-    // (was hanging). Applies to every conv this factory builds (stem + bottleneck 3x3), so it also covers
-    // the L1-path convs a DRAM slice_config cannot reach. Gated to Quasar; WH/BH keep the tuned subblock.
-    // Remove once the LLK dest-sync limitation is fixed (tt-metal #48679 / tt-llk #48504).
     const bool arch_is_quasar = device->arch() == tt::ARCH::QUASAR;
-    const uint32_t out_subblock_h_ntiles = arch_is_quasar ? 1 : block_config.out_subblock_h_ntiles;
-    const uint32_t out_subblock_w_ntiles = arch_is_quasar ? 1 : block_config.out_subblock_w_ntiles;
+    const uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
+    const uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
     const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
     const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
@@ -1143,17 +1135,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
 
     const uint32_t tilized_act_tile_size = tt::tile_size(tilized_act_df);
 
-    // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2.
-    // QSR: the Quasar hardware packer-L1-accumulate pack path (PACR0_TILE_INC in-place accumulate combined
-    // with the QSR_RESTORE_WR / g_dfb ring rewind between K-blocks) mis-addresses the matmul_partials CB and
-    // overruns it -> OOB L1 write -> ERROR_TRISC1 fault on the pack thread (opcode 0x19 = PACR0_TILE_INC).
-    // Unlike WH/BH (address derived from fifo_wr_ptr), Quasar's packer DST_TILE_FACE_ROW_IDX counter is not
-    // resynced to the rewound descriptor. Force off so K-accumulation goes through the FPU-reload path
-    // (copy_block reload + re-accumulate), which IS ported/validated on Quasar. This only
-    // drops a perf optimization; correctness is preserved. Remove once the LLK packer-L1-acc + ring-rewind
-    // counter resync is fixed. (This factory is Quasar-only, so no arch guard is needed.)
-    const bool packer_l1_acc_en = false;
-    (void)ttnn::prim::determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
+    const bool packer_l1_acc_en = ttnn::prim::determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
     const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];
@@ -1260,8 +1242,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
 
     // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
     const bool partials_cb_uses_output =
-        !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
-    log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
+        !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated &&
+        !arch_is_quasar;
 
     const bool reader_indices_globally_allocated =
         get_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).is_globally_allocated;
