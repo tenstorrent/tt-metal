@@ -37,9 +37,26 @@ uint32_t reduce_scatter_default_workers(
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link);
 
-// Returns the default chunks_per_sync value for the given topology and tile counts.
+// Returns the default chunks_per_sync value for the given topology and chunking geometry.
+//
+// Takes the per-worker tile range and the repeat count (units per worker for dims 1-3, batches for dim 0)
+// SEPARATELY rather than pre-multiplied: the kernels chunk each repeat independently, so the number
+// of chunks a step issues is repeats * ceil(tiles / granularity), which is not recoverable from the
+// product once the two have been multiplied together.
 uint32_t reduce_scatter_default_chunks_per_sync(
-    ttnn::ccl::Topology topology, uint32_t num_tiles_to_process_per_slice, uint32_t tile_granularity);
+    ttnn::ccl::Topology topology,
+    uint32_t tiles_per_worker_per_repeat,
+    uint32_t num_repeats,
+    uint32_t tile_granularity);
+
+// Cap on the default chunks_per_sync for the ring kernels that carry a worker's whole share of the
+// slice in every step (scatter dims 1-3). A step there holds up to 48 chunks, so "half the chunks"
+// reaches 16-24 and delays the receiver's start on each sync group. Measured on a 1x8 Blackhole ring
+// (bf16, 2 links): 4 was never worse than the uncapped default and beat it by 6.5% at 8M elements (16
+// chunks per step) and by ~1% at 16M-24M (32-48 chunks per step). An interval of 1 loses 5-21% on
+// steps of 8-48 chunks to the per-chunk waits. The dim 0 kernels, which split a step between the two
+// directions chunk by chunk, prefer the longer interval by 1.5-2% at 24M and are not capped.
+constexpr uint32_t RING_UNIT_STEP_MAX_CHUNKS_PER_SYNC = 4;
 
 // Sizing for the chunk-paged "contiguous" intermediate used by the ring reduce-scatter fast path.
 //
@@ -132,6 +149,43 @@ std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_2d_to_4d(uint32_t di
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> reduce_scatter_get_tile_offsets(
     uint32_t worker_id,
     uint32_t num_workers,
+    uint32_t output_batch_num_pages,
+    uint32_t output_channel_num_pages,
+    uint32_t slice_Wt,
+    uint32_t input_tensor_Wt,
+    uint32_t normalized_dim);
+
+// Per-worker share of one ring step, for the dims that iterate over channels (dim 0 has its own kernels).
+//
+// The ring kernels process every (batch, channel) pair of the slice inside each ring step, so the
+// tensor crosses the ring once however many batches it has. A "unit" is one such pair, indexed
+// u = b * slice_C + c over U = input_tensor_B * slice_C units, and the split hands each worker a
+// contiguous range of them:
+//
+//   unit-major (unit_start..unit_end a contiguous span, whole pages within)
+//       Each worker owns whole channels of whole batches. The per-channel loop is entered
+//       U/num_workers times per step and every visit carries a full channel of pages.
+//
+//   page-major (unit_start=0, unit_end=U)
+//       Every worker visits every unit and takes a fraction of the pages inside each. Used when the
+//       units do not divide evenly among the workers, or for a single worker.
+//
+// Either way a worker moves total_slice_pages / num_workers tiles per step, the same share the dim 0
+// kernels give their workers, and balance is identical between the two forms.
+struct ReduceScatterWorkerSplit {
+    uint32_t unit_start;
+    uint32_t unit_end;
+    uint32_t start_tiles_read;
+    uint32_t start_tiles_to_read;
+    uint32_t start_pages_read_in_row;
+    uint32_t start_row_offset;
+};
+
+ReduceScatterWorkerSplit reduce_scatter_get_worker_split(
+    uint32_t worker_id,
+    uint32_t num_workers,
+    uint32_t input_tensor_B,
+    uint32_t slice_C,
     uint32_t output_batch_num_pages,
     uint32_t output_channel_num_pages,
     uint32_t slice_Wt,
