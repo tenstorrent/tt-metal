@@ -594,3 +594,16 @@ this record is where the finding lives.
 | **The five `feature_spec.INVALID` "author-scoped exclusions"** | Not a refinement — `SUPPORTED` already claims those axis values and `validate()` accepts them, so there is nothing for an implementer to add. An INVALID-audit finding and a requested `feature_spec.py` edit; `test_rms_norm_ttnn_invalid_audit.py` proves all five pass. |
 | **The 19 red golden cells** | 13 are two harness defects and 6 are a harness scoring gap; none is op-attributed. Three one-line fixes requested in `verification_report.md`. |
 | Code-review items, ledger corrections, `math_approx_mode` coverage gap | `verification_report.md`. |
+
+
+### [ ] Refinement 4b — Remove the prime-`Wt` granularity cliff (ragged width chunk) (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 4 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (responsible cells 0/0). A prior-passing cell that failed, hung, or never ran (suite hung before reaching it) is a regression.
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.

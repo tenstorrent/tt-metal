@@ -659,6 +659,10 @@ void kernel_main() {
                 // finalizing (only the root's last-level fold applies the rsqrt -- a finalize
                 // here would rsqrt a partial sum).
                 {
+                    // R4b: this zone's LINE NUMBER is hashed into the profiler's 16-bit
+                    // source-location table; at line 662 it collided with
+                    // `compute_scale`@compute.cpp:1680 (0x0773) and terminated a profiled
+                    // run.  `test_rms_norm_ttnn_zone_hashes.py` guards the whole set.
                     MaybeDeviceZoneScope("writer_tree_forward");
                     cb_wait_front(cb_node_out, 1);
                     if (is_root != 0) {

@@ -765,6 +765,20 @@ is priced in l1_ledger.md's "Deviations" table with its measurement:
       on every one of them (0.99987 -> 0.99999 at Wt=127): a coarse chunk clears
       D7/D8's reduce-datapath floors, which is the precision lever Refinement 1
       built.  Fourteen guard cases 0.99-1.01x.
+  D34 Refinement 4b -- THE PER-STAGE DEVICE ZONES ARE OPT-IN (`STAGE_ZONES` ->
+      the `RMS_STAGE_ZONES` kernel define, default OFF).  NOT a perf trade: the
+      profiler keys a zone by a 16-BIT hash of "<name>,<abs path>,<line>", so the
+      41 zone sites this op carries are 41 entries in a 65 536-slot table that
+      EVERY graded run populates -- because the eval runner sets
+      TT_METAL_DEVICE_PROFILER=1 to read the op-level duration off the firmware
+      markers, which compiles user zones in as a side effect.  Two colliding
+      entries are a hard TT_THROW on every profiler read and a `terminate` at the
+      next device open; D33's kernel edits moved `writer_tree_forward` onto
+      writer.cpp:662, which collides with `compute_scale`@compute.cpp:1680 at
+      0x0773, and that -- not the ragged chunk -- is what zeroed the Refinement 4
+      golden run.  Gating the zones off by default takes the op's contribution to
+      that table to ZERO on the graded path while leaving every zone in the source
+      and one env var away.  `test_rms_norm_ttnn_zone_hashes.py` pins the ON build.
 
 """
 
@@ -946,6 +960,28 @@ WIDTH_SPLIT_MAX_GROUP_CORES = 16
 # count adds the combine for nothing, so 2 keeps grid-filling shapes (prefill:
 # Rt >= num_cores) on the untouched Phase-0 path.
 WIDTH_SPLIT_MIN_GAIN = 4
+
+# Refinement 4b (D34) -- PER-STAGE DEVICE ZONES ARE OPT-IN.  The kernels' 41
+# `MaybeDeviceZoneScope` sites compile only when this is on; it emits the
+# `RMS_STAGE_ZONES` kernel DEFINE, which is the ONE switch `perf_instrumentation.hpp`
+# reads.  Default OFF, from the env var of the same name, because a graded eval run
+# sets `TT_METAL_DEVICE_PROFILER=1` (to read the op-level DEVICE KERNEL DURATION off
+# the FIRMWARE markers) and that would otherwise register all 41 op zones in the
+# profiler's 16-BIT source-location hash table -- where two colliding entries are a
+# hard `TT_THROW` on every profiler read and a process `terminate` at the next device
+# open.  See the header for the full argument and the measured collision.
+#   RMS_STAGE_ZONES=1 scripts/run_safe_pytest.sh --profile <test>
+STAGE_ZONES = os.environ.get("RMS_STAGE_ZONES", "0") not in ("", "0")
+
+
+def _kernel_defines():
+    """Kernel `-D` defines shared by all three kernels.  ONE source of truth.
+
+    Empty (the default) means the build key is exactly what it was before D34, so
+    every non-profiled build stays byte-identical.
+    """
+    return [("RMS_STAGE_ZONES", "1")] if STAGE_ZONES else []
+
 
 # Refinement 4 (D33) -- THE RAGGED (PADDED) WIDTH CHUNK.  1 = a chunked width may
 # take the coarsest BALANCED chunk and pad the last one out to it; 0 = D1's divisor
@@ -2683,6 +2719,7 @@ def _zero_volume_descriptor(all_cores, compute_kernel_config):
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "rms_norm_ttnn_reader.cpp"),
                 core_ranges=all_cores,
+                defines=_kernel_defines(),
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
                 config=ttnn.ReaderConfigDescriptor(),
@@ -2690,6 +2727,7 @@ def _zero_volume_descriptor(all_cores, compute_kernel_config):
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "rms_norm_ttnn_writer.cpp"),
                 core_ranges=all_cores,
+                defines=_kernel_defines(),
                 compile_time_args=writer_ct,
                 runtime_args=writer_rt,
                 config=ttnn.WriterConfigDescriptor(),
@@ -2697,6 +2735,7 @@ def _zero_volume_descriptor(all_cores, compute_kernel_config):
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "rms_norm_ttnn_compute.cpp"),
                 core_ranges=all_cores,
+                defines=_kernel_defines(),
                 compile_time_args=compute_ct,
                 runtime_args=compute_rt,
                 config=compute_kernel_config,
@@ -3554,6 +3593,7 @@ def create_program_descriptor(
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_ttnn_reader.cpp"),
         core_ranges=all_cores,
+        defines=_kernel_defines(),
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt,
         config=_reader_dm_config(plan),  # NoC0, or NoC1 when the combine swaps
@@ -3561,6 +3601,7 @@ def create_program_descriptor(
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_ttnn_writer.cpp"),
         core_ranges=all_cores,
+        defines=_kernel_defines(),
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt,
         config=_writer_dm_config(plan),  # NoC1, or NoC0 on a resident-x combine
@@ -3568,6 +3609,7 @@ def create_program_descriptor(
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_ttnn_compute.cpp"),
         core_ranges=all_cores,
+        defines=_kernel_defines(),
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt,
         config=compute_kernel_config,  # passed through unmodified
