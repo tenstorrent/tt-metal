@@ -49,6 +49,67 @@ constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t)
     return v_shares_k_buffer && (Sq_chunk_t == 1);
 }
 
+// ---------------------------------------------------------------------------
+// Rotated Q split: host/device contract. The remainder ("float") Q chunks of an uneven work split
+// change owner core between ring iterations, so no grid row pays the +1 K-mcast slot on every one.
+// Everything here is derived identically by the program factory and all three kernels.
+//
+// rotated_max_slots -- the per-iteration chunk-list length -- is not here: the factory pushes it as
+// each kernel's LAST compile-time arg, and each kernel reads it back from that position.
+// ---------------------------------------------------------------------------
+
+// Handoff semaphore ring depth. A slot is live only within one ring iteration, so slots are reused
+// instead of allocated per iteration: program semaphores cap at 16 and are shared with the chain
+// and all-gather. 3 tolerates a full iteration of inter-core skew.
+constexpr uint32_t kRotatedHandoffSemDepth = 3;
+
+// Header words each kernel's per-iteration runtime-arg block carries before its chunk-id list.
+constexpr uint32_t kRotatedReaderIterHeaderWords = 2;   // [row_slot_count, my_count]
+constexpr uint32_t kRotatedWriterIterHeaderWords = 3;   // [my_count, float_migrated_in, float_dest]
+constexpr uint32_t kRotatedComputeIterHeaderWords = 1;  // [my_count]
+
+// One iteration's block is header words + rotated_max_slots chunk ids, so blocks are a fixed stride
+// apart and iteration `ordinal` starts here.
+constexpr uint32_t rotated_iter_stride(uint32_t header_words, uint32_t max_slots) { return header_words + max_slots; }
+constexpr uint32_t rotated_iter_base(uint32_t args_base, uint32_t iter_stride, uint32_t ordinal) {
+    return args_base + ordinal * iter_stride;
+}
+
+// Ordinal of `ring_iter` within the ACTIVE subsequence. All three kernels index the schedule by
+// this rather than by absolute ring_iter: the handoff pairs a donor signal with a receiver wait in
+// the NEXT EXECUTED iteration, and consecutive ordinals cannot straddle a skipped one. Equal to
+// ring_iter for a full mask, which is what lets the device-derived kv-pad mask rotate too.
+constexpr uint32_t rotated_active_ordinal(uint32_t active_ring_iter_mask, uint32_t ring_iter) {
+    constexpr uint32_t kRingIterMaskBits = 32;
+    const uint32_t before = ring_iter >= kRingIterMaskBits ? ~0u : ((1u << ring_iter) - 1u);
+    uint32_t bits = active_ring_iter_mask & before;
+    uint32_t count = 0;
+    while (bits) {
+        bits &= bits - 1u;  // clear lowest set bit
+        ++count;
+    }
+    return count;
+}
+
+// Handoff semaphores for a given ring size. Clamped to >= 1: a degenerate ring_size <= 1 never
+// receives a float, but the kernel still declares the array and takes a modulo by this.
+constexpr uint32_t rotated_handoff_sem_count(uint32_t ring_size) {
+    const uint32_t receiving_iters = ring_size > 0 ? ring_size - 1 : 0;
+    const uint32_t depth = receiving_iters < kRotatedHandoffSemDepth ? receiving_iters : kRotatedHandoffSemDepth;
+    return depth > 0 ? depth : 1;
+}
+
+// float_dest: the float's next owner as one packed word, or kRotatedNoDest when it stays put.
+// Physical NoC coordinates are small, so y takes the low byte and x the rest.
+constexpr uint32_t kRotatedDestYBits = 8;
+constexpr uint32_t kRotatedDestYMask = (1u << kRotatedDestYBits) - 1u;
+constexpr uint32_t kRotatedNoDest = ~0u;
+constexpr uint32_t rotated_pack_dest(uint32_t phys_x, uint32_t phys_y) {
+    return (phys_x << kRotatedDestYBits) | phys_y;
+}
+constexpr uint32_t rotated_dest_x(uint32_t packed_dest) { return packed_dest >> kRotatedDestYBits; }
+constexpr uint32_t rotated_dest_y(uint32_t packed_dest) { return packed_dest & kRotatedDestYMask; }
+
 template <bool v_shares_k_buffer, bool kt_inplace_v = false>
 constexpr uint32_t dummy_kv_chunks_for_phase_alignment(uint32_t processed_chunks) {
     // Reader pushes one K entry and one V entry per real chunk; compute pops the

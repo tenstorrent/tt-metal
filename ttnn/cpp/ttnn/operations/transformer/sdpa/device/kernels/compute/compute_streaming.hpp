@@ -1533,6 +1533,12 @@ static void sdpa_inner_loop_step(
         static_assert(vDHt % qktv_subblock_w == 0, "vDHt must be evenly divisible by qktv_subblock_w");
         static_assert(qktv_h * qktv_subblock_w <= dst_size, "qktv subblock must fit in dest register file");
         constexpr uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_h;  // full subblocks only
+        // The in-place sub_exp below PACK-writes the last QK row group; the first V matmul then
+        // UNPACK-reads rows [0, qktv_h). Overlapping ranges need a pack->unpack rendezvous or the
+        // matmul reads stale L1. q_num_subblocks == 1 was too narrow: the granularities also diverge
+        // when the QK solver falls back to subblock_h == 1 (Sk_chunk_t not divisible by 4) while
+        // Phase 2 widens qktv_h to 2, i.e. exactly Sq_chunk_t == 2.
+        constexpr bool qktv_first_group_reads_inplace_row = (q_num_subblocks - 1) * qkt_subblock_h < qktv_h;
         constexpr uint32_t qktv_v_num_subblocks = vDHt / qktv_subblock_w;
         constexpr uint32_t qktv_output_num_tiles = Sq_chunk_t * vDHt;
         // cb_qkt_im row width is KT_stride (for pointer alignment), not Sk_chunk_t
@@ -1572,10 +1578,11 @@ static void sdpa_inner_loop_step(
                         kt_sub * actual_sbw,
                         qkt_subblock_h,
                         actual_sbw);
-                    if constexpr (q_num_subblocks == 1) {
+                    if constexpr (qktv_first_group_reads_inplace_row) {
+                        // PACK half only; SEMGET head-of-line-blocks the unpack thread, so the
+                        // UNPACK half waits just before the matmul instead of stalling the setup
+                        // below, none of which reads cb_qkt_im tile data.
                         PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-                        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-                        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
                     }
                     if (kt_sub == 0) {
                         CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
@@ -1595,6 +1602,11 @@ static void sdpa_inner_loop_step(
                         // still limits how many V rows are multiplied.
                         mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
                         configure_row_pack_width(out_cb, qktv_subblock_w);
+                        if constexpr (qktv_first_group_reads_inplace_row) {
+                            // UNPACK half of the rendezvous posted above.
+                            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                        }
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             const uint32_t qktv_in1_index = kt_sub * matmul_inner * vDHt + v_index_offset;
                             blocked_matmul_and_pack<false, vDHt, vDHt>(
@@ -1635,7 +1647,7 @@ static void sdpa_inner_loop_step(
                         qkt_subblock_h,
                         actual_sbw);
                 }
-                if constexpr (q_num_subblocks == 1) {
+                if constexpr (qktv_first_group_reads_inplace_row) {
                     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
                     UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
                     UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
@@ -2306,6 +2318,9 @@ template <
     // reader's kv_chunk_is_beyond_logical_l skip so the K/V CB producer/consumer counts stay aligned.
     bool joint_n_skip_enabled = false,
     uint32_t joint_local_padded_Nt = 0,  // Lt_local: per-device joint tile count (sharded path)
+    // Rotated Q split: the q loop runs positions, mapping each to a flat chunk id from the
+    // runtime-arg list at rotated_list_arg_base. Off by default (position is the flat id).
+    bool rotated_q_split_enabled = false,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -2333,7 +2348,9 @@ void sdpa_ring_v2(
     // True (unpadded) joint length in tiles; joint K chunks starting at/after it are pure padding.
     const uint32_t logical_lt = 0,
     // Tile offset of this call's Q chunk within cb_q_in (head-serial passes; 0 otherwise).
-    const uint32_t q_base_tiles = 0) {
+    const uint32_t q_base_tiles = 0,
+    // Rotated Q split only: runtime-arg index of this ring iteration's flat chunk-id list.
+    [[maybe_unused]] const uint32_t rotated_list_arg_base = 0) {
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -2474,7 +2491,11 @@ void sdpa_ring_v2(
         // Compute Q chunk index (with optional zigzag remapping for causal balancing).
         // num_q_chunks is total per-head chunks (local + joint), matching the divisor the
         // writer/reader use to flatten (batch, head, q_chunk) — see ring_joint_sdpa.cpp.
-        uint32_t q_chunk = remap_q_index(q, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+        uint32_t q_flat = q;
+        if constexpr (rotated_q_split_enabled) {
+            q_flat = get_arg_val<uint32_t>(rotated_list_arg_base + q);
+        }
+        uint32_t q_chunk = remap_q_index(q_flat, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
 
         // Causal K-chunk limit and Q start tile for this Q chunk
         uint32_t causal_k_limit = num_kv_chunks;
