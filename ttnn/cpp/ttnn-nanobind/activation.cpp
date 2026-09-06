@@ -12,6 +12,7 @@
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 #include <fmt/ranges.h>
 
@@ -51,6 +52,7 @@ void py_module(nb::module_& mod) {
                 new (t) UnaryWithParam{arg.first, static_cast<float>(arg.second)};
             })
         .def_ro("op_type", &UnaryWithParam::op_type)
+        .def_ro("params", &UnaryWithParam::params)
         .def(nb::init_implicit<UnaryOpType>())
         .def("__repr__", [](const UnaryWithParam& param) {
             if (param.params.empty()) {
