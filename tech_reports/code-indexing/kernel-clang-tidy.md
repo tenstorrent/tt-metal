@@ -422,6 +422,49 @@ so no TU path contains `kernels/` and an allow-list keyed on it would analyze
 nothing at all. Exclusion-only also fails open as new in-repo device
 directories appear.
 
+**Per-path exceptions** are the fourth mechanism, and the right one when a
+checker is correct in general but wrong about a specific construct.
+`tt_metal/jit_build/kernel_clang_tidy/review_status.yaml` assigns a review status
+to findings matched by `filepath` (an fnmatch glob), `checker_name` (exact) or
+`report_hash` (prefix). `parse` defaults `--review-status` to
+`confirmed,unreviewed`, so anything marked `intentional` or `false_positive`
+drops out of the HTML report, `findings.json` and the statistics alike: the
+filter runs before the exporter picks a format
+(`codechecker_analyzer/cli/parse.py:646`, CodeChecker 6.27.1). The schema key is
+`$version`, not `version`, which `--help` does not mention.
+
+It is applied by the consolidate job, which copies the file into the merged
+report directory, rather than by the legs via `analyze --review-status-config`.
+`parse` reads `review_status.yaml` out of whatever directory it is handed, so an
+exception can be added or withdrawn by re-running one job instead of sixteen
+hardware legs. The cost is that suppressed findings are still analyzed, which for
+the one rule below is immaterial.
+
+That rule is `bugprone-suspicious-include` (1,488 findings), which objects to
+`#include`ing a `.cpp` — exactly how the JIT builds a kernel. `kernel_includes.hpp`
+(687) and the `chlkc_{math,pack,unpack}.cpp` prologs (798) pull the kernel body in
+as a source file, and `chlkc_list.h` (3) does the same in-repo. Two globs,
+`*/kernel_includes.hpp` and `*/chlkc_*`, cover all 1,488 exactly while leaving the
+21,550 findings other checkers report in those same files visible, which a
+`--disable` would not.
+
+The bar for a rule is that the finding is wrong about this code — not that it is
+unwelcome or numerous — and that it is scopable by path. Most volume candidates
+fail one of those. `readability-magic-numbers` (2,567) was proposed for an
+exception on the grounds that it fires on register offsets and bit positions, and
+the data did not support it: only 5% is generated, and the concentrations are SFPU
+polynomial coefficients (`ckernel_sfpu_trigonometry.h`, 139), tile geometry in
+dataflow helpers (`moreh_common.hpp`, 159 — `1024`, `16`, `>> 16`) and Tensix
+instruction encodings (`tensix_functions.h`, 102 — `(addr_mode << 15) |
+(zero_write << 12)`). Bit positions are precisely what should be a named constant,
+so the checker is right. The one arguable case is the NOC coordinate table in
+`eth_chan_noc_mapping.h` (65), which is tabular data whose shifts are already
+named, and 65 findings do not justify a rule. `performance-no-int-to-ptr` (694),
+`clang-diagnostic-old-style-cast` (766) and `readability-uppercase-literal-suffix`
+(3,762) fail the scoping test instead — their top five files hold 13–29% of their
+findings, so any path glob would be arbitrary. The last is also trivially
+auto-fixable, which makes it a target for an agent rather than for suppression.
+
 **Check options are the quietest suppressor here**, so they are worth reading as
 carefully as the `--disable` list. Nothing readability- or complexity-related is
 disabled, but five options retune three checks, and they were mirrored verbatim

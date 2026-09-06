@@ -130,6 +130,10 @@ jobs:
           if [ -n "$(find /work/legs -name '*.plist' -print -quit)" ]; then
             python3 .github/scripts/utils/merge_kernel_tidy_plists.py /work/legs /work/merged
           fi
+          # parse reads review statuses from the report directory it is given.
+          if [ -d /work/merged ]; then
+            cp tt_metal/jit_build/kernel_clang_tidy/review_status.yaml /work/merged/
+          fi
           n=$(find /work/merged -name '*.plist' 2>/dev/null | wc -l)
           echo "$n deduplicated plists from $(find /work/legs -maxdepth 1 -mindepth 1 -type d | wc -l) legs"
           if [ "$n" -eq 0 ]; then
