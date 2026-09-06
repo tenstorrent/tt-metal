@@ -112,6 +112,7 @@ class DecoderLayer:
         batch_size=1,
         cached_len=0,
         indexed_rope=False,
+        metadata=None,
     ):
         """hidden_states / residual: ``[1, 1, tokens_per_sp_row, hidden]``."""
         seqlen = hidden_states.shape[-2]
@@ -129,6 +130,7 @@ class DecoderLayer:
             batch_size=batch_size,
             cached_len=cached_len,
             indexed_rope=indexed_rope,
+            metadata=metadata,
         )
         hidden_states_post_norm.deallocate(True)
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)

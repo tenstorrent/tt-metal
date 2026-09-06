@@ -67,6 +67,7 @@ def attention_forward(
     layer_idx=0,
     cached_len=0,
     indexed_rope=False,
+    metadata=None,
 ):
     """Prefill attention forward (seq_len > 1).
 
@@ -82,6 +83,13 @@ def attention_forward(
         layer_idx: this layer's index, for the per-layer cache write
         cached_len: valid prefix length already in the cache BEFORE this chunk (0 = first chunk)
         indexed_rope: use the on-device indexed RoPE
+        metadata: optional ``TraceMetadata`` (see tt/trace.py) holding ``slot_idx`` and
+            ``kv_actual`` as 1-element uint32 DEVICE tensors. When present, the RoPE and the KV-cache
+            write read this chunk's offset from those tensors instead of from the host ints — the
+            trace-safe form, because a recorded program reads a fixed device address rather than
+            baking a captured value in. ``cached_len`` / ``user_id`` are still required alongside it:
+            the ring SDPA below takes ONLY host scalars, which is what stops the cache-read path from
+            being traceable (see ``tt/trace.py``).
 
     Returns:
         ``[1, 1, B*S, hidden]``
@@ -115,7 +123,8 @@ def attention_forward(
 
     # Full RoPE on Q and K. indexed: the op derives this chunk's per-chip start from
     # kv_actual_global=cached_len + the device's SP mesh coord, on-device.
-    rope_kv_actual = cached_len if indexed_rope else None
+    # Metadata tensor when tracing, host int otherwise. rotary_embedding_indexed overloads on this.
+    rope_kv_actual = (metadata.kv_actual if metadata is not None else cached_len) if indexed_rope else None
     rope_cluster_axis = mesh_config.sp_axis if indexed_rope else None
     if batch_size > 1 and not indexed_rope:
         rope_mats_sliced = [rope_mats[0][:, :, :seq_len, :], rope_mats[1][:, :, :seq_len, :]]

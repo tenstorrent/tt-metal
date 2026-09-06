@@ -173,6 +173,7 @@ class Model:
         cached_len=0,
         indexed_rope=False,
         on_layer_complete=None,
+        metadata=None,
     ):
         """Run the decoder stack.
 
@@ -188,6 +189,7 @@ class Model:
                 batch_size=batch_size,
                 cached_len=cached_len,
                 indexed_rope=indexed_rope,
+                metadata=metadata,
             )
             if on_layer_complete is not None:
                 on_layer_complete(i)
@@ -212,6 +214,7 @@ class Model:
         indexed_rope=True,
         skip_lm_head=True,
         on_layer_complete=None,
+        metadata=None,
     ):
         """One prefill chunk: embed -> layers -> (optionally) final norm + lm_head.
 
@@ -229,6 +232,7 @@ class Model:
             cached_len=cached_len,
             indexed_rope=indexed_rope,
             on_layer_complete=on_layer_complete,
+            metadata=metadata,
         )
         if skip_lm_head:
             return hidden_states

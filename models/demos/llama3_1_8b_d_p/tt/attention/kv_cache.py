@@ -145,7 +145,19 @@ def _write_one(cache, tensor, *, slot_idx, layer_idx, num_layers, kv_actual, sp_
     when needed (the original stays live for the attention op that follows). At
     ``kv_actual % 32 == 0`` chunk boundaries the per-device write offset is contiguous (block-cyclic
     degenerates to a reshape).
+
+    ``slot_idx`` and ``kv_actual`` are each either a host ``int`` (the scalar overload) or a
+    1-element uint32 device tensor (the METADATA overload). The metadata form is what makes this op
+    trace-safe: the recorded program reads the offset from a fixed device address instead of baking a
+    host value into the capture. The op requires the two to agree — both scalars or both tensors — so
+    that is asserted here rather than discovered as a nanobind overload-resolution error.
     """
+    slot_is_tensor = isinstance(slot_idx, ttnn.Tensor)
+    actual_is_tensor = isinstance(kv_actual, ttnn.Tensor)
+    assert slot_is_tensor == actual_is_tensor, (
+        f"slot_idx and kv_actual must both be host ints or both be metadata tensors; got "
+        f"slot_idx={'tensor' if slot_is_tensor else 'int'}, kv_actual={'tensor' if actual_is_tensor else 'int'}"
+    )
     src = tensor if tensor.dtype == cache.dtype else ttnn.typecast(tensor, cache.dtype)
     ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
         cache,
@@ -184,11 +196,15 @@ def write_kv_chunk(kv_cache: LlamaKVCache, tt_k, tt_v, *, slot_idx, layer_idx, k
     ), f"v has {tt_v.shape[1]} local KV heads but the cache was allocated for {kv_cache.num_kv_heads_local}"
     # Fail loud on a bad slot/layer (otherwise a silent OOB write into another user's slot) and on a
     # misaligned chunk offset (the block-cyclic per-device write assumes a tile-aligned boundary).
-    assert 0 <= slot_idx < kv_cache.num_users, f"slot_idx {slot_idx} out of range [0, {kv_cache.num_users})"
+    # On the metadata path these are device tensors whose VALUES the host does not have, so only the
+    # host-scalar form can be range-checked here; the op validates the device values itself.
     assert 0 <= layer_idx < kv_cache.num_layers, f"layer_idx {layer_idx} out of range [0, {kv_cache.num_layers})"
-    assert (
-        kv_actual % ttnn.TILE_SIZE == 0
-    ), f"kv_actual ({kv_actual}) must be tile-aligned (multiple of {ttnn.TILE_SIZE})"
+    if not isinstance(slot_idx, ttnn.Tensor):
+        assert 0 <= slot_idx < kv_cache.num_users, f"slot_idx {slot_idx} out of range [0, {kv_cache.num_users})"
+    if not isinstance(kv_actual, ttnn.Tensor):
+        assert (
+            kv_actual % ttnn.TILE_SIZE == 0
+        ), f"kv_actual ({kv_actual}) must be tile-aligned (multiple of {ttnn.TILE_SIZE})"
     for cache, tensor in ((kv_cache.k, tt_k), (kv_cache.v, tt_v)):
         _write_one(
             cache,

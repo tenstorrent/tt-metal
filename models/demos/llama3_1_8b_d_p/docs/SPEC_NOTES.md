@@ -423,6 +423,53 @@ the manifest.
 
 ---
 
+## 8d. Trace mode is MLA-only: the GQA ring SDPA has no metadata-tensor form
+
+**Severity: high for perf work — and it is a hard blocker, not a slow path.**
+
+A ttnn trace is recorded once and replayed, so every per-chunk value the recorded program reads must
+come from a **device tensor** the host can update in place, not from a host Python int. On this
+model's chunk path three ops consume per-chunk values:
+
+| op | metadata-tensor form? |
+|---|---|
+| `deepseek_prefill.update_padded_kv_cache` | **yes** — `slot_idx` / `kv_actual_global` overload |
+| `deepseek_prefill.rotary_embedding_indexed` | **yes** — `kv_actual_global` overload |
+| `transformer.ring_joint_scaled_dot_product_attention` | **no** |
+
+The joint ring op binds `kv_actual_isl` and `kv_cache_batch_idx` as `std::optional<uint32_t>` and
+`logical_n` as `std::size_t`. The **MLA** ring op has exactly the pair that is missing —
+`ring_mla` takes `slot_id` and `kv_actual_isl_tensor` — so DeepSeek/Kimi can trace chunked prefill
+and every GQA model (this one, `gpt_oss_d_p`, `minimax_m3`) cannot.
+
+Capturing anyway is worse than not capturing: chunk 0's cache offset and causal bound get frozen into
+the trace, and every later chunk reads the KV cache at the wrong offset **with no error**. This
+package therefore refuses the capture (`tt/trace.py::assert_traceable`) rather than accept a
+silently-wrong model.
+
+**What it would take:** add `slot_id` / `kv_actual_isl_tensor` optionals to
+`ring_joint_scaled_dot_product_attention`, mirroring `ring_mla`'s existing pair, and read them in the
+reader kernel where the scalars are read today. Everything on the model side is already in place and
+tested — `tests/unit/test_trace_metadata_vs_ref.py` shows the metadata path is bit-identical to the
+scalar path (PCC 1.0 at offsets 0, 512 and 1024), so the remaining change is confined to the op.
+
+**Consequence for the spec.** `PREFILL_USE_TRACE` reads like a universal knob, and the engine
+advertises `PrefillRunParams.use_trace` for every model, but whether it is *usable* is a property of
+the attention family. That belongs in the spec next to the attention block, so a bring-up learns it
+from the spec rather than from a wrong-KV debugging session:
+
+```jsonc
+"architecture": {
+  "attention": {
+    "family": "GQA",
+    "trace_capable": false,
+    "_why": "ring_joint_scaled_dot_product_attention takes host-scalar kv_actual_isl / kv_cache_batch_idx / logical_n; only ring_mla has tensor forms"
+  }
+}
+```
+
+---
+
 ## 9. Smaller gaps, with proposed fields
 
 | Gap | Proposal |

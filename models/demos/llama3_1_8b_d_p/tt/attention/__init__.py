@@ -91,6 +91,7 @@ class Attention:
         batch_size=1,
         cached_len=0,
         indexed_rope=False,
+        metadata=None,
     ):
         """Prefill attention forward. See ``prefill.attention_forward`` for argument semantics."""
         transformation_mat = self.transformation_mats["prefill"] if self.transformation_mats else None
@@ -110,4 +111,5 @@ class Attention:
             layer_idx=self.layer_idx,
             cached_len=cached_len,
             indexed_rope=indexed_rope,
+            metadata=metadata,
         )

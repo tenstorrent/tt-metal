@@ -162,6 +162,9 @@ class Llama31_8BPrefillAdapter(PrefillModelAdapter):
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
             first_layer_idx=params.first_layer_idx,
+            # PREFILL_USE_TRACE. capture_trace() refuses on any configuration a capture would
+            # silently break (the chunked ring path, or num_users > 1) — see tt/trace.py.
+            use_trace=params.use_trace,
         )
 
         if os.getenv("LLAMA_WEIGHTS_FROM_CACHE") == "1":

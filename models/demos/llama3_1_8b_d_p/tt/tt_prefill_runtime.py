@@ -25,6 +25,7 @@ from models.demos.llama3_1_8b_d_p.tt.ccl import CCLManager
 from models.demos.llama3_1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama3_1_8b_d_p.tt.model import Model
 from models.demos.llama3_1_8b_d_p.tt.rope import build_indexed_rope
+from models.demos.llama3_1_8b_d_p.tt import trace as trace_util
 from models.demos.llama3_1_8b_d_p.utils.general_utils import get_default_num_links
 
 
@@ -71,6 +72,12 @@ class TtPrefillRuntimeConfig:
     is_first_rank: bool = True
     is_last_rank: bool = True
     first_layer_idx: int = 0
+    # Capture the per-chunk forward as a ttnn trace and replay it, instead of re-dispatching op by op.
+    # Requires the mesh opened with trace_region_size > 0. NOTE this is only usable on the one-shot
+    # path today: the chunked path's ring SDPA takes host scalars with no tensor form, so a capture
+    # would freeze chunk 0's cache offset. capture_trace() refuses rather than be silently wrong —
+    # see tt/trace.py.
+    use_trace: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -100,11 +107,21 @@ class TtPrefillRuntime:
         self.compiled = False
         self.kv_cache = None
         self._on_layer_complete = None  # set by set_layer_ack_channel
+        # Trace state. `metadata` is allocated whenever use_trace is set, because the metadata-tensor
+        # path is what a capture records; `_trace_id` stays None until capture_trace() succeeds.
+        self.metadata = None
+        self._trace_id = None
+        self._trace_input = None
+        self._trace_chunk_size = None
 
         self._build_model(state_dict)
         if config.owns_kv_cache:
             self._allocate_kv_cache()
         self._build_indexed_rope()
+        if config.use_trace:
+            # Persistent, fixed-address per-chunk metadata. Allocated before any capture so the
+            # addresses a capture records are the ones the per-chunk update writes.
+            self.metadata = trace_util.make_metadata(self.mesh_device, slot_idx=0, kv_actual=0)
 
     # ---------------------------------------------------------------- build
 
@@ -296,11 +313,31 @@ class TtPrefillRuntime:
             actual_start % ttnn.TILE_SIZE == 0
         ), f"actual_start ({actual_start}) must be tile-aligned; the block-cyclic write assumes it"
 
+        # --- traced replay -------------------------------------------------------------------
+        # A recorded trace reads its input and its offsets from fixed device addresses, so the chunk
+        # is delivered by writing INTO those buffers and replaying; nothing is re-dispatched.
+        if self._trace_id is not None:
+            assert chunk_size == self._trace_chunk_size, (
+                f"trace was captured for chunk_size={self._trace_chunk_size} but this chunk is "
+                f"{chunk_size}; capture one trace per chunk size or run with use_trace=False"
+            )
+            self.metadata.update(slot_idx=slot_id, kv_actual=actual_start)
+            ttnn.copy(input_tensor, self._trace_input)
+            ttnn.deallocate(input_tensor)
+            trace_util.replay(self.mesh_device, self._trace_id)
+            return None
+
         if self.config.is_first_rank:
             x = self.model.embed(input_tensor)
             ttnn.deallocate(input_tensor)
         else:
             x = input_tensor
+
+        # When tracing, RoPE and the KV write read this chunk's offset from the persistent metadata
+        # tensors rather than from actual_start/slot_id. Update them BEFORE the forward so a replay
+        # sees the current chunk; the host ints are still passed because the ring SDPA needs them.
+        if self.metadata is not None:
+            self.metadata.update(slot_idx=slot_id, kv_actual=actual_start)
 
         out = self.model.forward_layers(
             x,
@@ -310,6 +347,7 @@ class TtPrefillRuntime:
             cached_len=actual_start,
             indexed_rope=True,
             on_layer_complete=self._on_layer_complete,
+            metadata=self.metadata,
         )
         if not self.config.is_last_rank:
             return out
@@ -317,6 +355,57 @@ class TtPrefillRuntime:
             out.deallocate(True)
             return None
         return self.model.lm_head(out)
+
+    # ---------------------------------------------------------------- trace
+
+    def uses_cache_backed_ring(self, chunk_size: int) -> bool:
+        """Whether a chunk of this size takes the cache-read ring path rather than the one-shot
+        all-gather bootstrap. Mirrors the branch in ``attention/prefill.attention_forward``: the ring
+        path is taken whenever the cache has capacity beyond a single chunk."""
+        return self.config.max_seq_len > chunk_size
+
+    def capture_trace(self, kv_caches=None) -> None:
+        """Record the per-chunk forward as a ttnn trace (engine hook; called once after compile()).
+
+        Refuses, loudly, on any configuration a capture would silently break — see ``tt/trace.py``.
+        The refusal is the point: the alternative is a model that produces wrong KV with no error.
+        """
+        if not self.config.use_trace or self._trace_id is not None:
+            return
+        assert self.compiled, "call compile() before capture_trace()"
+        chunk_size = self.config.default_chunk_size
+        trace_util.assert_traceable(
+            uses_cache_backed_ring=self.uses_cache_backed_ring(chunk_size),
+            num_users=self.config.num_users,
+        )
+        kv = self._resolve_kv(kv_caches)
+
+        # Persistent input at a fixed (captured) address, overwritten in place per chunk.
+        self._trace_input = self.make_chunk_input([0] * chunk_size, chunk_size)
+        self._trace_chunk_size = chunk_size
+        self.metadata.update(slot_idx=0, kv_actual=0)
+
+        def _forward():
+            out = self.model.forward_layers(
+                self._trace_input,
+                self.rope_indexed[chunk_size],
+                kv_cache=kv,
+                user_id=0,
+                cached_len=0,
+                indexed_rope=True,
+                on_layer_complete=self._on_layer_complete,
+                metadata=self.metadata,
+            )
+            out.deallocate(True)
+
+        logger.info(f"Llama-3.1-8B capture_trace() — recording a {chunk_size}-token chunk")
+        self._trace_id = trace_util.capture(self.mesh_device, _forward)
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"Llama-3.1-8B capture_trace() — trace {self._trace_id} recorded")
+
+    def release_trace(self) -> None:
+        trace_util.release(self.mesh_device, self._trace_id)
+        self._trace_id = None
 
     # --------------------------------------------------------- engine hooks
 
