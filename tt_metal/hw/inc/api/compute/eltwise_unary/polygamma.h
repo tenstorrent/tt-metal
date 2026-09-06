@@ -42,7 +42,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void polygamma_tile(std::uint32_t idst, std::uint32_t n_packed, std::uint32_t scale_packed) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_polygamma,
         (APPROX, is_fp32_dest_acc_en),
         idst,

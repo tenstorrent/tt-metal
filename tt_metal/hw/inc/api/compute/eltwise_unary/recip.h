@@ -38,7 +38,6 @@ template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_reciprocal,
         (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/, legacy_compat),
         idst,

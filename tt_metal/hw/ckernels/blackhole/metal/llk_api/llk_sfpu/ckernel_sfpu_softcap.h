@@ -29,7 +29,7 @@ sfpi_inline sfpi::vFloat _sfpu_softcap_(sfpi::vFloat x, sfpi::vFloat beta, sfpi:
 inline void softcap_init() { tanh_init</*APPROXIMATION_MODE=*/false, /*is_fp32_dest_acc_en=*/false>(); }
 
 // beta and its reciprocal arrive as fp32 bit patterns.
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_softcap(std::uint32_t param0, std::uint32_t param1) {
     sfpi::vFloat beta = Converter::as_float(param0);
     sfpi::vFloat inv_beta = Converter::as_float(param1);

@@ -58,14 +58,12 @@ template <>
 inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_silu,
         (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
         0 /*DST_IDX*/,
         ::ckernel::VectorMode::RC));
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_silu,
         (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
         2 /*DST_IDX*/,
@@ -73,7 +71,6 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
 
     PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_sfpu_binary,
         (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
         0 /*DST_IN0*/,
@@ -82,7 +79,6 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         ::ckernel::VectorMode::RC)));
     PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_sfpu_binary,
         (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
         2 /*DST_IN0*/,
@@ -107,14 +103,12 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
     PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::gelu>(ckernel::sfpu::gelu_init<true, false>)));
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_gelu,
         (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
         0 /*DST_IDX*/,
         ::ckernel::VectorMode::RC));
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_gelu,
         (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
         2 /*DST_IDX*/,
@@ -122,7 +116,6 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
 
     PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_sfpu_binary,
         (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
         0 /*DST_IN0*/,
@@ -131,7 +124,6 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         ::ckernel::VectorMode::RC)));
     PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_sfpu_binary,
         (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
         2 /*DST_IN0*/,

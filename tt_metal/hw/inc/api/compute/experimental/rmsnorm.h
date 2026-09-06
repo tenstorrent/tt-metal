@@ -142,7 +142,6 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
             _calculate_fill_,
             (APPROX, 2 /*ITERATIONS*/),
             0 /*dst_index*/,
@@ -150,13 +149,7 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
             scaler));
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
         MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            _calculate_fill_,
-            (APPROX, 2 /*ITERATIONS*/),
-            0 /*dst_index*/,
-            VectorMode::RC_custom,
-            0.0f));
+            DST_SYNC_MODE, _calculate_fill_, (APPROX, 2 /*ITERATIONS*/), 0 /*dst_index*/, VectorMode::RC_custom, 0.0f));
 
         if (batch == 0) {
             PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, ckernel::PackMode::Default>(ocb)));

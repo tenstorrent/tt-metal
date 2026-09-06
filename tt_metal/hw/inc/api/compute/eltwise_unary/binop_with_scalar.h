@@ -35,7 +35,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_unary_tile(uint32_t idst, uint32_t param1) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
         (APPROX, ADD_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst,
@@ -47,7 +46,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_unary_tile(uint32_t idst, uint32_t param1) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
         (APPROX, SUB_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst,
@@ -63,7 +61,6 @@ ALWI void mul_unary_tile(uint32_t idst, uint32_t param1) {
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
         (APPROX, MUL_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst,
@@ -77,7 +74,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void div_unary_tile(uint32_t idst, uint32_t param1) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
         (APPROX, DIV_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst,
@@ -89,7 +85,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
         (APPROX, RSUB_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst,
@@ -114,13 +109,7 @@ ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
 
 ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_add_int32,
-        (APPROX, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC,
-        param1));
+        DST_SYNC_MODE, calculate_add_int32, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC, param1));
 }
 
 // clang-format off
@@ -140,13 +129,7 @@ ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
 
 ALWI void sub_unary_tile_int32(uint32_t idst, uint32_t param1) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sub_int32,
-        (APPROX, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC,
-        param1));
+        DST_SYNC_MODE, calculate_sub_int32, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC, param1));
 }
 #endif
 
@@ -157,7 +140,7 @@ ALWI void binop_with_scalar_tile_init() {
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_init()));
 #else
-    MATH(SFPU_UNARY_INIT(unused));
+    MATH(SFPU_UNARY_INIT(unused, DST_ACCUM_MODE));
 #endif
 }
 

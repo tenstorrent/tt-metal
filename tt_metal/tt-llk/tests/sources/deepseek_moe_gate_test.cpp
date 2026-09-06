@@ -156,8 +156,7 @@ constexpr DeepseekMoeGateEltwiseBinaryMode BINARY_MODE =
     (DMG_RELOAD || DMG_SIGMOID) ? DeepseekMoeGateEltwiseBinaryMode::RELOAD : DeepseekMoeGateEltwiseBinaryMode::COPY;
 
 // One SFPU call on DEST tile 0; each gate functor walks its own region offsets from there.
-#define DMG_SFPU_CALL(FN, TEMPLATES, ...) \
-    SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
+#define DMG_SFPU_CALL(FN, TEMPLATES, ...) SFPU_UNARY_CALL(dest_sync, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
 
 // Reset dst_index to zero. The MOPs operate on whatever it was set to.
 static inline void mop_dest_reset()
@@ -326,13 +325,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             copy_to_dest_tile(SCORES_TILE, formats.math);
 
             SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (false /* fast_and_approx */));
-            SFPU_UNARY_CALL(
-                dest_sync,
-                is_fp32_dest_acc_en,
-                calculate_sigmoid,
-                (false /* fast_and_approx */, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
-                0,
-                VectorMode::RC_custom);
+            SFPU_UNARY_CALL(dest_sync, calculate_sigmoid, (false /* fast_and_approx */, is_fp32_dest_acc_en, 8 /* ITERATIONS */), 0, VectorMode::RC_custom);
         }
     }
 

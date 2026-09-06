@@ -43,14 +43,19 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_(
  * Macro hygiene: DST_IN0/DST_IN1/DST_OUT/VECTOR_MODE are evaluated by both
  * the check and params call. Keep call sites to identifiers/literals, not
  * side effects.
+ * Shared signature matches WH/BH (no DST_ACCUM slot). Inject DST_ACCUM_MODE
+ * for dest-tile bounds; Quasar has no runtime dest-acc switch.
  */
-#define SFPU_BINARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ...) \
-    (::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE),         \
-     _llk_math_eltwise_binary_sfpu_params_(                                                               \
+#define SFPU_BINARY_CALL_QSR(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ...) \
+    (::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE),             \
+     _llk_math_eltwise_binary_sfpu_params_(                                                                   \
          ::ckernel::sfpu::FN<_SFPU_BIN_EXPAND TEMPLATES>, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
 
+#define SFPU_BINARY_CALL(DST_SYNC, FN, TEMPLATES, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ...) \
+    SFPU_BINARY_CALL_QSR(DST_SYNC, DST_ACCUM_MODE, FN, TEMPLATES, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__)
+
 // Templated functor in `ckernel::sfpu` operating on a non-default Dest tile shape.
-#define SFPU_BINARY_CALL_TINY_TILE(                                                                           \
+#define SFPU_BINARY_CALL_TINY_TILE_QSR(                                                                       \
     DST_SYNC, DST_ACCUM, TILE_SHAPE, FN, TEMPLATES, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ...)              \
     (::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM, TILE_SHAPE>(DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE), \
      _llk_math_eltwise_binary_sfpu_params_<TILE_SHAPE>(                                                       \
@@ -61,11 +66,19 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_(
          VECTOR_MODE,                                                                                         \
          ##__VA_ARGS__))
 
+#define SFPU_BINARY_CALL_TINY_TILE(DST_SYNC, TILE_SHAPE, FN, TEMPLATES, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ...) \
+    SFPU_BINARY_CALL_TINY_TILE_QSR(                                                                                  \
+        DST_SYNC, DST_ACCUM_MODE, TILE_SHAPE, FN, TEMPLATES, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__)
+
 // Non-templated functor in `ckernel::sfpu`.
-#define SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ...) \
-    (::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE),               \
-     _llk_math_eltwise_binary_sfpu_params_(                                                                     \
+#define SFPU_BINARY_CALL_NO_TEMPLATE_ARGS_QSR(DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ...) \
+    (::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE),                   \
+     _llk_math_eltwise_binary_sfpu_params_(                                                                         \
          ::ckernel::sfpu::FN, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
+
+#define SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, FN, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ...) \
+    SFPU_BINARY_CALL_NO_TEMPLATE_ARGS_QSR(                                                           \
+        DST_SYNC, DST_ACCUM_MODE, FN, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__)
 
 /*
  * Binary SFPU init macros (4 total)

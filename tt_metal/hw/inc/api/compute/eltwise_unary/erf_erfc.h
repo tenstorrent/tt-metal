@@ -40,7 +40,7 @@ ALWI void erf_tile_init() {
 // clang-format on
 template <bool fast_and_approx = true>
 ALWI void erf_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erf, (fast_and_approx), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate_erf, (fast_and_approx), idst, VectorMode::RC));
 }
 
 /************** ERFC *****************/
@@ -64,9 +64,7 @@ ALWI void erfc_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::erfc_init, (tru
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void erfc_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (), idst, VectorMode::RC));
-}
+ALWI void erfc_tile(uint32_t idst) { MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate_erfc, (), idst, VectorMode::RC)); }
 
 #endif
 

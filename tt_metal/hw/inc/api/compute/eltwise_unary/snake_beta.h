@@ -28,7 +28,6 @@ template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void snake_beta_tile(uint32_t idst_x, uint32_t idst_alpha, uint32_t idst_beta, uint32_t idst_out) {
     MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_snake_beta,
         (APPROX, is_fp32_dest_acc_en, data_format, 8 /* ITERATIONS */),
         idst_x,

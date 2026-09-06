@@ -13,7 +13,7 @@
 namespace ckernel {
 
 ALWI void digamma_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_digamma, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate_digamma, (APPROX), idst, VectorMode::RC));
 }
 
 ALWI void digamma_tile_init() { MATH(SFPU_UNARY_INIT_FN(unused, sfpu::digamma_init, (APPROX))); }

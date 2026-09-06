@@ -15,7 +15,8 @@
  * explicit so tests and non-standard kernel preludes can supply their own
  * sync mode. Dest accumulation mode is read at runtime inside
  * get_dest_max_tiles_rt so it stays correct after enable/disable_fp32_dest_acc.
- * DST_ACCUM remains in the call-macro signature for compatibility.
+ * Dest-acc-sensitive kernels take is_fp32_dest_acc_en in TEMPLATES, not as a
+ * call-macro argument.
  */
 
 namespace ckernel {
@@ -52,22 +53,21 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
  * by both the check and params call. Keep call sites to identifiers/literals,
  * not side effects.
  */
-#define SFPU_TERNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...) \
+#define SFPU_TERNARY_CALL(DST_SYNC, FN, TEMPLATES, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...) \
     (::ckernel::_sfpu_ternary_check_<DST_SYNC>(DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE),         \
-     _llk_math_eltwise_ternary_sfpu_params_(                                                                        \
-         ::ckernel::sfpu::FN<_SFPU_TERN_EXPAND TEMPLATES>,                                                          \
-         DST_IN0,                                                                                                   \
-         DST_IN1,                                                                                                   \
-         DST_IN2,                                                                                                   \
-         DST_OUT,                                                                                                   \
-         VECTOR_MODE,                                                                                               \
+     _llk_math_eltwise_ternary_sfpu_params_(                                                             \
+         ::ckernel::sfpu::FN<_SFPU_TERN_EXPAND TEMPLATES>,                                               \
+         DST_IN0,                                                                                        \
+         DST_IN1,                                                                                        \
+         DST_IN2,                                                                                        \
+         DST_OUT,                                                                                        \
+         VECTOR_MODE,                                                                                    \
          ##__VA_ARGS__))
 
 // Non-templated functor in `ckernel::sfpu`.
-#define SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(                                                                 \
-    DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...)                          \
-    (::ckernel::_sfpu_ternary_check_<DST_SYNC>(DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE), \
-     _llk_math_eltwise_ternary_sfpu_params_(                                                                \
+#define SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...) \
+    (::ckernel::_sfpu_ternary_check_<DST_SYNC>(DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE),               \
+     _llk_math_eltwise_ternary_sfpu_params_(                                                                   \
          ::ckernel::sfpu::FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
 
 /*

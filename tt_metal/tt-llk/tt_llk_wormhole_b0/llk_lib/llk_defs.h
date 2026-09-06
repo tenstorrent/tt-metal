@@ -216,7 +216,7 @@ constexpr std::uint32_t operator|(InstrModLoadStore mod, std::uint32_t bits)
     return operator|(bits, mod);
 }
 
-template <DataFormat format, bool is_fp32_dest_acc_en = false>
+template <DataFormat format, bool is_fp32_dest_acc_en>
 constexpr InstrModLoadStore GetSfpLoadStoreInstrMod()
 {
     switch (format)

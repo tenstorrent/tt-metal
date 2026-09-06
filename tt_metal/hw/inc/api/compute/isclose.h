@@ -60,7 +60,6 @@ template <bool EQUAL_NAN = false>
 ALWI void isclose_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, uint32_t rtol_bits, uint32_t atol_bits) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_sfpu_isclose,
         (APPROX, 8 /* ITERATIONS */, EQUAL_NAN),
         idst0,

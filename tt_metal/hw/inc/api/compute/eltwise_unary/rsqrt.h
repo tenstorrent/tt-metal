@@ -38,7 +38,6 @@ template <bool legacy_compat = false, bool FAST_APPROX = false, bool is_fp32_des
 ALWI void rsqrt_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_rsqrt,
         (APPROX, 8 /* ITERATIONS */, is_fp32_dest_acc_en, FAST_APPROX, legacy_compat),
         idst,

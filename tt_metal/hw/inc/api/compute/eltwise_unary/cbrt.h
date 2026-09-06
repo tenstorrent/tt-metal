@@ -29,12 +29,7 @@ namespace ckernel {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void cbrt_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_cube_root,
-        (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC));
+        DST_SYNC_MODE, calculate_cube_root, (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
 
 /**

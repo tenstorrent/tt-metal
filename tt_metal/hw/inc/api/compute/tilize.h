@@ -255,7 +255,7 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 
 namespace fast_tilize_detail {
 
-template <bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool configure_remap, bool is_fp32_dest_acc_en>
 ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifdef ARCH_BLACKHOLE
     if (full_dim == 1) {
@@ -298,7 +298,7 @@ ALWI void fast_tilize_init_skip_remap(
 
 namespace fast_tilize_detail {
 
-template <bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool configure_remap, bool is_fp32_dest_acc_en>
 ALWI void fast_tilize_init_with_dt_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
     // Reconfig both SrcA and SrcB to match WH: some activation-reuse call sites
     // leave SrcB in a prior matmul-weights config that's incompatible with the

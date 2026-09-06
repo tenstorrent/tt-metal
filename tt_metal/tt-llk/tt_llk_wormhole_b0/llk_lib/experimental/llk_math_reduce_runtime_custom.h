@@ -66,7 +66,7 @@ inline void reduce_max_row_configure_addrmod_reinit_runtime()
  * This function should NOT be used as a substitute for native reduce LLK MOP configuration.
  * Use the standard reduce MOP configuration with _llk_math_reduce_init_ for general-purpose reduction.
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t block_ct_dim, const ckernel::TensorShape tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
@@ -182,7 +182,7 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t blo
  * from the original _llk_math_reduce_block_max_row_mop_config_ call.
  * Use when the MOP was clobbered (e.g., by eltwise binary ops) but the replay buffer is intact.
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_(std::uint32_t block_ct_dim, const ckernel::TensorShape& tensor_shape)
 {
     if (tensor_shape.num_faces_r_dim == 1)
@@ -231,7 +231,7 @@ inline void _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_(std::uint
  * Use the standard _llk_math_reduce_init_<PoolType::MAX, ReduceDim::REDUCE_ROW>() with multiple
  * _llk_math_reduce_() calls in a loop for general-purpose block reduction.
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void _llk_math_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_dim, const ckernel::TensorShape& tensor_shape)
 {
     reduce_max_row_configure_addrmod_reinit_runtime();
@@ -248,7 +248,7 @@ inline void _llk_math_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_
     math::_configure_default_zero_flag_state_();
 }
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void _llk_math_reduce_block_max_row_uninit_runtime_()
 {
 }
@@ -268,7 +268,7 @@ inline void _llk_math_reduce_block_max_row_uninit_runtime_()
  * Use the standard _llk_math_reduce_<PoolType::MAX, ReduceDim::REDUCE_ROW>() in a loop
  * for general-purpose block reduction across multiple tiles.
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
@@ -345,7 +345,7 @@ inline void _llk_math_reduce_block_max_row_reinit_runtime_()
  * This LLK API function is used only to re-initialize the address modifiers and MOP
  * after a matmul operation in an SDPA inner loop.
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void _llk_math_reduce_block_max_row_reinit_short_runtime_(std::uint32_t block_ct_dim, const ckernel::TensorShape& tensor_shape)
 {
     reduce_max_row_configure_addrmod();

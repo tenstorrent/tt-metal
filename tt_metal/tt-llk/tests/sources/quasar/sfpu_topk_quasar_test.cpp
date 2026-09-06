@@ -219,7 +219,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // Run the topk stages. RC_custom issues one SFPU call per tile (no per-face walk).
                 if (first_iter)
                 {
-                    SFPU_UNARY_CALL(
+                    SFPU_UNARY_CALL_QSR(
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_phases_steps,
@@ -234,7 +234,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 else
                 {
-                    SFPU_UNARY_CALL(
+                    SFPU_UNARY_CALL_QSR(
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_rebuild,
@@ -249,7 +249,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
 
                 // Always merge
-                SFPU_UNARY_CALL(
+                SFPU_UNARY_CALL_QSR(
                     dest_sync,
                     is_fp32_dest_acc_en,
                     calculate_bitonic_topk_merge,
@@ -262,7 +262,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // Final iteration: extra rebuild
                 if (last_iter)
                 {
-                    SFPU_UNARY_CALL(
+                    SFPU_UNARY_CALL_QSR(
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_rebuild,
@@ -341,7 +341,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     if (last_iter)
                     {
                         const int tile_L1_offset = current_tile_row * NUM_TILES_IN_RESULT_BUFFER_PER_ROW + stage_index;
-                        l1_addr_16B               = params.buffer_Res[tile_L1_offset] / 16;
+                        l1_addr_16B              = params.buffer_Res[tile_L1_offset] / 16;
                     }
                     else
                     {
