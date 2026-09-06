@@ -738,6 +738,7 @@ class MiniMaxH3Pipeline:
             self._prepare_transformer()
         self._prepare_text_encoder()
         self._prepare_audio_decoder()
+        self._rejoin_parent_mesh()
 
         if warmup:
             self._warmup_on_init()
@@ -1859,6 +1860,9 @@ class MiniMaxH3Pipeline:
         # during warmup). Under `coresident=False` a reload lands inside the timed row that
         # triggered it.
         on_event = on_event if on_event is not None else null_callback
+        # The previous request's decoders ran on the children; everything from here to the decode
+        # runs on the parent (the ref2va path re-enters through `_call_ref2va`, so it is covered too).
+        self._rejoin_parent_mesh()
 
         if references is not None:
             if image is not None or last_image is not None:
@@ -2171,6 +2175,8 @@ class MiniMaxH3Pipeline:
         `_prepare_*` outside a section, one section per stage -- and two copies of that would drift.
         `condition_spec` is the only thing the tasks differ by here, and only `ref2va` passes one.
         """
+        # fl2va/ref2va just encoded their keyframes/references on the video child; the DiT is parent work.
+        self._rejoin_parent_mesh()
         transformer = self._prepare_transformer()
         with event_section(on_event, "denoising"):
             video_rows, audio_rows = self._denoise(
@@ -2207,6 +2213,19 @@ class MiniMaxH3Pipeline:
             sampling_rate=self.audio_sampling_rate,
             num_frames=video.shape[2],
         )
+
+    def _rejoin_parent_mesh(self) -> None:
+        """Barrier before parent work that follows work on a decoder child (parallel decode only).
+
+        `MeshDevice` requires `quiesce_devices` when moving between overlapping views in *either*
+        direction: it drains the parent's and the children's queues and resets their in-use state.
+        The first version only quiesced parent -> children, and the first parent collective after a
+        child upload (the vision tower, in the construction warmup) hung to the device timeout. It is
+        cheap when nothing is in flight, so it runs at every transition rather than only the ones
+        known to matter.
+        """
+        if self.parallel_decode:
+            self.mesh_device.quiesce_devices()
 
     def _decode_concurrently(self, decode_video, decode_audio, on_event: PipelineEventCallback):
         """Run the video VAE on `video_mesh` and the audio decoder on `audio_mesh` at the same time.
