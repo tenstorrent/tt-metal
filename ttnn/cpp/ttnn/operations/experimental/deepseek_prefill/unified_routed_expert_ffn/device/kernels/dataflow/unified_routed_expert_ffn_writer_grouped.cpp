@@ -294,7 +294,9 @@ void kernel_main() {
                             const uint64_t src =
                                 up_bases.b[my_nt_gu] +
                                 static_cast<uint64_t>((kb * in0_block_w_gu + up_k_b) * run_tiles) * up_tile_bytes;
-                            noc_async_read(src, l1_w_up, (up_k_e - up_k_b) * run_tiles * up_tile_bytes, /*noc=*/1);
+                            if (up_k_e > up_k_b) {  // empty slice when in0_block_w_gu < group_rows
+                                noc_async_read(src, l1_w_up, (up_k_e - up_k_b) * run_tiles * up_tile_bytes, /*noc=*/1);
+                            }
                         } else {
                             for (uint32_t k = up_k_b; k < up_k_e; ++k) {
                                 const uint32_t row = kb * in0_block_w_gu + k;

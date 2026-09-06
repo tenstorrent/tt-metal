@@ -352,25 +352,38 @@ UnifiedRoutedExpertFfnGroupedProgramFactory::cached_program_t UnifiedRoutedExper
         TT_FATAL(!w_gu_candidates.empty(), "K_gate_tiles ({}) has no valid in0_block_w_gu", K_gate_tiles);
 
         // Grouped shrink order: keep the requested per-core M, then the widest
-        // gate/up K-block, then the deepest weight CB (D down to 2), then lower M.
+        // gate/up K-block, then the deepest weight CB (D down to 2), then lower M —
+        // but never trade the K-block width below kMinBlockW for a larger M: each
+        // K-block costs a fixed handshake/barrier round, so w=1 or 2 (192 rounds per
+        // chunk for M3) is far worse than one more M-chunk. Widths below the floor are
+        // a last resort when nothing else fits.
+        constexpr uint32_t kMinBlockW = 4;
         uint32_t fit_M = 0;
         uint32_t fit_w = 0;
         uint32_t fit_D = 0;
         const uint32_t D_req = D;
-        for (uint32_t M = per_core_M; M >= 1 && fit_M == 0; --M) {
-            for (const uint32_t w : w_gu_candidates) {
-                for (uint32_t d = D_req; d >= 2; --d) {
-                    D = d;
-                    if (cb_footprint_bytes(M, w) <= l1_budget) {
-                        fit_M = M;
-                        fit_w = w;
-                        fit_D = d;
+        for (uint32_t w_floor : {kMinBlockW, 1u}) {
+            for (uint32_t M = per_core_M; M >= 1 && fit_M == 0; --M) {
+                for (const uint32_t w : w_gu_candidates) {
+                    if (w < w_floor) {
+                        break;  // candidates are sorted widest first
+                    }
+                    for (uint32_t d = D_req; d >= 2; --d) {
+                        D = d;
+                        if (cb_footprint_bytes(M, w) <= l1_budget) {
+                            fit_M = M;
+                            fit_w = w;
+                            fit_D = d;
+                            break;
+                        }
+                    }
+                    if (fit_M != 0) {
                         break;
                     }
                 }
-                if (fit_M != 0) {
-                    break;
-                }
+            }
+            if (fit_M != 0) {
+                break;
             }
         }
         D = fit_D != 0 ? fit_D : D_req;

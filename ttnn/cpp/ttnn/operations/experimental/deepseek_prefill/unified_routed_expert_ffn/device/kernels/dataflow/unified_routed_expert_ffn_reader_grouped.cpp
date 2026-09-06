@@ -752,7 +752,9 @@ void kernel_main() {
                         const uint64_t src =
                             gate_bases.b[my_nt_gu] +
                             static_cast<uint64_t>((kb * in0_block_w_gu + k_b) * run_tiles) * gate_tile_bytes;
-                        noc_async_read(src, l1_w_gate, (k_e - k_b) * run_tiles * gate_tile_bytes);
+                        if (k_e > k_b) {  // empty slice when in0_block_w_gu < group_rows
+                            noc_async_read(src, l1_w_gate, (k_e - k_b) * run_tiles * gate_tile_bytes);
+                        }
                     } else {
                         for (uint32_t k = k_b; k < k_e; ++k) {
                             const uint32_t row = kb * in0_block_w_gu + k;
@@ -796,6 +798,10 @@ void kernel_main() {
                     const uint32_t u_off = k_b * per_core_N_gu * up_tile_bytes;
                     const uint32_t u_bytes = (k_e - k_b) * per_core_N_gu * up_tile_bytes;
                     Semaphore<> my_valid(get_arg_val<uint32_t>(VALID_RT + my_mt));
+                    // my_valid is the L1 SOURCE of the previous block's valid set_multicast; the NoC
+                    // reads it at packet injection, so flush sent writes before overwriting it
+                    // (else that multicast could carry this block's seq before its data went out).
+                    noc.async_writes_flushed();
                     my_valid.set(in1_block_seq);  // monotonic: receivers wait_min(seq)
                     for (uint32_t rect = 0; rect < 2; ++rect) {
                         const uint32_t r0 = (rect == 0) ? 0 : my_mt + 1;
@@ -808,31 +814,36 @@ void kernel_main() {
                         const uint32_t nx1 = get_arg_val<uint32_t>(COL_NOC_RT + 2 * (r1 - 1) + 0);
                         const uint32_t ny1 = get_arg_val<uint32_t>(COL_NOC_RT + 2 * (r1 - 1) + 1);
                         const uint32_t ndests = r1 - r0;
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(gate_block_start + g_off),
-                            MulticastEndpoint{},
-                            g_bytes,
-                            ndests,
-                            {.offset_bytes = 0},
-                            {.noc_x_start = nx0,
-                             .noc_y_start = ny0,
-                             .noc_x_end = nx1,
-                             .noc_y_end = ny1,
-                             .addr = gate_block_start + g_off},
-                            /*linked=*/true);
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(up_block_start + u_off),
-                            MulticastEndpoint{},
-                            u_bytes,
-                            ndests,
-                            {.offset_bytes = 0},
-                            {.noc_x_start = nx0,
-                             .noc_y_start = ny0,
-                             .noc_x_end = nx1,
-                             .noc_y_end = ny1,
-                             .addr = up_block_start + u_off},
-                            /*linked=*/true);
-                        noc.async_writes_flushed();
+                        // An empty slice (in0_block_w_gu < group_rows) has nothing to send: a
+                        // zero-length multicast is not a no-op on the NoC, so skip the data and
+                        // deliver only the valid (the peers still need it to advance).
+                        if (k_e > k_b) {
+                            noc.async_write_multicast(
+                                CoreLocalMem<uint32_t>(gate_block_start + g_off),
+                                MulticastEndpoint{},
+                                g_bytes,
+                                ndests,
+                                {.offset_bytes = 0},
+                                {.noc_x_start = nx0,
+                                 .noc_y_start = ny0,
+                                 .noc_x_end = nx1,
+                                 .noc_y_end = ny1,
+                                 .addr = gate_block_start + g_off},
+                                /*linked=*/true);
+                            noc.async_write_multicast(
+                                CoreLocalMem<uint32_t>(up_block_start + u_off),
+                                MulticastEndpoint{},
+                                u_bytes,
+                                ndests,
+                                {.offset_bytes = 0},
+                                {.noc_x_start = nx0,
+                                 .noc_y_start = ny0,
+                                 .noc_x_end = nx1,
+                                 .noc_y_end = ny1,
+                                 .addr = up_block_start + u_off},
+                                /*linked=*/true);
+                            noc.async_writes_flushed();
+                        }
                         my_valid.set_multicast<NocOptions::DEFAULT>(noc, nx0, ny0, nx1, ny1, ndests);
                     }
                 }
@@ -989,6 +1000,10 @@ void kernel_main() {
                     const uint32_t d_off = k_b * per_core_N_d * down_tile_bytes;
                     const uint32_t d_bytes = (k_e - k_b) * per_core_N_d * down_tile_bytes;
                     Semaphore<> my_valid(get_arg_val<uint32_t>(VALID_RT + my_mt));
+                    // my_valid is the L1 SOURCE of the previous block's valid set_multicast; the NoC
+                    // reads it at packet injection, so flush sent writes before overwriting it
+                    // (else that multicast could carry this block's seq before its data went out).
+                    noc.async_writes_flushed();
                     my_valid.set(in1_block_seq);  // monotonic: receivers wait_min(seq)
                     for (uint32_t rect = 0; rect < 2; ++rect) {
                         const uint32_t r0 = (rect == 0) ? 0 : my_mt + 1;
@@ -1001,19 +1016,21 @@ void kernel_main() {
                         const uint32_t nx1 = get_arg_val<uint32_t>(COL_NOC_RT + 2 * (r1 - 1) + 0);
                         const uint32_t ny1 = get_arg_val<uint32_t>(COL_NOC_RT + 2 * (r1 - 1) + 1);
                         const uint32_t ndests = r1 - r0;
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(in1_block_start + d_off),
-                            MulticastEndpoint{},
-                            d_bytes,
-                            ndests,
-                            {.offset_bytes = 0},
-                            {.noc_x_start = nx0,
-                             .noc_y_start = ny0,
-                             .noc_x_end = nx1,
-                             .noc_y_end = ny1,
-                             .addr = in1_block_start + d_off},
-                            /*linked=*/true);
-                        noc.async_writes_flushed();
+                        if (k_e > k_b) {  // empty slice (in0_block_w_d < group_rows): valid only
+                            noc.async_write_multicast(
+                                CoreLocalMem<uint32_t>(in1_block_start + d_off),
+                                MulticastEndpoint{},
+                                d_bytes,
+                                ndests,
+                                {.offset_bytes = 0},
+                                {.noc_x_start = nx0,
+                                 .noc_y_start = ny0,
+                                 .noc_x_end = nx1,
+                                 .noc_y_end = ny1,
+                                 .addr = in1_block_start + d_off},
+                                /*linked=*/true);
+                            noc.async_writes_flushed();
+                        }
                         my_valid.set_multicast<NocOptions::DEFAULT>(noc, nx0, ny0, nx1, ny1, ndests);
                     }
                 }
