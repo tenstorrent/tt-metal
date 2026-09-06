@@ -317,12 +317,31 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
         elif tt_input_dtype == ttnn.bfloat8_b:
             x = _simulate_bfp_quantization(x, 7)
         return x.to(torch.uint8)
+    elif tt_output_dtype == ttnn.int8:
+        if tt_input_dtype == ttnn.bfloat4_b:
+            x = _simulate_bfp_quantization(x, 3)
+        elif tt_input_dtype == ttnn.bfloat8_b:
+            x = _simulate_bfp_quantization(x, 7)
+        return x.to(torch.int8)
     elif tt_input_dtype == ttnn.uint8:
         if tt_output_dtype == ttnn.float32:
             return x.to(torch.float32)
         elif tt_output_dtype == ttnn.bfloat16 or tt_output_dtype == ttnn.bfloat8_b or tt_output_dtype == ttnn.bfloat4_b:
             return x.to(torch.bfloat16)
         elif tt_output_dtype == ttnn.int32 or tt_output_dtype == ttnn.uint16 or tt_output_dtype == ttnn.uint32:
+            return x.to(torch.int32)
+        else:
+            return x
+    elif tt_input_dtype == ttnn.int8:
+        if tt_output_dtype == ttnn.float32:
+            return x.to(torch.float32)
+        elif tt_output_dtype == ttnn.bfloat16 or tt_output_dtype == ttnn.bfloat8_b or tt_output_dtype == ttnn.bfloat4_b:
+            return x.to(torch.bfloat16)
+        elif tt_output_dtype == ttnn.uint16:
+            return torch.clamp(x.to(torch.int32), min=0)
+        elif tt_output_dtype == ttnn.uint32:
+            return x.to(torch.int64) & 0xFFFFFFFF
+        elif tt_output_dtype == ttnn.int32:
             return x.to(torch.int32)
         else:
             return x
