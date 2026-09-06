@@ -47,3 +47,90 @@
       timeout: 5
   team: ttnn
   owner_id: U07M7QZ0BQA # Camilo Vega -- Slack member ID
+
+# Eltwise infra coverage: broadcast classes, tensor-scalar variants and op-dispatch liveness.
+# This gates infrastructure, not accuracy.
+#
+# Eltwise accuracy lives in the sanity and L2-nightly eltwise groups, and neither runs on a PR
+# (pr-gate and merge-gate only invoke smoke-level workflows, and sanity-tests-pr.yaml is gated
+# to forks). So an eltwise infrastructure break currently lands on main and is first seen when
+# nightly sanity goes red. This entry gates the machinery itself -- a broadcast class that stops
+# dispatching, a reader stride that goes wrong, a scalar path that stops being taken, an op that
+# stops being registered at all.
+#
+# Selection is by test name rather than by whole file, so it stays small as those files grow.
+# Two things are being covered:
+#
+# 1. Broadcast and scalar machinery, in depth:
+#   subtile ......................... the test_binary_subtile_*_bcast cases: no bcast, row, col,
+#                                     scalar, and row_b_col_a
+#   where_bcast ..................... ternary broadcast over independent H and W per operand
+#   program_cache_..._shapes ........ the broadcast-vs-cache-key interaction, where a wrong key
+#                                     silently reuses a program built for different strides
+#   test_where_tss / tst / tts ...... the tensor-scalar where variants, which are the ones that
+#   test_binary_scalar (whole file) . get missed when only the all-tensor form is exercised
+#
+# 2. One basic case per op, across the op families, so that an op dropping out of dispatch is
+#    caught here rather than in nightly sanity:
+#   unary ........................... relu, relu6, sigmoid, tanh, gelu, silu, neg, log2, log1p,
+#                                     sin, mish, tril, triu
+#   binary .......................... relational (t-t and t-s), logical and/or/xor, left/right
+#                                     shift, atan2, nextafter, floor_div, ldexp, logaddexp,
+#                                     logaddexp2, xlogy, bias_gelu, arithmetic operator overloads
+#   div family (whole file) ......... div, div_no_nan, fmod, remainder, incl. the output-dtype
+#                                     and mixed-dtype paths
+#   ternary ......................... mac, lerp, addcmul, addcdiv
+#
+# Deliberately excluded: the heavy sweeps inside those same files (isclose, celu, inverse trig,
+# fill, div-scalar dtype matrices, clamp/clip) -- they are accuracy and dtype coverage, they cost
+# minutes, and they belong in the nightly eltwise groups where they already run.
+#
+# 753 tests selected -- 737 pass, 9 skip, 7 xfail. The test step measured 115s in CI on this branch
+# (run 33844607890) against the 10-minute timeout. Locally on an N300 the same selection is 45-47s
+# of pytest / 52-55s of wall-clock with a warm kernel cache and 230s / 237s on a total ccache miss;
+# the whole spread is kernel compilation, and this job runs with enable-kernel-ccache against the
+# shared Redis backend, so it sits at the warm end. One pytest invocation on purpose: device
+# bring-up is ~7s, so splitting this into per-file entries would cost more than the tests do.
+# Hardware only. Blackhole eltwise coverage in the merge gate comes from the tt-nn-validation-basic
+# gtest suite (tests/ttnn/unit_tests/gtests/test_eltwise.cpp), which runs on bh_p150b_civ2_viommu
+# as well as wh_n150_civ2.
+- name: "ttnn eltwise infra"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_scalar.py
+    tests/ttnn/unit_tests/operations/eltwise/test_ternary.py
+    tests/ttnn/unit_tests/operations/eltwise/test_where.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary.py
+    tests/ttnn/unit_tests/operations/eltwise/test_div_ops.py
+    tests/ttnn/unit_tests/operations/eltwise/test_relational.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py
+    tests/ttnn/unit_tests/operations/eltwise/test_ternary_composite.py
+    tests/ttnn/unit_tests/operations/eltwise/test_composite.py
+    tests/ttnn/unit_tests/operations/eltwise/test_elt_binary.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py
+    -k "(subtile or where_bcast or program_cache_different_broadcast_shapes
+    or test_where_tss or test_where_tst or test_where_tts
+    or test_gelu or test_silu or test_01_volume_sin
+    or test_div_ops or test_binary_scalar
+    or test_binary_relational_ttnn or test_binary_relational_scalar_ttnn
+    or test_binary_atan2_ttnn or test_binary_floor_div_ttnn
+    or test_binary_logical_and__ttnn or test_binary_logical_or__ttnn
+    or test_binary_logical_xor_ttnn or test_binary_nextafter_ttnn
+    or test_binary_left_shift or test_binary_right_shift
+    or test_mac_ttnn or test_lerp_ttnn
+    or test_ternary_addcmul_ttnn or test_ternary_addcdiv_ttnn
+    or test_unary_composite_mish_ttnn or test_unary_composite_tril_ttnn
+    or test_unary_composite_triu_ttnn
+    or test_ldexp or test_logaddexp or test_xlogy or test_bias_gelu
+    or test_arithmetic_operators
+    or test_unary_relu_ttnn or test_unary_relu6_ttnn or test_unary_sigmoid_ttnn
+    or test_unary_tanh_ttnn or test_unary_neg_ttnn
+    or test_unary_log2_ttnn or test_unary_log1p_ttnn)
+    and not (fused_relu_with_broadcast or rne_approx_modes)"
+    -m "not disable_fast_runtime_mode"
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+  team: ttnn
+  owner_id: U09BX3N0N95 # Mateusz Nowak
