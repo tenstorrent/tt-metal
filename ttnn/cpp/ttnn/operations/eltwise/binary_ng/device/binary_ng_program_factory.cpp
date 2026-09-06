@@ -448,7 +448,7 @@ void for_each_core_runtime_args(
 
     bool zero_start_grid = false;
     CoreCoord compute_with_storage_grid;
-    if (grid.size() == 1) {
+    if (all_device_cores.size() == 1 && (!rt_has_sharding || grid.size() == 1)) {
         const auto& cr = *all_device_cores.ranges().begin();
         if (cr.start_coord.x == 0 && cr.start_coord.y == 0) {
             if (rt_has_sharding) {

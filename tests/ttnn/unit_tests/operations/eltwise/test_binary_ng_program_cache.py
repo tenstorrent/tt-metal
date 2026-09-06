@@ -20,6 +20,7 @@ tensor_args_t::to_hash(): input tensor dtypes and memory_configs, plus each
 The default compute_program_hash() combines both of the above.
 
 Fields correctly excluded from hash (handled by override_runtime_arguments):
+- post_activations: omitted for quantization and WHERE, so their runtime zero-point/scalar values reuse the cache
 - logical_shape: not in compute_program_hash() by design - differently-shaped
   INTERLEAVED calls share a cache entry and runtime arguments are updated
   accordingly. This does not extend to sharded calls, for two reasons that no
@@ -752,3 +753,172 @@ def test_ng_streamed_runtime_args_work_noop_transitions(device, isolate_program_
             assert device.num_program_cache_entries() == entries
         if trace_id is not None:
             ttnn.release_trace(device, trace_id)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1000000}], indirect=True)
+@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("traced", [False, True])
+def test_ng_quant_scalar_cache_refresh(device, isolate_program_cache, input_dtype, traced):
+    """Refresh scale on hits and preserve older captured scalar values and output buffers."""
+    live = []
+    traces = []
+    try:
+        # Both scale and quantization zero-point are hash-excluded: attribute_values()
+        # deliberately omits post-activations for quantization. Every pair below must reuse
+        # one program and refresh both encoded scalar words, including returning to zero-point 3.
+        for iteration, (scale, zero_point) in enumerate(
+            ((1.0, 3), (2.0, 3), (4.0, -5), (0.5, -5), (4.0, 3), (2.0, -5))
+        ):
+            # The Int32 quant kernel stores a signed 8-bit quantized value in an int32
+            # container. Keep every affine result away from saturation boundaries so this
+            # regression isolates cached scalar refresh, not quantizer clipping behavior.
+            host = ((torch.arange(320 * 320).reshape(1, 1, 320, 320) % 15 - 7) * 4 + iteration * 4).float()
+            a = ttnn.from_torch(host, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+            # Values and scales are powers-of-two multiples, avoiding rounding-tie ambiguity.
+            expected = (host / scale + zero_point).to(torch.int32)
+            assert expected.min().item() > -127 and expected.max().item() < 127
+            with device.cache_entries_counter.measure():
+                out = ttnn.quantize(a, scale, zero_point, dtype=ttnn.int32)
+            live.append((a, out, expected))
+            assert torch.equal(ttnn.to_torch(out).to(torch.int32), expected)
+            if traced:
+                ttnn.synchronize_device(device)
+                trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+                try:
+                    try:
+                        with device.cache_entries_counter.measure():
+                            traced_out = ttnn.quantize(a, scale, zero_point, dtype=ttnn.int32)
+                    finally:
+                        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+                except BaseException:
+                    ttnn.release_trace(device, trace_id)
+                    raise
+                traces.append((trace_id, traced_out, expected))
+                ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+                assert torch.equal(ttnn.to_torch(traced_out).to(torch.int32), expected)
+        assert device.cache_entries_counter.total == 1
+        # Recheck retained eager outputs and replay old traces after the cached program was
+        # updated repeatedly. Fresh buffers and captured commands must keep their own values.
+        for _, out, expected in live:
+            assert torch.equal(ttnn.to_torch(out).to(torch.int32), expected)
+        for trace_id, out, expected in traces:
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            assert torch.equal(ttnn.to_torch(out).to(torch.int32), expected)
+    finally:
+        for trace_id, _, _ in traces:
+            ttnn.release_trace(device, trace_id)
+
+
+def _ng_geometry_grid(device, rectangles):
+    """Preserve the supplied range decomposition, including adjacent rectangles."""
+    size = device.compute_with_storage_grid_size()
+    if any(end[0] >= size.x or end[1] >= size.y for _, end in rectangles):
+        pytest.skip("Device is too small for the explicit BinaryNg geometry")
+    return ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(*start), ttnn.CoreCoord(*end)) for start, end in rectangles]
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1000000}], indirect=True)
+@pytest.mark.parametrize("traced", [False, True])
+@pytest.mark.parametrize("geometry", ["origin", "offset", "fragmented"])
+def test_ng_worker_geometry_cache_refresh(device, isolate_program_cache, geometry, traced):
+    """Explicit worker geometry preserves partitioning, fresh addresses and old captured scalars."""
+    rectangles = {
+        "origin": [((0, 0), (3, 1))],
+        "offset": [((1, 1), (4, 2))],
+        "fragmented": [((0, 0), (1, 1)), ((3, 0), (4, 1))],
+    }[geometry]
+    workers = _ng_geometry_grid(device, rectangles)
+    live, traces = [], []
+    try:
+        # Eight worker cores: partial, exact, remainder and >2x-grid work, then shrink.
+        for iteration, tiles in enumerate((1, 7, 8, 9, 20, 1)):
+            host = torch.full((1, 1, tiles * 32, 32), iteration + 1, dtype=torch.bfloat16)
+            a = ttnn.from_torch(host, layout=ttnn.TILE_LAYOUT, device=device)
+            out = ttnn.from_torch(torch.zeros_like(host), layout=ttnn.TILE_LAYOUT, device=device)
+            scalar = iteration + 2
+            expected = host * scalar
+            with device.cache_entries_counter.measure():
+                ttnn.multiply(a, scalar, output_tensor=out, sub_core_grids=workers)
+            live.append((a, out, expected))
+            assert torch.equal(ttnn.to_torch(out), expected)
+            if traced:
+                ttnn.synchronize_device(device)
+                trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+                try:
+                    try:
+                        with device.cache_entries_counter.measure():
+                            ttnn.multiply(a, scalar, output_tensor=out, sub_core_grids=workers)
+                    finally:
+                        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+                except BaseException:
+                    ttnn.release_trace(device, trace_id)
+                    raise
+                traces.append((trace_id, out, expected))
+        assert device.cache_entries_counter.total == 1
+        for _, out, expected in live:
+            assert torch.equal(ttnn.to_torch(out), expected)
+        # Poison every output first: replay must restore the older values/addresses.
+        if traced:
+            for a, out, _ in live:
+                ttnn.multiply(a, 0, output_tensor=out, sub_core_grids=workers)
+        for trace_id, out, expected in traces:
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            assert torch.equal(ttnn.to_torch(out), expected)
+    finally:
+        for trace_id, _, _ in traces:
+            ttnn.release_trace(device, trace_id)
+
+
+@pytest.mark.parametrize("geometry", ["split_workers", "offset", "fragmented_shards", "origin"])
+def test_ng_sharded_worker_geometry_cache_refresh(device, isolate_program_cache, geometry):
+    """A single shard rectangle must not truncate a multi-range worker grid."""
+    configurations = {
+        # One 2x2 shard rectangle spans both worker ranges. The old predicate takes
+        # only the first 1x2 worker rectangle, violating the fast helper's bounds.
+        "split_workers": (
+            [((0, 0), (0, 1)), ((1, 0), (1, 1))],
+            [((0, 0), (1, 1))],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        "offset": (
+            [((1, 1), (2, 2))],
+            [((1, 1), (2, 2))],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        "fragmented_shards": (
+            [((0, 0), (2, 1))],
+            [((0, 0), (0, 1)), ((2, 0), (2, 1))],
+            ttnn.ShardOrientation.COL_MAJOR,
+        ),
+        "origin": (
+            [((0, 0), (2, 1))],
+            [((0, 0), (1, 1))],
+            ttnn.ShardOrientation.COL_MAJOR,
+        ),
+    }
+    worker_ranges, shard_ranges, orientation = configurations[geometry]
+    workers = _ng_geometry_grid(device, worker_ranges)
+    shards = _ng_geometry_grid(device, shard_ranges)
+    assert len(workers.ranges()) == len(worker_ranges)
+    memory = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shards, [32, 32], orientation),
+    )
+    live = []
+    for iteration, scalar in enumerate((2, 3, 1)):
+        # Distinct values per shard expose swapped/omitted core assignment.
+        host = (torch.arange(128).reshape(1, 1, 128, 1) // 32 + iteration + 1).expand(1, 1, 128, 32)
+        host = host.to(torch.bfloat16).contiguous()
+        a = ttnn.from_torch(host, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory)
+        out = ttnn.from_torch(torch.zeros_like(host), layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory)
+        expected = host * scalar
+        with device.cache_entries_counter.measure():
+            ttnn.multiply(a, scalar, output_tensor=out, memory_config=memory, sub_core_grids=workers)
+        live.append((a, out, expected))
+        assert torch.equal(ttnn.to_torch(out), expected)
+    assert device.cache_entries_counter.total == 1
+    for _, out, expected in live:
+        assert torch.equal(ttnn.to_torch(out), expected)
