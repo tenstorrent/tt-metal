@@ -31,6 +31,12 @@ def compute_per_device_vocab(vocab_size, num_tp):
     return 1 << (per_device - 1).bit_length()  # next power of 2
 
 
+def _corerange_cores(core_range):
+    """Row-major list of (x, y) core coordinates of a ttnn.CoreRange."""
+    start, end = core_range.start, core_range.end
+    return [(x, y) for y in range(start.y, end.y + 1) for x in range(start.x, end.x + 1)]
+
+
 def create_rope_setup(
     mesh_device,
     hf_config,
@@ -143,6 +149,25 @@ class Model:
             datatype=ttnn.bfloat16,
             shard_batch_to_mesh_dim=0,
         )
+
+        # Attention decode places user b's Q/K/V shard on the core RotarySetup put user b's cos/sin/trans_mat
+        # on (rotary_embedding_llama reads them from the local core's L1). Both derive the placement from
+        # the same rule (ProgramConfig.get_decode_user_grid mirrors RotarySetup.get_batch_grid); fail at
+        # construction rather than silently rotating users with each other's angles if they ever diverge.
+        if not users_row_sharded:
+            from .attention.config import ProgramConfig as _AttnProgramConfig
+
+            user_cores, _ = _AttnProgramConfig.get_decode_user_grid(mesh_device, max_local_batch_size)
+            rope_grid = self.rope_setup.batch_grid
+            if isinstance(rope_grid, ttnn.CoreRangeSet):
+                expected = [c for cr in user_cores.ranges() for c in _corerange_cores(cr)]
+                actual = [c for cr in rope_grid.ranges() for c in _corerange_cores(cr)][: len(expected)]
+                if expected != actual:
+                    raise RuntimeError(
+                        f"RoPE core placement {actual[:4]}... does not match attention's per-user grid "
+                        f"{expected[:4]}... for max_local_batch_size={max_local_batch_size}; update "
+                        "ProgramConfig.get_decode_user_grid to mirror RotarySetup.get_batch_grid"
+                    )
 
         # Keep references for compatibility
         self.cos_matrix = self.rope_setup.cos_matrix
@@ -516,6 +541,16 @@ class Model:
         """
         # For non-row-sharded b<32, token buffer is padded to 32 — only embed real tokens
         actual_batch = current_pos.shape[-1]
+        if not self.users_row_sharded and actual_batch != self.max_local_batch_size:
+            # KV-update shard grid, RoPE cos/sin batch and the sampling lanes are all sized from
+            # max_local_batch_size at construction; a partial batch must be padded by the caller
+            # (unused slots: any token, position -1 is skipped by the on-device position increment).
+            raise ValueError(
+                f"Decode got {actual_batch} users but the model was built for max_local_batch_size="
+                f"{self.max_local_batch_size}; pad the batch to the configured size. (If this fires from "
+                "Generator's decode-trace warmup, the warmup page table has fewer rows than the batch: "
+                "run with warmup_prefill=False and pass the full page table to the first prefill.)"
+            )
         if not self.users_row_sharded and tokens.shape[-1] > actual_batch:
             tokens_for_embed = tokens[:, :, :, :actual_batch]
         else:
