@@ -21,6 +21,62 @@ using namespace ckernel;
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 
 /**
+ * @brief Emit the 32-bit column-broadcast move stream for one face pair of the current dest tile.
+ *
+ * Each source row's datum[0] is replicated across all 16 datums of that row, preserving per-row
+ * uniqueness. All 16 source rows of the pair are extracted in groups of 4, then broadcast via
+ * MOV_4_ROWS_D0_BRCST to both the left face (rows 0-15) and the right face (rows 16-31). Same
+ * hi16/lo16 split as the ROW/SCALAR broadcasts.
+ *
+ * @tparam face_base: Row offset of the face pair within the tile, values = <0 (faces 0+1)/32 (faces 2+3)>
+ * @note The caller must have pointed the math Dest window at the tile with @ref ckernel::math::set_dest_tile_base,
+ *       so every row offset here is a compile-time constant.
+ */
+template <std::uint32_t face_base>
+inline void eltwise_unary_bcast_col_32bit_face_pair()
+{
+    static_assert(face_base == 0 || face_base == 32, "face_base must select face pair 0+1 or 2+3");
+
+    // Extract all 16 source rows from dest into B register (4 rows at a time)
+    TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 0);         // hi16 rows 0-3
+    TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 4);     // hi16 rows 4-7
+    TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET + 8, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 8);     // hi16 rows 8-11
+    TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 12);   // hi16 rows 12-15
+    TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 0);       // lo16 rows 0-3
+    TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 4);   // lo16 rows 4-7
+    TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 8);   // lo16 rows 8-11
+    TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 12); // lo16 rows 12-15
+
+    // SrcA=Tf32: MOVB2D(DEST_NORM) writes hi16 of 32-bit dest
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
+
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 0);       // left face rows 0-3
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 4);   // left face rows 4-7
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 8);   // left face rows 8-11
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 12); // left face rows 12-15
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 16);      // right face rows 0-3
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 20);  // right face rows 4-7
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 24);  // right face rows 8-11
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 28); // right face rows 12-15
+
+    // BH HW bug: MOVB2D(DEST_32B_LOW) is ignored when Fp32 dest mode is active.
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+    // SrcA=Float32 (non-Tf32): MOVB2D(DEST_32B_LOW) writes lo16 of 32-bit dest
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
+
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 0);       // left face rows 0-3
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 4);   // left face rows 4-7
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 8);   // left face rows 8-11
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 12); // left face rows 12-15
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 16);      // right face rows 0-3
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 20);  // right face rows 4-7
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 24);  // right face rows 8-11
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 28); // right face rows 12-15
+
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+}
+
+/**
  * @brief Copy a tile into the destination register, optionally broadcasting source B.
  *
  * For the unpack-to-dest path with 32-bit data, applies the Blackhole hi16/lo16 broadcast workarounds
@@ -203,64 +259,36 @@ inline void _llk_math_eltwise_unary_datacopy_(
         }
         else if constexpr (src_b_bcast_type == BroadcastType::COL)
         {
-            // Column broadcast for 32-bit unpack-to-dest: each source row's datum[0] is
-            // replicated across all 16 datums of that row, preserving per-row uniqueness.
-            // Processes 2 face pairs (offset 0: faces 0+1, offset 1: faces 2+3). Within
-            // each pair, all 16 source rows are extracted in groups of 4, then broadcast
-            // via MOV_4_ROWS_D0_BRCST to both the left face (rows 0-15) and the right
-            // face (rows 16-31). Same hi16/lo16 split as ROW/SCALAR broadcasts.
-            const std::uint32_t tile_base = dst_index * 64;
+            // Column broadcast for 32-bit unpack-to-dest: processes 2 face pairs (faces 0+1 at
+            // rows 0-31, faces 2+3 at rows 32-63). @ref eltwise_unary_bcast_col_32bit_face_pair
+            // carries the per-pair stream; the pair offset is a template argument so the loop is
+            // unrolled at compile time and every dest row offset stays a constant.
+            //
+            // Point the math Dest window at this tile so those 48 moves address its rows with a
+            // compile-time offset. That removes the `dst_index * 64` multiply and the per-instruction
+            // add, and lets each move issue as an inline TTI_ instruction instead of a runtime-assembled
+            // instruction word. Only COL does this: the displacement costs a config write plus a math
+            // drain on entry and the same again on exit, which the 48-move stream pays back many times
+            // over, while ROW's 20 and SCALAR's 18 moves do not. Measured per tile: COL -21%, but ROW
+            // +2.7% and SCALAR +1.1% when they carried the same displacement (tt-llk#1068).
+            // Placed after the ZEROACC loop, which still addresses dest in faces relative to the
+            // half-buffer base.
+            math::set_dest_tile_base<DstTileShape::Tile32x32>(dst_index);
+
             TTI_SETDVALID(0b10);
 
-#pragma GCC unroll 2
-            for (int offset = 0; offset < 2; ++offset)
-            {
-                const std::uint32_t face_base = tile_base + offset * 32;
-
-                // Extract all 16 source rows from dest into B register (4 rows at a time)
-                TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 0);         // hi16 rows 0-3
-                TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 4);     // hi16 rows 4-7
-                TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET + 8, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 8);     // hi16 rows 8-11
-                TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 12);   // hi16 rows 12-15
-                TT_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 0);       // lo16 rows 0-3
-                TT_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 4);   // lo16 rows 4-7
-                TT_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 8);   // lo16 rows 8-11
-                TT_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 12); // lo16 rows 12-15
-
-                // SrcA=Tf32: MOVB2D(DEST_NORM) writes hi16 of 32-bit dest
-                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
-
-                TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 0);       // left face rows 0-3
-                TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 4);   // left face rows 4-7
-                TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 8);   // left face rows 8-11
-                TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 12); // left face rows 12-15
-                TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 16);      // right face rows 0-3
-                TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 20);  // right face rows 4-7
-                TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 24);  // right face rows 8-11
-                TT_MOVB2D(
-                    p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 28); // right face rows 12-15
-
-                // BH HW bug: MOVB2D(DEST_32B_LOW) is ignored when Fp32 dest mode is active.
-                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-                // SrcA=Float32 (non-Tf32): MOVB2D(DEST_32B_LOW) writes lo16 of 32-bit dest
-                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
-
-                TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 0);     // left face rows 0-3
-                TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 4); // left face rows 4-7
-                TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 8); // left face rows 8-11
-                TT_MOVB2D(
-                    p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 12);  // left face rows 12-15
-                TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 16); // right face rows 0-3
-                TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 20); // right face rows 4-7
-                TT_MOVB2D(
-                    p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 24); // right face rows 8-11
-                TT_MOVB2D(
-                    p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 28); // right face rows 12-15
-
-                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
-            }
+            eltwise_unary_bcast_col_32bit_face_pair<0 /*face_base*/>();
+            eltwise_unary_bcast_col_32bit_face_pair<32 /*face_base*/>();
 
             TTI_CLEARDVALID(0b10, 0);
+
+            // Give the Dest window back to the half-buffer base this branch was entered with. SFPU and
+            // the 16-bit MOP paths program this register absolutely before they use it, so they do not
+            // depend on the restore; the TT_ZEROACC loop above does not program it at all, so restoring
+            // keeps the next tile's zero-flag clears on exactly the rows they targeted before this
+            // change. The stall inside also drains the move stream before the SrcA format state below
+            // is restored.
+            math::reset_dest_tile_base();
         }
 
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
