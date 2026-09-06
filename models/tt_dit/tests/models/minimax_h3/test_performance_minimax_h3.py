@@ -226,7 +226,12 @@ def test_ref2va_performance(mesh_device, reset_seeds):
     # `transformer_ref` (~62 GB) is SP-replicated without FSDP, which fills each 32 GB Blackhole chip
     # and OOMs the forward-pass activations. Shard the DiT over the 32-way SP axis to free per-chip DRAM.
     pipeline = MiniMaxH3Pipeline.create_pipeline(
-        mesh_device=mesh_device, weights_dir=weights, task="ref2va", dit_fsdp=True, trace_denoise=False
+        mesh_device=mesh_device,
+        weights_dir=weights,
+        task="ref2va",
+        dit_fsdp=True,
+        trace_denoise=True,
+        bucket_denoise=True,
     )
 
     benchmark_profiler = BenchmarkProfiler()

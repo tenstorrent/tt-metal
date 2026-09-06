@@ -421,6 +421,7 @@ class MiniMaxH3Pipeline:
         precomputed_adaln: bool = False,
         dit_fsdp: bool = False,
         trace_denoise: bool | None = None,
+        bucket_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
         adaln_slot_roles: tuple[str, ...] | None = None,
@@ -450,12 +451,14 @@ class MiniMaxH3Pipeline:
         # recapture would swamp replay anyway. Co-residency measurements live in the class docstring.
         self.coresident = coresident
         self.trace_denoise = self.trace_denoise and self.coresident
+        # To be used for JIT compile bucketing without tracing
+        self.bucket_denoise = self.trace_denoise or bool(bucket_denoise)
         # False during `warmup`: generation logs (stage times, per-step, VAE profile) are the
         # measured-call report, not the compile pass. Construction logs still go through `_host_log`.
         self._log_generation = True
         # Per-rung device state -- one `_BucketState` per bucket-ladder rung the pipeline has served,
-        # keyed by the rung (or by 0 when tracing is off, where rebinding is harmless and one slot
-        # avoids holding a set of tensors per distinct shape). See `_BucketState` and `_denoise`.
+        # keyed by the rung when bucketing (or by 0 otherwise, where rebinding is harmless and one
+        # slot avoids holding a set of tensors per distinct shape). See `_BucketState` and `_denoise`.
         self._buckets: dict[int, _BucketState] = {}
         # Forces `_select_bucket` onto one rung regardless of the request's natural rung; `warmup`
         # uses it to walk the ladder with a single representative request.
@@ -520,7 +523,7 @@ class MiniMaxH3Pipeline:
         # The two admission checks must agree: a request that passes every cap must also fit the top
         # rung, or it would clear cap admission and then fail bucket selection at serving time. The
         # default cap/ladder pairs satisfy this; a custom pairing that does not is a config error.
-        if self.trace_denoise:
+        if self.bucket_denoise:
             caps = self.arena_caps
             admissible = caps.prompt + caps.condition_video_rows + caps.audio_rows + caps.video_rows
             if task == "ref2va":
@@ -684,6 +687,7 @@ class MiniMaxH3Pipeline:
         precomputed_adaln: bool = False,
         dit_fsdp: bool = False,
         trace_denoise: bool | None = None,
+        bucket_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
         adaln_slot_roles: tuple[str, ...] | None = None,
@@ -696,9 +700,10 @@ class MiniMaxH3Pipeline:
         `dit_fsdp=True` shards the DiT over the SP axis. `trace_denoise` defaults to the mesh preset
         (on for the quad only); pass `True` to trace the denoise step on other shapes, e.g. to
         exercise the traced resident path on one 4x8 Galaxy. Audio-decoder T-shard follows the same
-        preset (on for the quad); `MINIMAX_H3_AUDIO_T_SHARD` overrides. The three deployment knobs
-        default to the task's envelope: `bucket_ladder` is the traced padded lengths and the admission cap
-        (`default_bucket_ladder`; only consulted when tracing is on), `arena_caps` the per-stream
+        preset (on for the quad); `MINIMAX_H3_AUDIO_T_SHARD` overrides. `bucket_denoise` pads to the
+        ladder without tracing (tracing always implies it); default off. The three deployment knobs
+        default to the task's envelope: `bucket_ladder` is the padded lengths and the admission cap
+        (`default_bucket_ladder`; consulted when bucketing or tracing is on), `arena_caps` the per-stream
         admission limits (`MiniMaxH3ArenaCaps.for_task`), and `adaln_slot_roles` the pinned AdaLN
         slot set (3 slots for t2va/fl2va, all 4 for ref2va).
         """
@@ -721,6 +726,7 @@ class MiniMaxH3Pipeline:
             precomputed_adaln=precomputed_adaln,
             dit_fsdp=dit_fsdp,
             trace_denoise=trace_denoise,
+            bucket_denoise=bucket_denoise,
             bucket_ladder=bucket_ladder,
             arena_caps=arena_caps,
             adaln_slot_roles=adaln_slot_roles,
@@ -2134,7 +2140,7 @@ class MiniMaxH3Pipeline:
         rung_requests: Mapping[int, dict] | None = None,
     ) -> None:
         """
-        Buffer allocation and trace warmup.
+        Buffer allocation and, when tracing, trace capture.
         """
         generation_kwargs = dict(
             image=image,
@@ -2148,16 +2154,16 @@ class MiniMaxH3Pipeline:
         self._log_generation = False
         try:
             self(prompt, num_inference_steps=num_inference_steps, **generation_kwargs)
-            if not self.trace_denoise:
+            if not self.bucket_denoise:
                 return
             natural = self.last_seq_len.padded
             overrides = dict(rung_requests or {})
-            # Bind every rung untraced, largest-first, then capture each: two short generations per
-            # rung -- shapes, not step counts, key every program, and the traced pass captures at
-            # step 0 and replays from step 1. All binds precede all captures, so every capture bakes
-            # the final arena and pool addresses. A bind mid-walk releases live captures (the safety
-            # rule in `_denoise`), which is why the capture loop re-checks every rung rather than
-            # only the ones this walk bound.
+            # Bind every rung untraced, largest-first, then (when tracing) capture each: shapes, not
+            # step counts, key every program, so one short generation per rung compiles the whole
+            # stack, and the traced pass captures at step 0 and replays from step 1. All binds precede
+            # all captures, so every capture bakes the final arena and pool addresses. A bind mid-walk
+            # releases live captures (the safety rule in `_denoise`), which is why the capture loop
+            # re-checks every rung rather than only the ones this walk bound.
             fitted: dict[int, dict] = {}
             shrunk = generation_kwargs
             host = _is_host_rank()
@@ -2181,6 +2187,8 @@ class MiniMaxH3Pipeline:
                     if shrink:
                         shrunk = request
                 fitted[rung] = request
+            if not self.trace_denoise:
+                return
             capture_rungs = sorted(fitted, reverse=True)
             if host:
                 _tqdm_spacer()
@@ -2299,9 +2307,9 @@ class MiniMaxH3Pipeline:
         if over:
             raise ValueError(f"request exceeds the arena caps: {', '.join(over)} (see MiniMaxH3ArenaCaps)")
 
-        # The padded length: the trace-bucket rung when tracing, natural SP alignment otherwise.
+        # The padded length: the ladder rung when bucketing, natural SP alignment otherwise.
         alignment = self.sp_factor * ttnn.TILE_SIZE
-        if self.trace_denoise:
+        if self.bucket_denoise:
             rung = self._select_bucket(layout.sequence_length)
         else:
             rung = ((layout.sequence_length + alignment - 1) // alignment) * alignment
@@ -2333,7 +2341,7 @@ class MiniMaxH3Pipeline:
         # untraced pass may compile programs whose cache entries hold device buffers -- must not run
         # under live captures. Release them all first; `warm` rungs keep their bindings and their
         # next traced call re-captures automatically (~one forward each), never a re-warm.
-        state = self._buckets.setdefault(rung if self.trace_denoise else 0, _BucketState())
+        state = self._buckets.setdefault(rung if self.bucket_denoise else 0, _BucketState())
         traced = self.trace_denoise and state.warm
         if self.trace_denoise and not state.warm:
             self.release_traces()
