@@ -210,6 +210,8 @@ std::vector<Tensor> chunk_gdn_scan(
     const DeviceComputeKernelConfig& compute_kernel_config) {
     const auto& vb_shape = v_beta.logical_shape();  // [BH, NC, C, V]
     const auto& kd_shape = kd.logical_shape();      // [BH, NC, C, K]
+    const char* mcast_env = std::getenv("QWEN_GDN_SCAN_MCAST");
+    const char* serial_env = std::getenv("QWEN_GDN_SCAN_SERIAL");
     auto attrs = ChunkGdnScanOperation::operation_attributes_t{
         .BH = vb_shape[0],
         .num_chunks = vb_shape[1],
@@ -218,6 +220,8 @@ std::vector<Tensor> chunk_gdn_scan(
         .val_dim = vb_shape[3],
         .has_initial_state = initial_state.has_value(),
         .output_final_state = output_final_state,
+        .use_mcast = !(mcast_env && mcast_env[0] == '0'),
+        .force_serial = serial_env && serial_env[0] == '1',
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };
