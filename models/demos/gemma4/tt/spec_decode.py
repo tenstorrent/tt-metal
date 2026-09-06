@@ -1612,6 +1612,103 @@ class SpeculativeDecoder:
         self._last_fused_replay_s = time.perf_counter() - replay_t0
         return out, accepts
 
+    # ── serving (step-wise fused trace; vLLM B=1 sessions) ───────────────────
+
+    def serving_setup(self, anchor_token, anchor_pos, max_new_tokens):
+        """Capture the fused trace once for a serving session (B=1).
+
+        Mirrors ``_generate_fused_traced``'s setup block exactly; the caller
+        then drives one ``serving_step`` per engine step.
+        """
+        self._pv_a_prev = -1
+        self._use_trace = False
+        anchor_hidden = self.seed(anchor_token, anchor_pos)
+        self._use_trace = True
+        self._capture_fused_trace(anchor_token, anchor_hidden, anchor_pos, max_new_tokens=max_new_tokens)
+        anchor_hidden.deallocate(True)
+        self._srv_first = True
+
+    def serving_step(self, cur_token, cur_pos):
+        """ONE fused draft+verify iteration. Returns (committed, accepted_m).
+
+        The first call after ``serving_setup`` consumes the capture-bound
+        inputs; later calls refresh the persistent inputs for (cur_token,
+        cur_pos) exactly as the traced generate loop does.
+        """
+        K = self.draft_len
+        tr = self._fused_trace
+        if not self._srv_first:
+            h_tok = self._host_tokens([cur_token])
+            ttnn.copy_host_to_device_tensor(h_tok, tr["anchor_tok"])
+            h_tok.deallocate(True)
+            d_hpu, d_hpi = self._host_pos([cur_pos])
+            ttnn.copy_host_to_device_tensor(d_hpu, tr["d_pu"])
+            ttnn.copy_host_to_device_tensor(d_hpi, tr["d_pi"])
+            d_hpu.deallocate(True)
+            d_hpi.deallocate(True)
+            v_pos = [cur_pos + 1 + j for j in range(K)] if self._fused_reseed else [cur_pos + j for j in range(K + 1)]
+            v_hpu, v_hpi = self._host_pos(v_pos)
+            ttnn.copy_host_to_device_tensor(v_hpu, tr["v_pu"])
+            ttnn.copy_host_to_device_tensor(v_hpi, tr["v_pi"])
+            v_hpu.deallocate(True)
+            v_hpi.deallocate(True)
+            if tr.get("pv"):
+                h2 = self._pv_host_inputs(cur_pos, K + 1, s_k=tr["pv_S_k"], h_repeat=False)
+                ttnn.copy_host_to_device_tensor(self._pv_from_torch(h2["pos"], ttnn.uint32, device=False), tr["pv_pos"])
+                ttnn.copy_host_to_device_tensor(
+                    self._pv_from_torch(h2["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
+                    tr["pv_mask_full"],
+                )
+                ttnn.copy_host_to_device_tensor(
+                    self._pv_from_torch(h2["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
+                    tr["pv_mask_slide"],
+                )
+                for lt, e in h2["embed"].items():
+                    ttnn.copy_host_to_device_tensor(
+                        self._pv_from_torch(e, ttnn.uint32, device=False), tr["pv_embed"][lt]
+                    )
+                for lt, t in h2["hot_t"].items():
+                    ttnn.copy_host_to_device_tensor(self._pv_from_torch(t, ttnn.int32, device=False), tr["pv_hot"][lt])
+                self._pv_a_prev = cur_pos // self._pv_bs
+        self._srv_first = False
+
+        ttnn.execute_trace(self.mesh_device, tr["id"], cq_id=0, blocking=False)
+        vx = (
+            ttnn.to_torch(ttnn.get_device_tensors(tr["verify_x"])[0]) if self._tp > 1 else ttnn.to_torch(tr["verify_x"])
+        )
+        vx = vx.reshape(-1)
+        drafts = [int(vx[j if self._fused_reseed else 1 + j]) for j in range(K)]
+        target_ids = self._ids_to_host(tr["vidx"], K + 1)
+        m = next((i for i in range(K) if drafts[i] != target_ids[i]), K)
+        committed = drafts[:m] + [target_ids[m]]
+        if not self._fused_reseed:
+            self._hidden_row_to_device(self._fused_shift_seed_row(m, K))
+        return committed, m
+
+    def serving_release(self):
+        """Release the session's fused trace + persistent inputs (best effort)."""
+        tr = getattr(self, "_fused_trace", None)
+        self._fused_trace = None
+        if not tr:
+            return
+        try:
+            ttnn.release_trace(self.mesh_device, tr["id"])
+        except Exception:
+            pass
+        for v in tr.values():
+            if hasattr(v, "deallocate"):
+                try:
+                    v.deallocate(True)
+                except Exception:
+                    pass
+            elif isinstance(v, dict):
+                for t in v.values():
+                    if hasattr(t, "deallocate"):
+                        try:
+                            t.deallocate(True)
+                        except Exception:
+                            pass
+
     # ── batched (B>1) speculative decode ─────────────────────────────────────
     def _seed_batched(self, tokens, positions):
         """Batched drafter seed: one batch=B target verify of each user's anchor
