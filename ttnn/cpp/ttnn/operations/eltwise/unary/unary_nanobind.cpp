@@ -1417,7 +1417,7 @@ void py_module(nb::module_& mod) {
         mod,
         &ttnn::cos,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|cos|(\mathrm{{input\_tensor}}_i))doc",
-        "",
+        "Supported input range is (-5e4, 5e4)",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_subcoregrids<"acosh">(
         mod,
@@ -1611,7 +1611,7 @@ void py_module(nb::module_& mod) {
         mod,
         &ttnn::sin,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|sin|(\mathrm{{input\_tensor}}_i))doc",
-        "",
+        "Supported input range is (-1e5, 1e5)",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_subcoregrids<"square">(
         mod,
