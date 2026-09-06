@@ -396,6 +396,35 @@ def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
 @pytest.mark.parametrize(
     "ttnn_function",
     [
+        ttnn.bitwise_right_shift,
+        ttnn.bitwise_left_shift,
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_dtype",
+    [
+        ttnn.int32,
+        ttnn.uint32,
+    ],
+)
+def test_bitwise_shift_out_of_range_amount(device, ttnn_function, ttnn_dtype):
+    """A shift amount outside [0, 31] produces 0, for both shift directions."""
+    values = [1, 8, 47, 1024, 99999, 123456789, 2**31 - 1]
+    shifts = [-33, -8, -1, 32, 33, 63]
+
+    x_torch = torch.tensor([[v for v in values for _ in shifts]], dtype=torch.int32)
+    y_torch = torch.tensor([[s for _ in values for s in shifts]], dtype=torch.int32)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn_function(x_tt, y_tt))
+
+    assert torch.equal(tt_out, torch.zeros_like(x_torch))
+
+
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
         ttnn.logical_right_shift,
     ],
 )
