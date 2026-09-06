@@ -95,6 +95,53 @@ def _executable_source(fn) -> str:
     return ast.unparse(tree)  # unparse drops comments
 
 
+def test_every_registered_box_renders_its_own_figures():
+    """Correctness for ALL boxes, not just the one that exposed the bug: read the
+    numbers back out of the rendered block and compare to the box they came from.
+    Several boxes share a DRAM figure, so identity is checked numerically per box
+    rather than by asserting other boxes' values are absent."""
+    import re
+
+    for box in HARDWARE:
+        block = _hardware_prompt_block(box)
+        m = re.search(r"DRAM per chip: (\d+) GB \(total (\d+) GB\)", block)
+        assert m, f"{box.name}: no DRAM line rendered"
+        assert float(m.group(1)) == box.hbm_per_chip_gb, f"{box.name}: wrong per-chip DRAM"
+        assert float(m.group(2)) == box.total_hbm_gb, f"{box.name}: wrong total DRAM"
+
+        u = re.search(r"overhead: ([\d.]+) GB\s+at TP=1, ([\d.]+) GB", block)
+        assert u, f"{box.name}: no usable line rendered"
+        assert float(u.group(1)) == round(box.usable_per_chip_gb(1), 1), f"{box.name}: wrong TP=1 usable"
+        assert float(u.group(2)) == round(box.usable_per_chip_gb(2), 1), f"{box.name}: wrong TP>1 usable"
+
+        assert f"— {box.name} (" in block, f"{box.name}: box not named in the header"
+        assert f"{box.chips}x {box.arch}" in block, f"{box.name}: chips/arch not in the header"
+
+
+def test_emit_e2e_accepts_exactly_the_boxes_auto_up_accepts():
+    """The flag must span the same hardware table as auto-up, so a box that can be
+    brought up can also be handed to emit-e2e. Read the accepted set out of
+    argparse's own rejection message — no device work, no parser refactor."""
+    import re
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[3]
+    proc = subprocess.run(
+        [sys.executable, "-m", "scripts.tt_hw_planner", "emit-e2e", "m/x", "--box", "definitely-not-a-box"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 2, f"argparse should reject an unknown box; got rc={proc.returncode}"
+    m = re.search(r"choose from ([^)]+)\)", proc.stderr)
+    assert m, f"no choice list in stderr: {proc.stderr[-400:]}"
+    offered = {tok.strip().strip("'\"") for tok in m.group(1).split(",")}
+    assert offered == {b.name for b in HARDWARE}, f"offered {sorted(offered)}"
+
+
 def test_no_board_figures_are_hardcoded_in_the_block():
     """Constraint 3: every number comes from the registered box, so the block is
     correct for any board in the table — not just the one that exposed the bug."""
