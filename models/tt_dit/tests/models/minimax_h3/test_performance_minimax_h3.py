@@ -30,7 +30,7 @@ from ....pipelines.minimax_h3.packing_ref2va import (
     reference_from_video_file,
 )
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
-from .common import GALAXY_MESHES, create_fractal_image
+from .common import GALAXY_MESHES, MESH_4X8_RING_TRACED, create_fractal_image
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
@@ -67,7 +67,13 @@ SWEEP = [
 
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize(("aspect_ratio", "duration_s"), SWEEP)
-@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    # `4x8_TRACED` is the opt-in single-Galaxy mesh with a trace region, for MINIMAX_H3_TRACE_AUDIO /
+    # MINIMAX_H3_TRACE_DENOISE measurements; select it explicitly with -k, the plain `4x8` is the default.
+    GALAXY_MESHES + [MESH_4X8_RING_TRACED],
+    indirect=["mesh_device", "device_params"],
+)
 def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
     pretest_user_repl()
     weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
@@ -84,7 +90,12 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
             "from the total either way, but the run will take far longer than the reported compute."
         )
 
-    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights, dit_fsdp=False)
+    # MINIMAX_H3_TRACE_DENOISE=1 forces the traced denoise on a mesh whose preset leaves it off (the
+    # 4x8); unset keeps the preset. Needs a trace region on the mesh (`4x8_TRACED`).
+    trace_denoise = True if os.environ.get("MINIMAX_H3_TRACE_DENOISE") == "1" else None
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device, weights_dir=weights, dit_fsdp=False, trace_denoise=trace_denoise
+    )
 
     benchmark_profiler = BenchmarkProfiler()
     output = run_warm_generation(
