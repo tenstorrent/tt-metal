@@ -23,10 +23,19 @@ from ....utils.padding import PaddingConfig
 from .test_pipeline_flux2 import line_params_8k_flux2, line_params_flux2, ring_params_8k_flux2
 
 _TRACE_REGION_SIZE = 31_000_000
+# require_exact_physical_num_devices makes every row self-skip unless the mesh it asks for is
+# exactly what the machine has. Without it a (2,2) row opens a 2x2 submesh of a 32-chip galaxy
+# and really runs, so CI legs would have to pin mesh ids by hand per SKU. With it, the same
+# command run anywhere selects the one row that machine can serve: 2x2 on a 4-chip QuietBox,
+# 4x8 on a galaxy, and nothing on hardware that matches neither.
+_REQ_EXACT = {"require_exact_physical_num_devices": True}
 # Trace capture + Flux2 VAE-style L1_SMALL; align fabric with topology per case.
-line_params_flux2_transformer = {**line_params_flux2, "trace_region_size": _TRACE_REGION_SIZE}
+line_params_flux2_transformer = {**line_params_flux2, "trace_region_size": _TRACE_REGION_SIZE, **_REQ_EXACT}
 line_params_8k_flux2_transformer = {**line_params_8k_flux2, "trace_region_size": _TRACE_REGION_SIZE}
 ring_params_8k_flux2_transformer = {**ring_params_8k_flux2, "trace_region_size": _TRACE_REGION_SIZE}
+# Ring 4x8 keeps its existing params -- deliberately no trace_region_size, unlike the line rows --
+# and only gains the self-skip.
+ring_params_8k_flux2_req_exact = {**ring_params_8k_flux2, **_REQ_EXACT}
 
 
 class ModelLocationGenerator(Protocol):
@@ -44,13 +53,27 @@ class ModelLocationGenerator(Protocol):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, topology, num_links, device_params",
+    "mesh_device, sp_axis, tp_axis, topology, num_links, fsdp, shard_prompt, device_params",
     [
-        [(1, 8), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
-        [(2, 4), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
-        [(4, 8), 0, 1, ttnn.Topology.Ring, 2, ring_params_8k_flux2],
+        # 2x2 is the only geometry a 4-chip Blackhole box can run, and it is the mesh the
+        # bh_quietbox_2 CI leg exercises. FSDP is on because tensor parallelism alone shards
+        # the weights across the TP axis and REPLICATES them across SP, so 64 GB of weights
+        # occupy 129 GB of the 137 GB the four chips have. Sharding on both axes puts the
+        # same weights back in 64 GB, which is what the pipeline already does at this shape.
+        [(2, 2), 0, 1, ttnn.Topology.Linear, 2, True, False, line_params_flux2_transformer],
+        [(1, 8), 0, 1, ttnn.Topology.Linear, 1, False, False, line_params_flux2_transformer],
+        [(2, 4), 0, 1, ttnn.Topology.Linear, 1, False, False, line_params_flux2_transformer],
+        # shard_prompt=True on 4x8. With it False the prompt is replicated across the sp axis
+        # while the spatial stream is sharded, and the joint attention in the single blocks
+        # degrades as sp grows: PCC 75.5340% at sp=4 and 68.7162% at sp=8, against 99.6968%
+        # here. sp=1 and sp=2 are unaffected in practice (Attention gates shard_prompt on
+        # sequence_parallel.factor > 1, and 2x2 measures 99.9972%), so only this row changes.
+        # True is also what the pipeline and test_performance_flux2.py use -- the configuration
+        # #53608 measured and produced correct images from. Measured on run 33801719909.
+        [(4, 8), 0, 1, ttnn.Topology.Ring, 2, False, True, ring_params_8k_flux2_req_exact],
     ],
     ids=[
+        "bh_2x2_linear",
         "1x8_linear",
         "wh_2x4_linear",
         "bh_4x8_ring",
@@ -76,6 +99,8 @@ def test_transformer(
     tp_axis: int,
     topology: ttnn.Topology,
     num_links: int,
+    fsdp: bool,
+    shard_prompt: bool,
     batch_size: int,
     height: int,
     width: int,
@@ -89,7 +114,7 @@ def test_transformer(
 
     logger.info(
         f"test_transformer: mesh={tuple(mesh_device.shape)}, sp={sp_factor}, tp={tp_factor}, "
-        f"topology={topology}, num_links={num_links}"
+        f"topology={topology}, num_links={num_links}, fsdp={fsdp}"
     )
 
     model_name = model_location_generator("black-forest-labs/FLUX.2-dev", model_subdir="transformer")
@@ -124,10 +149,26 @@ def test_transformer(
     else:
         padding_config = None
 
+    num_layers = torch_model.config.num_layers - skip_layers
+    num_single_layers = torch_model.config.num_single_layers - skip_single_layers
+
+    # The converted-weight cache key is model/subfolder/<parallel>mesh<shape>_<dtype>[_FSDP] and
+    # carries no layer counts, so the layer-skip parametrizations would otherwise share one entry
+    # while holding different tensor sets. Whichever ran first would win: all_blocks first leaves
+    # a full tree that single_blocks reads a subset of, harmlessly, but single_blocks first leaves
+    # a 1-double/1-single tree and all_blocks then dies on "Unable to load the tensor" -- seen on
+    # run 33789514904, where four single_blocks invocations preceded all_blocks. The CI leg only
+    # avoids it because -k all_blocks happens to be ordered first, which is far too subtle a thing
+    # to rely on. Give each pruned variant its own entry, and leave the unpruned model on the
+    # plain "transformer" path so it still shares the pipeline's cache.
+    cache_subfolder = (
+        "transformer" if skip_layers == skip_single_layers == 0 else f"transformer_L{num_layers}_S{num_single_layers}"
+    )
+
     tt_model = Flux2Transformer(
         in_channels=in_channels,
-        num_layers=torch_model.config.num_layers - skip_layers,
-        num_single_layers=torch_model.config.num_single_layers - skip_single_layers,
+        num_layers=num_layers,
+        num_single_layers=num_single_layers,
         attention_head_dim=head_dim,
         num_attention_heads=num_heads,
         joint_attention_dim=joint_attention_dim,
@@ -136,16 +177,21 @@ def test_transformer(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
+        is_fsdp=fsdp,
+        shard_prompt=shard_prompt,
     )
 
     cache.load_model(
         tt_model,
         get_torch_state_dict=torch_model.state_dict,
         model_name="FLUX.2-dev",
-        subfolder="transformer",
+        subfolder=cache_subfolder,
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
         mesh_device=mesh_device,
+        # Also part of the cache key: an FSDP-sharded weight tree and a TP-only one hold
+        # different tensors, and reading one as the other fails on a missing weight.
+        is_fsdp=fsdp,
     )
 
     spatial_seq_len = height * width // 16**2
@@ -163,7 +209,10 @@ def test_transformer(
     spatial_rope_cos, spatial_rope_sin = torch_model.pos_embed.forward(image_ids)
 
     tt_spatial = tensor.from_torch(spatial, device=mesh_device, mesh_axes=[None, sp_axis, None])
-    tt_prompt = tensor.from_torch(prompt, device=mesh_device)
+    # The prompt and its RoPE follow shard_prompt, the same pairing test_transformer_profile uses.
+    prompt_mesh_axes = [None, sp_axis, None] if shard_prompt else None
+    prompt_rope_mesh_axes = [None, None, sp_axis, None] if shard_prompt else None
+    tt_prompt = tensor.from_torch(prompt, device=mesh_device, mesh_axes=prompt_mesh_axes)
     tt_embedded_prompt = tt_model.context_embedder(tt_prompt)
     tt_timestep = tensor.from_torch(timestep.unsqueeze(-1), dtype=ttnn.float32, device=mesh_device)
     tt_guidance = tensor.from_torch(guidance.unsqueeze(-1), device=mesh_device)
@@ -174,8 +223,12 @@ def test_transformer(
     tt_spatial_rope_sin = tensor.from_torch(
         spatial_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=[None, None, sp_axis, None]
     )
-    tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos.unsqueeze(0).unsqueeze(0), device=mesh_device)
-    tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device)
+    tt_prompt_rope_cos = tensor.from_torch(
+        prompt_rope_cos.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=prompt_rope_mesh_axes
+    )
+    tt_prompt_rope_sin = tensor.from_torch(
+        prompt_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=prompt_rope_mesh_axes
+    )
     tt_combined_rope = (
         ttnn.concat([tt_spatial_rope_cos, tt_prompt_rope_cos], dim=2),
         ttnn.concat([tt_spatial_rope_sin, tt_prompt_rope_sin], dim=2),
