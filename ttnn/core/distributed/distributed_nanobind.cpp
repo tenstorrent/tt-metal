@@ -579,6 +579,37 @@ void py_module(nb::module_& mod) {
                     List[int]: The words read.
             )doc")
         .def(
+            "write_core_l1",
+            [](MeshDevice* device,
+               const CoreCoord& logical_core,
+               uint32_t address,
+               std::vector<uint32_t> words,
+               const std::optional<MeshCoordinate>& coord) {
+                tt::tt_metal::detail::WriteToDeviceL1(
+                    coord.has_value() ? device->get_device(*coord) : device->get_devices().at(0),
+                    logical_core,
+                    address,
+                    words);
+            },
+            nb::arg("logical_core"),
+            nb::arg("address"),
+            nb::arg("words"),
+            nb::arg("coord") = nb::none(),
+            R"doc(
+                Write raw L1 words to one core.
+
+                The writer for read_core_l1: host-set state that is not a tensor and not part
+                of a program's kernel-config block. The semaphore pool uses it to give a slot
+                its initial value without rewriting the whole pool region, whose other slots
+                may belong to a program that is running.
+
+                Args:
+                    logical_core (CoreCoord): Core whose L1 to write.
+                    address (int): Byte address in L1; 4-byte aligned.
+                    words (List[int]): The words to write.
+                    coord (MeshCoordinate, optional): Which device of the mesh; the first when omitted.
+            )doc")
+        .def(
             "read_kernel_config",
             [](MeshDevice* device, const CoreCoord& logical_core, const std::optional<MeshCoordinate>& coord) {
                 auto cfg = tt::tt_metal::detail::ReadKernelConfig(
