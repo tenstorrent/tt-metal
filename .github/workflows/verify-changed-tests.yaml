@@ -1,0 +1,391 @@
+name: "Verify changed tests"
+
+# Gate for tests/pipeline_reorg edits. A PR that touches a test entry cannot enter
+# the merge queue until that specific entry has run green
+#
+# All logic lives in .github/scripts/utils/verify_changed_tests.py. This file only
+# wires it up, plus the two policy lists below.
+#
+# merge_group runs `scope` only. The hardware legs already ran on the PR head;
+# re-firing them in the queue would spend the same scarce hardware twice. The
+# queue only needs the context to report, which `scope` does. Required checks
+# are evaluated on the merge group too, so the trigger cannot simply be dropped.
+
+on:
+  pull_request:
+    branches:
+      - "main"
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+
+concurrency:
+  # Keyed per PR so pushes supersede each other, but merge-group runs never cancel
+  # one another.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  # Logical SKUs this gate must never dispatch: hardware too scarce to spend on a
+  # gate run. Touching an entry that covers one of these does not run it -- the PR
+  # is blocked until a code owner of the edited file approves it.
+  #
+  # Add a SKU     -> those legs stop auto-running and need an owner approval.
+  # Remove a SKU  -> the gate runs those legs itself and merge waits on them.
+  #
+  # Names are validated against .github/sku_config.yaml, so a typo fails the gate
+  # rather than silently letting a galaxy leg auto-run. The sim_* galaxy SKUs are
+  # absent on purpose: they run on CPU under ttsim and cost nothing scarce.
+  REVIEW_ONLY_SKUS: >-
+    wh_galaxy
+    wh_galaxy_perf
+    bh_galaxy
+    bh_sc1
+    bh_sc1_high_power
+    bh_sc4
+    bh_sc16
+
+  # Yamls whose tests need a tracy-enabled build. This cannot be derived: nothing
+  # in a test entry says "profiler build", and matching cmds on "profiler" also
+  # hits runtime_unit_tests.yaml and fabric_perf_tests.yaml. Everything else is
+  # derived from the leg itself -- sim_* SKUs run under ttsim, and a pytest cmd
+  # needs the wheel.
+  TRACY_BUILD_YAMLS: >-
+    galaxy_profiler_tests.yaml
+    single_card_profiler_tests.yaml
+    t3k_profiler_tests.yaml
+    runtime_perf_profiler_tests.yaml
+
+jobs:
+  scope:
+    name: Scope changed tests
+    if: ${{ github.event_name == 'merge_group' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.gate.outputs.status }}
+      expected-leg-count: ${{ steps.gate.outputs.expected-leg-count }}
+      review-leg-count: ${{ steps.gate.outputs.review-leg-count }}
+      leg-digest: ${{ steps.gate.outputs.leg-digest }}
+      needs-cpp: ${{ steps.gate.outputs.needs-cpp }}
+      needs-python: ${{ steps.gate.outputs.needs-python }}
+      needs-profiler: ${{ steps.gate.outputs.needs-profiler }}
+      matrix: ${{ steps.gate.outputs.matrix }}
+      sim-libs: ${{ steps.gate.outputs.sim-libs }}
+      leg-count: ${{ steps.gate.outputs.leg-count }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          # Full history: the gate diffs against the merge base with main.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip3 install PyYAML
+
+      - name: Scope the changed tests, narrow the matrix, enforce owner review
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/utils/verify_changed_tests.py \
+            --event "${{ github.event_name }}" \
+            --base "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}" \
+            --repo "${{ github.repository }}" \
+            --pr "${{ github.event.pull_request.number }}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --output scope.json
+
+      - name: Summarise
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### Verify changed tests"
+            echo
+            echo "Status: \`${{ steps.gate.outputs.status }}\`"
+            echo "Legs to prove: \`${{ steps.gate.outputs.expected-leg-count }}\`"
+            echo "Legs needing an owner review: \`${{ steps.gate.outputs.review-leg-count }}\`"
+            echo "Leg digest: \`${{ steps.gate.outputs.leg-digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # --- builds ---------------------------------------------------------------
+  # Only the flavours the surviving legs actually need. A PR touching one gtest
+  # pipeline pays for one plain build and nothing else.
+
+  build-cpp:
+    name: Build (cpp)
+    needs: scope
+    if: ${{ github.event_name == 'pull_request' && needs.scope.outputs.needs-cpp == 'true' }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: false
+      tracy: false
+
+  build-python:
+    name: Build (python)
+    needs: scope
+    if: ${{ github.event_name == 'pull_request' && needs.scope.outputs.needs-python == 'true' }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      tracy: false
+
+  build-profiler:
+    name: Build (profiler)
+    needs: scope
+    if: ${{ github.event_name == 'pull_request' && needs.scope.outputs.needs-profiler == 'true' }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      tracy: true
+
+  fetch-ttsim:
+    name: Fetch ttsim (${{ matrix.lib }})
+    needs: scope
+    if: >-
+      ${{ github.event_name == 'pull_request'
+          && needs.scope.outputs.sim-libs != '[]'
+          && needs.scope.outputs.sim-libs != '' }}
+    runs-on: ubuntu-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: ${{ fromJson(needs.scope.outputs.sim-libs) }}
+    concurrency:
+      group: ttsim-lib-${{ github.run_id }}-${{ matrix.lib }}
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - name: Checkout fetch-ttsim action and pinned ttsim version
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github/actions/fetch-ttsim
+            tt_metal/ttsim-version
+          sparse-checkout-cone-mode: false
+
+      - name: Fetch simulator binary
+        uses: ./.github/actions/fetch-ttsim
+        with:
+          lib: ${{ matrix.lib }}
+
+  # --- runs -----------------------------------------------------------------
+  run-tests:
+    name: ${{ matrix.leg.name }}
+    # fetch-ttsim is a prerequisite even for hardware legs: every fetch the run needs
+    # completes before any test starts.
+    needs: [scope, build-cpp, build-python, build-profiler, fetch-ttsim]
+    if: >-
+      ${{ !cancelled()
+          && !contains(needs.*.result, 'failure')
+          && github.event_name == 'pull_request'}}
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: ${{ fromJson(needs.scope.outputs.matrix) }}
+    runs-on: ${{ matrix.leg.runs_on }}
+    container:
+      image: >-
+        ${{ (matrix.leg.gate_packages && matrix.leg.gate_profile == 'cpp' && needs.build-cpp.outputs.basic-dev-docker-image)
+         || (matrix.leg.gate_packages && matrix.leg.gate_profile == 'python' && needs.build-python.outputs.basic-dev-docker-image)
+         || (matrix.leg.gate_profile == 'cpp' && needs.build-cpp.outputs.dev-docker-image)
+         || (matrix.leg.gate_profile == 'python' && needs.build-python.outputs.dev-docker-image)
+         || (matrix.leg.gate_profile == 'profiler' && needs.build-profiler.outputs.dev-docker-image)
+         || 'docker-image-unresolved!' }}
+      env:
+        ARCH_NAME: ${{ matrix.leg.arch }}
+        LOGURU_LEVEL: INFO
+        TT_LOGGER_LEVEL: warn
+        LD_LIBRARY_PATH: /work/build/lib
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        TT_METAL_HOME: ${{ matrix.leg.gate_packages && '/usr/libexec/tt-metalium' || '/work' }}
+        GTEST_TOTAL_SHARDS: ${{ matrix.leg.gtest_shard_total || 1 }}
+        GTEST_SHARD_INDEX: ${{ matrix.leg.gtest_shard_index || 0 }}
+        HF_HUB_OFFLINE: ${{ (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '0' || '1' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        # Weights cache, selected by the SKU's weights-cache-mode exactly as the
+        # owning pipeline selects it.
+        - ${{ matrix.leg['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:ro' || (matrix.leg['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
+      options: ${{ startsWith(matrix.leg.sku, 'sim_') && '--label runner-mode=sim' || '--device /dev/tenstorrent' }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: ⬇️ Setup Job
+        if: ${{ !matrix.leg.gate_packages }}
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: >-
+            ${{ (matrix.leg.gate_profile == 'cpp' && needs.build-cpp.outputs.build-artifact-name)
+             || (matrix.leg.gate_profile == 'python' && needs.build-python.outputs.build-artifact-name)
+             || (matrix.leg.gate_profile == 'profiler' && needs.build-profiler.outputs.build-artifact-name)
+             || '' }}
+          wheel-artifact-name: >-
+            ${{ (matrix.leg.gate_profile == 'python' && needs.build-python.outputs.wheel-artifact-name)
+             || (matrix.leg.gate_profile == 'profiler' && needs.build-profiler.outputs.wheel-artifact-name)
+             || '' }}
+          auto-triage: false
+
+      - name: ⬇️ Download packages artifact
+        if: ${{ matrix.leg.gate_packages }}
+        uses: ./docker-job/.github/actions/download-artifact-with-retry
+        timeout-minutes: 15
+        with:
+          name: >-
+            ${{ (matrix.leg.gate_profile == 'cpp' && needs.build-cpp.outputs.packages-artifact-name)
+             || (matrix.leg.gate_profile == 'python' && needs.build-python.outputs.packages-artifact-name)
+             || 'packages artifact unresolved!' }}
+          path: /work/pkgs/
+
+      - name: Install packages
+        if: ${{ matrix.leg.gate_packages }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          apt update
+          # tt-metalium-jit is optional: TT_USE_SYSTEM_SFPI builds don't produce it, since this
+          # container already has /opt/tenstorrent/sfpi for the JIT-build runtime fallback
+          # (see tt_metal/jit_build/build.cpp).
+          shopt -s nullglob
+          pkgs=(./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb)
+          apt install -y "${pkgs[@]}"
+
+      - name: ⬇️ Setup TTSim
+        if: ${{ startsWith(matrix.leg.sku, 'sim_') }}
+        uses: ./docker-job/.github/actions/setup-ttsim
+        timeout-minutes: 5
+        with:
+          sku: ${{ matrix.leg.sku }}
+          root: ${{ matrix.leg.gate_packages && '/usr/libexec/tt-metalium' || '/work' }}
+
+      - name: Apply ttsim wormhole workaround patches
+        if: ${{ startsWith(matrix.leg.sku, 'sim_wh') }}
+        run: |
+          HEADER=$(find /opt/venv -name "cunpack_common.h" -path "*wormhole_b0*" 2>/dev/null | head -1)
+          echo "Patching: $HEADER"
+          sed -i -e '/TT_UNPACR(SrcA, 0, 0, context_id, 0, 1 \/\* Set OvrdThreadId\*\/, 0 \/\*Set Dvalid\*\/, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);/d' \
+            "$HEADER"
+
+      - name: ${{ matrix.leg.name }}
+        if: ${{ !startsWith(matrix.leg.sku, 'sim_') }}
+        timeout-minutes: ${{ matrix.leg.timeout }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.leg.name }}.log
+          run: |
+            mkdir -p generated/test_reports
+            if [[ '${{ matrix.leg.dispatch_mode }}' == 'sd' ]]; then
+              TT_METAL_SLOW_DISPATCH_MODE=1 ${{ matrix.leg.cmd }}
+            else
+              ${{ matrix.leg.cmd }}
+            fi
+
+      - name: ${{ matrix.leg.name }} (simulator)
+        if: ${{ startsWith(matrix.leg.sku, 'sim_') }}
+        timeout-minutes: ${{ matrix.leg.timeout }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.leg.name }}.log
+          run: |
+            mkdir -p generated/test_reports
+            ${{ matrix.leg.cmd }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+
+      - name: Generate gtest annotations on failure
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+        if: ${{ failure() }}
+
+  # --- verdict --------------------------------------------------------------
+
+  verify-changed-tests:
+    # This job name is the required status check. It must run in every event, so
+    # the merge queue always gets an answer.
+    name: Changed tests verified
+    needs: [scope, run-tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide
+        run: |
+          set -euo pipefail
+
+          fail() { echo "::error::$1"; exit 1; }
+
+          if [[ '${{ github.event.pull_request.draft }}' == 'true' ]]; then
+            echo "Draft PR: the gate runs when it is marked ready for review. Drafts cannot be queued."
+            exit 0
+          fi
+
+          # A skipped stage is never treated as a pass. Every branch below states
+          # positively what had to succeed. The scope job also fails outright when a
+          # blocked leg lacks its owner approval, so that case never reaches here.
+          [[ '${{ needs.scope.result }}' == 'success' ]] \
+            || fail "the scope stage did not succeed (${{ needs.scope.result }})."
+
+          if [[ '${{ github.event_name }}' == 'merge_group' ]]; then
+            echo "Merge group: scope re-resolved cleanly; the legs already ran on the PR head."
+            exit 0
+          fi
+
+          # Every leg scope asked for must have been dispatched. A matrix that lost
+          # legs on the way would otherwise look exactly like a clean pass.
+          if [[ '${{ needs.scope.outputs.expected-leg-count || 0 }}' != '${{ needs.scope.outputs.leg-count || 0 }}' ]]; then
+            fail "scope resolved ${{ needs.scope.outputs.expected-leg-count || 0 }} leg(s) but ${{ needs.scope.outputs.leg-count || 0 }} were dispatched."
+          fi
+
+          if [[ '${{ needs.scope.outputs.leg-count || 0 }}' != '0' ]]; then
+            [[ '${{ needs.run-tests.result }}' == 'success' ]] \
+              || fail "${{ needs.scope.outputs.leg-count }} leg(s) did not all pass (run-tests: ${{ needs.run-tests.result }})."
+          fi
+
+          case '${{ needs.scope.outputs.status }}' in
+            no_op)
+              echo "No behaviour-affecting test-entry changes. Nothing to prove."
+              ;;
+            blocked)
+              echo "Legs this gate does not run carry an owner approval on the current head."
+              ;;
+            run)
+              echo "All ${{ needs.scope.outputs.leg-count }} leg(s) passed."
+              ;;
+            *)
+              fail "unrecognised scope status '${{ needs.scope.outputs.status }}'."
+              ;;
+          esac
