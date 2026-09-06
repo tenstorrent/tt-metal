@@ -143,18 +143,26 @@ AUDIO_SHIFT = 3.0
 _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
 _DEFAULT_AUDIO_T_FACTOR = 8
 
-# Concurrent video/audio decode on disjoint child meshes carved from the 4x8 parent, selected by name
-# through the `decode_submeshes` kwarg or MINIMAX_H3_PARALLEL_DECODE. Each entry is
-# ((video shape, video offset), (audio shape, audio offset)), in parent mesh coordinates. The DiT keeps
-# the whole parent; only the two decoders move.
+# Concurrent video/audio decode, selected through the `decode_submeshes` kwarg or MINIMAX_H3_PARALLEL_DECODE.
 #
-# * `4x7`: the VAE's 1344x768 tile grid is 4x7, so a 4x7 child decodes one clip per wave exactly as the
-#   4x8 does (the 8th column only ever held padding at 5 s), and the leftover 4x1 column runs the audio
-#   decoder T-sharded by 4 over axis 0 -- a physically intact line, so its halo exchange and gather are
-#   the same collectives the 4x8 factor-4 path already runs.
-# * `2x8` / `3x8`: the audio decoder keeps a full 8-wide row (factor 8); the VAE loses a quarter or half
-#   of its wave width. Comparison points for the wave-count cost, not candidates.
+# `thread`: both decoders stay on the parent mesh and the audio decode runs on a second host thread while
+# the VAE runs on the main one. The device executes the two streams in the order they are enqueued on the
+# shared queue, so the overlap is the audio decoder's host dispatch (it is ~70 % dispatch-bound) landing
+# in the gaps the VAE's host-side readback and stitch leave the device idle for. No new device state.
+#
+# `4x7` / `2x8` / `3x8`: the two decoders each own a child mesh carved from the 4x8 parent -- entries are
+# ((video shape, video offset), (audio shape, audio offset)) in parent coordinates. `4x7` matches the VAE's
+# 4x7 tile grid and gives the audio decoder the leftover 4x1 column (factor 4 over axis 0); the other two
+# keep a full 8-wide row for the audio decoder at the VAE's expense. **Unsafe on this runtime as it
+# stands, so they are refused unless MINIMAX_H3_PARALLEL_DECODE_SUBMESH_UNSAFE=1**: `create_submesh` gives
+# every child its own `L1BankingAllocator` (mesh_device.cpp `initialize`), and nothing coordinates it with
+# the parent's, so a child's DRAM/L1 allocations land on addresses the resident DiT already holds on the
+# same physical devices. Measured 2026-09-06: with the audio decoder loaded on the 4x1 child, the parent's
+# next collective hung to the device timeout. Making this sound needs a shared or partitioned allocator
+# between a parent and its children, which is a tt-metal change, not a pipeline one.
 _PARALLEL_DECODE_ENV = "MINIMAX_H3_PARALLEL_DECODE"
+_PARALLEL_DECODE_SUBMESH_UNSAFE_ENV = "MINIMAX_H3_PARALLEL_DECODE_SUBMESH_UNSAFE"
+_PARALLEL_DECODE_THREAD = "thread"
 _DECODE_SUBMESH_LAYOUTS: dict[str, tuple[tuple[tuple[int, int], tuple[int, int]], ...]] = {
     "4x7": (((4, 7), (0, 0)), ((4, 1), (0, 7))),
     "2x8": (((2, 8), (0, 0)), ((2, 8), (2, 0))),
@@ -162,10 +170,17 @@ _DECODE_SUBMESH_LAYOUTS: dict[str, tuple[tuple[tuple[int, int], tuple[int, int]]
 }
 
 
-def resolve_decode_submesh_layout(name: str | None, mesh_shape: tuple[int, ...]):
-    """The named layout, or None for unset/`off`/`0`. Only defined on a 4x8 parent; anything else raises
-    rather than carving a child the layouts were never sized for."""
+def resolve_parallel_decode_mode(name: str | None) -> str | None:
+    """`None` (sequential), `"thread"`, or `"submesh"` for a named child layout."""
     if name is None or name.strip().lower() in ("", "0", "off", "none", "false"):
+        return None
+    return _PARALLEL_DECODE_THREAD if name.strip().lower() == _PARALLEL_DECODE_THREAD else "submesh"
+
+
+def resolve_decode_submesh_layout(name: str | None, mesh_shape: tuple[int, ...]):
+    """The named child layout, or None for unset/`off`/`0`/`thread` (no children). Only defined on a 4x8
+    parent; anything else raises rather than carving a child the layouts were never sized for."""
+    if resolve_parallel_decode_mode(name) != "submesh":
         return None
     key = name.strip().lower()
     if key not in _DECODE_SUBMESH_LAYOUTS:
@@ -471,9 +486,21 @@ class MiniMaxH3Pipeline:
         # module construction, CCL manager, weight-cache key -- goes through these two, never
         # `self.mesh_device`: a distributed tensor is bound to the mesh it was created on.
         layout_name = decode_submeshes if decode_submeshes is not None else os.environ.get(_PARALLEL_DECODE_ENV)
+        self.parallel_decode_mode = resolve_parallel_decode_mode(layout_name)
         self.decode_submesh_layout = resolve_decode_submesh_layout(layout_name, tuple(mesh_device.shape))
-        self.parallel_decode = self.decode_submesh_layout is not None
-        if self.parallel_decode:
+        self.parallel_decode = self.parallel_decode_mode is not None
+        if self.parallel_decode_mode == _PARALLEL_DECODE_THREAD:
+            self._host_log(
+                "parallel decode (thread): audio decode on a worker thread alongside the video VAE, one mesh"
+            )
+        if self.decode_submesh_layout is not None:
+            if os.environ.get(_PARALLEL_DECODE_SUBMESH_UNSAFE_ENV) != "1":
+                raise ValueError(
+                    f"decode submesh layout {layout_name!r} is refused: a child mesh gets its own allocator and "
+                    "overwrites the parent's resident weights (see the note above _DECODE_SUBMESH_LAYOUTS). "
+                    f"Use MINIMAX_H3_PARALLEL_DECODE=thread, or set {_PARALLEL_DECODE_SUBMESH_UNSAFE_ENV}=1 to "
+                    "experiment anyway."
+                )
             (video_shape, video_offset), (audio_shape, audio_offset) = self.decode_submesh_layout
             self.video_mesh = mesh_device.create_submesh(
                 ttnn.MeshShape(*video_shape), ttnn.MeshCoordinate(*video_offset)
@@ -696,7 +723,7 @@ class MiniMaxH3Pipeline:
         # child's manager is Linear; the parent's Ring manager stays with the encoders that run on it.
         self.video_ccl_manager = (
             CCLManager(mesh_device=self.video_mesh, num_links=num_links, topology=ttnn.Topology.Linear)
-            if self.parallel_decode
+            if self.decode_submesh_layout is not None
             else self.encoder_ccl_manager
         )
         self._vae = MiniMaxH3Vae(
@@ -2215,36 +2242,33 @@ class MiniMaxH3Pipeline:
         )
 
     def _rejoin_parent_mesh(self) -> None:
-        """Barrier before parent work that follows work on a decoder child (parallel decode only).
+        """Barrier before parent work that follows work on a decoder child (submesh layouts only).
 
         `MeshDevice` requires `quiesce_devices` when moving between overlapping views in *either*
-        direction: it drains the parent's and the children's queues and resets their in-use state.
-        The first version only quiesced parent -> children, and the first parent collective after a
-        child upload (the vision tower, in the construction warmup) hung to the device timeout. It is
-        cheap when nothing is in flight, so it runs at every transition rather than only the ones
-        known to matter.
+        direction: it drains the parent's and the children's queues and resets their in-use state. It
+        is cheap when nothing is in flight, so it runs at every transition. (It did not save the
+        submesh layouts -- the allocator overlap described at `_DECODE_SUBMESH_LAYOUTS` did that.)
+        The `thread` mode has one mesh and needs no barrier.
         """
-        if self.parallel_decode:
+        if self.decode_submesh_layout is not None:
             self.mesh_device.quiesce_devices()
 
     def _decode_concurrently(self, decode_video, decode_audio, on_event: PipelineEventCallback):
-        """Run the video VAE on `video_mesh` and the audio decoder on `audio_mesh` at the same time.
+        """Run the video VAE and the audio decoder at the same time, the audio on a worker thread.
 
-        The denoise loop ran on the whole parent and the two children overlap it, so the parent is
-        quiesced first -- the barrier `MeshDevice` requires between work on overlapping views (it
-        drains every queue, the children's included, and resets their in-use state). No barrier goes
-        between the two decoder launches: each child has its own physical devices, and ttnn dispatch
-        is asynchronous per mesh, so once both streams are issued the two children execute
-        independently. The second thread is what lets the host *issue* both streams at once -- the
-        audio decoder is dispatch-bound, and issuing it after the VAE returned would serialize the
-        two on the host even with the devices idle.
+        `thread` mode: one mesh, so the device runs the two streams in enqueue order on the shared
+        queue; what overlaps is the audio decoder's host-side dispatch (its dominant cost) with the
+        VAE's host-side readback and stitch, during which the device would otherwise sit idle. No
+        barrier is needed. Submesh layouts (unsafe, see `_DECODE_SUBMESH_LAYOUTS`): the parent is
+        quiesced first, the barrier `MeshDevice` requires between work on overlapping views, and no
+        barrier goes between the two launches since the children hold disjoint devices.
 
         Section accounting: `vae` wraps the video decode as before; `audio` wraps only the wait for
         the audio thread after the video decode returned, so it measures the audio tail the video
         did not hide, and the stage rows still sum to the decode wall time.
         """
         mark = time.perf_counter()
-        self.mesh_device.quiesce_devices()
+        self._rejoin_parent_mesh()  # parent -> children barrier for the submesh layouts; no-op in thread mode
         t_quiesce = time.perf_counter() - mark
 
         outcome: dict[str, object] = {}

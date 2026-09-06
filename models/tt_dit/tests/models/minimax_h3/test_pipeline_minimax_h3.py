@@ -28,6 +28,7 @@ from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
     _requested_audio_t_factor,
     _resolve_audio_t_shard,
     resolve_decode_submesh_layout,
+    resolve_parallel_decode_mode,
 )
 from ..wan2_2.common import check_output_sanity
 from .common import GALAXY_MESHES
@@ -121,8 +122,18 @@ def test_requested_audio_t_factor_precedence(monkeypatch, expect_error):
 # overlap, unset/off means sequential, and a layout on any other parent shape is refused.
 @pytest.mark.parametrize("name", [None, "", "0", "off", "none", "OFF"])
 def test_decode_submesh_layout_off(name):
+    assert resolve_parallel_decode_mode(name) is None
     assert resolve_decode_submesh_layout(name, (4, 8)) is None
     assert resolve_decode_submesh_layout(name, (4, 32)) is None
+
+
+def test_parallel_decode_mode_resolution():
+    # `thread` is concurrency without children, on any mesh shape; a layout name means children.
+    assert resolve_parallel_decode_mode("thread") == "thread"
+    assert resolve_parallel_decode_mode(" Thread ") == "thread"
+    assert resolve_decode_submesh_layout("thread", (4, 8)) is None
+    assert resolve_decode_submesh_layout("thread", (4, 32)) is None
+    assert resolve_parallel_decode_mode("4x7") == "submesh"
 
 
 @pytest.mark.parametrize("name", ["4x7", "2x8", "3x8"])
