@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dispatch_device_operation.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch.hpp"
 #include "kernels/dataflow/dispatch_plan.hpp"  // PlanHeader / PlanEntry layout (host sizes the plan CB from these)
 #include <algorithm>
 #include <array>
@@ -873,6 +874,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
 
         auto worker_kernel_defines = fabric_defines;  // carries AXIS define if set
         auto worker_writer_defines = fabric_defines;
+        worker_writer_defines["DISPATCH_METADATA_FIELDS"] = std::to_string(DISPATCH_METADATA_FIELDS);
         if (has_padding_config) {
             worker_kernel_defines["HAS_PADDING_CONFIG"] = "1";
             worker_writer_defines["HAS_PADDING_CONFIG"] = "1";

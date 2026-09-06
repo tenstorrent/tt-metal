@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM2
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    DISPATCH_METADATA_FIELDS,
     ExpertMapping,
     compute_constants,
     extract_mesh_config,
@@ -400,9 +401,9 @@ def run_dispatch(
     # is >= 0 only for real dispatched tokens), since unfilled device slots are uninitialized.
     if fp8_scaled_input:
         filled = torch_metadata[..., 1] >= 0
-        mask = filled.unsqueeze(-1).expand_as(torch_metadata[..., 3:])
-        ref_tail = torch_metadata[..., 3:][mask]
-        out_tail = tt_out_metadata[..., 3:].to(torch.int32)[mask]
+        mask = filled.unsqueeze(-1).expand_as(torch_metadata[..., DISPATCH_METADATA_FIELDS:])
+        ref_tail = torch_metadata[..., DISPATCH_METADATA_FIELDS:][mask]
+        out_tail = tt_out_metadata[..., DISPATCH_METADATA_FIELDS:].to(torch.int32)[mask]
         assert torch.equal(ref_tail, out_tail), (
             "fp8 per-token scales in the metadata tail (fields 3..) do not match the reference "
             "(dispatch must byte-copy each token's scales unchanged)."
