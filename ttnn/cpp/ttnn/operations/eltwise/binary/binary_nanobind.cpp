@@ -72,6 +72,8 @@ constexpr auto kDivideInplaceDtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32";
 constexpr auto kMixedFloatFamilyFootnote =
     R"doc(Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.)doc";
 constexpr auto kSameDtypeRequiredFootnote = R"doc(Operands must have the same dtype.)doc";
+constexpr auto kInt32FloatScalarPromotionNote =
+    R"doc(An INT32 tensor with a floating-point scalar is promoted to FLOAT32 before computation, including integral-valued floats such as `2.0`. The default output dtype is FLOAT32. Use an integer scalar (for example, `2` instead of `2.0`) to retain integer-scalar semantics.)doc";
 constexpr auto kIscloseMixedDtypeFootnote = R"doc(The only allowed mixed-dtype pair is FLOAT32 with BFLOAT16.)doc";
 constexpr auto kRelationalDtypeFootnote =
     R"doc(Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.
@@ -98,7 +100,6 @@ constexpr auto kDivideFastApproxPostNote =
         When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.)doc";
 constexpr auto kDivFastApproxPostNote =
     R"doc(With INT32 tensor operands or an INT32 tensor and an integer scalar, rounding_mode `None` produces a FLOAT32 output and output datatype conversion is not supported, while `floor` and `trunc` produce an INT32 output.
-        An INT32 tensor with a floating-point scalar is promoted to FLOAT32 before division and rounding, including integral-valued floats such as `2.0`. The default output dtype is FLOAT32 in all rounding modes.
         When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero for fast approximation.
         When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero (accurate mode).)doc";
 constexpr auto kMultiplyInplaceFastApproxPostNote =
@@ -1900,7 +1901,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::remainder),
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
         detail::kFloatAndInt32UInt32Dtypes,
-        detail::kSameDtypeRequiredFootnote);
+        fmt::format("{}\n\n{}", detail::kSameDtypeRequiredFootnote, detail::kInt32FloatScalarPromotionNote));
 
     detail::bind_binary_operation_with_fast_approx<"add">(
         mod,
@@ -2341,7 +2342,7 @@ void py_module(nb::module_& mod) {
             const std::optional<tt::tt_metal::SubDeviceId>&>(&ttnn::div),
         detail::kFloatAndInt32Dtypes,
         detail::kDivideDtypeFootnote,
-        detail::kDivFastApproxPostNote);
+        fmt::format("{}\n\n{}", detail::kDivFastApproxPostNote, detail::kInt32FloatScalarPromotionNote));
 
     detail::bind_binary_composite_overload<"div_no_nan">(
         mod,
@@ -2398,7 +2399,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOverloadScalarFn>(&ttnn::fmod),
         static_cast<detail::BinaryOverloadTensorFn>(&ttnn::fmod),
         detail::kFloatAndInt32Dtypes,
-        detail::kSameDtypeRequiredFootnote);
+        fmt::format("{}\n\n{}", detail::kSameDtypeRequiredFootnote, detail::kInt32FloatScalarPromotionNote));
 
     detail::bind_inplace_operation<"gt_">(
         mod,

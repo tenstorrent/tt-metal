@@ -54,11 +54,19 @@ void validate_scalar_typecast(
         context);
 }
 
-std::pair<Tensor, std::optional<CoreRangeSet>> promote_int32_scalar_input(
+struct PromotedScalarInput {
+    Tensor input;
+    std::optional<CoreRangeSet> sub_core_grids;
+    std::optional<MemoryConfig> memory_config;
+};
+
+PromotedScalarInput promote_int32_scalar_input(
     const Tensor& input,
+    const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     auto operation_sub_core_grids = resolve_sub_device_workers(input, sub_core_grids, sub_device_id);
+    Tensor operation_input = input;
     if ((input.layout() == Layout::ROW_MAJOR && (input.is_sharded() || operation_sub_core_grids.has_value())) ||
         (input.is_sharded() && operation_sub_core_grids.has_value())) {
         // Use unary TYPECAST's full-tile staging for restricted row-major/sharded grids.
@@ -73,7 +81,7 @@ std::pair<Tensor, std::optional<CoreRangeSet>> promote_int32_scalar_input(
             input.is_sharded()
                 ? ttnn::to_layout(input, Layout::TILE, std::nullopt, std::nullopt, operation_sub_core_grids)
                 : input;
-        auto operation_input = unary::detail::unary_impl(
+        operation_input = unary::detail::unary_impl(
             typecast_input,
             {unary::EltwiseUnaryWithParam{
                 unary::UnaryOpType::TYPECAST,
@@ -81,12 +89,17 @@ std::pair<Tensor, std::optional<CoreRangeSet>> promote_int32_scalar_input(
             std::nullopt,
             std::nullopt,
             operation_sub_core_grids);
-        return {std::move(operation_input), std::move(operation_sub_core_grids)};
+    } else {
+        validate_scalar_typecast(
+            input.layout(), input.is_sharded(), operation_sub_core_grids, "INT32 scalar promotion");
+        operation_input =
+            ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids);
     }
-    validate_scalar_typecast(input.layout(), input.is_sharded(), operation_sub_core_grids, "INT32 scalar promotion");
-    auto operation_input =
-        ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids);
-    return {std::move(operation_input), std::move(operation_sub_core_grids)};
+    // Keep tilized shard pages through the arithmetic; untilize performs any
+    // requested output memory-layout conversion using the input shard workers.
+    auto operation_mem_config =
+        operation_input.layout() != input.layout() ? operation_input.memory_config() : output_mem_config;
+    return {std::move(operation_input), std::move(operation_sub_core_grids), std::move(operation_mem_config)};
 }
 
 Tensor restore_scalar_output_layout(
@@ -242,10 +255,8 @@ Tensor div(
         TT_FATAL(
             !(input.layout() == Layout::ROW_MAJOR && output_tensor.has_value()),
             "Optional output tensor with Row Major input is not supported right now for Elementwise operations");
-        const auto [operation_input, operation_sub_core_grids] =
-            promote_int32_scalar_input(input, sub_core_grids, sub_device_id);
-        const auto operation_mem_config =
-            operation_input.layout() != input.layout() ? operation_input.memory_config() : output_mem_config;
+        const auto [operation_input, operation_sub_core_grids, operation_mem_config] =
+            promote_int32_scalar_input(input, output_mem_config, sub_core_grids, sub_device_id);
         const std::optional<const DataType> requested_dtype =
             output_tensor.has_value() ? std::optional<const DataType>{output_tensor->dtype()} : output_dtype;
         if (rounding_mode.has_value() && requested_dtype.has_value() &&
@@ -637,22 +648,20 @@ Tensor remainder(
     Tensor operation_input = input;
     auto operation_sub_core_grids = sub_core_grids;
     auto operation_sub_device_id = sub_device_id;
+    auto operation_mem_config = output_mem_config;
     if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
         // binary_ng did not support preallocated outputs when tilizing row-major
         // inputs. Preserve that restriction rather than writing tile data to them.
         TT_FATAL(
             !(input.layout() == Layout::ROW_MAJOR && input.is_sharded() && output_tensor.has_value()),
             "Optional output tensor with row-major sharded scalar promotion is not supported");
-        auto [promoted_input, promoted_sub_core_grids] =
-            promote_int32_scalar_input(input, sub_core_grids, sub_device_id);
+        auto [promoted_input, promoted_sub_core_grids, promoted_mem_config] =
+            promote_int32_scalar_input(input, output_mem_config, sub_core_grids, sub_device_id);
         operation_input = std::move(promoted_input);
         operation_sub_core_grids = std::move(promoted_sub_core_grids);
+        operation_mem_config = std::move(promoted_mem_config);
         operation_sub_device_id = std::nullopt;
     }
-    // Keep tilized shard pages through the arithmetic; untilize performs any
-    // requested output memory-layout conversion using the input shard workers.
-    const auto operation_mem_config =
-        operation_input.layout() != input.layout() ? operation_input.memory_config() : output_mem_config;
 
     // The unary SFPU fast path does not support INT32. Float scalars promote INT32 inputs
     // above; integral scalars must route through binary_ng.
@@ -672,13 +681,20 @@ Tensor remainder(
                 operation_sub_core_grids);
         }
 
-        // Preserve the supported layout/grid combinations for output conversion,
-        // whether fused below or performed on a separate FP32 intermediate.
-        validate_scalar_typecast(
-            operation_input.layout(),
-            output_tensor->is_sharded(),
-            operation_sub_core_grids,
-            "Remainder output typecast");
+        // Fused unary TYPECAST supports row-major interleaved subgrids without
+        // standalone typecast. Keep the existing guards for sharded outputs and
+        // for the separate output-conversion path below.
+        const bool fused_row_major_bf16 = output_tensor->dtype() == DataType::BFLOAT16 &&
+                                          operation_input.layout() == Layout::ROW_MAJOR &&
+                                          output_tensor->layout() == Layout::ROW_MAJOR &&
+                                          !operation_input.is_sharded() && !output_tensor->is_sharded();
+        if (!fused_row_major_bf16) {
+            validate_scalar_typecast(
+                operation_input.layout(),
+                output_tensor->is_sharded(),
+                operation_sub_core_grids,
+                "Remainder output typecast");
+        }
 
         // Fuse BF16 conversion to avoid a separate pass, but retain TYPECAST's
         // explicit rounding: direct unary packing is not bit-equivalent.
@@ -747,11 +763,9 @@ Tensor fmod(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
-        const auto [operation_input, operation_sub_core_grids] =
-            promote_int32_scalar_input(input, sub_core_grids, sub_device_id);
+        const auto [operation_input, operation_sub_core_grids, operation_mem_config] =
+            promote_int32_scalar_input(input, output_mem_config, sub_core_grids, sub_device_id);
         const float scalar_f = std::get<float>(scalar);
-        const auto operation_mem_config =
-            operation_input.layout() != input.layout() ? operation_input.memory_config() : output_mem_config;
         return restore_scalar_output_layout(
             input,
             operation_input.layout(),

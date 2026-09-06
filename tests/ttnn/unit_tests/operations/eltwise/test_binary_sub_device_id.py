@@ -165,6 +165,34 @@ def test_binary_int32_float_scalar_row_major_sharded_with_sub_device_id(device, 
         teardown_sub_device(device, sub_device_manager)
 
 
+@pytest.mark.parametrize("scalar", [257.25, -257.25])
+@skip_for_slow_dispatch()
+def test_remainder_int32_row_major_bfloat16_output_with_sub_device_id(device, scalar):
+    torch_input = (torch.arange(32 * 1056, dtype=torch.int32) % 1024 - 512).reshape(32, 1056)
+    sub_device_manager = setup_sub_device(device)
+    try:
+        for offset in [0, 1]:
+            input_tensor = ttnn.from_torch(
+                torch_input + offset, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+            output_tensor = ttnn.from_torch(
+                torch.zeros_like(torch_input, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+            )
+            result = ttnn.remainder(
+                input_tensor, scalar, output_tensor=output_tensor, sub_device_id=ttnn.SubDeviceId(1)
+            )
+            expected = torch.remainder((torch_input + offset).float(), scalar).to(torch.bfloat16)
+            assert result.buffer_address() == output_tensor.buffer_address()
+            assert result.dtype == ttnn.bfloat16
+            assert result.layout == ttnn.ROW_MAJOR_LAYOUT
+            assert torch.equal(ttnn.to_torch(output_tensor), expected)
+    finally:
+        teardown_sub_device(device, sub_device_manager)
+
+
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @skip_for_slow_dispatch()

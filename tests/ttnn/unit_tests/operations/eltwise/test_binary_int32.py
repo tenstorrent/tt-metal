@@ -1594,11 +1594,15 @@ def test_binary_remainder_int32_float_scalar_optional_int32_output(layout, use_s
         pytest.param(ttnn.TILE_LAYOUT, False, id="tile"),
         pytest.param(ttnn.TILE_LAYOUT, True, id="tile_subgrid"),
         pytest.param(ttnn.ROW_MAJOR_LAYOUT, False, id="row_major"),
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, True, id="row_major_subgrid"),
     ],
 )
 @pytest.mark.parametrize("scalar", [257.25, -257.25])
-def test_binary_remainder_int32_float_scalar_optional_bfloat16_output(layout, use_sub_core_grids, scalar, device):
-    torch_input = torch.arange(-512, 512, dtype=torch.int32).reshape(32, 32)
+@pytest.mark.parametrize("width", [32, 1056])
+def test_binary_remainder_int32_float_scalar_optional_bfloat16_output(
+    layout, use_sub_core_grids, scalar, width, device
+):
+    torch_input = (torch.arange(32 * width, dtype=torch.int32) % 1024 - 512).reshape(32, width)
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=layout, device=device)
     output_tensor = ttnn.from_torch(
         torch.zeros_like(torch_input, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device
@@ -1609,9 +1613,12 @@ def test_binary_remainder_int32_float_scalar_optional_bfloat16_output(layout, us
 
     # Fused BF16 conversion must match the previous FP32 intermediate + typecast
     # path, including rounding of fractional remainders beyond BF16 precision.
-    promoted_input = ttnn.typecast(input_tensor, ttnn.float32, sub_core_grids=sub_core_grids)
+    # Standalone row-major typecast does not support subgrids; the reference uses
+    # its full-grid path, while the operation under test must use the requested grid.
+    reference_typecast_grids = sub_core_grids if layout == ttnn.TILE_LAYOUT else None
+    promoted_input = ttnn.typecast(input_tensor, ttnn.float32, sub_core_grids=reference_typecast_grids)
     intermediate = ttnn.remainder(promoted_input, scalar, sub_core_grids=sub_core_grids)
-    reference = ttnn.typecast(intermediate, ttnn.bfloat16, sub_core_grids=sub_core_grids)
+    reference = ttnn.typecast(intermediate, ttnn.bfloat16, sub_core_grids=reference_typecast_grids)
     result = ttnn.remainder(input_tensor, scalar, output_tensor=output_tensor, sub_core_grids=sub_core_grids)
 
     assert result.buffer_address() == output_tensor.buffer_address()
@@ -1664,7 +1671,10 @@ def test_binary_remainder_int32_float_scalar_optional_output_sharding(
 
 
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-def test_binary_remainder_int32_float_scalar_rejects_unsupported_sharded_output(layout, device, expect_error):
+@pytest.mark.parametrize("output_dtype", [ttnn.int32, ttnn.bfloat16])
+def test_binary_remainder_int32_float_scalar_rejects_unsupported_sharded_output(
+    layout, output_dtype, device, expect_error
+):
     torch_input = torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32)
     cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
     sharded_memory_config = ttnn.create_sharded_memory_config(
@@ -1679,7 +1689,7 @@ def test_binary_remainder_int32_float_scalar_rejects_unsupported_sharded_output(
     )
     output_tensor = ttnn.from_torch(
         torch.zeros_like(torch_input),
-        dtype=ttnn.int32,
+        dtype=output_dtype,
         layout=layout,
         device=device,
         memory_config=sharded_memory_config,
