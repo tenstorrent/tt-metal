@@ -13,6 +13,7 @@ set(SCALEOUT_TOOLS_API_HEADERS
     board/board.hpp
     cabling_generator/cabling_generator.hpp
     cabling_generator/regen_descriptors.hpp
+    cabling_matcher/cabling_matcher.hpp
     connector/connector.hpp
     factory_system_descriptor/query.hpp
     factory_system_descriptor/utils.hpp
@@ -25,6 +26,7 @@ set(SCALEOUT_TOOLS_SRCS
     board/board.cpp
     cabling_generator/cabling_generator.cpp
     cabling_generator/regen_descriptors.cpp
+    cabling_matcher/cabling_matcher.cpp
     connector/connector.cpp
     factory_system_descriptor/query.cpp
     factory_system_descriptor/utils.cpp
@@ -45,6 +47,8 @@ set(RUN_FABRIC_MANAGER_SRCS
 set(SCALEOUT_2D_BIG_MESH_CABLING_GEN_SRCS src/2d_big_mesh_cabling_gen.cpp)
 
 set(RUN_CABLING_GENERATOR_SRCS src/run_cabling_generator.cpp)
+
+set(RUN_CABLING_MATCHER_SRCS src/run_cabling_matcher.cpp)
 
 set(RUN_REGEN_DESCRIPTORS_SRCS src/run_regen_descriptors.cpp)
 
