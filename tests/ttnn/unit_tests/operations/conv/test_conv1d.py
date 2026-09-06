@@ -1016,6 +1016,48 @@ def test_conv1d_depthwise_dram_slice_auto_shard(device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_conv1d_unchunked_c10240_default(device):
+    """Unchunked stock no-bias depthwise conv1d (C=10240, groups=10240, K=4, T=12, padding=3)
+    with fully default configs: no conv_config, no compute_config, no slice_config, DRAM input.
+    Auto-shard used to force height sharding for 1d depthwise convs; at this shape the
+    height-sharded config cannot fit in L1 and the DRAM auto-slicer fails with
+    "DRAM Auto slice could not find valid slice configuration". The default call must now
+    pick a fitting layout (width sharding through the generic conv path)."""
+    torch.manual_seed(0)
+    torch_input_ncl = torch.randn(1, 10240, 12, dtype=torch.bfloat16).float()
+    torch_weight = torch.randn(10240, 1, 4, dtype=torch.bfloat16).float()
+    golden = torch.nn.functional.conv1d(torch_input_ncl, torch_weight, bias=None, stride=1, padding=3, groups=10240)
+
+    input_tt = ttnn.from_torch(
+        torch_input_ncl.permute(0, 2, 1),  # NLC for conv1d
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    weight_tt = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    tt_out, out_length = ttnn.conv1d(
+        input_tensor=input_tt,
+        weight_tensor=weight_tt,
+        device=device,
+        in_channels=10240,
+        out_channels=10240,
+        batch_size=1,
+        input_length=12,
+        kernel_size=4,
+        stride=1,
+        padding=3,
+        groups=10240,
+        return_output_dim=True,
+    )
+
+    out = ttnn.to_torch(tt_out).reshape(1, out_length, 10240).permute(0, 2, 1)
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(out, golden, pcc=0.99)
+    assert passing, pcc_msg
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_conv1d_depthwise_subblock_deadlock(device):
     """Fix 3 (depthwise CB deadlock): a depthwise (groups == C) conv1d whose act_block_h is
     forced large enough that out_subblock_h_ntiles > 1. The depthwise compute kernel tilized
