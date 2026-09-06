@@ -54,6 +54,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import NamedTuple
 
+import numpy as np
 import torch
 import tqdm
 from loguru import logger
@@ -425,6 +426,7 @@ class MiniMaxH3Pipeline:
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
         adaln_slot_roles: tuple[str, ...] | None = None,
+        warmup: bool = True,
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
@@ -669,6 +671,9 @@ class MiniMaxH3Pipeline:
         self._prepare_text_encoder()
         self._prepare_audio_decoder()
 
+        if warmup:
+            self._warmup_on_init()
+
     # ------------------------------------------------------------------ construction
 
     @classmethod
@@ -691,6 +696,7 @@ class MiniMaxH3Pipeline:
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
         adaln_slot_roles: tuple[str, ...] | None = None,
+        warmup: bool = True,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -730,6 +736,7 @@ class MiniMaxH3Pipeline:
             bucket_ladder=bucket_ladder,
             arena_caps=arena_caps,
             adaln_slot_roles=adaln_slot_roles,
+            warmup=warmup,
         )
 
     def _read_config(self, subfolder: str) -> dict:
@@ -2124,6 +2131,36 @@ class MiniMaxH3Pipeline:
             sampling_rate=self.audio_sampling_rate,
             num_frames=video.shape[2],
         )
+
+    @staticmethod
+    def _warmup_image(size: int = 512) -> Image.Image:
+        y, x = np.mgrid[0:size, 0:size].astype(np.uint8)
+        return Image.fromarray(np.stack([x, y, x ^ y], axis=-1), "RGB")
+
+    def _warmup_audio(self, seconds: float = 1.0) -> tuple[torch.Tensor, int]:
+        rate = self.audio_sampling_rate
+        return torch.zeros(MINIMAX_H3_AUDIO_CHANNELS, int(seconds * rate), dtype=torch.float32), rate
+
+    def _warmup_video(self, num_frames: int = 5, size: int = 256) -> tuple[np.ndarray, float]:
+        return np.zeros((num_frames, size, size, 3), dtype=np.uint8), float(MINIMAX_H3_FPS)
+
+    def _warmup_on_init(self) -> None:
+        """Compile and (when tracing) capture every module a served request touches, per task: the
+        keyframe encoder for t2va/fl2va, and the image, video and audio encoders for ref2va."""
+        height, width = resolve_canvas_size(16, 9)
+        num_frames = align_num_frames(round(5 * MINIMAX_H3_FPS))
+        if self.task == "ref2va":
+            waveform, sample_rate = self._warmup_audio()
+            video, fps = self._warmup_video()
+            references = [
+                MiniMaxH3Reference(image=self._warmup_image()),
+                MiniMaxH3Reference(video=video, fps=fps, audio=waveform, sample_rate=sample_rate),
+            ]
+            self.warmup(references=references, num_frames=num_frames, height=height, width=width, num_inference_steps=3)
+        else:
+            self.warmup(
+                image=self._warmup_image(), num_frames=num_frames, height=height, width=width, num_inference_steps=3
+            )
 
     def warmup(
         self,
