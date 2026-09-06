@@ -91,6 +91,9 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
 
+    assert_kernel_config_no_overlap(
+        mem_map_bases, default_l1_kernel_config_size, HalL1MemAddrType::DEFAULT_UNRESERVED, "Tensix");
+
     // Base FW api not supported on WH
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
