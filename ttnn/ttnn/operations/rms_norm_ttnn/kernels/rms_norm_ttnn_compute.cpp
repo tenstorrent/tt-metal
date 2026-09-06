@@ -350,6 +350,18 @@ constexpr uint32_t pass_b_blk(uint32_t wt, uint32_t cap) {
     return b;
 }
 
+// The SMALLEST divisor of `wt` that is >= 2 and <= `cap` -- pass B's DEST-lane block size
+// when the core owns exactly ONE tile-row (Perf 1).  See PASS_B_AUTO below for why the
+// two rules exist and which one a block gets.
+constexpr uint32_t pass_b_blk_small(uint32_t wt, uint32_t cap) {
+    for (uint32_t b = 2; b <= cap && b <= wt; ++b) {
+        if ((wt % b) == 0) {
+            return b;
+        }
+    }
+    return pass_b_blk(wt, cap);
+}
+
 namespace {
 constexpr uint32_t cb_input_sticks = 0;
 constexpr uint32_t cb_input_tiles = 1;
@@ -799,7 +811,32 @@ void kernel_main() {
     // bought) was REFUSED host-side in resolve_program_config, which is the only
     // place that decision lives; 0 means "the op's own choice" and is the seed's
     // expression exactly.
-    constexpr uint32_t PASS_B_BLK = (PASS_B_BLK_CT != 0) ? PASS_B_BLK_CT : pass_b_blk(WT_CHUNK, ckl::DEST_AUTO_LIMIT);
+    // PERF 1: A ONE-TILE-ROW BLOCK WANTS THE *SMALL* DEST BLOCK, NOT THE LARGE ONE.
+    // D21's rule -- the LARGEST divisor of WT_CHUNK that fits DEST -- amortizes pass B's
+    // per-element init, format reconfig and CB reserve/push over as many tiles as the
+    // register file holds.  That is the right trade when a core has many tile-rows to get
+    // through and pass B is THROUGHPUT-bound.  At BLOCK_ROWS == 1 it is not: pass B is the
+    // TAIL after the combine's multicast, the block is a handful of tiles, and a smaller
+    // DEST block lets the packer overlap the math instead of waiting out one long window.
+    // So the small rule is the op's choice, and the LARGE rule is the exception -- earned
+    // by a MEASURED regression, not by a hunch (blackhole p150b 1350 MHz, pinned config
+    // unchanged, output BIT-IDENTICAL in every cell below; a smaller block changes only
+    // the DEST windowing, never an operand, a format or a rounding):
+    //     BLOCK_ROWS > 1, small block LOSES  (1,1,8192,1024) BLOCK 64c   0.958x
+    //                                        (1,1,7168,1024) BLOCK gbr   0.976x
+    //     BLOCK_ROWS == 1, small block WINS  (1,1,32,7168) WIDTH 28c   3891 -> 3724  1.045x
+    //                                        (1,1,32,2304) WIDTH  9c   3156 -> 2989  1.056x
+    //                                        (1,1,32,1024) WIDTH  8c   2688 -> 2593  1.037x
+    //                                        (1,1,2048,256) HEIGHT     3564 -> 3433  1.038x
+    //                                        (1,1,32,7168) INTERLEAVED 8530 -> 8356  1.021x
+    // Geometries whose WT_CHUNK has no divisor between 2 and the auto value (WT_CHUNK 5 on
+    // the (1,1,32,5120) WIDTH shards) get the SAME number from both rules and are
+    // byte-identical, which is why they read flat.  `>= 2` rather than a flat 1: block 1
+    // measured 0.994x / 0.991x / 0.987x -- the per-tile lifecycle costs more than the
+    // overlap buys -- so 1 is a fallback for WT_CHUNK == 1, never a choice.
+    constexpr uint32_t PASS_B_AUTO = (BLOCK_ROWS > 1) ? pass_b_blk(WT_CHUNK, ckl::DEST_AUTO_LIMIT)
+                                                      : pass_b_blk_small(WT_CHUNK, ckl::DEST_AUTO_LIMIT);
+    constexpr uint32_t PASS_B_BLK = (PASS_B_BLK_CT != 0) ? PASS_B_BLK_CT : PASS_B_AUTO;
     static_assert(PASS_B_BLK >= 1 && WT_CHUNK % PASS_B_BLK == 0, "rms_norm_ttnn: PASS_B_BLK must divide WT_CHUNK");
     static_assert(PASS_B_BLK <= ckl::DEST_AUTO_LIMIT, "rms_norm_ttnn: PASS_B_BLK exceeds the DEST lane capacity");
 
@@ -1159,6 +1196,14 @@ void kernel_main() {
         }
     };
 
+    // PERF 1: the boot constants are waited ONCE, at first use, via these one-shot flags.
+    // `cb_scaler` and `cb_bank` are pushed once by the reader and never popped until the
+    // end, so the front only has to be established the first time -- and a flag keeps the
+    // poll off the per-chunk path of the streaming regimes, where pass A runs it hundreds
+    // of times per core.
+    bool scaler_ready = false;
+    bool bank_ready = false;
+
     auto pass_a = [&](uint32_t rows, uint32_t pipe_base) {
         for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
             // Tile offset of this chunk inside the HELD CB.  0 (and elided) unless
@@ -1203,6 +1248,14 @@ void kernel_main() {
                     ckl::PackTile<SQ_OUT>{});
             }
 
+            // PERF 1: the reduce helper does NOT wait on its scaler CB -- its own contract
+            // hands that to the caller (reduce_helpers_compute.hpp:37) -- and since the
+            // reader now publishes the input shard BEFORE synthesizing the scaler, this is
+            // the wait that used to be implied by the reader's ordering.
+            if (!scaler_ready) {
+                cb_wait_front(cb_scaler, SCALER_TILES);
+                scaler_ready = true;
+            }
             MaybeDeviceZoneScope("compute_reduce");
             rms_norm_local::accumulate_reduce_block<
                 ckernel::PoolType::SUM,
@@ -1295,6 +1348,15 @@ void kernel_main() {
             return;
         } else {
             MaybeDeviceZoneScope("compute_member_pack");
+            // PERF 1: `matmul_tiles` has no CB lifecycle, so the one-hot bank the reader
+            // synthesizes needs an explicit front here -- see the note above the row-block
+            // loop for the corruption this prevents.  BLOCK_ROWS pages, not `rows`: a
+            // RAGGED last block has fewer rows but the bank is always full-size, and this
+            // wait must cover the whole bank the first time whichever block runs first.
+            if (!bank_ready) {
+                cb_wait_front(cb_bank, BLOCK_ROWS);
+                bank_ready = true;
+            }
             cb_wait_front(cb_sum_handoff, rows);
             cb_reserve_back(cb_compact_handoff, 1);
             // NOT optional, for the same reason D22's fold spells its reconfigs out (a missing
@@ -1319,6 +1381,35 @@ void kernel_main() {
             cb_pop_front(cb_sum_handoff, rows);
         }
     };
+
+    // ---- PERF 1: THE BOOT-CONSTANT CBs ARE WAITED FOR *EXPLICITLY*, ONCE --------------
+    // `cb_scaler` and `cb_bank` are reader-synthesized constants that this kernel reads
+    // WITHOUT any per-use wait: the reduce helper's own contract puts the burden on the
+    // caller ("the scaler CB must contain the scaling factor tile BEFORE calling reduce()",
+    // reduce_helpers_compute.hpp:37), and `member_pack` / `compute_recv_unpack` hand
+    // `cb_bank` straight to `matmul_tiles`, which has no CB lifecycle at all.  Until Perf 1
+    // both were ordered only IMPLICITLY, by the reader publishing the input shard LAST --
+    // so pass A could not start until every boot constant was already in L1.
+    //
+    // Perf 1 hoists that publish to the TOP of the reader (a 1.29x win; see the note there),
+    // which DELETES that implicit ordering.  Without these two waits the compute kernel
+    // races the reader's boot: MEASURED as a non-deterministic corruption on the COMPACT
+    // combine path -- `1x1x2048x256` and `4x1x512x512` BLOCK_SHARDED came back at
+    // pcc 0.08-0.12 / rel-RMS 1e5 with a DIFFERENT set of cells failing on every run,
+    // because the permutation matmul was multiplying against a bank the reader had not
+    // finished zeroing.  The identity path (BLOCK_ROWS == 1) has no bank and happened to
+    // survive on the scaler, which is precisely the kind of luck a wait replaces.
+    //
+    // EACH WAIT SITS AT ITS OWN FIRST USE, not in a joint prologue: the scaler's is in
+    // `pass_a` immediately before the reduce and the bank's at the top of `member_pack` and
+    // `compute_recv_unpack`.  That matters, and it is measured -- a joint prologue makes
+    // `compute_square` (which needs NEITHER constant) block on both, and on the COMPACT
+    // BLOCK-shard geometries that cost 7-8% of the whole op (22001 vs 20419 ns on
+    // `(1,1,8192,1024)` BLOCK 64c) by re-serialising pass A behind the reader's boot.  A
+    // repeated `cb_wait_front` on an already-satisfied, never-popped CB is an L1 poll that
+    // returns immediately, so paying it per block is free where the constant is ready.
+    // These are the matching FRONTS for the `cb_pop_front(cb_scaler, SCALER_TILES)` at the
+    // end of this kernel; the bank is never popped at all.
 
     // D25's PROLOGUE: block 0's pass A runs before the loop, so from here on the loop body
     // issues block blk+1's pass A first and the root's arrival wait + fold + multicast for
@@ -1503,6 +1594,25 @@ void kernel_main() {
                 // interior fold and this one are ONE implementation.  What the tree changes
                 // here is only WHICH RING the root reads and HOW MANY pages are in it: the
                 // level-1 ring of TREE_SL1 forwarded sums instead of GATHER_SLOTS partials.
+                //
+                // PERF 1: THE FOLD PACKS STRAIGHT INTO THE MULTICAST LANDING PAGE.
+                // The last level's pack target used to be `cb_stat_handoff`, which the
+                // WRITER then copied 3 kB L1->L1 into the landing CB (with an acked
+                // barrier) purely to satisfy D24's "publish the root's own copy before the
+                // broadcast".  Packing into the landing CB directly makes that publish the
+                // pack that already existed: D24's requirement is unchanged and now free,
+                // and `cb_stat_handoff` degenerates to the one-page READY TOKEN pushed
+                // below.  This is the ROOT's branch only -- an interior tree node still
+                // packs `cb_node_out`, and a member never runs this code.
+                // MEASURED bit-identical, 1.013x-1.025x on the focus WIDTH shard and
+                // 1.006x-1.024x across every other combine geometry; see the writer's
+                // `writer_mcast_send` note for the table.
+                constexpr uint32_t CB_FOLD_OUT = COMPACT ? cb_mcast_in : cb_row_final;
+                // Under FIN_SPREAD the last level forwards a RAW sum, so the fold's pack
+                // would NOT be the stat and the landing page must not receive it.
+                // COMBINE_FIN_SPREAD is measured off (Refinement 2), so this guards a dead
+                // path rather than gating a live one.
+                static_assert(!FIN_SPREAD, "rms_norm_ttnn: the direct-to-landing fold assumes the ROOT finalizes");
                 MaybeDeviceZoneScope("compute_root_fused");
 #if defined(RMS_ABLATE_ROOT_SUM) || defined(RMS_ABLATE_ROOT_FINALIZE)
                 // ABLATION (temporary, /perf-measure): payload removed, every CB handshake
@@ -1514,9 +1624,12 @@ void kernel_main() {
                 // what makes the cumulative peel additive.  D28: the ROOT's window is the
                 // level-1 ring when the tree is built, and `compute_tree_fold_l0` above
                 // peels with the same pair of switches.
+                // PERF 1: the round's OUTPUT handshake is the CB_FOLD_OUT page plus the
+                // ready token below (which is emitted unconditionally, ablated or not), so
+                // the stub keeps the landing page's reserve/push and nothing else.
                 cb_wait_front(TREE ? cb_gather_l1 : cb_partials_gathered, TREE ? TREE_SL1 : GATHER_SLOTS);
-                cb_reserve_back(cb_stat_handoff, 1);
-                cb_push_back(cb_stat_handoff, 1);
+                cb_reserve_back(CB_FOLD_OUT, 1);
+                cb_push_back(CB_FOLD_OUT, 1);
                 cb_pop_front(TREE ? cb_gather_l1 : cb_partials_gathered, TREE ? TREE_SL1 : GATHER_SLOTS);
 #else
                 // FINALIZE = !FIN_SPREAD is the ONE line Lamp L-FIN changes on the root:
@@ -1530,7 +1643,7 @@ void kernel_main() {
                     combine_fold<
                         cb_gather_l1,
                         TREE_SL1,
-                        cb_stat_handoff,
+                        CB_FOLD_OUT,
                         /*FINALIZE=*/!FIN_SPREAD,
                         COMPACT,
                         COMPACT_FIN_WIDE,
@@ -1540,7 +1653,7 @@ void kernel_main() {
                     combine_fold<
                         cb_partials_gathered,
                         GATHER_SLOTS,
-                        cb_stat_handoff,
+                        CB_FOLD_OUT,
                         /*FINALIZE=*/!FIN_SPREAD,
                         COMPACT,
                         COMPACT_FIN_WIDE,
@@ -1548,6 +1661,12 @@ void kernel_main() {
                         EPS_BITS>();
                 }
 #endif
+                // The one-page READY TOKEN.  Its BYTES ARE NEVER READ: the writer waits it
+                // only to learn that CB_FOLD_OUT now holds this round's finalized stat, and
+                // then multicasts out of that page.  It is what gives the writer the
+                // happens-before it used to get from the copy it no longer makes.
+                cb_reserve_back(cb_stat_handoff, 1);
+                cb_push_back(cb_stat_handoff, 1);
             }
 
             // ---- LAMP L-FIN: the SPREAD finalize (Refinement 2) ---------------------
@@ -1621,6 +1740,10 @@ void kernel_main() {
             // (an identity un-permute is nothing to do), exactly as it did before D27.
             if constexpr (COMPACT) {
                 MaybeDeviceZoneScope("compute_recv_unpack");
+                if (!bank_ready) {  // PERF 1: matmul has no CB lifecycle
+                    cb_wait_front(cb_bank, BLOCK_ROWS);
+                    bank_ready = true;
+                }
                 cb_wait_front(CB_UNPERM_SRC, 1);
                 cb_reserve_back(cb_row_final, rows);
                 reconfig_data_format<ckernel::SrcOrder::Reverse>(CB_UNPERM_SRC, cb_bank);

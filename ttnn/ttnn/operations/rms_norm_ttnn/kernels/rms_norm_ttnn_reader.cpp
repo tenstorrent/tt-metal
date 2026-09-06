@@ -516,6 +516,43 @@ void kernel_main() {
 
     const auto x_acc = TensorAccessor(x_args, x_addr);
 
+    // ---- boot, FIRST: hand the resident shard to the compute kernel ---------
+    //
+    // PERF 1.  This publish is a pure CB hand-off of data that is ALREADY in this
+    // core's L1 (a zero-copy shard-backed ring): it reads nothing, moves nothing and
+    // depends on nothing below it.  It used to sit AFTER the scaler boot and after the
+    // per-channel operand's DRAM read, and `compute_square`'s `cb_wait_front` is blocked
+    // on it -- so the compute kernel idled through both.  MEASURED on the pinned
+    // `(1,1,32,7168)` WIDTH shard `[32,256]` `(7,4)` 28 cores (bf16 / HiFi2 /
+    // fp32_dest_acc_en=False, UNCHANGED -- this move touches no precision knob and the
+    // output is bit-identical, pcc 0.999985 both sides):
+    //     reader_native_publish END   2358 ->  616 ns
+    //     compute_reduce END          2740 -> 1289 ns
+    //     writer_gather_ship END      3166 -> 1936 ns
+    //     whole op                    5335 -> 4121 ns   = 1.295x
+    // and 1.09x-1.35x across the other sharded geometries, 1.02x-1.04x interleaved,
+    // flat (within noise) on STREAM / BAND / ragged-Wt, where there is no native shard
+    // to publish.  The gamma DRAM latency now drains under pass A and the combine.
+    //
+    // ORDERING SAFETY.  `cb_scaler` and `cb_input_tiles` are different CBs, waited on
+    // independently by the compute kernel, so nothing below reorders against this.  The
+    // `num_rows == 0` early return still sits ABOVE every CB touch (A4).  A ragged
+    // shard's pad-tile `async_write_zeros` inside `publish_native_shard` now runs before
+    // any read is in flight, which is strictly safer than running it after.
+    const uint32_t x_tile_bytes = get_tile_size(cb_input_tiles);
+
+    if constexpr (NATIVE_X) {
+        MaybeDeviceZoneScope("reader_native_publish");
+        // A TEMPLATE on the CB id, not a lambda taking one: `cb_reserve_back` and
+        // `DataflowBuffer` want a compile-time buffer index (a runtime one costs an
+        // indexed lookup where the seed had an immediate), and this sits on the
+        // measured native paths.  Two instantiations, one per stream.
+        publish_native_shard<cb_input_tiles, WT_CHUNK, IN_SHARD_PAGES>(w_real, x_tile_bytes);
+        if constexpr (NATIVE_R) {
+            publish_native_shard<cb_residual_tiles, WT_CHUNK, IN_SHARD_PAGES>(w_real, x_tile_bytes);
+        }
+    }
+
     // ---- boot: what cb_scaler carries, per reduce datapath ----------------
     // Value is exactly 1.0 everywhere; 1/W is applied in fp32 by the compute
     // finalize, never folded into a bf16 scaler (R4).
@@ -671,20 +708,6 @@ void kernel_main() {
     if constexpr (X_RESIDENT) {
         for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
             stage_per_channel(c);
-        }
-    }
-
-    const uint32_t x_tile_bytes = get_tile_size(cb_input_tiles);
-
-    if constexpr (NATIVE_X) {
-        MaybeDeviceZoneScope("reader_native_publish");
-        // A TEMPLATE on the CB id, not a lambda taking one: `cb_reserve_back` and
-        // `DataflowBuffer` want a compile-time buffer index (a runtime one costs an
-        // indexed lookup where the seed had an immediate), and this sits on the
-        // measured native paths.  Two instantiations, one per stream.
-        publish_native_shard<cb_input_tiles, WT_CHUNK, IN_SHARD_PAGES>(w_real, x_tile_bytes);
-        if constexpr (NATIVE_R) {
-            publish_native_shard<cb_residual_tiles, WT_CHUNK, IN_SHARD_PAGES>(w_real, x_tile_bytes);
         }
     }
 

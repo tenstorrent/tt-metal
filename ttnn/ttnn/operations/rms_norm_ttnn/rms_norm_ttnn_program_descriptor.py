@@ -779,6 +779,83 @@ is priced in l1_ledger.md's "Deviations" table with its measurement:
       golden run.  Gating the zones off by default takes the op's contribution to
       that table to ZERO on the graded path while leaving every zone in the source
       and one env var away.  `test_rms_norm_ttnn_zone_hashes.py` pins the ON build.
+  D35 Perf 1 (perf) -- THE READER PUBLISHES THE RESIDENT SHARD FIRST.  The whole
+      change is a statement move in rms_norm_ttnn_reader.cpp: the `NATIVE_X`
+      `publish_native_shard` block now sits at the TOP of the kernel, above
+      `reader_scaler_boot` / `reader_bank_boot` / `stage_per_channel`, instead of
+      below all three.  It is a pure CB hand-off of data already resident in this
+      core's L1 and it is what `compute_square`'s `cb_wait_front` blocks on, so
+      running it last made the compute kernel idle through a ~1 us per-channel
+      DRAM read that nothing needs until pass B.  MEASURED on the pinned
+      `(1,1,32,7168)` WIDTH `[32,256]` `(7,4)` 28-core case: reader_native_publish
+      END 2358 -> 616 ns, compute_reduce END 2740 -> 1289, writer_gather_ship END
+      3166 -> 1936, whole op 5335 -> 4121 = 1.295x.  1.09x-1.46x across every
+      other native-shard geometry, 1.02x-1.05x interleaved, flat where there is no
+      shard to publish (STREAM / BAND / ragged-Wt).  NO precision knob is touched
+      and the output is bit-identical.
+      THE HAZARD IT EXPOSED, and the fix, because a later edit must not undo it:
+      `cb_scaler` and `cb_bank` are reader-synthesized constants that the compute
+      kernel reads with NO wait of its own -- the reduce helper's contract puts
+      that on the caller (reduce_helpers_compute.hpp:37) and `matmul_tiles` has no
+      CB lifecycle at all -- so their availability was ordered ONLY by the publish
+      running last.  Hoisting it deleted that ordering and produced a
+      NON-DETERMINISTIC corruption on the COMPACT combine path (`1x1x2048x256` and
+      `4x1x512x512` BLOCK_SHARDED at pcc 0.08-0.12 / rel-RMS 1e5, a different set
+      of cells on every run).  The op now waits both fronts EXPLICITLY, one-shot,
+      AT FIRST USE -- see the `scaler_ready` / `bank_ready` flags in the compute
+      kernel.  At first use and not in a joint prologue: a prologue makes
+      `compute_square` (which needs neither) block on both and costs 7-8% on the
+      COMPACT BLOCK shards (22001 vs 20453 ns on `(1,1,8192,1024)` BLOCK 64c).
+  D36 Perf 1 (perf) -- THE GATHER SIGNALS ON *DEPARTED*, NOT *ACKNOWLEDGED*.
+      Every REMOTE gather ship in rms_norm_ttnn_writer.cpp (the flat member ship,
+      the tree's level-0 leaf ship and its level-1 forward) now calls
+      `Noc::async_writes_flushed()` instead of `noc_async_write_barrier()` before
+      bumping the gatherer's arrival semaphore.  `Semaphore::up` and
+      `noc_async_write` share `NOC_UNICAST_WRITE_VC` and the same source ->
+      destination path, and the NoC does not reorder same-VC traffic on one path,
+      so the increment provably cannot overtake the bytes; the ACK round trip was
+      dead time on the member's critical path, which IS the root's because
+      `writer_gather_wait` is bounded by the slowest member.  LOCAL ships keep
+      their barrier (nothing orders their visibility to the gatherer's own fold).
+      MEASURED, bit-identical: isolated 28-core gather 1827 -> 1680 ns (1.087x);
+      whole op 1.038x at G=28, 1.037x at G=8, 1.026x at G=9, 1.034x at G=32 (tree
+      on), 1.024x at gbr/fp32_dest=True, 1.004x/1.009x on the BLOCK shards.
+      Non-combine plans are byte-identical (`if constexpr (CROSS_CORE)`).
+  D37 Perf 1 (perf) -- THE ROOT'S FOLD PACKS STRAIGHT INTO THE MULTICAST LANDING
+      PAGE.  The last-level `combine_fold` now targets `CB_FOLD_OUT` (cb_mcast_in
+      on the COMPACT path, cb_row_final on the identity one) instead of
+      cb_stat_handoff, which the writer then copied 3 kB L1->L1 with an acked
+      barrier purely to satisfy D24's "publish the root's own copy before the
+      broadcast".  D24's REQUIREMENT is unchanged; it is now free, because the
+      publish IS the pack that already existed.  `cb_stat_handoff` degenerates to a
+      one-page READY TOKEN whose bytes are never read.  The writer names round
+      blk's landing page from a BOOT SNAPSHOT of the ring base plus its own round
+      counter -- NOT `get_read_ptr(CB_MCAST_LAND)`, which on the root is moved
+      under it by the un-permute's pop once compute runs ahead (D25 pipelines
+      exactly that): measured correct at 1-2 rounds and pcc 0.9106 at 3.  The
+      address is derived identically on every core, so the send stays src == dst
+      (the EXCLUDE-source path).  MEASURED, bit-identical: 1.013x-1.025x at G=28,
+      1.024x at G=8, 1.020x at G=9, 1.017x at G=32, 1.006x/1.007x on the 2- and
+      3-round BLOCK shards.  Carries `static_assert(!FIN_SPREAD)`: under the
+      spread finalize the last level forwards a RAW sum, so its pack is not the
+      stat.  COMBINE_FIN_SPREAD is measured off, so that guards a dead path.
+  D38 Perf 1 (perf) -- A ONE-TILE-ROW BLOCK TAKES THE *SMALL* PASS-B DEST BLOCK.
+      `PASS_B_AUTO` in the compute kernel: at BLOCK_ROWS == 1 the auto rule becomes
+      `pass_b_blk_small` (the SMALLEST divisor of WT_CHUNK >= 2), and D21's
+      largest-divisor rule is kept as a CARVE-OUT for BLOCK_ROWS > 1.  D21
+      amortizes pass B's per-element init / reconfig / reserve over as many tiles
+      as DEST holds, which is right when a core has many tile-rows and pass B is
+      throughput-bound; at BLOCK_ROWS == 1 pass B is the TAIL after the combine's
+      multicast and a smaller window lets the packer overlap the math.  The
+      carve-out is earned by a MEASURED regression, not a hunch: the small block
+      is 0.958x on `(1,1,8192,1024)` BLOCK 64c and 0.976x on `(1,1,7168,1024)`
+      BLOCK gbr.  Where it applies it is 1.045x / 1.056x / 1.037x / 1.038x /
+      1.021x on the (1,1,32,7168) / (1,1,32,2304) / (1,1,32,1024) WIDTH shards,
+      the (1,1,2048,256) HEIGHT shard and the (1,1,32,7168) interleaved decode.
+      Output is bit-identical everywhere (this changes only the DEST windowing).
+      A caller's `subblock_w` still overrides both rules, unclamped, exactly as A5
+      requires.  `>= 2` and not 1: block 1 measured 0.994x / 0.991x / 0.987x, so 1
+      is a fallback for WT_CHUNK == 1 and never a choice.
 
 """
 

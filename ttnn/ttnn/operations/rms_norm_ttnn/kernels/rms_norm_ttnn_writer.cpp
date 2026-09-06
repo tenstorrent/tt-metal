@@ -423,6 +423,28 @@ void kernel_main() {
         // disagree about how many bytes a receiver's landing page actually holds.
         const uint32_t mcast_bytes =
             (!COMPACT && MCAST_FACES != 0 && MCAST_FACES < 4) ? (MCAST_FACES * (stat_bytes / 4)) : stat_bytes;
+
+        // ---- PERF 1: the ROOT's multicast source page, named without a copy ----------
+        // Compute's last-level fold now PACKS THE FINALIZED STAT STRAIGHT INTO the
+        // multicast landing CB (see `CB_FOLD_OUT` in rms_norm_ttnn_compute.cpp), so the
+        // root no longer stages it through `cb_stat_handoff` and copies 3 kB L1->L1 here.
+        // What this kernel still needs from that CB is round `blk`'s landing ADDRESS, and
+        // it must derive it WITHOUT touching the CB's pointers, because on the root
+        // compute owns them.
+        //
+        // `get_read_ptr(CB_MCAST_LAND)` looks equivalent and IS NOT: on the root the
+        // un-permute POPS that CB, so a compute thread that has run ahead into round
+        // blk+1 (D25 pipelines exactly that) moves the read pointer under the writer and
+        // the multicast ships the WRONG page.  MEASURED: correct at 1 and 2 rounds,
+        // pcc 0.9106 / rel-RMS 0.413 at 3 rounds ((1,1,7168,1024) BLOCK, BLOCK_ROWS 11).
+        // The snapshot below is taken at boot, before any round, and walked one page per
+        // round -- derived IDENTICALLY on every core of the group (a member's own
+        // reserve/push walks the same ring at the same rate), so the root's address equals
+        // every member's and the send stays src == dst, which is the EXCLUDE-source path
+        // both mcast emitters take.
+        const uint32_t mcast_land_base = get_write_ptr(CB_MCAST_LAND);
+        const uint32_t mcast_land_pages = DataflowBuffer(CB_MCAST_LAND).get_total_size_bytes() / stat_bytes;
+        uint32_t mcast_land_page = 0;
         // ---- THE COMPACT GATHER (Perf 3, descriptor D27) --------------------
         // The gather is the only per-GROUP_SIZE term in the combine: every member ships
         // into ONE root, so the root's L1 ingress carries (GROUP_SIZE - 1) transfers per
@@ -639,8 +661,10 @@ void kernel_main() {
                         get_read_ptr(CB_GATHER_SRC),
                         l0_gatherer ? get_noc_addr(wp) : get_noc_addr(l0_parent_x, l0_parent_y, wp),
                         l0_pos);
-                    noc_async_write_barrier();  // data before signal
-                    if (!l0_gatherer) {
+                    if (l0_gatherer) {
+                        noc_async_write_barrier();  // LOCAL: my own fold reads it back
+                    } else {
+                        noc.async_writes_flushed();  // DEPARTED -- see PERF 1 note
                         gather_sem.up(noc, l0_parent_x, l0_parent_y, 1);
                     }
                     cb_pop_front(CB_GATHER_SRC, 1);
@@ -673,8 +697,10 @@ void kernel_main() {
                         get_read_ptr(cb_node_out),
                         (is_root != 0) ? get_noc_addr(wp1) : get_noc_addr(mc.sender_x(), mc.sender_y(), wp1),
                         l1_pos);
-                    noc_async_write_barrier();  // data before signal
-                    if (is_root == 0) {
+                    if (is_root != 0) {
+                        noc_async_write_barrier();  // LOCAL: my own fold reads it back
+                    } else {
+                        noc.async_writes_flushed();  // DEPARTED -- see PERF 1 note
                         gather_sem_l1.up(noc, mc.sender_x(), mc.sender_y(), 1);
                     }
                     cb_pop_front(cb_node_out, 1);
@@ -716,12 +742,12 @@ void kernel_main() {
                         // included): slot 0 is the unique last-level gatherer, so the tree
                         // hands it the same one finalized tile the flat root produced.
                         MaybeDeviceZoneScope("writer_mcast_send");
+                        // PERF 1 (see the flat tail below): cb_stat_handoff is a READY
+                        // TOKEN, not the payload -- the fold packed the stat into the
+                        // landing page itself.
                         cb_wait_front(cb_stat_handoff, 1);
-                        cb_reserve_back(CB_MCAST_LAND, 1);
-                        const uint32_t stat_dst = get_write_ptr(CB_MCAST_LAND);
-                        noc_async_write(get_read_ptr(cb_stat_handoff), get_noc_addr(stat_dst), mcast_bytes);
-                        noc_async_write_barrier();
-                        cb_push_back(CB_MCAST_LAND, 1);
+                        const uint32_t stat_dst = mcast_land_base + mcast_land_page * stat_bytes;
+                        mcast_land_page = (mcast_land_page + 1 == mcast_land_pages) ? 0 : (mcast_land_page + 1);
                         if constexpr (mc.active) {
                             sender.send(stat_dst, stat_dst, mcast_bytes);
                         }
@@ -791,27 +817,31 @@ void kernel_main() {
                     // cb_mcast_in (not cb_row_final): compute un-permutes it into the
                     // `rows` column-shaped tiles pass B reads, so cb_row_final is now
                     // compute-private.
+                    // PERF 1: THE ROOT'S OWN L1->L1 PUBLISH IS DELETED.
+                    // Perf 2 / D24 established that the root must publish its own copy of
+                    // the stat BEFORE broadcasting -- its un-permute, and behind it its
+                    // pass B, block on that push, so pushing after the send made the root
+                    // wait out the whole multicast (`compute_scale` 13575 -> 10932 ns on
+                    // the root).  That requirement is UNCHANGED; what changed is that it is
+                    // now free.  Compute's fold packs the finalized stat DIRECTLY into
+                    // CB_MCAST_LAND and pushes it, so D24's publish IS the pack that
+                    // already existed, and this kernel's 3 kB copy + acked barrier is pure
+                    // deletion.  `cb_stat_handoff` degenerates to a one-page READY TOKEN --
+                    // its bytes are never read; waiting it is how this kernel learns the
+                    // landing page holds THIS round's stat.
+                    //   * the ROOT never reserves/pushes CB_MCAST_LAND: compute is its sole
+                    //     producer on that core.  On a member the writer still is.  One
+                    //     producer per CB per core either way.
+                    //   * the send is still src == dst (the EXCLUDE-source path), because
+                    //     `mcast_land_page` is derived identically on every core.
+                    // MEASURED (bit-identical output; blackhole p150b 1350 MHz, pinned
+                    // config unchanged): (1,1,32,7168) WIDTH 28c 5347 -> 5292 (1.013x, up
+                    // to 1.025x across runs); WIDTH G=8 1.024x, G=9 1.020x, G=32 (tree)
+                    // 1.017x, gbr/fp32_dest=True 1.017x, BLOCK 2 rounds 1.006x, BLOCK gbr
+                    // 3 rounds 1.007x.  Non-combine plans are byte-identical.
                     cb_wait_front(cb_stat_handoff, 1);
-                    cb_reserve_back(CB_MCAST_LAND, 1);
-                    const uint32_t stat_dst = get_write_ptr(CB_MCAST_LAND);
-                    noc_async_write(get_read_ptr(cb_stat_handoff), get_noc_addr(stat_dst), mcast_bytes);
-                    noc_async_write_barrier();
-                    // Perf 2 (D24): PUBLISH THE ROOT'S OWN COPY BEFORE THE BROADCAST.
-                    // The root's un-permute (and behind it its pass B) blocks on this push,
-                    // so pushing after the send made the root wait out the whole multicast
-                    // to the other GROUP_SIZE-1 cores even though its own copy of the stat
-                    // had been in L1 since before the send started.  Legal because `send()`
-                    // and the un-permute are both READERS of this page -- the send never
-                    // writes it -- and cb_mcast_in is CB_COMBINE_FLAT_DEPTH (== 2) pages
-                    // deep, so the next round's reserve cannot reach the page the
-                    // (already-returned) send read.
-                    //
-                    // MEASURED on the root core (perf_experiments/combine_pipeline_depth):
-                    // `compute_scale` 13575 -> 10932 ns, i.e. -2643 ns of the root's pass B
-                    // spent waiting out its own multicast.  Whole-op it is worth 1.006x
-                    // ALONE but 1.037x on top of the compute-side pipeline (which exposes
-                    // the root's pass B as the next thing on the critical path).
-                    cb_push_back(CB_MCAST_LAND, 1);
+                    const uint32_t stat_dst = mcast_land_base + mcast_land_page * stat_bytes;
+                    mcast_land_page = (mcast_land_page + 1 == mcast_land_pages) ? 0 : (mcast_land_page + 1);
                     if constexpr (mc.active) {
                         sender.send(stat_dst, stat_dst, mcast_bytes);
                     }
@@ -840,7 +870,7 @@ void kernel_main() {
                         get_read_ptr(CB_GATHER_SRC),
                         get_noc_addr(root_x, root_y, get_write_ptr(cb_partials_gathered)),
                         my_slot);
-                    noc_async_write_barrier();  // data before signal
+                    noc.async_writes_flushed();  // DEPARTED is enough -- see PERF 1 note
                     gather_sem.up(noc, root_x, root_y, 1);
                     cb_pop_front(CB_GATHER_SRC, 1);
                 }
@@ -873,3 +903,54 @@ void kernel_main() {
         cb_wait_front(cb_output_tiles, num_rows * WT_CHUNK);
     }
 }
+
+// =====================================================================================
+//  PERF 1 -- THE GATHER SIGNALS ON *DEPARTED*, NOT ON *ACKNOWLEDGED*
+// =====================================================================================
+// Every REMOTE gather ship above (`writer_gather_ship`'s member branch, the tree's
+// level-0 leaf ship, and the tree's level-1 forward) used to call
+// `noc_async_write_barrier()` -- "wait for the destination's ACK" -- before bumping the
+// gatherer's arrival semaphore.  It now calls `Noc::async_writes_flushed()` -- "wait
+// until the data has DEPARTED this core".
+//
+// WHY THAT IS SUFFICIENT, and the argument is an ordering one, not a statistical one:
+// `Semaphore::up` and `noc_async_write` both issue on `NOC_UNICAST_WRITE_VC` (VC 1) and
+// take the same source -> destination path, and the NoC does not reorder same-VC traffic
+// on one path.  So once the partial has departed, the semaphore increment behind it
+// cannot overtake it, and the gatherer can never observe an arrival count that runs
+// ahead of the bytes.  The ACK round trip the barrier waited for was pure dead time on
+// the member's critical path -- and the member's critical path IS the root's, because
+// `writer_gather_wait` is bounded by the slowest member.
+//
+// THE LOCAL SHIPS KEEP THEIR BARRIER.  A gatherer writing into its OWN L1 slot (the flat
+// root, a tree level-0 gatherer, the tree root's level-1 slot) has no atomic behind it to
+// order against; its own fold reads those bytes back through `cb_push_back`, so the
+// barrier is the thing that makes them visible and it stays.
+//
+// MEASURED (blackhole p150b 1350 MHz, at the op's pinned config -- bf16 / HiFi2 /
+// fp32_dest_acc_en=False / math_approx_mode=False, UNCHANGED; output bit-identical, this
+// is a synchronization change and not a numeric one).  Isolated 28-core gather bench:
+// 1827 -> 1680 ns (1.087x).  Whole op:
+//     (1,1,32,7168) WIDTH [32,256] (7,4) G=28   5342 -> 5145   1.038x
+//     (1,1,32,1024) WIDTH [32,128] (8,1) G=8    3460 -> 3338   1.037x
+//     (1,1,32,2304) WIDTH [32,256] (9,1) G=9    4173 -> 4067   1.026x
+//     (1,1,32,5120) WIDTH [32,160] (8,4) G=32   4498 -> 4350   1.034x   (tree ON)
+//     (1,1,32,5120) WIDTH gbr fp32_dest=True    5959 -> 5820   1.024x
+//     (1,1,8192,1024) BLOCK (8,8)              22904 -> 22802  1.004x
+//     (1,1,7168,1024) BLOCK gbr                32182 -> 31899  1.009x
+// Non-combine plans are byte-identical: every site is inside `if constexpr (CROSS_CORE)`.
+//
+// TWO RECORDED NEGATIVES from the same investigation, so nobody re-derives them:
+//   * a DUAL-NoC gather (even slots on NOC_0, odd on NOC_1) is worth a further ~400 ns at
+//     G=28 in isolation, but `get_noc_addr(..., noc=1)` from the BRISC writer HANGS: under
+//     `DM_DEDICATED_NOC` each RISC owns one NoC's counters and command buffers, so the
+//     second NIU is only reachable from the OTHER RISC.  It is a two-kernel shape, and
+//     moving the gather signal into the reader would also break
+//     `COMBINE_MCAST_FIRE_AND_FORGET`'s ordering licence (which rests on the receiver's
+//     ctor -- in THIS kernel -- running before this core signals the gather).
+//   * shrinking the payload below `GATHER_FACES = 2` needs a column->row permute of the
+//     partial; `llk_math_transpose_dest` inside the fold's DEST window HANGS, because
+//     `_llk_math_transpose_dest_`'s `TTI_STALLWAIT` waits on `SRCA_VLD|SRCB_VLD` which
+//     `add_tiles` has just cleared, and `llk_unpack_set_srcb_dummy_valid()` covers SrcB
+//     only.  Through a CB round trip instead it costs more than the transaction it saves
+//     (1368 vs 1258 ns).
