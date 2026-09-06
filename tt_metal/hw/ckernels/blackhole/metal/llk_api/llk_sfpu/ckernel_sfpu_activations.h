@@ -19,8 +19,12 @@ struct ActivationImpl;
 template <bool APPROXIMATION_MODE>
 struct ActivationImpl<APPROXIMATION_MODE, ActivationType::Hardsigmoid> {
     static inline void apply(sfpi::vFloat& v) {
-        sfpi::vFloat tmp = (v * sfpi::vConstFloatPrgm0) + sfpi::vConstFloatPrgm1;
-        v = _relu_max_body_(tmp, 1.0f);
+        // Clamp before scaling: (v + 3) is exact for v near -3 by Sterbenz's lemma, so
+        // multiplying the clamped value by 1/6 avoids the catastrophic cancellation that
+        // v * (1/6) + 0.5 suffers there (up to 25% relative error just below v = -3).
+        // Matches torch's evaluation order: clamp(v + 3, 0, 6) / 6.
+        sfpi::vFloat tmp = _relu_max_body_(v + 3.0f, 6.0f);
+        v = tmp * sfpi::vConstFloatPrgm0;
     }
 };
 
@@ -46,7 +50,6 @@ void hardsigmoid_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // For hardsigmoid slope is 1/6, FP32 IEEE 754 representation.
     sfpi::vConstFloatPrgm0 = 0.1666666716337204f;
-    sfpi::vConstFloatPrgm1 = 0.5f;
 }
 
 }  // namespace ckernel::sfpu
