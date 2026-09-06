@@ -26,8 +26,10 @@
 #include <cstring>
 #include <thread>
 
+#include "common/host_threading.hpp"
+
 namespace tt::tt_metal::detail {
-inline static const size_t EXECUTOR_NTHREADS = std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 1;
+inline static const size_t EXECUTOR_NTHREADS = get_host_worker_threads();
 
 using Executor = tf::Executor;
 using ExecTask = tf::Task;
