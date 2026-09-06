@@ -73,7 +73,9 @@
 
 - name: ttnn nightly experimental tests (wormhole)
   # test_moe_grouped_topk hangs on Wormhole (TODO: file issue + restore). Exclude on WH only.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk" -m "not requires_host_iommu" --timeout=600'
+  # Ignore experimental/fft: WH-B0 only, needs a dedicated per-file job; registering that
+  # job requires a time_budget.yaml bump that fork PRs cannot land.
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft -xv -k "not performance and not test_moe_grouped_topk" -m "not requires_host_iommu" --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 65
@@ -85,7 +87,7 @@
 
 - name: ttnn nightly experimental tests (blackhole)
   # Host-IOMMU tests are selected by the viommu job below and excluded from these non-IOMMU SKUs.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance" -m "not requires_host_iommu" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft -xv -k "not performance" -m "not requires_host_iommu" --timeout=600'
   skus:
     bh_p100:
       timeout: 60
@@ -117,6 +119,7 @@
   cmd: |
     pytest \
       tests/ttnn/nightly/unit_tests/operations/experimental \
+      --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft \
       tests/ttnn/nightly/unit_tests/operations/sdpa \
       -m requires_host_iommu -xv --timeout=600
   skus:
