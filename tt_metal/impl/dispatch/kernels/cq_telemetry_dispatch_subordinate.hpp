@@ -11,6 +11,7 @@
 
 constexpr uint32_t first_stream_index = FIRST_STREAM_INDEX;
 constexpr uint32_t total_sub_devices = TOTAL_SUB_DEVICES;
+constexpr uint32_t num_worker_cores = NUM_WORKER_CORES;
 constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uintptr_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
 constexpr uintptr_t dispatch_telemetry_control_addr = DISPATCH_TELEMETRY_CONTROL_ADDR;
@@ -20,13 +21,14 @@ FORCE_INLINE uint32_t stream_wrap_delta(uint32_t current, uint32_t previous) {
     return ((current - previous) << shift) >> shift;
 }
 
-// Compress work runtime into avg_work_runtime_per_worker only when needed to avoid losing cycles
+// Compress work runtime into avg_work_runtime_per_worker only when needed to avoid losing cycles.
+// Divide by the chip-wide worker core count so host can recover total cycles as avg * num_worker_cores.
 FORCE_INLINE void compress_work_runtime(
-    uint64_t& avg_work_runtime_per_worker, uint64_t& current_sub_device_work_runtime, uint32_t workers_per_sub_device) {
-    if (workers_per_sub_device == 0) {
+    uint64_t& avg_work_runtime_per_worker, uint64_t& current_sub_device_work_runtime) {
+    if (num_worker_cores == 0) {
         return;
     }
-    avg_work_runtime_per_worker += current_sub_device_work_runtime / workers_per_sub_device;
+    avg_work_runtime_per_worker += current_sub_device_work_runtime / num_worker_cores;
     current_sub_device_work_runtime = 0;
     auto dispatch_telemetry =
         reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
@@ -97,10 +99,7 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
                     while (completion_count[i] < workers_per_sub_device[i]) {
                         const bool will_overflow = UINT64_MAX - current_sub_device_work_runtime[i] < delta_work_runtime;
                         if (will_overflow) {
-                            compress_work_runtime(
-                                avg_work_runtime_per_worker,
-                                current_sub_device_work_runtime[i],
-                                workers_per_sub_device[i]);
+                            compress_work_runtime(avg_work_runtime_per_worker, current_sub_device_work_runtime[i]);
                         }
                         current_sub_device_work_runtime[i] += delta_work_runtime;
                         completion_count[i]++;
@@ -110,8 +109,7 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
                 if (sub_device_update) {
                     // If the workers_per_sub_device has changed, the cumulative work runtime must be compressed
                     if (dispatch_telemetry->workers_per_sub_device[i] != workers_per_sub_device[i]) {
-                        compress_work_runtime(
-                            avg_work_runtime_per_worker, current_sub_device_work_runtime[i], workers_per_sub_device[i]);
+                        compress_work_runtime(avg_work_runtime_per_worker, current_sub_device_work_runtime[i]);
                         current_sub_device_work_runtime[i] = 0;
                         dispatch_telemetry->current_sub_device_work_runtime[i] = current_sub_device_work_runtime[i];
                         workers_per_sub_device[i] = dispatch_telemetry->workers_per_sub_device[i];
@@ -210,8 +208,7 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
                 while (delta_sem_count > 0 && completion_count[i] < workers_per_sub_device[i]) {
                     const bool will_overflow = UINT64_MAX - current_sub_device_work_runtime[i] < delta_work_runtime;
                     if (will_overflow) {
-                        compress_work_runtime(
-                            avg_work_runtime_per_worker, current_sub_device_work_runtime[i], workers_per_sub_device[i]);
+                        compress_work_runtime(avg_work_runtime_per_worker, current_sub_device_work_runtime[i]);
                     }
                     current_sub_device_work_runtime[i] += delta_work_runtime;
                     completion_count[i]++;

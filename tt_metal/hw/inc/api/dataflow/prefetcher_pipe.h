@@ -708,7 +708,9 @@ private:
         ASSERT(static_cast<bool>(
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_cb_interface.config_ptr)[REMOTE_DFB_CFG_IS_SENDER]));
         ASSERT(page_size % REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == 0);
-        uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_cb_interface.config_ptr)[3];
+        uint32_t fifo_size =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_cb_interface.config_ptr)[REMOTE_DFB_CFG_FIFO_SIZE];
+        ASSERT(page_size != 0 && page_size <= fifo_size);
         uint32_t fifo_start_addr = sender_cb_interface.fifo_start_addr;
         uint32_t cb_size_page_aligned = fifo_size - fifo_size % page_size;
         uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
@@ -761,7 +763,9 @@ private:
         ASSERT(!static_cast<bool>(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             receiver_cb_interface.config_ptr)[REMOTE_DFB_CFG_IS_SENDER]));
         ASSERT(page_size % REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == 0);
-        uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_cb_interface.config_ptr)[3];
+        uint32_t fifo_size =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_cb_interface.config_ptr)[REMOTE_DFB_CFG_FIFO_SIZE];
+        ASSERT(page_size != 0 && page_size <= fifo_size);
         uint32_t fifo_start_addr = receiver_cb_interface.fifo_start_addr;
         uint32_t fifo_rd_ptr = receiver_cb_interface.fifo_rd_ptr;
         uint32_t cb_size_page_aligned = fifo_size - fifo_size % page_size;

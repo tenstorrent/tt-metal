@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstddef>
@@ -35,36 +36,33 @@ constexpr size_t cb_page_size = 16;
 constexpr size_t n_cbs = 32;
 constexpr size_t data_buffer_size = cb_n_pages * cb_n_pages;
 
-std::vector<std::shared_ptr<Buffer>> create_output_buffers(
+std::vector<std::shared_ptr<distributed::MeshBuffer>> create_output_buffers(
     distributed::MeshWorkload& /*workload*/, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto* device = mesh_device->get_devices()[0];
-
-    std::vector<std::shared_ptr<Buffer>> output_buffers;
+    std::vector<std::shared_ptr<distributed::MeshBuffer>> output_buffers;
     output_buffers.reserve(n_cbs);
     for (size_t i = 0; i < n_cbs; i++) {
         // Bootleg way to put a single buffer on a single core
-        auto const& buffer_config = ShardedBufferConfig{
-            device,
-            data_buffer_size,
-            data_buffer_size,
-            BufferType::L1,
-            TensorMemoryLayout::WIDTH_SHARDED,
-            ShardSpecBuffer(
-                CoreRangeSet(CoreRange(worker_core)),
-                {cb_n_pages, cb_n_pages},
-                ShardOrientation::ROW_MAJOR,
-                {cb_n_pages, cb_n_pages},
-                {1, 1}),
-        };
-        output_buffers.push_back(CreateBuffer(buffer_config));
+        output_buffers.push_back(distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = data_buffer_size},
+            {.page_size = data_buffer_size,
+             .buffer_type = BufferType::L1,
+             .sharding_args = BufferShardingArgs(
+                 ShardSpecBuffer(
+                     CoreRangeSet(CoreRange(worker_core)),
+                     {cb_n_pages, cb_n_pages},
+                     ShardOrientation::ROW_MAJOR,
+                     {cb_n_pages, cb_n_pages},
+                     {1, 1}),
+                 TensorMemoryLayout::WIDTH_SHARDED)},
+            mesh_device.get()));
     }
     return output_buffers;
 }
 
 std::vector<uint32_t> generate_rt_args(
-    uint32_t master_semaphore, uint32_t subordinate_semaphore, std::vector<std::shared_ptr<Buffer>> const& data_buffers) {
+    uint32_t master_semaphore,
+    uint32_t subordinate_semaphore,
+    const std::vector<std::shared_ptr<distributed::MeshBuffer>>& data_buffers) {
     std::vector<uint32_t> rt_args;
     rt_args.reserve(2 + n_cbs);
     rt_args.push_back(master_semaphore);
@@ -97,7 +95,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
             cbs.push_back(CreateCircularBuffer(program_, worker_core, cb_config));
         }
 
-        const auto& master_data_buffers = create_output_buffers(workload, mesh_device);
+        auto master_data_buffers = create_output_buffers(workload, mesh_device);
         const auto& subordinate_data_buffers = create_output_buffers(workload, mesh_device);
 
         const std::vector<uint32_t>& kernel_ct_args{n_cbs, cb_n_pages};
@@ -123,9 +121,9 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
 
-        std::vector<uint32_t> out_buf(data_buffer_size);
+        std::vector<uint32_t> out_buf;
         for (size_t i = 0; i < n_cbs; i++) {
-            tt::tt_metal::detail::ReadFromBuffer(master_data_buffers[i], out_buf);
+            distributed::EnqueueReadMeshBuffer(cq, out_buf, master_data_buffers[i], true);
 
             const uint8_t* raw_data = reinterpret_cast<uint8_t*>(out_buf.data());
             for (size_t pages_pushed = 0; pages_pushed < cb_n_pages; pages_pushed++) {

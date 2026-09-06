@@ -240,7 +240,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_InBounds_DRAM_NoViolation) {
 }
 
 // Positive control for live-range lifetime identity. Same-address wrappers are
-// routine (Buffer::view subviews, the mesh workload's kernel-binary view buffers):
+// routine (MeshBuffer views, the mesh workload's kernel-binary view buffers):
 // a temporary non-owning buffer created at a live owner's address — usually with a
 // SMALLER size — registers a second range with the same start. Its destruction must
 // remove ITS range, not the owner's: a start-keyed removal would erase the owner's
@@ -263,8 +263,11 @@ TEST_F(UnitMeshFixture, OOB_Tensor_SameAddressTempBuffer_NoViolation) {
         // on the PHYSICAL device: that id's registry is the one the launch snapshot
         // consumes, where the owner's per-device buffer is registered.
         constexpr uint32_t temp_size = buffer_size / 4;
-        auto temp =
-            Buffer::create(this->device().get_devices()[0], owner->address(), temp_size, temp_size, BufferType::DRAM);
+        [[maybe_unused]] auto temp = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = temp_size},
+            {.page_size = temp_size, .buffer_type = BufferType::DRAM},
+            &this->device(),
+            owner->address());
     }
     // Access the owner PAST the temporary's extent — valid, must stay registered.
     uint32_t in_addr = static_cast<uint32_t>(owner->address()) + buffer_size / 2;

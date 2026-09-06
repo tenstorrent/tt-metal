@@ -116,3 +116,79 @@ def preprocess_llama3_8b_chat_prompts(
         reserve_decode_tokens=reserve_decode_tokens,
         pad_id=pad_id,
     )
+
+
+def evaluate_seeded_cross_cardinality_consistency(
+    outputs_by_cardinality: dict[int, dict[str, list[int]]],
+    sequential_controls: dict[str, list[int]],
+    *,
+    request_ids: tuple[str, ...],
+    expected_token_count: int,
+    expected_cardinalities: tuple[int, ...] = (1, 2, 4, 32),
+) -> tuple[str, tuple[dict[str, object], ...]]:
+    """Validate a complete experiment and return its exact-token disposition.
+
+    A complete token mismatch is a scientifically useful negative result rather
+    than a malformed execution.  Missing, reordered, empty, or truncated output
+    still fails closed and therefore cannot be recorded as a rejection verdict.
+    """
+
+    if tuple(outputs_by_cardinality) != expected_cardinalities:
+        raise AssertionError(
+            f"seeded cross-cardinality experiment expected {expected_cardinalities}, "
+            f"got {tuple(outputs_by_cardinality)}"
+        )
+    if tuple(sequential_controls) != request_ids:
+        raise AssertionError(
+            "sequential controls must contain every fixed request in order: "
+            f"expected {request_ids}, got {tuple(sequential_controls)}"
+        )
+
+    if expected_token_count <= 0:
+        raise AssertionError("seeded cross-cardinality experiment requires a positive expected token count")
+    bad_controls = {
+        request_id: len(token_ids)
+        for request_id, token_ids in sequential_controls.items()
+        if len(token_ids) != expected_token_count
+    }
+    if bad_controls:
+        raise AssertionError(
+            f"sequential controls must each return {expected_token_count} generated tokens: {bad_controls}"
+        )
+
+    mismatches = []
+    for cardinality, outputs in outputs_by_cardinality.items():
+        expected_request_ids = request_ids[:cardinality]
+        if tuple(outputs) != expected_request_ids:
+            raise AssertionError(
+                f"cardinality {cardinality} must contain the fixed request prefix "
+                f"{expected_request_ids}, got {tuple(outputs)}"
+            )
+        for request_id, token_ids in outputs.items():
+            control_token_ids = sequential_controls[request_id]
+            if len(token_ids) != expected_token_count:
+                raise AssertionError(
+                    f"request {request_id!r} returned {len(token_ids)} tokens at cardinality {cardinality}; "
+                    f"expected {expected_token_count}"
+                )
+            if token_ids != control_token_ids:
+                mismatch_index = next(
+                    (
+                        index
+                        for index, (actual, control) in enumerate(zip(token_ids, control_token_ids, strict=False))
+                        if actual != control
+                    ),
+                    min(len(token_ids), len(control_token_ids)),
+                )
+                mismatches.append(
+                    {
+                        "cardinality": cardinality,
+                        "request_id": request_id,
+                        "first_token_difference": mismatch_index,
+                        "control_token_count": len(control_token_ids),
+                        "batched_token_count": len(token_ids),
+                    }
+                )
+
+    verdict = "INVARIANT" if not mismatches else "BATCHED_PREFILL_REJECTED"
+    return verdict, tuple(mismatches)
