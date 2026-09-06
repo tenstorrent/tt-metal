@@ -591,7 +591,15 @@ class TtIndexer:
         entry point has to translate, not just forward()."""
         return self._index_layer_idx if self._is_index_compact else cache_layer_idx
 
-    def _tp_replicate_index_kbuf(self, index_kbuf: ttnn.Tensor, cache_batch_idx: int) -> ttnn.Tensor:
+    def _tp_replicate_index_kbuf(
+        self,
+        index_kbuf: ttnn.Tensor,
+        cache_batch_idx: int,
+        *,
+        slot_id_tensor: ttnn.Tensor | None = None,
+        num_layers: int = 1,
+        layer_idx: int = 0,
+    ) -> ttnn.Tensor:
         """KV DEDUP ONLY: rebuild this chip's FULL SP slab [1,1,T/sp,D_idx] (block-cyclic order preserved,
         bf16 TILE) out of the sp*tp-striped key cache, so the fused ring op gets the k_local it expects.
 
@@ -618,13 +626,30 @@ class TtIndexer:
             dtype=index_kbuf.dtype,
             layout=index_kbuf.layout,
         )
+        # Trace-safe slot select. input_batch_index is a host runtime arg the program-cache override
+        # re-patches per dispatch, and a replay never re-runs that patch -- so a captured program keeps
+        # rebuilding the slab for whichever user was live at CAPTURE time (the runtime captures with
+        # cache_user_id=0), while the metadata-driven K WRITE lands in the correct slot. That is the same
+        # wrong-slot-with-no-error failure the dense path already avoids by handing over the 1-element
+        # user id; the KV-dedup path was simply never converted. Single-slot caches keep the scalar form:
+        # there is no slot to get wrong.
+        multi_slot = index_kbuf.shape[0] > 1
+        slot_kwargs = (
+            {
+                "input_batch_index_tensor": slot_id_tensor,
+                "batch_slot_num_layers": num_layers,
+                "batch_slot_layer_idx": layer_idx,
+            }
+            if slot_id_tensor is not None and multi_slot
+            else {"input_batch_index": cache_batch_idx if multi_slot else 0}
+        )
         return ttnn.experimental.high_bw_all_gather(
             index_kbuf,
             dim=2,
             output_tensor=out,
             num_links=self.ccl_num_links,
             cluster_axis=self.tp_axis,
-            input_batch_index=cache_batch_idx if index_kbuf.shape[0] > 1 else 0,
+            **slot_kwargs,
         )
 
     def write_k(
@@ -882,7 +907,19 @@ class TtIndexer:
         # scoring rather than running as a blocking pre-pass. The rebuilt slab is batch-1, so the in-kernel
         # slot select is not needed (cache_batch_idx=None); everything else is identical to the dense path.
         kv_deduped = self.tp_shard_kv and self.tp_factor > 1
-        k_local = self._tp_replicate_index_kbuf(index_kv_cache, cache_batch_idx) if kv_deduped else index_kv_cache
+        k_local = (
+            self._tp_replicate_index_kbuf(
+                index_kv_cache,
+                cache_batch_idx,
+                # metadata[0] is the 1-element USER id; the gather recomposes user*layers + layer_idx
+                # on-device, exactly as the dense path's cache_batch_idx_tensor does below.
+                slot_id_tensor=metadata[0] if metadata is not None else None,
+                num_layers=self._index_cache_layers,
+                layer_idx=cache_layer_idx,
+            )
+            if kv_deduped
+            else index_kv_cache
+        )
         k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=k_local, sp_axis=self.sp_axis)
         host_start = time.perf_counter() if _fused_ring_host_timing_enabled() else None
         logits = ttnn.experimental.ring_indexer_score_dsa(

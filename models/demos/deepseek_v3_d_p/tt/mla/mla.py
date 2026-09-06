@@ -1874,6 +1874,7 @@ class ttMLA:
                 cache_batch_idx,
                 populated_global,
                 block_cyclic_chunk_local=block_cyclic_chunk_local,
+                metadata=metadata,
             )
 
         storage = kvpe_cache.storage
@@ -2011,6 +2012,7 @@ class ttMLA:
         populated_global: int,
         *,
         block_cyclic_chunk_local: int,
+        metadata=None,
     ) -> MlaKvCache:
         """_gather_kvpe_prefix for an SP*TP-DEDUPED cache: ONE full-mesh snake gather.
 
@@ -2020,15 +2022,37 @@ class ttMLA:
         sparse_sdpa decodes with block_cyclic_cache_tp_sharded=True."""
         storage = kvpe_cache.storage
         slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
+        multi_slot = storage.shape[0] > 1
         stripes = self.sp_factor * self.tp_factor
         # Block-cyclic storage is meaningful only in whole global slabs, as on the SP-only path; the slab
         # is sp-wide because block_cyclic_chunk_local is the per-SP-ROW width (each chip holds 1/tp of it).
         slab_global = block_cyclic_chunk_local * self.sp_factor
-        gathered_dim_size = min(
-            storage.shape[2] * stripes,
-            ((populated_global + slab_global - 1) // slab_global) * slab_global,
+        # Trace-safe extent and slot, for the same reasons spelled out on the SP-only path in
+        # _gather_kvpe_prefix: populated_global GROWS per chunk and the slot is re-patched per dispatch,
+        # so a capture bakes this chunk's prefix and the capture-time slot into the gather's runtime args
+        # and every replay re-gathers that. The KV WRITE is metadata-driven either way, so the symptom is
+        # a silent wrong-slot / truncated-history READ that worsens with depth, never an error. This path
+        # (KV dedup) was left on the host-scalar form when the SP-only path was made trace-safe.
+        extent_kwargs = (
+            {"gathered_prefix_tensor": metadata[1], "gathered_slab_global": slab_global}
+            if metadata is not None
+            else {
+                "gathered_dim_size": min(
+                    storage.shape[2] * stripes,
+                    ((populated_global + slab_global - 1) // slab_global) * slab_global,
+                )
+            }
         )
-        assert gathered_dim_size > 0
+        assert metadata is not None or extent_kwargs["gathered_dim_size"] > 0
+        slot_meta_kwargs = (
+            {
+                "input_batch_index_tensor": metadata[0],
+                "batch_slot_num_layers": self.layer_num,
+                "batch_slot_layer_idx": cache_batch_idx % self.layer_num,
+            }
+            if metadata is not None and multi_slot
+            else {"input_batch_index": slot_lo}
+        )
         assert self._sparse_kv_gather_buffer is not None
         gathered = ttnn.experimental.high_bw_all_gather(
             storage,
@@ -2036,8 +2060,8 @@ class ttMLA:
             output_tensor=self._sparse_kv_gather_buffer,
             num_links=self.ccl_num_links,
             cluster_axis=None,
-            input_batch_index=slot_lo,
-            gathered_dim_size=gathered_dim_size,
+            **slot_meta_kwargs,
+            **extent_kwargs,
         )
         return MlaKvCache(
             format=kvpe_cache.format,
@@ -2052,6 +2076,7 @@ class ttMLA:
         populated_global: int,
         *,
         block_cyclic_chunk_local: int,
+        metadata=None,
     ) -> MlaKvCache:
         """_gather_kvpe_prefix for an SP*TP-DEDUPED cache when the snake cannot run: two axis gathers.
 
@@ -2064,6 +2089,19 @@ class ttMLA:
         seq_local and stage 2 has to reach the LAST TP slot -- (tp-1)*seq_local + prefix_dev rows per
         SP rank instead of the prefix_dev*tp a compacting gather would move."""
         storage = kvpe_cache.storage
+        # Not made trace-safe: stage 2 reaches past the LAST TP slot ((tp-1)*seq_local + prefix_dev),
+        # which is not the "round the populated prefix up to whole slabs" closed form that
+        # gathered_prefix_tensor derives on-device, so the extent cannot be expressed in the tensor
+        # form the snake path uses. Fail loudly instead of silently baking this chunk's prefix and the
+        # capture-time slot into a replayed program. Reachable only where the snake cannot close its
+        # ring (see _can_full_mesh_gather_kvpe) -- notably sp == 1, which the SP-only path already
+        # refuses to trace for the same class of reason.
+        assert metadata is None, (
+            "trace-safe sparse prefill is not supported on the two-stage TP-sharded KV gather: this mesh "
+            "cannot close a full-mesh snake ring (sp_axis/tp_axis layout, mesh shape, or declared dim-2 "
+            "shard factor), and stage 2's extent has no on-device closed form. Run this shape untraced, "
+            "or use a mesh where _can_full_mesh_gather_kvpe holds."
+        )
         slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
         assert self._sparse_kv_gather_buffer is not None
         seq_local = storage.shape[2]  # per-DEVICE cache depth
