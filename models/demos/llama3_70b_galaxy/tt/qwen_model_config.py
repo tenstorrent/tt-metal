@@ -167,6 +167,23 @@ class TtQwenModelArgs(TtModelArgs):
         "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
     }
 
+    @property
+    def use_prefetcher(self):
+        return self._use_prefetcher
+
+    @use_prefetcher.setter
+    def use_prefetcher(self, value):
+        self._use_prefetcher = bool(value)
+        # On Blackhole galaxy the fused galaxy CCLs use 1D-multicast writers that no-op on the
+        # 2D-torus fabric, so with the prefetcher on we keep ring matmuls and route collectives
+        # through stable ops (use_unfused_ccl). Keep the two flags in lockstep so a late
+        # overwrite cannot leave use_prefetcher=False + use_unfused_ccl=True.
+        self.use_unfused_ccl = (
+            self._use_prefetcher
+            and getattr(self, "is_blackhole", False)
+            and os.environ.get("QWEN_BH_UNFUSED_CCL", "1") == "1"
+        )
+
     def __init__(
         self,
         mesh_device,
@@ -222,16 +239,7 @@ class TtQwenModelArgs(TtModelArgs):
             # the tt-metal CI yamls export the flag to keep the prefetcher path covered.
             if self.is_blackhole and os.environ.get("QWEN_BH_PREFETCHER", "0") == "1":
                 self.use_prefetcher = True
-
-        # On Blackhole galaxy the fused galaxy CCLs (fused_rms_minimal, llama_rs_create_heads,
-        # all_gather_concat, llama_rs_matmul, llama_reduce_scatter) use 1D-multicast writers that no-op
-        # on the 2D-torus fabric, so with the prefetcher on we keep the ring matmuls (they must consume
-        # the prefetched global-CB weights) but route every collective through the stable/standard ops
-        # the no-prefetcher path already uses, each pinned to the worker sub-device. use_prefetcher
-        # still gates the matmuls; use_unfused_ccl gates the post-matmul collective/head/rotary logic.
-        self.use_unfused_ccl = (
-            self.use_prefetcher and self.is_blackhole and os.environ.get("QWEN_BH_UNFUSED_CCL", "1") == "1"
-        )
+        # use_unfused_ccl is derived by the use_prefetcher setter (BH + QWEN_BH_UNFUSED_CCL).
 
         # Set up prefetcher stuff (Blackhole galaxy: 8 readers x 3 receivers; Wormhole: 12 x 2)
         if self.is_blackhole:
