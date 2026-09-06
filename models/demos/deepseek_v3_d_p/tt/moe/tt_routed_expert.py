@@ -300,6 +300,14 @@ class TtRoutedExpert(LightweightModule):
         cache_name_prefix: Optional[str] = None,
         *,
         activation: "ttnn.RoutedExpertActivation",
+        ffn_num_row_groups: int = 0,
+        ffn_grid_rows: int = 0,
+        ffn_grid_cols: int = 0,
+        ffn_per_core_m_max: int = 0,
+        ffn_weight_cb_depth: int = 0,
+        ffn_col_strided: int = 0,
+        ffn_down_split: int = 1,
+        ffn_lpt_fixed_cost_tiles: int = 0,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -357,6 +365,18 @@ class TtRoutedExpert(LightweightModule):
                 "(ttnn.RoutedExpertActivation.Silu, .SwiGluOai or .SituGlu)"
             )
         self.activation = activation
+        # Grouped fused-FFN program factory knobs (Blackhole path only). All zero =
+        # legacy full-grid program, byte-identical to before these were added.
+        self.ffn_kwargs = dict(
+            num_row_groups=ffn_num_row_groups,
+            grid_rows=ffn_grid_rows,
+            grid_cols=ffn_grid_cols,
+            per_core_m_max=ffn_per_core_m_max,
+            weight_cb_depth=ffn_weight_cb_depth,
+            col_strided=ffn_col_strided,
+            down_split=ffn_down_split,
+            lpt_fixed_cost_tiles=ffn_lpt_fixed_cost_tiles,
+        )
 
         # Every non-SiLU activation lives in the fused Blackhole kernel only; the Wormhole
         # fallback in forward() calls routed_expert_ffn, which has no activation parameter and
@@ -570,6 +590,7 @@ class TtRoutedExpert(LightweightModule):
                 gate_biases=self.gate_biases,
                 up_biases=self.up_biases,
                 down_biases=self.down_biases,
+                **self.ffn_kwargs,
             )
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <variant>
 
+#include "unified_routed_expert_ffn_grouped_program_factory.hpp"
 #include "unified_routed_expert_ffn_program_factory.hpp"
 #include "unified_routed_expert_ffn_types.hpp"
 
@@ -20,8 +21,11 @@ struct UnifiedRoutedExpertFfnDeviceOperation {
     using tensor_args_t = UnifiedRoutedExpertFfnInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
-    using program_factory_t = std::variant<UnifiedRoutedExpertFfnProgramFactory>;
+    using program_factory_t =
+        std::variant<UnifiedRoutedExpertFfnProgramFactory, UnifiedRoutedExpertFfnGroupedProgramFactory>;
 
+    // Legacy full-grid factory unless num_row_groups > 0 (grouped factory).
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -51,6 +55,14 @@ ttnn::Tensor unified_routed_expert_moe(
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation::Silu,
     const std::vector<ttnn::Tensor>& gate_biases = {},
     const std::vector<ttnn::Tensor>& up_biases = {},
-    const std::vector<ttnn::Tensor>& down_biases = {});
+    const std::vector<ttnn::Tensor>& down_biases = {},
+    uint32_t num_row_groups = 0,
+    uint32_t grid_rows = 0,
+    uint32_t grid_cols = 0,
+    uint32_t per_core_m_max = 0,
+    uint32_t weight_cb_depth = 0,
+    uint32_t col_strided = 0,
+    uint32_t down_split = 1,
+    uint32_t lpt_fixed_cost_tiles = 0);
 
 }  // namespace ttnn::prim

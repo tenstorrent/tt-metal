@@ -65,6 +65,10 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
+#ifdef GROUPED
+// Grouped program factory: row groups + device-side expert -> group assignment.
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/group_assign.hpp"
+#endif
 
 #ifdef FUSE_BIAS
 // Row-broadcast bias add (gpt-oss). Bias is a (1, N) tensor tiled to one
@@ -853,6 +857,28 @@ void kernel_main() {
     // compile-time) because they vary per core and one kernel serves the whole grid.
     const uint32_t gu_valid_n_subblocks = get_arg_val<uint32_t>(0);
     const uint32_t d_valid_n_subblocks = get_arg_val<uint32_t>(1);
+    // GROUPED (grouped program factory only): this core's row group and its row
+    // WITHIN the group; a chunk spans group_rows (not kGridY) M-row cores, and
+    // experts are assigned to groups device-side (group_assign::lpt_assign).
+#ifdef GROUPED
+    constexpr bool kGrouped = true;
+    const uint32_t my_group = get_arg_val<uint32_t>(2);
+    const uint32_t my_mt = get_arg_val<uint32_t>(3);
+    constexpr uint32_t num_row_groups = get_named_compile_time_arg_val("num_row_groups");
+    constexpr uint32_t group_rows = get_named_compile_time_arg_val("group_rows");
+    constexpr uint32_t lpt_fixed_cost_tiles = get_named_compile_time_arg_val("lpt_fixed_cost_tiles");
+    constexpr uint32_t adaptive_grid_y = group_rows;
+    uint32_t assign[group_assign::kMaxExperts];
+#else
+    constexpr bool kGrouped = false;
+    const uint32_t my_group = 0;
+    const uint32_t my_mt = 0;
+    constexpr uint32_t adaptive_grid_y = adaptive_chunk::kGridY;
+    uint32_t assign[1];
+    (void)assign;
+#endif
+    (void)my_group;
+    (void)my_mt;
 
     // Phase 1 (gate)
     constexpr uint32_t g_in0_block_w = get_compile_time_arg_val(0);
@@ -954,6 +980,25 @@ void kernel_main() {
     // are pushed ONCE and stay resident, so UNPACK can re-index them per expert.
     counts_scratch_cb.wait_front(1);
     idx_scratch_cb.wait_front(1);
+#ifdef GROUPED
+    // Expert -> row-group assignment, computed on UNPACK from the same L1 pages the
+    // reader and writer use (identical integer code => identical result). MATH/PACK
+    // never need it: they learn each expert's (gated) count via the mailbox below.
+    UNPACK(({
+        const uint32_t counts_l1_addr = get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4;
+        const uint32_t idx_l1_addr = get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4;
+        group_assign::lpt_assign(
+            reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counts_l1_addr),
+            reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr),
+            experts_per_chip,
+            num_row_groups,
+            chunk_M_max,
+            num_chunks_max,
+            m_tiles_full,
+            lpt_fixed_cost_tiles,
+            assign);
+    }));
+#endif
 
     // SiLU is applied as a MATH-thread SFPU pass on dst (silu_tile) between
     // copy_tile and pack_tile — not packer-fused via apply_activation_from_pack.
@@ -988,6 +1033,12 @@ void kernel_main() {
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
             const uint32_t global_expert_id = idx_ptr[local_expert_id];
             count_value = counts_ptr[global_expert_id];
+            if constexpr (kGrouped) {
+                // Foreign expert (another row group) => count 0 => chunk loop skipped.
+                if (assign[local_expert_id] != my_group) {
+                    count_value = 0;
+                }
+            }
             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
         }));
@@ -1019,8 +1070,20 @@ void kernel_main() {
             // rows >= per_core_M (see matmul_phase). re_eff_out_gu = per_core_M *
             // per_core_N_gu (g_in1_num_subblocks * gu_out_subblock_num_tiles ==
             // per_core_N_gu since gu_out_subblock_h == 1).
-            const uint32_t re_m_valid = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
-            const uint32_t re_eff_out_gu = re_m_valid * g_in1_num_subblocks * gu_out_subblock_num_tiles;
+            const uint32_t re_m_valid =
+                adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max, adaptive_grid_y);
+            // GROUPED: bound the MAC work further to the rows this core actually owns
+            // (rows past the expert's token count are phantom on every core of the
+            // row; the reader mcasts no x for them and the writer never emits them).
+            // Legacy keeps the uniform per_core_M bound.
+            uint32_t re_m_rows = re_m_valid;
+            if constexpr (kGrouped) {
+                const uint32_t first_row = chunk * chunk_M_max + my_mt * re_m_valid;
+                re_m_rows = (first_row < count_tiles)
+                                ? ((count_tiles - first_row < re_m_valid) ? (count_tiles - first_row) : re_m_valid)
+                                : 0u;
+            }
+            const uint32_t re_eff_out_gu = re_m_rows * g_in1_num_subblocks * gu_out_subblock_num_tiles;
             //
             // matmul_block_init only re-programs addressing, not SrcA/SrcB formats. On
             // chunk >= 1 the unpacker is left on multiply_phase's operands, so reset it
@@ -1062,7 +1125,7 @@ void kernel_main() {
                 cb_partials_up,
                 cb_gate_intermed,
                 cb_up_intermed,
-                /*m_subblocks=*/re_m_valid,
+                /*m_subblocks=*/re_m_rows,
                 /*n_subblocks=*/gu_valid_n_subblocks);
 
 #ifdef FUSED_BINARY_ACT
@@ -1116,16 +1179,20 @@ void kernel_main() {
                 cb_in1_down,
                 cb_partials_d,
                 cb_out,
-                /*m_subblocks=*/re_m_valid,
+                /*m_subblocks=*/re_m_rows,
                 /*n_subblocks=*/d_valid_n_subblocks,
                 cb_down_bias);
         }  // end chunk loop
 
 #ifdef FUSE_BIAS
         // Pop this expert's biases so the reader can refill for the next expert.
-        CircularBuffer(cb_gate_bias).pop_front(g_in1_per_core_w);
-        CircularBuffer(cb_up_bias).pop_front(g_in1_per_core_w);
-        CircularBuffer(cb_down_bias).pop_front(d_in1_per_core_w);
+        // GROUPED: the reader skips the bias read for experts this group does not
+        // run (effective_chunks == 0), so skip the matching pop.
+        if (!kGrouped || effective_chunks > 0) {
+            CircularBuffer(cb_gate_bias).pop_front(g_in1_per_core_w);
+            CircularBuffer(cb_up_bias).pop_front(g_in1_per_core_w);
+            CircularBuffer(cb_down_bias).pop_front(d_in1_per_core_w);
+        }
 #endif
     }  // end per-local-expert loop
 }

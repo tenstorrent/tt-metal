@@ -23,9 +23,42 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
 }
 }  // namespace
 
+UnifiedRoutedExpertFfnDeviceOperation::program_factory_t UnifiedRoutedExpertFfnDeviceOperation::select_program_factory(
+    const operation_attributes_t& op, const tensor_args_t&) {
+    if (op.num_row_groups > 0) {
+        return UnifiedRoutedExpertFfnGroupedProgramFactory{};
+    }
+    return UnifiedRoutedExpertFfnProgramFactory{};
+}
+
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
     TT_FATAL(t.x.storage_type() == ttnn::StorageType::DEVICE, "x must be on device");
+    if (op.num_row_groups > 0) {
+        // Grouped factory: the device-side LPT assignment keeps its arrays on the
+        // kernel stack (group_assign::kMaxExperts / kMaxGroups).
+        TT_FATAL(
+            op.experts_per_chip <= 32,
+            "grouped unified_routed_expert_moe supports at most 32 local experts, got {}",
+            op.experts_per_chip);
+        TT_FATAL(op.num_row_groups <= 16, "num_row_groups must be <= 16, got {}", op.num_row_groups);
+        const uint32_t rows = op.grid_rows == 0 ? 8u : op.grid_rows;
+        TT_FATAL(
+            rows % op.num_row_groups == 0,
+            "grid_rows ({}) must be a multiple of num_row_groups ({})",
+            rows,
+            op.num_row_groups);
+        TT_FATAL(
+            op.per_core_m_max == 0 || op.per_core_m_max == 1 || op.per_core_m_max == 2 || op.per_core_m_max == 4 ||
+                op.per_core_m_max == 8,
+            "per_core_m_max must be 0 (auto), 1, 2, 4 or 8, got {}",
+            op.per_core_m_max);
+        TT_FATAL(
+            op.weight_cb_depth == 0 || (op.weight_cb_depth >= 2 && op.weight_cb_depth <= 4),
+            "weight_cb_depth must be 0 (auto) or 2..4, got {}",
+            op.weight_cb_depth);
+        TT_FATAL(op.col_strided <= 1 && op.down_split <= 1, "col_strided / down_split are 0/1 flags");
+    }
     // Scoped to Blackhole, matching ttnn::softcap / ttnn::situ_glu. The underlying SFPU
     // primitives exist on Wormhole, but that combination is unverified.
     if (op.activation == RoutedExpertActivation::SituGlu) {
@@ -347,7 +380,15 @@ ttnn::Tensor unified_routed_expert_moe(
     ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation activation,
     const std::vector<ttnn::Tensor>& gate_biases,
     const std::vector<ttnn::Tensor>& up_biases,
-    const std::vector<ttnn::Tensor>& down_biases) {
+    const std::vector<ttnn::Tensor>& down_biases,
+    uint32_t num_row_groups,
+    uint32_t grid_rows,
+    uint32_t grid_cols,
+    uint32_t per_core_m_max,
+    uint32_t weight_cb_depth,
+    uint32_t col_strided,
+    uint32_t down_split,
+    uint32_t lpt_fixed_cost_tiles) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -357,7 +398,15 @@ ttnn::Tensor unified_routed_expert_moe(
             .x_is_row_major = x_is_row_major,
             .activation = activation,
             .fuse_bias = !gate_biases.empty(),
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .num_row_groups = num_row_groups,
+            .grid_rows = grid_rows,
+            .grid_cols = grid_cols,
+            .per_core_m_max = per_core_m_max,
+            .weight_cb_depth = weight_cb_depth,
+            .col_strided = col_strided,
+            .down_split = down_split,
+            .lpt_fixed_cost_tiles = lpt_fixed_cost_tiles},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,

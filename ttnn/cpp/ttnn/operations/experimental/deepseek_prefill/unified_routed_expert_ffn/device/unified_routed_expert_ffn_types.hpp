@@ -79,10 +79,50 @@ struct UnifiedRoutedExpertFfnParams {
 
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("m_tiles", "experts_per_chip", "x_is_row_major", "activation", "fuse_bias");
+    // ---- Grouped program factory (UnifiedRoutedExpertFfnGroupedProgramFactory) ----
+    // num_row_groups == 0 selects the legacy factory and leaves every field below
+    // inert. Otherwise the grid is split into `num_row_groups` row groups that run
+    // their own expert loops concurrently (experts assigned to groups device-side by
+    // token count), every core reads its own weight slice from DRAM, and the knobs
+    // below size the per-core CBs. All are part of the program-cache key.
+    uint32_t num_row_groups = 0;
+    uint32_t grid_rows = 0;        // 0 => 8. M-row cores used (must be <= device grid y, multiple of num_row_groups)
+    uint32_t grid_cols = 0;        // 0 => 11. N-column cores used (<= device grid x)
+    uint32_t per_core_m_max = 0;   // 0 => 4. CB-sized per-core M cap (tiles); chunk = per_core_m_max * rows/group
+    uint32_t weight_cb_depth = 0;  // 0 => 2. Blocks per weight CB (in1 gate/up/down)
+    uint32_t col_strided = 0;      // 1 => bank-strided N ownership (band mode): needs grid_cols == DRAM banks
+    uint32_t down_split = 1;       // 1 => the writer RISC reads `down` weights on NoC 1 (like UP_SPLIT)
+    uint32_t lpt_fixed_cost_tiles = 0;  // 0 => 32. Per-chunk weight-stream cost (tile-rows) in the LPT balance
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "m_tiles",
+        "experts_per_chip",
+        "x_is_row_major",
+        "activation",
+        "fuse_bias",
+        "num_row_groups",
+        "grid_rows",
+        "grid_cols",
+        "per_core_m_max",
+        "weight_cb_depth",
+        "col_strided",
+        "down_split",
+        "lpt_fixed_cost_tiles");
     auto attribute_values() const {
-        return std::forward_as_tuple(m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias);
+        return std::forward_as_tuple(
+            m_tiles,
+            experts_per_chip,
+            x_is_row_major,
+            activation,
+            fuse_bias,
+            num_row_groups,
+            grid_rows,
+            grid_cols,
+            per_core_m_max,
+            weight_cb_depth,
+            col_strided,
+            down_split,
+            lpt_fixed_cost_tiles);
     }
 };
 
