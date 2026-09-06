@@ -519,6 +519,181 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBNoIssue) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Sub-range locks: (mem + offset).scoped_lock(n).
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+struct SubRangeLockSetup {
+    uint32_t region_base;      // base of the locker's region
+    uint32_t locked_addr;      // base + offset: first locked byte
+    uint32_t extent_bytes;     // size of the locked range, and of each NOC write
+    uint32_t offset_elements;  // offset in uint32_t elements
+    uint32_t num_elements;     // locked length in uint32_t elements
+};
+
+SubRangeLockSetup make_sub_range_setup() {
+    auto& mc = MetalContext::instance();
+    const uint32_t unreserved_addr =
+        mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    // 64 B units, satisfying every arch's L1 alignment.
+    constexpr uint32_t kUnitBytes = 64;
+    constexpr uint32_t kUnitElems = kUnitBytes / sizeof(uint32_t);
+    return SubRangeLockSetup{
+        .region_base = unreserved_addr,
+        .locked_addr = unreserved_addr + kUnitBytes,
+        .extent_bytes = kUnitBytes,
+        .offset_elements = kUnitElems,
+        .num_elements = kUnitElems};
+}
+
+// Runs the offset-locker against a writer aimed at `write_target_addr`, and returns the
+// write-to-locked issues reported on the writer core.
+std::vector<NOCDebugIssueType> run_sub_range_lock(
+    NOCDebuggingFixture* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const SubRangeLockSetup& setup,
+    uint32_t write_target_addr,
+    CoreCoord& writer_virtual_core_out) {
+    const experimental::NodeCoord locker_core{0, 0};
+    const experimental::NodeCoord writer_core{1, 0};
+
+    auto& mc = MetalContext::instance();
+    const uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
+    const uint32_t writer_buffer_addr = setup.region_base + (alignment * 32);
+
+    auto locker_vc = mesh_device->worker_core_from_logical_core(CoreCoord{locker_core.x, locker_core.y});
+    auto writer_vc = mesh_device->worker_core_from_logical_core(CoreCoord{writer_core.x, writer_core.y});
+    writer_virtual_core_out = writer_vc;
+
+    const experimental::KernelSpecName LOCKER{"locker"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::SemaphoreSpecName SEM_LOCKED{"sem_locked"};
+    const experimental::SemaphoreSpecName SEM_WRITTEN{"sem_written"};
+
+    experimental::SemaphoreSpec sem_locked{
+        .unique_id = SEM_LOCKED, .target_nodes = experimental::NodeRange{locker_core, writer_core}};
+    experimental::SemaphoreSpec sem_written{
+        .unique_id = SEM_WRITTEN, .target_nodes = experimental::NodeRange{locker_core, writer_core}};
+
+    const experimental::DataMovementHardwareConfig dm_rv0 =
+        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+
+    experimental::KernelSpec locker_spec{
+        .unique_id = LOCKER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_xcore_locker.cpp",
+        .num_threads = 1,
+        .semaphore_bindings =
+            {{.semaphore_spec_name = SEM_LOCKED, .accessor_name = "locked"},
+             {.semaphore_spec_name = SEM_WRITTEN, .accessor_name = "written"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"region_base", "offset_elements", "num_elements", "writer_noc_x", "writer_noc_y"}},
+        .hw_config = dm_rv0,
+    };
+    experimental::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_xcore_writer.cpp",
+        .num_threads = 1,
+        .semaphore_bindings =
+            {{.semaphore_spec_name = SEM_LOCKED, .accessor_name = "locked"},
+             {.semaphore_spec_name = SEM_WRITTEN, .accessor_name = "written"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"src_buffer_addr", "write_size", "target_noc_x", "target_noc_y", "inbox", "target_addr"}},
+        .hw_config = dm_rv0,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "scoped_lock_sub_range",
+        .kernels = {locker_spec, writer_spec},
+        .semaphores = {sem_locked, sem_written},
+        .work_units =
+            {experimental::WorkUnitSpec{.name = "locker_wu", .kernels = {LOCKER}, .target_nodes = locker_core},
+             experimental::WorkUnitSpec{.name = "writer_wu", .kernels = {WRITER}, .target_nodes = writer_core}},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::ProgramRunArgs run_args;
+    experimental::ProgramRunArgs::KernelRunArgs locker_params{};
+    locker_params.kernel = LOCKER;
+    locker_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        locker_core,
+        {{"region_base", setup.region_base},
+         {"offset_elements", setup.offset_elements},
+         {"num_elements", setup.num_elements},
+         {"writer_noc_x", static_cast<uint32_t>(writer_vc.x)},
+         {"writer_noc_y", static_cast<uint32_t>(writer_vc.y)}});
+    experimental::ProgramRunArgs::KernelRunArgs writer_params{};
+    writer_params.kernel = WRITER;
+    writer_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        writer_core,
+        {{"src_buffer_addr", writer_buffer_addr},
+         {"write_size", setup.extent_bytes},
+         {"target_noc_x", static_cast<uint32_t>(locker_vc.x)},
+         {"target_noc_y", static_cast<uint32_t>(locker_vc.y)},
+         {"inbox", 0u},  // 0 -> take target_addr directly; the host picks the address here
+         {"target_addr", write_target_addr}});
+    run_args.kernel_run_args = {locker_params, writer_params};
+    experimental::SetProgramRunArgs(program, run_args);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
+    ReadMeshDeviceProfilerResults(*mesh_device);
+
+    std::vector<NOCDebugIssueType> locked_issues;
+    for (IDevice* device : mesh_device->get_devices()) {
+        auto issues = fixture->get_write_to_locked_issues(device->id(), writer_vc, 0);
+        locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
+    }
+    return locked_issues;
+}
+
+}  // namespace
+
+// A write into the locked sub-range is flagged, and the recorded extent is the sub-range.
+TEST_F(NOCDebuggingFixture, ScopedLockSubRangeExtentIssue) {
+    for (auto& mesh_device : devices_) {
+        log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
+        if (mesh_device->compute_with_storage_grid_size().x < 2) {
+            GTEST_SKIP() << "Test requires at least 2 cores in x dimension";
+        }
+        const auto setup = make_sub_range_setup();
+        CoreCoord writer_virtual_core;
+        auto locked_issues = run_sub_range_lock(this, mesh_device, setup, setup.locked_addr, writer_virtual_core);
+
+        ASSERT_FALSE(locked_issues.empty())
+            << "Expected write-to-locked issue: the NOC write targeted the locked sub-range at base + offset.";
+        for (const auto& issue : locked_issues) {
+            EXPECT_EQ(issue.base_type, NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM);
+            // issue_address/issue_size describe the WRITE, not the lock.
+            EXPECT_EQ(issue.issue_address, setup.locked_addr);
+            EXPECT_EQ(issue.issue_size, setup.extent_bytes);
+        }
+    }
+}
+
+// The mirror half: a write into the region's UNLOCKED HEAD must not be flagged. A lock that anchored
+// at the region base would have covered [base, base + extent) and flagged this.
+TEST_F(NOCDebuggingFixture, ScopedLockSubRangeUnlockedHeadNoIssue) {
+    for (auto& mesh_device : devices_) {
+        log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
+        if (mesh_device->compute_with_storage_grid_size().x < 2) {
+            GTEST_SKIP() << "Test requires at least 2 cores in x dimension";
+        }
+        const auto setup = make_sub_range_setup();
+        CoreCoord writer_virtual_core;
+        auto locked_issues = run_sub_range_lock(this, mesh_device, setup, setup.region_base, writer_virtual_core);
+
+        EXPECT_TRUE(locked_issues.empty())
+            << "Write targeted [base, base + extent), which is OUTSIDE the locked sub-range "
+               "[base + offset, base + offset + extent); the lock anchored at the base instead of the offset.";
+    }
+}
+
 // Writing to a region locked by yourself should not trigger an issue.
 TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToOwnLockNoIssue) {
     for (auto& mesh_device : devices_) {
@@ -964,13 +1139,14 @@ void run_dfb_scoped_lock_xcore_test(
     };
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_dfb_xcore_writer.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_xcore_writer.cpp",
         .num_threads = 1,
         .semaphore_bindings =
             {{.semaphore_spec_name = SEM_LOCKED, .accessor_name = "locked"},
              {.semaphore_spec_name = SEM_WRITTEN, .accessor_name = "written"}},
         .runtime_arg_schema =
-            {.runtime_arg_names = {"src_buffer_addr", "write_size", "target_noc_x", "target_noc_y", "inbox"}},
+            {.runtime_arg_names =
+                 {"src_buffer_addr", "write_size", "target_noc_x", "target_noc_y", "inbox", "target_addr"}},
         .hw_config = dm_rv0,
     };
 
@@ -1011,7 +1187,8 @@ void run_dfb_scoped_lock_xcore_test(
          {"write_size", write_size},
          {"target_noc_x", static_cast<uint32_t>(locker_vc.x)},
          {"target_noc_y", static_cast<uint32_t>(locker_vc.y)},
-         {"inbox", scratch_addr}});  // local word the locker published the entry addr into
+         {"inbox", scratch_addr},  // local word the locker published the entry addr into
+         {"target_addr", 0u}});    // unused: inbox != 0 selects the published address
     experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;  // no runtime args
     run_args.kernel_run_args = {locker_params, consumer_params, writer_params};

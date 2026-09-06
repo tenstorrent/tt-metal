@@ -219,6 +219,20 @@ protected:
     }
 };
 
+// Quasar-gated single unit mesh that runs under either dispatch mode. QuasarMeshDeviceSingleCardFixture
+// sits on UnitMeshFixture, whose slow-dispatch gate it bypasses by overriding SetUp -- which also skips
+// DetectDispatchMode. Deriving from UnitMeshAnyDispatchFixture keeps that detection.
+class QuasarAnyDispatchMeshDeviceSingleCardFixture : public UnitMeshAnyDispatchFixture {
+protected:
+    void SetUp() override {
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        if (this->arch_ != tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Not a Quasar device";
+        }
+        UnitMeshAnyDispatchFixture::SetUp();
+    }
+};
+
 class QuasarMultiCQMeshDeviceSingleCardFixture : public QuasarMeshDeviceSingleCardFixture {
 protected:
     size_t num_command_queues() const override { return 2; }
