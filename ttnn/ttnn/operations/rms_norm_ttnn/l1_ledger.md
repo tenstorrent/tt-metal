@@ -358,12 +358,49 @@ is FLAT to slightly faster (4884 → 4605, 9248 → 9337), because those shapes 
 the width-split combine rather than byte-bound.
 
 **The bias costs 1.09×–1.23×**, largest at decode where a whole extra chain over the block is not
-hidden behind DRAM. Lamp L-OPERAND-TRIM (`BIAS_TRIM ∈ {0, GAMMA_TRIM}`) is the untaken measurement.
+hidden behind DRAM. Lamp L-OPERAND-TRIM (`BIAS_TRIM ∈ {0, GAMMA_TRIM}`) is **TAKEN and CLOSED in
+Refinement 3**: sweeping each operand's granularity independently, everything coarser than D23's
+derived two-face-row form LOSES — half page 0.93–1.00×, whole tile **0.76–0.96×**, and
+`gamma=2 / bias=0` 0.85–1.00×. So the trim is a BYTE-count win, not a transaction-count one, and
+two trimmed reads per chunk instead of one does not flip it. `BIAS_TRIM` copying `GAMMA_TRIM`'s
+policy — derived from its OWN tile size — is the measured optimum; both are now overridable
+(`PER_CHANNEL_TRIM_GAMMA` / `_BIAS`) and both ship derived.
 
 ### Levers taken and refused on the residual path
 
 | Lever | Verdict | Numbers (median of THREE fresh-cache profiled runs per variant) |
 |-------|---------|------------------------------------------------------------------|
 | `cb_x_sum`'s pack policy: `Upfront`/`AtEnd` instead of pass B's `PerBlockSize` pair | **TAKEN** | `(1,1,8192,1024)` gamma_bias_residual 139 758 → 136 361 (**1.025×**, and the two run distributions are *disjoint*, which is why 2.5% is reportable on a shape whose spread is ~2%); `(1,1,32,5120)` WIDTH 32c 6 824 → 6 730 (**1.014×**); residual-only prefill 125 154 → 124 890 (1.002×, flat); `(1,1,7168,1024)` BLOCK 64c 33 822 → 33 876 (0.998×, flat). cb_x_sum is compute-private and BOTH its readers wait `Upfront`, so the incremental page handover D21 kept for pass B (whose consumer is the ROW_MAJOR `untilize`) buys nothing here — at `WT_CHUNK = 32` / `PASS_B_BLK = 8` it was 4 reserve/push pairs per (block, chunk) where 1 does. It wins where a bias makes pass B long enough for pass A's own flow control to be visible, and is flat where the shape is DRAM-bound |
-| **L-RES-FUSE** — fuse `residual_add_block` + `square_block` into ONE DEST window | **REFUSED, and the reason is a regime overlap rather than expressibility** | `op_design.md` frames this as STREAM-only ("pass A does not need `t` to survive"); that framing is too narrow — `chain.inl:1831` shows the chain supports MULTIPLE `PackTile` elements, so `BinaryFpu<Add> → PackTile<cb_x_sum> → …square… → PackTile<cb_x_squared>` would keep `t` **and** drop one pack + one unpack per tile. What kills it is the interaction with D12: the fused form needs the square's DEST fold OFF (the fold accumulates `WT_CHUNK` tiles into one slot and packs per *row*, which cannot coexist with a per-*tile* pack of `t` in the same window), and the fold is off exactly when `WT_CHUNK > 8` — i.e. on the wide per-core widths, which are the shapes measured AT the DRAM roofline (residual prefill: 1.50× the bytes, 1.42× the time). Where the op is latency-bound (`WT_CHUNK ≤ 8`, decode and every width-shard geometry) the fold is ON and the fusion is unavailable. So the lever's availability and its value are anti-correlated by construction. Reachable if the fold ever gains a per-tile variant |
+| **L-RES-FUSE** — fuse `residual_add_block` + `square_block` into ONE DEST window | **BUILT AND MEASURED in Refinement 3; the multi-`PackTile` reading below was WRONG, and the correct form LOSES** | The row's original claim — that `chain.inl`'s support for multiple `PackTile` elements makes `BinaryFpu<Add> -> PackTile<cb_x_sum> -> Square -> PackTile<cb_x_squared>` legal, keeping `t` AND dropping a pack+unpack — is **false**, and the failure is silent rather than structural. In `eltwise_chain` **pack is its own cohort**, disjoint from math-MOP/SFPU (`chain.inl elem_pack_init`), so EVERY pack in a chain runs after EVERY compute element: the first `PackTile` publishes the SQUARE into `cb_x_sum` and pass B normalizes `t^2`. Built and measured at **pcc 0.260** on `(1,1,8192,5120)` ROW_RESIDENT `gamma_bias_residual`, and 0.947x, so it was not even fast. Publishing `t` and squaring it in one DEST window would need a DEST->DEST copy element the chain does not expose. `op_design.md`'s STREAM-only framing was therefore RIGHT: `t` need not survive only where pass B rebuilds it. That three-element form (`Add -> Square -> Pack`) is shipped as the `RES_FUSE` knob, is correct (pcc 0.999980), and measures **0.989x** on `(1,1,1024,16384)` STREAM `gamma_bias_residual` -- the SFPU `square_tile` costs more than the saved unpack and pack. **Parked at 0, kept live.** The anti-correlation the row identified (the fold is on exactly where the op is latency-bound) still holds and is why the knob's reach is small either way |
 | **D32** — reinstating the D25 combine pipeline with a residual | **REFUSED as inexpressible at bounded L1**, and the cost measured at zero | The hoist needs a TWO-BLOCK sliding window in `cb_x_sum` at a tile offset. A ring cannot hold one: the front advances by exactly one block per iteration, so for any ring size `k·BR·XH` the window straddles the wrap at `f = (k−1)·BR·XH`. The seed's `cb_input_tiles` escapes this only because under `NATIVE_IN` it is the whole shard (every page popped once, monotonically, never wrapping) — so the equivalent for `cb_x_sum` is a buffer sized to the whole per-core assignment, i.e. a second resident shard's worth of L1. **Measured cost of giving the pipeline up:** `(1,1,7168,1024)` BLOCK-sharded 64c with `gamma_bias_residual` runs **33 813 ns against the feature spec's 34 569 ns achievable** — it beats the reference *without* the pipeline, so there is nothing to buy back |
+
+
+---
+
+## Refinement 3 — no inventory change, and why
+
+Refinement 3 added **no CB, resized none, deleted none, and moved no DRAM crossing**: every one of
+its five knobs ships at a byte-identical default except `PASS_A_SQ_BLOCK`, which changes only the
+DEST-lane block size and the reserve/push *granularity* of a pack into `cb_x_squared` — not that
+CB's page count, its format, its producer, its consumer or its lifetime. The table above and the
+data-movement budget therefore stand unchanged.
+
+One knob *would* have moved the table and is parked because of it. **`CB_SQ_EXACT`** corrects
+`_cb_block_mult`'s over-pricing of `cb_x_squared`: under the D12 DEST fold that CB is
+`BLOCK_ROWS × 1` tiles, but the solve charges it the full chunk width. The error is conservative —
+it can only shrink `BLOCK_ROWS`, never overflow L1 — and correcting it does admit a coarser block
+where the fold is on and L1 binds: `(1,1,8192,1024)` BLOCK `[1024,128]` 64c goes `BLOCK_ROWS`
+20 → 25 (CB region 1 165 → 1 309 kB), `(1,1,7168,1024)` 11 → 12, `(1,1,1024,512)` WIDTH 21 → 25.
+It measures **0.987×** on the first of those — one of the two shards the verifier flagged for thin
+margin — so the coarser block costs more in ring pressure and pipeline fill than the fewer combine
+rounds buy. The conservative price ships (`CB_SQ_EXACT = 0`), which is also what keeps
+`test_program_is_structurally_the_seeds` byte-identical; the exact price stays a live knob with
+this number attached.
+
+**The prefill's data-movement budget is now confirmed against the machine rather than a nominal
+roofline.** For `(1,1,8192,W)` INTERLEAVED bf16 the op moves exactly `2 · R · W · 2` bytes plus the
+per-channel row, and at that traffic it runs at **384 GB/s** (W=1024) and **409 GB/s** (W=7168)
+against `ttnn.clone` of the same tensors at 400 and 398 GB/s — i.e. the wide prefill is 3% faster
+than a pure DRAM→DRAM copy. There is no byte left to remove on this path; the only non-DRAM residue
+is the per-channel operand's own read, which all cores issue simultaneously against the same few
+DRAM pages (`no_gamma` 83 087 ns vs `gamma` 87 372 ns).

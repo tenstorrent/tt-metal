@@ -832,8 +832,20 @@ def _pack_txn_rows(block_rows: int, txn_rows: int) -> int:
 #   compute element) -- the four-element form writes the square into cb_x_sum too and
 #   measures pcc 0.260.  See the gate comment in the compute kernel.
 #   0 == the seed's two chains.
-PASS_A_SQ_BLOCK = 0
+PASS_A_SQ_BLOCK = 1
 RES_FUSE = 0
+
+# ---- Refinement 3 (folded in): price cb_x_squared at the width it ACTUALLY takes
+# `_cb_block_mult` prices every block-scoped CB at the full chunk width, but under the
+# D12 DEST fold cb_x_squared is `BLOCK_ROWS x 1` tiles, not `BLOCK_ROWS x WT_CHUNK`.
+# The error is CONSERVATIVE -- it can only shrink BLOCK_ROWS, never overflow L1 -- and
+# it bites only where the fold is on (WT_CHUNK <= DEST_ACC_SQUARE_MAX_WT), which is
+# also where L1 is rarely the binding constraint.  `CB_SQ_EXACT = 1` charges the true
+# width in the RESIDENT solve (the one place the chunk is already known to be
+# `wt_core`); 0 keeps the seed's conservative price, so the default is byte-identical
+# and `test_program_is_structurally_the_seeds` cannot move for this reason.  Measured:
+# see the changelog's R3 table.
+CB_SQ_EXACT = 0
 
 # Ordered depth candidates for the two cross-processor CBs (cb_input_tiles,
 # cb_output_tiles), COARSEST FIRST.  The regime search (D4) walks them and takes
@@ -2852,7 +2864,12 @@ def create_program_descriptor(
                 + scaler_bytes
                 + combine_fixed
             )
-            per_tilerow = wt_core * bt * mult + per_row_bytes
+            # R3: cb_x_squared's REAL width.  The RESIDENT chunk IS `wt_core`, so the
+            # D12 fold's predicate is already decidable here; `mult` prices it at the
+            # full width, so subtract the difference back off when the fold is on.
+            # `CB_SQ_EXACT = 0` keeps the seed's conservative price exactly.
+            sq_wt = 1 if (CB_SQ_EXACT and kernel_partial_w == 0 and wt_core <= DEST_ACC_SQUARE_MAX_WT) else wt_core
+            per_tilerow = wt_core * bt * mult - (wt_core - sq_wt) * bt + per_row_bytes
             return max(0, (budget - fixed) // max(1, per_tilerow)), mult
 
         for depth in depth_candidates:

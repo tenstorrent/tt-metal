@@ -367,3 +367,176 @@
     check that both gates reach the writer's CT list where the kernel reads them.
   - `test_rms_norm_ttnn_perf.py`: `_MCAST_WRITER_CT`, the measured allowance for the two
     combine-transport words, with the full sweep table inline.
+
+## Refinement 3 — Strip the per-block fixed costs off the interleaved prefill
+- Date: 2026-09-06
+- Type: perf. **No SUPPORTED / EXCLUSIONS change** — nothing in the registry declarations
+  was edited, so `verify_supported`'s categories are untouched by construction.
+- What was done — **all four named levers built and measured; nothing deleted, nothing
+  reverted; four of the five knobs are measured nulls parked at byte-identical defaults
+  and the fifth is the phase's win.** `Reused:` every chain, CB, helper, kernel file and
+  program-descriptor branch — no new kernel, no second descriptor path. `Added:` five
+  knobs, each with exactly one source of truth, plus one permanent ablation switch.
+
+  **The premise had to be corrected first, and that is the phase's most important
+  finding.** The queue's Goal priced the two interleaved prefill cases against a
+  "~450 GB/s roofline" and concluded "the gap is compute-side overhead rather than byte
+  count". Measured against the *machine's* practical ceiling for the identical traffic —
+  the same tensors through the cheapest possible kernels — that is not what is happening:
+
+  | (1,1,8192,W) INTERLEAVED bf16 | rms_norm_ttnn (R2) | `ttnn.exp` | `ttnn.clone` |
+  |---|---:|---:|---:|
+  | W=1024, 33.5 MB | 88 128 ns / **381 GB/s** | 88 787 / 378 | 83 833 / **400** |
+  | W=7168, 234.9 MB | 576 680 ns / **407 GB/s** | 624 674 / 376 | 590 613 / **398** |
+
+  A full RMS norm *with a weight* already **beats a pure DRAM→DRAM copy** at W=7168 and
+  sits 5% off it at W=1024; the no-operand build (83 087 ns) is AT `clone`'s number to
+  0.9%. So the interleaved prefill is **DRAM-saturated, not overhead-bound**, ~400 GB/s
+  is the achievable ceiling on this box, and the residual 5% at W=1024 is the per-channel
+  operand's own DRAM traffic rather than any per-block fixed cost. Every lever below was
+  still built and measured against that corrected picture.
+
+  1. **Lever 1 — data-format reconfig elision. MEASURED NULL, bounded by an ablation
+     rather than argued.** Instead of guessing at per-boundary predicates, the seven
+     operand specs and the reduce's mode now route through one named `DFR` /
+     `REDUCE_RECONFIG` pair, and `RMS_ABLATE_RECONFIG` strips **every** data-format
+     reconfig in the compute kernel at once. That build is numerically destroyed
+     (pcc ≈ 0 / NaN — proof the reconfigs are genuinely doing work) and it moves the
+     clock **not at all**: 0.989–1.008x across all twelve cases, i.e. inside the noise
+     band, with the largest single reading being a 1.1% *loss*. The mechanism is why:
+     `eltwise_chain`'s reconfig fold is **boot-hoisted** — `emit_pre_element_transitions`
+     runs in the chain's one-time setup, not per tile — so this kernel pays
+     `stages × num_blocks × NUM_W_CHUNKS` reconfigs per core (five, in total, on
+     `(1,1,8192,1024)`), never `stages × tiles`. `master.md`'s 1.19x for that lever is a
+     per-tile-reconfig measurement and does not transfer. The elision is therefore **not
+     implemented**: there is nothing to elide. The named constants and the ablation switch
+     stay, so the next reader gets the bound for free.
+  2. **Lever 2 — Lamp L-RES-FUSE. The lamp's own four-element form is STRUCTURALLY
+     WRONG, and that is the finding.** `Add → PackTile(cb_x_sum) → Square → PackTile(
+     cb_x_squared)` cannot work: in `eltwise_chain` **pack is its own cohort**, disjoint
+     from math-MOP/SFPU (`chain.inl elem_pack_init`), so every pack in a chain runs after
+     every compute element — the first pack therefore publishes the SQUARE into cb_x_sum
+     and pass B normalizes `t²`. Built, measured: **pcc 0.260** on `(1,1,8192,5120)`
+     ROW_RESIDENT `gamma_bias_residual`, and 0.947x, so it was not even fast. Publishing
+     `t` and squaring it in one DEST window needs a DEST→DEST copy element the chain does
+     not expose — recorded as a helper gap, not worked around with raw LLK. Re-gated to
+     the lamp's *real* boundary: `t` need not survive **only in STREAM**, where pass B
+     rebuilds it, so there the chain is the three-element `Add → Square → Pack`. Correct
+     there (pcc 0.999980, bit-comparable to the unfused pair) and **0.989x** on
+     `(1,1,1024,16384)` STREAM `gamma_bias_residual` — the SFPU `square_tile` costs more
+     than the saved unpack and pack. **Parked at 0, kept live.**
+  3. **Lever 3 — reader/writer transaction granularity. MEASURED FLAT; both NoC halves
+     moved together, never one alone.** `DM_TXN_ROWS_MAX` groups `TXN_ROWS` tile-rows into
+     ONE reserve / issue run / barrier / push in the reader **and** the symmetric ONE wait
+     / issue run / barrier / pop in the writer — the writer twin is in the same commit, so
+     the bottleneck cannot just move across the CB. Swept `{WT_CHUNK, 2·WT_CHUNK,
+     BLOCK_ROWS·WT_CHUNK}` (the queue's set) on top of the pass-A block:
+     `(1,1,8192,1024)` 1.024 / 1.018, `+bias` 1.005 / 1.005, `(1,1,8192,2048)` 1.012 /
+     1.010, STREAM 1.002 / 0.994, every sharded guard within noise — no consistent
+     direction, and mildly negative at the coarsest setting on two cases. That is the
+     trade the queue predicted: a coarser handoff buys barriers and costs reader↔compute
+     overlap *inside* a block. **Parked at 1 (byte-identical to the seed's per-tile-row
+     barrier), kept live**, with `TXN_ROWS | BLOCK_ROWS` asserted host-side and
+     `static_assert`ed in both kernels — that divisibility is what makes a multi-tile-row
+     reserve straddle-free on a `depth × BLOCK_ROWS × WT_CHUNK` ring, so it is a
+     correctness invariant rather than a preference.
+  4. **Lever 4 — Lamp L-OPERAND-TRIM. D23's derived policy WINS the re-measurement, and
+     the bias copying it is RIGHT.** Each operand now carries its own override
+     (`PER_CHANNEL_TRIM_GAMMA` / `_BIAS`) filtered through the same legality rule, so a
+     forced granularity can never produce a truncated block-float read. Speedup vs the
+     derived default (two face-rows):
+
+     | variant | prefill 1024 g | +bias | 2048 g | 5120 gbr | W28c | W32c gbr | BLK 64c |
+     |---|---:|---:|---:|---:|---:|---:|---:|
+     | trim 1 (half page) | 0.953 | 0.980 | 0.979 | 1.004 | 0.930 | 0.930 | 0.986 |
+     | trim 0 (whole tile) | 0.865 | 0.838 | 0.880 | 0.895 | 0.790 | 0.758 | 0.959 |
+     | gamma 2 / bias 0 | 1.000 | 0.955 | 0.979 | 0.957 | 0.992 | 0.852 | 1.000 |
+
+     So the lamp's hypothesis is **refuted with a number**: at this granularity fewer,
+     bigger per-channel transactions LOSE (up to 0.758x), the trim is a byte-count win and
+     not a transaction-count one, and two trimmed reads per chunk instead of one does not
+     flip it. Both operands stay derived; the lamp is closed.
+  5. **Folded in — `_cb_block_mult` over-prices `cb_x_squared`.** Corrected behind
+     `CB_SQ_EXACT`, in the RESIDENT solve where the chunk is already known to be
+     `wt_core`. It does change the blocking where the D12 fold is on and L1 binds — the
+     64-core BLOCK shard goes BLOCK_ROWS 20 → 25, `(1,1,7168,1024)` 11 → 12,
+     `(1,1,1024,512)` WIDTH 21 → 25 — and it measures **0.987x on `(1,1,8192,1024)` BLOCK
+     64c**, one of the two shards the verifier flagged. The coarser block costs more (more
+     L1, bigger rings, less pipelining) than the fewer rounds buy. **Parked at 0**, which
+     is also what keeps `test_program_is_structurally_the_seeds` byte-identical.
+  6. **NEW — the phase's actual win, and it is squarely this heading's subject.** Pass A's
+     `square` chain was the ONE chain in the kernel still running at **DEST block_size 1**:
+     one `tile_regs` handshake, one per-element init, one format reconfig and one CB
+     reserve/push per TILE, while every pass-B chain (and `residual_add_block`) had taken
+     `PASS_B_BLK` since D21 measured 1.28–1.66x for exactly that. `PASS_A_SQ_BLOCK` gives
+     it the same block — **derived from `PASS_B_BLK`, never a second literal** — paired
+     with the `PerBlockSize` reserve/push the blocked pack lifecycle requires (a `PerTile`
+     reserve under `block_size > 1` reserves one page and packs `PASS_A_SQ_BLK`: a
+     corrupted ring, i.e. a hang, which is why the two are one change). Inert under the
+     D12 fold, whose `DestAccumulation::PerRow` already owns D0 for the whole tile-row.
+
+- Perf achieved — shipped Refinement 3 vs Refinement 2's program (the ONLY difference is
+  `PASS_A_SQ_BLOCK`), blackhole p150b, AICLK 1350 MHz = the reference clock (scale
+  1.0000), in-process profiler, **min over 3 reps of median-of-5**:
+
+  | case | R2 | R3 | x |
+  |---|---:|---:|---:|
+  | `(1,1,8192,2048)` INTERLEAVED `gamma` | 172 433 | **167 994** | **1.026** |
+  | `(1,1,8192,1024)` INTERLEAVED `no_gamma` (the seed-parity build) | 84 517 | **83 087** | **1.017** |
+  | `(1,1,8192,1024)` INTERLEAVED `gamma_bias` | 96 727 | **95 361** | **1.014** |
+  | `(1,1,32,7168)` INTERLEAVED width-split 16c | 8 964 | **8 852** | **1.013** |
+  | `(1,1,8192,1024)` INTERLEAVED `gamma` | 88 128 | **87 372** | **1.009** |
+  | `(1,1,1024,16384)` STREAM `residual` | 290 399 | **288 460** | 1.007 |
+  | `(1,1,8192,7168)` INTERLEAVED `gamma` | 576 680 | **573 699** | 1.005 |
+  | `(1,1,32,7168)` WIDTH `[32,256]` (7,4) 28c | 5 560 | **5 530** | 1.005 |
+  | `(1,1,8192,5120)` INTERLEAVED `gamma_bias_residual` | 667 621 | **665 557** | 1.003 |
+  | `(1,1,256,512)` ROW_MAJOR BAND 64c | 23 556 | 23 515 | 1.002 |
+  | `(1,1,8192,1024)` BLOCK `[1024,128]` 64c | 23 570 | 23 568 | 1.000 |
+  | `(1,1,32,5120)` WIDTH 32c `gbr` / `(1,1,7168,1024)` BLOCK 64c `gbr` | 6 299 / 33 019 | 6 308 / 33 036 | 0.999 |
+  | `(1,1,1024,16384)` STREAM `gamma_bias_residual` | 522 549 | 524 550 | 0.996 |
+
+  **Nothing regresses**; the win is 1.005–1.026x concentrated exactly on the interleaved
+  prefill this heading names, and the operand-free build — the one
+  `test_program_is_structurally_the_seeds` pins — gets **faster (1.017x) with a
+  measurement attached**, which is the prompt's rule for touching it. Against the machine
+  ceiling the prefill now runs at **384 GB/s** at W=1024 (`clone` 400) and **409 GB/s** at
+  W=7168, i.e. **3% faster than a pure DRAM copy of the same bytes**.
+- Accuracy achieved: PCC 0.999980–0.999992 and rel-RMS unchanged on every geometry in the
+  sweep, at every variant — identical to R2's digits on all fourteen cases. The shipped
+  change moves WHEN work is issued, never what: the square's operands, order and DEST
+  slots are the same tiles in the same order. The one variant that DID move the numbers
+  (the four-element L-RES-FUSE, pcc 0.260) is the one that is gated off.
+- Golden test progress: `test_op_loose` **433 passed / 10 failed / 3 skipped** — the
+  identical Phase-0 and Refinement-2 figure, all 10 the same harness-attributed failures
+  (`CoreRange.end_coord`, `torch.max()` on a zero-element readback), none op-attributed.
+  Plus a **2 196-cell** `test_op` cartesian slice over `1x1x2048x256 / 1x1x32x4096 /
+  4x1x512x512` (every layout × placement × dtype × operand mode), all green.
+- Issues encountered:
+  1. **The lamp's fused chain is inexpressible, not just slow.** See lever 2: pack being
+     its own cohort means a chain can publish only its FINAL DEST value, and the failure
+     mode is a silent wrong answer (pcc 0.260), not a hang or a compile error. The gate
+     comment in the compute kernel carries the mechanism so a later phase cannot re-derive
+     the same broken chain.
+  2. **A per-stage zone can invert the truth under DRAM contention.** The first breakdown
+     of `(1,1,8192,1024)` showed `reader_read_gamma` at **60 000–72 000 cycles on the
+     slowest cores** (54 µs of an 89 µs op) and made the gamma read look like the whole
+     problem. It is not: the no-gamma build is only 4.9 µs faster. All 110 cores issue
+     their gamma reads at t=0 against a DRAM the same 110 cores are saturating, so the
+     zone measures *occupancy under contention*, not payload — exactly the trap
+     `device-zone-scope-attribution.md` warns about. The end-time spread across cores
+     (27 k → 120 k cycles at essentially zero start skew) is the honest signal.
+  3. **`ttnn.NOC`-style enum aliasing bit nothing here**, but two knobs did have to be
+     ordered inside the kernel: `PASS_B_BLK` is now defined ahead of the pass-A output
+     spec that derives `SQ_BLK` from it (one source of truth, so the definition moves
+     rather than being duplicated), and `RES_FUSE` after `X_RESIDENT`.
+- Tests added:
+  - `tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_dataflow_knobs.py`
+    (**292 cells**) — the five knobs' shipped values, that each is still LIVE (flipping the
+    module constant must move the CT arg), the packed transaction word's byte-identity at
+    the default, the `TXN_ROWS | BLOCK_ROWS` straddle invariant swept over every block size
+    1..40 × seven caps, and that a forced face-row trim on `bfloat8_b` falls back to the
+    half page rather than issuing a truncated read. All host-side; nothing dispatches.
+  - `tests/ttnn/unit_tests/operations/rms_norm_ttnn/probes/bench_r3.py` — the reusable
+    14-case A/B harness (6 interleaved-prefill targets, 2 STREAM, 6 guards) every number
+    above came from.
+  - Whole unit directory after the change: **601 passed, 1 skipped**.

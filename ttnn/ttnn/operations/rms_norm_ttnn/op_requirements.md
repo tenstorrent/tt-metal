@@ -357,7 +357,7 @@ finding lives.
 
 ---
 
-### [ ] Refinement 3 — Strip the per-block fixed costs off the interleaved prefill
+### [x] Refinement 3 — Strip the per-block fixed costs off the interleaved prefill
 
 **Type**: perf
 
@@ -429,6 +429,59 @@ the ~450 GB/s roofline), no perf-group case regresses, the golden suite is green
 `verify_supported`'s categories are unchanged, and no regression across the config-spanning
 guard set or `test_program_is_structurally_the_seeds` — or, where that test does move, a
 recorded measurement justifying it.
+
+**Outcome**: **all four named levers built and measured; three are nulls parked at
+byte-identical defaults, the fourth (the trim) is a re-measurement that CONFIRMS the shipped
+policy, and the phase's win came from a fifth thing this heading's own title names.**
+1.005–1.026x on the interleaved prefill with nothing regressed. All numbers blackhole p150b
+1350 MHz, in-process profiler, min over 3 reps of median-of-5.
+
+*The Goal's premise needed correcting first.* The "~450 GB/s roofline" is not reachable on
+this box for interleaved DRAM read+write. Measured against the machine's own ceiling — the
+same tensors through the cheapest possible kernels — `(1,1,8192,1024)` gives `ttnn.clone`
+83 833 ns (400 GB/s) and `ttnn.exp` 88 787 (378) against this op's 88 128 (381); at
+`(1,1,8192,7168)` it is `clone` 590 613 (398) and `exp` 624 674 (376) against this op's
+576 680 (**407**). A full RMS norm with a weight already **beat a pure DRAM→DRAM copy** at
+the wide shape, and the operand-free build matched `clone` to 0.9%. **The interleaved
+prefill is DRAM-saturated, not overhead-bound** — so the 13–19% "headroom" the table
+reported is mostly the gap between the quoted roofline and the achievable one.
+
+*What I measured.* **Lever 1** is a null and the ablation proves it rather than argues it:
+`RMS_ABLATE_RECONFIG` strips EVERY data-format reconfig (an incorrect build, pcc ≈ 0) and
+moves the clock 0.989–1.008x over twelve cases — because `eltwise_chain`'s reconfig fold is
+**boot-hoisted**, so this kernel pays `stages × num_blocks × NUM_W_CHUNKS` reconfigs per
+core (five, on the target shape), not `stages × tiles`; `master.md`'s 1.19x is a
+per-tile-reconfig number and does not transfer. **Lever 2**'s four-element chain is
+structurally impossible, not merely slow: pack is its own cohort, so an intermediate DEST
+value cannot be published and cb_x_sum receives the SQUARE — pcc **0.260**, measured. Its
+correct STREAM-only form (`Add → Square → Pack`) is 0.989x; parked live. **Lever 3** moved
+both NoC halves together (grouped reserve/barrier/push in the reader, the symmetric
+wait/barrier/pop in the writer) and measured flat-to-slightly-negative across the queue's
+`{WT_CHUNK, 2·WT_CHUNK, BLOCK_ROWS·WT_CHUNK}` sweep; parked at 1 with `TXN_ROWS | BLOCK_ROWS`
+asserted in both kernels as the straddle-free invariant. **Lever 4** refutes its own lamp
+with a number: coarser per-channel reads are **0.76–1.00x**, so D23's two-face-row policy
+wins and the bias copying it is right. The folded-in `_cb_block_mult` correction is real
+(BLOCK_ROWS 20 → 25 on the 64-core BLOCK shard) and measures **0.987x** there, so it ships
+parked at the conservative price. **The win**: pass A's `square` was the one chain still at
+DEST `block_size 1` while every pass-B chain had taken `PASS_B_BLK` since D21 — giving it the
+same (derived, never duplicated) block plus the `PerBlockSize` pack lifecycle it requires is
+**1.026x** on `(1,1,8192,2048)`, **1.017x** on the operand-free `(1,1,8192,1024)`, 1.014x with
+a bias, 1.013x on the width-split `(1,1,32,7168)`, 1.009x on `(1,1,8192,1024)` `gamma`, and
+0.996–1.005x everywhere else. Golden `test_op_loose` 433/443 (the identical prior figure, all
+10 harness-attributed) plus a 2 196-cell cartesian slice; unit directory 601 passed.
+
+*What the bottleneck actually is now, and what I would try next.* DRAM bandwidth, at
+~400 GB/s for interleaved read+write on this box — the prefill now runs at 384 GB/s at
+W=1024 and **409 GB/s at W=7168, 3% faster than `ttnn.clone` of the same bytes**. The only
+non-DRAM residue is the per-channel operand: `no_gamma` is 83 087 ns against `gamma`'s
+87 372, and a per-stage capture shows all 110 cores issuing their gamma reads at t=0 against
+the same few DRAM pages (`reader_read_gamma` spreads 3 800 → 72 000 cycles across cores).
+Deleting that would mean **multicasting the per-channel operands** from one reader — one
+core reads the row, a `Mcast2D` over the grid distributes it — which is a transport
+scheme-change, not a knob, and the byte argument for it was already (correctly) rejected;
+the *contention* argument is new and is the reason to revisit it. Not filed as a follow-up:
+the trailing perf rounds re-derive the breakdown from scratch and this record is where the
+finding lives.
 
 ---
 
