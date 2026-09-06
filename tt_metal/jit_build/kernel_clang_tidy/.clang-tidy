@@ -1,0 +1,43 @@
+---
+# Check-option tuning for kernel (device) code analyzed post-hoc from real
+# runtime JIT compiles. See tech_reports/code-indexing/kernel-clang-tidy.md and
+# scripts/build_kernel_clang_tidy_commands.py.
+#
+# This file serves the local dev path only:
+#   build_kernel_clang_tidy_commands.py --run --config-file <this file>
+# CI does not read it. There, checker selection, check options and scoping all
+# come from codechecker.json + skiplist, because passing a --config-file
+# alongside the -config that CodeChecker builds makes clang-tidy fail with
+# "--config-file and --config are mutually exclusive". The CheckOptions below
+# are mirrored as --checker-config entries in codechecker.json; keep the two in
+# sync.
+#
+# Deliberately contains NO 'Checks:' key: clang-tidy's command-line -checks
+# takes precedence over a config-file 'Checks:' anyway, so one here would be
+# dead weight at best and misleading at worst.
+#
+# This replaced an inherited 189-entry opt-out list carried over from the
+# kernel_clang_tidy CMake target in PR #37252. That list was assembled by
+# muting whatever fired under a different (static) flow and had never been
+# re-triaged, so it silently suppressed most of the checks worth running here.
+
+CheckOptions:
+  # Both values are clang-tidy's defaults, stated explicitly because the host
+  # .clang-tidy at the repo root sets Threshold=312 with IgnoreMacros=true and
+  # this file otherwise mirrors it. That pairing suits a blocking host gate but
+  # defeats the check here: at 312 it produced 5 findings out of 62,710, and
+  # IgnoreMacros hides exactly the macro-driven complexity that dominates LLK
+  # and the SFPU headers. This report is non-blocking and exists to enumerate
+  # problems, so do not "re-sync" these two from the host config.
+  - key: readability-function-cognitive-complexity.IgnoreMacros
+    value: false
+  - key: readability-function-cognitive-complexity.Threshold
+    value: 25
+  - key: readability-simplify-boolean-expr.SimplifyDeMorgan
+    value: false
+  - key: readability-else-after-return.WarnOnUnfixable
+    value: false
+  - key: readability-else-after-return.WarnOnConditionVariables
+    value: false
+
+FormatStyle: 'file'

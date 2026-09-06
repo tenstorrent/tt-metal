@@ -1,0 +1,13 @@
+# CodeChecker skip list for kernel (device) code analysis, used with
+# --drop-reports-from-skipped-files so these paths are dropped from both
+# analysis and reporting. Exclusion-only: anything not listed is analyzed.
+# Why not an allow-list, and why this rather than HeaderFilterRegex, in
+# tech_reports/code-indexing/kernel-clang-tidy.md.
+#
+# The generated JIT glue under the kernel cache is analyzed on purpose. Do not
+# add it back without reading that report first.
+
+# Upstream toolchain: pinned SFPI release and the host libc/libstdc++ used for
+# the analysis parse. Not fixable in this repo.
+-/opt/tenstorrent/sfpi/*
+-/usr/*
