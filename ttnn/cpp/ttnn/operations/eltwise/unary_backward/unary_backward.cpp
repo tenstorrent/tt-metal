@@ -1562,24 +1562,17 @@ std::vector<Tensor> deg2rad_bw(
 std::vector<std::optional<ttnn::Tensor>> gelu_bw(
     const Tensor& grad,
     const Tensor& input,
-    const std::string& approximate,
+    operations::unary::GeluVariant variant,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
-    std::vector<std::optional<Tensor>> result;
-    if (!input_grad.has_value()) {
-        input_grad = ttnn::empty_like(grad);
-    }
+    TT_FATAL(
+        variant != operations::unary::GeluVariant::FAST_LUT,
+        "GELU_BW does not support GeluVariant::FAST_LUT because no matching backward kernel is available.");
 
     auto output_memory_config =
         input_grad.has_value() ? input_grad->memory_config() : output_mem_config.value_or(input.memory_config());
-    TT_FATAL((approximate == "none" || approximate == "tanh"), "Incorrect approximate mode (expected 'none', 'tanh')");
 
-    DataType output_dtype = input.dtype();
-    auto result_tensor = ttnn::operations::unary_backward::gelu_bw::launch_gelu_bw(
-        grad, input, approximate == "tanh", output_dtype, output_memory_config, input_grad);
-    result.push_back(result_tensor);
-
-    return result;
+    return {ttnn::prim::gelu_bw(grad, input, variant, input.dtype(), output_memory_config, input_grad)};
 }
 
 std::vector<Tensor> repeat_bw(
