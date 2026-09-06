@@ -22,11 +22,17 @@
 # re-triaged, so it silently suppressed most of the checks worth running here.
 
 CheckOptions:
-  # Device code has large macro-driven functions by nature.
+  # Both values are clang-tidy's defaults, stated explicitly because the host
+  # .clang-tidy at the repo root sets Threshold=312 with IgnoreMacros=true and
+  # this file otherwise mirrors it. That pairing suits a blocking host gate but
+  # defeats the check here: at 312 it produced 5 findings out of 62,710, and
+  # IgnoreMacros hides exactly the macro-driven complexity that dominates LLK
+  # and the SFPU headers. This report is non-blocking and exists to enumerate
+  # problems, so do not "re-sync" these two from the host config.
   - key: readability-function-cognitive-complexity.IgnoreMacros
-    value: true
+    value: false
   - key: readability-function-cognitive-complexity.Threshold
-    value: 312
+    value: 25
   - key: readability-simplify-boolean-expr.SimplifyDeMorgan
     value: false
   - key: readability-else-after-return.WarnOnUnfixable

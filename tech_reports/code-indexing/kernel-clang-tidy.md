@@ -390,6 +390,28 @@ so no TU path contains `kernels/` and an allow-list keyed on it would analyze
 nothing at all. Exclusion-only also fails open as new in-repo device
 directories appear.
 
+**Check options are the quietest suppressor here**, so they are worth reading as
+carefully as the `--disable` list. Nothing readability- or complexity-related is
+disabled, but five options retune three checks, and they were mirrored verbatim
+from the repo's root host `.clang-tidy` ("mirror host .clang-tidy strategy for
+kernel checks") rather than chosen for device code:
+
+| Option | clang-tidy default | Ours |
+| --- | --- | --- |
+| `readability-function-cognitive-complexity.Threshold` | 25 | 25 (was 312) |
+| `readability-function-cognitive-complexity.IgnoreMacros` | false | false (was true) |
+| `readability-simplify-boolean-expr.SimplifyDeMorgan` | true | false |
+| `readability-else-after-return.WarnOnUnfixable` | true | false |
+| `readability-else-after-return.WarnOnConditionVariables` | true | false |
+
+The first two are now back at clang-tidy's defaults, deliberately diverging from
+the host config. At `Threshold=312` with `IgnoreMacros=true`, cognitive
+complexity produced **5 findings out of 62,710** — a 12.5x-loosened threshold
+that also ignored precisely the macro-driven complexity that dominates LLK and
+the SFPU headers. That pairing suits a blocking host gate; it defeats a
+non-blocking report whose purpose is to enumerate problems. Both files state the
+values explicitly so a future "sync with host" edit does not silently undo it.
+
 **Check options** go through `--checker-config
 clang-tidy:<checker>:<option>=<value>`, not through a config file. Forwarding
 `--config-file` via `cc-verbatim-args-file` was the first attempt and it fails:
