@@ -28,6 +28,11 @@ void bind_sdpa_decode(nb::module_& mod) {
         Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension.
 
 
+        Shape identifiers used below: `b` is the batch size, `nh` the number of Q heads on this device
+        (`pnh` the same count padded up to the tile height), `nkv` the number of KV heads, `s` the KV
+        sequence length and `dh` the head dimension.
+
+
         Args:
             input_tensor_q (ttnn.Tensor): the input tensor [1 x b x nh x dh]
             input_tensor_k (ttnn.Tensor): the input tensor [b x nkv x   s x dh]
@@ -36,7 +41,11 @@ void bind_sdpa_decode(nb::module_& mod) {
 
         Keyword args:
             is_causal (bool): whether the attention is is_causal. Defaults to `True`.
-            attn_mask (ttnn.Tensor, optional): the input tensor [b x 1 x s x s]. Defaults to `None`.
+            attn_mask (ttnn.Tensor, optional): the input tensor [1 x b x nh x s]; `nh` must match Q's.
+                `s` must be a multiple of `k_chunk_size`: unpaged decode defaults it to
+                `min(512, largest power-of-two divisor of s)`, paged decode defaults it to 32 through
+                `SDPAProgramConfig`, and paged non-causal attention requires an explicit positive
+                `k_chunk_size`. Only valid with `is_causal=False`. Defaults to `None`.
             cur_pos (List of int, optional): list of integers of length b. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             cur_pos_tensor (ttnn.Tensor, optional): [b] tensor of integers of length b. Defaults to `None`.

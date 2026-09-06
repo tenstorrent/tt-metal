@@ -461,12 +461,17 @@ result = ttnn.softmax(input_tensor, dim=-1)
 ### Attention with Scale and Mask
 ```python
 import math
+import torch
 
 # Attention scaling factor (1/√d_k)
 scale = 1.0 / math.sqrt(64)
 
-# Create attention mask
-mask = ttnn.rand((1, 1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+# The mask is additive: it is added to the scores before the softmax, so 0 means
+# attend and a large negative value means ignore. Use a finite value, not -inf.
+mask_torch = torch.zeros((1, 1, 1, 64), dtype=torch.bfloat16)
+mask_torch[..., 48:] = -1e3  # ignore the last 16 key positions
+
+mask = ttnn.from_torch(mask_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 # Fused scale-mask-softmax
 attention_weights = ttnn.scale_mask_softmax(
@@ -477,6 +482,11 @@ attention_weights = ttnn.scale_mask_softmax(
 )
 ```
 
+> **Mask shape.** The height (dim -2) must be `1` or the tile height, and intermediate dimensions
+> must be `1` — so a full causal mask and any per-head bias are both rejected here. Constructing a
+> mask from a tokenizer's output is covered in
+> [LLMs Tech Report §2.4.3](../../../../../../../tech_reports/LLMs/llms.md#243-attention-masks).
+
 ### Complete Transformer Attention Implementation
 ```python
 def transformer_attention(query, key, value, attention_mask=None, head_dim=64):
@@ -486,13 +496,15 @@ def transformer_attention(query, key, value, attention_mask=None, head_dim=64):
     key_transposed = ttnn.transpose(key, -2, -1)
     attention_scores = ttnn.matmul(query, key_transposed)
 
-    # Step 2: Apply fused scale + mask + softmax
+    # Step 2: Apply fused scale + mask + softmax.
+    # is_causal_mask describes a mask you supply; it does not generate one, and
+    # setting it true without passing a mask raises.
     scale_factor = 1.0 / math.sqrt(head_dim)
     attention_weights = ttnn.scale_mask_softmax(
         input_tensor=attention_scores,
         scale=scale_factor,
         mask=attention_mask,
-        is_causal_mask=True,  # For autoregressive models
+        is_causal_mask=False,
         numeric_stable=True   # For numerical stability
     )
 
