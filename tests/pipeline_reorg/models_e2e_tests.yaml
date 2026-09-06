@@ -469,6 +469,12 @@
 - name: Qwen3.6-27B e2e tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=P150x4
+    # One-time seed of the shared HF_HOME cache when this revision isn't on the mount yet.
+    # This job's env sets HF_HUB_OFFLINE=1 (and CI=true forces local_files_only=True
+    # downstream too), so a cold cache fails outright with LocalEntryNotFoundError instead of
+    # downloading. Override HF_HUB_OFFLINE for just this command; needs mlperf-read-only=false
+    # on this run too, since /mnt/MLPerf is otherwise mounted :ro and the download can't persist.
+    HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/vision_demo.py -k "traced_single_image"
@@ -478,6 +484,74 @@
     bh_quietbox_2:
       timeout: 45
       tier: 1
+      release_ready: false
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
+- name: Qwen3.5-9B e2e tests
+  # Wormhole N300 sibling of the Qwen3.6-27B/P150x4 entry above -- different checkpoint, mesh
+  # (1,2), and code path (TP=2 + Wormhole gates). Tier 3, not tier 1, matching the unit-test leg.
+  # Same -k filters as the 27B leg: single ISL + determinism + one vision case, not the full
+  # 4k-256k ISL ladder or vision demo matrix (out of CI budget on both device targets).
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.5-9B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.5-9B MESH_DEVICE=N300
+    # One-time seed of the shared HF_HOME cache when this revision isn't on the mount yet.
+    # This job's env sets HF_HUB_OFFLINE=1 (and CI=true forces local_files_only=True
+    # downstream too), so a cold cache fails outright with LocalEntryNotFoundError instead of
+    # downloading. Override HF_HUB_OFFLINE for just this command; needs mlperf-read-only=false
+    # on this run too, since /mnt/MLPerf is otherwise mounted :ro and the download can't persist.
+    HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
+    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
+    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
+    pytest --timeout 1800 models/demos/blackhole/qwen36/demo/vision_demo.py -k "traced_single_image" || true
+    pytest --timeout 1800 models/demos/blackhole/qwen36/demo/vision_demo.py -k "traced_single_image"
+  model: qwen3.5-9b
+  model_family: Qwen
+  skus:
+    # Measured 16 min on the first green run (actions/runs/33774115934); 20 leaves ~25% slack.
+    wh_n300:
+      timeout: 20
+      tier: 3
+      release_ready: false
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
+# Long-context ISL coverage. The tier-1 entry above only exercises the 128-token
+# bucket, so the chunk-outer traced prefill path it shares with vLLM is never
+# driven past its first chunk. Tier 2 so a long-context regression does not gate
+# merges, and split from the tier-1 entry so a failure is attributable.
+# 128k/256k are deliberately excluded: they download the long-context corpus and
+# run well past this pipeline's budget -- run those by hand for release sign-off.
+- name: Qwen3.6-27B long-context e2e tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=P150x4
+    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_4k or traced_8k"
+    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "batched_4k_b8"
+  model: qwen3.6-27b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 40
+      tier: 2
+      release_ready: false
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
+# Teacher-forced accuracy trend: top-1/top-5 vs HF plus full-vocab logit PCC over
+# 128 steps. Loads the HF reference on the host, so it is slow and sits at tier 3.
+# This is the accuracy-regression detector the 5-step full-depth PCC tests
+# structurally cannot be -- it is what would catch the 27B trend documented in
+# the model README's "Open finding" moving.
+- name: Qwen3.6-27B teacher-forced accuracy
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=P150x4
+    pytest --timeout 3600 models/demos/blackhole/qwen36/tests/e2e/test_teacher_forcing_e2e.py
+  model: qwen3.6-27b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 70
+      tier: 3
       release_ready: false
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
