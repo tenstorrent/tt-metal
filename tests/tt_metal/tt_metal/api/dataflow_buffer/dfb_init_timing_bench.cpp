@@ -1351,6 +1351,22 @@ void print_usage(const char* argv0) {
         << "\nRequires TT_METAL_SLOW_DISPATCH_MODE=1 and TT_METAL_MEASURE_DFB_INIT_TIME=1 on Quasar.\n";
 }
 
+bool preflight_dfb_init_timing_bench() {
+    if (!std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        log_info(tt::LogTest, "Skipping dfb_init_timing_bench: set TT_METAL_SLOW_DISPATCH_MODE=1 to run it");
+        return false;
+    }
+    if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
+        log_info(tt::LogTest, "Skipping dfb_init_timing_bench: requires Quasar");
+        return false;
+    }
+    if (!MetalContext::instance().rtoptions().get_measure_dfb_init_time_enabled()) {
+        log_info(tt::LogTest, "Skipping dfb_init_timing_bench: set TT_METAL_MEASURE_DFB_INIT_TIME=1 to run it");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace tt::tt_metal
 
 int main(int argc, char** argv) {
@@ -1384,6 +1400,10 @@ int main(int argc, char** argv) {
         // {"six-debug-implicit-sync", run_benchmark_case_six_debug_implicit_sync},
         // {"six-debug-implicit-sync-program-spec", run_benchmark_case_six_debug_implicit_sync_program_spec},
     };
+
+    if (!preflight_dfb_init_timing_bench()) {
+        return 0;
+    }
 
     std::unordered_set<std::string> selected;
     if (case_name == "all") {
