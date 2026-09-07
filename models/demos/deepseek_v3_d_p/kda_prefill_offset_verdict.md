@@ -69,6 +69,28 @@ tie, leaving no offset where B is meaningfully ahead.
 Rotation alone is free on both (`+1.7%` / `+1.6%`, inside noise), as theory
 predicts: a device-boundary offset only reorders a carry list.
 
+## Transport: the collective beats a true one-hop unicast
+
+A's exchange has two transports behind one seam, proven to deliver identical
+rows (backend-parity test, 18 passed).
+
+| case | rows unicast moves | `slice_gather` | `unicast` |
+| --- | ---: | ---: | ---: |
+| device boundary | 0 | +1.8% | +1.1% |
+| smallest split (o=32) | 32 | +14.7% | +17.5% |
+| worst case (o=C/2) | 1280 | **+29.7%** | **+187.9%** |
+| largest split (o=C-32) | 32 | +17.6% | +17.1% |
+
+Cases moving 32 rows are a wash; the one moving 1280 rows explodes. On SP2 the
+gather receives `P*o = 2560` rows against unicast's 1280 -- only twice the bytes
+-- yet runs about six times faster, so `point_to_point` achieves roughly twelve
+times worse bandwidth per byte than `all_gather`. **Keep `slice_gather`.**
+
+This retires the fused C++ neighbour-shift escalation. Its condition was a real
+bandwidth win consumed by launch overhead; instead dispatch count is fine and
+per-byte throughput is the problem. The one condition that would revive it is
+Galaxy SP8, where the gather receives eight times the payload rather than twice.
+
 ## Why A is the recommendation
 
 - It is never meaningfully worse, and much better at two of three split cases.
@@ -98,9 +120,13 @@ predicts: a device-boundary offset only reorders a carry list.
   when measured last against +3.2% when measured second. All numbers above come
   from interleaved timing, where every offset's trace is captured up front and
   samples round-robin.
-- **The unicast and baseline-sized-exchange rungs are unbuilt**
-  (`tt-metal_tracker-6ls.3`, `-6ls.5`). Both would move their prototype in its
-  favoured direction.
+- **B's baseline-sized summary exchange is unbuilt** (`tt-metal_tracker-6ls.5`),
+  deliberately. B gathers `2P` fragment summaries where `P` would do; at 1.57 MB
+  per summary pair that is 3.1 MB of avoidable traffic on LoudBox SP2, about
+  91 us, or 3% of B's own overhead -- it would move B's best case from +25.9%
+  to roughly +25.0% and cannot change the verdict. On **Galaxy SP8 the same
+  change saves 12.6 MB, about 363 us or 9.2% of baseline**, so it becomes worth
+  building the moment Galaxy numbers exist.
 - **No regression budget is proposed.** The design defers that until Galaxy
   measurements exist, and they do not.
 
