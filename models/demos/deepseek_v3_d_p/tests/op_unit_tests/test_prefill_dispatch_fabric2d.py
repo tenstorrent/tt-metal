@@ -79,10 +79,19 @@ def _expert_dispatch_table(num_routed_experts: int, dispatch_group_size: int, nu
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4-2link",
         ),
+        # One link halves stream_count, so the opposite chip's chunk is split two ways instead of
+        # four: the split arithmetic and the region layout both change shape, not just size.
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4-1link",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("seq_len_per_chip", [32], ids=lambda s: f"seq{s}")
+@pytest.mark.parametrize("seq_len_per_chip", [32, 128], ids=lambda s: f"seq{s}")
 @pytest.mark.parametrize("num_routed_experts", [256], ids=lambda n: f"exp{n}")
 @pytest.mark.parametrize("emb_dim", [256], ids=lambda e: f"emb{e}")
 def test_dispatch_fabric2d(mesh_device, device_params, num_links, seq_len_per_chip, num_routed_experts, emb_dim):
@@ -173,9 +182,9 @@ def test_dispatch_fabric2d(mesh_device, device_params, num_links, seq_len_per_ch
         indices, table, offs, x, max_dispatch_buffer_token_size, G, H, seq_len_per_chip, num_experts_per_tok, emb_dim
     )
 
-    # Only the pages a NEIGHBOUR sourced are written yet: a destination further round the ring needs the
-    # forwarding region, which arrives with the relay. Comparing just those makes this a real gate now
-    # rather than one that waits for the whole protocol.
+    # Every page a REMOTE chip sourced should now be in place: the neighbour's by a single hop, the
+    # rest relayed through the forwarding regions. Pages a chip sources for its own experts are the
+    # local same-chip phase, which is not implemented yet.
     got_payload = ttnn.get_device_tensors(payload)
     got_meta = ttnn.get_device_tensors(metadata)
     mesh_cols = tuple(mesh_device.shape)[1]
@@ -184,8 +193,8 @@ def test_dispatch_fabric2d(mesh_device, device_params, num_links, seq_len_per_ch
     bad = 0
     for dev in range(H * G):
         r, g = dev // mesh_cols, dev % mesh_cols
-        neighbours = {(r - 1) % H, (r + 1) % H}
-        pages = [p for p in range(max_dispatch_buffer_token_size) if int(src_of[g, r, p]) in neighbours]
+        remote = {s for s in range(H) if s != r}
+        pages = [p for p in range(max_dispatch_buffer_token_size) if int(src_of[g, r, p]) in remote]
         if not pages:
             continue
         pay = ttnn.to_torch(got_payload[dev]).reshape(max_dispatch_buffer_token_size, emb_dim)
@@ -202,6 +211,6 @@ def test_dispatch_fabric2d(mesh_device, device_params, num_links, seq_len_per_ch
             logger.error(f"  first got={met[idx][0].tolist()} want={ref_meta[g, r][idx][0].tolist()}")
             bad += 1
 
-    logger.info(f"neighbour-sourced pages compared byte-exact: {checked} across {H * G} devices")
-    assert checked > 0, "no neighbour-sourced pages found; the reference or the routing is wrong"
+    logger.info(f"remote-sourced pages compared byte-exact: {checked} across {H * G} devices")
+    assert checked > 0, "no remote-sourced pages found; the reference or the routing is wrong"
     assert bad == 0, f"{bad} device/tensor comparisons differ from the dispatch reference"

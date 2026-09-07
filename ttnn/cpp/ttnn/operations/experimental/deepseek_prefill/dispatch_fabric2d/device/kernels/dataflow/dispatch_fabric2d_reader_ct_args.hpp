@@ -65,6 +65,12 @@ struct ReaderCtArgs {
         kRingChipIdsBase,
         kAssignmentBase,
         kScheduleBase,
+        // (origin_row, dst_row, split_idx, split_count) per descriptor. `in` is what this stream reads
+        // out of its own region; `out` is what it writes into the downstream chip's. They are different
+        // lists, and validate_chunk_agreement proves `out` here equals `in` on the downstream chip -- in
+        // identity and order -- which is what lets a writer place a chunk from its own list alone.
+        kInChunksBase,
+        kOutChunksBase,
         kCount,
     };
 
@@ -100,6 +106,8 @@ struct ReaderCtArgs {
     uint32_t ring_chip_ids_base;
     uint32_t assignment_base;
     uint32_t schedule_base;
+    uint32_t in_chunks_base;
+    uint32_t out_chunks_base;
 
 #ifndef KERNEL_BUILD
     ReaderCtArgs(
@@ -142,14 +150,18 @@ struct ReaderCtArgs {
         num_relay(relay_count),
         ring_chip_ids_base(kCount),
         assignment_base(kCount + args.device->shape()[args.axis]),
-        schedule_base(kCount + args.device->shape()[args.axis] + own_count * ASSIGNMENT_WORDS) {}
+        schedule_base(kCount + args.device->shape()[args.axis] + own_count * ASSIGNMENT_WORDS),
+        in_chunks_base(schedule_base + own_count + relay_count),
+        out_chunks_base(in_chunks_base + relay_count * ASSIGNMENT_WORDS) {}
 
     // Scalars, then ring_chip_ids, then the assignments, then the schedule. The three base indices above
     // are what the kernel walks these with, so they are computed from the same expressions.
     std::vector<uint32_t> to_ct_word_arr(
         const std::vector<uint32_t>& ring_chip_ids,
         const std::vector<uint32_t>& assignment_words,
-        const std::vector<uint32_t>& schedule) const {
+        const std::vector<uint32_t>& schedule,
+        const std::vector<uint32_t>& in_chunks,
+        const std::vector<uint32_t>& out_chunks) const {
         constexpr uint32_t kUnset = 0xDEADBEEFu;
         std::vector<uint32_t> w(kCount, kUnset);
         w[kNumL1Slots] = num_l1_slots;
@@ -181,6 +193,8 @@ struct ReaderCtArgs {
         w[kRingChipIdsBase] = ring_chip_ids_base;
         w[kAssignmentBase] = assignment_base;
         w[kScheduleBase] = schedule_base;
+        w[kInChunksBase] = in_chunks_base;
+        w[kOutChunksBase] = out_chunks_base;
         for (uint32_t i = 0; i < kCount; i++) {
             TT_FATAL(w[i] != kUnset, "dispatch_fabric2d: reader compile-time arg {} was never assigned", i);
         }
@@ -194,9 +208,17 @@ struct ReaderCtArgs {
             extent,
             num_own * ASSIGNMENT_WORDS,
             num_own + num_relay);
+        TT_FATAL(
+            in_chunks.size() == num_relay * ASSIGNMENT_WORDS && out_chunks.size() == num_relay * ASSIGNMENT_WORDS,
+            "dispatch_fabric2d: chunk descriptor blocks are {}/{} words but the kernel indexes {} each",
+            in_chunks.size(),
+            out_chunks.size(),
+            num_relay * ASSIGNMENT_WORDS);
         w.insert(w.end(), ring_chip_ids.begin(), ring_chip_ids.end());
         w.insert(w.end(), assignment_words.begin(), assignment_words.end());
         w.insert(w.end(), schedule.begin(), schedule.end());
+        w.insert(w.end(), in_chunks.begin(), in_chunks.end());
+        w.insert(w.end(), out_chunks.begin(), out_chunks.end());
         return w;
     }
 #else
@@ -229,7 +251,9 @@ struct ReaderCtArgs {
         num_relay(get_compile_time_arg_val(kNumRelay)),
         ring_chip_ids_base(get_compile_time_arg_val(kRingChipIdsBase)),
         assignment_base(get_compile_time_arg_val(kAssignmentBase)),
-        schedule_base(get_compile_time_arg_val(kScheduleBase)) {}
+        schedule_base(get_compile_time_arg_val(kScheduleBase)),
+        in_chunks_base(get_compile_time_arg_val(kInChunksBase)),
+        out_chunks_base(get_compile_time_arg_val(kOutChunksBase)) {}
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }
@@ -238,8 +262,8 @@ struct ReaderCtArgs {
     // TensorAccessorArgs are chained on by the program factory after every block above, in
     // ReaderRtArg order. Derived from the block bases, so adding a scalar or widening a block cannot
     // silently shift them.
-    static constexpr uint32_t accessor_base = get_compile_time_arg_val(kScheduleBase) +
-                                              get_compile_time_arg_val(kNumOwn) + get_compile_time_arg_val(kNumRelay);
+    static constexpr uint32_t accessor_base =
+        get_compile_time_arg_val(kOutChunksBase) + get_compile_time_arg_val(kNumRelay) * ASSIGNMENT_WORDS;
     static constexpr auto in_args = TensorAccessorArgs<accessor_base>();
     static constexpr auto indices_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     static constexpr auto offsets_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
