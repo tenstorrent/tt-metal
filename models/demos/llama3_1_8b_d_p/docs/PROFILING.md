@@ -7,7 +7,7 @@ Where the time goes in a warm prefill on the 8x4 Blackhole Galaxy, and what that
 optimisations are worth doing.
 
 **Headline: the prefill is host-dispatch-bound, not compute-bound.** Device kernels account for
-~75 ms of a ~900 ms chunk — about **8%**. The other ~92% is per-op dispatch and synchronisation.
+~62.5 ms of a ~900 ms chunk — about **7%**. The other ~93% is per-op dispatch and synchronisation.
 That is exactly what ttnn trace mode removes, which makes the missing tensor-metadata form on the
 GQA ring SDPA (`docs/SPEC_NOTES.md` §8d, `tt/trace.py`) a **first-order performance blocker** rather
 than a formality.
@@ -84,34 +84,40 @@ prefill forwards, inferred from op counts — 10240 matmuls / 32 devices / 5 per
 Normalised per device per prefill; devices run concurrently, so the per-device mean approximates the
 critical path when the mesh is balanced.
 
-**Total device kernel time: 74.8 ms per prefill — 2.34 ms per layer.**
+**Tilize is excluded.** All 163 of its calls land before the first forward and none in the second
+(verified per device by call order), so it is one-time weight tilization at setup, not per-prefill
+work. An earlier revision of this document averaged it across both forwards and consequently
+reported 74.8 ms/prefill with "layout conversion 16.7%" — both wrong. Excluding it reproduces the
+5 Sep checkpoint's independent figure of 62.40 ms almost exactly.
+
+**Total device kernel time: 62.5 ms per prefill — 1.95 ms per layer.**
 
 | op | calls/layer | ms/prefill | % of device time |
 |---|---|---|---|
-| Matmul | 5.00 | 18.48 | 24.7 |
-| **AllGatherAsync** | 5.03 | 15.83 | 21.2 |
-| **Tilize** | 2.55 | 12.29 | 16.4 |
-| **ReduceScatterMinimalAsync** | 3.00 | 9.84 | 13.2 |
-| SDPA | 1.00 | 9.75 | 13.0 |
-| LayerNorm | 2.00 | 3.78 | 5.1 |
-| BinaryNg (add/mul) | 4.00 | 2.16 | 2.9 |
-| RotaryEmbeddingIndexed | 2.00 | 0.81 | 1.1 |
-| NlpCreateHeads / ConcatHeads | 2.00 | 1.11 | 1.5 |
-| Unary (silu) | 1.00 | 0.43 | 0.6 |
-| Typecast | 3.05 | 0.19 | 0.3 |
+| Matmul | 5.00 | 18.49 | 29.6 |
+| **AllGatherAsync** | 5.03 | 15.83 | 25.3 |
+| **ReduceScatterMinimalAsync** | 3.00 | 9.84 | 15.7 |
+| SDPA | 1.00 | 9.75 | 15.6 |
+| LayerNorm | 2.00 | 3.79 | 6.1 |
+| BinaryNg (add/mul) | 4.00 | 2.16 | 3.5 |
+| NlpCreateHeads / ConcatHeads | 2.00 | 1.11 | 1.8 |
+| RotaryEmbeddingIndexed | 2.00 | 0.81 | 1.3 |
+| Unary (silu) | 1.00 | 0.43 | 0.7 |
+| Typecast | 3.02 | 0.19 | 0.3 |
 | UpdatePaddedKvCache | 2.00 | 0.14 | 0.2 |
 
 Grouped:
 
-- **collectives 34.3%** (8 per layer: 5 all-gather + 3 reduce-scatter, i.e. 256 per 32-layer chunk)
-- **matmul 24.7%** — the only line that is useful arithmetic
-- **layout conversion 16.7%** (tilize + typecast) — pure overhead
-- **SDPA 13.0%**
+- **collectives 41.0%** (8 per layer: 5 all-gather + 3 reduce-scatter, i.e. 256 per 32-layer chunk)
+- **matmul 29.6%** — the only line that is useful arithmetic
+- **SDPA 15.6%**
+
+Collectives cost **more device time than every matmul combined**.
 
 ## 4. What this means for optimisation
 
-**1. Trace mode — the big one, and it is blocked.** 2.34 ms of device kernel work per layer against
-28.4 ms of wall time means roughly **26 ms per layer is host dispatch and synchronisation**, ~12x
+**1. Trace mode — the big one, and it is blocked.** 1.95 ms of device kernel work per layer against
+28.4 ms of wall time means roughly **26.5 ms per layer is host dispatch and synchronisation**, ~14x
 the device work. ~32 op dispatches per layer x 32 layers is ~1000 dispatches per chunk, each a
 host→device round trip across 32 chips. Trace replay collapses that to one submission.
 
@@ -122,7 +128,7 @@ already done and validated — see `tt/trace.py` and `tests/unit/test_trace_meta
 the metadata-tensor path is bit-identical to the scalar path (PCC 1.0). What remains is confined to
 the op.
 
-**2. Collectives cost more device time than matmul does.** 34.3% vs 24.7%. Worth checking whether all
+**2. Collectives cost more device time than matmul does.** 41.0% vs 29.6%. Worth checking whether all
 eight per-layer collectives are needed: this package deliberately uses the **replicated-residual**
 contract (attention and MLP each close with a full all-reduce = reduce-scatter + all-gather).
 MiniMax-M3's sharded-residual variant keeps the stream at emb/tp and removes two of the three
@@ -130,8 +136,9 @@ all-gathers per MoE block; the dense analogue would remove one all-gather per su
 was consciously out of bring-up scope (`README.md`, "Reuse vs fresh") and is now quantified: it is
 the second-largest lever.
 
-**3. Layout conversion is 16.7% of device time.** 2.55 Tilize calls per layer is more than the math
-needs; worth finding which op boundary forces the retilization.
+**3. Tilize is setup, not steady state.** 163 calls per device, all before the first forward — it
+costs ~12 ms once and nothing thereafter. Do not chase it as per-chunk overhead (this document
+previously did).
 
 **4. Do not tune the SDPA chunk sizes on this evidence.** The controlled test found no effect
 distinguishable from noise. The knobs exist (§1) if someone wants to measure properly.

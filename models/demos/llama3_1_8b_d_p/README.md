@@ -107,9 +107,9 @@ chunked==one-shot invariant, and the golden-cache round-trip.
 
 ### Performance
 
-Warm, 32 layers, 2048-token chunk, bf16: **~900 ms/chunk**, of which only **~75 ms is device kernel
-time**. Cost is linear in layers (28.4 ms/layer, R² 0.996) and flat in tokens per chunk — a
-latency-bound pipeline. Device time is 34% collectives, 25% matmul, 17% layout conversion.
+Warm, 32 layers, 2048-token chunk, bf16: **~900 ms/chunk**, of which only **~62.5 ms is device
+kernel time**. Cost is linear in layers (28.4 ms/layer, R² 0.996) and flat in tokens per chunk — a
+latency-bound pipeline. Device time is 41% collectives, 30% matmul, 16% SDPA.
 
 The prefill is host-dispatch-bound, so **trace mode is the largest available lever, and it is blocked
 by the GQA ring SDPA** (`docs/SPEC_NOTES.md` §8d). Full analysis, method and caveats in
