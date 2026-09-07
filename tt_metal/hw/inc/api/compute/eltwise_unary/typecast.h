@@ -420,20 +420,13 @@ ALWI void typecast_tile(uint32_t idst) {
         (in_format == DataFormat::Int8 && out_format == DataFormat::UInt8)) {
         // No SFPU kernel needed.
     } else if constexpr (
-        in_format == DataFormat::Int8 && (out_format == DataFormat::Int32 || out_format == DataFormat::UInt32)) {
+        in_format == DataFormat::Int8 &&
+        (out_format == DataFormat::Int32 || out_format == DataFormat::UInt32 || out_format == DataFormat::UInt16)) {
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             calculate_typecast_int8_to_int32,
-            (APPROX, 8 /* ITERATIONS */),
-            idst,
-            VectorMode::RC));
-    } else if constexpr (in_format == DataFormat::Int8 && out_format == DataFormat::UInt16) {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            calculate_typecast_int8_to_uint16,
-            (APPROX, 8 /* ITERATIONS */),
+            (APPROX, 8 /* ITERATIONS */, (out_format == DataFormat::UInt16)),
             idst,
             VectorMode::RC));
     } else if constexpr (

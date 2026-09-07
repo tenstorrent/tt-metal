@@ -1013,15 +1013,23 @@ inline void calculate_typecast_uint_to_uint8() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool CLAMP_TO_UINT16 = false>
 inline void calculate_typecast_int8_to_int32() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
         TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // e = b ^ 0x80 to get excess 128
-        TTI_SFPIADD(
-            -128 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, 0);
+        if constexpr (CLAMP_TO_UINT16) {
+            TTI_SFPIADD(
+                -128 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);  // negatives clamp to 0
+            TTI_SFPENCC(0, 0, 0, 0);
+            TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
+        } else {
+            TTI_SFPIADD(
+                -128 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, 0);
+        }
     }
 }
 
@@ -1038,19 +1046,6 @@ inline void calculate_typecast_int8_to_fp32() {
         TTI_SFPADDI(TYPECAST_INT8_MINUS_128_IMM16, p_sfpu::LREG0, 0);
         TTI_SFPNOP;  // SFPADDI result is not readable next cycle
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
-    }
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_typecast_int8_to_uint16() {
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; ++d) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // e = b ^ 0x80 to get excess 128
-        TTI_SFPIADD(-128 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);  // negatives clamp to 0
-        TTI_SFPENCC(0, 0, 0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
     }
 }
 
