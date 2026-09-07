@@ -27,7 +27,12 @@ class MiniMaxM3Config:
     # (1024): it beats the conservative 768 both on total cost (+0.4% against a per-count oracle
     # vs +1.2%) and on worst single count (+8.5% at 1024 vs +27.2% at 1280). Measured under
     # SwiGluOai, the activation these experts actually run.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 1536
+    # Not enabled: the M3 MoE builds TtRoutedExpert directly and forwards no threshold, so nothing
+    # reads this. Nothing on the op side blocks it any more -- moe_fused_swiglu carries SwiGluOai,
+    # and M3's only bias is the router's e_score_correction_bias, not an expert-FFN bias, so there
+    # is none to lose. Kept under _MEASURED so it is not re-derived; rename it back to
+    # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD once that path forwards one.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 1536
     SHARED_INTERMEDIATE_SIZE = 3072  # Always-on shared expert
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
