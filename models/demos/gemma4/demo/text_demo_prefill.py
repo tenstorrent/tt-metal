@@ -233,13 +233,13 @@ def _hf_text_config(model_path):
 # ── The prefill model under test ────────────────────────────────────────────
 
 
-def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
+def _build_prefill_model(mesh_device, model_path, chunk_size, context_len=None):
     """Create a CP prefill model with ring caches for one or more chunks."""
     mesh_config = _mesh_config(mesh_device)
     if mesh_config.prefill.sp <= 1:
         raise ValueError("This demo requires context parallel prefill")
     tp = mesh_device.shape[1]
-    context_len = context_len or chunk
+    context_len = context_len or chunk_size
     max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", context_len))
 
     cache_root = _cache_root(model_path, mesh_device.shape)
@@ -258,7 +258,7 @@ def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
         model_path=model_path,
         mesh_config=mesh_config,
         create_kv_cache=False,
-        prefill_chunk_size=chunk,
+        prefill_chunk_size=chunk_size,
     )
     logger.info(f"Model ready in {time.time() - t0:.1f}s")
 
@@ -280,34 +280,33 @@ def test_prefill_long_context_traced(
     """Measure all prefill chunks using one replayed ring-attention trace."""
     from models.demos.gemma4.tt.ccl import cp_degree
 
-    chunk = chunk_size
     mesh_config = _mesh_config(mesh_device)
     cp = cp_degree(mesh_config)
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if chunk < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
+    if chunk_size < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
         pytest.skip(
-            f"chunk={chunk} gives a {chunk // cp}-token Q slab at CP={cp}, under the "
+            f"chunk={chunk_size} gives a {chunk_size // cp}-token Q slab at CP={cp}, under the "
             f"{GEMMA4_SLIDING_WINDOW_TOKENS}-token sliding window; ring_joint needs "
             f"chunk >= window*cp = {GEMMA4_SLIDING_WINDOW_TOKENS * cp} (its halo is single-hop)"
         )
-    if context_len % chunk != 0:
-        pytest.skip(f"context_len={context_len} is not a whole number of {chunk}-token chunks")
+    if context_len % chunk_size != 0:
+        pytest.skip(f"context_len={context_len} is not a whole number of {chunk_size}-token chunks")
 
     model_path = _model_path()
-    n_chunks = context_len // chunk
+    n_chunks = context_len // chunk_size
     model_args, model, kv_cache = _build_prefill_model(
         mesh_device=mesh_device,
         model_path=model_path,
-        chunk=chunk,
+        chunk_size=chunk_size,
         context_len=context_len,
     )
     tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
 
-    rope_local_seq = chunk // cp
+    rope_local_seq = chunk_size // cp
     host_input = _host_tensor(
         mesh_device,
-        tokens_all[:, :chunk].contiguous(),
+        tokens_all[:, :chunk_size].contiguous(),
         ttnn.uint32,
         ttnn.ROW_MAJOR_LAYOUT,
         mesh_config=mesh_config,
@@ -317,7 +316,7 @@ def test_prefill_long_context_traced(
     device_positions = ttnn.to_device(
         _host_tensor(
             mesh_device,
-            torch.arange(0, chunk, dtype=torch.int32).unsqueeze(0),
+            torch.arange(0, chunk_size, dtype=torch.int32).unsqueeze(0),
             ttnn.uint32,
             ttnn.ROW_MAJOR_LAYOUT,
             mesh_config=mesh_config,
@@ -332,11 +331,11 @@ def test_prefill_long_context_traced(
 
     def _stage(chunk_idx):
         """Host-side refresh of everything that varies per chunk. Never inside a trace."""
-        chunk_start = chunk_idx * chunk
+        chunk_start = chunk_idx * chunk_size
         _t = time.time()
         staged = _host_tensor(
             mesh_device,
-            tokens_all[:, chunk_start : chunk_start + chunk].contiguous(),
+            tokens_all[:, chunk_start : chunk_start + chunk_size].contiguous(),
             ttnn.uint32,
             ttnn.ROW_MAJOR_LAYOUT,
             mesh_config=mesh_config,
@@ -364,7 +363,7 @@ def test_prefill_long_context_traced(
         # rows chunk-major CP assigns it, so the gather inside the trace lands correctly.
         pos_host = _host_tensor(
             mesh_device,
-            torch.arange(chunk_start, chunk_start + chunk, dtype=torch.int32).unsqueeze(0),
+            torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0),
             ttnn.uint32,
             ttnn.ROW_MAJOR_LAYOUT,
             mesh_config=mesh_config,
@@ -436,8 +435,8 @@ def test_prefill_long_context_traced(
                 readback_s += time.time() - t_rb
             # Report per-chunk latency and cumulative device and wall time.
             logger.info(
-                f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk}) "
-                f"device={per_chunk[-1] * 1000:.1f}ms ({chunk / per_chunk[-1]:.0f} tok/s) | "
+                f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk_size}) "
+                f"device={per_chunk[-1] * 1000:.1f}ms ({chunk_size / per_chunk[-1]:.0f} tok/s) | "
                 f"total device={sum(per_chunk):.1f}s wall={time.time() - t_run:.1f}s"
             )
         total_s = time.time() - t_run
@@ -512,21 +511,20 @@ def test_prefill_layer_perf_chunk_n(
     from models.demos.gemma4.tt.attention.ring_prefill import PackedRingKVCache
     from models.demos.gemma4.tt.ccl import cp_degree
 
-    chunk = chunk_size
     mesh_config = _mesh_config(mesh_device)
     cp = cp_degree(mesh_config)
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if chunk < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
+    if chunk_size < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
         pytest.skip(
-            f"chunk {chunk} / CP {cp} = {chunk // cp} tokens per rank, below the "
+            f"chunk {chunk_size} / CP {cp} = {chunk_size // cp} tokens per rank, below the "
             f"{GEMMA4_SLIDING_WINDOW_TOKENS}-token sliding window; ring_joint needs "
             f"chunk >= window*cp = {GEMMA4_SLIDING_WINDOW_TOKENS * cp}"
         )
-    assert context_len % chunk == 0, "context_len must be a whole number of chunks"
-    n_chunks = context_len // chunk
+    assert context_len % chunk_size == 0, "context_len must be a whole number of chunks"
+    n_chunks = context_len // chunk_size
     if chunk_idx != "all" and not 0 <= int(chunk_idx) < n_chunks:
-        pytest.skip(f"chunk {chunk_idx} is outside the {n_chunks} chunks of {chunk} in {context_len} tokens")
+        pytest.skip(f"chunk {chunk_idx} is outside the {n_chunks} chunks of {chunk_size} in {context_len} tokens")
 
     chunk_idxs = list(range(n_chunks)) if chunk_idx == "all" else [int(chunk_idx)]
     layer_types = ["full_attention", "sliding_attention"] if layer_type == "both" else [layer_type]
@@ -536,7 +534,7 @@ def test_prefill_layer_perf_chunk_n(
     model_args, model, _ = _build_prefill_model(
         mesh_device=mesh_device,
         model_path=model_path,
-        chunk=chunk,
+        chunk_size=chunk_size,
         context_len=context_len,
     )
     tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
@@ -544,14 +542,14 @@ def test_prefill_layer_perf_chunk_n(
     layer_idxs = {lt: find_layer_idx(text_config, lt) for lt in layer_types}
     type_desc = ", ".join(f"{_perf_layer_tag(lt)}=layer{layer_idxs[lt]}" for lt in layer_types)
     logger.info(
-        f"[layer_perf_chunk] ctx={context_len} chunk={chunk} n_chunks={n_chunks} cp={cp} | "
+        f"[layer_perf_chunk] ctx={context_len} chunk={chunk_size} n_chunks={n_chunks} cp={cp} | "
         f"cells={len(chunk_idxs) * len(layer_types)} chunks={chunk_idxs[0]}..{chunk_idxs[-1]} "
         f"types=({type_desc})"
     )
 
     host_input = _host_tensor(
         mesh_device,
-        tokens_all[:, :chunk].contiguous(),
+        tokens_all[:, :chunk_size].contiguous(),
         ttnn.uint32,
         ttnn.ROW_MAJOR_LAYOUT,
         mesh_config=mesh_config,
@@ -561,7 +559,7 @@ def test_prefill_layer_perf_chunk_n(
     device_positions = ttnn.to_device(
         _host_tensor(
             mesh_device,
-            torch.arange(0, chunk, dtype=torch.int32).unsqueeze(0),
+            torch.arange(0, chunk_size, dtype=torch.int32).unsqueeze(0),
             ttnn.uint32,
             ttnn.ROW_MAJOR_LAYOUT,
             mesh_config=mesh_config,
@@ -574,10 +572,10 @@ def test_prefill_layer_perf_chunk_n(
 
     def _stage(idx):
         """Refresh tokens, ring metadata, semaphores, and RoPE positions before replay."""
-        chunk_start = idx * chunk
+        chunk_start = idx * chunk_size
         staged = _host_tensor(
             mesh_device,
-            tokens_all[:, chunk_start : chunk_start + chunk].contiguous(),
+            tokens_all[:, chunk_start : chunk_start + chunk_size].contiguous(),
             ttnn.uint32,
             ttnn.ROW_MAJOR_LAYOUT,
             mesh_config=mesh_config,
@@ -590,7 +588,7 @@ def test_prefill_layer_perf_chunk_n(
             ttnn.reset_global_semaphore_value(semaphore, 0)
         pos_host = _host_tensor(
             mesh_device,
-            torch.arange(chunk_start, chunk_start + chunk, dtype=torch.int32).unsqueeze(0),
+            torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0),
             ttnn.uint32,
             ttnn.ROW_MAJOR_LAYOUT,
             mesh_config=mesh_config,
@@ -734,7 +732,7 @@ def test_prefill_layer_perf_chunk_n(
                 logger.info(
                     f"[layer_perf_chunk] RESULT type={tag} chunk={idx} ring_depth={idx} "
                     f"kv_actual_global={chunk_start} measured_ms={measured_s * 1000:.2f} "
-                    f"tok_s={chunk / measured_s:.0f} signposts={sp_start},{sp_stop}"
+                    f"tok_s={chunk_size / measured_s:.0f} signposts={sp_start},{sp_stop}"
                 )
 
         hidden = _cp_gather_torch(outs[layer_types[-1]], mesh_device, mesh_config)
