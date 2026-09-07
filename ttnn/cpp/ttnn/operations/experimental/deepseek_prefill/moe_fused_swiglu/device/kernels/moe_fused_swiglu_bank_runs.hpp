@@ -26,6 +26,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+#include "api/core_local_mem.h"
 
 #include "moe_fused_swiglu_common.hpp"
 
@@ -50,11 +53,21 @@ struct WeightRuns {
     template <class Acc>
     static FORCE_INLINE void read(
         const Acc& acc, uint32_t page_row_base, uint32_t j0, uint32_t jend, uint32_t l1_base, uint32_t page_bytes) {
+        // Binds noc_index, so a run rides whichever NoC the CALLING kernel owns -- the reader's
+        // NOC_0 and the writer's NOC_1 both reach here, and neither passes a handle.
+        Noc noc;
         uint32_t j = j0;
         uint32_t off = 0;
         while (j < jend) {
             const uint32_t len = run(j, jend);
-            noc_async_read(acc.get_noc_addr(page_row_base + j), l1_base + off * page_bytes, len * page_bytes);
+            // The accessor supplies the run's START page; the size is the whole run, so `len` pages
+            // leave as ONE transaction rather than one per page.
+            noc.async_read(
+                acc,
+                CoreLocalMem<uint32_t>(l1_base + off * page_bytes),
+                len * page_bytes,
+                {.page_id = page_row_base + j},
+                {});
             j += len;
             off += len;
         }
@@ -64,11 +77,17 @@ struct WeightRuns {
     template <class Acc>
     static FORCE_INLINE void write(
         const Acc& acc, uint32_t page_row_base, uint32_t j0, uint32_t jend, uint32_t l1_base, uint32_t page_bytes) {
+        Noc noc;
         uint32_t j = j0;
         uint32_t off = 0;
         while (j < jend) {
             const uint32_t len = run(j, jend);
-            noc_async_write(l1_base + off * page_bytes, acc.get_noc_addr(page_row_base + j), len * page_bytes);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(l1_base + off * page_bytes),
+                acc,
+                len * page_bytes,
+                {},
+                {.page_id = page_row_base + j});
             j += len;
             off += len;
         }

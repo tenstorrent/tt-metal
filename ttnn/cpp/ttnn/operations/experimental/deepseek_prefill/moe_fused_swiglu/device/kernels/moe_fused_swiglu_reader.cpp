@@ -16,10 +16,9 @@
 //      iteration, with a posted per-slot-flag multicast.
 //
 // RAW-DATAFLOW DEVIATIONS, each because no in-tree helper expresses the thing:
-//   * weight/output DRAM traffic uses raw `noc_async_read`/`noc_async_write` over a contiguous RUN
-//     of pages (moe_fused_swiglu_bank_runs.hpp); one transaction per page would be
-//     transaction-rate-bound rather than bandwidth-bound, and no NoC helper takes a page RANGE.
-//     Addresses still go via TensorAccessor.
+//   * the phase-2 W_down stream keeps the raw sticky `noc_async_read_set_trid`: the Noc form tags
+//     one call at a time, so it cannot tag a whole coalesced RUN issued by a shared helper
+//     (moe_fused_swiglu_bank_runs.hpp), and the per-K-block barrier is what the deferral needs.
 //   * the reduce-scatter transport is raw unicast + counting semaphores: mcast_pipe's SenderPipe is
 //     a rectangle multicast, while a gather leg is point-to-point with a different destination per
 //     peer, and the fan-in needs counting.
