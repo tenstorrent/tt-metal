@@ -28,7 +28,7 @@ _QSR_PROV = dict(
     arch="quasar",
     run_id="42",
     timestamp="2026-01-01T00:00:00",
-    pipeline="PR",
+    pipeline="pr",
     pr_number="7",
 )
 
@@ -152,7 +152,7 @@ def test_convert_drops_quasar_columns_on_wh_bh_schema(tmp_path):
         arch="wormhole",
         run_id="42",
         timestamp="2026-01-01T00:00:00",
-        pipeline="PR",
+        pipeline="pr",
         pr_number="7",
     )
 
