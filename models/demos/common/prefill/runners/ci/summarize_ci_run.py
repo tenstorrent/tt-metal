@@ -129,6 +129,39 @@ def _cell_metrics(kept, disp):
     return ct, ttft
 
 
+def _occupancy(kept):
+    spans, busy = {}, {}
+    for rank, cells in kept.items():
+        cs = [c for c in sorted(cells) if cells[c][0] is not None and cells[c][1] is not None]
+        # A single measured chunk makes the span identically the compute, so occupancy is 1 by construction.
+        if len(cs) < 2:
+            return [], {}
+        # Span and busy are both single-host deltas, so these ratios carry no inter-host clock skew,
+        # and each rank's own fill and drain fall outside its own span.
+        spans[rank] = _end(cells[cs[-1]]) - cells[cs[0]][0]
+        busy[rank] = sum(cells[c][1] for c in cs) / 1000.0
+    if len(spans) < 2 or min(spans.values()) <= 0:
+        return [], {}
+
+    b = max(busy, key=lambda r: busy[r])
+    rec = {
+        "balance": (sum(busy.values()) / len(busy)) / busy[b],
+        "bottleneck_saturation": busy[b] / spans[b],
+        "global_occupancy": sum(busy.values()) / sum(spans.values()),
+        "bottleneck_rank": b,
+        "rank_span_s": {str(r): spans[r] for r in sorted(spans)},
+        "rank_busy_s": {str(r): busy[r] for r in sorted(busy)},
+    }
+    out = [
+        "occupancy: span = a rank's own first measured chunk start -> its own last measured chunk end;"
+        " busy = its summed device compute",
+        f"  balance               = {rec['balance']:.4f}",
+        f"  bottleneck_saturation = {rec['bottleneck_saturation']:.4f}",
+        f"  global_occupancy      = {rec['global_occupancy']:.4f}",
+    ]
+    return out, rec
+
+
 def _publish(lines, name):
     print(f"disaggregated prefill perf -- {name or 'run'}")
     print("\n".join(lines))
@@ -214,6 +247,12 @@ def _perf_metrics(kept, cs_sorted, disp, chunk_size, probe_chunks=None):
         tput = ranks * chunk_size / span
         out.append(f"  throughput {lbl:>14} (chunk {d:>3}): {tput:>12,.1f} tok/s  ({span:.3f} s)")
         rec["throughput_tok_s"][lbl] = tput
+
+    # Occupancy compares a rank against its own timeline, so it is meaningless without a pipeline.
+    if ranks >= 2:
+        occ_lines, occ_rec = _occupancy(kept)
+        out.extend(occ_lines)
+        rec.update(occ_rec)
     return out, rec
 
 
