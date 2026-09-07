@@ -277,6 +277,9 @@ class TtPrefillRuntime:
         *,
         skip_lm_head: bool = True,
         get_last_token: int = -1,
+        # The shared pipeline runner passes the chunk's PrefillMetadata tensor for device-side layer acks;
+        # M3 acks from the host callback, so it is accepted and unused.
+        metadata_msg=None,
     ):
         """Prefill ONE chunk into user ``slot_id``'s slice of the engine-owned ``kv_cache``. With
         ``skip_lm_head`` (the default) returns None — single-rank is headless, the populated cache is the
