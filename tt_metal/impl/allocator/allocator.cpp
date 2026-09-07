@@ -29,6 +29,10 @@ namespace tt::tt_metal {
 
 AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
     config_(std::make_unique<AllocatorConfig>(alloc_config)),
+    persistent_l1_(
+        alloc_config.l1_unreserved_base,
+        alloc_config.worker_l1_size - alloc_config.l1_small_size,
+        alloc_config.worker_grid),
     view_(std::make_unique<Allocator>(this)),
     tracking_enabled_(trace_allocation_tracking_enabled()),
     traceback_capture_enabled_(trace_allocation_diagnostics_enabled()),
@@ -162,8 +166,17 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         std::unordered_map<CoreCoord, DeviceAddr> addrs;
         for (const auto& core : cores) {
             auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+            // PrefetcherPipe / persistent L1 sit outside BankManager. Per-core placement
+            // must skip this core's persistent occupancy; lockstep uses the flattened
+            // all-cores list below because it picks one address for every bank.
             addrs[core] = l1_manager_->allocate_buffer(
-                alloc_size, page_size, bottom_up, config_->compute_grid, /*num_shards=*/1, AllocatorID{bank_id + 1});
+                alloc_size,
+                page_size,
+                bottom_up,
+                config_->compute_grid,
+                /*num_shards=*/1,
+                AllocatorID{bank_id + 1},
+                persistent_l1_.occupied_ranges(core));
         }
         buffer->set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
@@ -179,7 +192,8 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             break;
         case BufferType::L1: {
             // In HYBRID mode, gather per-bank ranges from device allocators so lockstep avoids occupied regions.
-            std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
+            // PrefetcherPipe / persistent L1 regions sit outside BankManager; lockstep must avoid them too.
+            std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges = persistent_l1_.occupied_ranges();
             if (!hybrid_device_allocators_.empty()) {
                 using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
                 uint32_t num_banks = l1_manager_->num_banks();
