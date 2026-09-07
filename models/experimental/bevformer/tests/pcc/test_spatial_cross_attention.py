@@ -37,9 +37,6 @@ PRINT_DETAILED_COMPARISON_FLAG = False
 MAX_QUERY_ROW_REL_ERROR = 0.3
 
 
-# blank_cams: (cam_idx, batch_idx) pairs to clear in bev_mask, or "all".
-# valid_per_pair: None keeps the random 95%-invalid mask; an int pins max_len to that many valid
-# queries per (camera, batch) pair.
 @pytest.mark.parametrize(
     "config_name, batch_size, bev_h, bev_w, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio, blank_cams, valid_per_pair",
     [
