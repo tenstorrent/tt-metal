@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ring_common_args.hpp"
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -523,17 +525,22 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     uint32_t arg_idx = 0;
-    address_t interm_tensor_address = get_arg_val<address_t>(arg_idx++);
-    address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
+    address_t interm_tensor_address = get_common_arg_val<address_t>(ring_common_arg::Intermediate);
+    ++arg_idx;  // Reserved per-core address slot.
+    address_t output_tensor_address = get_common_arg_val<address_t>(ring_common_arg::Output);
+    ++arg_idx;  // Reserved per-core address slot.
     const uint8_t this_core_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t this_core_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t opposite_core_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t opposite_core_y = get_arg_val<uint32_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    ++arg_idx;  // Out-ready semaphore is selected from common args after direction.
+    size_t batch_ready_sem = get_common_arg_val<uint32_t>(ring_common_arg::BatchReady);
+    ++arg_idx;  // Reserved per-core address slot.
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    size_t barrier_sem = get_common_arg_val<uint32_t>(ring_common_arg::Barrier);
+    ++arg_idx;                                                // Reserved per-core address slot.
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
+    const size_t out_ready_sem = get_common_arg_val<uint32_t>(ring_common_arg::OutReady0 + direction);
     const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
@@ -542,7 +549,8 @@ void kernel_main() {
     // Chunk-paged layout only: staging buffer for the 2nd-last iteration's direct-to-remote
     // contribution. The tiled layout scatter-writes that contribution into the remote output tensor
     // instead and leaves this address at 0.
-    address_t penult_intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
+    address_t penult_intermediate_tensor_address = get_common_arg_val<address_t>(ring_common_arg::Penult);
+    ++arg_idx;  // Reserved per-core address slot.
 #ifdef USE_WORKER_MUX
     size_t mux_arg_idx = arg_idx;
     auto mux_sender = tt::tt_fabric::FabricMuxV2Sender</*EAGER_STAGING=*/true>::build_from_args(mux_arg_idx);

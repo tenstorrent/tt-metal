@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ring_common_args.hpp"
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -39,10 +41,13 @@ void kernel_main() {
 
     uint32_t arg_idx = 0;
     // Load the input tensor spec
-    address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    address_t input_tensor_address = get_common_arg_val<address_t>(ring_common_arg::Input);
+    ++arg_idx;  // Reserved per-core address slot.
+    address_t intermediate_tensor_address = get_common_arg_val<address_t>(ring_common_arg::Intermediate);
+    ++arg_idx;  // Reserved per-core address slot.
+    ++arg_idx;  // Out-ready semaphore is selected from common args after direction.
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
+    const size_t out_ready_sem = get_common_arg_val<uint32_t>(ring_common_arg::OutReady0 + direction);
     const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
     const int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
