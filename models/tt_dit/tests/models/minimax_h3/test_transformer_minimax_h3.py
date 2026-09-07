@@ -1159,6 +1159,28 @@ def test_minimax_h3_transformer_block_perf(
     tt_out = run_block()
     signpost("stop")
 
+    # MINIMAX_H3_BLOCK_PERF_ITERS=N: keep running the warm block N more times and log the wall time per
+    # iteration in chunks, to see whether sustained load changes it. The pipeline's 50-block step measures
+    # 5.97 s on a 4x8 at 15 s (MINIMAX_H3_STEP_TIMERS, blocks section) against 3.8 s device / 4.1 s with
+    # gaps here for 50 x one warm block -- and a traced replay of the same ops is just as slow, so the
+    # difference is device execution under sustained load, not host dispatch.
+    sustained = int(os.environ.get("MINIMAX_H3_BLOCK_PERF_ITERS", "0"))
+    if sustained > 0:
+        laps = []
+        for _ in range(sustained):
+            t0 = time.perf_counter()
+            run_block()
+            laps.append(time.perf_counter() - t0)
+        chunk = max(1, sustained // 10)
+        summary = ", ".join(
+            f"{i}-{min(i + chunk, sustained) - 1}: {1000 * sum(laps[i : i + chunk]) / len(laps[i : i + chunk]):.1f} ms"
+            for i in range(0, sustained, chunk)
+        )
+        logger.info(
+            f"SUSTAINED {sustained} warm iterations: first {1000 * laps[0]:.1f} ms, min {1000 * min(laps):.1f} ms, "
+            f"median {1000 * sorted(laps)[len(laps) // 2]:.1f} ms, max {1000 * max(laps):.1f} ms | per chunk: {summary}"
+        )
+
     assert tuple(tt_out.shape) == (
         1,
         1,
