@@ -10,7 +10,10 @@ FROM ${BASE}
 # full  = source tree plus the build tarball unpacked over it; tests run the C++
 #         binaries from /work/build and import ttnn in place. That import needs
 #         /work/ttnn on PYTHONPATH as well as /work, since /work/ttnn is a
-#         namespace dir and the package itself is /work/ttnn/ttnn.
+#         namespace dir and the package itself is /work/ttnn/ttnn. Nothing here
+#         runs pip, so ttnn's declared dependencies are installed from the tree's
+#         pyproject.toml: no base image is guaranteed to carry them already (the
+#         dev image lacks graphviz and ml_dtypes, and ci-test lacks graphviz).
 # wheel = source tree plus the wheel installed; no build tree.
 ARG PROFILE=full
 
@@ -34,6 +37,7 @@ RUN --mount=type=bind,source=artifact,target=/tmp/payload \
             tar --zstd -xf "${tarballs[0]}" -C /work; \
             test -d /work/build \
                 || { echo "::error::the tarball produced no /work/build" >&2; exit 1; }; \
+            uv pip install -r /work/pyproject.toml; \
             printf 'profile=full\npayload=%s\n' "$(basename "${tarballs[0]}")" \
                 > /etc/prebuilt-tests-env-manifest ;; \
         wheel) \
