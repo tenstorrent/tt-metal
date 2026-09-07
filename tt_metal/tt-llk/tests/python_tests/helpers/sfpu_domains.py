@@ -442,8 +442,16 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.ReluMax: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
+    # relu_min(x) = max(x, RELU_MIN_THRESHOLD), so the upper bound has to clear the
+    # threshold or the op has no pass-through half: at low=-5/high=5 against a threshold of
+    # 5.0 the sampler is half-open, every input clamps, and the golden collapses to the
+    # constant 5.0 -- a kernel that ignored x entirely would have scored a perfect PCC.
     MathOperation.ReluMin: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM,
+            low=-5.0,
+            high=2.0 * RELU_MIN_THRESHOLD,
+        )
     ),
     # lrelu: leaky ReLU with slope 0.1; span both signs so the negative
     # (scaled) branch and the positive (pass-through) branch are exercised.
@@ -1823,7 +1831,14 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     MathOperation.Threshold: (THRESHOLD_T,),
     # relu_max clamps above at its threshold, and keeps relu's own knee at 0.
     MathOperation.ReluMax: (0.0, RELU_MAX_THRESHOLD),
-    MathOperation.ReluMin: (RELU_MIN_THRESHOLD,),
+    # The threshold alone only proves the clamp branch. Straddle it so the edge face also
+    # carries a value that passes through unchanged; 4.0/5.0/6.0 are exact in every format
+    # this sweep runs, so the pair does not blur together in bf16.
+    MathOperation.ReluMin: (
+        RELU_MIN_THRESHOLD - 1.0,
+        RELU_MIN_THRESHOLD,
+        RELU_MIN_THRESHOLD + 1.0,
+    ),
     # softplus goes linear at its threshold.
     MathOperation.Softplus: (SOFTPLUS_THRESHOLD,),
     # Round-half-to-even ties, where the kernel's _round_even_ and a naive round differ.

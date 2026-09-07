@@ -285,6 +285,23 @@ class SFPU_UNARY_SCALAR(TemplateParameter):
 
 
 @dataclass
+class SFPU_UNARY_THRESHOLD(TemplateParameter):
+    """Threshold operand for a unary op that clamps against a scalar, as raw fp32 bits.
+
+    Same contract as :class:`SFPU_UNARY_SCALAR` -- emit the bit pattern rather than a
+    decimal literal so the kernel and the torch golden agree exactly. Separate from
+    SFPU_UNARY_SCALAR so a driver can carry both at once, which
+    relu_min_lreg2_regression_test.cpp does: the scalar is its LREG2 poison and the
+    threshold is the value relu_min is supposed to clamp to.
+    """
+
+    value_bits: int = 0x40A00000  # 5.0f
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SFPU_UNARY_THRESHOLD = {self.value_bits}u;"
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 
