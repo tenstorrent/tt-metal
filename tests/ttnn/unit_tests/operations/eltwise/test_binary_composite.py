@@ -403,7 +403,7 @@ def test_binary_logical_and__ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.logical_and_)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    assert_with_ulp(input_tensor1, golden_tensor)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=input_tensor1)
     assert torch.equal(ttnn.to_torch(input_tensor1), golden_tensor)
 
 
@@ -442,7 +442,7 @@ def test_binary_logical_or__ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.logical_or_)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    assert_with_ulp(input_tensor1, golden_tensor)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=input_tensor1)
     assert torch.equal(ttnn.to_torch(input_tensor1), golden_tensor)
 
 
@@ -481,7 +481,7 @@ def test_binary_logical_xor__ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.logical_xor_)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    assert_with_ulp(input_tensor1, golden_tensor)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=input_tensor1)
     assert torch.equal(ttnn.to_torch(input_tensor1), golden_tensor)
 
 

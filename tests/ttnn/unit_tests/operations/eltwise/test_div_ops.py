@@ -185,7 +185,7 @@ def test_div_no_nan_fp32(device):
 
     output = ttnn.div_no_nan(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
-    assert_with_ulp(output, torch_output, ulp_threshold=1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=torch_output, actual_result=output, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -457,7 +457,7 @@ def test_optional_output_tensor_remainder(device):
     )
     optional_output_tensor = ttnn.to_torch(optional_output_tensor)
 
-    assert_with_ulp(optional_output_tensor, torch_golden, ulp_threshold=0)
+    assert_with_ulp(expected_result=torch_golden, actual_result=optional_output_tensor, ulp_threshold=0)
 
 
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.float32])
@@ -659,7 +659,7 @@ def test_div_int32_float_scalar_promotion(device, rounding_mode, scalar, layout,
     assert result.layout == layout
     # Match floating division's accuracy contract; rounded small results must be exact.
     actual = ttnn.to_torch(result)
-    assert_with_ulp(actual, expected, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1.0)
     if rounding_mode is not None:
         assert torch.equal(actual[2:9], expected[2:9])
 
@@ -740,7 +740,7 @@ def test_div_int32_float_scalar_promotion_sharded(
     assert result.layout == layout
     assert result.memory_config() == output_memory_config
     expected = torch.div(torch_input.float(), 2.5, rounding_mode=rounding_mode)
-    assert_with_ulp(ttnn.to_torch(result), expected, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=expected, actual_result=ttnn.to_torch(result), ulp_threshold=1.0)
 
 
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
@@ -767,7 +767,7 @@ def test_div_int32_float_scalar_promotion_fast_mode(device, rounding_mode):
     result = ttnn.div(input_tensor, 2.5, rounding_mode=rounding_mode, fast_and_approximate_mode=True)
     assert result.dtype == ttnn.float32
     expected = torch.div(torch_input.float(), 2.5, rounding_mode=rounding_mode)
-    assert_with_ulp(ttnn.to_torch(result), expected, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=expected, actual_result=ttnn.to_torch(result), ulp_threshold=1.0)
 
 
 def test_div_int32_float_scalar_promotion_output_guards(device, expect_error):
