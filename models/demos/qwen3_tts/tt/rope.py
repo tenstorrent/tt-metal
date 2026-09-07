@@ -311,6 +311,7 @@ def apply_rope_qk(
     compute_kernel_config=None,
     memory_config=None,
     k_keep_decode_layout: bool = False,
+    qk_already_decode_layout: bool = False,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     """Rotate Q ``[1, n_q, seq, head_dim]`` and K ``[1, n_kv, seq, head_dim]``.
 
@@ -328,6 +329,11 @@ def apply_rope_qk(
     Only ``seq == 1`` qualifies: decode mode applies one position to every row of the
     tile, whereas a real multi-token sequence needs a distinct cos/sin row per position.
     Callers that have no ``decode_trans_mat`` keep the prefill kernel.
+
+    ``qk_already_decode_layout=True`` says Q/K arrive as ``[1, 1, n_heads, head_dim]``
+    already — e.g. straight out of ``nlp_create_qkv_heads_decode`` — so the transpose in
+    is skipped. Q is still transposed back for SDPA unless the caller wants otherwise; K
+    obeys ``k_keep_decode_layout`` as usual.
 
     ``k_keep_decode_layout=True`` returns K as ``[1, 1, n_kv, head_dim]`` — the decode
     kernel's own output — instead of transposing it back. That layout is byte-identical
@@ -350,7 +356,11 @@ def apply_rope_qk(
         )
 
     # Every head must land in one 32-row tile after the transpose.
-    _decode_kernel = int(q.shape[-2]) == 1 and decode_trans_mat is not None and int(q.shape[1]) <= ttnn.TILE_SIZE
+    if qk_already_decode_layout:
+        # [1, 1, heads, head_dim]: heads sit on dim 2 and dim 1 is the (single) batch.
+        _decode_kernel = decode_trans_mat is not None and int(q.shape[-2]) <= ttnn.TILE_SIZE
+    else:
+        _decode_kernel = int(q.shape[-2]) == 1 and decode_trans_mat is not None and int(q.shape[1]) <= ttnn.TILE_SIZE
     if not _decode_kernel:
         if k_keep_decode_layout:
             raise ValueError(
@@ -373,7 +383,10 @@ def apply_rope_qk(
         # [1, n_heads, 1, head_dim] -> [1, 1, n_heads, head_dim]: packs all heads into
         # the single tile the decode kernel wants. transpose writes the sharded layout
         # directly, so no separate reshard is needed on either side.
-        t_d = ttnn.transpose(t, 1, 2, memory_config=hd_memcfg)
+        if qk_already_decode_layout:
+            t_d = t if t.memory_config() == hd_memcfg else ttnn.to_memory_config(t, hd_memcfg)
+        else:
+            t_d = ttnn.transpose(t, 1, 2, memory_config=hd_memcfg)
         r = ttnn.experimental.rotary_embedding_llama(
             t_d,
             cos_s,
@@ -383,7 +396,8 @@ def apply_rope_qk(
             memory_config=hd_memcfg,
             compute_kernel_config=compute_kernel_config,
         )
-        ttnn.deallocate(t_d)
+        if t_d is not t:
+            ttnn.deallocate(t_d)
         if k_keep_decode_layout and _i == 1:
             rotated.append(r)  # caller consumes the [1, 1, n_kv, head_dim] cache layout
             continue

@@ -1003,6 +1003,166 @@ alone (the CP N300 sharding does not apply on one chip). CP decodes -8.3 %, Talk
 
 ---
 
+## 3.x Decode-layout head split — `QWEN3_TTS_DECODE_HEAD_SPLIT` (default ON, `=0` to revert)
+
+`nlp_create_qkv_heads_decode` returns `[1, 1, heads, head_dim]` HEIGHT_SHARDED
+`(TILE, head_dim)` on one core. That is *byte-identical* to the spec decode-mode RoPE
+requires (`_rope_decode_memcfg`) and to `paged_k_input_mem_config`, so the head split
+can land straight in it and three of the four per-layer transposes disappear.
+
+**Measured, N300, `decode_talker`, medians of 3:**
+
+| | OFF | ON | delta |
+|---|--:|--:|--:|
+| device ops | 957 | 901 | **-56** |
+| Transpose | 112 ops, 0.358 ms | 28 ops, 0.096 ms | **-84 ops, -0.262 ms** |
+| LayerNorm | 113 ops, 1.195 ms | 113 ops, 1.123 ms | -0.072 ms |
+| head split | 0.052 ms (`NlpCreateHeads`) | 0.062 ms (`...Decode`) | +0.010 ms |
+| ShardedToInterleaved | 56 ops, 0.085 ms | 56 ops, 0.041 ms | -0.044 ms |
+| InterleavedToSharded | 58 ops, 0.139 ms | 58 ops, 0.144 ms | +0.005 ms |
+| Reshard | 28 ops, 0.061 ms | 56 ops, 0.072 ms | +28 ops, +0.011 ms |
+| device kernel | 10.743 ms | 10.387 ms | -0.356 ms |
+| op-to-op gap | 0.844 ms | 0.901 ms | +0.057 ms |
+| device end to end | 11.587 ms | 11.289 ms | -0.298 ms |
+| wall, 10 traced replays (median of 3) | 10.59 ms | **10.43 ms** | -0.16 ms (-1.5 %) |
+| `talker_trace` in the real AR frame (median of 4) | 10.698 ms | **10.508 ms** | **-0.189 ms (-1.8 %)** |
+| `cp_trace`, same runs | 26.20 ms | 26.21 ms | +0.007 ms (untouched) |
+
+`-84` transposes and `-28` `NlpCreateHeads` against `+28` decode splits and `+28` V
+reshards nets `-56` ops. The V transpose becomes a V reshard because
+`nlp_create_qkv_heads_decode` puts q/k/v all on core (0,0) and
+`paged_fused_update_cache` rejects overlapping K/V grids.
+
+### The win does reach the AR loop — `steady_ms_per_frame` just cannot see it
+
+An earlier revision of this section claimed "no frame-level gain, possibly slower",
+from `steady_ms_per_frame` medians of 40.06 ON vs 39.96 OFF over 6 runs per arm. **That
+was a misreading of noise.** That metric ranges 39.79-40.55 run to run — ~0.7 ms of
+spread against a 0.2 ms signal — so it cannot resolve this change in either direction,
+and its median moved the wrong way by chance.
+
+`QWEN3_TTS_HOST_PROF=1` settles it, because it times the Talker's replay separately
+inside the real fused frame. Medians of 4 runs per arm:
+
+| | OFF | ON | delta | spread |
+|---|--:|--:|--:|--:|
+| `talker_trace` | 10.698 ms | 10.508 ms | **-0.189 ms** | <=0.03 ms |
+| `cp_trace` | 26.20 ms | 26.21 ms | +0.007 ms | <=0.03 ms |
+| frame TOTAL | 39.32 ms | 39.10 ms | -0.22 ms | 0.2-0.6 ms |
+
+So the -1.8 % is real and lands in the AR loop, `cp_trace` confirms there is **no CP
+interaction** (an L1-address interaction was the suspect in the earlier revision, and it
+is now ruled out to 0.007 ms), and the reason the frame barely moves is plain Amdahl:
+the CP is **26.2 of the 39.1 ms frame (67 %)** and the Talker 10.5 ms (27 %), so 1.8 %
+of the Talker is 0.5 % of the frame.
+
+**Methodology, generally**: to gate a Talker-only change, use `QWEN3_TTS_HOST_PROF=1`
+and read `talker_trace` (spread ~0.03 ms), not `steady_ms_per_frame` (spread ~0.7 ms).
+The frame metric is a regression tripwire, not an instrument for sub-1 % component
+changes.
+
+### The `I2S` bridges were avoidable — `rms_norm` can write RoPE's layout
+
+The first working version bridged the norm both ways (`HS -> IL -> norm -> IL -> HS`),
+which added 56 `I2S` and pushed the op-to-op gap up +0.184 ms, halving the win. But
+`rms_norm` with an **interleaved input** accepts `memory_config=<HEIGHT_SHARDED>` and
+writes it directly, bit-exact with resharding afterwards. That is what the numbers
+above use: 56 ops and 0.127 ms of gap recovered, wall -0.10 -> -0.16 ms.
+
+The input side cannot be closed the same way: a *sharded* input dispatches the sharded
+kernel even with no `program_config`, and that kernel is not bit-exact here (below). So
+`HS -> IL` before the norm is forced, and the chain is 9 ops/layer against 11 — minimal
+given that the split emits HEIGHT_SHARDED, the norm needs interleaved in, and RoPE
+takes HEIGHT_SHARDED only.
+
+**Bit-exact**: 60 frames x 16 codebooks = 960 codes and the output WAV are
+byte-identical to the flag-off run (md5 match), with flag-off confirmed reproducible
+run-to-run first.
+
+### Three things this cost, all worth knowing
+
+1. **The two head-split ops read opposite qkv column conventions.** The width-sharded
+   `nlp_create_qkv_heads` wants the KV-group-interleaved columns `Attention` permutes
+   the fused QKV weight into at init; `nlp_create_qkv_heads_decode` wants plain
+   `q|k|v` concat. The flag therefore also flips that init permutation to the identity
+   — a host-side change, free at runtime. Proven with tagged heads in
+   `test_qwen3_tts_decode_head_split.py`.
+
+2. **The seq<=32 prefill bucket shares that weight.** It splits with the *L1-interleaved*
+   `nlp_create_qkv_heads`, which — unlike its width-sharded self — reads concat order,
+   so it still works; but it loses the "split with no intermediate L1 copy" path and the
+   `prefill_32` window goes **14.82 -> 15.26 ms (+0.44 ms)**. Paid once per request
+   against -0.10 ms every frame, and only for prompts of <=32 tokens (the demo's
+   61-token prompt uses bucket 64 and never touches it).
+
+3. **The sharded norm kernel is NOT a drop-in for the interleaved one at this
+   compute_kernel_config.** `rms_norm` rejects HEIGHT_SHARDED outright, so the head
+   norms have to be bridged out and back. Doing that to WIDTH_SHARDED with
+   `LayerNormShardedMultiCoreProgramConfig` is ~2x the win (-0.20 ms wall) but at LoFi
+   with `fp32_dest_acc_en` it differs from the interleaved kernel by **rel 1.9e-2 / PCC
+   0.99998 on Q**, and that reaches the codes — frame 0 matched, frame 1 diverged at
+   codebook 3. Bridging to L1 interleaved and keeping **today's** kernel, fed one tile
+   instead of `num_heads` tiles, is bit-exact. Both facts are pinned by tests, including
+   a deliberately inverted one that fails if the two kernels ever start agreeing.
+
+### Why the fourth transpose stays
+
+Q still has to be transposed back to `[1, heads, 1, head_dim]` for the prefill-form
+SDPA (28 ops, 0.096 ms). Removing it needs
+`scaled_dot_product_attention_decode`, which section 5 rejects on correctness: its
+cross-chunk reduction is wrong at `dh=128` once the cache spans more than one
+`k_chunk`, and kv=352 admits only `k_chunk=32` (11 chunks) -> PCC 0.50. So this is
+blocked on the same thing, not on layout.
+
+### Verdict — PROMOTED to default ON
+
+Bit-exact (960/960 codes and the output WAV md5-identical), -1.8 % of `talker_trace`
+and -0.5 % of the AR frame, reproducible to 0.03 ms. -56 device ops.
+
+The one cost is the seq=32 prefill bucket: **14.82 -> 15.26 ms (+0.44 ms)**, because the
+DRAM-sharded qkv weight's column order is shared with it and that bucket falls back to
+the L1-interleaved split. Paid **once per request** against -0.189 ms on **every frame**,
+so it breaks even after ~2.3 frames.
+
+**What actually selects that bucket is the reference audio, not the prompt text.** 32 is
+the floor — `_TRACED_PREFILL_BUCKETS = (32, 64, 128)` with
+`next(b for b in ... if b >= real_seq_len)`, and 32 is also the smallest entry in
+`PREFILL_SEQS` — so any `real_seq_len` of 1..32 pads to exactly 32. But
+
+    real_seq_len = 9 (role + prefix) + 1 (codec BOS) + ref_codec_frames
+
+and the *text* never lengthens it: `create_icl_embedding_ttnn` pads the text up to
+`codec_lens` when it is shorter, and streams the excess during decode as
+`trailing_text_hidden` when it is longer. Measured on jim_reference.wav (4.01 s ->
+51 codec frames): `real_seq_len = 61 -> bucket 64` for both a 15-token and a 38-token
+text. Reaching bucket 32 needs <=22 codec frames, i.e. a reference clip under ~1.8 s.
+
+So for the demo's reference the cost is **exactly zero**: `prefill_demo` (bucket 64) is
+14.80 / 14.81 ms ON against 14.77 / 14.81 ms OFF — 64 > `short_seq_limit`, so it does
+not use the DRAM-sharded qkv path at all and the weight order is irrelevant there.
+
+The bucket-32 fallback is gated too: 160 codes and the output WAV are md5-identical
+across arms. To reproduce it, truncate the reference *cache* rather than the audio
+(`encode_reference_audio` shells out to `ffmpeg`, which is not installed here, and only
+skips it when `<audio>.refcache.pt` exists) — write `{ref_codes: rc[:18],
+audio_data: ad[:18*1920]}` next to a stub wav of the same basename. Note `--max-tokens`
+must then be **>=80**: the KV cache is sized `padded_seq_len + max_new_tokens + 16`
+rounded to a tile, and the warmup still compiles bucket 128, so bucket 32 with
+`--max-tokens 40` gives a 96-row cache and dies with "Fill update_idx (0) + input tensor
+height (128) must be <= cache tensor height (96)". That is pre-existing and unrelated to
+this flag — it reproduces with the flag off.
+
+Making the flag-on path decode-only as well — keeping the KV-group-order weight for the
+seq=32 prefill bucket alongside a concat-order copy for decode — would cost **+134 MiB of
+DRAM per chip** (2048x2304 bfp8_b = 4.78 MiB x 28 layers) to recover 0.44 ms once per
+request, and only for sub-1.8 s reference clips. Not recommended. Note the runtime chain
+is *already* decode-only (gated on `_traced_decode`); only the weight order is shared.
+
+`QWEN3_TTS_DECODE_HEAD_SPLIT=0` restores the KV-group weight order and the
+transpose-around-RoPE chain in one step, for bisecting.
+
+---
+
 ## 4. Measurement methodology — read before comparing reports
 
 **N300 CCL timings swing ~2x run to run.** The same `ttnn.all_gather` of a 64 KB payload
@@ -1157,7 +1317,7 @@ export TT_VISIBLE_DEVICES=0 \
 | `num_links=2` on that all_gather | 69 us vs 34 us on auto | Payload far too small to amortise a second link's setup. |
 | Moving RoPE cos/sin/trans_mat from DRAM to L1 | 40.9 vs 41.4 us | Irrelevant — the cost is the per-head loop, not memory. |
 | Lowering RoPE math fidelity | 41.4 (LoFi) vs 43.4 (HiFi4) | Same. Not a fidelity problem. |
-| `nlp_create_qkv_heads_decode` instead of the sharded prefill-style split | 13.3 us vs 2 us | Much worse here. Its value is feeding a full decode-layout attention pipeline, which this model does not use. |
+| ~~`nlp_create_qkv_heads_decode` instead of the sharded prefill-style split~~ | ~~13.3 us vs 2 us~~ | **Overturned 2026-09-07 — see 3.x.** The 13.3 us does not reproduce: in-model the op is 2.2 us against 1.9 us for the sharded split. The likely cause of the old number is the input sharding — the op validates `num_kv_heads % input_cores == 0`, so probing it on an 8-core-wide xqkv (rather than the `num_kv_heads`-core spec the model builds) fails or falls back. It is now a flag, `QWEN3_TTS_DECODE_HEAD_SPLIT`. |
 | Running the CodePredictor at TP=1 (replicated) on N300 to delete all CCLs | est. matmul growth +103 us vs CCL saving -107 us | Net ~zero for a large, risky change. |
 | DRAM-sharding the CP QKV matmul | ~2 us | N is padded 2048 -> 2304, so it needs an S2I + slice that eats the gain. |
 | `ttnn.transformer.scaled_dot_product_attention_decode` for Talker decode | PCC **0.50** vs 1.00 | Its cross-chunk flash-decode reduction is wrong at dh=128 as soon as the cache spans more than one `k_chunk` — single chunk 0.999995, two full chunks 0.702, 11 chunks 0.504 against an fp32 reference in isolation. And we cannot stay inside one chunk: the op requires `k_chunk_size` to be a **power of two** (`sdpa_decode.cpp:67`) *and* to divide `k_shape[2]`, so kv=352 (=32x11) admits only `k_chunk=32`, i.e. 11 chunks. `models/tt_transformers` documents the same cliff for Gemma-2 at dh=256. Revisit only if kv_max is padded to a power of two (then `k_chunk=kv_max` is single-chunk and correct) — it would also need `nlp_concat_heads_decode` and a new wo in0 spec. The prefill-form SDPA at `q_chunk=32` is 26.8 us and correct. |
