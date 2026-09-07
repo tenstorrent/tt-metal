@@ -15,20 +15,11 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
 
 namespace tt::tt_metal {
 class Buffer;
 class MeshTensor;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
-
-enum class ReduceOpMath { SUM, AVG, MAX, MIN, STD, VAR };
-
-enum class ReduceOpDim { H, W, HW };
-
-enum class ReduceOpParallelizationStrategy { MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW, SINGLE_CORE_HW };
-
 }  // namespace tt::tt_metal
 
 namespace ttnn::prim {

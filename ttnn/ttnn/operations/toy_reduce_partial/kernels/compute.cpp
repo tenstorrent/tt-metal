@@ -1,100 +1,14 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Unified compute kernel for toy_reduce_partial.
-//
-// Handles both REDUCE_ROW (W) and REDUCE_COL (H) via REDUCE_ROW_MODE
-// compile-time arg. Supports MAX and SUM pool types via POOL_TYPE_SUM arg.
-// The partial-scaler mode works identically for both: the reduce helper applies
-// the reader-prepared partial scaler to the last tile in the reduced dimension
-// (last W tile for REDUCE_ROW, last H tile for REDUCE_COL).
-
-#include <cstdint>
-
-#include "api/compute/reduce.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 void kernel_main() {
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t NC = get_compile_time_arg_val(2);
-    constexpr uint32_t has_partial = get_compile_time_arg_val(3);
-    constexpr uint32_t reduce_row_mode = get_compile_time_arg_val(4);
-    constexpr uint32_t pool_type_sum = get_compile_time_arg_val(5);
-
-    constexpr uint32_t cb_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-
-    compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
-
-    constexpr auto partial_mode =
-        has_partial ? compute_kernel_lib::ReducePartialMode::Scaler : compute_kernel_lib::ReducePartialMode::None;
-
-    constexpr auto block_shape = compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC);
-
-    if constexpr (pool_type_sum) {
-        if constexpr (reduce_row_mode) {
-            compute_kernel_lib::reduce<
-                PoolType::SUM,
-                ReduceDim::REDUCE_ROW,
-                cb_in,
-                cb_scaler,
-                cb_out,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                block_shape,
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::NoAccumulation{},
-                compute_kernel_lib::NoOp{},
-                partial_mode);
-        } else {
-            compute_kernel_lib::reduce<
-                PoolType::SUM,
-                ReduceDim::REDUCE_COL,
-                cb_in,
-                cb_scaler,
-                cb_out,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                block_shape,
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::NoAccumulation{},
-                compute_kernel_lib::NoOp{},
-                partial_mode);
-        }
-    } else {
-        if constexpr (reduce_row_mode) {
-            compute_kernel_lib::reduce<
-                PoolType::MAX,
-                ReduceDim::REDUCE_ROW,
-                cb_in,
-                cb_scaler,
-                cb_out,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                block_shape,
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::NoAccumulation{},
-                compute_kernel_lib::NoOp{},
-                partial_mode);
-        } else {
-            compute_kernel_lib::reduce<
-                PoolType::MAX,
-                ReduceDim::REDUCE_COL,
-                cb_in,
-                cb_scaler,
-                cb_out,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                block_shape,
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::NoAccumulation{},
-                compute_kernel_lib::NoOp{},
-                partial_mode);
-        }
-    }
-
-    constexpr uint32_t num_scaler_tiles = has_partial ? 2 : 1;
-    cb_pop_front(cb_scaler, num_scaler_tiles);
+    static_assert(get_compile_time_arg_val(0) == 1, "toy_reduce_partial expects one planned call");
+    using Call = ttnn::kernel_lib::ReduceCallAtT<1, 0>;
+    compute_kernel_hw_startup(Call::input_cb_id, Call::auxiliary_cb_id, Call::output_cb_id);
+    compute_kernel_lib::reduce<Call>();
+    cb_pop_front(Call::auxiliary_cb_id, Call::auxiliary_tile_count);
 }

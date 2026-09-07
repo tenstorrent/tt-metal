@@ -315,7 +315,15 @@ ReducePlan make_tiled_plan(
                                      : checked_mul_u32(logical_h, logical_w, "logical HW reduction volume"));
     const std::uint32_t partial_elements =
         dim == ReduceOpDim::W ? logical_w % tile_w : (dim == ReduceOpDim::H ? logical_h % tile_h : 0U);
-    const bool has_axis_partial = partial_elements != 0 && (math == ReduceOpMath::SUM || math == ReduceOpMath::AVG);
+    const bool has_axis_partial =
+        partial_elements != 0 && (math == ReduceOpMath::SUM || math == ReduceOpMath::AVG || math == ReduceOpMath::MAX);
+    // The SFPU implementations do not consume scaler tiles. A ReduceTile plan
+    // may use either GMPOOL or SFPU, depending on its dtype and accuracy mode.
+    TT_FATAL(
+        math != ReduceOpMath::MAX || !has_axis_partial ||
+            (input.data_type() != DataType::INT32 &&
+             !(input.data_type() == DataType::FLOAT32 && fp32_mode == ReduceFp32Mode::Accurate)),
+        "Reduce planner: partial MAX scalers require the native reduce_tile path; INT32 and accurate FLOAT32 use SFPU");
     const bool scalar_has_2d_partial = dim == ReduceOpDim::HW && ((logical_h % tile_h) || (logical_w % tile_w));
 
     const auto automatic_algorithm = add_is_legal(input, math, dim, fp32_mode, hardware, scalar_has_2d_partial) &&
