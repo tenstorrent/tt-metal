@@ -53,6 +53,13 @@ CheckOptions:
     value: "^([NCHWD]|[xyz]|[ijk]|[WHCND]t|cb|id)$"
   - key: readability-identifier-length.IgnoredParameterNames
     value: "^(n|[xyzab]|[ijk]|id|cb|vc|[WHCND]t)$"
+  # The check's rationale is that lowercase 'l' is confusable with '1' -- '1l'
+  # reads as '11'. That does not apply to 'u' or 'f', which is all this codebase
+  # produces: 2,713 'u' and 1,052 'f' against a single 'ul' and no 'l' at all.
+  # Listing only the l-family limits the check to the confusable case; each entry
+  # is also the suggested replacement, so they are spelled fully uppercase.
+  - key: readability-uppercase-literal-suffix.NewSuffixes
+    value: "L;UL;LL;ULL"
   - key: readability-simplify-boolean-expr.SimplifyDeMorgan
     value: false
   - key: readability-else-after-return.WarnOnUnfixable

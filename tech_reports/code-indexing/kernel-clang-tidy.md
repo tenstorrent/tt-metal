@@ -320,6 +320,9 @@ this domain:
 | `portability-simd-intrinsics` | SFPI *is* a SIMD intrinsics layer, by design. |
 | `clang-diagnostic-c++98-compat` | Device code is C++17/20. |
 | `performance-enum-size` | Measured zero saving on every enum it flags that is actually stored; see below. |
+| `bugprone-easily-swappable-parameters` | Every device API parameter is `uint32_t`, so it fires on nearly every function (`llk_unpack_AB`, `tilizeA_B_reduce_init`). 1,410 findings whose only fix is strong-typedef wrappers across the whole ABI. |
+| `clang-diagnostic-unsafe-buffer-usage` | The C++ Safe Buffers profile, 1,315 findings carrying just two distinct messages, both "unsafe buffer access" with no specifics. It wants `std::span` for all pointer arithmetic, but kernels address L1 at fixed hardware addresses through raw pointers, which a span cannot represent. |
+| `clang-diagnostic-unused-parameter` | Redundant: 846 of its 907 findings share an exact file, line *and* column with `misc-unused-parameters`, which is kept because it also carries an auto-fix. Costs 61 unique positions. |
 
 Two more are muted on volume. `modernize-use-trailing-return-type` (1,182
 findings) is pure style and tt-umd mutes it too.
@@ -472,6 +475,16 @@ as a source file, and `chlkc_list.h` (3) does the same in-repo. Two globs,
 21,550 findings other checkers report in those same files visible, which a
 `--disable` would not.
 
+The second rule is `modernize-macro-to-enum` (3,968 findings), and it is the
+cleanest scoping case in the report: **every** finding, without exception, is
+under `*/hw/inc/internal/*`, the Tensix register and configuration headers, with
+`cfg_defines.h` alone holding 3,181 of them and `noc_overlay_parameters.h`,
+`tensix.h`, `noc_parameters.h` and `dev_mem_map.h` accounting for most of the
+rest. Those headers track the hardware rather than being hand-maintained, and the
+macros in them are tested with `#if`, where an enum is invisible to the
+preprocessor — so the suggested change is not merely unwelcome but incorrect. The
+checker stays enabled everywhere else, which a `--disable` would not allow.
+
 The bar for a rule is that the finding is wrong about this code — not that it is
 unwelcome or numerous — and that it is scopable by path. Most volume candidates
 fail one of those. `readability-magic-numbers` (2,567) was proposed for an
@@ -483,15 +496,15 @@ instruction encodings (`tensix_functions.h`, 102 — `(addr_mode << 15) |
 (zero_write << 12)`). Bit positions are precisely what should be a named constant,
 so the checker is right. The one arguable case is the NOC coordinate table in
 `eth_chan_noc_mapping.h` (65), which is tabular data whose shifts are already
-named, and 65 findings do not justify a rule. `performance-no-int-to-ptr` (694),
-`clang-diagnostic-old-style-cast` (766) and `readability-uppercase-literal-suffix`
-(3,762) fail the scoping test instead — their top five files hold 13–29% of their
-findings, so any path glob would be arbitrary. The last is also trivially
-auto-fixable, which makes it a target for an agent rather than for suppression.
+named, and 65 findings do not justify a rule. `performance-no-int-to-ptr` (694) and
+`clang-diagnostic-old-style-cast` (766) fail the scoping test instead — their top
+five files hold 13–29% of their findings, so any path glob would be arbitrary.
+`readability-uppercase-literal-suffix` (3,766) failed it too, but turned out to be
+addressable through a check option instead; see below.
 
 **Check options are the quietest suppressor here**, so they are worth reading as
 carefully as the `--disable` list. Nothing readability- or complexity-related is
-disabled, but nine options retune five checks. Five were mirrored verbatim from
+disabled, but ten options retune six checks. Five were mirrored verbatim from
 the repo's root host `.clang-tidy` ("mirror host .clang-tidy strategy for kernel
 checks") rather than chosen for device code:
 
@@ -506,6 +519,7 @@ checks") rather than chosen for device code:
 | `readability-identifier-length.IgnoredLoopCounterNames` | `^[ijk_]$` | `^[ijk_nchwdbtr]$` |
 | `readability-identifier-length.IgnoredVariableNames` | (none) | `^([NCHWD]\|[xyz]\|[ijk]\|[WHCND]t\|cb\|id)$` |
 | `readability-identifier-length.IgnoredParameterNames` | `^[n]$` | `^(n\|[xyzab]\|[ijk]\|id\|cb\|vc\|[WHCND]t)$` |
+| `readability-uppercase-literal-suffix.NewSuffixes` | (all) | `L;UL;LL;ULL` |
 
 The first two are now back at clang-tidy's defaults, deliberately diverging from
 the host config. At `Threshold=312` with `IgnoreMacros=true`, cognitive
@@ -574,6 +588,24 @@ Together these take the check from 3,243 findings to 1,385, a 57% cut, and what
 survives is what the check exists for: `s` (115), `in` (77), `r` (64), `a` (58),
 `s0` (54), `v` (52), plus `p`, `g`, `m`, `l`. Those are terse rather than
 conventional, and no domain argument rescues them.
+
+`readability-uppercase-literal-suffix.NewSuffixes` narrows the third check on the
+same principle: keep the case the check exists for, drop the rest. The check's
+rationale is that a lowercase `l` is confusable with `1`, so `1l` reads as `11`.
+No such ambiguity exists for `u` or `f`, and `u` and `f` are all this codebase
+produces — 2,713 and 1,052 respectively, against exactly one `ul` and not a
+single bare `l`. Listing only the l-family takes the check from 3,766 findings to
+that one, while still catching a future `1l`.
+
+Two things about the option are worth recording because both are easy to get
+wrong. Each listed suffix is also the *suggested replacement*, so the entries
+must be spelled fully uppercase: `L;uL;UL;LL;uLL;ULL` flags the same literals but
+rewrites `3ul` to `3uL`, whereas `L;UL;LL;ULL` yields `3UL`. And matching is
+against the suffix as written, so an all-uppercase list still catches lowercase
+literals; verified by fixing a file holding all seven suffix forms. (Separately,
+`cert-dcl16-c` is an alias of this check that CERT already scopes to the
+l-family. It reports nothing in the current run, but see the note on alias
+duplication.)
 
 The blunter alternative, `MinimumVariableNameLength=2`, was rejected. It
 silences slightly more (860 variable findings against 761) but accepts *any*
