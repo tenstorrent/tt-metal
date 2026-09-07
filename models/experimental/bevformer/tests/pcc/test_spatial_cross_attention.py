@@ -33,7 +33,7 @@ ENABLE_LOGGING = True
 # Default Test Configuration
 PRINT_DETAILED_COMPARISON_FLAG = False
 
-# Used for single query row testing
+# Maximum relative error allowed for any query row
 MAX_QUERY_ROW_REL_ERROR = 0.3
 
 
