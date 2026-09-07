@@ -1250,12 +1250,10 @@ class ttMLA:
     ) -> None:
         """``actual_end`` (end of this chunk's real tokens) clamps the write to them, so a chunk padding
         past the cache end needs only its real tokens to fit. Omitted, the whole padded slab is written."""
-        # TP-sharded writes need the host kv_actual_global (the reader derives its 1/tp window from it),
-        # which the metadata path cannot supply. The op re-checks; assert here for a readable failure.
-        assert not (metadata is not None and tp_axis is not None), (
-            "tp_shard_kv is not supported on the metadata (traced) write path -- run with PREFILL_USE_TRACE=0, "
-            "or with PREFILL_KV_ONLY_LAST_LAYER=0 so the kv-only layer does not take the metadata path."
-        )
+        # TP-sharded writes used to be scalar-only: the reader derived its 1/tp source window from the
+        # HOST kv_actual_global, which the metadata path leaves at 0. The reader now reads that value
+        # on-device from metadata[1] -- the same tensor the writer reads -- so the two cannot disagree and
+        # the combination is supported. The op still validates that the tensor is present.
         # Metadata (trace-safe) path: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read
         # on-device, each its own 1-element tensor. Scalar path passes host slot/kv_actual_global.
         if metadata is not None:

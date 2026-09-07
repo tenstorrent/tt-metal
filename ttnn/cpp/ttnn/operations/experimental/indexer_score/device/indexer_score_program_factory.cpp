@@ -349,7 +349,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // flag, then a placeholder accessor. Pushed AFTER partial readiness AND after #55617's physical SP
     // size, matching the reader's meta_ct_base.
     reader_ct.push_back(0u);
-    reader_ct.insert(reader_ct.end(), 5, 0u);
+    // 6 zeros: rt base, two CBs, Sq, rotation-exact flag, key-stripe split. The split is only read on the
+    // metadata path (rejected here), so 0 is inert -- but the WIDTH must match the reader.
+    reader_ct.insert(reader_ct.end(), 6, 0u);
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
     // Cache-slot metadata, same reasoning and the same fixed-width discipline: flag, rt base,
     // pages-per-slot, mailbox CB, then a placeholder accessor.

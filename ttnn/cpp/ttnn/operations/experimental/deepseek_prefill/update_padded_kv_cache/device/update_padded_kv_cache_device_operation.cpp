@@ -63,6 +63,10 @@ constexpr uint32_t kNumInputPagesDoubleBuffered = 2;
 // the slot_idx tensor's element [0] then the kv_actual_global tensor's element [0]. Sized to hold a
 // 4B uint32 page; rounded up to a 16B alignment-friendly slot.
 constexpr uint32_t kMetaCbIndex = 1;
+// The reader needs its OWN scratch: under tp_axis it reads kv_actual_global on-device to derive its
+// source-row mapping, and it runs concurrently with the writer on the same core -- sharing kMetaCbIndex
+// would race the writer's own metadata reads.
+constexpr uint32_t kReaderMetaCbIndex = 2;
 constexpr uint32_t kMetadataBytes = 16;
 
 // Runtime-arg checks shared by the cache-miss and cache-hit paths. The structural checks
@@ -92,13 +96,15 @@ void validate_runtime_args(
             "tp_axis ({}) must differ from cluster_axis ({})",
             tp_axis,
             *args.cluster_axis);
-        // The reader picks this chip's 1/tp source window from the HOST kv_actual_global (common arg), while
-        // on the metadata path the writer reads the real value on-device and the host scalar is always 0. The
-        // two would silently disagree for any chunk start that is not window-aligned, so reject the combo.
+        // tp_axis used to be scalar-only here: the reader took this chip's 1/tp source window from the
+        // HOST kv_actual_global, which the metadata path leaves at 0 while the writer reads the real value
+        // on-device -- the two disagreed for any chunk start that was not window-aligned. The reader now
+        // performs the SAME on-device read (see reader_update_padded_kv_cache.cpp), so both derive the
+        // start from one value and the combination is sound.
         TT_FATAL(
-            !tensor_args.slot_idx.has_value(),
-            "tp_axis is only supported on the SCALAR path: the reader's source-row mapping needs a host "
-            "kv_actual_global, which the metadata (traceable) path does not provide.");
+            !tensor_args.slot_idx.has_value() || tensor_args.kv_actual_global.has_value(),
+            "tp_axis on the metadata path needs the kv_actual_global tensor: the reader derives its "
+            "source-row mapping from it on-device.");
     }
     TT_FATAL(
         args.layer_idx < args.num_layers,
@@ -536,24 +542,32 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         }}},
     });
 
-    // L1-scratch CB the writer reads each metadata tensor's element into (reused for both reads).
-    // Metadata path only.
+    // L1-scratch CBs the kernels read each metadata tensor's element into (each reused across its own
+    // reads). Metadata path only; the reader gets a separate index because both kernels read
+    // concurrently on the same core.
     if (has_metadata) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = kMetadataBytes,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = kMetaCbIndex,
-                .data_format = tt::DataFormat::UInt32,
-                .page_size = kMetadataBytes,
-            }}},
-        });
+        for (const uint32_t meta_cb : {kMetaCbIndex, kReaderMetaCbIndex}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = kMetadataBytes,
+                .core_ranges = all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = meta_cb,
+                    .data_format = tt::DataFormat::UInt32,
+                    .page_size = kMetadataBytes,
+                }}},
+            });
+        }
     }
 
     // Reader kernel descriptor. tile_height leads (the reader divides kv_actual_global by it, as the writer
-    // does), so the tensor accessor args start at index 1.
-    KernelDescriptor::CompileTimeArgs reader_compile_args = {writer_tile_height};
+    // does), then has_metadata and the reader's metadata scratch CB, so the source accessor starts at 3.
+    // On the metadata path ONE metadata accessor follows it, for the 1-element kv_actual_global tensor.
+    KernelDescriptor::CompileTimeArgs reader_compile_args = {
+        writer_tile_height, static_cast<uint32_t>(has_metadata), has_metadata ? kReaderMetaCbIndex : 0u};
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_args);
+    if (has_metadata) {
+        TensorAccessorArgs(tensor_args.kv_actual_global->buffer()).append_to(reader_compile_args);
+    }
 
     KernelDescriptor reader_kernel;
     reader_kernel.kernel_source = kReaderKernelPath;
@@ -631,8 +645,10 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         });
     }
 
-    // Reader common args: the TP-linearization quantities its source-row mapping needs, plus the per-call
-    // kv_actual_global at index 7 (patched on cache hits) -- which rows this chip owns depends on the start.
+    // Reader common args: the TP-linearization quantities its source-row mapping needs, plus index 7
+    // (patched on cache hits) -- which rows this chip owns depends on the chunk start. Metadata path ->
+    // the kv_actual_global tensor's raw DRAM address, which the reader reads element [0] of on-device;
+    // scalar path -> the value itself. Same dual use as the writer's args 8/9.
     reader_kernel.emplace_common_runtime_args({
         linear_coord,
         linear_factor,
@@ -641,7 +657,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         sp_factor,
         tp_factor,
         Wt,
-        args.kv_actual_global,
+        has_metadata ? tensor_args.kv_actual_global->buffer()->address() : args.kv_actual_global,
     });
 
     // Per-core runtime args. The input/cache buffers are passed as Buffer* bindings (not raw
@@ -724,7 +740,8 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
         TT_FATAL(
             kReaderKvActualGlobalCommonArgIdx < reader_common.size(),
             "update_padded_kv_cache reader is missing the kv_actual_global common arg");
-        reader_common[kReaderKvActualGlobalCommonArgIdx] = args.kv_actual_global;
+        // arg9 already resolves to the address on the metadata path and the value on the scalar path.
+        reader_common[kReaderKvActualGlobalCommonArgIdx] = arg9;
     }
 }
 

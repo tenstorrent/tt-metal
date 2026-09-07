@@ -95,7 +95,14 @@ constexpr uint32_t meta_Sq = get_compile_time_arg_val(meta_ct_base + 4);
 // Rotation-exact SP geometry: sp_axis set, OR a fused full-mesh ring. The host computes the
 // same predicate in rotation_exact_sp_geometry(), so both sides pick the same branch.
 constexpr uint32_t meta_rotation_exact = get_compile_time_arg_val(meta_ct_base + 5);
-constexpr auto meta_args = TensorAccessorArgs<meta_ct_base + 6>();
+// KV dedup splits the KEY stripes tp-times finer than the queries, so block_cyclic_ct carries the SPLIT
+// geometry (bc_sp == sp*split, bc_chunk_local == chunk_local/split) -- which is what the invP addressing
+// needs. The causal geometry is NOT invariant under that regrouping: the host's device_causal_geometry
+// passes the UNSPLIT sp/chunk_local, so feeding it the split pair here derives a different mask on the
+// metadata path than the scalar path uses. Carry the split factor so this side can undo it; it is
+// already hashed (structural), so it costs no extra program variant.
+constexpr uint32_t meta_key_stripe_split = get_compile_time_arg_val(meta_ct_base + 6);
+constexpr auto meta_args = TensorAccessorArgs<meta_ct_base + 7>();
 // Cache-slot select, appended with the same fixed-width discipline as the chunk-start block above: both
 // factories always push it (zero-filled, with a placeholder accessor, when off), so every index here is
 // valid unconditionally and no guarded-index trick is needed.
@@ -665,12 +672,19 @@ void kernel_main() {
         ASSERT(
             chunk_start_idx % iscore::kCausalTileWidth == 0 && chunk_global_tiles <= k_len_tiles &&
             chunk_start_idx / iscore::kCausalTileWidth <= k_len_tiles - chunk_global_tiles);
+        // Undo the key-stripe split so this matches device_causal_geometry's (unsplit) arguments exactly.
+        // Identity when key_stripe_split == 1, which is every non-dedup path.
+        // Guard the divisor: the non-fused factory zero-fills this block (it rejects the metadata path),
+        // and `bc_sp / 0` is an ill-formed constant expression even in a discarded branch.
+        constexpr uint32_t geom_split = meta_key_stripe_split != 0 ? meta_key_stripe_split : 1;
+        constexpr uint32_t geom_sp = bc_sp / geom_split;
+        constexpr uint32_t geom_chunk_local_elems = bc_chunk_local * 32 * geom_split;
         const auto geom = ttnn::operations::experimental::indexer_score::causal_geometry_tiles(
             chunk_start_idx,
             block_cyclic,
             meta_rotation_exact != 0,
-            bc_sp,
-            bc_chunk_local * 32,  // block_cyclic_ct carries chunk_local in TILES; the closed form takes elements
+            geom_sp,
+            geom_chunk_local_elems,
             get_arg_val<uint32_t>(meta_rt_base + 1),  // device_index
             get_arg_val<uint32_t>(meta_rt_base + 2),  // tp_index
             meta_Sq);
