@@ -92,6 +92,7 @@ class TtPrefillRuntime:
             num_layers=self.config.num_layers,
             mesh_config=self.mesh_config,
             create_kv_cache=False,
+            prefill_weights_only=True,  # This service produces KV without computing logits.
             model_path=self.model_path,
             prefill_chunk_size=self.config.chunk_size,
             ring_kv_caches=kv_caches.layers,

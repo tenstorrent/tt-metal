@@ -333,11 +333,13 @@ class Gemma4Model:
         # ring KV cache slabs. None means single-chunk prefill.
         prefill_chunk_size=None,
         ring_kv_caches=None,
-        # Legacy parameters — ignored
-        transformation_mats=None,
+        transformation_mats=None,  # Legacy parameter — ignored
+        prefill_weights_only: bool = False,
     ):
         self.mesh_device = mesh_device
         self.hf_config = hf_config
+        # KV-only service returns the decoder output without final norm or logits.
+        self.prefill_weights_only = prefill_weights_only
         self.prefill_chunk_size = prefill_chunk_size
         self.mesh_config = mesh_config
         self.hidden_size = hf_config.hidden_size
@@ -474,26 +476,30 @@ class Gemma4Model:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            # LM head (tied with embeddings): column-parallel (shard vocab dim)
-            # Each device holds [hidden, vocab/TP]; all-gather logits after softcapping.
-            # Default is bfloat16 — bfloat8_b is generally too lossy for 262k-vocab
-            # argmax, but the override is exposed for systems that genuinely
-            # need the DRAM relief and can tolerate the precision loss.
-            lm_head_weight = embed_weight.transpose(0, 1).unsqueeze(0).unsqueeze(0)
-            if tp > 1:
-                lm_mapper = mesh_config.column_parallel(mesh_device)
-            else:
-                lm_mapper = replicate
-            lm_head_suffix = f"_{dtype_to_str(lm_head_dtype)}"
-            self.lm_head_weight = ttnn.as_tensor(
-                lm_head_weight,
-                device=mesh_device,
-                dtype=lm_head_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=lm_mapper,
-                cache_file_name=get_cache_file_name(tensor_cache_path, f"lm_head.weight{tp_suffix}{lm_head_suffix}"),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            self.lm_head_weight = None
+            if not prefill_weights_only:
+                # LM head (tied with embeddings): column-parallel (shard vocab dim)
+                # Each device holds [hidden, vocab/TP]; all-gather logits after softcapping.
+                # Default is bfloat16 — bfloat8_b is generally too lossy for 262k-vocab
+                # argmax, but the override is exposed for systems that genuinely
+                # need the DRAM relief and can tolerate the precision loss.
+                lm_head_weight = embed_weight.transpose(0, 1).unsqueeze(0).unsqueeze(0)
+                if tp > 1:
+                    lm_mapper = mesh_config.column_parallel(mesh_device)
+                else:
+                    lm_mapper = replicate
+                lm_head_suffix = f"_{dtype_to_str(lm_head_dtype)}"
+                self.lm_head_weight = ttnn.as_tensor(
+                    lm_head_weight,
+                    device=mesh_device,
+                    dtype=lm_head_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=lm_mapper,
+                    cache_file_name=get_cache_file_name(
+                        tensor_cache_path, f"lm_head.weight{tp_suffix}{lm_head_suffix}"
+                    ),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
         else:
             self.embedding_weight = None
             self.lm_head_weight = None
@@ -621,21 +627,23 @@ class Gemma4Model:
         for i in range(n_layers):
             self.last_kv_layer_by_type[hf_config.layer_types[i]] = i
 
-        # Final norm
-        if state_dict and "model.language_model.norm.weight" in state_dict:
-            norm_state = substate(state_dict, "model.language_model.norm")
-        elif state_dict and "model.norm.weight" in state_dict:
-            norm_state = substate(state_dict, "model.norm")
-        else:
-            norm_state = {}
+        self.norm = None
+        if not prefill_weights_only:
+            # Final norm
+            if state_dict and "model.language_model.norm.weight" in state_dict:
+                norm_state = substate(state_dict, "model.language_model.norm")
+            elif state_dict and "model.norm.weight" in state_dict:
+                norm_state = substate(state_dict, "model.norm")
+            else:
+                norm_state = {}
 
-        self.norm = RMSNorm(
-            mesh_device=mesh_device,
-            hf_config=hf_config,
-            state_dict=norm_state,
-            tensor_cache_path=f"{tensor_cache_path}/final_norm" if tensor_cache_path else None,
-            mesh_config=mesh_config,
-        )
+            self.norm = RMSNorm(
+                mesh_device=mesh_device,
+                hf_config=hf_config,
+                state_dict=norm_state,
+                tensor_cache_path=f"{tensor_cache_path}/final_norm" if tensor_cache_path else None,
+                mesh_config=mesh_config,
+            )
 
         # sampling_dp: number of independent sampling groups (one per mesh row).
         # This is 1 for standard TP-only meshes (e.g. 1x8), and >1 for multi-row
@@ -646,7 +654,7 @@ class Gemma4Model:
 
         # On-device sampling (greedy/top-k/top-p) — avoids reading full vocab logits to CPU
         self.sampling = None
-        if is_mesh and tp > 1:
+        if not prefill_weights_only and is_mesh and tp > 1:
             per_device_padded = _compute_per_device_vocab(hf_config.vocab_size, tp)
             if per_device_padded <= 64 * 1024:
                 sampling_args = self._make_sampling_args(hf_config, mesh_device, tp)
@@ -1006,6 +1014,9 @@ class Gemma4Model:
                 here and routed to ``packed_decode_forward``.
         """
         seq_len = hidden_states.shape[2]
+        if self.prefill_weights_only and is_decode:
+            raise ValueError("prefill_weights_only models support KV-only prefill, not decode")
+
         rope_seq_len = seq_len // batch_size if (not is_decode and batch_size > 1) else seq_len
         caches = kv_caches or self.tt_kv_cache
 
@@ -1292,6 +1303,10 @@ class Gemma4Model:
             if kv_pair is not None:
                 kv_pair[0].deallocate(True)
                 kv_pair[1].deallocate(True)
+
+        if self.prefill_weights_only:
+            self._flush_deferred_bounded_fills_if_needed()
+            return hidden_states
 
         # Single-user intermediate generator-level chunks (get_last_token=-1 with
         # a chunk_page_table, not in prefill-trace mode) only need the KV fill

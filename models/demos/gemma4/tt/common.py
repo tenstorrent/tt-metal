@@ -57,9 +57,10 @@ def create_tt_model(
     bounded_sliding_cache_slots: int | None = None,
     prefill_chunk_size=None,
     ring_kv_caches=None,
+    prefill_weights_only: bool = False,
 ):
     """
-    Create Gemma4 model with all weights loaded to device.
+    Create Gemma4 model, optionally omitting output weights for KV-only prefill.
 
     Returns:
         (model_args, model, tt_kv_cache, state_dict)
@@ -158,11 +159,13 @@ def create_tt_model(
         bounded_sliding_kv_cache=bounded_sliding_kv_cache,
         bounded_sliding_cache_slots=bounded_sliding_cache_slots,
         ring_kv_caches=ring_kv_caches,
+        prefill_weights_only=prefill_weights_only,
     )
 
     # After a full cold build, record completion (+ capture host-consumed weights to the sidecar)
     # so future runs can skip the HF load.
-    if loaded_real_weights and num_layers is None:
+    # A KV-only build must not certify a cache that may lack output weights.
+    if loaded_real_weights and num_layers is None and not prefill_weights_only:
         mark_weight_cache_complete(cache_dir, state_dict, is_host_weight=_gemma4_is_host_weight, **cache_identity)
 
     return model_args, model, model.tt_kv_cache, state_dict

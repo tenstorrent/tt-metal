@@ -34,7 +34,7 @@ except ModuleNotFoundError:
 
 MODEL_DTYPE = ttnn.bfloat16
 PAGE_BLOCK_SIZE = 64
-TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
+TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 32 * 1024 * 1024))
 
 
 def _model_path():
@@ -56,7 +56,7 @@ def _cache_root(model_path, mesh_shape):
     return str(args.weight_cache_path(MODEL_DTYPE, mesh_shape=mesh_shape))
 
 
-def _require_cache(cache_root, tp, num_layers):
+def _require_cache(cache_root, tp, num_layers, *, prefill_weights_only=False):
     """Skip with actionable instructions unless the tensor cache looks usable.
 
     Without this, a cold or wrong-TP cache surfaces as ``ttnn.as_tensor`` calling
@@ -71,12 +71,12 @@ def _require_cache(cache_root, tp, num_layers):
     else:
         if not os.path.isdir(os.path.join(cache_root, f"layer_{num_layers - 1}")):
             missing.append(f"layer_{num_layers - 1}/")
-        if not os.path.isdir(os.path.join(cache_root, "final_norm")):
+        if not prefill_weights_only and not os.path.isdir(os.path.join(cache_root, "final_norm")):
             missing.append("final_norm/")
         entries = os.listdir(cache_root)
         if not any(e.startswith(f"embed_tokens.weight_tp{tp}_") for e in entries):
             missing.append(f"embed_tokens.weight_tp{tp}_*")
-        if not any(e.startswith(f"lm_head.weight_tp{tp}_") for e in entries):
+        if not prefill_weights_only and not any(e.startswith(f"lm_head.weight_tp{tp}_") for e in entries):
             missing.append(f"lm_head.weight_tp{tp}_*")
 
     if missing:
@@ -281,7 +281,7 @@ def _hf_text_config(model_path):
 # ── The prefill model under test ────────────────────────────────────────────
 
 
-def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
+def _build_prefill_model(mesh_device, model_path, chunk, context_len=None, *, prefill_weights_only=False):
     """Create the full model from cache, sized for a ``context_len``-token prefill.
 
     ``context_len`` defaults to a single ``chunk``. When larger, prefill runs as
@@ -301,7 +301,7 @@ def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
     cache_root = _cache_root(model_path, mesh_device.shape)
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)
     num_layers = Gemma4ModelArgs.from_hf_config(hf_config).num_hidden_layers
-    _require_cache(cache_root, tp, num_layers)
+    _require_cache(cache_root, tp, num_layers, prefill_weights_only=prefill_weights_only)
 
     logger.info(f"Creating Gemma4 ({num_layers} layers, TP={tp}, max_seq_len={max_seq_len})...")
     t0 = time.time()
@@ -313,6 +313,7 @@ def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
         state_dict=_cache_completion_state(model_path),
         model_path=model_path,
         create_kv_cache=True,
+        prefill_weights_only=prefill_weights_only,
         paged_attention_config=paged_config,
         prefill_chunk_size=chunk if context_len > chunk else None,
     )
@@ -420,7 +421,7 @@ def test_prefill_long_context_traced(
     model_path = _model_path()
     n_chunks = context_len // chunk
     model_args, model, kv_cache, page_table_tt = _build_prefill_model(
-        mesh_device, model_path, chunk, context_len=context_len
+        mesh_device, model_path, chunk, context_len=context_len, prefill_weights_only=True
     )
     tokens_all = _prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
 
@@ -569,10 +570,10 @@ def test_prefill_long_context_traced(
             per_chunk.append(time.time() - t_c)
             out = out_ring
             # Reading every chunk's hidden states to host is a test artifact — a prefill
-            # server leaves the KV cache on device and reads back only the last chunk,
-            # whose final row seeds the first decode step. readback="final" measures that
-            # shape; "all" gathers every chunk, which costs wall time but checks each one
-            # for finiteness instead of only the last.
+            # server leaves the KV cache on device. With prefill_weights_only, this
+            # output is the decoder hidden state BEFORE final RMSNorm, not logits.
+            # readback="final" checks only the last chunk; "all" gathers every chunk
+            # and checks each one for finiteness.
             if readback_all or chunk_idx == n_chunks - 1:
                 t_rb = time.time()
                 hidden = _cp_gather_torch(out, mesh_device, mesh_config)
