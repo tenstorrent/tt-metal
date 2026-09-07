@@ -265,7 +265,7 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(),
+            torus_xy_device_params(trace_region_size=1_000_000),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
@@ -273,7 +273,8 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(0)
-def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
+@pytest.mark.parametrize("traced", [False, True])
+def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device, traced):
     """The per-element-tensor (traceable) path and the scalar path must produce bit-identical outputs.
 
     Drives the traceable path from a 1-element uint32 DRAM tensor holding kv_actual_global (the reader
@@ -299,19 +300,6 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
     shard_dims[sp_axis] = 2
     from_torch_kwargs = dict(
         device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    cos_tt = ttnn.from_torch(
-        cos_re,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
-        **from_torch_kwargs,
-    )
-    sin_tt = ttnn.from_torch(
-        sin_re,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
-        **from_torch_kwargs,
-    )
-    trans_tt = ttnn.from_torch(
-        get_rot_transformation_mat(), mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device), **from_torch_kwargs
     )
 
     input_shard_dims = [None, None]
@@ -342,6 +330,22 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
     entries_after_first = None
 
     for kv_actual in cases:
+        # Keep previous tensors live while allocating replacements, forcing different addresses
+        # for every binding on cache hits (including the cos/sin tables and transform).
+        previous_bindings = (cos_tt, sin_tt, trans_tt, tt_input, kv_t) if kv_actual else None
+        cos_tt = ttnn.from_torch(
+            cos_re,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+            **from_torch_kwargs,
+        )
+        sin_tt = ttnn.from_torch(
+            sin_re,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+            **from_torch_kwargs,
+        )
+        trans_tt = ttnn.from_torch(
+            get_rot_transformation_mat(), mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device), **from_torch_kwargs
+        )
         torch_input = torch.randn(1, n_heads, chunk_global, ROPE_HEAD_DIM, dtype=torch.bfloat16)
         tt_input = ttnn.from_torch(
             torch_input,
@@ -349,7 +353,7 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
             **from_torch_kwargs,
         )
 
-        kv_t = _make_scalar_tensor(kv_actual)
+        kv_t = _make_scalar_tensor(0 if traced else kv_actual)
 
         out_scalar = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
             tt_input, cos_tt, sin_tt, trans_tt, kv_actual_global=kv_actual, cluster_axis=sp_axis
@@ -357,6 +361,22 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
         out_meta = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
             tt_input, cos_tt, sin_tt, trans_tt, kv_actual_global=kv_t, cluster_axis=sp_axis
         )
+        trace_id = None
+        if traced:
+            ttnn.synchronize_device(mesh_device)
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            out_meta = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                tt_input, cos_tt, sin_tt, trans_tt, kv_actual_global=kv_t, cluster_axis=sp_axis
+            )
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            # Replays must read the current metadata value, not the value present at capture.
+            host_kv = ttnn.from_torch(
+                torch.tensor([kv_actual], dtype=torch.int64).reshape(1, 1, 1, 1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(host_kv, kv_t)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
         ttnn.synchronize_device(mesh_device)
 
         scalar_host = ttnn.to_torch(out_scalar, mesh_composer=composer).to(torch.float32)[:, :n_heads, :, :]
@@ -365,13 +385,19 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
             f"kv_actual={kv_actual}: per-element-tensor-path output differs from scalar-path "
             f"(max abs diff {(meta_host - scalar_host).abs().max().item()})"
         )
+        positions = [p for chip in _rotated_chip_positions(kv_actual, sp, C) for p in chip]
+        cos_selected = cos_full[:, :, positions, :]
+        sin_selected = sin_full[:, :, positions, :]
+        reference = torch_input * cos_selected + rotate_half(torch_input, meta_style=True) * sin_selected
+        assert_with_pcc(reference, meta_host.to(torch.bfloat16), 0.99)
         logger.success(f"kv_actual={kv_actual}: per-element-tensor path == scalar path (bit-exact)")
         # After the first chunk both programs (scalar + metadata, distinct by metadata.has_value()) are
         # compiled; capture the count so we can assert no further growth across the remaining chunks.
         if entries_after_first is None:
             entries_after_first = mesh_device.num_program_cache_entries()
-        ttnn.deallocate(kv_t)
-        ttnn.deallocate(tt_input)
+        if trace_id is not None:
+            ttnn.release_trace(mesh_device, trace_id)
+        del previous_bindings
 
     # The whole point of this path: kv_actual_global is a runtime arg (metadata address patched on cache
     # hits), NOT part of the program hash, so successive chunks — including the non-slab-aligned one —
