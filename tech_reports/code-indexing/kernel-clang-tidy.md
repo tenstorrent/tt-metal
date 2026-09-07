@@ -491,7 +491,7 @@ auto-fixable, which makes it a target for an agent rather than for suppression.
 
 **Check options are the quietest suppressor here**, so they are worth reading as
 carefully as the `--disable` list. Nothing readability- or complexity-related is
-disabled, but six options retune four checks. Five were mirrored verbatim from
+disabled, but nine options retune five checks. Five were mirrored verbatim from
 the repo's root host `.clang-tidy` ("mirror host .clang-tidy strategy for kernel
 checks") rather than chosen for device code:
 
@@ -503,6 +503,9 @@ checks") rather than chosen for device code:
 | `readability-else-after-return.WarnOnUnfixable` | true | false |
 | `readability-else-after-return.WarnOnConditionVariables` | true | false |
 | `modernize-use-auto.MinTypeNameLength` | 5 | 9 |
+| `readability-identifier-length.IgnoredLoopCounterNames` | `^[ijk_]$` | `^[ijk_nchwdbtr]$` |
+| `readability-identifier-length.IgnoredVariableNames` | (none) | `^([NCHWD]\|[xyz]\|[ijk]\|[WHCND]t\|cb\|id)$` |
+| `readability-identifier-length.IgnoredParameterNames` | `^[n]$` | `^(n\|[xyzab]\|[ijk]\|id\|cb\|vc\|[WHCND]t)$` |
 
 The first two are now back at clang-tidy's defaults, deliberately diverging from
 the host config. At `Threshold=312` with `IgnoreMacros=true`, cognitive
@@ -533,6 +536,49 @@ microseconds, so it played no part in the decision. (`auto` does have a real
 build-time cost as a deduced *return* type, which cannot be forward-declared and
 so pulls definitions into translation units that previously needed only a
 declaration. This check never suggests that.)
+
+`readability-identifier-length` is the other option set chosen here, and it is
+the one place where the check's own defaults are demonstrably mis-tuned for a
+tensor-compute codebase. The three exemption lists are separate options because
+the check treats variables, parameters and loop counters as separate categories
+with separate minimum lengths (3, 3 and 2). Its defaults already exempt `i`,
+`j`, `k` and `_` as counters, `n` as a parameter and `e` as an exception name,
+which is why none of those appear in the report.
+
+What does appear, 3,243 findings, is dominated by names that are this domain's
+vocabulary:
+
+| Category | Findings | Dominated by |
+| --- | --- | --- |
+| variable | 1,799 | `Wt` (160), `Ht` (113), `N` (82), `in` (77), `cb` (65) |
+| loop variable | 786 | `d` (249), `w` (130), `c` (67), `n` (65), `h` (61) |
+| parameter | 658 | `a` (58), `i` (58), `x` (56), `id` (54), `cb` (41) |
+
+The loop-counter column is the clearest case. `n`, `c`, `h`, `w` and `d` are
+NCHW/NCDHW layout letters, standard across every tensor framework, and the loops
+they index are literally the batch/channel/height/width dimensions;
+`for (uint32_t h = 0; h < Ht; ++h)` reads better than `height_index`, not worse.
+`Wt` and `Ht` ("width/height in tiles") are this repo's own published vocabulary,
+and `cb` is the central abstraction, named in the API itself (`cb_wait_front`,
+`cb_id`). `x`/`y`/`z` are NOC coordinates and `vc` is a virtual channel.
+
+The lists are deliberately asymmetric rather than one shared set. A loop
+counter's meaning comes from its bound three lines away and its scope ends with
+the loop; a variable lives for a whole function and a parameter is read at every
+call site. So `h` is exempt as a counter but still reported as a variable, and
+`a`/`b` are exempt as parameters — where they are conventional binary operands in
+the SFPU math helpers — but still reported as locals. That granularity is real,
+not aspirational: clang-tidy applies each regex only to its own category.
+
+Together these take the check from 3,243 findings to 1,385, a 57% cut, and what
+survives is what the check exists for: `s` (115), `in` (77), `r` (64), `a` (58),
+`s0` (54), `v` (52), plus `p`, `g`, `m`, `l`. Those are terse rather than
+conventional, and no domain argument rescues them.
+
+The blunter alternative, `MinimumVariableNameLength=2`, was rejected. It
+silences slightly more (860 variable findings against 761) but accepts *any*
+two-character name, including `s0` today and whatever appears tomorrow, whereas
+the regex names what it is exempting and why.
 
 **Check options** go through `--checker-config
 clang-tidy:<checker>:<option>=<value>`, not through a config file. Forwarding
