@@ -17,6 +17,11 @@ drops nothing and the block mask reduces to plain causality. That is deliberate:
 indexers rank near-tied bf16 scores differently, they select different entries, and the block's output
 legitimately differs from the reference's by more than numerics -- there is nothing for PCC to say. What
 the top-k itself does is covered by tests/pcc/test_ttnn_csa_indexer.py, on its own overlap metric.
+
+The mesh list, the chunk-PCC reporter and the reference sliding mask come from test_ttnn_hca.py and
+mesh_configs.py rather than being restated here: CSA and HCA run the same attention body
+(v4_attention_base.py) and the same chunked-vs-unchunked comparison, so those three are identical
+between them by construction, not by coincidence.
 """
 
 import pytest
@@ -30,7 +35,8 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.configuration_deepseek_v
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4Attention
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import V4_MESH_CONFIGS
+from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_hca import _report_chunk_pccs, _sliding_mask
 from models.demos.deepseek_v3_d_p.tt.mla.compressed_sparse_attention import TtCSA
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -108,33 +114,8 @@ _MODEL_CONFIGS_CHUNKED = [pytest.param(cfg, chunked, id=name) for name, cfg, chu
 _MODEL_CONFIGS_FORWARD = [pytest.param(cfg, fwd, id=name) for name, cfg, _, fwd in _VARIANTS]
 
 
-# Blackhole runs a mesh config only when it uses every chip, so one shape per box class.
-_MESH_CONFIGS = [
-    pytest.param(
-        (2, 2),
-        fabric2d_device_params(),
-        ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-        id="fabric2d-mesh-2x2",
-    ),
-    pytest.param(
-        (4, 2),
-        fabric2d_device_params(),
-        ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-        id="fabric2d-mesh-4x2",
-    ),
-    pytest.param(
-        (8, 4),
-        torus_xy_device_params(),
-        ttnn.Topology.Ring,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="torus-xy-8x4",
-    ),
-]
-
-# (chunk_size, real lengths). 1024 is slab-aligned on every mesh above, including the 8x4 one, whose
-# indexer wants a whole tile of the slab per chip.
+# (chunk_size, real lengths). 1024 is slab-aligned on every mesh in V4_MESH_CONFIGS, including the 8x4
+# one, whose indexer wants a whole tile of the slab per chip.
 _CHUNKED_SCENARIOS = [
     ("2chunk-full", 1024, [1024, 1024]),
     ("2chunk-ragged", 1024, [1024, 600]),  # a ragged FINAL chunk, the only place one is allowed
@@ -142,12 +123,6 @@ _CHUNKED_SCENARIOS = [
     # not be confused: the carry, and the compressed append offset.
     ("3chunk-varying", 1024, [512, 1024, 1024]),
 ]
-
-
-def _sliding_mask(q_pos, k_pos, sliding_window):
-    i, j = q_pos.view(-1, 1), k_pos.view(1, -1)
-    allowed = (j <= i) & (i - j < sliding_window)
-    return torch.zeros(i.shape[0], j.shape[1]).masked_fill(~allowed, float("-inf"))
 
 
 def _golden(ref, hidden, config):
@@ -197,21 +172,10 @@ def _download(mesh_device, tensor):
     )  # sp -> seq (dim2), tp -> hidden (dim3)
 
 
-def _report_chunk_pccs(pccs, floor):
-    """Log every chunk's PCC, then let the worst one decide. Asserting inside the loop stops at the first
-    chunk under the floor, and PCC can dip and recover -- reporting first means one run tells the whole
-    story instead of one chunk per run."""
-    for it, kv_actual, valid, pcc in pccs:
-        log = logger.warning if pcc < floor else logger.info
-        log(f"  iter {it} (kv_actual={kv_actual} valid={valid}): PCC {pcc:.6f}")
-    worst_it, _, _, worst = min(pccs, key=lambda row: row[3])
-    assert worst >= floor, f"worst chunk PCC {worst:.6f} (iter {worst_it}) is below the floor {floor}"
-
-
 @pytest.mark.parametrize("seq_len", _SHAPES, ids=[f"seq{s}" for s in _SHAPES])
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
-    _MESH_CONFIGS,
+    V4_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("model_config, forward_pcc", _MODEL_CONFIGS_FORWARD)
@@ -252,7 +216,7 @@ def test_csa_forward_mesh(mesh_device, device_params, topology, seq_len, model_c
 @pytest.mark.parametrize("name, chunk_size, iters_valid", _CHUNKED_SCENARIOS, ids=[n for n, _, _ in _CHUNKED_SCENARIOS])
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
-    _MESH_CONFIGS,
+    V4_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("model_config, chunked_pcc", _MODEL_CONFIGS_CHUNKED)

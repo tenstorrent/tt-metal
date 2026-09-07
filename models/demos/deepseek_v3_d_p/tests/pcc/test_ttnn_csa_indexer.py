@@ -10,8 +10,9 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4Indexer
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_plain_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtCsaIndexer
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 
@@ -97,7 +98,7 @@ _CACHE_SLOTS = [
     [
         pytest.param(
             (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            fabric_1d_plain_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
             id="2x2",
         )
@@ -109,6 +110,9 @@ def test_ttnn_csa_indexer_block_cyclic_two_chunks(
 ):
     torch.manual_seed(17)
     sp_axis, tp_axis = 0, 1
+    # Derived from the opened fabric rather than hardcoded, so the pair always matches what the fabric
+    # actually wraps; a Ring handed to an axis with no wrap hangs instead of returning a wrong answer.
+    sp_ccl_topology, tp_ccl_topology = per_axis_topology(device_params["fabric_config"])
     sp_factor = mesh_device.shape[sp_axis]
     chunk_tokens = 256
     max_seq_len = 2 * chunk_tokens
@@ -130,8 +134,8 @@ def test_ttnn_csa_indexer_block_cyclic_two_chunks(
         layer_idx=0,
         tt_ccl=tt_ccl,
         ccl_num_links=2 if is_blackhole() else 1,
-        sp_ccl_topology=ttnn.Topology.Linear,
-        tp_ccl_topology=ttnn.Topology.Linear,
+        sp_ccl_topology=sp_ccl_topology,
+        tp_ccl_topology=tp_ccl_topology,
         seq_len=max_seq_len,
         active_seq_len=chunk_tokens,
         slot_num=slot_num,
