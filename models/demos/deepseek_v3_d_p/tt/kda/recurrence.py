@@ -15,6 +15,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_AFFINE_SUMMARY_DTYPE,
+    KDA_AFFINE_WORKING_MEMORY_CONFIG,
     KDA_CHUNK_SIZE,
     KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
     KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
@@ -53,25 +54,19 @@ class _AffineTransform:
 
 @dataclass(frozen=True)
 class _BoundarySelector:
-    """Per-device scalars that pick between a wrapped-chip and an ordinary value.
+    """A per-device predicate that picks between a wrapped-chip and an ordinary value.
 
     The wrapped chip publishes a different affine transform and reloads a
     different carry than every other chip. That difference cannot be control
     flow: one program serves the whole mesh and its runtime args vary by core,
-    not by device. So it arrives as tensor content instead -- ``on`` is 1.0 on
-    the boundary chip and 0.0 elsewhere, ``off`` its complement -- broadcast into
-    the small affine tensors.
+    not by device. So it arrives as tensor content instead -- 1.0 on the boundary
+    chip and 0.0 elsewhere, broadcast across the small affine tensors.
     """
 
-    on: ttnn.Tensor
-    off: ttnn.Tensor
+    is_boundary: ttnn.Tensor
 
     def select(self, boundary: ttnn.Tensor, elsewhere: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.add(
-            ttnn.mul(boundary, self.on, memory_config=KDA_OUTPUT_MEMORY_CONFIG),
-            ttnn.mul(elsewhere, self.off, memory_config=KDA_OUTPUT_MEMORY_CONFIG),
-            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
-        )
+        return ttnn.where(self.is_boundary, boundary, elsewhere, memory_config=KDA_AFFINE_WORKING_MEMORY_CONFIG)
 
     def select_transform(self, boundary: _AffineTransform, elsewhere: _AffineTransform) -> _AffineTransform:
         return _AffineTransform(
@@ -98,26 +93,26 @@ def _boundary_selectors(
     for chip in range(sp_size):
         indicator = torch.zeros(sp_size, 1, 1)
         indicator[chip] = 1.0
-        on, off = (
-            ttnn.from_torch(
-                rows,
-                dtype=KDA_RECURRENT_STATE_DTYPE,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=KDA_OUTPUT_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=tuple(mesh_dims), mesh_shape=mesh_shape),
+        selectors.append(
+            _BoundarySelector(
+                is_boundary=ttnn.from_torch(
+                    indicator,
+                    dtype=KDA_RECURRENT_STATE_DTYPE,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=KDA_AFFINE_WORKING_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=tuple(mesh_dims), mesh_shape=mesh_shape),
+                )
             )
-            for rows in (indicator, 1.0 - indicator)
         )
-        selectors.append(_BoundarySelector(on=on, off=off))
     return tuple(selectors)
 
 
-def _interleaved(transform: _AffineTransform) -> _AffineTransform:
-    """Move a sharded summary pair to interleaved memory, where matmul runs."""
+def _in_working_memory(transform: _AffineTransform) -> _AffineTransform:
+    """Move a sharded summary pair to the interleaved memory the algebra runs in."""
     return _AffineTransform(
-        a=ttnn.to_memory_config(transform.a, KDA_OUTPUT_MEMORY_CONFIG),
-        b=ttnn.to_memory_config(transform.b, KDA_OUTPUT_MEMORY_CONFIG),
+        a=ttnn.to_memory_config(transform.a, KDA_AFFINE_WORKING_MEMORY_CONFIG),
+        b=ttnn.to_memory_config(transform.b, KDA_AFFINE_WORKING_MEMORY_CONFIG),
     )
 
 
@@ -132,7 +127,7 @@ def _compose_affine(
         a=ttnn.matmul(
             outer.a,
             inner.a,
-            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+            memory_config=KDA_AFFINE_WORKING_MEMORY_CONFIG,
             dtype=KDA_RECURRENT_STATE_DTYPE,
             compute_kernel_config=compute_config,
         ),
@@ -140,12 +135,12 @@ def _compose_affine(
             ttnn.matmul(
                 outer.a,
                 inner.b,
-                memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+                memory_config=KDA_AFFINE_WORKING_MEMORY_CONFIG,
                 dtype=KDA_RECURRENT_STATE_DTYPE,
                 compute_kernel_config=compute_config,
             ),
             outer.b,
-            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+            memory_config=KDA_AFFINE_WORKING_MEMORY_CONFIG,
         ),
     )
 
@@ -161,12 +156,12 @@ def _apply_affine(
         ttnn.matmul(
             transform.a,
             state,
-            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+            memory_config=KDA_AFFINE_WORKING_MEMORY_CONFIG,
             dtype=KDA_RECURRENT_STATE_DTYPE,
             compute_kernel_config=compute_config,
         ),
         transform.b,
-        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+        memory_config=KDA_AFFINE_WORKING_MEMORY_CONFIG,
     )
 
 
@@ -552,7 +547,7 @@ def _scan_grouped_chunks(
         # Two disjoint ranges cover every chunk exactly once, so the summary work
         # is the same as one whole-partition pass. The split only makes each
         # piece's transform separately available.
-        head_transform = _interleaved(
+        head_transform = _in_working_memory(
             _summarize_chunk_groups(
                 grouped,
                 geometry,
@@ -562,7 +557,7 @@ def _scan_grouped_chunks(
                 chunk_count=wrap_chunk,
             )
         )
-        tail_transform = _interleaved(
+        tail_transform = _in_working_memory(
             _summarize_chunk_groups(
                 grouped,
                 geometry,
