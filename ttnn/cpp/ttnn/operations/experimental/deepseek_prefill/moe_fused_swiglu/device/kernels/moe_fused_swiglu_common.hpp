@@ -170,6 +170,15 @@ inline uint32_t round_up_capped(uint32_t v, uint32_t mult, uint32_t cap) {
     return (r > cap) ? cap : r;
 }
 
+// Zero `bytes` of L1 at `addr`, 8 bytes at a time. Used for bias padding columns, which are read
+// once per expert, so the cost is irrelevant next to leaving them stale and adding garbage.
+inline void zero_l1(uint32_t addr, uint32_t bytes) {
+    volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(addr);
+    for (uint32_t i = 0; i < bytes / 8; ++i) {
+        p[i] = 0;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Reduce-scatter slice plan.
 //

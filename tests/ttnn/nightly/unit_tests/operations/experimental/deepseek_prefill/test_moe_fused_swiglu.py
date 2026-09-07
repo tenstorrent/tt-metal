@@ -68,6 +68,9 @@ def run_moe_fused_swiglu(
     weights_dtype=ttnn.bfloat4_b,
     pcc_threshold: float = 0.97,
     core_grid=GRID,
+    gate_bias=None,
+    up_bias=None,
+    down_bias=None,
 ):
     """
     One chip, one expert, moe_fused_swiglu called directly.
@@ -151,6 +154,9 @@ def run_moe_fused_swiglu(
         input_m_tiles=allocated_tokens // 32,
         core_grid=core_grid,
         activation=activation,
+        gate_biases=None if gate_bias is None else [gate_bias],
+        up_biases=None if up_bias is None else [up_bias],
+        down_biases=None if down_bias is None else [down_bias],
     )
     tt_output = ttnn.to_torch(output)[0, 0]
 
