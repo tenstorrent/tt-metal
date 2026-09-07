@@ -15,9 +15,13 @@ LLK=~/tt-metal/tt_metal/tt-llk; PT=$LLK/tests/python_tests; SRC=$LLK/tests/sourc
 OUT="${OUT:-$HOME/nopsweep}"
 RUNS="${RUNS:-40}"; IDX="${IDX:-5742}"; LF="${LF:-64}"
 NOPS="${NOPS:-0 1 2 3 4 6 8 12 16}"
-# INSIDE=1 puts the nops inside the loop, right after the wait for math, so they
-# run every iteration. That tests timing, not alignment: pack is made late by a
-# fixed amount on every handshake, whatever the loop's address.
+# INSIDE=0     nops before the pack loop: run once, only move the loop's address.
+# INSIDE=1     nops inside the pack loop after the wait for math: run every
+#              iteration. Pack turned out to have >= 8 cycles of slack, so these
+#              cost nothing and only shift the alignment of what follows.
+# INSIDE=math  nops inside the MATH loop after the wait for DEST. Math is on the
+#              critical path, so each one costs a cycle per iteration and moves
+#              math's handshake signal by that cycle.
 INSIDE="${INSIDE:-0}"
 export RUNNER_TEMP="${RUNNER_TEMP:-$HOME/llk-wh-build}"
 
@@ -65,7 +69,9 @@ dump_pack_elf() {
 }
 
 run_pass() {
-    local N=$1 NAME="nop$1"; [ "$INSIDE" = 1 ] && NAME="in$1"
+    local N=$1 NAME="nop$1"
+    [ "$INSIDE" = 1 ] && NAME="in$1"
+    [ "$INSIDE" = math ] && NAME="im$1"
     say "pass $NAME  nops=$N"
     restore
     sed -i "s/^            LOOP_FACTOR(1024),\$/            LOOP_FACTOR($LF),/" perf_math_matmul.py
@@ -77,7 +83,8 @@ run_pass() {
 
 python3 - "$PT/helpers/profiler.py" "$SRC/math_matmul_perf.cpp" "$N" "$INSIDE" <<'PY'
 import sys
-prof, kern, n, inside = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4] == "1"
+prof, kern, n, mode = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+inside = mode == "1"
 
 # Host side only: dump the raw profiler frame. The kernel's own zones are untouched.
 t = open(prof).read()
@@ -97,7 +104,12 @@ if n == 0:
 OLD = """            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_packer_wait_for_math_done_();"""
-if inside:
+if mode == "math":
+    # The math thread's L1_TO_L1 loop. Its wait call appears exactly once in the file.
+    OLD = "                _llk_math_wait_for_dest_available_<dest_sync>();"
+    pad = "\n".join('                asm volatile("nop");' for _ in range(n))
+    NEW = OLD + "\n" + pad
+elif inside:
     # After the wait, indented to the loop body: executes once per iteration.
     pad = "\n".join('                asm volatile("nop");' for _ in range(n))
     NEW = OLD + "\n" + pad

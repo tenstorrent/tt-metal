@@ -59,8 +59,10 @@ def text_size(root, name):
 def main():
     root = Path(sys.argv[1] if len(sys.argv) > 1 else Path.home() / "nopsweep")
     files = sorted(
-        list(root.glob("nop*_profiler.csv")) + list(root.glob("in*_profiler.csv")),
-        key=lambda p: int(re.search(r"(?:nop|in)(\d+)_", p.name).group(1)),
+        list(root.glob("nop*_profiler.csv"))
+        + list(root.glob("in*_profiler.csv"))
+        + list(root.glob("im*_profiler.csv")),
+        key=lambda p: int(re.search(r"(?:nop|in|im)(\d+)_", p.name).group(1)),
     )
     if not files:
         print(f"no profiler dumps found under {root}")
@@ -68,7 +70,7 @@ def main():
 
     rows = []
     for f in files:
-        n = int(re.search(r"(?:nop|in)(\d+)_", f.name).group(1))
+        n = int(re.search(r"(?:nop|in|im)(\d+)_", f.name).group(1))
         s = per_run_total(f)
         st = states(s)
         med = s.median()
