@@ -2438,6 +2438,9 @@ class UnarySFPUGolden:
         # bits, integer unary max/min against the scalar 1000.
         self._int_shift_amount = 3
         self._int_maxmin_scalar = INT_MAXMIN_SCALAR
+        # relu_min's integer threshold, matching the kernel's RELU_MIN_INT_THRESHOLD default.
+        # Signed: the kernel carries it as a two's-complement uint32 and static_casts to int.
+        self._relu_min_int_threshold = int(RELU_MIN_THRESHOLD)
         self.data_format = None
         # Precision the SFPU actually evaluates at, which is Dest's and not the output
         # format's. The per-element ops below read this rather than data_format: no
@@ -2461,12 +2464,16 @@ class UnarySFPUGolden:
         skip_tilize: bool = False,
         unpack_to_srcs: bool = False,
         shift_amount: int = 3,
+        relu_min_int_threshold: int = int(RELU_MIN_THRESHOLD),
     ):
         self.data_format = data_format
         self.dst_format = data_format
         self.dest_acc = dest_acc
         # Mirrors the SFPU_SHIFT_AMOUNT template parameter; only the unary shift ops read it.
         self._int_shift_amount = shift_amount
+        # Mirrors the SFPU_RELU_MIN_INT_THRESHOLD template parameter; only relu_min on an
+        # integer format reads it. Signed here, two's-complement uint32 on the kernel side.
+        self._relu_min_int_threshold = relu_min_int_threshold
 
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
@@ -3152,7 +3159,11 @@ class UnarySFPUGolden:
             # is an exact integer max with no float round-trip. Deliberately independent of
             # self.dst_format: _call_integer returns before __call__ assigns it, so reading
             # it here would pick up whatever the previous call left behind.
-            return max(x, int(threshold))
+            #
+            # The threshold comes from _relu_min_int_threshold, not the float default: the
+            # int32 sweep drives negative thresholds to reach the wrapper's sign+magnitude
+            # re-encoding branch, and a negative value has no float-path equivalent here.
+            return max(x, int(self._relu_min_int_threshold))
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)

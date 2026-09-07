@@ -51,6 +51,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
     TILE_COUNT,
     DestSync,
@@ -969,6 +970,110 @@ def test_eltwise_unary_sfpu_int(
     )
 
 
+# relu_min's integer threshold, which is the last unreached branch of that kernel.
+#
+# The vInt branch of _relu_min_ re-encodes its threshold from two's complement into the
+# sign+magnitude order SFPSWAP compares in -- but only when the threshold is negative:
+#
+#     int scalar = static_cast<int>(threshold);
+#     if (scalar < 0) { scalar = -scalar; scalar = 0x80000000 | (scalar & 0x7FFFFFFF); }
+#
+# Nothing reaches that `if`. The harness's own dispatch hard-coded 5u, and no Compute API
+# entry point passes a negative integer threshold either (relu_tile_int32 passes 0, and
+# relu_min_tile_int32 routes to a different kernel entirely). So the re-encoding shipped
+# untested. Overriding the threshold via SFPU_RELU_MIN_INT_THRESHOLD is what reaches it.
+#
+# Both signs are swept, because the negation is only meaningful against a control: the
+# non-negative thresholds take the straight-through path and must keep agreeing.
+_RELU_MIN_INT_THRESHOLDS = [-1000, -5, -1, 0, 5, 1000]
+
+
+def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
+    """Values straddling *threshold*, so both sides of the clamp fire.
+
+    Built around the threshold rather than from a fixed span: at -1000 a positive-only
+    spread would sit entirely on the pass-through side and the clamp would never fire,
+    which is the same way the float domain used to be vacuous.
+
+    Negatives are required here -- max(x, -5) only clamps for x < -5 -- so unlike
+    _int_unary_stimuli_spec this cannot stay positive-only. That is safe for this op
+    because the kernel loads and stores under InstrModLoadStore::INT32_2S_COMP, which
+    converts DEST's two's complement to sign+magnitude and back around the SFPSWAP; the
+    positive-only rule there exists for the max/min ops that are also read as unsigned.
+    """
+    straddle = [float(threshold + d) for d in (-2, -1, 0, 1, 2)]
+    # A decade either side, so the comparison is exercised well away from the boundary too.
+    spread = [float(threshold + d) for d in (-1000, -100, -10, 10, 100, 1000)]
+    return StimuliSpec.custom(values=straddle + spread, seed=0)
+
+
+@parametrize(
+    threshold=_RELU_MIN_INT_THRESHOLDS,
+    dest_acc=[DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_relu_min_int_threshold(
+    request,
+    threshold: int,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """relu_min on Int32 against both signs of threshold.
+
+    The negative cases are the point: they are the only inputs that reach the
+    sign+magnitude re-encoding in _relu_min_'s vInt branch. Exact integer golden, so a
+    mis-encoded threshold shows up as a wrong clamp value rather than a tolerance miss.
+
+    The non-negative cases are the control and pass: they take the straight-through path
+    where sign+magnitude and two's complement coincide.
+    """
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+
+    # First execution of this branch, and it does not work. Measured on n300 at
+    # thresholds -1, -5 and -1000, against stimuli straddling each:
+    #
+    #   as shipped      the threshold wins every lane, including against inputs that are
+    #                   larger than it, and is stored as the raw re-encoding: threshold -5
+    #                   returns 0x80000005 (-2147483643) rather than -5, and -1000 returns
+    #                   0x800003E8. The magnitude is right, the representation is not.
+    #   re-encode       the opposite failure -- a plain two's-complement negative threshold
+    #     removed       never wins, so every input passes through unclamped.
+    #
+    # So it is not a matter of deleting the conversion: neither representation makes SFPSWAP
+    # and the INT32_2S_COMP store agree for a negative threshold, and settling it needs the
+    # ISA semantics for that pair rather than a guess. Recorded as a non-strict xfail rather
+    # than skipped so the case still *executes* and reports XPASS the moment it is fixed.
+    #
+    # Nothing ships on this path: no Compute API entry point passes a negative integer
+    # threshold (relu_tile_int32 passes 0, relu_min_tile_int32 routes to relu_clamp_int), and
+    # the harness itself hard-coded 5u until this test parametrized it. Wormhole-scoped
+    # because this is the raw-TTI kernel; Blackhole's _relu_min_ is plain sfpi and is
+    # expected to handle a negative threshold correctly -- if it does not, that is a real
+    # Blackhole finding and should surface as a failure rather than be pre-excused.
+    if threshold < 0 and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
+        request.node.add_marker(
+            pytest.mark.xfail(
+                reason="Wormhole _relu_min_ vInt branch mishandles a negative threshold: the "
+                "sign+magnitude re-encoding wins every comparison and is stored raw "
+                "(threshold -5 returns 0x80000005). Unreached before this test; no shipping "
+                "op passes a negative integer threshold.",
+                strict=False,
+            )
+        )
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.ReluMin,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_relu_min_int_stimuli_spec(threshold),
+        relu_min_int_threshold=threshold,
+    )
+
+
 # Cat E: the shift amount itself, which is the last gap in that category.
 #
 # The unary shift ops take their amount as a compile-time immediate, not as an operand, so
@@ -1258,6 +1363,7 @@ def eltwise_unary_sfpu(
     custom_atol=None,
     custom_rtol=None,
     shift_amount=None,
+    relu_min_int_threshold=None,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1299,6 +1405,11 @@ def eltwise_unary_sfpu(
         formats.input_format,
         input_dimensions,
         **({} if shift_amount is None else {"shift_amount": shift_amount}),
+        **(
+            {}
+            if relu_min_int_threshold is None
+            else {"relu_min_int_threshold": relu_min_int_threshold}
+        ),
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -1322,6 +1433,11 @@ def eltwise_unary_sfpu(
             # Only emitted when swept: sfpu_operations.h keys off #ifdef, and every other
             # unary test has to keep compiling without the macro.
             *([] if shift_amount is None else [SFPU_SHIFT_AMOUNT(shift_amount)]),
+            *(
+                []
+                if relu_min_int_threshold is None
+                else [SFPU_RELU_MIN_INT_THRESHOLD(relu_min_int_threshold)]
+            ),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
