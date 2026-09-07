@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology
 
 
 def exchange_convolution_carry(
@@ -12,14 +13,18 @@ def exchange_convolution_carry(
     initial_carry: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
+    topology: OffsetTopology,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return partition entry carries and the replicated final stream carry.
 
     Both outputs have shape ``[B, history, Q_local + K_local + V_local]`` in
-    row-major DRAM. ``partition_carry`` differs by SP rank: rank zero receives
-    ``initial_carry`` and every later rank receives its predecessor tail.
-    ``final_carry`` is the global stream tail replicated across SP. Channels
-    remain sharded across TP.
+    row-major DRAM. ``partition_carry`` differs by SP rank: the chronologically
+    first chip receives ``initial_carry`` and every other chip receives its
+    chronological predecessor's tail. ``final_carry`` is the global stream tail
+    replicated across SP. Channels remain sharded across TP.
+
+    Order comes from ``topology``, never from physical rank. At ``actual_start=0``
+    the boundary chip is rank zero and this reduces exactly to rank order.
     """
     batch, local_sequence, channels = projected_qkv.shape
     history = initial_carry.shape[1]
@@ -47,23 +52,27 @@ def exchange_convolution_carry(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    entry_carries = [initial_carry]
-    for rank in range(sp_size - 1):
-        tiled_rank_tail = ttnn.slice(
+    def chip_tail(chip: int) -> ttnn.Tensor:
+        tiled_chip_tail = ttnn.slice(
             gathered_tails,
-            (0, rank * ttnn.TILE_SIZE, 0),
-            (batch, (rank + 1) * ttnn.TILE_SIZE, channels),
+            (0, chip * ttnn.TILE_SIZE, 0),
+            (batch, (chip + 1) * ttnn.TILE_SIZE, channels),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        rank_tail = ttnn.to_layout(tiled_rank_tail, ttnn.ROW_MAJOR_LAYOUT)
-        entry_carries.append(
-            ttnn.slice(
-                rank_tail,
-                (0, 0, 0),
-                (batch, history, channels),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        row_major_tail = ttnn.to_layout(tiled_chip_tail, ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.slice(
+            row_major_tail,
+            (0, 0, 0),
+            (batch, history, channels),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+    # Chronological order: the boundary chip opens the stream and consumes the
+    # caller carry; every other chip consumes the tail of the chip before it.
+    entry_carries = [
+        initial_carry if chip == topology.boundary_chip else chip_tail(topology.predecessor_chip(chip))
+        for chip in range(sp_size)
+    ]
     replicated_entries = ttnn.concat(entry_carries, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     partition_carry = ttnn.mesh_partition(
         replicated_entries,
@@ -72,17 +81,6 @@ def exchange_convolution_carry(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    tiled_final_carry = ttnn.slice(
-        gathered_tails,
-        (0, (sp_size - 1) * ttnn.TILE_SIZE, 0),
-        (batch, sp_size * ttnn.TILE_SIZE, channels),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    final_row_major = ttnn.to_layout(tiled_final_carry, ttnn.ROW_MAJOR_LAYOUT)
-    final_carry = ttnn.slice(
-        final_row_major,
-        (0, 0, 0),
-        (batch, history, channels),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    # The stream ends on the chip chronologically before the boundary chip.
+    final_carry = chip_tail(topology.predecessor_chip(topology.boundary_chip))
     return partition_carry, final_carry

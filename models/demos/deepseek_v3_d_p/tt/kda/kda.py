@@ -20,6 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
+from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology, offset_topology
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -190,8 +191,11 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
+        actual_start: int,
     ) -> None:
         """Validate shape/type plus the documented SP state-distribution contract."""
+        if actual_start < 0 or actual_start % KDA_CHUNK_SIZE:
+            raise ValueError(f"actual_start must be a non-negative multiple of {KDA_CHUNK_SIZE}, got {actual_start}")
         if len(hidden_states.shape) != 3 or hidden_states.shape[-1] != self.config.hidden_size:
             raise ValueError(
                 f"hidden_states shape {tuple(hidden_states.shape)} must be [B,T,{self.config.hidden_size}]"
@@ -219,6 +223,7 @@ class ttKDA:
         self,
         qkv: ttnn.Tensor,
         convolution_state: ttnn.Tensor,
+        topology: OffsetTopology,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Run depthwise convolution and emit Q/K/V without post-convolution slices."""
         config = self.config
@@ -239,6 +244,7 @@ class ttKDA:
                 qkv_row_major,
                 state_row_major,
                 sequence_parallel_axis=self.sequence_parallel_axis,
+                topology=topology,
             )
         else:
             new_state = ttnn.slice(
@@ -386,17 +392,25 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
+        actual_start: int = 0,
     ) -> tuple[ttnn.Tensor, KdaState]:
         """Run prefill KDA and return replacement logical carries.
+
+        ``actual_start`` is the absolute global position of this chunk's first
+        token. It selects the chronological SP segment order for MLA's
+        block-cyclic layout; the default of zero is the natural order and is
+        numerically identical to the pre-offset path. Every SP rank must observe
+        the same value.
 
         The input state is only read. No tensor reachable from it is used as a
         ``ttnn.copy`` destination or retained on this layer. The returned output
         is sequence-partitioned along SP and, when TP > 1, reduce-scattered on
         the hidden dimension; TP == 1 returns the full hidden dimension.
         """
-        self._validate_forward(hidden_states, state)
+        self._validate_forward(hidden_states, state, actual_start)
+        topology = offset_topology(actual_start, self.sequence_parallel_size, hidden_states.shape[1])
         projected = self._project_inputs(hidden_states)
-        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution)
+        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution, topology)
         gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,
@@ -408,6 +422,7 @@ class ttKDA:
             gate=gate,
             beta=beta,
             initial_state=state.recurrent,
+            topology=topology if self.sequence_parallel_size > 1 else None,
         )
         output = self._kda_rms_norm(output, projected.output_gate)
         output = self._project_output(output)

@@ -11,6 +11,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.kda.utils import collect_mesh_accuracy_and_determinism_results
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
+from models.demos.deepseek_v3_d_p.tt.kda.offset import offset_topology
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_equal
 
 pytestmark = [
@@ -78,7 +79,12 @@ def test_exchange_convolution_carry_preserves_causal_carries(
     state_tt = _to_device(external, mesh_device, tuple(state_dims))
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        return exchange_convolution_carry(qkv_tt, state_tt, sequence_parallel_axis=sp_axis)
+        return exchange_convolution_carry(
+            qkv_tt,
+            state_tt,
+            sequence_parallel_axis=sp_axis,
+            topology=offset_topology(0, sp_size, local_sequence),
+        )
 
     (entry_tt, final_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
     actual_entries = _sp_carries(entry_tt, mesh_device, sp_axis, tensor_parallel_axis)

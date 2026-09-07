@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
+from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology, offset_topology
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -57,7 +58,7 @@ def _run_recurrence(
         ),
         sequence_parallel_axis=None,
     )
-    return executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state)
+    return executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state, topology=None)
 
 
 @pytest.mark.parametrize(
@@ -250,6 +251,7 @@ def _distributed_recurrence_case(
     torch.Tensor,
     torch.Tensor,
     int,
+    OffsetTopology,
 ]:
     sp_axis = 1 - tensor_parallel_axis
     sequence, heads, dim = 128, 8, 32
@@ -281,16 +283,20 @@ def _distributed_recurrence_case(
         KDARecurrenceProgramConfig(summary_group_chunks=8),
         sequence_parallel_axis=sp_axis,
     )
-    return executor, inputs, expected_output.to(torch.bfloat16), expected_state, sp_axis
+    topology = offset_topology(0, sp_size, sequence // sp_size)
+    return executor, inputs, expected_output.to(torch.bfloat16), expected_state, sp_axis, topology
 
 
 def _run_distributed_recurrence(
     executor: recurrence.KDARecurrence,
     inputs: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor],
+    topology: OffsetTopology,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     q, k, v, gate, beta, initial_state = inputs
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        new_state, output = executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state)
+        new_state, output = executor(
+            q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state, topology=topology
+        )
     return output, new_state
 
 
@@ -305,16 +311,16 @@ def test_distributed_recurrence_matches_serial_and_is_deterministic(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> None:
-    executor, inputs, expected_output, expected_state, sp_axis = _distributed_recurrence_case(
+    executor, inputs, expected_output, expected_state, sp_axis, topology = _distributed_recurrence_case(
         mesh_device, tensor_parallel_axis
     )
 
     (output_tt, state_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(
-        lambda: _run_distributed_recurrence(executor, inputs)
+        lambda: _run_distributed_recurrence(executor, inputs, topology)
     )
     ttnn.synchronize_device(mesh_device)
     cache_entries = mesh_device.num_program_cache_entries()
-    repeated_output, repeated_state = _run_distributed_recurrence(executor, inputs)
+    repeated_output, repeated_state = _run_distributed_recurrence(executor, inputs, topology)
     ttnn.synchronize_device(mesh_device)
     assert mesh_device.num_program_cache_entries() == cache_entries
     ttnn.deallocate(repeated_output)
@@ -341,11 +347,11 @@ def test_distributed_recurrence_trace_replay_matches_eager(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> None:
-    executor, inputs, _, _, sp_axis = _distributed_recurrence_case(mesh_device, tensor_parallel_axis)
-    eager_output_tt, eager_state_tt = _run_distributed_recurrence(executor, inputs)
+    executor, inputs, _, _, sp_axis, topology = _distributed_recurrence_case(mesh_device, tensor_parallel_axis)
+    eager_output_tt, eager_state_tt = _run_distributed_recurrence(executor, inputs, topology)
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    traced_output_tt, traced_state_tt = _run_distributed_recurrence(executor, inputs)
+    traced_output_tt, traced_state_tt = _run_distributed_recurrence(executor, inputs, topology)
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     for _ in range(3):
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
