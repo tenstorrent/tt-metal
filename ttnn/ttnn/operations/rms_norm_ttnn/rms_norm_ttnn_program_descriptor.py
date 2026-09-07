@@ -1052,6 +1052,53 @@ is priced in l1_ledger.md's "Deviations" table with its measurement:
       program).  Any A-then-B comparison without a burn read or ABBA counterbalancing
       silently favours B, and at this op's effect sizes that is the whole signal.
 
+  D43 Perf 3 (perf) -- THE GROUPED SQUARE FOLD.  See `SQ_FOLD_GROUP` for the rule, the
+      measurements and the precision evidence.  In one line: `DEST_ACC_SQUARE_MAX_WT`
+      is a PRECISION ceiling on the fold's serial 16-bit accumulation depth, and because
+      the fold was all-or-nothing that ceiling was also a PERF ceiling.  Folding in
+      GROUPS decouples the two.  1.026x-1.053x on the TRISC-bound geometries, flat on
+      the roofline-gated prefill band, byte-identical wherever the fold already shipped.
+
+  D44 Perf 3 (perf) -- PASS B'S ORDER: GAMMA FIRST ON A CROSS-CORE PLAN.  Pass B's
+      FIRST op is the one that needs the finalized stat, and on a `combine` plan that
+      stat arrives by gather -> root fold -> multicast.  The gamma mul depends on x and
+      gamma ONLY, so doing it first fills that wait with the traversal instead of idling
+      through it.  MEASURED 1.011x-1.154x on all 7 combine=True plans of the `perf`
+      group (the four WIDTH shards 1.089x-1.154x, both BLOCK shards 1.011x/1.025x, the
+      three W-split interleaved decodes 1.037x-1.074x) and BIT-EXACT with the shipped
+      order on all 6 combine=False plans.
+
+      WHAT MAKES IT WORK IS THE TRAVERSAL, NOT THE MATH, and an ablation settles that
+      rather than arguing it: deleting only the gamma MULTIPLY (a bare CopyTile over the
+      same tiles, lifecycle and trip count kept) is 0.982-1.004x, while deleting the
+      whole TRAVERSAL is 1.096-1.244x.  So the pass costs its traversal and the multiply
+      is free -- which retires the entire "cut pass B's op count" idea class (fewer or
+      cheaper muls, pre-combined broadcasts, matmul-by-diagonal) at every geometry, and
+      also explains why Perf 1's DEST-reuse fusion LOST: it deleted packs, which were
+      never the cost, and added per-face MOP restarts.  On the small-block combine plans
+      the reorder measures AS FAST AS DELETING the traversal outright (1.095 vs 1.096;
+      1.129 vs 1.113; 1.036 vs 1.034; 1.074 vs 1.075), which only latency-hiding
+      explains.
+
+      THE COST, recorded because it is real and because the round would be dishonest
+      without it: the reordered intermediate is `x * gamma`, which is UN-normalized, so
+      it can saturate the intermediate CB's dtype where the shipped intermediate
+      (approximately 1) cannot.  The boundary is exactly |x * gamma| > dtype_max --
+      measured, x=1e10 with gamma=1e29 gives 9.965e28 shipped against 3.373e28
+      reordered.  This NARROWS THE OP'S DYNAMIC RANGE on combine-engaged plans.  Nothing
+      in the op's tested universe reaches that band (all 19 perf cases and 31 structural
+      LOOSE_CASES match the shipped order to 6 decimal places of pcc, and the op's own
+      sum(x^2) already saturates by |x| ~ 1.8e19), so it is graduated -- but it is a
+      price, not a free win, and reverting it is one predicate.
+
+      TWO CARVE-OUTS, each earned, each spelled as the NARROW exception so it shrinks
+      rather than has to be widened:
+        * `!HAS_G` -- INFEASIBLE, there is no second mul to move.
+        * `!CROSS_CORE` -- MEASURED REGRESSION.  With the stat computed locally there is
+          no arrival to hide behind; the reorder cost a reproducible 0.983x and 0.989x
+          in two independent sessions on `(1,1,8192,2304)`.  Every other combine=False
+          case was flat, so the carve-out is the REGIME, not that one shape.
+
 """
 
 from __future__ import annotations

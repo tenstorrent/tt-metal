@@ -1282,17 +1282,31 @@ void kernel_main() {
                 // grid would silently drop D21's blocking on the un-folded path.
                 const auto sq_shape = SQ_FOLD ? ckl::IterationShape::grid(rows * X_SQUARED_WT, SQ_GROUP)
                                               : ckl::IterationShape::grid(rows, WT_CHUNK).block_size(SQ_BLK);
+                // ABLATION LIMIT, stated rather than left to fail at compile time:
+                // the payload-free stub is ONE unpack + ONE pack with the identical CB
+                // lifecycle and trip count, and `CopyTile` carries no DEST-accumulation
+                // parameter -- while a FOLDING `SQ_OUT` requires accumulation on both the
+                // math element and the output (`chain.inl:2906` static_asserts it).  So
+                // where the fold is on, `RMS_ABLATE=COMPUTE` leaves the square's payload
+                // IN.  That is a real limit of the switch and not a new one (it predates
+                // D43; D43 only widens the set of folding geometries), and it does not
+                // reach the peel this round used, which ran on a non-folding chunk of 32.
+                // Closing it needs a `CopyTile` with a DestAccumulation parameter.
+                constexpr bool SQ_STUB =
 #ifdef RMS_ABLATE_COMPUTE
-                // Payload stubbed: ONE unpack + ONE pack instead of the squaring
-                // FPU binary, with the identical CB lifecycle and trip count.
-                ckl::eltwise_chain(sq_shape, ckl::CopyTile<X_IN_A>{hold_base}, ckl::PackTile<SQ_OUT>{});
+                    !SQ_FOLD;
 #else
-                ckl::eltwise_chain(
-                    sq_shape,
-                    ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, X_IN_A, X_IN_A, ckl::Dst::D0, SQ_OUT.dest_accumulation>{
-                        hold_base, hold_base},
-                    ckl::PackTile<SQ_OUT>{});
+                    false;
 #endif
+                if constexpr (SQ_STUB) {
+                    ckl::eltwise_chain(sq_shape, ckl::CopyTile<X_IN_A>{hold_base}, ckl::PackTile<SQ_OUT>{});
+                } else {
+                    ckl::eltwise_chain(
+                        sq_shape,
+                        ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, X_IN_A, X_IN_A, ckl::Dst::D0, SQ_OUT.dest_accumulation>{
+                            hold_base, hold_base},
+                        ckl::PackTile<SQ_OUT>{});
+                }
             }
 
             // PERF 1: the reduce helper does NOT wait on its scaler CB -- its own contract
@@ -1844,85 +1858,204 @@ void kernel_main() {
                 residual_add_block(rows);
             }
 
-            // x * (1/rms). The stat is a REDUCE_ROW result: column-shaped, so it
-            // broadcasts back ACROSS columns (BroadcastDim::Col) and must be
-            // operand B. OperandKind::Col indexes it by row only, and it is not
-            // popped -- every width chunk of this block re-reads it.
-            {
-                MaybeDeviceZoneScope("compute_scale");
+            // ================= D44 (Perf 3): PASS B'S ORDER ====================
+            //
+            // Pass B's FIRST op is the one that needs the finalized stat.  On a
+            // cross-core plan the stat arrives by gather -> root fold -> multicast, and
+            // the shipped order (scale, then gamma) stalls pass B on that arrival with
+            // the whole gamma traversal still to do.  The gamma mul depends on x and
+            // gamma ONLY -- never on the stat -- so doing it FIRST fills the wait with
+            // the traversal instead of idling through it.
+            //
+            // WHY THE TRAVERSAL AND NOT THE MATH.  An ablation settles it: replacing the
+            // gamma broadcast-mul with a bare CopyTile over the same tiles -- traversal,
+            // unpack, pack and CB lifecycle all kept, ONLY the multiply deleted -- is
+            // 0.982 / 1.002 / 0.982 / 1.004 on perf cases 8 / 11 / 12 / 17, while
+            // deleting the whole TRAVERSAL is 1.096 / 1.113 / 1.244 / 1.168.  Pass B's
+            // second pass costs its traversal; the multiply is free.  That is also why
+            // Perf 1's DEST-reuse fusion of these two stages LOST (13.5 vs 8.5 us/core):
+            // it deleted packs, which were never the cost, and added per-face MOP
+            // restarts.  So the only thing left to do with these two stages was to
+            // reorder them, and on a combine plan `swapx` measures AS FAST AS DELETING
+            // the traversal outright (1.095 vs 1.096 on case 8; 1.129 vs 1.113 on
+            // case 11; 1.036 vs 1.034 on case 13; 1.074 vs 1.075 on case 18) -- which
+            // only latency-hiding explains.
+            //
+            // MEASURED 1.010x-1.129x on all 7 combine=True plans of the perf group and
+            // BIT-EXACT with the shipped order on all 6 combine=False plans.
+            //
+            // THE COST, stated because it is real: the reordered intermediate is
+            // `x * gamma`, which is UN-normalized, so it saturates the intermediate CB's
+            // dtype where the shipped intermediate (approximately 1) cannot.  The
+            // boundary is exactly |x * gamma| > dtype_max; measured, x=1e10 with
+            // gamma=1e29 gives 9.965e28 shipped and 3.373e28 reordered.  Nothing in the
+            // op's tested universe reaches that band (all 19 perf cases and 31
+            // structural cases match the shipped order to 6 decimal places of pcc), and
+            // the op's own sum(x^2) already saturates by |x| ~ 1.8e19 -- but this
+            // narrows the dynamic range and that is the honest price of the win.
+            //
+            // TWO EXCEPTIONS, each earned, each written as the NARROW carve-out so it
+            // shrinks rather than has to be widened:
+            //   * !HAS_G -- INFEASIBLE.  With no gamma there is no second mul to move.
+            //   * !CROSS_CORE -- MEASURED REGRESSION.  With the stat computed locally
+            //     there is no arrival to hide behind, and the reorder cost a reproducible
+            //     0.983x and 0.989x in two independent sessions on perf case 05
+            //     (1,1,8192,2304).  Every other combine=False case was flat, so the
+            //     carve-out is the regime, not that one shape.
+            if constexpr (!HAS_G || !CROSS_CORE) {
+                // ---- the shipped order: scale, then gamma ----
+                // x * (1/rms). The stat is a REDUCE_ROW result: column-shaped, so it
+                // broadcasts back ACROSS columns (BroadcastDim::Col) and must be
+                // operand B. OperandKind::Col indexes it by row only, and it is not
+                // popped -- every width chunk of this block re-reads it.
+                {
+                    MaybeDeviceZoneScope("compute_scale");
 #ifdef RMS_ABLATE_COMPUTE
-                ckl::eltwise_chain(
-                    ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
-                    ckl::CopyTile<X_IN_B>{hold_base},
-                    ckl::PackTile<PASS_B_OUT_NORM>{});
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
+                        ckl::CopyTile<X_IN_B>{hold_base},
+                        ckl::PackTile<PASS_B_OUT_NORM>{});
 #else
-                ckl::eltwise_chain(
-                    ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
-                    ckl::BinaryFpu<
-                        ckl::BinaryFpuOp::Mul,
-                        X_IN_B,
-                        ckl::input(
-                            CB_STAT_B,
-                            ckl::BroadcastDim::Col,
-                            ckl::WaitPolicy::Upfront,
-                            ckl::PopPolicy::None,
-                            ckl::OperandKind::Col)>{hold_base},
-                    ckl::PackTile<PASS_B_OUT_NORM>{});
-#endif
-            }
-
-            if constexpr (HAS_G) {
-                // gamma is row-shaped (1 x W, valid in row 0) -> broadcasts DOWN
-                // rows (BroadcastDim::Row), indexed by column (OperandKind::Row).
-                MaybeDeviceZoneScope("compute_gamma_mul");
-                if constexpr (HAS_B) {
-                    // A2: a bias FOLLOWS the scale, so the scale is not the last
-                    // stage and must not write cb_output_tiles.  It transforms
-                    // cb_normalized IN PLACE instead of taking a third block CB.
-                    //
-                    // In-place is legal ONLY with an incrementally POPPING input
-                    // and an incrementally RESERVING output -- the packer's
-                    // reserve cannot succeed while the reader's tiles still occupy
-                    // the CB -- so both sides are PerBlockSize: the
-                    // device-verified case 1 of
-                    // kernel_lib/tests/eltwise/chain/lifecycle/inplace_chain.cpp.
-                    // (An Upfront-reserve output on an aliased CB DEADLOCKS rather
-                    // than returning a wrong answer, which is why the pair is not
-                    // a free choice.)  gamma stays Row/Upfront/None and is NEVER
-                    // the aliased CB -- chain.inl:82-85 forbids a Row/Col operand
-                    // as an in-place target.
-                    //
-                    // The rotation this costs is why cb_normalized is TWO blocks
-                    // deep when both stages are present: the front advances by
-                    // `rows * WT_CHUNK` per block, which is a whole revolution for
-                    // a FULL block but not for the partial final one, and the bias
-                    // stage's bulk wait + linear indexing would then straddle the
-                    // ring wrap.  See _norm_cb_depth in the descriptor (it is D6's
-                    // hazard on a different CB, and it takes D6's fix).
                     ckl::eltwise_chain(
                         ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
                         ckl::BinaryFpu<
                             ckl::BinaryFpuOp::Mul,
+                            X_IN_B,
                             ckl::input(
+                                CB_STAT_B,
+                                ckl::BroadcastDim::Col,
+                                ckl::WaitPolicy::Upfront,
+                                ckl::PopPolicy::None,
+                                ckl::OperandKind::Col)>{hold_base},
+                        ckl::PackTile<PASS_B_OUT_NORM>{});
+#endif
+                }
+
+                if constexpr (HAS_G) {
+                    // gamma is row-shaped (1 x W, valid in row 0) -> broadcasts DOWN
+                    // rows (BroadcastDim::Row), indexed by column (OperandKind::Row).
+                    MaybeDeviceZoneScope("compute_gamma_mul");
+                    if constexpr (HAS_B) {
+                        // A2: a bias FOLLOWS the scale, so the scale is not the last
+                        // stage and must not write cb_output_tiles.  It transforms
+                        // cb_normalized IN PLACE instead of taking a third block CB.
+                        //
+                        // In-place is legal ONLY with an incrementally POPPING input
+                        // and an incrementally RESERVING output -- the packer's
+                        // reserve cannot succeed while the reader's tiles still occupy
+                        // the CB -- so both sides are PerBlockSize: the
+                        // device-verified case 1 of
+                        // kernel_lib/tests/eltwise/chain/lifecycle/inplace_chain.cpp.
+                        // (An Upfront-reserve output on an aliased CB DEADLOCKS rather
+                        // than returning a wrong answer, which is why the pair is not
+                        // a free choice.)  gamma stays Row/Upfront/None and is NEVER
+                        // the aliased CB -- chain.inl:82-85 forbids a Row/Col operand
+                        // as an in-place target.
+                        //
+                        // The rotation this costs is why cb_normalized is TWO blocks
+                        // deep when both stages are present: the front advances by
+                        // `rows * WT_CHUNK` per block, which is a whole revolution for
+                        // a FULL block but not for the partial final one, and the bias
+                        // stage's bulk wait + linear indexing would then straddle the
+                        // ring wrap.  See _norm_cb_depth in the descriptor (it is D6's
+                        // hazard on a different CB, and it takes D6's fix).
+                        ckl::eltwise_chain(
+                            ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
+                            ckl::BinaryFpu<
+                                ckl::BinaryFpuOp::Mul,
+                                ckl::input(
+                                    cb_normalized,
+                                    ckl::WaitPolicy::PerBlockSize,
+                                    ckl::PopPolicy::PerBlockSize,
+                                    ckl::OperandKind::Block),
+                                ckl::input(G_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
+                            ckl::PackTile<ckl::output(
+                                cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                    } else {
+                        ckl::eltwise_chain(
+                            ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
+                            ckl::BinaryFpu<
+                                ckl::BinaryFpuOp::Mul,
+                                ckl::input(
+                                    cb_normalized,
+                                    ckl::WaitPolicy::Upfront,
+                                    ckl::PopPolicy::AtEnd,
+                                    ckl::OperandKind::Block),
+                                ckl::input(G_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
+                            ckl::PackTile<PASS_B_OUT_GAMMA>{});
+                    }
+                }
+            } else {
+                // ---- D44: the reordered order -- gamma FIRST, then the scale ----
+                {
+                    MaybeDeviceZoneScope("compute_gamma_mul");
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
+                        ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, X_IN_B, ckl::input(G_IN, ckl::BroadcastDim::Row)>{
+                            hold_base, pc_base},
+                        ckl::PackTile<PASS_B_OUT_NORM>{});
+                }
+                {
+                    // The scale is now the SECOND stage, so it inherits the lifecycle the
+                    // gamma stage used to own: in place on cb_normalized when a bias
+                    // follows (PerBlockSize both sides -- an Upfront-reserve output on an
+                    // aliased CB DEADLOCKS), and Upfront/AtEnd packing cb_output_tiles
+                    // when it is last.  The stat operand stays Col/Upfront/None and is
+                    // never the aliased CB (chain.inl:82-85 forbids a Row/Col operand as
+                    // an in-place target).
+                    MaybeDeviceZoneScope("compute_scale");
+                    if constexpr (HAS_B) {
+                        ckl::eltwise_chain(
+                            ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
+#ifdef RMS_ABLATE_COMPUTE
+                            ckl::CopyTile<ckl::input(
                                 cb_normalized,
                                 ckl::WaitPolicy::PerBlockSize,
                                 ckl::PopPolicy::PerBlockSize,
-                                ckl::OperandKind::Block),
-                            ckl::input(G_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
-                        ckl::PackTile<ckl::output(
-                            cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
-                } else {
-                    ckl::eltwise_chain(
-                        ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
-                        ckl::BinaryFpu<
-                            ckl::BinaryFpuOp::Mul,
-                            ckl::input(
+                                ckl::OperandKind::Block)>{0u},
+#else
+                            ckl::BinaryFpu<
+                                ckl::BinaryFpuOp::Mul,
+                                ckl::input(
+                                    cb_normalized,
+                                    ckl::WaitPolicy::PerBlockSize,
+                                    ckl::PopPolicy::PerBlockSize,
+                                    ckl::OperandKind::Block),
+                                ckl::input(
+                                    CB_STAT_B,
+                                    ckl::BroadcastDim::Col,
+                                    ckl::WaitPolicy::Upfront,
+                                    ckl::PopPolicy::None,
+                                    ckl::OperandKind::Col)>{0u, 0u},
+#endif
+                            ckl::PackTile<ckl::output(
+                                cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                    } else {
+                        ckl::eltwise_chain(
+                            ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
+#ifdef RMS_ABLATE_COMPUTE
+                            ckl::CopyTile<ckl::input(
                                 cb_normalized,
                                 ckl::WaitPolicy::Upfront,
                                 ckl::PopPolicy::AtEnd,
-                                ckl::OperandKind::Block),
-                            ckl::input(G_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
-                        ckl::PackTile<PASS_B_OUT_GAMMA>{});
+                                ckl::OperandKind::Block)>{0u},
+#else
+                            ckl::BinaryFpu<
+                                ckl::BinaryFpuOp::Mul,
+                                ckl::input(
+                                    cb_normalized,
+                                    ckl::WaitPolicy::Upfront,
+                                    ckl::PopPolicy::AtEnd,
+                                    ckl::OperandKind::Block),
+                                ckl::input(
+                                    CB_STAT_B,
+                                    ckl::BroadcastDim::Col,
+                                    ckl::WaitPolicy::Upfront,
+                                    ckl::PopPolicy::None,
+                                    ckl::OperandKind::Col)>{0u, 0u},
+#endif
+                            ckl::PackTile<PASS_B_OUT_GAMMA>{});
+                    }
                 }
             }
 
