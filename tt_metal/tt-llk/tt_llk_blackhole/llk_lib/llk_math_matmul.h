@@ -677,8 +677,20 @@ inline void _llk_math_matmul_init_(
 
     if constexpr (THROTTLE_LEVEL > 0)
     {
-        matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL>(
-            ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        // The throttled MOP's replay sequences are written for a full 32x32 tile only; on any other
+        // geometry its record window and emitted sequence disagree and the matmul wedges. Throttling
+        // is a throughput cap, so fall back to the unthrottled MOP rather than corrupt the loop.
+        const bool throttle_supported_tile = (in0_tile_r_dim == TILE_R_DIM) && (in0_tile_c_dim == TILE_C_DIM) && (in1_tile_r_dim == TILE_R_DIM) &&
+                                             (in1_tile_c_dim == TILE_C_DIM) && !partial_face;
+        if (throttle_supported_tile)
+        {
+            matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL>(
+                ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        }
+        else
+        {
+            matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        }
     }
     else
     {
