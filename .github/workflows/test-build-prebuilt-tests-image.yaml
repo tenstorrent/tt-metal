@@ -223,6 +223,10 @@ jobs:
       platform: "Ubuntu 22.04"
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       build-type: "Release"
+      # Sanity builds with tracy, and a tracy-enabled _ttnn imports the `tracy`
+      # Python module during module init. Without this the import checks below
+      # pass on a payload shaped unlike the one consumers actually get.
+      tracy: true
       publish-artifact: true
       # The env images bake the tarball and the wheel; the debs would be an upload
       # and a retention cost that nothing in this arm reads.
@@ -346,7 +350,7 @@ jobs:
           # about whether in-place import works. It needs deps the base image may not
           # carry, so this fails here on a GitHub runner rather than on a hardware leg.
           docker run --rm \
-            -e PYTHONPATH=/work:/work/ttnn \
+            -e PYTHONPATH=/work:/work/ttnn:/work/tools \
             -e TT_METAL_HOME=/work \
             -e LD_LIBRARY_PATH=/work/build/lib \
             --entrypoint python3 "$FULL" -c 'import ttnn; print("ttnn imported from", ttnn.__file__)'
@@ -357,7 +361,7 @@ jobs:
           # The base a consumer actually uses. Bases differ in what their venv carries,
           # so an import that works on ci-test says nothing about this one.
           docker run --rm \
-            -e PYTHONPATH=/work:/work/ttnn \
+            -e PYTHONPATH=/work:/work/ttnn:/work/tools \
             -e TT_METAL_HOME=/work \
             -e LD_LIBRARY_PATH=/work/build/lib \
             --entrypoint python3 "$DEV_FULL" -c 'import ttnn; print("ttnn imported from", ttnn.__file__)'
@@ -451,7 +455,9 @@ jobs:
         TT_METAL_HOME: /work
         # /work/ttnn as well as /work: /work/ttnn is a namespace dir and the
         # package is /work/ttnn/ttnn. Same in-place layout as bisect-dispatch.
-        PYTHONPATH: /work:/work/ttnn
+        # /work/tools carries the `tracy` module, which a tracy-enabled _ttnn
+        # imports at init. The wheel gets it via package_dir; in place it is here.
+        PYTHONPATH: /work:/work/ttnn:/work/tools
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: wormhole_b0
         LOGURU_LEVEL: INFO
