@@ -42,9 +42,13 @@ any other subsystem on the world context.
 Wire format
 ===========
 Fixed framing: `[u64 length]` on tag 0, then `[body bytes]` on tag 1.
-Body is `torch.save` of a Python dict with the RolloutBatch fields.
-`length == 0` is the close message sent by the producer's `close()` to
-tell the consumer transport thread to stop.
+Body is `torch.save` of a Python dict with the RolloutBatch fields
+(``batch_id``, ``weight_version``, ``prompts``, ``completions``,
+``logprobs``, ``extra``). The ``extra`` field is a plain-Python-builtins
+dict (typically ``{"answer": [...]}``) that carries dataset columns the
+consumer's reward functions need. ``length == 0`` is the close message
+sent by the producer's `close()` to tell the consumer transport thread
+to stop.
 """
 
 from __future__ import annotations
@@ -106,8 +110,9 @@ class RolloutBatch:
     completions: List[List[int]]
     logprobs: torch.Tensor
 
-    # Optional metadata slot for future use (e.g. rewards). Not serialized
-    # by default; add to the wire format if you populate it.
+    # Dataset columns needed by the consumer's reward functions (e.g.
+    # ``{"answer": ["42", ...]}`` for gsm8k). Values must be plain Python
+    # builtins so ``torch.load(..., weights_only=True)`` accepts them.
     extra: dict = field(default_factory=dict, hash=False, compare=False)
 
 
@@ -325,6 +330,7 @@ def _serialize_batch(batch: RolloutBatch) -> bytes:
         "prompts": batch.prompts,
         "completions": batch.completions,
         "logprobs": batch.logprobs,
+        "extra": dict(batch.extra),
     }
     buf = io.BytesIO()
     torch.save(payload, buf)
@@ -339,4 +345,5 @@ def _deserialize_batch(blob: bytes) -> RolloutBatch:
         prompts=list(payload["prompts"]),
         completions=list(payload["completions"]),
         logprobs=payload["logprobs"],
+        extra=dict(payload.get("extra", {})),
     )
