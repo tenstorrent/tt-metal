@@ -1861,3 +1861,32 @@
       tier: 2
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
+
+# ── VibeVoice ──────────────────────────────────────────────────────
+
+# Module PCC coverage for the VibeVoice-specific blocks: the diffusion head and
+# the acoustic/semantic tokenizers are the parts no other model in the repo
+# covers, which makes them the tier-3 "most critical modules". The Qwen2.5-1.5B
+# backbone (test_lm_head_pcc / test_decoder_layer_pcc) is left to tt_transformers
+# coverage, and prefill/decode are exercised by the e2e leg. Weights-cache notes
+# are on the VibeVoice entry in models_e2e_tests.yaml.
+# Measured 3:19 for all 10 tests on a single P150.
+- name: VibeVoice-1.5B unit tests (P150 1x1)
+  cmd: |
+    export TT_METAL_WATCHER=30
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export VIBEVOICE_MODEL_PATH=/mnt/MLPerf/huggingface/microsoft/VibeVoice-1.5B
+    export MESH_DEVICE=P150
+    pytest --timeout 600 \
+      models/experimental/vibevoice/tests/pcc/test_diffusion_head_pcc.py \
+      models/experimental/vibevoice/tests/pcc/test_acoustic_tokenizer_pcc.py \
+      models/experimental/vibevoice/tests/pcc/test_semantic_tokenizer_pcc.py \
+      models/experimental/vibevoice/tests/pcc/test_connector_pcc.py \
+      models/experimental/vibevoice/tests/pcc/test_dpm_scheduler_pcc.py
+  model: vibevoice-1.5b
+  model_family: VibeVoice
+  skus:
+    bh_p150b_civ2:
+      timeout: 6
+      tier: 3
+  team: models
