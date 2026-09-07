@@ -25,6 +25,9 @@ case "${MODEL}" in
     MGD="${MGD_DIR}/kimi27_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
     MAX_SEQ_LEN=256000
+    # Users are bounded by per-bank KV capacity, and that bound has to be bisected, not computed --
+    # the arithmetic bound overshoots ~20% once weights and transients are counted. The OOM edge sits
+    # just above this and wanders between ranks, so re-bisect before raising it.
     NUM_USERS_DEFAULT=86
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1; export PREFILL_LAYER_ACK_D2H=1;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
@@ -34,6 +37,8 @@ case "${MODEL}" in
     MGD="${MGD_DIR}/glm52_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/glm52.json"
     MAX_SEQ_LEN=1049600
+    # Same per-bank capacity bound, relaxed by the TP KV dedup below. The sparse KV format moves it
+    # a long way (SP x TP fits 34 at bf16, 56 at fp8), so this sits well under the edge, not on it.
     NUM_USERS_DEFAULT=28
     TP_SHARD_KV_DEFAULT=1
     RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1;"
