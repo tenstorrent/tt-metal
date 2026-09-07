@@ -70,8 +70,8 @@ uint32_t logical_local_cache_tokens(
     const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args,
     const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& tensor_args) {
     if (tensor_args.has_paged_cache()) {
-        return static_cast<uint32_t>(
-            tensor_args.page_bundle_indices->logical_volume() * static_cast<uint64_t>(args.kv_cache_page_size));
+        const uint32_t sp = tensor_args.cache.device()->shape()[*args.cluster_axis];
+        return ((tensor_args.page_bundle_indices->logical_shape()[1] + sp - 1) / sp) * args.kv_cache_page_size;
     }
     return tensor_args.cache.padded_shape()[-2];
 }
@@ -93,7 +93,7 @@ void validate_paged_cache(
         table.storage_type() == StorageType::DEVICE && table.buffer() != nullptr,
         "page_bundle_indices must be allocated on device");
     TT_FATAL(table.device() == cache.device(), "page_bundle_indices must be on the same device as cache");
-    TT_FATAL(table.dtype() == DataType::UINT16, "page_bundle_indices must have uint16 dtype");
+    TT_FATAL(table.dtype() == DataType::UINT32, "page_bundle_indices must have uint32 dtype");
     TT_FATAL(table.layout() == Layout::ROW_MAJOR, "page_bundle_indices must use ROW_MAJOR layout");
     TT_FATAL(table.padded_shape() == table.logical_shape(), "page_bundle_indices must not be padded");
     TT_FATAL(
@@ -101,8 +101,8 @@ void validate_paged_cache(
         "page_bundle_indices must be DRAM interleaved");
     const auto& ts = table.logical_shape();
     TT_FATAL(
-        ts.rank() == 4 && ts[0] == 1 && ts[1] == 1 && ts[2] == 1 && ts[3] > 0,
-        "page_bundle_indices must have shape [1,1,1,num_logical_bundles] (got {})",
+        ts.rank() == 2 && ts[0] > 0 && ts[1] >= cache.device()->shape()[*args.cluster_axis],
+        "page_bundle_indices must have shape [slots,max_pages] with at least one page per SP rank (got {})",
         ts);
 
     const auto& cs = cache.logical_shape();
@@ -115,11 +115,6 @@ void validate_paged_cache(
         "Paged cache flat page count {} must be positive and divisible by num_layers {}",
         cs[0],
         args.num_layers);
-    const uint32_t physical_bundles = cs[0] / args.num_layers;
-    TT_FATAL(
-        physical_bundles <= (1u << 16),
-        "uint16 page_bundle_indices support at most 65536 physical bundles (got {})",
-        physical_bundles);
     TT_FATAL(cache.memory_config().buffer_type() == BufferType::DRAM, "Paged cache must be in DRAM");
     const auto nd = cache.nd_shard_spec();
     TT_FATAL(nd.has_value(), "Paged cache must use an ND-sharded memory config");
@@ -306,7 +301,8 @@ void validate_runtime_args(
             TILE_HEIGHT);
         if (tensor_args.has_paged_cache()) {
             TT_FATAL(
-                args.slot_idx == 0, "Paged cache uses page_bundle_indices to select the request; slot_idx must be 0");
+                args.slot_idx < tensor_args.page_bundle_indices->logical_shape()[0],
+                "slot_idx out of range for page table slots");
         } else {
             const uint32_t num_slots = cache.padded_shape()[0] / args.num_layers;
             TT_FATAL(
@@ -338,6 +334,25 @@ void validate_runtime_args(
         // do not add tokens. But the cache is sharded across sp*tp, so its global capacity multiplies both.
         const uint32_t chunk_global_tokens = sp_factor * input_seq;
         const uint32_t global_cache_capacity = sp_factor * tp_factor * logical_local_cache_tokens(args, tensor_args);
+        if (tensor_args.has_paged_cache()) {
+            const uint32_t max_pages = tensor_args.page_bundle_indices->logical_shape()[1];
+            const uint32_t write_end = args.valid_global.has_value() ? tt::round_up(*args.valid_global, TILE_HEIGHT)
+                                                                     : args.kv_actual_global + chunk_global_tokens;
+            const uint32_t local_chunk = input_seq / tp_factor;
+            const uint32_t chips = sp_factor * tp_factor;
+            const uint32_t slab = write_end / (chips * local_chunk);
+            const uint32_t boundary = (write_end / local_chunk) % chips;
+            for (uint32_t rank = 0; rank < chips; ++rank) {
+                const uint32_t local_end =
+                    slab * local_chunk +
+                    (rank < boundary ? local_chunk : (rank == boundary ? write_end % local_chunk : 0u));
+                const uint32_t local_pages = (max_pages + sp_factor - 1 - rank / tp_factor) / sp_factor;
+                TT_FATAL(
+                    local_end <= local_pages * args.kv_cache_page_size,
+                    "write would overflow page table capacity on SP rank {}",
+                    rank / tp_factor);
+            }
+        }
         if (args.valid_global.has_value()) {
             const uint32_t valid_global = args.valid_global.value();
             TT_FATAL(
@@ -429,7 +444,7 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
         input_seq / TILE_HEIGHT,
         tp_factor);
     TT_FATAL(
-        logical_local_cache_tokens(args, tensor_args) % written_seq == 0,
+        tensor_args.has_paged_cache() || logical_local_cache_tokens(args, tensor_args) % written_seq == 0,
         "cache seq ({}) must be a multiple of the per-chip written chunk ({} = input_seq {} / tp {})",
         cache_seq,
         written_seq,
@@ -637,14 +652,14 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     }
     if (has_paged_cache) {
         const uint32_t table_bytes =
-            static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_volume() * sizeof(uint16_t));
+            static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_shape()[1] * sizeof(uint32_t));
         const uint32_t aligned_table_bytes = (table_bytes + 31u) & ~31u;
         desc.cbs.push_back(CBDescriptor{
             .total_size = aligned_table_bytes,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = kPageTableCbIndex,
-                .data_format = tt::DataFormat::RawUInt16,
+                .data_format = tt::DataFormat::UInt32,
                 .page_size = aligned_table_bytes,
             }}},
         });
@@ -685,7 +700,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     writer_compile_args.push_back(args.num_layers);
     writer_compile_args.push_back(args.layer_idx);
     writer_compile_args.push_back(
-        has_paged_cache ? static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_volume()) : 0u);
+        has_paged_cache ? static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_shape()[1]) : 0u);
     if (has_metadata) {
         // One accessor reused for both 1-element tensors (identical layout).
         TensorAccessorArgs(tensor_args.slot_idx->buffer()).append_to(writer_compile_args);
@@ -723,6 +738,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
             // Arg 10: valid_global's DRAM addr when clamping, else an inert 0 (always present so the
             // indices never shift).
             has_valid ? tensor_args.valid_global->buffer()->address() : 0u,  // smuggled-rta-ok: as above
+            sp_coord,
+            sp_factor,
         });
     } else {
         writer_kernel.emplace_common_runtime_args({
@@ -737,6 +754,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
             args.slot_idx,
             args.kv_actual_global,
             args.valid_global.value_or(0),  // arg 10; read only by the has_valid program
+            sp_coord,
+            sp_factor,
         });
     }
 

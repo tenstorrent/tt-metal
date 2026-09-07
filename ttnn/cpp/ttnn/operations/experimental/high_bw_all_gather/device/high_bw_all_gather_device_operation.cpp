@@ -24,15 +24,20 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 tt::tt_metal::Shape logical_input_shape(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
     auto shape = tensor_args.input_tensor.padded_shape();
     if (tensor_args.has_paged_input()) {
+        const uint32_t sp =
+            args.kv_cache_sp_axis.has_value() ? tensor_args.input_tensor.device()->shape()[*args.kv_cache_sp_axis] : 1u;
         shape[0] = 1;
         shape[1] = 1;
-        shape[2] = tensor_args.page_bundle_indices->logical_volume() * args.kv_cache_page_size;
+        shape[2] = ((tensor_args.page_bundle_indices->logical_shape()[1] + sp - 1) / sp) * args.kv_cache_page_size;
     }
     return shape;
 }
 
 void validate_paged_input(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
     if (!tensor_args.has_paged_input()) {
+        TT_FATAL(
+            args.kv_cache_slot_idx == 0 && !args.kv_cache_sp_axis.has_value(),
+            "kv_cache_slot_idx and kv_cache_sp_axis require page_bundle_indices");
         return;
     }
 
@@ -56,7 +61,7 @@ void validate_paged_input(const HighBwAllGatherParams& args, const HighBwAllGath
     TT_FATAL(table.storage_type() == StorageType::DEVICE, "page_bundle_indices must be on device");
     TT_FATAL(table.buffer() != nullptr, "page_bundle_indices must have an allocated device buffer");
     TT_FATAL(table.device() == input.device(), "page_bundle_indices must be on the same mesh device as input");
-    TT_FATAL(table.dtype() == DataType::UINT16, "page_bundle_indices must have uint16 dtype");
+    TT_FATAL(table.dtype() == DataType::UINT32, "page_bundle_indices must have uint32 dtype");
     TT_FATAL(table.layout() == Layout::ROW_MAJOR, "page_bundle_indices must use ROW_MAJOR layout");
     TT_FATAL(table.padded_shape() == table.logical_shape(), "page_bundle_indices must not be padded");
     TT_FATAL(
@@ -64,10 +69,21 @@ void validate_paged_input(const HighBwAllGatherParams& args, const HighBwAllGath
         "page_bundle_indices must be DRAM interleaved");
     const auto& table_shape = table.logical_shape();
     TT_FATAL(
-        table_shape.rank() == 4 && table_shape[0] == 1 && table_shape[1] == 1 && table_shape[2] == 1 &&
-            table_shape[3] > 0,
-        "page_bundle_indices must have shape [1,1,1,num_logical_bundles] (got {})",
+        table_shape.rank() == 2 && table_shape[0] > 0 && table_shape[1] > 0,
+        "page_bundle_indices must have shape [slots,max_pages] (got {})",
         table_shape);
+
+    TT_FATAL(args.kv_cache_slot_idx < table_shape[0], "kv_cache_slot_idx is out of range");
+    if (args.kv_cache_sp_axis.has_value()) {
+        TT_FATAL(*args.kv_cache_sp_axis < input.device()->shape().dims(), "kv_cache_sp_axis is out of range");
+        const uint32_t sp = input.device()->shape()[*args.kv_cache_sp_axis];
+        TT_FATAL(table_shape[1] >= sp, "page table must contain at least one page per SP rank");
+        TT_FATAL(
+            table_shape[1] % sp == 0 ||
+                (args.gathered_dim_size.has_value() &&
+                 *args.gathered_dim_size <= (table_shape[1] / sp) * args.kv_cache_page_size * args.num_devices),
+            "Uneven SP page tables require gathered_dim_size within every rank's page capacity");
+    }
 
     const auto& input_shape = input.logical_shape();
     TT_FATAL(
@@ -79,11 +95,6 @@ void validate_paged_input(const HighBwAllGatherParams& args, const HighBwAllGath
         "Paged input flat page count {} must be positive and divisible by kv_cache_num_layers {}",
         input_shape[0],
         args.kv_cache_num_layers);
-    const uint32_t physical_bundles = input_shape[0] / args.kv_cache_num_layers;
-    TT_FATAL(
-        physical_bundles <= (1u << 16),
-        "uint16 page_bundle_indices support at most 65536 physical bundles (got {})",
-        physical_bundles);
     TT_FATAL(input.memory_config().buffer_type() == BufferType::DRAM, "Paged input must be in DRAM");
     const auto nd = input.nd_shard_spec();
     TT_FATAL(nd.has_value(), "Paged input must use an ND-sharded memory config");
@@ -158,6 +169,7 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         args.kv_cache_page_size,
         args.kv_cache_num_layers,
         args.kv_cache_layer_idx,
+        args.kv_cache_sp_axis,
         tensor_args);
 }
 
@@ -313,6 +325,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_hit(
     // The slot/prefix values are deliberately hash-excluded. Recheck only their cheap dynamic
     // bounds here; all tensor/layout/fabric structure belongs to the program key and was proven on
     // the miss path. This keeps a serving-loop cache hit to scalar validation plus direct RT-arg writes.
+    validate_paged_input(args, tensor_args);
     const auto input_shape = logical_input_shape(args, tensor_args);
     const auto& output_tensor = tensor_args.output_tensor;
     TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in buffers on device!");
@@ -388,7 +401,9 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const std::optional<Tensor>& page_bundle_indices,
     uint32_t kv_cache_page_size,
     uint32_t kv_cache_num_layers,
-    uint32_t kv_cache_layer_idx) {
+    uint32_t kv_cache_layer_idx,
+    uint32_t kv_cache_slot_idx,
+    std::optional<uint32_t> kv_cache_sp_axis) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -523,7 +538,9 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .gathered_dim_size = gathered_dim_size,
             .kv_cache_page_size = kv_cache_page_size,
             .kv_cache_num_layers = kv_cache_num_layers,
-            .kv_cache_layer_idx = kv_cache_layer_idx},
+            .kv_cache_layer_idx = kv_cache_layer_idx,
+            .kv_cache_slot_idx = kv_cache_slot_idx,
+            .kv_cache_sp_axis = kv_cache_sp_axis},
         HighBwAllGatherInputs{
             .input_tensor = input_tensor, .output_tensor = output_tensor, .page_bundle_indices = page_bundle_indices}};
 }
@@ -545,7 +562,9 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& page_bundle_indices,
     uint32_t kv_cache_page_size,
     uint32_t kv_cache_num_layers,
-    uint32_t kv_cache_layer_idx) {
+    uint32_t kv_cache_layer_idx,
+    uint32_t kv_cache_slot_idx,
+    std::optional<uint32_t> kv_cache_sp_axis) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -559,7 +578,9 @@ Tensor high_bw_all_gather(
         page_bundle_indices,
         kv_cache_page_size,
         kv_cache_num_layers,
-        kv_cache_layer_idx);
+        kv_cache_layer_idx,
+        kv_cache_slot_idx,
+        kv_cache_sp_axis);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }

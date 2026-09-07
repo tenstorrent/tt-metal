@@ -21,7 +21,9 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& page_bundle_indices,
     uint32_t kv_cache_page_size,
     uint32_t kv_cache_num_layers,
-    uint32_t kv_cache_layer_idx) {
+    uint32_t kv_cache_layer_idx,
+    uint32_t kv_cache_slot_idx,
+    std::optional<uint32_t> kv_cache_sp_axis) {
     return ttnn::prim::high_bw_all_gather(
         input_tensor,
         output_tensor,
@@ -35,7 +37,9 @@ Tensor high_bw_all_gather(
         page_bundle_indices,
         kv_cache_page_size,
         kv_cache_num_layers,
-        kv_cache_layer_idx);
+        kv_cache_layer_idx,
+        kv_cache_slot_idx,
+        kv_cache_sp_axis);
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather

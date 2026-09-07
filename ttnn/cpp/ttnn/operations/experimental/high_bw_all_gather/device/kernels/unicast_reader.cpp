@@ -68,6 +68,8 @@ void kernel_main() {
     constexpr uint32_t logical_wt = get_compile_time_arg_val(paged_ct_base + 5);
     constexpr uint32_t page_bundle_count = get_compile_time_arg_val(paged_ct_base + 6);
 
+    constexpr uint32_t page_table_sp_size = get_compile_time_arg_val(paged_ct_base + 7);
+
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
 
@@ -92,6 +94,9 @@ void kernel_main() {
     const address_t data_valid_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_chunks_per_stripe = get_arg_val<uint32_t>(arg_idx++);
 
+    const uint32_t page_table_slot = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t page_table_sp_rank = get_arg_val<uint32_t>(arg_idx++);
+
     auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
     const auto page_bundle_accessor = TensorAccessor(page_bundle_args, page_bundle_indices_address);
@@ -107,14 +112,20 @@ void kernel_main() {
         page_bundle_l1 = page_bundle_cb.get_write_ptr();
         noc.async_read(
             page_bundle_accessor,
-            CoreLocalMem<uint16_t>(page_bundle_l1),
-            page_bundle_count * sizeof(uint16_t),
-            {.page_id = 0},
+            CoreLocalMem<uint32_t>(page_bundle_l1),
+            page_bundle_count * sizeof(uint32_t),
+            {.page_id = page_table_slot},
             {});
         noc.async_read_barrier();
         invalidate_l1_cache();
+        if constexpr (page_table_sp_size > 1) {
+            auto* table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_bundle_l1);
+            for (uint32_t i = 0, p = page_table_sp_rank; p < page_bundle_count; ++i, p += page_table_sp_size) {
+                table[i] = table[p];
+            }
+        }
     }
-    const PagedKVAccessor<decltype(input_tensor_accessor)> paged_input{
+    const PagedKVAccessor<decltype(input_tensor_accessor), uint32_t> paged_input{
         input_tensor_accessor, page_bundle_l1, page_size_rows, page_num_layers, 1, page_layer_idx};
 
     OutputStripeIterator<

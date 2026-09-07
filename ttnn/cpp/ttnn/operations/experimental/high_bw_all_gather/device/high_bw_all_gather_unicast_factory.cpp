@@ -48,6 +48,8 @@ enum class ReaderRtArg : std::size_t {
     ReadySemaphore,
     DataValidSemaphore,
     OutputChunksPerStripe,
+    PageTableSlot,
+    PageTableSpRank,
     Count,
 };
 
@@ -99,9 +101,13 @@ PageGeometry derive_page_geometry(
     auto input_shape = input_tensor.padded_shape();
     const bool has_paged_input = tensor_args.has_paged_input();
     if (has_paged_input) {
+        const uint32_t sp = operation_attributes.kv_cache_sp_axis.has_value()
+                                ? input_tensor.device()->shape()[*operation_attributes.kv_cache_sp_axis]
+                                : 1u;
         input_shape[0] = 1;
         input_shape[1] = 1;
-        input_shape[2] = tensor_args.page_bundle_indices->logical_volume() * operation_attributes.kv_cache_page_size;
+        input_shape[2] = ((tensor_args.page_bundle_indices->logical_shape()[1] + sp - 1) / sp) *
+                         operation_attributes.kv_cache_page_size;
     }
     const uint32_t rank = input_shape.rank();
     int32_t gather_dim = operation_attributes.dim;
@@ -673,10 +679,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     constexpr uint32_t page_bundle_cb_id = tt::CB::c_in1;
     const bool has_paged_input = tensor_args.has_paged_input();
     if (has_paged_input) {
-        const uint32_t table_bytes = tensor_args.page_bundle_indices->logical_volume() * sizeof(uint16_t);
+        const uint32_t table_bytes = tensor_args.page_bundle_indices->logical_shape()[1] * sizeof(uint32_t);
         const uint32_t aligned_table_bytes = (table_bytes + 31u) & ~31u;
         tt::tt_metal::CircularBufferConfig page_bundle_cb_config =
-            tt::tt_metal::CircularBufferConfig(aligned_table_bytes, {{page_bundle_cb_id, tt::DataFormat::RawUInt16}})
+            tt::tt_metal::CircularBufferConfig(aligned_table_bytes, {{page_bundle_cb_id, tt::DataFormat::UInt32}})
                 .set_page_size(page_bundle_cb_id, aligned_table_bytes);
         CreateCircularBuffer(program, worker_core_range, page_bundle_cb_config);
     }
@@ -729,7 +735,8 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
          operation_attributes.kv_cache_num_layers,
          operation_attributes.kv_cache_layer_idx,
          logical_wt,
-         has_paged_input ? static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_volume()) : 0u});
+         has_paged_input ? static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_shape()[1]) : 0u,
+         operation_attributes.kv_cache_sp_axis.has_value() ? mesh_shape[*operation_attributes.kv_cache_sp_axis] : 1u});
 
     // Writer
     std::vector<uint32_t> writer_compile_args = {
@@ -898,6 +905,11 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 reader_rt_args[rt_arg_index(ReaderRtArg::ReadySemaphore)] = ready_sem.address();
                 reader_rt_args[rt_arg_index(ReaderRtArg::DataValidSemaphore)] = data_valid_sem.address();
                 reader_rt_args[rt_arg_index(ReaderRtArg::OutputChunksPerStripe)] = output_chunks_per_stripe;
+                reader_rt_args[rt_arg_index(ReaderRtArg::PageTableSlot)] = operation_attributes.kv_cache_slot_idx;
+                reader_rt_args[rt_arg_index(ReaderRtArg::PageTableSpRank)] =
+                    operation_attributes.kv_cache_sp_axis.has_value()
+                        ? sender_device_coord[*operation_attributes.kv_cache_sp_axis]
+                        : 0u;
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
                 std::vector<uint32_t> writer_rt_args(rt_arg_index(WriterRtArg::Count));
@@ -1007,6 +1019,11 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
             reader_args.at(rt_arg_index(ReaderRtArg::InputAddress)) = input_addr;
             reader_args.at(rt_arg_index(ReaderRtArg::OutputAddress)) = output_addr;
             reader_args.at(rt_arg_index(ReaderRtArg::PageBundleIndicesAddress)) = page_bundle_indices_addr;
+            reader_args.at(rt_arg_index(ReaderRtArg::PageTableSlot)) = operation_attributes.kv_cache_slot_idx;
+            reader_args.at(rt_arg_index(ReaderRtArg::PageTableSpRank)) =
+                operation_attributes.kv_cache_sp_axis.has_value()
+                    ? coordinate_range.start_coord()[*operation_attributes.kv_cache_sp_axis]
+                    : 0u;
             reader_args.at(rt_arg_index(ReaderRtArg::ReadySemaphore)) = ready_addr;
             reader_args.at(rt_arg_index(ReaderRtArg::DataValidSemaphore)) = data_valid_addr;
             auto& writer_args = writer_args_by_core[core.x][core.y];

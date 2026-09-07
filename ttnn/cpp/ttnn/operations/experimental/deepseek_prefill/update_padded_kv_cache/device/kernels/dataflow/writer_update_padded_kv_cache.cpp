@@ -180,13 +180,22 @@ static void run_writer() {
     if constexpr (has_paged_cache) {
         CircularBuffer table_cb(page_table_cb);
         const uint32_t page_table_l1 = table_cb.get_write_ptr();
-        const uint32_t table_bytes = page_bundle_count * sizeof(uint16_t);
+        const uint32_t table_bytes = page_bundle_count * sizeof(uint32_t);
         const auto table_reader = TensorAccessor(page_bundle_args, page_bundle_indices_addr);
-        noc.async_read(table_reader, CoreLocalMem<uint16_t>(page_table_l1), table_bytes, {.page_id = 0}, {});
+        noc.async_read(table_reader, CoreLocalMem<uint32_t>(page_table_l1), table_bytes, {.page_id = slot_idx}, {});
         noc.async_read_barrier();
         invalidate_l1_cache();
 
-        const PagedKVAccessor<decltype(s)> paged_cache{
+        const uint32_t table_sp_rank = get_common_arg_val<uint32_t>(11);
+        const uint32_t table_sp_size = get_common_arg_val<uint32_t>(12);
+        auto* table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_l1);
+        if (table_sp_size > 1) {
+            for (uint32_t i = 0, p = table_sp_rank; p < page_bundle_count; ++i, p += table_sp_size) {
+                table[i] = table[p];
+            }
+        }
+
+        const PagedKVAccessor<decltype(s), uint32_t> paged_cache{
             s, page_table_l1, page_size_rows, page_num_layers, 1, page_layer_idx};
         const uint32_t num_blocks = num_pages / Wt;
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
@@ -194,7 +203,7 @@ static void run_writer() {
             const uint32_t row = block % input_Ht;
             const bool keep = !HasValid || row < rows_to_write;
             const uint32_t logical_row = update_idxt + row;
-            const auto cursor = paged_cache.cursor(logical_row);
+            const auto cursor = paged_cache.cursor(keep ? logical_row : 0u);
             for (uint32_t w = 0; w < Wt; ++w) {
                 cb.wait_front(onepage);
                 if (keep) {

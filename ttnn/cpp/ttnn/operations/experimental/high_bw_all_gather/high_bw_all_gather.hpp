@@ -25,7 +25,9 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& page_bundle_indices = std::nullopt,
     uint32_t kv_cache_page_size = 32,
     uint32_t kv_cache_num_layers = 1,
-    uint32_t kv_cache_layer_idx = 0);
+    uint32_t kv_cache_layer_idx = 0,
+    uint32_t kv_cache_slot_idx = 0,
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 

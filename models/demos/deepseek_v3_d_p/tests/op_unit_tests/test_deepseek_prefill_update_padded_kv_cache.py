@@ -104,9 +104,14 @@ def _make_empty_paged_pool(mesh_device, physical_bundles, num_layers, page_size,
 
 
 def _make_page_bundle_table(mesh_device, order):
+    row = torch.tensor(order, dtype=torch.int64)
+    if row.ndim == 1:
+        row = row.repeat_interleave(mesh_device.shape[0])
+    row = row.reshape(-1)
+    rows = torch.stack([row.flip(0), row.roll(1), row])
     return ttnn.from_torch(
-        torch.tensor(order, dtype=torch.int64).reshape(1, 1, 1, len(order)),
-        dtype=ttnn.uint16,
+        rows,
+        dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -161,7 +166,7 @@ def test_update_padded_kv_cache_paged_bundle_pool(mesh_device, layout, page_size
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             pool,
             tt_input0,
-            slot_idx=0,
+            slot_idx=2,
             layer_idx=layer_idx,
             num_layers=num_layers,
             kv_actual_global=0,
@@ -172,7 +177,7 @@ def test_update_padded_kv_cache_paged_bundle_pool(mesh_device, layout, page_size
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             pool,
             tt_input1,
-            slot_idx=0,
+            slot_idx=2,
             layer_idx=layer_idx,
             num_layers=num_layers,
             kv_actual_global=chunk_tokens,
@@ -180,8 +185,8 @@ def test_update_padded_kv_cache_paged_bundle_pool(mesh_device, layout, page_size
             page_bundle_indices=table,
             kv_cache_page_size=page_size,
         )
-        # Traceable metadata form: the table selects the request, so a non-zero slot payload is ignored.
-        slot_t = _make_scalar_tensor(mesh_device, 17)
+        # Traceable metadata form selects the same nonzero table row on device.
+        slot_t = _make_scalar_tensor(mesh_device, 2)
         kv_t = _make_scalar_tensor(mesh_device, 0)
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             pool,
@@ -212,7 +217,7 @@ def test_update_padded_kv_cache_paged_bundle_pool(mesh_device, layout, page_size
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
 @pytest.mark.timeout(0)
-def test_update_padded_kv_cache_paged_rejects_nonzero_scalar_slot(mesh_device, expect_error):
+def test_update_padded_kv_cache_paged_rejects_out_of_range_scalar_slot(mesh_device, expect_error):
     page_size, head_dim = 32, 128
     pool = _make_empty_paged_pool(mesh_device, 2, 1, page_size, head_dim, ttnn.TILE_LAYOUT)
     table = _make_page_bundle_table(mesh_device, [0, 1])
@@ -224,11 +229,11 @@ def test_update_padded_kv_cache_paged_rejects_nonzero_scalar_slot(mesh_device, e
         ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    with expect_error(RuntimeError, "slot_idx must be 0"):
+    with expect_error(RuntimeError, "slot_idx out of range"):
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             pool,
             tt_input,
-            slot_idx=1,
+            slot_idx=3,
             layer_idx=0,
             num_layers=1,
             kv_actual_global=0,
@@ -238,17 +243,80 @@ def test_update_padded_kv_cache_paged_rejects_nonzero_scalar_slot(mesh_device, e
         )
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+@pytest.mark.parametrize("metadata", [False, True], ids=["scalar", "metadata"])
+def test_update_padded_kv_cache_paged_uint32_slots(mesh_device, layout, metadata, expect_error):
+    """Different slot rows and IDs above 65535 survive cached scalar and metadata writes."""
+    base, page_size, width = 65536, 32, 32
+    rows = torch.tensor([[base + 1, base], [base + 2, base + 3], [base + 4, base + 5]])
+    table = ttnn.from_torch(
+        rows,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    pool = _make_empty_paged_pool(mesh_device, base + 6, 1, page_size, width, layout)
+    torch.manual_seed(937)
+    source = torch.randn(1, 1, 2 * page_size, width, dtype=torch.bfloat16)
+    tt_input = _make_input(source, ttnn.bfloat16, layout, mesh_device, ttnn.ReplicateTensorToMesh(mesh_device))
+    entries = None
+    for slot in (2, 0, 2):
+        args = (_make_scalar_tensor(mesh_device, slot), _make_scalar_tensor(mesh_device, 0)) if metadata else ()
+        kwargs = {} if metadata else dict(slot_idx=slot, kv_actual_global=0)
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            pool,
+            tt_input,
+            *args,
+            layer_idx=0,
+            num_layers=1,
+            cluster_axis=0,
+            page_bundle_indices=table,
+            kv_cache_page_size=page_size,
+            **kwargs,
+        )
+        ttnn.synchronize_device(mesh_device)
+        actual = ttnn.to_torch(ttnn.get_device_tensors(pool)[0])
+        expected = source.reshape(2, 1, page_size, width)
+        assert torch.equal(actual[rows[slot]], expected)
+        assert torch.count_nonzero(actual[:base]) == 0
+        assert torch.count_nonzero(actual[rows[1]]) == 0
+        if entries is None:
+            entries = mesh_device.num_program_cache_entries()
+        else:
+            assert mesh_device.num_program_cache_entries() == entries
+    if not metadata:
+        with expect_error(RuntimeError, "slot_idx out of range"):
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                pool,
+                tt_input,
+                slot_idx=3,
+                kv_actual_global=0,
+                layer_idx=0,
+                num_layers=1,
+                cluster_axis=0,
+                page_bundle_indices=table,
+                kv_cache_page_size=page_size,
+            )
+
+
 @pytest.mark.parametrize("mesh_device", [(4, 1)], ids=["4x1"], indirect=True)
 @pytest.mark.timeout(0)
-def test_update_padded_kv_cache_paged_sp_boundary_straddle(mesh_device):
+@pytest.mark.parametrize("extra_page", [0, 1])
+def test_update_padded_kv_cache_paged_sp_boundary_straddle(mesh_device, extra_page):
     """Paged writes retain the existing per-SP-rank rotated offsets at a mid-device, mid-page boundary."""
     sp, cluster_axis = 4, 0
     page_size, head_dim, num_layers, layer_idx = 32, 128, 2, 1
     chunk_local, logical_local_tokens = 64, 128
     logical_bundles, physical_bundles = logical_local_tokens // page_size, 7
-    order = [5, 1, 6, 2]
+    orders = torch.stack([torch.tensor([5, 1, 6, 2]).roll(rank) for rank in range(sp)], dim=1)
     pool = _make_empty_paged_pool(mesh_device, physical_bundles, num_layers, page_size, head_dim, ttnn.TILE_LAYOUT)
-    table = _make_page_bundle_table(mesh_device, order)
+    table_order = orders.reshape(-1)
+    if extra_page:
+        table_order = torch.cat([table_order, torch.tensor([0])])
+    table = _make_page_bundle_table(mesh_device, table_order.reshape(1, -1))
     input_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, 1), dims=(2, None))
     input_composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(sp, 1), dims=(2, 0))
 
@@ -273,7 +341,7 @@ def test_update_padded_kv_cache_paged_sp_boundary_straddle(mesh_device):
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             pool,
             tt_input,
-            slot_idx=0,
+            slot_idx=2,
             layer_idx=layer_idx,
             num_layers=num_layers,
             kv_actual_global=start,
@@ -288,7 +356,7 @@ def test_update_padded_kv_cache_paged_sp_boundary_straddle(mesh_device):
         sp, physical_bundles * num_layers, 1, page_size, head_dim
     )
     for chip in range(sp):
-        logical = torch.cat([pool_host[chip, p * num_layers + layer_idx, 0] for p in order])
+        logical = torch.cat([pool_host[chip, p * num_layers + layer_idx, 0] for p in orders[:, chip].tolist()])
         assert torch.equal(logical, expected_local[chip])
 
 
@@ -329,7 +397,7 @@ def test_update_padded_kv_cache_paged_perf_matches_contiguous(mesh_device):
         return ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             cache,
             tt_input,
-            slot_idx=0,
+            slot_idx=2 if paging else 0,
             layer_idx=0,
             num_layers=1,
             kv_actual_global=0,

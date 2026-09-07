@@ -78,11 +78,10 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     ``input`` must then be TP-replicated and single-head, and each chip persists only
                     its own ``1/tp`` seq window. Must differ from ``cluster_axis``.
                 page_bundle_indices (ttnn.Tensor, optional): Enables the shared paged-cache layout.
-                    The uint16 ROW_MAJOR DRAM table maps logical local pages for this request to
-                    physical bundles. ``cache`` is then
+                    The replicated uint32 ROW_MAJOR DRAM table has shape [slots,max_pages].
+                    Local page i on cluster_axis rank r uses table[slot_idx, i*SP+r]. ``cache`` is then
                     ``[physical_bundles*num_layers, 1, kv_cache_page_size, D]`` with one bundle/layer
-                    page per ND shard. The table selects the request, so scalar ``slot_idx`` must be 0
-                    (the metadata-path slot value is ignored).
+                    page per ND shard. Both scalar and device-metadata ``slot_idx`` select the table row.
                 kv_cache_page_size (int): Token rows per physical bundle page. Defaults to 32.
 
             Returns:

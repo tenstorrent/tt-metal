@@ -31,9 +31,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 // chip persists only its own 1/tp seq window; the axes linearize to one block-cyclic axis of size sp*tp.
 // When `page_bundle_indices` is supplied, `cache` is a shared bundle pool shaped
 // `[physical_bundles * num_layers, 1, kv_cache_page_size, D]`, with one ND shard per physical
-// bundle/layer pair. The uint16 ROW_MAJOR DRAM table maps this request's logical local pages to
-// physical bundles; `layer_idx` selects the layer within each bundle. Consequently the scalar
-// `slot_idx` must be zero in paged mode, while the metadata form ignores its slot value.
+// bundle/layer pair. The replicated uint32 ROW_MAJOR DRAM table has shape [slots,max_pages].
+// Local page i on SP rank r uses table[slot_idx, i*SP+r]; layer_idx selects the layer in the bundle.
+// Both scalar and device-metadata slot_idx select the table row.
 //
 // In-place: returns a handle to `cache`. Two call forms (identical results):
 

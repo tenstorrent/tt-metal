@@ -31,12 +31,15 @@ selection.
   warning.
 - optional paged-KV input for sparse-MLA cache gathers. In this mode the input
   is a shared ND-sharded pool shaped
-  `[physical_bundles * num_layers, 1, page_size, D]`, and a uint16 row-major
-  interleaved-DRAM table maps logical pages to physical bundles. The operation
-  gathers the selected layer as a logical `[1, 1, table_length * page_size, D]`
+  `[physical_bundles * num_layers, 1, page_size, D]`, and a replicated uint32 row-major
+  interleaved-DRAM table `[slots, max_pages]` maps logical pages to physical bundles.
+  `kv_cache_slot_idx` selects the row without recompilation. With `kv_cache_sp_axis`,
+  local page `i` on rank `r` uses `table[slot, i * SP + r]`; the default is SP=1. The operation
+  gathers the selected layer as a logical `[1, 1, ceil(max_pages / SP) * page_size, D]`
   tensor without first materializing a contiguous cache. Paged input supports
   an active `gathered_dim_size` prefix, but is incompatible with
-  `input_batch_index` because the page table already selects the request;
+  `input_batch_index` because the page table already selects the request. For uneven
+  SP page counts, `gathered_dim_size` must fit the smallest local page capacity;
 - worker and mux cores must be exclusive to this program for its duration. On
   the qualified two-link Blackhole ring, the large-message path uses 32
   reader/writer workers plus four mux cores. Each active mux owns its

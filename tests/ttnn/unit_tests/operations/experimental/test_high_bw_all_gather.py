@@ -251,9 +251,12 @@ def _make_paged_pool(mesh_device, physical_bundles, num_layers, page_size, width
 
 
 def _make_page_bundle_table(mesh_device, order):
+    sp = math.prod(tuple(mesh_device.shape))
+    row = torch.tensor(order, dtype=torch.int64).repeat_interleave(sp)
+    rows = torch.stack([row.flip(0), row.roll(sp), row])
     return ttnn.from_torch(
-        torch.tensor(order, dtype=torch.int64).reshape(1, 1, 1, len(order)),
-        dtype=ttnn.uint16,
+        rows,
+        dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -1141,7 +1144,7 @@ def test_high_bw_all_gather_paged_kv_pool(mesh_device, expect_error):
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 pool,
                 device_input,
-                slot_idx=0,
+                slot_idx=2,
                 layer_idx=layer_idx,
                 num_layers=num_layers,
                 kv_actual_global=0,
@@ -1160,6 +1163,8 @@ def test_high_bw_all_gather_paged_kv_pool(mesh_device, expect_error):
                 kv_cache_page_size=page_size,
                 kv_cache_num_layers=num_layers,
                 kv_cache_layer_idx=layer_idx,
+                kv_cache_slot_idx=2,
+                kv_cache_sp_axis=cluster_axis,
             )
             ttnn.synchronize_device(rank_line)
             if dtype == ttnn.fp8_e4m3:
@@ -1197,6 +1202,8 @@ def test_high_bw_all_gather_paged_kv_pool(mesh_device, expect_error):
                 kv_cache_page_size=page_size,
                 kv_cache_num_layers=num_layers,
                 kv_cache_layer_idx=layer_idx,
+                kv_cache_slot_idx=2,
+                kv_cache_sp_axis=cluster_axis,
             )
 
 
@@ -1258,7 +1265,7 @@ def test_high_bw_all_gather_paged_kv_perf_matches_contiguous(mesh_device):
     ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
         pool,
         device_input,
-        slot_idx=0,
+        slot_idx=2,
         layer_idx=layer_idx,
         num_layers=num_layers,
         kv_actual_global=0,
@@ -1302,6 +1309,8 @@ def test_high_bw_all_gather_paged_kv_perf_matches_contiguous(mesh_device):
             kv_cache_page_size=page_size,
             kv_cache_num_layers=num_layers,
             kv_cache_layer_idx=layer_idx,
+            kv_cache_slot_idx=2,
+            kv_cache_sp_axis=cluster_axis,
             gathered_dim_size=global_rows,
         )
 
@@ -1464,3 +1473,97 @@ def test_high_bw_all_gather_token_sweep(mesh_device, axis_0_min_bandwidth_gbps, 
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
     min_bandwidth_gbps = (axis_0_min_bandwidth_gbps, axis_1_min_bandwidth_gbps)[cluster_axis]
     _run_high_bw_all_gather_token_sweep(rank_line, min_bandwidth_gbps, cluster_axis)
+
+
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
+@run_for_blackhole("high_bw_all_gather paged slot coverage requires Blackhole")
+@pytest.mark.parametrize("extra_page", [0, 1])
+def test_high_bw_all_gather_paged_uint32_slots(mesh_device, expect_error, extra_page):
+    """Select distinct requests from one replicated table and reuse one gather program."""
+    rank_line, axis = _rank_line_mesh(mesh_device)
+    sp = rank_line.shape[axis]
+    base, page_size, width, local_pages = 65536, 32, 32, 2
+    rows = torch.stack(
+        [
+            torch.stack(
+                [torch.tensor([base + 2 * slot, base + 2 * slot + 1]).roll(rank % 2) for rank in range(sp)], dim=1
+            ).reshape(-1)
+            for slot in range(3)
+        ]
+    )
+    if extra_page:
+        rows = torch.cat([rows, rows[:, :1]], dim=1)
+    table = ttnn.from_torch(
+        rows,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=rank_line,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(rank_line),
+    )
+    pool = _make_paged_pool(rank_line, base + 6, 1, page_size, width, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    sources = {}
+    for slot in (0, 2):
+        torch.manual_seed(529 + slot)
+        sources[slot] = torch.randn(1, 1, local_pages * page_size * sp, width, dtype=torch.bfloat16)
+        source = _make_tensor(
+            rank_line,
+            sources[slot],
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            ttnn.ShardTensor2dMesh(
+                rank_line, dims=(2, None) if axis == 0 else (None, 2), mesh_shape=tuple(rank_line.shape)
+            ),
+        )
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            pool,
+            source,
+            slot_idx=slot,
+            kv_actual_global=0,
+            layer_idx=0,
+            num_layers=1,
+            cluster_axis=axis,
+            page_bundle_indices=table,
+            kv_cache_page_size=page_size,
+        )
+    capacity_rows = (local_pages + extra_page) * page_size
+    output = _make_tensor(
+        rank_line,
+        torch.zeros(1, 1, capacity_rows * sp, width, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.ReplicateTensorToMesh(rank_line),
+    )
+    entries = None
+    kwargs = dict(
+        dim=2,
+        output_tensor=output,
+        cluster_axis=axis,
+        num_links=_NUM_LINKS,
+        page_bundle_indices=table,
+        kv_cache_page_size=page_size,
+        kv_cache_sp_axis=axis,
+        gathered_dim_size=local_pages * page_size * sp,
+    )
+    for slot in (2, 0, 2):
+        gathered = ttnn.experimental.high_bw_all_gather(pool, kv_cache_slot_idx=slot, **kwargs)
+        ttnn.synchronize_device(rank_line)
+        for shard in ttnn.get_device_tensors(gathered):
+            actual = ttnn.to_torch(shard)
+            for rank in range(sp):
+                assert torch.equal(
+                    actual[:, :, rank * capacity_rows : rank * capacity_rows + local_pages * page_size],
+                    sources[slot][:, :, rank * local_pages * page_size : (rank + 1) * local_pages * page_size],
+                )
+                assert (
+                    torch.count_nonzero(
+                        actual[:, :, rank * capacity_rows + local_pages * page_size : (rank + 1) * capacity_rows]
+                    )
+                    == 0
+                )
+        if entries is None:
+            entries = rank_line.num_program_cache_entries()
+        else:
+            assert rank_line.num_program_cache_entries() == entries
+    with expect_error(RuntimeError, "kv_cache_slot_idx is out of range"):
+        ttnn.experimental.high_bw_all_gather(pool, kv_cache_slot_idx=3, **kwargs)

@@ -71,13 +71,17 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     slot; bytes outside those prefixes are left unchanged. ``gathered_dim_size``
                     is the total valid extent, not a contiguous output prefix: consumers must
                     preserve the fixed per-rank stride when locating every rank's valid data.
-                page_bundle_indices: Optional uint16 ROW_MAJOR DRAM table mapping this request's
-                    logical local KV pages to physical bundles. When present, ``input_tensor`` is a
+                page_bundle_indices: Optional uint32 ROW_MAJOR DRAM table with shape [slots,max_pages] mapping this request's
+                    global KV pages to SP-local physical bundles. When present, ``input_tensor`` is a
                     shared ND-sharded pool shaped
                     ``[physical_bundles*kv_cache_num_layers, 1, kv_cache_page_size, D]`` and the
-                    logical gathered source is ``[1, 1, table_length*kv_cache_page_size, D]``.
+                    logical gathered source is ``[1, 1, ceil(max_pages/SP)*kv_cache_page_size, D]``.
                     This mode is incompatible with ``input_batch_index`` because the table selects
                     the request.
+                kv_cache_slot_idx: Row selected from the replicated page table; runtime-patched. Defaults to 0.
+                kv_cache_sp_axis: Optional mesh axis for round-robin page ownership. Local page i
+                    reads table[slot, i*SP+rank]. None means SP=1. Uneven page counts require
+                    gathered_dim_size to fit the smallest local page capacity.
                 kv_cache_page_size: Token rows in each physical KV page. Defaults to 32.
                 kv_cache_num_layers: Layers stored in every physical bundle. Defaults to 1.
                 kv_cache_layer_idx: Layer selected from every physical bundle. Defaults to 0.
@@ -96,7 +100,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("page_bundle_indices").noconvert() = nb::none(),
         nb::arg("kv_cache_page_size") = 32,
         nb::arg("kv_cache_num_layers") = 1,
-        nb::arg("kv_cache_layer_idx") = 0);
+        nb::arg("kv_cache_layer_idx") = 0,
+        nb::arg("kv_cache_slot_idx") = 0,
+        nb::arg("kv_cache_sp_axis") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail
