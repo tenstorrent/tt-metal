@@ -101,6 +101,24 @@ def index_golden_present(trace_dir) -> bool:
     return dsa_dir.is_dir() and any(dsa_dir.glob("indexer_k_layer_*"))
 
 
+def kv_golden_present(trace_dir, layer_idx: int) -> bool:
+    """True when ``trace_dir`` carries the ``kv_post_transform`` golden for ``layer_idx``.
+
+    Presence test for exactly what ``_load_golden_kv_post`` reads, in both layouts it supports (the
+    single ``kv_cache/layer_N.safetensors`` and the sharded ``kv_cache/layer_N/rows_*.safetensors``).
+    Callers use it to SKIP a comparison instead of failing inside the loader on a trace that simply
+    does not carry that layer -- the MTP levels (#53533) are the live case: they write KVPE layers
+    ``num_layers + k``, which no GLM-5.2 trace dumped so far contains. Lives next to the loader so the
+    ``kv_cache/layer_*`` layout stays encoded in exactly one place."""
+    from pathlib import Path
+
+    base = Path(trace_dir) / "kv_cache"
+    if (base / f"layer_{layer_idx}.safetensors").exists():
+        return True
+    layer_dir = base / f"layer_{layer_idx}"
+    return layer_dir.is_dir() and any(layer_dir.glob("rows_*.safetensors"))
+
+
 def _load_golden_index_k(trace_dir, layer_idx: int, total_len: int) -> "torch.Tensor":
     """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
     dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
