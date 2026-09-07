@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.chip_architecture import is_4row_arch
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     DataCopyGolden,
@@ -194,6 +195,16 @@ def transpose_dest_implied_math_formats(*, is_perf=False):
     )
 
 
+_MX_FORMATS = (
+    []
+    if is_4row_arch()
+    else [
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
+    ]
+)
+
 TRANSPOSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
@@ -202,9 +213,7 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
-        # DataFormat.MxInt8,
-        # DataFormat.MxInt4,
-        # DataFormat.MxInt2,
+        *_MX_FORMATS,
     ],
 )
 PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(

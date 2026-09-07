@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // 4row_arch INT8_2x matmul kernel. Identical to matmul_quasar_test.cpp on the unpack/pack
-// threads; the math thread uses llk_math_matmul_4row_arch.h (the 16-MVMULDI DI+X2 traversal
-// for INT8_2x) instead of the Quasar llk_math_matmul.h (8-MVMULDI MxFp4_2x traversal).
+// threads; the math thread uses llk_math_matmul.h, which for MATH_ROWS==4 emits the 16-MVMULDI
+// DI+X2 traversal for INT8_2x (vs the 8-MVMULDI MxFp4_2x traversal on 8-row Quasar).
 
 #include <algorithm>
 #include <cstdint>
@@ -20,13 +20,9 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-// Buffer descriptor IDs for TDMA engines - these are indices into the hardware buffer descriptor table
-constexpr std::uint32_t buf_desc_id_src_a = 29; // Source A matrix input buffer
-constexpr std::uint32_t buf_desc_id_src_b = 30; // Source B matrix input buffer
-constexpr std::uint32_t buf_desc_id_dst   = 31; // Destination matrix output buffer
-
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_unpack_matmul.h"
 #include "params.h"
 
@@ -39,35 +35,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Setup sync for unpack
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
     set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
-    // src A input configuration
-    tdma_descriptor_t tdma_desc_src_a;
-    tdma_desc_src_a.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_A[0]);
-    tdma_desc_src_a.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_A_src);
-    tdma_desc_src_a.buf_desc.f.lmt_addr_16B = 0;
-    tdma_desc_src_a.buf_desc.f.x_dim        = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-    tdma_desc_src_a.buf_desc.f.y_dim        = FACE_R_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-    tdma_desc_src_a.buf_desc.f.z_dim        = num_faces_A; // Number of faces = 4, tiny tiles not supported for quasar
-    tdma_desc_src_a.buf_desc_id             = buf_desc_id_src_a;
-    tdma_desc_src_a.reg_data_format         = static_cast<std::uint32_t>(formats.unpack_A_dst);
 
-    // src B input configuration
-    tdma_descriptor_t tdma_desc_src_b;
-    tdma_desc_src_b.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_B[0]);
-    tdma_desc_src_b.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_B_src);
-    tdma_desc_src_b.buf_desc.f.lmt_addr_16B = 0;
-    tdma_desc_src_b.buf_desc.f.x_dim        = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-    tdma_desc_src_b.buf_desc.f.y_dim        = FACE_R_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-    tdma_desc_src_b.buf_desc.f.z_dim        = num_faces_B; // Number of faces = 4, tiny tiles not supported for quasar
-    tdma_desc_src_b.buf_desc_id             = buf_desc_id_src_b;
-    tdma_desc_src_b.reg_data_format         = static_cast<std::uint32_t>(formats.unpack_B_dst);
+    // Matmul flips the unpacker roles: operand A drives UNPACR1/SrcB and operand B drives UNPACR0/SrcA.
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
+        ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces_A), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+        ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces_B), L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
+    _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(static_cast<DataFormat>(formats.unpack_A_dst));
+    _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(static_cast<DataFormat>(formats.unpack_B_dst));
 
-    _configure_buf_desc_table_(tdma_desc_src_a.buf_desc_id, tdma_desc_src_a.buf_desc);
-    _configure_buf_desc_table_(tdma_desc_src_b.buf_desc_id, tdma_desc_src_b.buf_desc);
-    _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(tdma_desc_src_a);
-    _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(tdma_desc_src_b);
-
-    _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(buf_desc_id_src_a, buf_desc_id_src_b, CT_DIM, RT_DIM, KT_DIM); // transpose in src_A not supported for
-                                                                                                                    // quasar
+    _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+        CT_DIM,
+        RT_DIM,
+        KT_DIM); // transpose in src_A not supported for quasar
 
     for (std::uint32_t j = 0; j < KT_DIM; j++)
     {
@@ -80,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "llk_math_common.h"
-#include "llk_math_matmul_4row_arch.h"
+#include "llk_math_matmul.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -104,13 +86,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // per SrcA/SrcB datum drive the 32-way dot-product reduction, result in INT32). Set when
     // SrcA/SrcB are configured as Int8_2x / UInt8_2x.
     // ENABLE_DIRECT_INDEXING selects the DI variant (MVMULDI with explicit indices); the
-    // 4row_arch X2 traversal is implemented on the DI path.
-    // NOTE: the 4row_arch matmul API takes CT_DIM/RT_DIM as compile-time template params.
-    _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, CT_DIM, RT_DIM, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>();
+    // 4row_arch X2 traversal is implemented on the DI path (routed there for MATH_ROWS==4 X2
+    // regardless of ENABLE_DIRECT_INDEXING).
+    _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
 
     for (std::uint32_t i = 0; i < KT_DIM; i++)
     {
-        _llk_math_matmul_block_<CT_DIM, RT_DIM>();
+        _llk_math_matmul_block_(CT_DIM, RT_DIM);
     }
     _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 }
@@ -119,6 +101,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_matmul.h"
 #include "params.h"
@@ -130,19 +113,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    tdma_descriptor_t tdma_desc_dst;
-    tdma_desc_dst.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_Res[0]);
-    tdma_desc_dst.buf_desc.f.lmt_addr_16B = 0;
-    tdma_desc_dst.buf_desc.f.format       = static_cast<std::uint8_t>(formats.pack_dst);
-    tdma_desc_dst.buf_desc.f.x_dim        = FACE_C_DIM;
-    tdma_desc_dst.buf_desc.f.y_dim        = FACE_R_DIM;
-    tdma_desc_dst.buf_desc.f.z_dim        = num_faces;
-    tdma_desc_dst.buf_desc_id             = buf_desc_id_dst;
-    tdma_desc_dst.reg_data_format         = static_cast<std::uint8_t>(formats.pack_src);
-
-    _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc_dst);
-    _llk_pack_matmul_init_(buf_desc_id_dst, RT_DIM, CT_DIM, 1); // Use destination buffer descriptor for packing output
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+        ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    _llk_pack_matmul_init_(
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), RT_DIM, CT_DIM, 1); // Use destination buffer descriptor for packing output
 
     _llk_pack_matmul_(0, 0);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
