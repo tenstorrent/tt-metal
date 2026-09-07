@@ -18,6 +18,8 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 
 #include "moe_fused_swiglu_bank_runs.hpp"
@@ -160,7 +162,8 @@ FORCE_INLINE void scatter_payload_to(
     uint32_t slice_tiles,
     uint32_t my_row,
     uint32_t tile_bytes) {
-    const uint32_t src = get_read_ptr(src_cb);
+    CircularBuffer src_buf(src_cb);
+    Noc noc;
     dst += my_row * slice_tiles * tile_bytes;
     const uint32_t bytes = slice_tiles * tile_bytes;
     for (uint32_t i = 0; i < workers; ++i) {
@@ -168,9 +171,14 @@ FORCE_INLINE void scatter_payload_to(
         // Worker i takes the CONTIGUOUS tile range [i*a, (i+1)*a) of MY block — contiguous because
         // the gate/up layout is `m*HN_PAD + n`, so this is ONE transaction, not m_eff strided ones.
         // It lands at MY row's slot on every peer, which is where they all expect my contribution.
-        noc_async_write(src + i * bytes, get_noc_addr(p.x, p.y, dst), bytes);
+        noc.async_write(
+            use<CircularBuffer::AddrSelector::READ_PTR>(src_buf),
+            UnicastEndpoint{},
+            bytes,
+            {.offset_bytes = i * bytes},
+            {.noc_x = p.x, .noc_y = p.y, .addr = dst});
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }
 
 FORCE_INLINE void scatter_payload(
