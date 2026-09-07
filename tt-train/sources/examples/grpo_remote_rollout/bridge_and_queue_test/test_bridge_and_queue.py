@@ -1,39 +1,38 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Two-rank tt-run test that runs the ThreadedWeightBridge and the
-RolloutQueue concurrently on separate duplicated MPI contexts.
+"""Two-rank tt-run test that runs the ThreadedWeightBridge (dict API) and
+the RolloutQueue concurrently on separate duplicated MPI contexts.
 
 Rank directions match the real fully-async trainer:
 
   * Rank 0 = TTML trainer.
-      - ``ThreadedWeightBridge.sender``: ships fresh weights to rank 1.
+      - ``ThreadedWeightBridge.sender``: ships fresh weight dicts to
+        rank 1 via ``send_weights({"w0": x0, "w1": x1})``.
       - ``RolloutQueue.consumer``: reads incoming rollout batches.
   * Rank 1 = TTT rollout worker.
-      - ``ThreadedWeightBridge.receiver``: receives weights.
+      - ``ThreadedWeightBridge.receiver``: reads weight dicts through
+        ``with bridge.poll_weights() as dicts:`` between rounds.
       - ``RolloutQueue.producer``: pushes freshly generated batches.
 
 Rank 0 main loop (mirrors the training loop):
 
-  1. Pop a rollout batch from RolloutQueue (need data before training).
-  2. Run a burst of ttnn.add on CQ0 (mock gradient work).
-  3. Every other round, push the updated weight tensor through the bridge.
+  1. Pop a rollout batch from RolloutQueue.
+  2. Run ``ttnn.add`` bursts on CQ0 (mock gradient work) on
+     ``x0`` (+1/add) and ``x1`` (+2/add).
+  3. Every other round, ``send_weights({"w0": x0, "w1": x1})`` and then
+     keep mutating x0 / x1 -- the pads are the freeze point.
 
 Rank 1 main loop:
 
   1. Push a fake rollout batch through RolloutQueue.
-  2. Between rounds, non-blockingly check the recv pad for a fresh
-     weight update; if one arrived, sample + verify + release.
+  2. ``with bridge.poll_weights() as dicts:`` non-blocking. If a fresh
+     dict is there, sample both keys under the lock and record. The lock
+     ensures the bridge cannot overwrite the pads while rank 1 reads.
 
-Verification: rank 1 ships two expected-checksum lists to rank 0 at the
-end (one per channel). Rank 0 compares and prints one PASS/FAIL per
-channel plus a top-level [COMBINED PASS] / [COMBINED FAIL].
-
-Purpose: proves the two duplicated MPI contexts truly progress in
-parallel under MPI_THREAD_MULTIPLE. If the ttml DistributedContext
-bindings ever regress and stop releasing the GIL, this test will
-deadlock in a way that ``test_threaded_bridge.py`` and
-``test_rollout_queue.py`` alone might not catch.
+Verification: rank 1 ships two expected-summary lists at the end
+(rollout checksums + observed weight first-elems per key). Rank 0
+prints PASS/FAIL per channel plus a top-level ``[COMBINED PASS]``.
 """
 
 from __future__ import annotations
@@ -44,7 +43,7 @@ import struct
 import sys
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import torch
 
@@ -59,29 +58,24 @@ from weight_bridge import ThreadedWeightBridge  # noqa: E402
 
 
 # ---- knobs -------------------------------------------------------------------
-TTML_RANK: int = 0  # weight sender + rollout consumer
-TTT_RANK: int = 1  # weight receiver + rollout producer
+TTML_RANK: int = 0
+TTT_RANK: int = 1
 
 MESH_SHAPE: tuple = (1, 1)
 NUM_CQS: int = 2
 
-# Weight bridge pad shape (matches test_threaded_bridge.py).
 PAD_SHAPE: tuple = (64, 64)
 PAD_TTNN_DTYPE = ttnn.float32
 PAD_TORCH_DTYPE = torch.float32
 
-# Rollout batch shape.
 BATCH_B: int = 4
 MAX_COMPLETION_LEN: int = 32
 PROMPT_LEN: int = 6
 
 N_ROUNDS: int = 6
 QUEUE_CAPACITY: int = 2
-
-# Ticks (ttnn.add calls) per round on rank 0 -- mock gradient work.
 ADDS_PER_ROUND: int = 200
 
-# Reserved MPI tags on the world context for the end-of-test summary handoff.
 _TAG_QUEUE_SUMMARY_LEN: int = 998
 _TAG_QUEUE_SUMMARY_BODY: int = 999
 _TAG_BRIDGE_SUMMARY_LEN: int = 996
@@ -96,8 +90,17 @@ def _open_mesh() -> "ttnn.MeshDevice":
     )
 
 
+def _fresh(mesh: "ttnn.MeshDevice", value: float) -> "ttnn.Tensor":
+    return ttnn.from_torch(
+        torch.full(PAD_SHAPE, value, dtype=PAD_TORCH_DTYPE),
+        dtype=PAD_TTNN_DTYPE,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
 def _build_batch(batch_id: int, weight_version: int) -> RolloutBatch:
-    """Deterministic fake batch keyed on batch_id."""
     torch.manual_seed(1000 + batch_id)
     prompts = [[(batch_id * 100 + p * 10 + t) % 32000 for t in range(PROMPT_LEN)] for p in range(BATCH_B)]
     completions = [
@@ -120,46 +123,30 @@ def _batch_checksum(batch: RolloutBatch) -> float:
 
 
 def _ttml_main() -> None:
-    """Rank 0: weight bridge sender + rollout queue consumer."""
+    """Rank 0: weight bridge sender (dict API) + rollout queue consumer."""
     print(f"[rank {TTML_RANK}] TTML: opening mesh with num_command_queues={NUM_CQS}...", flush=True)
     mesh = _open_mesh()
 
-    bridge = ThreadedWeightBridge.sender(
-        peer_rank=TTT_RANK,
-        mesh_device=mesh,
-        shape=PAD_SHAPE,
-        dtype=PAD_TTNN_DTYPE,
-    )
+    bridge = ThreadedWeightBridge.sender(peer_rank=TTT_RANK, mesh_device=mesh)
     q = RolloutQueue.consumer(peer_rank=TTT_RANK, capacity=QUEUE_CAPACITY)
 
     try:
-        # Live "weights" tensor for the bridge sender path.
-        x = ttnn.from_torch(
-            torch.zeros(*PAD_SHAPE, dtype=PAD_TORCH_DTYPE),
-            dtype=PAD_TTNN_DTYPE,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        one = ttnn.from_torch(
-            torch.ones(*PAD_SHAPE, dtype=PAD_TORCH_DTYPE),
-            dtype=PAD_TTNN_DTYPE,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        x0 = _fresh(mesh, 0.0)
+        x1 = _fresh(mesh, 100.0)
+        one = _fresh(mesh, 1.0)
+        two = _fresh(mesh, 2.0)
 
-        # Order matters: bridge.connect() and q.connect() are collective on
-        # duplicated MPI contexts; both ranks must call in the same order.
+        # Both connect calls are collective on their own duplicated context;
+        # both ranks must call in the same order.
         bridge.connect()
         q.connect()
         print(f"[rank {TTML_RANK}] TTML: both channels connected", flush=True)
 
         received_rollout_checksums: List[float] = []
-        pushed_weight_first_elems: List[float] = []
+        pushed_weight_snapshots: List[dict] = []
 
         for r in range(N_ROUNDS):
-            # 1) Pop a rollout batch (need data before training).
+            # 1) Pop a rollout batch.
             batch = q.pop()
             if batch is None:
                 print(f"[rank {TTML_RANK}] TTML: queue closed early at round {r}; breaking", flush=True)
@@ -174,30 +161,36 @@ def _ttml_main() -> None:
             # 2) Mock gradient work on CQ0.
             t0 = time.perf_counter()
             for _ in range(ADDS_PER_ROUND):
-                x = ttnn.add(x, one)
+                x0 = ttnn.add(x0, one)
+                x1 = ttnn.add(x1, two)
             burst_ms = (time.perf_counter() - t0) * 1000.0
 
-            # 3) Every other round, push the updated weight tensor.
+            # 3) Every other round, push the updated weight dict.
             if r % 2 == 0:
-                first_elem = float(ttnn.to_torch(x, cq_id=0)[0, 0])
-                pushed_weight_first_elems.append(first_elem)
-                bridge.push_tensor(x)
+                first0 = float(ttnn.to_torch(x0, cq_id=0)[0, 0])
+                first1 = float(ttnn.to_torch(x1, cq_id=0)[0, 0])
+                pushed_weight_snapshots.append({"w0": first0, "w1": first1})
+                bridge.send_weights({"w0": x0, "w1": x1})
+                # Deliberate mutation after send_weights returns.
+                for _ in range(ADDS_PER_ROUND):
+                    x0 = ttnn.add(x0, one)
+                    x1 = ttnn.add(x1, two)
                 print(
-                    f"[rank {TTML_RANK}] round {r}: pushed weight ({ADDS_PER_ROUND} adds "
-                    f"took {burst_ms:.1f}ms, first_elem={first_elem})",
+                    f"[rank {TTML_RANK}] round {r}: pushed weight dict "
+                    f"({ADDS_PER_ROUND} adds took {burst_ms:.1f}ms; then another "
+                    f"{ADDS_PER_ROUND} post-push mutations; w0={first0}, w1={first1})",
                     flush=True,
                 )
             else:
                 print(
                     f"[rank {TTML_RANK}] round {r}: {ADDS_PER_ROUND} adds took {burst_ms:.1f}ms "
-                    f"(no push this round)",
+                    "(no push this round)",
                     flush=True,
                 )
 
         print(f"[rank {TTML_RANK}] TTML: main loop done; closing bridge", flush=True)
         bridge.close()
 
-        # Read verification summaries shipped by rank 1.
         (n,) = struct.unpack("<I", ttnn.distributed_context_recv_bytes(4, TTT_RANK, _TAG_QUEUE_SUMMARY_LEN))
         expected_rollout = json.loads(
             ttnn.distributed_context_recv_bytes(int(n), TTT_RANK, _TAG_QUEUE_SUMMARY_BODY).decode()
@@ -208,10 +201,7 @@ def _ttml_main() -> None:
         )
 
         queue_ok = expected_rollout == received_rollout_checksums
-        # The bridge summary is the list of first_elem values we pushed;
-        # rank 1 confirms which ones it observed. We just check that our
-        # pushed list matches rank 1's observed list.
-        bridge_ok = expected_bridge == pushed_weight_first_elems
+        bridge_ok = expected_bridge == pushed_weight_snapshots
 
         print(
             f"[rank {TTML_RANK}] rollout channel: {'PASS' if queue_ok else 'FAIL'} "
@@ -221,7 +211,7 @@ def _ttml_main() -> None:
         )
         print(
             f"[rank {TTML_RANK}] bridge channel:  {'PASS' if bridge_ok else 'FAIL'} "
-            f"pushed={pushed_weight_first_elems} rank1_saw={expected_bridge}",
+            f"pushed={pushed_weight_snapshots} rank1_saw={expected_bridge}",
             flush=True,
         )
 
@@ -241,16 +231,11 @@ def _ttml_main() -> None:
 
 
 def _ttt_main() -> None:
-    """Rank 1: weight bridge receiver + rollout queue producer."""
+    """Rank 1: weight bridge receiver (dict API) + rollout queue producer."""
     print(f"[rank {TTT_RANK}] TTT: opening mesh with num_command_queues={NUM_CQS}...", flush=True)
     mesh = _open_mesh()
 
-    bridge = ThreadedWeightBridge.receiver(
-        peer_rank=TTML_RANK,
-        mesh_device=mesh,
-        shape=PAD_SHAPE,
-        dtype=PAD_TTNN_DTYPE,
-    )
+    bridge = ThreadedWeightBridge.receiver(peer_rank=TTML_RANK, mesh_device=mesh)
     q = RolloutQueue.producer(peer_rank=TTML_RANK, capacity=QUEUE_CAPACITY)
 
     try:
@@ -259,7 +244,7 @@ def _ttt_main() -> None:
         print(f"[rank {TTT_RANK}] TTT: both channels connected", flush=True)
 
         pushed_rollout_checksums: List[float] = []
-        observed_weight_first_elems: List[float] = []
+        observed_weight_snapshots: List[dict] = []
 
         for r in range(N_ROUNDS):
             # 1) Push a fake rollout batch.
@@ -272,27 +257,26 @@ def _ttt_main() -> None:
                 flush=True,
             )
 
-            # 2) Between rounds, check for a fresh weight update from rank 0.
-            #    Try a bounded number of times so we don't block forever if
-            #    rank 0 is running an odd-round (no push).
-            _drain_weight_pad_if_ready(bridge, observed_weight_first_elems, max_attempts=5)
+            # 2) Between rounds, non-blockingly poll for a fresh weight dict.
+            _drain_weight_bridge_once(bridge, observed_weight_snapshots)
 
             time.sleep(0.05)
 
-        # After the main loop, drain any remaining pending weight updates.
-        # Rank 0 might have pushed a weight in its last "even" round after
-        # we already advanced past it.
-        _drain_weight_pad_if_ready(bridge, observed_weight_first_elems, max_attempts=20)
+        # After the main loop, drain any remaining pending weight dicts.
+        for _ in range(20):
+            drained = _drain_weight_bridge_once(bridge, observed_weight_snapshots)
+            if not drained:
+                break
+            time.sleep(0.02)
 
         print(f"[rank {TTT_RANK}] TTT: main loop done; closing queue", flush=True)
         q.close()
 
-        # Ship two summaries so rank 0 can print PASS/FAIL for both channels.
         body = json.dumps(pushed_rollout_checksums).encode()
         ttnn.distributed_context_send_bytes(struct.pack("<I", len(body)), TTML_RANK, _TAG_QUEUE_SUMMARY_LEN)
         ttnn.distributed_context_send_bytes(body, TTML_RANK, _TAG_QUEUE_SUMMARY_BODY)
 
-        body = json.dumps(observed_weight_first_elems).encode()
+        body = json.dumps(observed_weight_snapshots).encode()
         ttnn.distributed_context_send_bytes(struct.pack("<I", len(body)), TTML_RANK, _TAG_BRIDGE_SUMMARY_LEN)
         ttnn.distributed_context_send_bytes(body, TTML_RANK, _TAG_BRIDGE_SUMMARY_BODY)
         print(f"[rank {TTT_RANK}] TTT: shipped both summaries", flush=True)
@@ -306,39 +290,28 @@ def _ttt_main() -> None:
             print(f"[rank {TTT_RANK}] close_mesh_device: {type(e).__name__}: {e}", flush=True)
 
 
-def _drain_weight_pad_if_ready(
-    bridge: "ThreadedWeightBridge",
-    observed: List[float],
-    *,
-    max_attempts: int,
-) -> None:
-    """Consume as many pending weight pads as are currently ready.
+def _drain_weight_bridge_once(bridge: "ThreadedWeightBridge", observed: List[dict]) -> bool:
+    """Non-blockingly try to read ONE weight dict from the bridge.
 
-    The bridge's ``acquire_recv_pad`` blocks until a message arrives, so we
-    use ``has_data`` peek + a short spin. If nothing is pending after
-    ``max_attempts`` tiny sleeps, we give up and return; a future round
-    will pick up whatever arrived after.
+    Returns True if a dict was consumed; False otherwise. Uses the
+    ``poll_weights`` context manager, so the lock is held across the read
+    when a dict is available.
     """
-    for _ in range(max_attempts):
-        # Grab the pad only if the receiver bridge has landed something.
-        # There is no non-blocking primitive on the bridge yet; approximate
-        # it by peeking the has_data flag (unsafe but harmless in this test)
-        # and only calling acquire when we expect it to return promptly.
-        if not getattr(bridge, "_has_data", False):
-            time.sleep(0.01)
-            continue
-        pad = bridge.acquire_recv_pad()
-        if pad is None:
-            return
-        try:
-            first_elem = float(ttnn.to_torch(pad, cq_id=0)[0, 0])
-            observed.append(first_elem)
-            print(
-                f"[rank {TTT_RANK}] observed fresh weight first_elem={first_elem}",
-                flush=True,
-            )
-        finally:
-            bridge.release_recv_pad()
+    with bridge.poll_weights() as dicts:
+        if dicts is None:
+            return False
+        dev_dict = dicts[0]
+        if not dev_dict:
+            return False
+        entry: dict = {}
+        for k in sorted(dev_dict.keys()):
+            entry[k] = float(ttnn.to_torch(dev_dict[k], cq_id=0)[0, 0])
+    observed.append(entry)
+    print(
+        f"[rank {TTT_RANK}] observed fresh weight dict " + " ".join(f"{k}={v}" for k, v in entry.items()),
+        flush=True,
+    )
+    return True
 
 
 def main() -> None:
