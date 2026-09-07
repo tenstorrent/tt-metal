@@ -33,7 +33,10 @@ FORCE_INLINE void load_weight_block(
     weights.push_back(4 * block_ct);
 }
 
-template <uint32_t block_ct, uint32_t num_blocks>
+// Rows of causal history per fragment: one fewer than the four learned taps.
+constexpr uint32_t history_rows_per_plane = 3;
+
+template <uint32_t block_ct, uint32_t num_blocks, uint32_t wrap_row>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
@@ -63,16 +66,29 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             load_weight_block<block_ct>(noc, weights, tap0, tap1, tap2, tap3, tile_bytes, ct_start);
         }
 
+        // A wrap restarts the causal stream mid-buffer. wrap_row is tile aligned, so
+        // this whole 32-row output tile lies on one side of it: rows below the wrap
+        // reach back into history plane 0, rows at or above it into plane 1. With
+        // wrap_row == 0 both terms fold away at compile time.
+        int32_t row_floor = 0;
+        uint32_t history_plane = 0;
+        if constexpr (wrap_row != 0) {
+            if (mt * tile_height >= wrap_row) {
+                row_floor = static_cast<int32_t>(wrap_row);
+                history_plane = history_rows_per_plane;
+            }
+        }
+
         for (uint32_t tap = 0; tap < 4; ++tap) {
             activation.reserve_back(block_ct);
             for (uint32_t row = 0; row < tile_height; ++row) {
                 const int32_t source_row = static_cast<int32_t>(mt * tile_height + row + tap) - 3;
-                if (source_row < 0) {
+                if (source_row < row_floor) {
                     noc.async_read(
                         history,
                         activation,
                         block_row_bytes,
-                        {.page_id = static_cast<uint32_t>(source_row + 3),
+                        {.page_id = static_cast<uint32_t>(source_row - row_floor + 3) + history_plane,
                          .offset_bytes = ct_start * block_offset_scale},
                         {.offset_bytes = row * block_row_bytes});
                 } else {
