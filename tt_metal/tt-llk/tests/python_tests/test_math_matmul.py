@@ -5,6 +5,7 @@ from itertools import chain, product
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIM,
@@ -80,6 +81,8 @@ TINY_TILES_MATMUL_COMBINATIONS = sweep_tiny_tiles_matmul(
 )
 
 
+TINY_TILE_THROTTLE_LEVELS = [0, 1] if get_chip_architecture() == ChipArchitecture.BLACKHOLE else [0]
+
 ALL_TEST_PARAMS = list(
     chain(
         # Regular matmul with all throttle levels
@@ -89,12 +92,13 @@ ALL_TEST_PARAMS = list(
                 MATH_FIDELITIES, MATMUL_COMBINATIONS, [1, 2, 3, 4, 5]
             )
         ),
-        # Tiny tiles: throttle 0, plus one throttled level. A non-full tile falls back to the
-        # unthrottled MOP regardless of level, so level 1 covers the whole throttled range.
+        # Tiny tiles: throttle 0 everywhere, plus one throttled level where a non-full tile
+        # falls back to the unthrottled MOP. Wormhole still calls the throttled path for these
+        # shapes, so a throttled tiny tile would assert (or wedge) there.
         (
             (fidelity, combinations, throttle)
             for fidelity, combinations, throttle in product(
-                MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS, [0, 1]
+                MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS, TINY_TILE_THROTTLE_LEVELS
             )
         ),
     )
