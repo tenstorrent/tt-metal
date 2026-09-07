@@ -16,13 +16,15 @@ import pandas as pd
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-sys.path.insert(0, str(REPO_ROOT / "tools" / "tracy"))
+sys.path.insert(0, str(REPO_ROOT / "tools"))
 
-from perf_counter_analysis import (
+from tracy import perf_metrics_common as mc
+from tracy.perf_counter_analysis import (
     COUNTER_TYPE_NAMES,
     PERF_COUNTER_CSV_HEADERS,
     compute_device_only_metrics,
     compute_perf_counter_metrics,
+    extract_perf_counters,
     quasar_l1_client_label,
 )
 
@@ -80,14 +82,22 @@ QUASAR_CAPTURE_TYPES = (
     + ["L1_CLIENT_UNPACK0_IF0_LANE3_SBANK_POP"]
 )
 
+# Display names follow the engine's families: "Thread N Stall Rate", "<CLASS> Instrn Avail Rate TN",
+# "<Reason> Rate" / "<Reason> Share", and the l1_client counter's own name plus " Rate".
 QUASAR_EXPECTED_METRICS = [
-    "Thread 3 Issue Stall Rate",
+    "Thread 3 Stall Rate",
     "T3 Instrn Issue Rate",
     "SrcA Stall Math Rate",
+    "SrcA Stall Math Share",
     "Dest Stall Pack Rate",
     "XSEARCH Instrn Avail Rate T0",
     "INSTISSUE Instrn Avail Rate T3",
     "CFG Instrn Avail Rate T3",
+    "Unpacker2 Busy T0 Util",
+    "SrcA Write T1 Share",
+    "Math Src Data Ready Rate",
+    "FPU SFPU Overlap",
+    "T3 Instrn Per Issue-Ready Cycle",
     "L1_CLIENT_UNPACK0_IF0_LANE3_SBANK_POP Rate",
 ]
 
@@ -123,6 +133,10 @@ def test_counter_type_names_match_enum():
     assert len(COUNTER_TYPE_NAMES) == len(enum_names)
     for ordinal, name in COUNTER_TYPE_NAMES.items():
         assert enum_names[ordinal] == name, f"ordinal {ordinal}: table says {name}, enum says {enum_names[ordinal]}"
+    # The Quasar block is appended after the Blackhole L1 bank 5 group, so no tt-1xx ordinal moved.
+    assert enum_names[enum_names.index("ANY_THREAD_STALL") + 1] == "L1_5_EXT_UNPACKER_13"
+    assert enum_names.index("L1_5_EXT_UNPACKER_14_GRANT") < enum_names.index("CFG_INSTRN_AVAILABLE_3")
+    assert enum_names[-1] == "UNPACK2_BUSY_THREAD0"
 
 
 def test_l1_client_labels_cover_all_subport_ranges():
@@ -137,11 +151,18 @@ def test_l1_client_labels_cover_all_subport_ranges():
 
 def test_quasar_capture_produces_quasar_metrics_per_op():
     df = make_capture(QUASAR_CAPTURE_TYPES, "QUASAR_NEO{}", 4)
-    stats = compute_perf_counter_metrics(df, "quasar", total_compute_cores=4)["per_op_stats"]
+    result = compute_perf_counter_metrics(df, "quasar", total_compute_cores=4)
+    stats = result["per_op_stats"]
     for metric in QUASAR_EXPECTED_METRICS:
         assert metric in stats, metric
         values = stats[metric]["avg"]
         assert values and all(v == v for v in values.values()), f"{metric} produced NaN"
+    # Every Quasar metric the engine declares is a real column here (nothing read a fake 0 or None).
+    quasar_labels = {mc.METRIC_LABELS[k] for k in mc.METRIC_LABELS if k.startswith("thread3_")}
+    assert quasar_labels <= set(stats)
+    # Four NEO readers on four cores: the raw counts average per record, not per compute core.
+    fpu = df[df["counter type"] == "FPU_COUNTER"]["value"]
+    assert result["per_op_counts"]["avg_fpu_count"][(1, 0)] == pytest.approx(fpu.mean())
 
 
 def test_quasar_capture_produces_quasar_metrics_device_only():
@@ -233,3 +254,41 @@ def test_absent_l1_noc_counters_give_nan_not_zero():
         if metric in agg:
             vals = [v for stat in agg[metric].values() for v in (stat.values() if isinstance(stat, dict) else [stat])]
             assert all(v != v for v in vals if isinstance(v, float)), (metric, vals)
+
+
+def test_extract_labels_neo_and_l1_client_selection():
+    # Quasar records arrive under a TRISC's label with the NEO and the l1_client selection in the metadata;
+    # the frame must carry the NEO as the reader and the selection as the counter's own name.
+    def event(counter_type, neo, sel=None, risc="QUASAR_NEO2_TRISC1"):
+        md = f"'counter type': {counter_type}; 'ref cnt': 5000; 'value': 250; 'neo': {neo}"
+        if sel is not None:
+            md += f"; 'counter sel': {sel}"
+        return ({"id": 9090, "run_host_id": 7, "trace_id_count": 0, "meta_data": "{" + md + "}"}, 123, 0, risc, (2, 3))
+
+    l1_client_ordinal = next(k for k, v in COUNTER_TYPE_NAMES.items() if v == "QUASAR_L1_CLIENT_EVENT")
+    fpu_ordinal = next(k for k, v in COUNTER_TYPE_NAMES.items() if v == "FPU_COUNTER")
+    df = extract_perf_counters(
+        [
+            event(fpu_ordinal, 2),
+            event(l1_client_ordinal, 2, sel=5 * 8 + 1),
+            event(fpu_ordinal, 0, risc="BRISC"),
+        ]
+    )
+    assert list(df["risc_type"]) == ["QUASAR_NEO2", "QUASAR_NEO2", "BRISC"]
+    assert list(df["counter type"]) == ["FPU_COUNTER", "L1_CLIENT_UNPACK0_IF0_LANE0_SBANK_POP", "FPU_COUNTER"]
+    per_op = compute_perf_counter_metrics(df, "quasar", 1)["per_op_stats"]
+    rate = per_op["L1_CLIENT_UNPACK0_IF0_LANE0_SBANK_POP Rate"]["avg"][(7, 0)]
+    assert rate == pytest.approx(250 / 5000 * 100)
+
+
+def test_quasar_metrics_are_none_without_their_counters():
+    # An INSTRN-only tt-1xx capture must not produce thread 3 or stall-reason values from absent counters.
+    df = make_capture(["THREAD_STALLS_0", "THREAD_INSTRUCTIONS_0", "CFG_INSTRN_AVAILABLE_1"], "BRISC", 1)
+    stats = compute_perf_counter_metrics(df, "blackhole", 1)["per_op_stats"]
+    assert "Thread 0 Stall Rate" in stats and "CFG Instrn Avail Rate T1" in stats
+    for absent in ("Thread 3 Stall Rate", "T3 Instrn Issue Rate", "SrcA Stall Math Rate", "SrcA Stall Math Share"):
+        assert absent not in stats, absent
+    # One captured stall reason has no share: a share needs at least two reasons to compare.
+    df = make_capture(["THREAD_STALLS_3", "SRCA_STALL_MATH"], "QUASAR_NEO{}", 1)
+    stats = compute_perf_counter_metrics(df, "quasar", 1)["per_op_stats"]
+    assert "SrcA Stall Math Rate" in stats and "SrcA Stall Math Share" not in stats

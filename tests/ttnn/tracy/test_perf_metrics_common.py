@@ -249,3 +249,89 @@ def test_tech_report_catalogue_matches_metric_labels_exactly():
         assert key not in catalogue, f"duplicate catalogue row for {key}"
         catalogue[key] = re.sub(r" \((%|ratio)\)$", "", label_unit)
     assert catalogue == mc.METRIC_LABELS
+
+
+def test_quasar_families_gate_on_their_counters():
+    # A tt-1xx capture has no thread 3, no XSEARCH class and no thread-ORed stall reasons: all None.
+    out = mc.compute_metrics(_View({"THREAD_STALLS_0": 100.0, "THREAD_INSTRUCTIONS_0": 900.0}))
+    assert out["thread3_stall_pct"] is None
+    assert out["thread3_ipc_pct"] is None
+    assert out["xsearch_instrn_avail_t0_pct"] is None
+    assert out["srca_stall_math_pct"] is None
+    assert out["srca_stall_math_share_pct"] is None
+    assert out["unpack2_busy_t0_pct"] is None
+    assert out["thread0_instrn_per_ready_cycle_ratio"] == 900.0 / 1900.0
+    # The per-ready-cycle ratio needs the thread's stall counter for its denominator.
+    assert mc.compute_metrics(_View({"THREAD_INSTRUCTIONS_0": 900.0}))["thread0_instrn_per_ready_cycle_ratio"] is None
+    out = mc.compute_metrics(
+        _View(
+            {
+                "THREAD_STALLS_3": 500.0,
+                "THREAD_INSTRUCTIONS_3": 900.0,
+                "XSEARCH_INSTRN_AVAILABLE_0": 200.0,
+                "UNPACK2_BUSY_THREAD0": 1000.0,
+                "MATH_SRC_DATA_READY": 400.0,
+            }
+        )
+    )
+    assert out["thread3_stall_pct"] == 25.0
+    assert out["thread3_ipc_pct"] == 45.0
+    assert out["xsearch_instrn_avail_t0_pct"] == 10.0
+    assert out["unpack2_busy_t0_pct"] == 50.0
+    assert out["math_src_data_ready_pct"] == 20.0
+    # 900 instructions over the 1500 cycles thread 3 was not stalled.
+    assert out["thread3_instrn_per_ready_cycle_ratio"] == 0.6
+
+def test_stall_reason_shares_need_two_reasons():
+    out = mc.compute_metrics(_View({"SRCA_STALL_MATH": 300.0}))
+    assert out["srca_stall_math_pct"] == 15.0
+    assert out["srca_stall_math_share_pct"] is None
+    out = mc.compute_metrics(_View({"SRCA_STALL_MATH": 300.0, "DEST_STALL_PACK": 100.0}))
+    assert out["srca_stall_math_share_pct"] == 75.0
+    assert out["dest_stall_pack_share_pct"] == 25.0
+    # Every reason has a rate and a share in the vocabulary; the fifteen match the Quasar INSTRN readout.
+    assert len(mc.STALL_REASON_COUNTERS) == 15
+    for stem in mc.STALL_REASON_COUNTERS:
+        assert f"{stem}_pct" in mc.METRIC_LABELS and f"{stem}_share_pct" in mc.METRIC_LABELS
+
+def test_fpu_sfpu_overlap_and_thread1_write_shares():
+    out = mc.compute_metrics(_View({"FPU_COUNTER": 800.0, "SFPU_COUNTER": 600.0, "MATH_COUNTER": 1000.0}))
+    assert out["fpu_sfpu_overlap_pct"] == 20.0  # (800 + 600 - 1000) / 2000
+    out = mc.compute_metrics(_View({"FPU_COUNTER": 800.0, "MATH_COUNTER": 1000.0}))
+    assert out["fpu_sfpu_overlap_pct"] is None
+    out = mc.compute_metrics(
+        _View(
+            {
+                "SRCA_WRITE_THREAD0": 300.0,
+                "SRCA_WRITE_THREAD1": 100.0,
+                "SRCB_WRITE_THREAD0": 0.0,
+                "SRCB_WRITE_THREAD1": 50.0,
+            }
+        )
+    )
+    assert out["srca_write_thread0_share_pct"] == 75.0
+    assert out["srca_write_thread1_share_pct"] == 25.0
+    assert out["srcb_write_thread1_share_pct"] == 100.0
+
+def test_l1_client_rates_are_dynamic_and_round_trip_their_labels():
+    names = ["L1_CLIENT_UNPACK0_IF0_LANE0_SBANK_POP", "L1_CLIENT_UNPACK0_IF0_LANE0_ISSUE_STALL_CARRY"]
+    view = _View({n: 100.0 for n in names}, cycles=10000.0)
+    out = mc.compute_l1_client_metrics(view, names + ["FPU_COUNTER"])
+    assert out == {
+        "l1_client_unpack0_if0_lane0_sbank_pop_pct": 1.0,
+        "l1_client_unpack0_if0_lane0_issue_stall_carry_pct": 4.0,  # carries pulse once per four lanes
+    }
+    for key in out:
+        assert mc.metric_label(key).endswith(" Rate")
+        assert mc.metric_label(key)[: -len(" Rate")] in names
+    assert mc.metric_label("fpu_utilization_pct") == "FPU Util"
+    # Nothing dynamic leaks into the static vocabulary the CSV headers and the LLK gate derive from.
+    assert not any(k.startswith("l1_client_") for k in mc.METRIC_LABELS)
+    assert mc.compute_l1_client_metrics(_View({}), names) == {}
+
+def test_l1_client_labels_cover_every_subport_range():
+    assert mc.quasar_l1_client_label(0) == "L1_CLIENT_TRISC0_UNUSED"
+    assert mc.quasar_l1_client_label(4 * 8 + 7) == "L1_CLIENT_THCON_ORDER_FIFO_ACTIVE"
+    assert mc.quasar_l1_client_label(5 * 8 + 1) == "L1_CLIENT_UNPACK0_IF0_LANE0_SBANK_POP"
+    assert mc.quasar_l1_client_label(24 * 8 + 3) == "L1_CLIENT_UNPACK2_IF0_LANE3_ISSUE_WORK_CARRY"
+    assert mc.quasar_l1_client_label(36 * 8 + 6) == "L1_CLIENT_PACK1_IF0_LANE3_PENDING_REQS_CARRY"
