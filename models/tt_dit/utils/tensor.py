@@ -555,6 +555,126 @@ def _reassemble_2d(
     return shards[0]
 
 
+def _local_shards_multihost(
+    tt_tensor: ttnn.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    concat_dims: list[int | None],
+    ccl_manager,
+    pre_transfer_fn: Callable[[ttnn.Tensor], ttnn.Tensor] | None,
+    use_persistent_buffer: bool,
+    root: int | None = None,
+):
+    """Multi-host half of `fast_device_to_host`: on-device inter-host gather + re-shard, then local DMA.
+
+    Returns ``(local_coords, shards, logical_shape, local_mesh_shape)`` -- this rank's zero-copy per-device
+    shards after the re-shard, with 0-based coordinates in the local mesh, exactly what `_reassemble_2d`
+    consumes -- or ``None`` when `root` is set and this is not the root rank. Shared by the concatenating
+    `fast_device_to_host` and the per-shard `fast_device_to_host_shards`.
+    """
+    mesh_shape = tuple(mesh_device.shape)
+    if ccl_manager is None:
+        msg = "fast_device_to_host requires ccl_manager in a distributed (multi-host) environment"
+        raise ValueError(msg)
+
+    view = mesh_device.get_view()
+    rank = int(ttnn.distributed_context_get_rank())
+
+    inter_host_axis = _get_inter_host_axis(mesh_device, view, mesh_shape)
+    intra_host_axis = 1 - inter_host_axis
+
+    # Step 1: On-device all_gather + repeat + mesh_partition.
+    # All_gather replicates the inter-host axis.  Repeat + mesh_partition
+    # then re-shard it so every local device holds *unique* data,
+    # maximising PCIe bandwidth during the DMA read.
+    gathered_tensor = tt_tensor
+    inter_dim = concat_dims[inter_host_axis]
+    if inter_dim is not None and mesh_shape[inter_host_axis] > 1:
+        gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.TILE_LAYOUT)
+        gathered_tensor = ccl_manager.all_gather(
+            gathered_tensor,
+            dim=inter_dim,
+            mesh_axis=inter_host_axis,
+            use_hyperparams=True,
+            use_persistent_buffer=use_persistent_buffer,
+        )
+
+        n_hosts = int(ttnn.distributed_context_get_size())
+        if n_hosts > 1:
+            # A TILE-layout all_gather/repeat/mesh_partition is only safe when
+            # BOTH of the last two dims are tile-aligned. If the second-to-last
+            # dim (H) is not a multiple of TILE_SIZE, its tile padding makes the
+            # TILE repeat/mesh_partition interleave H rows across the shards ->
+            # horizontal-band noise corruption on multi-host (single-host skips
+            # this block, hence 4x8 was clean but 4x32 corrupted). Predict the
+            # per-chip shape after repeat (× n_hosts) and mesh_partition
+            # (÷ inter_axis_size) on inter_dim, and drop to ROW_MAJOR unless
+            # BOTH last dims are tile-aligned (matches the known-good behavior).
+            post_shape = list(gathered_tensor.shape)
+            post_shape[inter_dim] = post_shape[inter_dim] * n_hosts // mesh_shape[inter_host_axis]
+            if post_shape[-1] % ttnn.TILE_SIZE != 0 or post_shape[-2] % ttnn.TILE_SIZE != 0:
+                gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
+
+            repeat_dims = [1] * len(gathered_tensor.shape)
+            repeat_dims[inter_dim] = n_hosts
+            gathered_tensor = ttnn.repeat(gathered_tensor, repeat_dims)
+            gathered_tensor = ttnn.mesh_partition(gathered_tensor, dim=inter_dim, cluster_axis=inter_host_axis)
+
+        if pre_transfer_fn is not None:
+            gathered_tensor = pre_transfer_fn(gathered_tensor)
+        else:
+            gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    elif pre_transfer_fn is not None:
+        gathered_tensor = pre_transfer_fn(gathered_tensor)
+
+    # Step 2: Only root rank (if specified) does D2H.
+    if root is not None and rank != root:
+        return None
+
+    # Step 3: DMA all local shards and reassemble on host.
+    # Single .cpu() on the mesh tensor batches all local DMA reads into
+    # one C++ dispatch — the reader thread pool processes all device
+    # completion queues in parallel.
+    host_tensor = gathered_tensor.cpu(blocking=False)
+    ttnn.synchronize_device(mesh_device)
+
+    # Extract local shard buffers via get_shard (zero-copy, no MPI).
+    host_mesh_coords = list(host_tensor.tensor_topology().mesh_coords())
+    distributed_buf = host_tensor.host_buffer()
+    tt_dtype = host_tensor.dtype
+    padded_shape = list(host_tensor.padded_shape)
+    logical_shape = list(host_tensor.shape)
+    trim = tuple(slice(0, d) for d in logical_shape)
+
+    local_coords_and_bufs = []
+    for c in host_mesh_coords:
+        if not view.is_local(c):
+            continue
+        buf = distributed_buf.get_shard(c)
+        if buf is not None:
+            local_coords_and_bufs.append((c, buf))
+
+    shards = [_host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim] for _, buf in local_coords_and_bufs]
+
+    # Build local mesh shape and 0-based coordinates for _reassemble_2d.
+    local_inter_positions = sorted({int(c[inter_host_axis]) for c, _ in local_coords_and_bufs})
+    local_intra_positions = sorted({int(c[intra_host_axis]) for c, _ in local_coords_and_bufs})
+    local_mesh_shape = [0, 0]
+    local_mesh_shape[inter_host_axis] = len(local_inter_positions)
+    local_mesh_shape[intra_host_axis] = len(local_intra_positions)
+    local_mesh_shape = tuple(local_mesh_shape)
+
+    inter_remap = {pos: i for i, pos in enumerate(local_inter_positions)}
+    intra_remap = {pos: i for i, pos in enumerate(local_intra_positions)}
+    local_coords = []
+    for c, _ in local_coords_and_bufs:
+        coord = [0, 0]
+        coord[inter_host_axis] = inter_remap[int(c[inter_host_axis])]
+        coord[intra_host_axis] = intra_remap[int(c[intra_host_axis])]
+        local_coords.append(tuple(coord))
+
+    return local_coords, shards, logical_shape, local_mesh_shape
+
+
 def fast_device_to_host(
     tt_tensor: ttnn.Tensor,
     mesh_device: ttnn.MeshDevice,
@@ -612,106 +732,12 @@ def fast_device_to_host(
 
     # --- Multi-host: hybrid on-device collective + fast local DMA -----------
     if ttnn.using_distributed_env():
-        if ccl_manager is None:
-            msg = "fast_device_to_host requires ccl_manager in a distributed (multi-host) environment"
-            raise ValueError(msg)
-
-        view = mesh_device.get_view()
-        rank = int(ttnn.distributed_context_get_rank())
-
-        inter_host_axis = _get_inter_host_axis(mesh_device, view, mesh_shape)
-        intra_host_axis = 1 - inter_host_axis
-
-        # Step 1: On-device all_gather + repeat + mesh_partition.
-        # All_gather replicates the inter-host axis.  Repeat + mesh_partition
-        # then re-shard it so every local device holds *unique* data,
-        # maximising PCIe bandwidth during the DMA read.
-        gathered_tensor = tt_tensor
-        inter_dim = concat_dims[inter_host_axis]
-        if inter_dim is not None and mesh_shape[inter_host_axis] > 1:
-            gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.TILE_LAYOUT)
-            gathered_tensor = ccl_manager.all_gather(
-                gathered_tensor,
-                dim=inter_dim,
-                mesh_axis=inter_host_axis,
-                use_hyperparams=True,
-                use_persistent_buffer=use_persistent_buffer,
-            )
-
-            n_hosts = int(ttnn.distributed_context_get_size())
-            if n_hosts > 1:
-                # A TILE-layout all_gather/repeat/mesh_partition is only safe when
-                # BOTH of the last two dims are tile-aligned. If the second-to-last
-                # dim (H) is not a multiple of TILE_SIZE, its tile padding makes the
-                # TILE repeat/mesh_partition interleave H rows across the shards ->
-                # horizontal-band noise corruption on multi-host (single-host skips
-                # this block, hence 4x8 was clean but 4x32 corrupted). Predict the
-                # per-chip shape after repeat (× n_hosts) and mesh_partition
-                # (÷ inter_axis_size) on inter_dim, and drop to ROW_MAJOR unless
-                # BOTH last dims are tile-aligned (matches the known-good behavior).
-                post_shape = list(gathered_tensor.shape)
-                post_shape[inter_dim] = post_shape[inter_dim] * n_hosts // mesh_shape[inter_host_axis]
-                if post_shape[-1] % ttnn.TILE_SIZE != 0 or post_shape[-2] % ttnn.TILE_SIZE != 0:
-                    gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
-
-                repeat_dims = [1] * len(gathered_tensor.shape)
-                repeat_dims[inter_dim] = n_hosts
-                gathered_tensor = ttnn.repeat(gathered_tensor, repeat_dims)
-                gathered_tensor = ttnn.mesh_partition(gathered_tensor, dim=inter_dim, cluster_axis=inter_host_axis)
-
-            if pre_transfer_fn is not None:
-                gathered_tensor = pre_transfer_fn(gathered_tensor)
-            else:
-                gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
-        elif pre_transfer_fn is not None:
-            gathered_tensor = pre_transfer_fn(gathered_tensor)
-
-        # Step 2: Only root rank (if specified) does D2H.
-        if root is not None and rank != root:
+        local = _local_shards_multihost(
+            tt_tensor, mesh_device, concat_dims, ccl_manager, pre_transfer_fn, use_persistent_buffer, root=root
+        )
+        if local is None:
             return None
-
-        # Step 3: DMA all local shards and reassemble on host.
-        # Single .cpu() on the mesh tensor batches all local DMA reads into
-        # one C++ dispatch — the reader thread pool processes all device
-        # completion queues in parallel.
-        host_tensor = gathered_tensor.cpu(blocking=False)
-        ttnn.synchronize_device(mesh_device)
-
-        # Extract local shard buffers via get_shard (zero-copy, no MPI).
-        host_mesh_coords = list(host_tensor.tensor_topology().mesh_coords())
-        distributed_buf = host_tensor.host_buffer()
-        tt_dtype = host_tensor.dtype
-        padded_shape = list(host_tensor.padded_shape)
-        logical_shape = list(host_tensor.shape)
-        trim = tuple(slice(0, d) for d in logical_shape)
-
-        local_coords_and_bufs = []
-        for c in host_mesh_coords:
-            if not view.is_local(c):
-                continue
-            buf = distributed_buf.get_shard(c)
-            if buf is not None:
-                local_coords_and_bufs.append((c, buf))
-
-        shards = [_host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim] for _, buf in local_coords_and_bufs]
-
-        # Build local mesh shape and 0-based coordinates for _reassemble_2d.
-        local_inter_positions = sorted({int(c[inter_host_axis]) for c, _ in local_coords_and_bufs})
-        local_intra_positions = sorted({int(c[intra_host_axis]) for c, _ in local_coords_and_bufs})
-        local_mesh_shape = [0, 0]
-        local_mesh_shape[inter_host_axis] = len(local_inter_positions)
-        local_mesh_shape[intra_host_axis] = len(local_intra_positions)
-        local_mesh_shape = tuple(local_mesh_shape)
-
-        inter_remap = {pos: i for i, pos in enumerate(local_inter_positions)}
-        intra_remap = {pos: i for i, pos in enumerate(local_intra_positions)}
-        local_coords = []
-        for c, _ in local_coords_and_bufs:
-            coord = [0, 0]
-            coord[inter_host_axis] = inter_remap[int(c[inter_host_axis])]
-            coord[intra_host_axis] = intra_remap[int(c[intra_host_axis])]
-            local_coords.append(tuple(coord))
-
+        local_coords, shards, logical_shape, local_mesh_shape = local
         return _reassemble_2d(local_coords, shards, logical_shape, local_mesh_shape, concat_dims, permute, dtype)
 
     # --- Single-host: async DMA on all devices + host-side concat -----------
@@ -743,6 +769,7 @@ def fast_device_to_host_shards(
     tt_tensor: ttnn.Tensor,
     mesh_device: ttnn.MeshDevice,
     *,
+    ccl_manager=None,
     pre_transfer_fn: Callable[[ttnn.Tensor], ttnn.Tensor] | None = None,
 ) -> list[torch.Tensor]:
     """The per-device shards of a mesh tensor as zero-copy torch tensors, in row-major mesh order, no concat.
@@ -756,7 +783,16 @@ def fast_device_to_host_shards(
     only see its own shards, and the concatenating path's inter-host gather is what makes it whole.
     """
     if ttnn.using_distributed_env():
-        raise NotImplementedError("fast_device_to_host_shards is single-host only; use fast_device_to_host")
+        # Same on-device inter-host gather + re-shard as the concatenating path (it converts the wave
+        # to row-major on device itself), minus the host memcpy: return the local shards in unit order.
+        # After the re-shard every rank holds the whole wave across its local devices, `span` units each.
+        local = _local_shards_multihost(
+            tt_tensor, mesh_device, [0, 0], ccl_manager, pre_transfer_fn, use_persistent_buffer=False
+        )
+        local_coords, shards, _logical_shape, local_mesh_shape = local
+        cols = local_mesh_shape[1]
+        order = sorted(range(len(shards)), key=lambda i: int(local_coords[i][0]) * cols + int(local_coords[i][1]))
+        return [shards[i] for i in order]
     mesh_coords = list(tt_tensor.tensor_topology().mesh_coords())
     if pre_transfer_fn is not None:
         tt_tensor = pre_transfer_fn(tt_tensor)
