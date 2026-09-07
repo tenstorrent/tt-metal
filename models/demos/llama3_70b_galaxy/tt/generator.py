@@ -1541,7 +1541,7 @@ class Generator(WarmupForwardMixin):
             compile_logits = compile_out[0] if isinstance(compile_out, tuple) else compile_out
             if compile_logits is not None:
                 logger.info("Pre-compiling sampling path before decode trace capture")
-                sampling_module.precompile(logits=compile_logits, tt_out_tok=tokens_tt)
+                sampling_module.precompile(logits=compile_logits, tt_out_tok=tokens_tt, all_configs=True)
 
         # Save the buffer addresses for preallocated tensors.
         # Same reasoning as the prefill capture: everything allocated inside the capture window

@@ -2519,7 +2519,9 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
         return;
     }
 
-    uint64_t base_dfb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    for (const auto& dfb : this->dataflow_buffers_) {
+        reserve_program_local_l1(device, dfb->core_ranges);
+    }
     for (auto& dfb : this->dataflow_buffers_) {
         // Alias secondaries share the primary's L1 address; skip allocation here
         // and propagate the address inline after the primary is processed below.
@@ -2532,7 +2534,7 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
             // Use the address latched by set_borrowed_memory_base_addr()
             alloc_addr = dfb->borrowed_addr_;
         } else {
-            uint64_t computed_addr = base_dfb_address;
+            uint64_t computed_addr = reserve_program_local_l1(device, dfb->core_ranges);
             for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
                 // Need the max available address across all cores dataflow buffer is placed on
                 for (const CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
@@ -2552,7 +2554,9 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
                             // `core_range` but also intersecting `dfb_allocator.core_range`
                             continue;
                         }
-                        dfb_allocator.mark_address(computed_addr, dfb->total_size(), base_dfb_address);
+                        const uint64_t allocator_base =
+                            reserve_program_local_l1(device, CoreRangeSet(dfb_allocator.core_range));
+                        dfb_allocator.mark_address(computed_addr, dfb->total_size(), allocator_base);
                     }
                 }
             }
