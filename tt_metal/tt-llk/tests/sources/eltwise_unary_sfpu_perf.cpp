@@ -133,10 +133,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // CLAMP_NEGATIVE must match the accuracy harness (which passes it): for
         // approx exp it selects the clamped approx-exp branch in sfpu_operations.
         // Omitting it defaulted to false -> a different approx path -> mismatch.
-        // TopK rows: the init runs the topk init (fused variant when FUSED_SORT). With FUSED_SORT the
-        // local-sort row includes the fuse sweep, as a kernel would run it before each local sort;
-        // the merge and rebuild rows are network-only, since they run on already-packed words. The
-        // defuse sweep is its own operation (topk_defuse).
+        // TopK rows: the init runs the topk init (fused variant when FUSED_SORT).
         test_utils::call_unary_sfpu_operation_init<
             SFPU_UNARY_OPERATION,
             APPROX_MODE,
