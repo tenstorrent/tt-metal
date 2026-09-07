@@ -84,10 +84,7 @@ _FABRIC_2D_TORUS_XY_DEVICE_PARAMS = pytest.param(
     id="fabric_2d_torus_xy",
 )
 
-# A full-mesh linearization resolves on either fabric, but not as the same thing: the
-# torus closes a snake ring over its wrap link, the plain line can only walk an open
-# Hamiltonian path. Both must produce the same gathered tensor, so accuracy runs over
-# both; perf is gated separately because the path costs N-1 hops against a ring's N/2.
+# Both fabrics must gather identically so accuracy covers both; perf stays torus-only, the path costs N-1 hops vs N/2.
 _FULL_MESH_DEVICE_PARAMS = [
     _FABRIC_2D_TORUS_XY_DEVICE_PARAMS,
     _FABRIC_2D_LINE_DEVICE_PARAMS,
