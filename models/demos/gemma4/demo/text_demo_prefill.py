@@ -474,13 +474,9 @@ def test_prefill_long_context_traced(
 # ── Per-layer prefill timing ────────────────────────────────────────────────
 
 
-def _perf_layer_tag(layer_type):
-    return "sliding" if layer_type == "sliding_attention" else "global"
-
-
 def _perf_signposts(layer_type, chunk_idx):
     """Return profiler signposts for one layer and chunk."""
-    base = f"gemma4-layer-{_perf_layer_tag(layer_type)}-chunk{chunk_idx}"
+    base = f"gemma4-layer-{layer_type}-chunk{chunk_idx}"
     return f"{base}-start", f"{base}-stop"
 
 
@@ -490,9 +486,7 @@ def _perf_signposts(layer_type, chunk_idx):
 @pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
 @pytest.mark.parametrize("context_len", LAYER_PERF_CONTEXT_LENGTHS, ids=lambda c: f"ctx_{c // 1024}k")
 @pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"sz{c}")
-@pytest.mark.parametrize(
-    "layer_type", ["full_attention", "sliding_attention", "both"], ids=["global", "sliding", "both"]
-)
+@pytest.mark.parametrize("layer_type", ["global", "local", "both"])
 @pytest.mark.parametrize(
     "chunk_idx",
     [*range(max(LAYER_PERF_CONTEXT_LENGTHS) // min(PREFILL_CHUNK_SIZES)), "all"],
@@ -527,7 +521,8 @@ def test_prefill_layer_perf_chunk_n(
         pytest.skip(f"chunk {chunk_idx} is outside the {n_chunks} chunks of {chunk_size} in {context_len} tokens")
 
     chunk_idxs = list(range(n_chunks)) if chunk_idx == "all" else [int(chunk_idx)]
-    layer_types = ["full_attention", "sliding_attention"] if layer_type == "both" else [layer_type]
+    layer_types = ["global", "local"] if layer_type == "both" else [layer_type]
+    model_layer_types = {"global": "full_attention", "local": "sliding_attention"}
 
     model_path = _model_path()
     text_config = _hf_text_config(model_path)
@@ -539,8 +534,8 @@ def test_prefill_layer_perf_chunk_n(
     )
     tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
 
-    layer_idxs = {lt: find_layer_idx(text_config, lt) for lt in layer_types}
-    type_desc = ", ".join(f"{_perf_layer_tag(lt)}=layer{layer_idxs[lt]}" for lt in layer_types)
+    layer_idxs = {lt: find_layer_idx(text_config, model_layer_types[lt]) for lt in layer_types}
+    type_desc = ", ".join(f"{lt}=layer{layer_idxs[lt]}" for lt in layer_types)
     logger.info(
         f"[layer_perf_chunk] ctx={context_len} chunk={chunk_size} n_chunks={n_chunks} cp={cp} | "
         f"cells={len(chunk_idxs) * len(layer_types)} chunks={chunk_idxs[0]}..{chunk_idxs[-1]} "
@@ -606,12 +601,13 @@ def test_prefill_layer_perf_chunk_n(
             f"layer {idx} ({lt}) shares KV from layer {model.kv_shared_layer_map[idx]}; "
             f"timing it standalone would omit the K/V projection and cache write"
         )
-        assert lt in model.rope_caches_2d, (
+        model_layer_type = model_layer_types[lt]
+        assert model_layer_type in model.rope_caches_2d, (
             f"model has no 2D RoPE cache for {lt} (built without _hf_text_config?) — "
             f"per-chunk RoPE would be wrong, refusing to measure"
         )
-        cos_2d, sin_2d = model.rope_caches_2d[lt]
-        pack_rope = pack_global_rope_device if lt == "full_attention" else pack_sliding_rope_device
+        cos_2d, sin_2d = model.rope_caches_2d[model_layer_type]
+        pack_rope = pack_global_rope_device if lt == "global" else pack_sliding_rope_device
 
         def forward(chunk_start):
             embeds, _, _, _ = model.transform_and_embed_prefill_inputs_device(device_input, None, None, None)
@@ -628,8 +624,8 @@ def test_prefill_layer_perf_chunk_n(
                 batch_size=1,
                 user_id=0,
                 chunk_start_idx=chunk_start,
-                packed_global_rope=packed_rope if lt == "full_attention" else None,
-                packed_sliding_rope=packed_rope if lt == "sliding_attention" else None,
+                packed_global_rope=packed_rope if lt == "global" else None,
+                packed_sliding_rope=packed_rope if lt == "local" else None,
             )
 
         return forward
@@ -653,8 +649,7 @@ def test_prefill_layer_perf_chunk_n(
         traces[lt] = tid
         capture_s = time.time() - t0
         logger.info(
-            f"[layer_perf_chunk] {_perf_layer_tag(lt)} layer_idx={layer_idxs[lt]} "
-            f"compile={compile_s:.1f}s capture={capture_s:.1f}s"
+            f"[layer_perf_chunk] {lt} layer_idx={layer_idxs[lt]} " f"compile={compile_s:.1f}s capture={capture_s:.1f}s"
         )
 
     measured_set = set(chunk_idxs)
@@ -706,7 +701,6 @@ def test_prefill_layer_perf_chunk_n(
                     ttnn.synchronize_device(mesh_device)
                     continue
 
-                tag = _perf_layer_tag(lt)
                 sp_start, sp_stop = _perf_signposts(lt, idx)
 
                 chunk_start = _stage(idx)
@@ -721,7 +715,6 @@ def test_prefill_layer_perf_chunk_n(
                     {
                         "chunk_idx": idx,
                         "layer_type": lt,
-                        "tag": tag,
                         "layer_idx": layer_idxs[lt],
                         "chunk_start": chunk_start,
                         "measured_ms": measured_s * 1000,
@@ -730,7 +723,7 @@ def test_prefill_layer_perf_chunk_n(
                     }
                 )
                 logger.info(
-                    f"[layer_perf_chunk] RESULT type={tag} chunk={idx} ring_depth={idx} "
+                    f"[layer_perf_chunk] RESULT type={lt} chunk={idx} ring_depth={idx} "
                     f"kv_actual_global={chunk_start} measured_ms={measured_s * 1000:.2f} "
                     f"tok_s={chunk_size / measured_s:.0f} signposts={sp_start},{sp_stop}"
                 )
@@ -743,11 +736,11 @@ def test_prefill_layer_perf_chunk_n(
     assert torch.isfinite(hidden).all(), f"{layer_types[-1]} layer produced non-finite output"
     assert float(hidden.std()) > 0.001, f"{layer_types[-1]} layer output is degenerate"
 
-    n_sliding = model_args.layer_types.count("sliding_attention")
+    n_local = model_args.layer_types.count("sliding_attention")
     n_global = model_args.layer_types.count("full_attention")
     by_type = {}
     for r in results:
-        by_type.setdefault(r["tag"], []).append(r)
+        by_type.setdefault(r["layer_type"], []).append(r)
     for tag, rows in by_type.items():
         span = (
             f"{rows[0]['measured_ms']:.2f}ms @chunk{rows[0]['chunk_idx']} -> "
@@ -759,13 +752,13 @@ def test_prefill_layer_perf_chunk_n(
         logger.info(f"[layer_perf_chunk] {tag} depth curve: {span}")
     if len(by_type) == 2:
         for idx in chunk_idxs:
-            g = next((r for r in results if r["chunk_idx"] == idx and r["tag"] == "global"), None)
-            s = next((r for r in results if r["chunk_idx"] == idx and r["tag"] == "sliding"), None)
+            g = next((r for r in results if r["chunk_idx"] == idx and r["layer_type"] == "global"), None)
+            s = next((r for r in results if r["chunk_idx"] == idx and r["layer_type"] == "local"), None)
             if g and s:
-                est = n_global * g["measured_ms"] + n_sliding * s["measured_ms"]
+                est = n_global * g["measured_ms"] + n_local * s["measured_ms"]
                 logger.info(
                     f"[layer_perf_chunk] ESTIMATE chunk={idx} "
-                    f"{n_global}x global({g['measured_ms']:.2f}ms) + {n_sliding}x sliding({s['measured_ms']:.2f}ms) "
-                    f"= {est:.0f}ms of a {n_global + n_sliding}-layer chunk (excludes embedding/head and the "
+                    f"{n_global}x global({g['measured_ms']:.2f}ms) + {n_local}x local({s['measured_ms']:.2f}ms) "
+                    f"= {est:.0f}ms of a {n_global + n_local}-layer chunk (excludes embedding/head and the "
                     f"inter-layer CCL not in a single-layer graph)"
                 )
