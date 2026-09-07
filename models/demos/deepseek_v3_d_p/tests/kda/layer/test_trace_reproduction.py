@@ -26,7 +26,7 @@ pytestmark = [
 ]
 
 
-@pytest.mark.parametrize("layer_idx", [5, 13, 20])
+@pytest.mark.parametrize("layer_idx", [5, 13, 20], ids=["5", "13", "20"])
 def test_kda_decoder_stream_probe(device: ttnn.Device, layer_idx: int) -> None:
     """Match issue #55420: FP32 normalized host reference, BF16 device input."""
     sequence = int(os.getenv("KDA_REAL_TRACE_SEQUENCE", "1024"))
