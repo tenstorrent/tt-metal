@@ -34,6 +34,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
@@ -286,7 +287,7 @@ using BRD = moe_fused_swiglu::WeightRuns<WD_SHARD_W>;  // W_down
 // read a contiguous run and the coalescing is unchanged on either side.
 inline uint32_t wd_rows_writer(uint32_t block_hn_rows) { return (block_hn_rows * WD_SPLIT) / 8; }
 
-// Cross-RISC completion gate. `noc_async_read_barrier()` is PER-RISC-V, so it proves nothing about
+// Cross-RISC completion gate. A read barrier is PER-RISC-V, so it proves nothing about
 // the writer's share of the SAME K-blocks — publishing without this hands `down` a half-written
 // tile. Both counters are monotone, so `wd_done + n` is the tightest legal gate.
 inline void wd_split_gate(uint32_t& wd_done, uint32_t n) {
@@ -296,8 +297,8 @@ inline void wd_split_gate(uint32_t& wd_done, uint32_t n) {
 }
 
 void kernel_main() {
-    // Carries this kernel's noc_index, which is the NoC the free-function increments used
-    // implicitly. The explicit noc_read(0) handles below stay as they are.
+    // Bound to this kernel's noc_index (NOC_0). The raw ncrisc_* multicasts below pass the same
+    // noc_index explicitly, so every transaction this kernel issues rides one NoC.
     Noc noc;
     (void)get_arg_val<uint32_t>(0);  // retained runtime slot for cache-compatible argument layout
     const uint32_t x_addr = get_arg_val<uint32_t>(1);
@@ -439,8 +440,8 @@ void kernel_main() {
             for (uint32_t n = 0; n < HN_PAD; ++n) {
                 const uint32_t col = hstart + n;
                 if (n < hn_cols && col < HID_T) {
-                    noc_async_read(gb_acc.get_noc_addr(col), lg, gbias_tile);
-                    noc_async_read(ub_acc.get_noc_addr(col), lu, gbias_tile);
+                    noc.async_read(gb_acc, CoreLocalMem<uint32_t>(lg), gbias_tile, {.page_id = col}, {});
+                    noc.async_read(ub_acc, CoreLocalMem<uint32_t>(lu), gbias_tile, {.page_id = col}, {});
                 } else {
                     moe_fused_swiglu::zero_l1(lg, gbias_tile);
                     moe_fused_swiglu::zero_l1(lu, gbias_tile);
@@ -454,13 +455,13 @@ void kernel_main() {
             for (uint32_t n = 0; n < EC_MAX; ++n) {
                 const uint32_t col = out_col_start + n;
                 if (n < ec && col < EMB_T) {
-                    noc_async_read(db_acc.get_noc_addr(col), ld, dbias_tile);
+                    noc.async_read(db_acc, CoreLocalMem<uint32_t>(ld), dbias_tile, {.page_id = col}, {});
                 } else {
                     moe_fused_swiglu::zero_l1(ld, dbias_tile);
                 }
                 ld += dbias_tile;
             }
-            noc_async_read_barrier();
+            noc.async_read_barrier();
             cb_push_back(cb_gate_bias, HN_PAD);
             cb_push_back(cb_up_bias, HN_PAD);
             cb_push_back(cb_down_bias, EC_MAX);
@@ -474,9 +475,9 @@ void kernel_main() {
         // depends on `global_expert_id`; the counts PAGE address does not, so issue the two independent DRAM reads
         // together and pay one completion round-trip.  The optional region-start read remains later:
         // it deliberately reuses l1_cnt after `count` is extracted.
-        noc_async_read(idx_acc.get_noc_addr(0), l1_idx, IDX_PAGE);
-        noc_async_read(cnt_acc.get_noc_addr(0), l1_cnt, COUNTS_PAGE);
-        noc_async_read_barrier();
+        noc.async_read(idx_acc, CoreLocalMem<uint32_t>(l1_idx), IDX_PAGE, {.page_id = 0}, {});
+        noc.async_read(cnt_acc, CoreLocalMem<uint32_t>(l1_cnt), COUNTS_PAGE, {.page_id = 0}, {});
+        noc.async_read_barrier();
         invalidate_l1_cache();
         const uint32_t global_expert_id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_idx)[local_expert_id];
         // The routing table lives on device, so the host can size it but never bound its VALUES. An
@@ -505,8 +506,8 @@ void kernel_main() {
             // Same bound as the count: this lookup is the one that becomes the writer's NOC base.
             if (expert_in_range) {
                 const uint32_t l1_start = get_write_ptr(cb_counts_scratch);
-                noc_async_read(start_acc.get_noc_addr(0), l1_start, START_PAGE);
-                noc_async_read_barrier();
+                noc.async_read(start_acc, CoreLocalMem<uint32_t>(l1_start), START_PAGE, {.page_id = 0}, {});
+                noc.async_read_barrier();
                 invalidate_l1_cache();
                 start_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_start)[global_expert_id];
                 // The offsets are device-produced too, so the host sizes the table and cannot bound
@@ -674,7 +675,7 @@ void kernel_main() {
                                 MaybeDeviceZoneScope("reader_x_read");
                                 cb_reserve_back(cb_x_in, TILE_H);
                                 issue_x_row(row, get_write_ptr(cb_x_in));
-                                noc_async_read_barrier();
+                                noc.async_read_barrier();
                                 cb_push_back(cb_x_in, TILE_H);
                             }
                         }
@@ -688,7 +689,7 @@ void kernel_main() {
                         // bfp8_b TILE: the tiles land straight in the resident slot, no tilize.
                         if (!staged_early) {
                             issue_x_row(row, dst);
-                            noc_async_read_barrier();
+                            noc.async_read_barrier();
                         }
                     }
                 }
@@ -811,7 +812,7 @@ void kernel_main() {
             {
                 MaybeDeviceZoneScope("reader_wg_wait");
                 for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                     cb_push_back(cb_w_gate, WG_CHUNK_TILES);
                     if (c + 1 < GU_CHUNKS) {
                         issue_wg_chunk(c + 1);
@@ -987,7 +988,7 @@ void kernel_main() {
                 if (prefetch_next_x) {
                     noc_async_read_barrier_with_trid(P2_READ_TRID);
                 } else {
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                 }
                 if constexpr (WD_SPLIT) {
                     // ...and NOC_1's half of the SAME blocks (see wd_split_gate).
@@ -1015,7 +1016,7 @@ void kernel_main() {
                 if (prefetch_next_x) {
                     noc_async_read_barrier_with_trid(P2_READ_TRID);
                 } else {
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                 }
             };
             {
