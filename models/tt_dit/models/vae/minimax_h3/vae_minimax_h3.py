@@ -376,10 +376,14 @@ class MiniMaxH3Vae:
         # bigger matmuls and fewer waves; 1 is the original one-tile-per-device schedule.
         assert waves_per_device >= 1, f"waves_per_device must be >= 1, got {waves_per_device}"
         self.waves_per_device = waves_per_device
-        self.async_stitch = os.environ.get(_ASYNC_STITCH_ENV, "1") == "1"
-        self.shard_readback = (
-            self.async_stitch and os.environ.get(_SHARD_READBACK_ENV, "1") == "1" and not ttnn.using_distributed_env()
-        )
+        # Single host only, both of them. On a multi-host mesh the shard readback cannot apply (the
+        # gathering readback is what makes a wave whole across ranks), and the worker alone LOSES
+        # there: measured on a 4x32 at 15 s, VAE decode 24.9 s -> 27.9 s -- the worker becomes the
+        # critical path (stitch 9.2 s + unpatchify on one thread, 6.4 s drain wait) while its memory
+        # traffic slows the readback from 1.8 to 2.6 s/wave. Multi-host keeps the serial schedule.
+        single_host = not ttnn.using_distributed_env()
+        self.async_stitch = single_host and os.environ.get(_ASYNC_STITCH_ENV, "1") == "1"
+        self.shard_readback = self.async_stitch and os.environ.get(_SHARD_READBACK_ENV, "1") == "1"
         # Pipeline warmup turns this off so the compile-pass decode does not dump a profile.
         self.log_profile = True
         self._encoder_state: dict[str, torch.Tensor] | None = None
