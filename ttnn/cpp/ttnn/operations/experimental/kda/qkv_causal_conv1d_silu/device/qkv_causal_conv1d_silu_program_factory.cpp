@@ -112,7 +112,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
                 tt::tt_metal::experimental::TensorBinding{tap2_tensor_name, "tap2"},
                 tt::tt_metal::experimental::TensorBinding{tap3_tensor_name, "tap3"},
             },
-        .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
+        .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}, {"wrap_row", attrs.wrap_row}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };

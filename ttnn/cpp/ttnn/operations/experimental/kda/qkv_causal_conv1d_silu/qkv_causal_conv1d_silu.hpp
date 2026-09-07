@@ -27,6 +27,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     uint32_t k_width,
     uint32_t v_width,
     const QkvCausalConv1dSiluProgramConfig& program_config,
+    uint32_t wrap_row = 0,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
