@@ -1,0 +1,128 @@
+# A container (v5.1) package for the GLM-4.7-Flash autoport on ONE Blackhole chip.
+#
+#   tt-model package --container models/autoports/zai_org_glm_4_7_flash/tt-model.yaml
+#   tt-model serve   build/glm-4-7-flash-p150/tt_kernel_manifest.json --follow
+#   tt-model push    build/glm-4-7-flash-p150 --private
+#
+# Every value below was transcribed from the bring-up that actually served this model:
+# doc/tti_release/RUN_NOTES.md and the release run spec under doc/tti_release/run_specs/.
+schema: "5.1"
+
+repo: stisiTT/glm-4-7-flash-p150
+name: glm-4-7-flash-p150
+
+# A POINTER, pinned to the snapshot the PCC and eval numbers were measured against, so a
+# consumer cannot silently get a different checkpoint from the one that was validated.
+weights:
+  repo: zai-org/GLM-4.7-Flash
+  revision: 7dd20894a642a0aa287e9827cb1a1f7f91386b67
+
+kind: vllm-plugin
+arch: blackhole
+
+source:
+  tt_metal: /home/stisi/tt-metal
+
+  # EXACTLY what ships. The model directory is 87 MB, of which 85 MB is bring-up evidence
+  # (doc/ 59 MB, readiness_vllm/ 26 MB) that must not travel. This list is the serve-path
+  # import closure plus the one runtime data file, and comes to about 1.3 MB.
+  code:
+    # models/ and models/autoports/ are PEP 420 namespace packages, but the model directory
+    # itself has a real __init__.py, so it has to ship or the package will not import.
+    - models/autoports/zai_org_glm_4_7_flash/__init__.py
+    # The model and its vLLM adapter.
+    - models/autoports/zai_org_glm_4_7_flash/tt
+    # The EXTRA_MODELS_DIR bundle: vllm_metadata.json plus the registration shim. This is
+    # what lets the image run a STOCK plugin. Without it the model resolves only through a
+    # hardcoded entry on a personal plugin fork.
+    - models/autoports/zai_org_glm_4_7_flash/vllm_bundle
+    # RUNTIME DATA, not documentation. tt/generator_vllm.py reads this at model load
+    # (_CONTRACT_PATH, json.loads(...read_text())) for the kv-cache block_size and the
+    # supported context. There is no fallback: a missing file is a FileNotFoundError at
+    # boot. The rest of doc/ is evidence and is deliberately excluded.
+    - models/autoports/zai_org_glm_4_7_flash/doc/context_contract.json
+    # The three models/common modules the serve path imports. lightweightmodule and
+    # sampling are unconditional; readiness_check is imported under try/except and would
+    # silently degrade to `object` if absent, so it ships and verify: asserts it is real.
+    - models/common/lightweightmodule.py
+    - models/common/sampling
+    - models/common/readiness_check
+
+  ubuntu: "22.04"
+  python: "3.12" # matches the python_env this model was brought up and served in
+
+runtime:
+  # Stock vLLM from PyPI, built VLLM_TARGET_DEVICE=empty inside the image. The venv that
+  # served reports 0.25.1+empty; the +empty suffix is the local sdist build tag.
+  vllm: {version: "0.25.1"}
+
+  # UPSTREAM, pinned by sha. The bring-up used 9f2ec5d on a personal fork, which existed
+  # only to hardcode this model into the plugin's built-in table. The vllm_bundle above
+  # replaces that entirely, so the image can pin the commit the fork branched from and a
+  # colleague can rebuild without fetching anyone's fork.
+  plugin:
+    repo: https://github.com/tenstorrent/vllm-tt-plugin
+    ref: 6d3bb2854f5f8885acc1b12111d929bffdebc36e
+
+  # The directory whose CHILDREN hold vllm_metadata.json. Registration chain:
+  #   register_tt_models() -> _register_models_from_extra_dir() -> this dir ->
+  #   glm_4_7_flash/vllm_metadata.json -> arch Glm4MoeLiteForCausalLM, TT-prefixed to
+  #   TTGlm4MoeLiteForCausalLM -> tt_glm_4_7_flash:GLM47FlashForCausalLM -> the shim ->
+  #   models.autoports.zai_org_glm_4_7_flash.tt.generator_vllm:GLM47FlashForCausalLM
+  extra_models_dir: models/autoports/zai_org_glm_4_7_flash/vllm_bundle
+
+serve:
+  port: 8000
+
+  # One Blackhole chip. The box is a QuietBox 2 with four p300c boards, but this model
+  # opens a 1x1 mesh on device 0, so the board label that matches the chip count is p150,
+  # which is also what tt-inference-server calls a single Blackhole chip.
+  hardware: p150
+  mesh_device: P150
+
+  # From the release run spec's vllm_args. block_size is not a preference: the model
+  # compares it against its own fixed paged-cache block size and refuses to start on a
+  # mismatch (tt/generator_vllm.py, "pass --block-size ... to vllm serve").
+  max_num_seqs: 32
+  block_size: 64
+  max_model_len: 202752 # == doc/context_contract.json, capability_reduction: none
+
+  # GLM-4.7-Flash thinks by default. Without the parser every response is the raw
+  # reasoning trace, which is what made the first release run's scores meaningless.
+  capabilities:
+    reasoning_parser: glm47
+
+  additional_config:
+    tt:
+      sample_on_device_mode: all
+      trace_region_size: 350000000
+
+  # From the run spec. VLLM_TARGET_DEVICE is deliberately NOT here: it is a build-time
+  # variable for the vLLM fork, and this image builds stock vLLM with an empty target.
+  # MESH_DEVICE is not here either, because it is derived from mesh_device above.
+  env:
+    ARCH_NAME: blackhole
+    VLLM_CONFIGURE_LOGGING: "1"
+    VLLM_RPC_TIMEOUT: "900000"
+    TORCHDYNAMO_DISABLE: "1"
+
+  # No args: here on purpose. The release run spec listed max_num_batched_tokens=202752,
+  # but that spec documents a configuration rather than launching one, and no stage
+  # record shows the flag was ever passed to a server that served. vLLM's own default
+  # applies instead. Add it back only with evidence from a run that used it.
+
+# Assertions run INSIDE the finished image, after the user switch. These are what make the
+# code allowlist above trustworthy.
+verify:
+  # The runtime data file. Its absence is a boot-time FileNotFoundError rather than a
+  # silent fallback, but catching it here costs nothing and names the cause.
+  - "from pathlib import Path; p = Path('/opt/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/context_contract.json'); assert p.is_file(), 'context_contract.json missing: the adapter reads it at model load for block_size and supported context'"
+  # The real adapter.
+  - "from models.autoports.zai_org_glm_4_7_flash.tt.generator_vllm import GLM47FlashForCausalLM; assert GLM47FlashForCausalLM"
+  # The readiness contract is imported under try/except and falls back to `object`, so an
+  # under-shipped models/common/readiness_check would degrade in silence. Assert the real
+  # class resolves, not the fallback.
+  - "from models.common.readiness_check.contract import Generator; assert isinstance(Generator, type) and Generator is not object"
+  # The block_size the manifest declares must equal the one the model will demand, or the
+  # server refuses to start. Cheap to check here, expensive to discover at boot.
+  - "import json; c = json.load(open('/opt/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/context_contract.json')); assert int(c['kv_cache']['block_size']) == 64, f\"manifest declares block_size 64 but the contract says {c['kv_cache']['block_size']}\""
