@@ -350,6 +350,16 @@ FORCE_INLINE void pc_issue_slice_reads(
     for (uint32_t w = 0; w < count; ++w) {
         const uint32_t wt = first_wt + w;
         const uint32_t tile_id = (wt < WT) ? wt : (WT - 1);
+        // ABLATION: `RMS_ABLATE_PER_CHANNEL` stubs the PAYLOAD of the D40
+        // broadcast injector's slice read while leaving the loop trip count, the
+        // caller's cb_reserve/barrier/send/push and its zone in place.  It must be
+        // here as well as in `stage_per_channel`: when the broadcast is engaged the
+        // injector reads through THIS function and never through that one, so a
+        // guard only there peels nothing on a mcast plan (measured: 84,510 ->
+        // 82,739 ns with pcc UNCHANGED at 0.999985, i.e. the read was still running).
+#ifdef RMS_ABLATE_PER_CHANNEL
+        (void)tile_id;
+#else
         if constexpr (TRIM == 2) {
             constexpr uint32_t ROW_BYTES = TILE_DIM * ELEM_BYTES;
             const uint64_t base = get_noc_addr(tile_id, acc);
@@ -361,6 +371,7 @@ FORCE_INLINE void pc_issue_slice_reads(
         } else {
             noc_async_read_tile(tile_id, acc, l1_addr);
         }
+#endif
         l1_addr += tile_bytes;
     }
 }
