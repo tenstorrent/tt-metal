@@ -193,9 +193,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
 
     KernelSpec writer{
         .unique_id = WRITER,
-        .source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-            "writer_unary_interleaved_start_id_metal2.cpp",
+        .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         .dfb_bindings =
             {
                 DFBBinding{
@@ -208,7 +206,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
             {
                 TensorBinding{
                     .tensor_parameter_name = OUTPUT,
-                    .accessor_name = "dst",
+                    .accessor_name = "output",
                 },
             },
         .runtime_arg_schema =
