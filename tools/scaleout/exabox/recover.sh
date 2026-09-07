@@ -74,6 +74,9 @@ Optional:
                                             (auto-detected if not specified)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
+    --docker-args <args>                    Extra arguments passed verbatim to 'docker run' (quoted string).
+                                            Only used with --use-docker.
+                                            e.g. --docker-args "--cap-add=SYS_PTRACE --shm-size=2g"
     --output <directory>                    Output directory for logs and validation artifacts
                                             (default: "<comma-separated-hosts>-<timestamp>").
                                             Passed to run_cluster_validation as --output-path so the
@@ -142,6 +145,7 @@ MPI_EXTRA_ARGS=()
 OUTPUT_DIR=""  # default computed after --hosts is known: "<comma-separated-hosts>-<timestamp>"
 RERUN_ON_RETRAIN=false
 VALIDATION_EXTRA_ARGS=()
+DOCKER_EXTRA_ARGS=()
 REGENERATE_ON_FAILURE=true
 
 # Minimum required tt-smi/KMD/firmware versions (TT_SMI_MIN_VERSION, KMD_MIN_VERSION,
@@ -273,6 +277,15 @@ while [[ $# -gt 0 ]]; do
             fi
             read -ra _extra <<< "$2"
             MPI_EXTRA_ARGS+=("${_extra[@]}")
+            shift 2
+            ;;
+        --docker-args)
+            if [[ -z "$2" ]]; then
+                echo "Error: --docker-args requires a non-empty value"
+                exit 1
+            fi
+            read -ra _extra <<< "$2"
+            DOCKER_EXTRA_ARGS+=("${_extra[@]}")
             shift 2
             ;;
         --output)
@@ -438,6 +451,12 @@ else
     DESCRIPTOR_ARGS+=(--cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH")
 fi
 
+# Expand --docker-args tokens into repeatable --docker-arg flags for mpi-docker.
+DOCKER_ARG_FLAGS=()
+for _darg in "${DOCKER_EXTRA_ARGS[@]}"; do
+    DOCKER_ARG_FLAGS+=(--docker-arg "$_darg")
+done
+
 # Print summary
 echo "=========================================="
 echo "Cluster recovery"
@@ -501,6 +520,7 @@ elif [[ "$SKIP_MPI_STRESS_TEST" == false ]]; then
             --empty-entrypoint \
             --tag-host \
             --mpi-interface "$MPI_IF" \
+            "${DOCKER_ARG_FLAGS[@]}" \
             "${MPI_EXTRA_ARGS[@]}" \
             --host "$HOSTS" \
             --map-by ppr:1:node \
@@ -620,6 +640,7 @@ elif [[ "$SKIP_VALIDATION" == false ]]; then
                 --tag-host \
                 --mpi-interface "$MPI_IF" \
                 --volume /data/scaleout_configs \
+                "${DOCKER_ARG_FLAGS[@]}" \
                 "${MPI_EXTRA_ARGS[@]}" \
                 --host "$HOSTS" \
                 ./build/tools/scaleout/run_cluster_validation \
@@ -710,6 +731,7 @@ if [[ "$REGENERATE_ON_FAILURE" == true && $VALIDATION_EXIT -ne 0 ]]; then
                     --empty-entrypoint \
                     --mpi-interface "$MPI_IF" \
                     "${REGEN_VOLUMES[@]}" \
+                    "${DOCKER_ARG_FLAGS[@]}" \
                     --host "$FIRST_HOST" -np 1 \
                     ./build/tools/scaleout/run_regen_descriptors \
                     "${REGEN_ARGS[@]}" || echo "Warning: descriptor regeneration failed (see error above)"

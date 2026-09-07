@@ -369,6 +369,7 @@ void DispatchSKernel::CreateKernel() {
             {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
             {"TOTAL_SUB_DEVICES", std::to_string(static_config_.max_num_worker_sems.value())},
             {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
+            {"NUM_WORKER_CORES", std::to_string(device_worker_cores.size())},
         };
         tt::tt_metal::ComputeConfig compute_config;
         compute_config.defines = compute_defines;

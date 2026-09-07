@@ -3,8 +3,11 @@
 
 """
 Optimal matmul and SDPA configurations for the MLA module, keyed by local sequence length
-(per-device after SP sharding). Configs sourced from op_unit_tests/test_mla_matmuls.py
-and op_unit_tests/test_ring_joint_mla.py.
+(per-device after SP sharding). SDPA configs sourced from op_unit_tests/test_ring_joint_mla.py.
+
+utils/test_mla_matmuls.py is a hand-run harness for local development and perf measurement of
+these matmuls; its program configs are copied from the 4096 entries below with per_core_M adjusted
+for the 5k chunk, so retuning either side means updating the other.
 
 Production local seq_len values:
   - 128k total / 8 SP devices = 16384 per device

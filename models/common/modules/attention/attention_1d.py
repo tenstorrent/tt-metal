@@ -40,7 +40,6 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import ttnn
-from models.common.device_utils import is_blackhole
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
@@ -243,13 +242,18 @@ class Attention1DConfig:
     # Separate all-gather (non-Ring topology or non-fused decode path)
     decode_gather_users_memcfg: ttnn.MemoryConfig | None = None  # Output placement for standalone all_gather
 
-    # Compute kernel configs (None = auto-derived; fp32 dest acc, math fidelity, etc.)
-    li_qkv_decode_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None  # Decode QKV matmul kernel
-    sdpa_decode_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None  # Decode SDPA kernel
-    li_o_decode_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None  # Decode WO matmul kernel
-    li_qkv_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None  # Prefill QKV matmul kernel
-    sdpa_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None  # Prefill SDPA kernel
-    li_o_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None  # Prefill WO matmul kernel
+    # Architecture-sensitive caller requests. ``None`` selects mesh/SKU
+    # defaults during construction; explicit compatible values win.
+    li_qkv_decode_compute_kernel_cfg: ttnn.DeviceComputeKernelConfig | None = None
+    sdpa_decode_compute_kernel_cfg: ttnn.DeviceComputeKernelConfig | None = None
+    li_o_decode_compute_kernel_cfg: ttnn.DeviceComputeKernelConfig | None = None
+    li_qkv_prefill_compute_kernel_cfg: ttnn.DeviceComputeKernelConfig | None = None
+    sdpa_prefill_compute_kernel_cfg: ttnn.DeviceComputeKernelConfig | None = None
+    li_o_prefill_compute_kernel_cfg: ttnn.DeviceComputeKernelConfig | None = None
+    prefill_qkv_grid: tuple[int, int] | None = None
+    dram_shard_grid_width: int | None = None
+    decode_create_qkv_head_grid: ttnn.CoreGrid | None = None
+    decode_transformation_core_grid: ttnn.CoreCoord | None = None
 
     # Transformation matrices for rotary embedding (static, computed once).
     # These are NOT LazyWeights because they are:
@@ -299,9 +303,6 @@ class Attention1DConfig:
             "prefill_xqkv_prg_config",
             "prefill_sdpa_prg_config",
             "prefill_wo_prg_config",
-            "li_qkv_decode_compute_kernel_cfg",
-            "sdpa_decode_compute_kernel_cfg",
-            "li_o_decode_compute_kernel_cfg",
         ]
 
         # Multi-device needs CCL and topology
@@ -375,7 +376,7 @@ class Attention1D(LightweightModule):
                                max_batch_size=1, max_seq_len=2048)
         """
         super().__init__()
-        self.config = _resolve_attention1d_config(
+        self.config = resolve_attention1d_arch_config(
             Attention1DConfig(
                 wqkv=wqkv,
                 wo=wo,
@@ -398,9 +399,21 @@ class Attention1D(LightweightModule):
             config = Attention1DConfig(wqkv, wo, n_heads=32, head_dim=128)
             attn = Attention1D.from_config(config)
         """
+        if not isinstance(config, Attention1DConfig):
+            raise TypeError("Attention1D.from_config expects Attention1DConfig")
         instance = object.__new__(cls)
         super(Attention1D, instance).__init__()
-        instance.config = _resolve_attention1d_config(config)
+        instance.config = resolve_attention1d_arch_config(config)
+        instance._device_weights_loaded = False
+        instance._bind_forward_methods()
+        return instance
+
+    @classmethod
+    def _from_config_with_arch(cls, config: Attention1DConfig, arch):
+        """Internal construction path for callers that already queried the mesh architecture."""
+        instance = object.__new__(cls)
+        super(Attention1D, instance).__init__()
+        instance.config = resolve_attention1d_arch_config(config, _arch=arch)
         instance._device_weights_loaded = False
         instance._bind_forward_methods()
         return instance
@@ -484,7 +497,7 @@ class Attention1D(LightweightModule):
             xqkv_fused = ttnn.experimental.minimal_matmul(
                 x,
                 self.wqkv,
-                compute_kernel_config=cfg.li_qkv_prefill_compute_kernel_cfg,
+                compute_kernel_config=self.config.li_qkv_prefill_compute_kernel_cfg,
                 config=cfg.prefill_xqkv_minimal_matmul_config(seq_len),
             )
         else:
@@ -493,7 +506,7 @@ class Attention1D(LightweightModule):
                 self.wqkv,
                 dtype=cfg.activation_dtype or ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=cfg.li_qkv_prefill_compute_kernel_cfg,
+                compute_kernel_config=self.config.li_qkv_prefill_compute_kernel_cfg,
                 program_config=cfg.prefill_xqkv_prg_config(seq_len),
             )
 
@@ -615,7 +628,7 @@ class Attention1D(LightweightModule):
                     input_tensor_v=values,
                     page_table_tensor=page_table,
                     chunk_start_idx=chunk_start_idx,
-                    compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg,
+                    compute_kernel_config=self.config.sdpa_prefill_compute_kernel_cfg,
                     program_config=cfg.prefill_sdpa_prg_config(seq_len, chunk_start_idx),
                 )
             else:
@@ -626,7 +639,7 @@ class Attention1D(LightweightModule):
                     input_tensor_v=values,
                     page_table_tensor=page_table,
                     chunk_start_idx_tensor=chunk_start_idx_tensor,
-                    compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg,
+                    compute_kernel_config=self.config.sdpa_prefill_compute_kernel_cfg,
                     program_config=cfg.prefill_sdpa_prg_config(seq_len, block_size),
                 )
         else:
@@ -638,7 +651,7 @@ class Attention1D(LightweightModule):
                 is_causal=True,
                 sliding_window_size=cfg.sliding_window,
                 scale=cfg.scale,
-                compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg,
+                compute_kernel_config=self.config.sdpa_prefill_compute_kernel_cfg,
                 program_config=cfg.prefill_sdpa_prg_config(sdpa_seq_len, None),
             )
 
@@ -676,14 +689,14 @@ class Attention1D(LightweightModule):
             output = ttnn.experimental.minimal_matmul(
                 attn_output_concat,
                 self.wo,
-                compute_kernel_config=cfg.li_o_prefill_compute_kernel_cfg,
+                compute_kernel_config=self.config.li_o_prefill_compute_kernel_cfg,
                 config=cfg.prefill_wo_minimal_matmul_config(seq_len),
             )
         else:
             output = ttnn.linear(
                 attn_output_concat,
                 self.wo,
-                compute_kernel_config=cfg.li_o_prefill_compute_kernel_cfg,
+                compute_kernel_config=self.config.li_o_prefill_compute_kernel_cfg,
                 dtype=cfg.activation_dtype or ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 program_config=cfg.prefill_wo_prg_config(seq_len),
@@ -739,7 +752,7 @@ class Attention1D(LightweightModule):
             self.wqkv,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=cfg.decode_xqkv_prg_config,
-            compute_kernel_config=cfg.li_qkv_decode_compute_kernel_cfg,
+            compute_kernel_config=self.config.li_qkv_decode_compute_kernel_cfg,
             dtype=cfg.activation_dtype or ttnn.bfloat16,
         )
 
@@ -919,7 +932,7 @@ class Attention1D(LightweightModule):
             scale=cfg.scale,
             sliding_window_size=cfg.sliding_window,
             program_config=cfg.decode_sdpa_prg_config,
-            compute_kernel_config=cfg.sdpa_decode_compute_kernel_cfg,
+            compute_kernel_config=self.config.sdpa_decode_compute_kernel_cfg,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -934,7 +947,7 @@ class Attention1D(LightweightModule):
             scale=cfg.scale,
             sliding_window_size=cfg.sliding_window,
             program_config=cfg.decode_sdpa_prg_config,
-            compute_kernel_config=cfg.sdpa_decode_compute_kernel_cfg,
+            compute_kernel_config=self.config.sdpa_decode_compute_kernel_cfg,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -1303,7 +1316,7 @@ class Attention1D(LightweightModule):
             memory_config_ag=cfg.decode_all_gather_matmul_memcfg,
             memory_config_mm=cfg.decode_residual_memcfg,
             program_config=cfg.decode_all_gather_matmul_prg_config,
-            compute_kernel_config=cfg.li_o_decode_compute_kernel_cfg,
+            compute_kernel_config=self.config.li_o_decode_compute_kernel_cfg,
             chunks_per_sync=cfg.decode_agmm_chunks_per_sync,
             num_workers_per_link=cfg.decode_agmm_num_workers_per_link,
             num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
@@ -1330,7 +1343,7 @@ class Attention1D(LightweightModule):
             self.wo,
             program_config=cfg.decode_attn_output_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            compute_kernel_config=cfg.li_o_decode_compute_kernel_cfg,
+            compute_kernel_config=self.config.li_o_decode_compute_kernel_cfg,
         )
 
         return dense_out
@@ -1490,7 +1503,10 @@ class Attention1D(LightweightModule):
 
         # Get compute kernel config for Q/K normalization
         # Q/K norm uses interleaved path (not sharded like regular decode RMSNorm)
-        qk_norm_compute_kernel = ttnn.WormholeComputeKernelConfig(
+        arch = mesh_device.arch()
+        architecture = _attention_architecture(mesh_device, arch)
+        qk_norm_compute_kernel = ttnn.init_device_compute_kernel_config(
+            arch,
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
@@ -1511,7 +1527,7 @@ class Attention1D(LightweightModule):
                 cache_dir_weight_name=(Path(weight_cache_path) / layer_name, "q_norm") if weight_cache_path else None,
             )
 
-            q_norm_config = RMSNorm1DConfig(
+            q_norm_common = RMSNorm1DConfig(
                 weight=q_norm_lazy,
                 mesh_device=mesh_device,
                 eps=configuration.norm_eps,
@@ -1519,8 +1535,8 @@ class Attention1D(LightweightModule):
                 decode_in_sharded=False,  # Q/K heads are interleaved after create_qkv_heads
                 decode_out_sharded=False,
                 prefill_distributed=False,  # Q/K norm doesn't need distributed prefill
-                compute_kernel_config=qk_norm_compute_kernel,
             )
+            q_norm_config = replace(q_norm_common, compute_kernel_config=qk_norm_compute_kernel)
 
         if f"{k_norm_str}.weight" in state_dict:
             k_norm_torch = state_dict[f"{k_norm_str}.weight"]
@@ -1536,7 +1552,7 @@ class Attention1D(LightweightModule):
                 cache_dir_weight_name=(Path(weight_cache_path) / layer_name, "k_norm") if weight_cache_path else None,
             )
 
-            k_norm_config = RMSNorm1DConfig(
+            k_norm_common = RMSNorm1DConfig(
                 weight=k_norm_lazy,
                 mesh_device=mesh_device,
                 eps=configuration.norm_eps,
@@ -1544,8 +1560,8 @@ class Attention1D(LightweightModule):
                 decode_in_sharded=False,  # Q/K heads are interleaved after create_qkv_heads
                 decode_out_sharded=False,
                 prefill_distributed=False,  # Q/K norm doesn't need distributed prefill
-                compute_kernel_config=qk_norm_compute_kernel,
             )
+            k_norm_config = replace(k_norm_common, compute_kernel_config=qk_norm_compute_kernel)
 
         # Handle QKV bias
         wqkv_bias = None
@@ -1614,18 +1630,23 @@ class Attention1D(LightweightModule):
             use_fused_all_gather_matmul=use_fused_all_gather_matmul,
             decode_all_gather_matmul_prg_config=model_config.get("ATTN_ALL_GATHER_MATMUL_PROGCFG"),
             decode_all_gather_matmul_memcfg=model_config.get("ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"),
+            # Use provided transformation matrices if available; otherwise auto-created in resolve
+            transformation_mat_decode=transformation_mats.get("decode") if transformation_mats else None,
+            transformation_mat_prefill=transformation_mats.get("prefill") if transformation_mats else None,
             li_qkv_decode_compute_kernel_cfg=li_qkv_decode_cfg,
             sdpa_decode_compute_kernel_cfg=sdpa_decode_cfg,
             li_o_decode_compute_kernel_cfg=li_o_decode_cfg,
             li_qkv_prefill_compute_kernel_cfg=li_qkv_prefill_cfg,
             sdpa_prefill_compute_kernel_cfg=sdpa_prefill_cfg,
             li_o_prefill_compute_kernel_cfg=li_o_prefill_cfg,
-            # Use provided transformation matrices if available; otherwise auto-created in resolve
-            transformation_mat_decode=transformation_mats.get("decode") if transformation_mats else None,
-            transformation_mat_prefill=transformation_mats.get("prefill") if transformation_mats else None,
+            prefill_qkv_grid=(8, 8) if architecture == "wormhole" else (8, 10),
+            dram_shard_grid_width=(8 if architecture == "wormhole" else configuration.dram_shard_grid_width),
+            decode_create_qkv_head_grid=None if architecture == "wormhole" else ttnn.CoreGrid(y=4, x=8),
+            decode_transformation_core_grid=(
+                mesh_device.compute_with_storage_grid_size() if architecture == "wormhole" else ttnn.CoreCoord(8, 8)
+            ),
         )
-
-        return cls.from_config(config)
+        return cls._from_config_with_arch(config, arch)
 
 
 # =============================================================================
@@ -1633,9 +1654,157 @@ class Attention1D(LightweightModule):
 # =============================================================================
 
 
-def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
+_ATTENTION_COMPUTE_SLOT_NAMES = (
+    "li_qkv_decode_compute_kernel_cfg",
+    "sdpa_decode_compute_kernel_cfg",
+    "li_o_decode_compute_kernel_cfg",
+    "li_qkv_prefill_compute_kernel_cfg",
+    "sdpa_prefill_compute_kernel_cfg",
+    "li_o_prefill_compute_kernel_cfg",
+)
+
+
+def _attention_mesh_device(config: Attention1DConfig) -> ttnn.MeshDevice:
+    mesh_device = config.mesh_device or config.wqkv.device or ttnn.GetDefaultDevice()
+    if mesh_device is None:
+        raise ValueError("Attention1D requires a mesh_device on the config, weight, or default device")
+    return mesh_device
+
+
+def _attention_architecture(mesh_device: ttnn.MeshDevice, arch) -> str:
+    """Return the supported architecture name using only the concrete mesh."""
+    if arch == ttnn.device.Arch.WORMHOLE_B0:
+        return "wormhole"
+    if arch == ttnn.device.Arch.BLACKHOLE:
+        return "blackhole"
+    raise ValueError(f"Unsupported Attention1D architecture: {arch}")
+
+
+def _shared_attention_compute_defaults(arch) -> dict[str, object]:
+    """Build the architecture-neutral TTTv2 six-slot baseline for ``arch``.
+
+    This preserves simple/common-config construction. Model numerical recipes
+    are supplied explicitly by model-owned architecture wrappers and take
+    precedence over these shared defaults.
+    """
+
+    def make(fidelity, *, fp32=False):
+        return ttnn.init_device_compute_kernel_config(
+            arch,
+            math_fidelity=fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32,
+            packer_l1_acc=True,
+        )
+
+    return {
+        "li_qkv_decode_compute_kernel_cfg": make(ttnn.MathFidelity.HiFi2),
+        "sdpa_decode_compute_kernel_cfg": make(ttnn.MathFidelity.HiFi2),
+        "li_o_decode_compute_kernel_cfg": make(ttnn.MathFidelity.HiFi2),
+        "li_qkv_prefill_compute_kernel_cfg": make(ttnn.MathFidelity.HiFi2),
+        "sdpa_prefill_compute_kernel_cfg": make(ttnn.MathFidelity.HiFi4, fp32=True),
+        "li_o_prefill_compute_kernel_cfg": make(ttnn.MathFidelity.HiFi2),
+    }
+
+
+def _wormhole_attention_architecture_fields(mesh_device: ttnn.MeshDevice) -> dict[str, object]:
+    """Return the frozen Wormhole compatibility geometry.
+
+    Blackhole geometry is deliberately absent: model/SKU overrides are
+    expressed as optional fields on ``Attention1DConfig``.
+    """
+    return {
+        "prefill_qkv_grid": (8, 8),
+        "dram_shard_grid_width": 8,
+        "decode_create_qkv_head_grid": None,
+        "decode_transformation_core_grid": mesh_device.compute_with_storage_grid_size(),
+    }
+
+
+def _blackhole_attention_mesh_overlay(mesh_device: ttnn.MeshDevice) -> dict[str, object]:
+    """Resolve effective Blackhole mesh/SKU geometry for the simple API."""
+    return {
+        "prefill_qkv_grid": (8, 10),
+        "dram_shard_grid_width": mesh_device.dram_grid_size().x,
+        "decode_create_qkv_head_grid": ttnn.CoreGrid(y=4, x=8),
+        "decode_transformation_core_grid": ttnn.CoreCoord(8, 8),
+    }
+
+
+def resolve_attention1d_arch_config(config: Attention1DConfig, *, _arch=None) -> Attention1DConfig:
+    """Resolve and validate Attention1D's architecture composition exactly once."""
+    if not isinstance(config, Attention1DConfig):
+        raise TypeError("resolve_attention1d_arch_config expects Attention1DConfig")
+    common = config
+    mesh_device = _attention_mesh_device(common)
+    arch = mesh_device.arch() if _arch is None else _arch
+    architecture = _attention_architecture(mesh_device, arch)
+
+    defaults = _shared_attention_compute_defaults(arch)
+    slots = {
+        name: defaults[name] if getattr(common, name) is None else getattr(common, name)
+        for name in _ATTENTION_COMPUTE_SLOT_NAMES
+    }
+    default_fields = (
+        _wormhole_attention_architecture_fields(mesh_device)
+        if architecture == "wormhole"
+        else _blackhole_attention_mesh_overlay(mesh_device)
+    )
+    architecture_fields = {
+        name: default if getattr(common, name) is None else getattr(common, name)
+        for name, default in default_fields.items()
+    }
+
+    missing = [name for name, value in slots.items() if value is None]
+    if missing:
+        raise ValueError(f"Incomplete {architecture} Attention1D recipe; missing: {', '.join(missing)}")
+    kernel_arch = ttnn.device.Arch.WORMHOLE_B0 if architecture == "wormhole" else ttnn.device.Arch.BLACKHOLE
+    copied_slots = {}
+    for name, value in slots.items():
+        try:
+            copied_slots[name] = ttnn.init_device_compute_kernel_config(kernel_arch, value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Invalid {architecture} Attention1D {name}: {error}") from error
+    slots = copied_slots
+    dram_width = architecture_fields["dram_shard_grid_width"]
+    expected_dram_width = 8 if architecture == "wormhole" else mesh_device.dram_grid_size().x
+    if dram_width <= 0:
+        raise ValueError("Attention1D SKU overlay requires a positive dram_shard_grid_width")
+    if dram_width != expected_dram_width:
+        raise ValueError(f"Attention1D SKU DRAM width {dram_width} does not match resolved width {expected_dram_width}")
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    qkv_x, qkv_y = architecture_fields["prefill_qkv_grid"]
+    if qkv_x <= 0 or qkv_y <= 0 or qkv_x > compute_grid.x or qkv_y > compute_grid.y:
+        raise ValueError(
+            f"Attention1D prefill QKV grid {(qkv_x, qkv_y)} exceeds compute grid " f"{(compute_grid.x, compute_grid.y)}"
+        )
+    for field_name in ("decode_create_qkv_head_grid", "decode_transformation_core_grid"):
+        grid = architecture_fields[field_name]
+        if grid is None:
+            continue
+        if grid.x <= 0 or grid.y <= 0 or grid.x > compute_grid.x or grid.y > compute_grid.y:
+            raise ValueError(
+                f"Attention1D {field_name} {(grid.x, grid.y)} exceeds compute grid "
+                f"{(compute_grid.x, compute_grid.y)}"
+            )
+
+    return _resolve_attention1d_config(
+        common,
+        _architecture=architecture,
+        _architecture_fields=architecture_fields,
+        _resolved_fields={**slots, **architecture_fields},
+    )
+
+
+def _resolve_attention1d_config(
+    config: Attention1DConfig,
+    *,
+    _architecture: str | None = None,
+    _architecture_fields: dict[str, object] | None = None,
+    _resolved_fields: dict[str, object] | None = None,
+) -> Attention1DConfig:
     """Materialize the config with sensible defaults."""
-    to_set = {}
+    to_set = dict(_resolved_fields or {})
 
     # --- Phase 1: Model dimensions (fail-fast validation, no device needed) ---
     # n_heads, n_kv_heads, head_dim MUST be provided - they cannot be reliably inferred
@@ -1672,15 +1841,21 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     # --- Phase 2: Device and foundational fields ---
 
     # Derive mesh_device
-    mesh_device = config.mesh_device
-    if mesh_device is None:
-        mesh_device = config.wqkv.device
-    if mesh_device is None:
-        mesh_device = ttnn.GetDefaultDevice()
+    mesh_device = _attention_mesh_device(config)
     if config.mesh_device is None:
         to_set["mesh_device"] = mesh_device
 
     assert mesh_device is not None, "mesh_device must be available!"
+    if _architecture is None:
+        raise ValueError("Attention1D internal config resolution requires a construction-time architecture")
+    architecture = _architecture
+    is_bh = architecture == "blackhole"
+    if _architecture_fields is None:
+        if is_bh:
+            raise ValueError("Blackhole Attention1D requires explicit SKU overlay fields")
+        architecture_fields = _wormhole_attention_architecture_fields(mesh_device)
+    else:
+        architecture_fields = _architecture_fields
 
     num_devices = mesh_device.get_num_devices()
 
@@ -1744,35 +1919,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     if config.activation_dtype is None:
         to_set["activation_dtype"] = ttnn.bfloat16
 
-    # --- Phase 5: Compute kernel configs ---
-
-    compute_kernel_hifi2_fp16 = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
-    compute_kernel_hifi4 = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
-
-    if config.li_qkv_decode_compute_kernel_cfg is None:
-        to_set["li_qkv_decode_compute_kernel_cfg"] = compute_kernel_hifi2_fp16
-    if config.sdpa_decode_compute_kernel_cfg is None:
-        to_set["sdpa_decode_compute_kernel_cfg"] = compute_kernel_hifi2_fp16
-    if config.li_o_decode_compute_kernel_cfg is None:
-        to_set["li_o_decode_compute_kernel_cfg"] = compute_kernel_hifi2_fp16
-    if config.li_qkv_prefill_compute_kernel_cfg is None:
-        to_set["li_qkv_prefill_compute_kernel_cfg"] = compute_kernel_hifi2_fp16
-    if config.sdpa_prefill_compute_kernel_cfg is None:
-        to_set["sdpa_prefill_compute_kernel_cfg"] = compute_kernel_hifi4
-    if config.li_o_prefill_compute_kernel_cfg is None:
-        to_set["li_o_prefill_compute_kernel_cfg"] = compute_kernel_hifi2_fp16
-
-    # --- Phase 6: Program configs ---
+    # --- Phase 5: Program configs ---
 
     tile_size = TILE_SIZE
     tile_padded_batch_rows = tile_size * math.ceil(config.max_batch_size / tile_size)
@@ -1819,12 +1966,12 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
         to_set["decode_create_qkv_head_memcfg"] = (
             ttnn.create_sharded_memory_config(
                 shape=(TILE_SIZE, head_dim),
-                core_grid=ttnn.CoreGrid(y=4, x=8),
+                core_grid=architecture_fields["decode_create_qkv_head_grid"],
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            if is_blackhole()
+            if is_bh
             else ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         )
 
@@ -1845,14 +1992,15 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     # DRAM shard grid width: on Wormhole always 8 (despite 12 physical DRAM cores);
     # on Blackhole use actual DRAM grid width (7 for P100, 8 for P150).
     # Matching per_core_N to this width avoids silent PCC issues on P100.
-    dram_shard_grid_width = 8 if not is_blackhole() else mesh_device.dram_grid_size().x
+    dram_shard_grid_width = architecture_fields["dram_shard_grid_width"]
+    qkv_prefill_grid = architecture_fields["prefill_qkv_grid"]
 
     if config.prefill_xqkv_prg_config is None:
 
         @lru_cache
         def xqkv_prefill_prg_config(seq_len: int):
             return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
+                compute_with_storage_grid_size=qkv_prefill_grid,
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -1868,7 +2016,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     # minimal_matmul config for QKV (only materialized when the opt-in is set). Block sizes and grid
     # mirror TTTv1 (model_config.py:1626-1632): a full 8x8 (8x10 on BH) compute grid, 8/8/8 blocks.
     if config.prefill_qkv_minimal_matmul and config.prefill_xqkv_minimal_matmul_config is None:
-        minimal_qkv_grid = ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8)
+        minimal_qkv_grid = ttnn.CoreCoord(*qkv_prefill_grid)
 
         @lru_cache
         def xqkv_minimal_matmul_config(seq_len: int):
@@ -1885,7 +2033,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     # as the QKV minimal config — the folded WO matmul is the same shape class (full-K activation @ a
     # PlacementShard(-1) column-sharded weight), so it tiles identically.
     if config.prefill_wo_minimal_matmul and config.prefill_wo_minimal_matmul_config is None:
-        minimal_wo_grid = ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8)
+        minimal_wo_grid = ttnn.CoreCoord(*qkv_prefill_grid)
 
         @lru_cache
         def wo_minimal_matmul_config(seq_len: int):
@@ -2172,7 +2320,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
         doubled_batch_size = max_batch_size * 2 if use_qk_fused else max_batch_size
 
         # Get core grid for batch distribution
-        core_grid = ttnn.CoreCoord(8, 8) if is_blackhole() else mesh_device.compute_with_storage_grid_size()
+        core_grid = architecture_fields["decode_transformation_core_grid"]
         batch_grid = ttnn.num_cores_to_corerangeset(doubled_batch_size, core_grid, row_wise=True)
 
         # Create transformation matrix repeated across batch cores

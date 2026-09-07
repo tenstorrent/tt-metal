@@ -82,8 +82,8 @@ class RMSNorm1DConfig:
     decode_input_memcfg: ttnn.MemoryConfig | None = None
     prefill_input_memcfg: ttnn.MemoryConfig | None = None
 
-    # Compute kernel config (shared across paths)
-    compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
+    # Compute kernel config (None = architecture default resolved from mesh_device)
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
 
     # Internal: distributed weight LazyWeight (sharded across devices for Path 3)
     # Note: Uses LazyWeight with explicit mesh_mapper_config to shard weights correctly.
@@ -136,19 +136,20 @@ class RMSNorm1D(LightweightModule):
         Note: Use from_config() to customize eps, add_unit_offset, or other settings.
         """
         super().__init__()
-        self.config = _resolve_1d_config(RMSNorm1DConfig(weight=weight))
-        self._device_weights_loaded = False
-        self._bind_forward_methods()
+        self._initialize_from_config(resolve_rmsnorm_1d_arch_config(RMSNorm1DConfig(weight=weight)))
 
     @classmethod
     def from_config(cls, config: RMSNorm1DConfig):
         """Power API - any level of customization via config."""
         instance = object.__new__(cls)
         super(RMSNorm1D, instance).__init__()
-        instance.config = _resolve_1d_config(config)
-        instance._device_weights_loaded = False
-        instance._bind_forward_methods()
+        instance._initialize_from_config(resolve_rmsnorm_1d_arch_config(config))
         return instance
+
+    def _initialize_from_config(self, config: RMSNorm1DConfig) -> None:
+        self.config = config
+        self._device_weights_loaded = False
+        self._bind_forward_methods()
 
     def _bind_forward_methods(self):
         """Bind decode_forward and prefill_forward based on config."""
@@ -390,17 +391,10 @@ class RMSNorm1D(LightweightModule):
             ),
         )
 
-        # Get compute kernel config (e.g., fp32_dest_acc_en for Qwen models)
-        fp32_dest_acc_en = True
-        if hasattr(args, "base_model_name") and args.base_model_name in ("Qwen2.5-7B", "Qwen2.5-VL-7B"):
-            fp32_dest_acc_en = False
-
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            packer_l1_acc=False,
-        )
+        # Preserve the legacy bridge's established numerical policy. Native TTTv2
+        # model profiles supply their own explicit architecture wrapper instead.
+        arch = mesh_device.arch()
+        compute_kernel_config = _legacy_rmsnorm_compute_kernel_config(arch, getattr(args, "base_model_name", None))
 
         # Determine prefill_distributed based on dim and num_devices.
         # Keep dim=4096 on the distributed path so multichip prefill norms match
@@ -422,12 +416,144 @@ class RMSNorm1D(LightweightModule):
             compute_kernel_config=compute_kernel_config,
         )
 
-        return cls.from_config(config)
+        instance = object.__new__(cls)
+        super(RMSNorm1D, instance).__init__()
+        instance._initialize_from_config(_resolve_rmsnorm_1d_arch_config(config, mesh_device=mesh_device, arch=arch))
+        return instance
 
 
 # =============================================================================
 # Config resolution
 # =============================================================================
+
+
+def _rmsnorm_compute_kernel_config(arch) -> ttnn.DeviceComputeKernelConfig:
+    """Construct the TTTv1-matched RMSNorm recipe for the concrete device."""
+    return ttnn.init_device_compute_kernel_config(
+        arch,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
+def _legacy_rmsnorm_compute_kernel_config(arch, base_model_name: str | None) -> ttnn.DeviceComputeKernelConfig:
+    """Preserve the retiring ModelArgs bridge's established per-model policy."""
+    return ttnn.init_device_compute_kernel_config(
+        arch,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=base_model_name not in ("Qwen2.5-7B", "Qwen2.5-VL-7B"),
+        packer_l1_acc=False,
+    )
+
+
+def _validate_rmsnorm_compute_kernel_config(compute_kernel_config) -> None:
+    if compute_kernel_config is None:
+        raise ValueError("RMSNorm1D architecture config requires compute_kernel_config")
+    if not isinstance(compute_kernel_config, ttnn.WormholeComputeKernelConfig):
+        raise TypeError(
+            "RMSNorm1D compute_kernel_config must be a concrete TTNN compute kernel config, "
+            f"got {type(compute_kernel_config).__name__}"
+        )
+
+
+def _derive_rmsnorm_mesh_device(config: RMSNorm1DConfig) -> ttnn.MeshDevice:
+    mesh_device = config.mesh_device
+    if mesh_device is None:
+        mesh_device = config.weight.device
+    if mesh_device is None:
+        mesh_device = ttnn.GetDefaultDevice()
+    if mesh_device is None:
+        raise ValueError("RMSNorm1D mesh_device must be available")
+    if config.weight.device is not None and config.weight.device is not mesh_device:
+        raise ValueError("RMSNorm1D mesh_device must match weight.device")
+    return mesh_device
+
+
+def _validate_rmsnorm_program_config(
+    config: RMSNorm1DConfig, compute_kernel_config: ttnn.DeviceComputeKernelConfig
+) -> None:
+    if not config.decode_in_sharded:
+        if config.decode_out_sharded:
+            raise ValueError("decode_out_sharded=True requires decode_in_sharded=True")
+        return
+
+    program_config = config.decode_program_config
+    memory_config = config.decode_memory_config
+    if program_config is None or memory_config is None:
+        raise ValueError("Sharded RMSNorm1D decode requires decode_program_config and decode_memory_config")
+    if not isinstance(program_config, ttnn.LayerNormShardedMultiCoreProgramConfig):
+        raise TypeError("decode_program_config must be LayerNormShardedMultiCoreProgramConfig")
+
+    if program_config.block_h <= 0 or program_config.block_w <= 0 or program_config.subblock_w <= 0:
+        raise ValueError("RMSNorm1D decode program block and subblock dimensions must be positive")
+    if program_config.block_w % program_config.subblock_w != 0:
+        raise ValueError("RMSNorm1D decode block_w must be divisible by subblock_w")
+
+    grid = program_config.compute_with_storage_grid_size
+    if grid.x <= 0 or grid.y <= 0:
+        raise ValueError("RMSNorm1D decode program grid dimensions must be positive")
+    device_grid = config.mesh_device.compute_with_storage_grid_size()
+    if grid.x > device_grid.x or grid.y > device_grid.y:
+        raise ValueError("RMSNorm1D decode program grid exceeds the device compute grid")
+
+    dim = config.weight.source.numel()
+    num_cores = grid.x * grid.y
+    tile_padded_batch_rows = TILE_SIZE * math.ceil(config.max_batch_size / TILE_SIZE)
+    expected_block_h = tile_padded_batch_rows // TILE_SIZE
+    expected_block_w = dim // num_cores // TILE_SIZE
+    if program_config.block_h != expected_block_h or program_config.block_w != expected_block_w:
+        raise ValueError(
+            "RMSNorm1D decode program blocks do not match batch/hidden geometry: "
+            f"got ({program_config.block_h}, {program_config.block_w}), "
+            f"expected ({expected_block_h}, {expected_block_w})"
+        )
+
+    if compute_kernel_config.dst_full_sync_en:
+        max_subblock_w = 8 if compute_kernel_config.fp32_dest_acc_en else 16
+    else:
+        max_subblock_w = 4 if compute_kernel_config.fp32_dest_acc_en else 8
+    if program_config.subblock_w > max_subblock_w:
+        raise ValueError(
+            "RMSNorm1D decode subblock_w exceeds destination-register capacity: "
+            f"{program_config.subblock_w} > {max_subblock_w}"
+        )
+
+    if not memory_config.is_sharded():
+        raise ValueError("Sharded RMSNorm1D decode requires a sharded decode_memory_config")
+    if memory_config.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        raise ValueError("RMSNorm1D decode_memory_config must be width sharded")
+    expected_shard_shape = [tile_padded_batch_rows, dim // num_cores]
+    if list(memory_config.shard_spec.shape) != expected_shard_shape:
+        raise ValueError(
+            "RMSNorm1D decode memory shard does not match program geometry: "
+            f"got {list(memory_config.shard_spec.shape)}, expected {expected_shard_shape}"
+        )
+
+
+def resolve_rmsnorm_1d_arch_config(config: RMSNorm1DConfig) -> RMSNorm1DConfig:
+    """Return a new fully resolved common config after one architecture query."""
+    mesh_device = _derive_rmsnorm_mesh_device(config)
+    return _resolve_rmsnorm_1d_arch_config(config, mesh_device=mesh_device, arch=mesh_device.arch())
+
+
+def _resolve_rmsnorm_1d_arch_config(config: RMSNorm1DConfig, *, mesh_device: ttnn.MeshDevice, arch) -> RMSNorm1DConfig:
+    if arch not in (ttnn.device.Arch.WORMHOLE_B0, ttnn.device.Arch.BLACKHOLE):
+        raise ValueError(f"Unsupported RMSNorm1D architecture: {arch}")
+
+    requested_compute = config.compute_kernel_config or _rmsnorm_compute_kernel_config(arch)
+    try:
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(arch, requested_compute)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Invalid RMSNorm1D compute recipe for {arch}: {error}") from error
+
+    _validate_rmsnorm_compute_kernel_config(compute_kernel_config)
+    resolved_common = _resolve_1d_config(config)
+    resolved_common = replace(resolved_common, compute_kernel_config=compute_kernel_config)
+    _validate_rmsnorm_program_config(resolved_common, compute_kernel_config)
+    return resolved_common
 
 
 def _resolve_1d_config(config: RMSNorm1DConfig) -> RMSNorm1DConfig:
@@ -441,15 +567,9 @@ def _resolve_1d_config(config: RMSNorm1DConfig) -> RMSNorm1DConfig:
     dim = config.weight.source.numel()
 
     # Derive mesh_device from weight
-    mesh_device = config.mesh_device
-    if mesh_device is None:
-        mesh_device = config.weight.device
-    if mesh_device is None:
-        mesh_device = ttnn.GetDefaultDevice()
+    mesh_device = _derive_rmsnorm_mesh_device(config)
     if config.mesh_device is None:
         to_set["mesh_device"] = mesh_device
-
-    assert mesh_device is not None, "mesh_device must be available!"
 
     num_devices = mesh_device.get_num_devices()
 
@@ -467,6 +587,12 @@ def _resolve_1d_config(config: RMSNorm1DConfig) -> RMSNorm1DConfig:
             to_set["prefill_distributed"] = False
         else:
             to_set["prefill_distributed"] = True
+    elif config.prefill_distributed and num_devices == 1:
+        raise ValueError("RMSNorm1D distributed prefill requires more than one device")
+    elif config.prefill_distributed and not can_shard_weights:
+        raise ValueError(
+            f"RMSNorm1D distributed prefill requires at least {num_devices} weight tiles, got {num_weight_tiles}"
+        )
 
     prefill_distributed = to_set.get("prefill_distributed", config.prefill_distributed)
 
@@ -474,17 +600,7 @@ def _resolve_1d_config(config: RMSNorm1DConfig) -> RMSNorm1DConfig:
     if config.tt_ccl is None and num_devices > 1 and prefill_distributed:
         to_set["tt_ccl"] = get_tt_ccl(mesh_device)
 
-    # --- Phase 3: Compute kernel config ---
-
-    if config.compute_kernel_config is None:
-        to_set["compute_kernel_config"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-
-    # --- Phase 4: Local decode configs (Path 1) ---
+    # --- Phase 3: Local decode configs (Path 1) ---
 
     tile_size = TILE_SIZE
     tile_padded_batch_rows = tile_size * math.ceil(config.max_batch_size / tile_size)
