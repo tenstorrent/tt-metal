@@ -591,7 +591,6 @@ def test_prefill_long_context_traced(
     finally:
         ttnn.release_trace(mesh_device, tid_ring)
 
-    ring_chunks = per_chunk[1:]
     device_s = sum(per_chunk)
     # Three different numbers, because conflating them understates the model by ~2x.
     #   device   — execute_trace + synchronize. What the hardware spends on prefill.
@@ -611,12 +610,12 @@ def test_prefill_long_context_traced(
     )
     logger.info(
         f"[traced_perf] TOTAL {context_len} tokens in {total_s:.1f}s ({context_len / total_s:.0f} tok/s) "
-        f"| chunk0(ring)={per_chunk[0] * 1000:.1f}ms | ring chunks mean={sum(ring_chunks) / len(ring_chunks) * 1000:.1f}ms "
-        f"min={min(ring_chunks) * 1000:.1f}ms max={max(ring_chunks) * 1000:.1f}ms"
+        f"| chunk0(ring)={per_chunk[0] * 1000:.1f}ms | ring chunks mean={sum(per_chunk) / len(per_chunk) * 1000:.1f}ms "
+        f"min={min(per_chunk) * 1000:.1f}ms max={max(per_chunk) * 1000:.1f}ms"
     )
     logger.info(
-        f"[traced_perf] ring-depth cost: first={ring_chunks[0] * 1000:.1f}ms -> last={ring_chunks[-1] * 1000:.1f}ms "
-        f"= {ring_chunks[-1] / ring_chunks[0]:.2f}x over {len(ring_chunks) - 1} extra chunks of history"
+        f"[traced_perf] ring-depth cost: first={per_chunk[0] * 1000:.1f}ms -> last={per_chunk[-1] * 1000:.1f}ms "
+        f"= {per_chunk[-1] / per_chunk[0]:.2f}x over {len(per_chunk) - 1} extra chunks of history"
     )
 
     # No value check here. A trace records the values live at capture, so a per-chunk scalar
