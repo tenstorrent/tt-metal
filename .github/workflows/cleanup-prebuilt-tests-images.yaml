@@ -34,11 +34,12 @@ name: "Cleanup prebuilt tests images"
 # building one image per run instead of two would halve it.
 #
 # One matrix entry per package the producer creates, each with its own N, because
-# their push rates differ by two orders of magnitude. prebuilt-tests-env-image
-# carries a source tree plus build output rather than packages, and is pushed by
-# the producer test and the nightly consumers on the order of ten a day, so N=100
-# buys it more retention than N=4,800 buys the gate images. Recompute either when
-# a high-volume caller is wired, the same way the figure above is derived.
+# their push rates differ. prebuilt-tests-env-image carries a source tree plus
+# build output rather than packages. Sanity runs about 250 times a day and bakes
+# two of these per run, one per (base, profile) its impls need; runtime sanity
+# adds about 20 runs a day with one more. So roughly 520 a day, and N=1500 buys
+# about three days. Recompute if a caller is added, the same way the figure above
+# is derived from a rate.
 #
 # This deletes irreversibly. The package list is fixed in the matrix below and
 # never derives from event context, so this cannot resolve to a package it should
@@ -71,7 +72,7 @@ jobs:
           - package: tt-metal/prebuilt-tests-image
             keep: "4800"
           - package: tt-metal/prebuilt-tests-env-image
-            keep: "100"
+            keep: "1500"
     steps:
       - uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
         with:

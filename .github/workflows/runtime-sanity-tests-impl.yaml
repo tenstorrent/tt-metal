@@ -13,6 +13,15 @@ on:
         required: false
         type: string
         default: ""
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Env image carrying the source tree and build output at /work. When set,
+          the job mounts no /work, checks out only .github, and fetches no
+          artifact. Empty falls back to the artifact path, which is what forks and
+          a failed bake get.
       enabled-skus:
         required: true
         type: string
@@ -110,7 +119,7 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.prebuilt-image || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         # Quasar is checked first: sim_quasar contains neither 'bh_' nor 'blackhole' and would
@@ -123,7 +132,9 @@ jobs:
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
         TTNN_CONFIG_OVERRIDES: '{"validate_program_args": true}'
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
+        # The image owns /work, so no bind mount: one would mask the payload. A
+        # single-path entry is an anonymous volume on an unused path.
+        - ${{ inputs.prebuilt-image != '' && '/no_work_mount' || format('{0}/docker-job:/work', github.workspace) }}
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: ${{ startsWith(matrix.test-group.sku, 'sim_') && '--label runner-mode=sim' || '--device /dev/tenstorrent' }}
     defaults:
@@ -135,7 +146,10 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          submodules: recursive
+          # With an image the source is already at /work; the workspace copy only
+          # has to satisfy `uses: ./docker-job/...`, which resolves against it.
+          submodules: ${{ inputs.prebuilt-image == '' && 'recursive' || 'false' }}
+          sparse-checkout: ${{ inputs.prebuilt-image != '' && '.github' || '' }}
           path: docker-job
           ref: ${{ inputs.ref || github.sha }}
       - name: ⬇️  Setup Job
@@ -144,6 +158,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          env-from-image: ${{ inputs.prebuilt-image != '' }}
       - name: ⬇️  Setup TTSim
         if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
         uses: ./docker-job/.github/actions/setup-ttsim

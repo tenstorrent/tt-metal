@@ -17,6 +17,15 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Env image carrying the source tree and build output at /work. When set,
+          the job mounts no /work, checks out only .github, and fetches no
+          artifact. Empty falls back to the artifact path, which is what forks and
+          a failed bake get.
       enable-watcher:
         required: false
         type: boolean
@@ -184,14 +193,18 @@ jobs:
     runs-on: ${{ matrix.test-group.runs_on }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ (startsWith(matrix.test-group.sku, 'sim_') || matrix.test-group.sku == 'bh_p100') && (inputs.docker-image || 'docker-image-unresolved!') || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image) }}
+      # The prebuilt ref comes first so it short-circuits the harbor-prefix
+      # expression below: a per-commit image is canonical ghcr and never prefixed.
+      image: ${{ inputs.prebuilt-image || ((startsWith(matrix.test-group.sku, 'sim_') || matrix.test-group.sku == 'bh_p100') && (inputs.docker-image || 'docker-image-unresolved!') || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image)) }}
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         TT_LOGGER_LEVEL: warn
         TTNN_CONFIG_OVERRIDES: '{"validate_program_args": true}'
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        # The image owns /work, so no bind mount: one would mask the payload. A
+        # single-path entry is an anonymous volume on an unused path.
+        - ${{ inputs.prebuilt-image != '' && '/no_work_mount' || format('{0}/docker-job:/work', github.workspace) }}
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: ${{ startsWith(matrix.test-group.sku, 'sim_') && '--label runner-mode=sim' || (inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku)) && '--cap-add CAP_PERFMON --device /dev/tenstorrent -e TT_GH_CI_INFRA' || '--device /dev/tenstorrent -e TT_GH_CI_INFRA' }}
     defaults:
@@ -205,13 +218,17 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
           filter: blob:none
-          submodules: recursive
+          # With an image the source is already at /work; the workspace copy only
+          # has to satisfy `uses: ./docker-job/...`, which resolves against it.
+          submodules: ${{ inputs.prebuilt-image == '' && 'recursive' || 'false' }}
+          sparse-checkout: ${{ inputs.prebuilt-image != '' && '.github' || '' }}
           path: docker-job
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          env-from-image: ${{ inputs.prebuilt-image != '' }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}

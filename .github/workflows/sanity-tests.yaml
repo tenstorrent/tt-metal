@@ -298,6 +298,27 @@ jobs:
       test-docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
       llk-ci-docker-image: ${{ needs.build-artifact.outputs.llk-ci-docker-image }}
 
+  bake-env-ci-test-wheel:
+    needs: build-artifact
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      # Canonical, never a resolve-docker-pull-refs output: that one is
+      # Harbor-prefixed and the producer runs GitHub-hosted with no Harbor access.
+      base-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=wheel
+      # Must match what build-artifact was given, or src/ and the wheel disagree.
+      source-ref: ${{ inputs.ref || github.sha }}
+
   # Single SKU list that gates every suite (L2-nightly style). Each impl filters this list against
   # its own tests yaml via prepare_test_matrix.py, so an empty intersection just yields no jobs.
   generate-sku-matrix:
@@ -412,7 +433,10 @@ jobs:
 
   # TTNN sanity tests
   ttnn-sanity-tests:
-    needs: [build-artifact, generate-sku-matrix]
+    # The bake feeds prebuilt-image but is deliberately absent from `if`: a failed
+    # bake yields an empty ref and the legs fall back to the artifact path, rather
+    # than skipping and counting as success in workflow-status.
+    needs: [build-artifact, generate-sku-matrix, bake-env-ci-test-wheel]
     secrets: inherit
     if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.sanity-skus != '' && toJSON(inputs.run-ttnn-sanity-tests) != 'false' }}
     uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
@@ -428,6 +452,7 @@ jobs:
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
+      prebuilt-image: ${{ needs.bake-env-ci-test-wheel.outputs.image }}
 
   t3000-sanity-tests:
     if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-wormhole == 'true' && toJSON(inputs.run-t3000-sanity-tests) != 'false' }}
