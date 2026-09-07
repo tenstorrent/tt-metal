@@ -157,6 +157,225 @@ def test_indexed_fill_block_sharded_tile(device, B, H, W, b, core_grid_y, core_g
 
 
 @pytest.mark.parametrize(
+    "B, H, W, b, core_grid_y, core_grid_x",
+    [
+        (4, 64, 128, 2, 2, 2),
+        (8, 64, 256, 3, 2, 4),
+        (4, 128, 128, 1, 2, 2),
+        (4, 64, 256, 2, 2, 2),
+    ],
+    ids=["B4-H64-W128-b2-2x2", "B8-H64-W256-b3-2x4", "B4-H128-W128-b1-2x2", "B4-H64-W256-b2-2x2"],
+)
+def test_indexed_fill_width_sharded_tile_multi_row_grid(device, B, H, W, b, core_grid_y, core_grid_x):
+    batch_id = torch.randint(0, B, (1, 1, 1, b))
+    batch_id_ttnn = ttnn.Tensor(batch_id, ttnn.uint32).to(
+        device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    )
+
+    width_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(B, 1, H, W),
+        core_grid=ttnn.CoreGrid(y=core_grid_y, x=core_grid_x),
+        strategy=ttnn.ShardStrategy.WIDTH,
+    )
+    interleaved_l1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    torch_a = torch.rand((B, 1, H, W), dtype=torch.bfloat16)
+    torch_b = torch.rand((b, 1, H, W), dtype=torch.bfloat16)
+    input_tensor_a = ttnn.from_torch(
+        torch_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=width_sharded_mem_config
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=interleaved_l1
+    )
+
+    output_tensor = ttnn.indexed_fill(
+        batch_id_ttnn, input_tensor_a, input_tensor_b, memory_config=width_sharded_mem_config
+    )
+    assert tuple(output_tensor.shape) == (B, 1, H, W)
+    assert output_tensor.layout == ttnn.TILE_LAYOUT
+    logger.info(
+        f"Indexed Fill (WIDTH_SHARDED+TILE, {core_grid_y}x{core_grid_x} grid) Output Shape: "
+        f"{output_tensor.shape}, Memory Layout: {output_tensor.memory_config().memory_layout}"
+    )
+
+    golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=0)
+    assert_with_pcc(golden, ttnn.to_torch(output_tensor), 0.9999)
+
+
+@pytest.mark.parametrize(
+    "B, H, W, b, core_grid_y, core_grid_x",
+    [
+        (4, 64, 128, 2, 2, 2),
+        (8, 64, 256, 3, 2, 4),
+    ],
+    ids=["B4-H64-W128-b2-2x2", "B8-H64-W256-b3-2x4"],
+)
+def test_indexed_fill_width_sharded_col_major_orientation(device, B, H, W, b, core_grid_y, core_grid_x):
+    batch_id = torch.randint(0, B, (1, 1, 1, b))
+    batch_id_ttnn = ttnn.Tensor(batch_id, ttnn.uint32).to(
+        device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    )
+
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_x - 1, core_grid_y - 1))])
+    shard_width = W // (core_grid_x * core_grid_y)
+    width_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        # WIDTH_SHARDED shard height spans the whole flattened non-width volume (B * H), not just H.
+        ttnn.ShardSpec(grid, (B * H, shard_width), ttnn.ShardOrientation.COL_MAJOR),
+    )
+    interleaved_l1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    torch_a = torch.rand((B, 1, H, W), dtype=torch.bfloat16)
+    torch_b = torch.rand((b, 1, H, W), dtype=torch.bfloat16)
+    input_tensor_a = ttnn.from_torch(
+        torch_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=width_sharded_mem_config
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=interleaved_l1
+    )
+
+    output_tensor = ttnn.indexed_fill(
+        batch_id_ttnn, input_tensor_a, input_tensor_b, memory_config=width_sharded_mem_config
+    )
+    assert tuple(output_tensor.shape) == (B, 1, H, W)
+
+    golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=0)
+    assert_with_pcc(golden, ttnn.to_torch(output_tensor), 0.9999)
+
+
+@pytest.mark.parametrize(
+    "strategy, core_grid",
+    [
+        (ttnn.ShardStrategy.HEIGHT, ttnn.CoreGrid(y=1, x=4)),
+        (ttnn.ShardStrategy.WIDTH, ttnn.CoreGrid(y=1, x=4)),
+        (ttnn.ShardStrategy.WIDTH, ttnn.CoreGrid(y=2, x=2)),
+        (ttnn.ShardStrategy.BLOCK, ttnn.CoreGrid(y=2, x=2)),
+    ],
+    ids=["HEIGHT-1x4", "WIDTH-1x4", "WIDTH-2x2", "BLOCK-2x2"],
+)
+def test_indexed_fill_sharded_in_interleaved_out(device, strategy, core_grid):
+    B, H, W, b = 4, 64, 128, 2
+    sharded_cfg = ttnn.create_sharded_memory_config(shape=(B, 1, H, W), core_grid=core_grid, strategy=strategy)
+    interleaved_l1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    torch_a = torch.rand((B, 1, H, W), dtype=torch.bfloat16)
+    torch_b = torch.rand((b, 1, H, W), dtype=torch.bfloat16)
+    batch_id = torch.randint(0, B, (1, 1, 1, b))
+    batch_id_ttnn = ttnn.Tensor(batch_id, ttnn.uint32).to(device, interleaved_l1)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=sharded_cfg
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=interleaved_l1
+    )
+
+    output_tensor = ttnn.indexed_fill(batch_id_ttnn, input_tensor_a, input_tensor_b, memory_config=interleaved_l1)
+    assert not output_tensor.memory_config().is_sharded()
+
+    golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=0)
+    assert_with_pcc(golden, ttnn.to_torch(output_tensor), 0.9999)
+
+
+@pytest.mark.parametrize(
+    "B, b, D",
+    [
+        (8, 3, 64),
+        (4, 2, 32),
+    ],
+    ids=["B8-b3-D64", "B4-b2-D32"],
+)
+def test_indexed_fill_dram_sharded(device, B, b, D):
+    input_a_shape = (B, 1, 1, D)
+    input_b_shape = (b, 1, 1, D)
+
+    batch_id = torch.randint(0, B, (1, 1, 1, b))
+    batch_id_ttnn = ttnn.Tensor(batch_id, ttnn.uint32).to(
+        device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    )
+
+    dram_grid_size = device.dram_grid_size()
+    num_dram_cores = min(B, dram_grid_size.x * dram_grid_size.y)
+    dram_shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_cores - 1, 0))])
+    shard_height = (B + num_dram_cores - 1) // num_dram_cores
+    dram_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_shard_grid, (shard_height, D), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    interleaved_l1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    torch_a = torch.rand(input_a_shape, dtype=torch.bfloat16)
+    torch_b = torch.rand(input_b_shape, dtype=torch.bfloat16)
+    input_tensor_a = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=dram_sharded_mem_config,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=interleaved_l1
+    )
+
+    output_tensor = ttnn.indexed_fill(
+        batch_id_ttnn, input_tensor_a, input_tensor_b, memory_config=dram_sharded_mem_config
+    )
+    logger.info(
+        f"Indexed Fill (DRAM HEIGHT_SHARDED) Output Shape: {output_tensor.shape}, "
+        f"Memory Layout: {output_tensor.memory_config().memory_layout}, "
+        f"Buffer Type: {output_tensor.memory_config().buffer_type}"
+    )
+
+    golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=0)
+    assert_with_pcc(golden, ttnn.to_torch(output_tensor), 0.9999)
+
+
+@pytest.mark.parametrize(
+    "B, H, W, b",
+    [
+        (4, 32, 32, 2),
+        (8, 32, 64, 3),
+    ],
+    ids=["B4-H32-W32-b2", "B8-H32-W64-b3"],
+)
+def test_indexed_fill_nd_sharded(device, B, H, W, b):
+    input_a_shape = (B, 1, H, W)
+    input_b_shape = (b, 1, H, W)
+
+    batch_id = torch.randint(0, B, (1, 1, 1, b))
+    batch_id_ttnn = ttnn.Tensor(batch_id, ttnn.uint32).to(
+        device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    )
+
+    grid_size = device.compute_with_storage_grid_size()
+    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))
+    grid = ttnn.CoreRangeSet([core_range])
+    nd_shard_spec = ttnn.NdShardSpec(ttnn.Shape([1, 1, H, W]), grid)
+    nd_sharded_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+    interleaved_l1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    torch_a = torch.rand(input_a_shape, dtype=torch.bfloat16)
+    torch_b = torch.rand(input_b_shape, dtype=torch.bfloat16)
+    input_tensor_a = ttnn.from_torch(
+        torch_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=nd_sharded_mem_config
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=interleaved_l1
+    )
+
+    output_tensor = ttnn.indexed_fill(batch_id_ttnn, input_tensor_a, input_tensor_b, memory_config=interleaved_l1)
+    logger.info(
+        f"Indexed Fill (ND_SHARDED in, interleaved out) Output Shape: {output_tensor.shape}, "
+        f"Memory Layout: {output_tensor.memory_config().memory_layout}"
+    )
+
+    golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=0)
+    assert_with_pcc(golden, ttnn.to_torch(output_tensor), 0.9999)
+
+
+@pytest.mark.parametrize(
     "shape_a, b, dim",
     [
         # Replace whole batches along dim=0 (the default).
@@ -217,13 +436,9 @@ def test_indexed_fill_dim(device, shape_a, b, dim, layout):
     ["interleaved_tile", "height_sharded"],
 )
 def test_indexed_fill_program_cache(device, variant):
-    # Program-cache-hit correctness. The descriptor factory does not run create_descriptor()
-    # again on a cache hit: per-core buffer addresses are patched via Buffer* bindings, and
-    # the native/shard-local paths re-point the output-aliased CB (CBDescriptor::buffer) to
-    # the new output buffer. Run the op twice with freshly allocated tensors — kept alive in
-    # `held` so the allocator hands out DIFFERENT addresses on the second (cache-hit) run —
-    # and verify both results are numerically correct and that the hit reuses the cached
-    # program instead of building a new one. A stale-address bug would fail the second PCC.
+    # Run the op twice with freshly allocated tensors (kept alive in `held` so the allocator
+    # gives different addresses the second time) and check both runs are correct and that the
+    # second run reuses the cached program instead of building a new one.
     B, b, D, dim = 8, 3, 32, 0
     shape_a = (B, 1, 1, D)
     shape_b = (b, 1, 1, D)

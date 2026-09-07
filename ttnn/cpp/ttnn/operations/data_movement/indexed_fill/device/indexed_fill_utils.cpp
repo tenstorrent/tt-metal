@@ -151,6 +151,16 @@ bool is_shard_local_indexed_fill(
         return false;
     }
 
+    // The shard-local kernel derives each core's shard/column index from its row-major
+    // position `i` in create_program_artifacts()'s core list (corerange_to_cores(..., row_wise
+    // = true)), which only matches the tensor's actual shard-to-core assignment when the shard
+    // is ROW_MAJOR-oriented. A COL_MAJOR shard would read/write the wrong shard on multi-row /
+    // multi-column grids, so fall back to the generic path in that case instead.
+    if (a_shard.orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR ||
+        out_shard.orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR) {
+        return false;
+    }
+
     // input_b: must be interleaved OR the same WIDTH_SHARDED layout (same grid, same shard
     // width). Direct L1 arithmetic works for WIDTH_SHARDED because every core has all `b`
     // input_b batches locally, so `replace_src` (a global index in [0, b)) always resolves
@@ -178,6 +188,9 @@ bool is_shard_local_indexed_fill(
             return false;
         }
         if (b_mem.shard_spec()->shape[1] != a_shard.shape[1]) {
+            return false;
+        }
+        if (b_mem.shard_spec()->orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR) {
             return false;
         }
     }

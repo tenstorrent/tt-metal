@@ -41,7 +41,12 @@ CoreRangeSet get_indexed_fill_worker_grid(
 // BLOCK_SHARDED input_a.  Conditions:
 //   * input_a is WIDTH_SHARDED or BLOCK_SHARDED, L1
 //   * output  is the same sharding layout, L1, with the same shard grid and shard shape
-//   * input_b is either (a) the same sharding / grid / shape as input_a, or (b) INTERLEAVED
+//   * input_a and output shard orientation is ROW_MAJOR (matches the row-major core
+//     enumeration the program factory uses to derive per-core shard/column indices)
+//   * input_a sharding is even (no leftover row/col)
+//   * input_b is either (a) WIDTH_SHARDED with the same grid, shard width, and ROW_MAJOR
+//     orientation as input_a (shard height may differ, since input_b has `b` batches, not
+//     `B`), or (b) INTERLEAVED
 bool is_shard_local_indexed_fill(
     const tt::tt_metal::TensorSpec& input_a_spec,
     const tt::tt_metal::TensorSpec& input_b_spec,
