@@ -50,6 +50,8 @@
         "checker:clang-diagnostic-unsafe-buffer-usage",
         "--disable",
         "checker:clang-diagnostic-unused-parameter",
+        "--disable",
+        "checker:clang-diagnostic-reserved-identifier",
         "--checker-config",
         "clang-tidy:readability-function-cognitive-complexity:IgnoreMacros=false",
         "--checker-config",

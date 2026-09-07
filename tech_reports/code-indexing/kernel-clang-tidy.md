@@ -324,6 +324,7 @@ this domain:
 | `clang-diagnostic-unsafe-buffer-usage` | The C++ Safe Buffers profile, 1,315 findings carrying just two distinct messages, both "unsafe buffer access" with no specifics. It wants `std::span` for all pointer arithmetic, but kernels address L1 at fixed hardware addresses through raw pointers, which a span cannot represent. |
 | `clang-diagnostic-unused-parameter` | Redundant: 846 of its 907 findings share an exact file, line *and* column with `misc-unused-parameters`, which is kept because it also carries an auto-fix. Costs 61 unique positions. |
 | `prefix:cert` | Every one of the 41 `cert-*` checks is an alias, so the prefix removes no capability; 461 of the 463 findings it drops are reported at an identical position under the aliased original. See the note on alias duplication for the two it does cost. |
+| `clang-diagnostic-reserved-identifier` | The third name for a rule `bugprone-reserved-identifier` already covers. Its only 3 unique findings are the linker-mandated `_start` entry symbol. |
 
 Two more are muted on volume. `modernize-use-trailing-return-type` (1,182
 findings) is pure style and tt-umd mutes it too.
@@ -524,9 +525,12 @@ accepted for a one-line config against two findings in ~24,000. If either
 construct ever matters, the fix is to configure the original checker rather than
 to re-enable `cert-*` and take the 461 duplicates back.
 
-`clang-diagnostic-reserved-identifier` (202) is deliberately left enabled: it is
-not a clean subset, with 199 of its positions shared with
-`bugprone-reserved-identifier`, 3 unique to it and 29 unique to the other.
+`clang-diagnostic-reserved-identifier` (202) is disabled for the same reason,
+leaving `bugprone-reserved-identifier` as the single name for the rule. It is not
+a clean subset — 199 of its positions are shared, 3 are unique to it and 29 to
+the other — but all three of its unique findings are the firmware entry symbol
+`_start`, in `brisck.cc`, `trisck.cc` and `idle_erisck.cc`. That name is dictated
+by the linker, so the cost of dropping the diagnostic is nil.
 
 **Check options are the quietest suppressor here**, so they are worth reading as
 carefully as the `--disable` list. Nothing readability- or complexity-related is
