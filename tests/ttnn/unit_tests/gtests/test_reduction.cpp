@@ -50,6 +50,79 @@
 
 namespace ttnn::operations::reduction::test {
 
+TEST(ReduceHostPlanner, PartialMaxUsesExistingScalerRecipe) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    namespace args = ttnn::kernel_lib::reduce_plan_args;
+    for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE, tt::ARCH::QUASAR}) {
+        for (const bool fp32_dest : {false, true}) {
+            const ReduceHardwareConfig hardware{
+                .arch = arch,
+                .fp32_dest_acc_en = fp32_dest,
+                .dst_full_sync_en = false,
+                .available_l1_bytes = 1U << 20,
+            };
+            for (const auto dtype : {DataType::BFLOAT16, DataType::FLOAT32}) {
+                const auto spec = [dtype](const Shape& shape) {
+                    return TensorSpec(shape, TensorLayout(dtype, PageConfig(Layout::TILE), MemoryConfig{}));
+                };
+                for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
+                    for (const uint32_t valid : {1U, 15U, 16U, 17U, 31U}) {
+                        const auto input = spec(dim == ReduceOpDim::W ? Shape{32, 64 + valid} : Shape{64 + valid, 160});
+                        const auto output = spec(dim == ReduceOpDim::W ? Shape{32, 1} : Shape{1, 160});
+                        const auto plan = make_reduce_plan(
+                            input, output, ReduceOpMath::MAX, dim, 1.0F, ReduceFp32Mode::Fast, hardware);
+                        EXPECT_EQ(plan.partial_mode, compute_kernel_lib::ReducePartialMode::Scaler);
+                        EXPECT_EQ(plan.partial_reduce_axis_elements, valid);
+                        EXPECT_EQ(plan.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
+                        ASSERT_EQ(plan.auxiliary_tiles.size(), 2U);
+                        EXPECT_EQ(plan.auxiliary_tiles[0].num_valid_elements, 32U);
+                        EXPECT_EQ(plan.auxiliary_tiles[1].num_valid_elements, valid);
+                        EXPECT_EQ(
+                            plan.auxiliary_tiles[1].type,
+                            dim == ReduceOpDim::W ? ReduceAuxiliaryTileType::FirstRow
+                                                  : ReduceAuxiliaryTileType::FirstRowPerFaceRow);
+                        if (dim == ReduceOpDim::H) {
+                            EXPECT_EQ(plan.chunk.output_tiles, fp32_dest ? 4U : 5U);
+                        }
+                        const auto words =
+                            ReduceCallArgs(plan, {.input_cb_id = 0, .auxiliary_cb_id = 1, .output_cb_id = 16})
+                                .get_compile_time_args();
+                        EXPECT_EQ(
+                            args::extract(
+                                words[static_cast<uint32_t>(args::CallWord::Configuration)],
+                                args::config::partial_mode_shift,
+                                args::config::partial_mode_mask),
+                            static_cast<uint32_t>(compute_kernel_lib::ReducePartialMode::Scaler));
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(ReduceHostPlanner, PartialMaxScalerRequiresNativeReduceTile) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    const ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::BLACKHOLE,
+        .fp32_dest_acc_en = true,
+        .dst_full_sync_en = false,
+        .available_l1_bytes = 1U << 20,
+    };
+    for (const auto dtype : {DataType::INT32, DataType::FLOAT32}) {
+        const auto spec = [dtype](const Shape& shape) {
+            return TensorSpec(shape, TensorLayout(dtype, PageConfig(Layout::TILE), MemoryConfig{}));
+        };
+        for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
+            const auto input = spec(dim == ReduceOpDim::W ? Shape{32, 45} : Shape{45, 32});
+            const auto output = spec(dim == ReduceOpDim::W ? Shape{32, 1} : Shape{1, 32});
+            EXPECT_ANY_THROW(
+                make_reduce_plan(input, output, ReduceOpMath::MAX, dim, 1.0F, ReduceFp32Mode::Accurate, hardware));
+        }
+    }
+}
+
 TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;

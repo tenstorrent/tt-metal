@@ -66,7 +66,9 @@ class ReduceCase:
     input_dtype: str = "bf16"
     output_dtype: str = "bf16"
     fp32_mode: str = "Fast"
+    fp32_dest_acc_en: bool = True
     partial_elements: int = 0
+    max_identity_only: bool = False
     scalar: float = 1.0
 
     @property
@@ -300,7 +302,91 @@ def _boundary_cases() -> list[ReduceCase]:
     return cases
 
 
-ALL_CASES = tuple(_input_space_cases() + _regression_cases() + _numerical_space_cases() + _boundary_cases())
+def _partial_max_cases() -> list[ReduceCase]:
+    cases = []
+    for dim in ("REDUCE_ROW", "REDUCE_COL"):
+        for dtype in ("bf16", "fp32"):
+            cases.append(
+                ReduceCase(
+                    name=f"partial-max-{dtype}-dest16-{dim}",
+                    family="partial-max",
+                    dim=dim,
+                    rows=3,
+                    cols=9,
+                    pool="MAX",
+                    input_dtype=dtype,
+                    output_dtype=dtype,
+                    calls=2,
+                    fp32_dest_acc_en=False,
+                    partial_elements=17,
+                )
+            )
+            for scalar in (0.5, 2.0):
+                cases.append(
+                    ReduceCase(
+                        name=f"partial-max-{dtype}-{dim}-scale{scalar}",
+                        family="partial-max",
+                        dim=dim,
+                        rows=1,
+                        cols=1,
+                        pool="MAX",
+                        input_dtype=dtype,
+                        output_dtype=dtype,
+                        partial_elements=17,
+                        scalar=scalar,
+                    )
+                )
+            cases.append(
+                ReduceCase(
+                    name=f"partial-max-{dtype}-all-identity-{dim}",
+                    family="partial-max",
+                    dim=dim,
+                    rows=3,
+                    cols=3,
+                    pool="MAX",
+                    input_dtype=dtype,
+                    output_dtype=dtype,
+                    calls=2,
+                    partial_elements=17,
+                    max_identity_only=True,
+                )
+            )
+        for valid in (1, 15, 16, 17, 31):
+            cases.append(
+                ReduceCase(
+                    name=f"partial-max-bf16-{dim}-valid{valid}",
+                    family="partial-max",
+                    dim=dim,
+                    rows=1,
+                    cols=1,
+                    pool="MAX",
+                    partial_elements=valid,
+                )
+            )
+        for dtype in ("bf16", "fp32"):
+            for input_mode in INPUT_MODES:
+                cases.append(
+                    ReduceCase(
+                        name=f"partial-max-{dtype}-Fast-{dim}-{input_mode}-acc2",
+                        family="partial-max",
+                        dim=dim,
+                        rows=3 if dim == "REDUCE_ROW" else 9,
+                        cols=5,
+                        batches=2,
+                        pool="MAX",
+                        input_dtype=dtype,
+                        output_dtype=dtype,
+                        input_mode=input_mode,
+                        calls=2,
+                        partial_elements=17,
+                    )
+                )
+    return cases
+
+
+ALL_CASES = tuple(
+    _input_space_cases() + _regression_cases() + _numerical_space_cases() + _boundary_cases() + _partial_max_cases()
+)
 
 
 def _assert_complete_case_matrix() -> None:
@@ -459,7 +545,7 @@ def _make_plan(
         ),
         hardware=_PLANNER.ReduceHardwareConfig(
             arch=device.arch(),
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=case.fp32_dest_acc_en,
             dst_full_sync_en=False,
             available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
         ),
@@ -480,6 +566,8 @@ def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int]) -> None:
             if case.expected_algorithm == "ACCUMULATE_VIA_ADD"
             else _PLANNER.ReducePartialMode.SCALER
         )
+    elif case.partial_elements and case.pool == "MAX":
+        expected_partial = _PLANNER.ReducePartialMode.SCALER
 
     for index, (call, input_cb_id) in enumerate(zip(plan.calls, input_cb_ids)):
         assert call.input_cb_id == input_cb_id
@@ -556,7 +644,7 @@ def _repeated_input_cb_plan_compile_args(input_tensor, output) -> tuple[list[int
 def _compute_config(case: ReduceCase, input_cb_ids: list[int]) -> ttnn.ComputeConfigDescriptor:
     config = ttnn.ComputeConfigDescriptor(
         math_fidelity=ttnn.MathFidelity.HiFi3,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=case.fp32_dest_acc_en,
         dst_full_sync_en=False,
     )
     if case.input_dtype == "fp32" and case.fp32_mode == "Accurate":
@@ -581,6 +669,27 @@ def _make_logical_chunks(case: ReduceCase) -> list[torch.Tensor]:
             chunk = torch.rand(shape, generator=generator, dtype=torch.float32) + 0.125 * call
             if case.input_dtype == "bf16":
                 chunk = chunk.to(torch.bfloat16)
+        if case.partial_elements and case.pool == "MAX":
+            # Zero is not an identity for MAX. Keep every valid value negative
+            # and poison the padding so neither zero masking nor no masking passes.
+            # Exactly representable values make MAX comparisons exact even in fast mode.
+            chunk = -torch.randint(2, 128, shape, generator=generator).to(chunk.dtype)
+            if case.max_identity_only:
+                chunk.fill_(-torch.inf)
+            padding = 99.0
+            if not case.max_identity_only:
+                # Make the final valid lane win, with a distinct maximum per output.
+                # Alternate which accumulated call wins to exercise both fold operands.
+                output_elements = case.logical_height if case.dim == "REDUCE_ROW" else case.logical_width
+                index = torch.arange(output_elements)
+                delta = call * (2 * (index % 2) - 1)
+                edge = (-(32 + 2 * (index % 64) + delta) / 256).to(chunk.dtype)
+                if case.dim == "REDUCE_ROW":
+                    chunk[:, :, case.logical_width - 1] = edge
+                else:
+                    chunk[:, case.logical_height - 1, :] = edge
+            chunk[:, case.logical_height :, :] = padding
+            chunk[:, :, case.logical_width :] = padding
         chunks.append(chunk)
     return chunks
 
@@ -641,6 +750,8 @@ def _golden(case: ReduceCase, chunks: list[torch.Tensor]) -> torch.Tensor:
             golden = golden * case.scalar
     elif case.pool == "MAX":
         golden = partials.amax(dim=0)
+        if case.scalar != 1.0:
+            golden = golden * case.scalar
     else:
         golden = partials.amin(dim=0)
     return golden
@@ -798,10 +909,14 @@ def test_reduce_helpers_complete_input_space(device, case: ReduceCase):
     """Exercise every valid helper branch and its numerical/layout boundaries."""
     if "QUASAR" in str(device.arch()).upper() and (case.input_dtype == "int32" or case.fp32_mode == "Accurate"):
         pytest.skip("The reduce helper rejects SFPU reduce paths on Quasar")
+    if "QUASAR" in str(device.arch()).upper() and case.pool == "MAX" and case.dim == "REDUCE_ROW" and case.calls > 1:
+        pytest.skip("The MAX row accumulator reload is not supported on Quasar")
 
     actual, expected = _run_case(device, case)
     if case.input_dtype == "int32":
         torch.testing.assert_close(actual.to(torch.int64), expected, rtol=0, atol=0)
+    elif case.pool == "MAX" and case.partial_elements:
+        torch.testing.assert_close(actual.to(torch.float64), expected.to(torch.float64), rtol=0, atol=0)
     else:
         rtol = 0.05 if case.calls > 1 or case.input_dtype == "bf16" else 0.02
         torch.testing.assert_close(
