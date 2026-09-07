@@ -14,18 +14,11 @@ def make_tile_constant_tensor(shape, offset):
     return values.expand(shape) + offset
 
 
-@pytest.mark.parametrize(
-    "ttnn_op, torch_op",
-    [
-        (ttnn.add, torch.add),
-        (ttnn.subtract, torch.subtract),
-        (ttnn.multiply, torch.multiply),
-    ],
-)
+@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract, ttnn.multiply])
 @pytest.mark.parametrize("broadcast_lhs", [True, False])
 @pytest.mark.parametrize("rank", [7, 8])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-def test_binary_ng_broadcast_dim_minus_6_at_high_rank(device, ttnn_op, torch_op, broadcast_lhs, rank, layout):
+def test_binary_ng_broadcast_dim_minus_6_at_high_rank(device, ttnn_op, broadcast_lhs, rank, layout):
     # Dimensions -7 and outward match. Dimension -6 broadcasts while an outer
     # dimension is non-unit, so the collapsed nD input index must repeat.
     outer_dims = [2] * (rank - 6)
@@ -39,7 +32,7 @@ def test_binary_ng_broadcast_dim_minus_6_at_high_rank(device, ttnn_op, torch_op,
     lhs = ttnn.from_torch(torch_lhs, dtype=ttnn.bfloat16, layout=layout, device=device)
     rhs = ttnn.from_torch(torch_rhs, dtype=ttnn.bfloat16, layout=layout, device=device)
     actual = ttnn.to_torch(ttnn_op(lhs, rhs))
-    expected = torch_op(torch_lhs, torch_rhs)
+    expected = ttnn.get_golden_function(ttnn_op)(torch_lhs, torch_rhs)
 
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
