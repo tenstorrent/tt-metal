@@ -17,8 +17,9 @@ same reason the comparison is repeated at every window size the sweep dispatches
 ``WINDOWS``) rather than at one tile.
 
 An op with no table entry is not a failure; it falls back to the per-element loop.
-``test_no_unlisted_op_is_silently_bit_exact_capable`` reports the fallback set so the
-coverage stays visible instead of quietly shrinking.
+``test_vector_table_holds_its_floor_and_reports_the_fallback_set`` prints that fallback
+set and holds the vector table to a floor, so the coverage stays visible instead of
+quietly shrinking.
 """
 
 import pytest
@@ -286,36 +287,57 @@ def _compare(golden, operation, vector, scalar, evaluable, values, label):
 
 
 @pytest.mark.parametrize("operation", VECTOR_OPS, ids=lambda o: o.name)
-@pytest.mark.parametrize("population", POPULATIONS)
-@pytest.mark.parametrize("data_format", FORMATS, ids=lambda f: f.name)
-def test_vector_op_matches_scalar_op(operation, population, data_format):
-    """Every table entry, over every population, at every window, under both NaN rules."""
-    golden = _GOLDEN
-    _bind_formats(golden, data_format)
-    base = _population(population).to(torch.float32)
+def test_vector_op_matches_scalar_op(operation):
+    """Every table entry, over every population, at every window, under both NaN rules.
 
+    Only *operation* is parametrised. The population, format and window axes are looped
+    inside one item because they are cheap and the op axis is the one that carries the
+    diagnostic value: a failure names the op in its id and the cell in its message, and
+    88 items still spread across xdist workers, whereas 1,320 make every PR pay
+    collection and reporting for a matrix that runs in a couple of seconds.
+
+    ``checked`` is not decoration. Folding axes into a loop is exactly the edit that can
+    silently stop covering a cell -- a mis-scoped ``continue``, a loop nested one level
+    too deep -- and unlike a dropped parametrize argument nothing about the item count
+    would show it. The count is asserted against the product of the three axes.
+    """
+    golden = _GOLDEN
     vector_op = golden._vector_op(operation)
     assert vector_op is not None, f"{operation.name} is in the table but has no impl"
 
-    scalar, evaluable = _scalar_reference(golden, operation, base)
+    checked = 0
+    for population in POPULATIONS:
+        base = _population(population).to(torch.float32)
+        for data_format in FORMATS:
+            # Rebound per cell: the scalar oracle reads ``data_format`` too (the
+            # inf->NaN rule is applied on both sides), so it has to be re-evaluated per
+            # format rather than hoisted out with the population.
+            _bind_formats(golden, data_format)
+            scalar, evaluable = _scalar_reference(golden, operation, base)
 
-    for window in WINDOWS:
-        repeats = window // TILE
-        values = base.repeat(repeats)
-        _compare(
-            golden,
-            operation,
-            vector_op(values).to(torch.float32),
-            scalar.repeat(repeats),
-            evaluable.repeat(repeats),
-            values,
-            f"{population} / {data_format.name} / window {window}",
-        )
+            for window in WINDOWS:
+                repeats = window // TILE
+                values = base.repeat(repeats)
+                _compare(
+                    golden,
+                    operation,
+                    vector_op(values).to(torch.float32),
+                    scalar.repeat(repeats),
+                    evaluable.repeat(repeats),
+                    values,
+                    f"{population} / {data_format.name} / window {window}",
+                )
+                checked += 1
+
+    expected = len(POPULATIONS) * len(FORMATS) * len(WINDOWS)
+    assert checked == expected, (
+        f"{operation.name}: compared {checked} cells, expected {expected}; a "
+        "population, format or window is no longer being reached"
+    )
 
 
 @pytest.mark.parametrize("operation", VECTOR_OPS, ids=lambda o: o.name)
-@pytest.mark.parametrize("data_format", FORMATS, ids=lambda f: f.name)
-def test_vector_op_matches_scalar_op_in_the_tile_dtype(operation, data_format):
+def test_vector_op_matches_scalar_op_in_the_tile_dtype(operation):
     """The same agreement with the window arriving in the tile's own dtype.
 
     ``__call__`` does not hand ``vector_op`` an fp32 tensor: ``result`` follows
@@ -325,31 +347,40 @@ def test_vector_op_matches_scalar_op_in_the_tile_dtype(operation, data_format):
     the one dtype where that narrowing cannot lose anything -- a NaN sign included, which
     is exactly what ``cast_to_dest_dtype`` exists to preserve.
 
-    One cell rather than the full matrix: the populations are already covered in fp32,
-    and what is being pinned here is the dtype the window arrives in, so the specials
-    are the population that matters.
+    One population rather than the full matrix: the populations are already covered in
+    fp32, and what is being pinned here is the dtype the window arrives in, so the
+    specials are the population that matters. The format axis is looped in-item for the
+    reason given on ``test_vector_op_matches_scalar_op``, with the same count assertion.
     """
     golden = _GOLDEN
-    _bind_formats(golden, data_format)
-    values = _population("specials").to(format_dict[data_format])
-
     vector_op = golden._vector_op(operation)
-    scalar, evaluable = _scalar_reference(golden, operation, values)
-    _compare(
-        golden,
-        operation,
-        vector_op(values).to(torch.float32),
-        scalar,
-        evaluable,
-        values,
-        f"specials in {format_dict[data_format]} / {data_format.name}",
-    )
+
+    checked = 0
+    for data_format in FORMATS:
+        _bind_formats(golden, data_format)
+        values = _population("specials").to(format_dict[data_format])
+
+        scalar, evaluable = _scalar_reference(golden, operation, values)
+        _compare(
+            golden,
+            operation,
+            vector_op(values).to(torch.float32),
+            scalar,
+            evaluable,
+            values,
+            f"specials in {format_dict[data_format]} / {data_format.name}",
+        )
+        checked += 1
+
+    expected = len(FORMATS)
+    assert (
+        checked == expected
+    ), f"{operation.name}: compared {checked} formats, expected {expected}"
 
 
 @pytest.mark.parametrize("operation", VECTOR_OPS, ids=lambda o: o.name)
-@pytest.mark.parametrize("window", WINDOWS)
-def test_vector_op_preserves_shape_and_dtype(operation, window):
-    """The whole-tile result must be a same-length float tensor.
+def test_vector_op_preserves_shape_and_dtype(operation):
+    """The whole-tile result must be a same-length float tensor, at every window.
 
     ``__call__`` writes it straight into a slice of ``result``, so a shape or dtype
     surprise corrupts the tile rather than raising. Asserted on the *pre-cast* tensor:
@@ -359,10 +390,25 @@ def test_vector_op_preserves_shape_and_dtype(operation, window):
     """
     golden = _GOLDEN
     _bind_formats(golden, DataFormat.Float16_b)
-    values = _population("signed_wide").to(torch.float32).repeat(window // TILE)
-    raw = golden._vector_op(operation)(values)
-    assert raw.shape == values.shape
-    assert raw.dtype.is_floating_point, f"{operation.name} returned {raw.dtype}"
+    vector_op = golden._vector_op(operation)
+
+    checked = 0
+    for window in WINDOWS:
+        values = _population("signed_wide").to(torch.float32).repeat(window // TILE)
+        raw = vector_op(values)
+        assert raw.shape == values.shape, (
+            f"{operation.name} at window {window}: returned {tuple(raw.shape)}, "
+            f"expected {tuple(values.shape)}"
+        )
+        assert (
+            raw.dtype.is_floating_point
+        ), f"{operation.name} at window {window} returned {raw.dtype}"
+        checked += 1
+
+    expected = len(WINDOWS)
+    assert (
+        checked == expected
+    ), f"{operation.name}: checked {checked} windows, expected {expected}"
 
 
 def test_every_table_entry_is_a_registered_op():
@@ -376,7 +422,7 @@ def test_every_table_entry_is_a_registered_op():
     assert not unreachable, f"vector table entries with no registered op: {unreachable}"
 
 
-def test_no_unlisted_op_is_silently_bit_exact_capable():
+def test_vector_table_holds_its_floor_and_reports_the_fallback_set():
     """Report which ops still take the per-element path, and hold the table's floor.
 
     The report is the point: ops legitimately stay scalar, and this is the only place

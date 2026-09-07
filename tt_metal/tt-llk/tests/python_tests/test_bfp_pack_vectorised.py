@@ -117,47 +117,78 @@ def _populations():
 POPULATIONS = _populations()
 
 
-@pytest.mark.parametrize("magnitude_bits,reference_block_fn,packer", BFP_WIDTHS)
-@pytest.mark.parametrize("population", sorted(POPULATIONS), ids=lambda p: p)
-@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 # The full tile plus the partial-face layouts the packers support. Only the first is
 # the maximum layout, so only it gets the named constants -- the rest are deliberately
 # *not* MAX_NUM_FACES / MAX_FACE_R_DIM and reading them as literals is the point.
-@pytest.mark.parametrize(
-    "num_faces,face_r_dim",
-    [
-        (MAX_NUM_FACES, MAX_FACE_R_DIM),
-        (2, MAX_FACE_R_DIM),
-        (1, MAX_FACE_R_DIM),
-        (MAX_NUM_FACES, 1),
-    ],
-)
+LAYOUTS = [
+    (MAX_NUM_FACES, MAX_FACE_R_DIM),
+    (2, MAX_FACE_R_DIM),
+    (1, MAX_FACE_R_DIM),
+    (MAX_NUM_FACES, 1),
+]
+
+DTYPES = [torch.float32, torch.bfloat16]
+
+
+@pytest.mark.parametrize("magnitude_bits,reference_block_fn,packer", BFP_WIDTHS)
+@pytest.mark.parametrize("population", sorted(POPULATIONS), ids=lambda p: p)
 def test_vectorised_matches_reference(
-    magnitude_bits, reference_block_fn, packer, population, dtype, num_faces, face_r_dim
+    magnitude_bits, reference_block_fn, packer, population
 ):
-    """Exponents and per-datum mantissas must match the reference exactly."""
-    tensor = POPULATIONS[population].to(dtype)
-    flattened = _bfp_prepare_blocks(tensor, BLOCK_SIZE, num_faces, face_r_dim)
+    """Exponents and per-datum mantissas must match the reference exactly.
 
-    ref_exponents, ref_mantissas = _bfp_collect_blocks(
-        flattened, BLOCK_SIZE, reference_block_fn
-    )
-    vec_exponents, vec_mantissas = _bfp_quantize_blocks(
-        flattened, BLOCK_SIZE, magnitude_bits
-    )
+    The width and population axes are parametrised; dtype and layout are looped inside
+    one item. Width and population are what a failure needs in its id -- they say which
+    packer and which numeric region diverged -- while dtype and layout only change the
+    framing of the same comparison, and each is named in the failure message. Keeping
+    all four as parametrize axes made 384 unmarked items that every PR pays collection
+    and reporting for, to run a matrix that takes about a second.
 
-    # Compared via an explicit first-mismatch report rather than `assert a == b`:
-    # these are 1024-element lists, and pytest's list-diff rewriting on a failure is
-    # slow enough across this file's matrix to look like a hang.
-    _assert_datums_equal(vec_exponents, ref_exponents, "shared exponent")
-    _assert_datums_equal(vec_mantissas, ref_mantissas, "mantissa datum")
-    # The packers return Python ints in 0..255; anything else breaks bytes(...).
-    assert all(isinstance(v, int) and 0 <= v <= 0xFF for v in vec_exponents)
-    assert all(isinstance(v, int) and 0 <= v <= 0xFF for v in vec_mantissas)
-    # And the public packer's byte stream must be convertible, which is how every
-    # caller consumes it (bytes(pack_bfp8_b(...))).
-    assert isinstance(
-        bytes(packer(tensor, num_faces=num_faces, face_r_dim=face_r_dim)), bytes
+    ``checked`` is asserted against the product of the two inner axes: folding axes into
+    a loop is exactly the edit that can silently stop covering a cell, and unlike a
+    dropped parametrize argument nothing about the item count would reveal it.
+    """
+    checked = 0
+    for dtype in DTYPES:
+        tensor = POPULATIONS[population].to(dtype)
+        for num_faces, face_r_dim in LAYOUTS:
+            cell = f"{dtype} / num_faces={num_faces} / face_r_dim={face_r_dim}"
+            flattened = _bfp_prepare_blocks(tensor, BLOCK_SIZE, num_faces, face_r_dim)
+
+            ref_exponents, ref_mantissas = _bfp_collect_blocks(
+                flattened, BLOCK_SIZE, reference_block_fn
+            )
+            vec_exponents, vec_mantissas = _bfp_quantize_blocks(
+                flattened, BLOCK_SIZE, magnitude_bits
+            )
+
+            # Compared via an explicit first-mismatch report rather than `assert a == b`:
+            # these are 1024-element lists, and pytest's list-diff rewriting on a failure
+            # is slow enough across this file's matrix to look like a hang.
+            _assert_datums_equal(
+                vec_exponents, ref_exponents, f"{cell}: shared exponent"
+            )
+            _assert_datums_equal(
+                vec_mantissas, ref_mantissas, f"{cell}: mantissa datum"
+            )
+            # The packers return Python ints in 0..255; anything else breaks bytes(...).
+            assert all(
+                isinstance(v, int) and 0 <= v <= 0xFF for v in vec_exponents
+            ), f"{cell}: a shared exponent is not a byte-valued int"
+            assert all(
+                isinstance(v, int) and 0 <= v <= 0xFF for v in vec_mantissas
+            ), f"{cell}: a mantissa datum is not a byte-valued int"
+            # And the public packer's byte stream must be convertible, which is how every
+            # caller consumes it (bytes(pack_bfp8_b(...))).
+            assert isinstance(
+                bytes(packer(tensor, num_faces=num_faces, face_r_dim=face_r_dim)), bytes
+            ), f"{cell}: the packer's output is not convertible to bytes"
+            checked += 1
+
+    expected = len(DTYPES) * len(LAYOUTS)
+    assert checked == expected, (
+        f"{population}: compared {checked} cells, expected {expected}; a dtype or "
+        "layout is no longer being reached"
     )
 
 
