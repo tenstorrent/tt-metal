@@ -10,6 +10,15 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_w
 
 pytestmark = pytest.mark.use_module_device
 
+# Algorithm-specific thresholds, derived from FP32's 23 stored fraction bits:
+# the initial quotient is rounded in steps of 2**11 on Wormhole (bias 2**34)
+# and 2**10 on Blackhole (bias 2**33). For |a| = 2**31, the quotient reaches
+# half a step at |b| = 2**21 (WH) or 2**22 (BH), where the estimate can round
+# to zero. Test the boundary and both neighbors, with both divisor signs.
+# HW conversion edge case: q = 0 leaves residual magnitude 2**31, whose bit
+# pattern 0x80000000 is INT32_MIN in two's complement but negative zero to
+# the SFPU sign-magnitude-to-float conversion. These are algorithm/format
+# boundaries, not maximum divisor values supported by either architecture.
 INT32_MIN_THRESHOLD_DIVISORS = (
     2**21 - 1,
     2**21,
@@ -923,7 +932,9 @@ def test_div_edge_cases(rounding_mode, device):
 def test_div_int32_min_rounding_modes(rounding_mode, device):
     divisors = [
         *INT32_MIN_THRESHOLD_DIVISORS,
-        239823930,
+        239823930,  # Empirical non-power-of-two reproducer from issue #51476, not a format boundary.
+        # Large exact powers of two, then signed-format endpoints; with INT32_MIN
+        # as numerator these also cover small quotients and zero/nonzero remainders.
         2**30,
         -(2**30),
         2**31 - 1,
@@ -964,6 +975,9 @@ def test_div_int32_odd_residuals(rounding_mode, operand_kind, device):
     # odd numerators exercise the low bit discarded by residual conversion.
     # Unlike remainder's weaker reciprocal, division's Halley refinement must
     # leave enough correction accuracy for the single final adjustment.
+    # The 256-wide windows sample signed-format endpoints, the empirical
+    # remainder counterexample, and zero. Their size is coverage/tile alignment,
+    # not an algorithm threshold; step 2 selects odd residuals throughout.
     numerators = torch.cat(
         [
             torch.arange(-(2**31) + 1, -(2**31) + 256, 2, dtype=torch.int64),
@@ -983,6 +997,9 @@ def test_div_int32_odd_residuals(rounding_mode, operand_kind, device):
         2,
         3,
         7,
+        # Algorithm-specific: neighbors of the WH (2048) and BH (1024)
+        # coarse-quotient steps; small +/-1, +/-2, +/-3, +/-7 above stress
+        # correction accuracy because residual error is divided by |b|.
         -2049,
         -2048,
         -2047,
@@ -1404,14 +1421,17 @@ def test_binary_remainder_fmod_int32_edge_cases(ttnn_op, device):
 def test_binary_remainder_fmod_int32_min(ttnn_op, device):
     divisors = [
         *INT32_MIN_THRESHOLD_DIVISORS,
-        239823930,
+        239823930,  # Retain issue #51476's empirical non-power-of-two divisor.
+        # Large power-of-two controls and the signed INT32 endpoints.
         2**30,
         -(2**30),
         2**31 - 1,
         -(2**31),
     ]
     numerators = [-(2**31)] * len(divisors)
-    # Exercises an odd correction magnitude that must remain exact.
+    # Empirical BH counterexample to dropping the residual's low bit: this
+    # numerator with divisor -1 exposed a correction error with remainder's
+    # weaker reciprocal. It is not a format/HW boundary; the exact remainder is 0.
     numerators.append(-2140947629)
     divisors.append(-1)
 
@@ -1445,6 +1465,8 @@ def test_binary_remainder_fmod_int32_odd_residuals(ttnn_op, device):
     # numerators produce odd initial residuals. Dropping their low bit before
     # float conversion is unsafe: the approximate reciprocal can introduce
     # additional error that the single final adjustment cannot recover.
+    # 256-wide windows are coverage choices around INT32 endpoints, the empirical
+    # counterexample, and zero; unlike the div test, retain even controls too.
     numerators = torch.cat(
         [
             torch.arange(-(2**31), -(2**31) + 256, dtype=torch.int64),
@@ -1455,6 +1477,9 @@ def test_binary_remainder_fmod_int32_odd_residuals(ttnn_op, device):
             torch.arange(-128, 128, dtype=torch.int64),
         ]
     )
+    # Algorithm coverage: 2048 +/- 1 straddles WH's coarse-quotient step;
+    # 4194305 = 2**22 + 1 is just beyond BH's INT32_MIN zero-estimate threshold.
+    # Small divisors amplify correction error; both signs cover sign adjustment.
     divisors = torch.tensor(
         [-4194305, -2049, -2048, -2047, -7, -3, -2, -1, 1, 2, 3, 7, 2047, 2048, 2049, 4194305],
         dtype=torch.int64,
@@ -1474,6 +1499,8 @@ def test_binary_remainder_fmod_int32_odd_residuals(ttnn_op, device):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_binary_remainder_fmod_int32_sign_adjustment(ttnn_op, layout, device):
     """Cover all operand sign combinations, zero remainders, and INT_MIN divisors."""
+    # +/-4 and +/-5 supply divisible and non-divisible small pairs, not HW
+    # boundaries; INT32_MIN and INT32_MAX add the signed representation extremes.
     numerators = torch.tensor([-(2**31), -5, -4, -1, 0, 1, 4, 5], dtype=torch.int32)
     divisors = torch.tensor([-(2**31), -5, -4, -1, 1, 4, 5, 2**31 - 1], dtype=torch.int32)
     # Repeat all 64 operand pairs across a full tile.
@@ -1499,6 +1526,8 @@ def test_binary_remainder_fmod_int32_sign_adjustment(ttnn_op, layout, device):
     "divisor", [-1, *INT32_MIN_THRESHOLD_DIVISORS, 239823930, 2**30, -(2**30), 2**31 - 1, -(2**31)]
 )
 def test_binary_remainder_fmod_int32_scalar_layout_and_extreme_values(ttnn_op, layout, divisor, device):
+    # Reuse the INT32 endpoints, +/-2**30 large-value controls, and empirical
+    # -2140947629 / -1 low-bit counterexample documented in the tensor test above.
     torch_input_tensor = torch.tensor(
         [-(2**31), -2140947629, -(2**30), -1, 0, 1, 2**30, 2**31 - 1], dtype=torch.int32
     )
@@ -1604,6 +1633,11 @@ def test_binary_remainder_int32_float_scalar_optional_int32_output(layout, use_s
 def test_binary_remainder_int32_float_scalar_optional_bfloat16_output(
     layout, use_sub_core_grids, scalar, width, device
 ):
+    # Format-specific: +/-257.25 yields exact FP32 quarter remainders that need
+    # BF16 rounding (e.g. 257 is halfway between BF16 values 256 and 258).
+    # HW layout coverage: 32 is one tile width; 1056 = 1024 + 32 forces a row
+    # past the unary factory's 1024-element staging chunk, with a partial tail.
+    # Cycling -512..511 covers both signs and values on either side of the divisor.
     torch_input = (torch.arange(32 * width, dtype=torch.int32) % 1024 - 512).reshape(32, width)
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=layout, device=device)
     output_tensor = ttnn.from_torch(

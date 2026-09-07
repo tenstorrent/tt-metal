@@ -641,6 +641,11 @@ def test_div_int32_rejects_non_float32_output_dtype(device, expect_error):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("use_sub_core_grids", [False, True])
 def test_div_int32_float_scalar_promotion(device, rounding_mode, scalar, layout, use_sub_core_grids):
+    # Format boundaries: FP32 has 24 significant bits, so +/- (2**24 + 3)
+    # rounds on promotion; INT32 endpoints exercise the largest signed magnitudes.
+    # The remaining small integers cover exact/inexact quotients and both signs.
+    # Scalars +/-2.0 distinguish Python float promotion from integer dispatch;
+    # +/-0.5 and +/-2.5 are binary-exact, while +/-3.14 also exercises FP32 rounding.
     torch_input = torch.tensor(
         [-(2**31), -(2**24 + 3), -1999, -7, -5, 0, 5, 7, 1999, 2**24 + 3, 2**31 - 1], dtype=torch.int32
     )
@@ -661,6 +666,8 @@ def test_div_int32_float_scalar_promotion(device, rounding_mode, scalar, layout,
 
 @pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
 def test_div_int32_integer_and_float_scalar_remain_distinct(device, rounding_mode):
+    # 2**24 + 3 rounds to 2**24 + 4 in FP32, so dividing by 2 versus 2.0
+    # exposes lost integer precision; the negative case also checks floor vs trunc.
     torch_input = torch.tensor([-(2**24 + 3), 2**24 + 3], dtype=torch.int32)
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     integer_result = ttnn.div(input_tensor, 2, rounding_mode=rounding_mode)
@@ -706,6 +713,8 @@ def test_div_int32_float_scalar_promotion_output_dtype(device, rounding_mode, ou
 def test_div_int32_float_scalar_promotion_sharded(
     device, rounding_mode, layout, use_sub_core_grids, interleaved_output, strategy, shape, grid_end
 ):
+    # HW layout coverage: 4096 elements make four 32x32 tiles/shards. The signed
+    # endpoints and +/- (2**24 + 3) separately check INT32 range and FP32 rounding.
     torch_input = (torch.arange(4096, dtype=torch.int32) % 1024 - 512).reshape(1, 1, *shape)
     torch_input.flatten()[:4] = torch.tensor([-(2**31), 2**31 - 1, -(2**24 + 3), 2**24 + 3])
     cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(*grid_end))})

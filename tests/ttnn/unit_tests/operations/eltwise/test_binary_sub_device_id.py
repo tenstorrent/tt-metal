@@ -134,6 +134,9 @@ def test_binary_int32_float_scalar_promotion_with_sub_device_id(device, op_fn, l
 @skip_for_slow_dispatch()
 def test_binary_int32_float_scalar_row_major_sharded_with_sub_device_id(device, op_fn, interleaved_output):
     """Tilize, promotion, arithmetic and untilize stay on the non-origin shard workers."""
+    # HW layout: four 32x32 shards on cores away from (0,0) expose accidental
+    # full-grid dispatch. The 128 KiB local L1 budget allows conversion staging;
+    # it is test headroom, not a minimum memory requirement of the operation.
     cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 3))})
     memory_config = ttnn.create_sharded_memory_config(
         shape=(32, 32),
@@ -168,6 +171,9 @@ def test_binary_int32_float_scalar_row_major_sharded_with_sub_device_id(device, 
 @pytest.mark.parametrize("scalar", [257.25, -257.25])
 @skip_for_slow_dispatch()
 def test_remainder_int32_row_major_bfloat16_output_with_sub_device_id(device, scalar):
+    # 1056 = 1024 + 32 crosses a unary staging-chunk boundary with a partial tail.
+    # +/-257.25 gives exact FP32 quarter remainders but exercises BF16 rounding,
+    # including the tie at 257 between BF16 values 256 and 258.
     torch_input = (torch.arange(32 * 1056, dtype=torch.int32) % 1024 - 512).reshape(32, 1056)
     sub_device_manager = setup_sub_device(device)
     try:
@@ -197,6 +203,8 @@ def test_remainder_int32_row_major_bfloat16_output_with_sub_device_id(device, sc
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @skip_for_slow_dispatch()
 def test_div_int32_float_scalar_promotion_with_sub_device_id(device, rounding_mode, layout):
+    # INT32_MIN is the signed-format edge; 2**24 + 3 is not exactly representable
+    # in FP32 and checks that promotion happens before division by float 2.0.
     torch_input = torch.tensor([-(2**31), -7, -5, 0, 5, 7, 2**24 + 3], dtype=torch.int32)
     sub_device_manager = setup_sub_device(device)
     try:

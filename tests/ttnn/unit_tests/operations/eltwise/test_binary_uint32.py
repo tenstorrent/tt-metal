@@ -862,6 +862,11 @@ def test_binary_remainder_uint32_full_range(shape, low_a, high_a, low_b, high_b,
 @pytest.mark.parametrize("divisor", [2**21 - 1, 2**21, 2**21 + 1, 2**22 - 1, 2**22, 2**22 + 1])
 def test_remainder_uint32_range_reduction_thresholds(device, use_scalar, divisor):
     """The half-range helper remains exact near its largest unsigned numerator."""
+    # Algorithm-specific: UINT32 uses a >> 1, so UINT32_MAX reaches INT32_MAX
+    # in the helper. Divisors around 2**21 (WH) / 2**22 (BH) probe where its
+    # initial quotient can round to zero (2048/1024-wide quotient steps).
+    # Offsets sample adjacent odd/even numerators and power-of-two neighborhoods;
+    # 127/128 and 1023/1024 are coverage choices, not additional dtype limits.
     torch_a = torch.tensor([2**32 - 1 - offset for offset in (0, 1, 2, 3, 127, 128, 1023, 1024)], dtype=torch.uint32)
     input_a = ttnn.from_torch(
         torch_a, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG

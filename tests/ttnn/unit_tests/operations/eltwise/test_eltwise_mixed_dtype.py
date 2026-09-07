@@ -96,6 +96,8 @@ def test_neg_mixed_dtype(device, isolate_program_cache):
 @pytest.mark.parametrize("scalar", [1.3, -1.3])
 def test_remainder_mixed_float_output(device, layout, is_sharded, use_sub_core_grids, scalar):
     """Mixed float outputs retain precision and the unary layout/grid support."""
+    # Format-specific: +/-1.3 is not binary-exact, so the remainders need more
+    # precision than BF16; writing FP32 must not retain BF16-intermediate rounding.
     shape = (32, 32)
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
     memory_config = ttnn.DRAM_MEMORY_CONFIG
