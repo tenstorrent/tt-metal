@@ -480,7 +480,7 @@ inline void _llk_math_reduce_addrmod_(const TensorShape& tensor_shape)
         if (tensor_shape.face_r_dim < (FACE_R_DIM >> 1))
         {
             // For face_r_dim < 8, dest will be sparse with faces placed every 8 rows.
-            addr_mod_0_dest_incr = static_cast<std::uint16_t>(ELTWISE_MATH_ROWS);
+            addr_mod_0_dest_incr = static_cast<std::uint16_t>(MAX_FPU_ROWS);
         }
         else
         {
