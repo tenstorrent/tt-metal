@@ -29,7 +29,13 @@ case "${MODEL}" in
     # the arithmetic bound overshoots ~20% once weights and transients are counted. The OOM edge sits
     # just above this and wanders between ranks, so re-bisect before raising it.
     NUM_USERS_DEFAULT=86
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1; export PREFILL_LAYER_ACK_D2H=1;"
+    # TRACE ONLY, for the reason the glm52 leg below spells out: capture_trace()'s D2H warm pass fires
+    # warmup_ack_count() records that prefill_runner then drains, and on this branch's traced runner that
+    # drain never completes -- verified locally (py-spy: the runner sits in read_metadata() at 100% CPU
+    # after a clean capture) and again in CI, where taking main's both-flags form here turned this leg
+    # into a "Status: TIMEOUT / hang triaged". main sets PREFILL_LAYER_ACK_D2H=1 as well; do not adopt it
+    # until the warm-pass drain is fixed.
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
     ;;
   glm52)
@@ -51,9 +57,10 @@ case "${MODEL}" in
     # TRACE ONLY. PREFILL_LAYER_ACK_D2H=1 (which main sets here) is NOT combined with it:
     # capture_trace()'s D2H warm pass fires warmup_ack_count() real records that prefill_runner then
     # drains, and that drain spins forever on a traced GLM run -- verified locally, the runner sits in
-    # read_metadata() at 100% CPU after a clean capture. The kimi27 leg above DOES run both flags and
-    # passes, so this is specific to the GLM path rather than to the combination as such; keep them
-    # apart here until the warm-pass drain is fixed.
+    # read_metadata() at 100% CPU after a clean capture. Confirmed in CI too: the kimi27 leg above was
+    # briefly given main's both-flags form and its SC4 job came back "Status: TIMEOUT / hang triaged",
+    # so the incompatibility is the COMBINATION, not something GLM-specific. Both legs stay trace-only
+    # until the warm-pass drain is fixed.
     RUNNER_ENV="export PREFILL_USE_TRACE=1;"
     # Sparse DSA: TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over the
     # 21 `full` layers), both PCC'd. The trace must be the indexer-K dump -- the adapter's default golden
