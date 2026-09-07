@@ -220,10 +220,15 @@ _PREFILL_SCAN_ENV = "QWEN36_PREFILL_SCAN"
 
 
 def _prefill_scan_mode() -> str:
-    """``hillis`` (default) or ``sequential`` for the prefill state recurrence."""
+    """``sequential`` (default) or ``hillis`` for the prefill state recurrence.
+
+    Sequential is the work-efficient form and is 3.85x faster on the layer at the
+    shipped batch; see doc/prefill_general_optimizations. ``hillis`` restores the
+    original parallel scan.
+    """
     import os
 
-    return os.environ.get(_PREFILL_SCAN_ENV, "hillis")
+    return os.environ.get(_PREFILL_SCAN_ENV, "sequential")
 
 
 def _sequential_recurrence(

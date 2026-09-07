@@ -34,12 +34,14 @@ The model-level gain is smaller than the per-layer gain because TP4 splits
 rather than `b=1536` and are less efficient, and because the 16 full-attention
 layers, projections and LM head do not change.
 
-Reproduce (both knobs default off/`hillis`; set them to opt in):
+Both are **on by default**. To restore the previous behaviour for an A/B:
 
 ```bash
-QWEN36_SCAN_MATMUL_GRID=8x10 QWEN36_PREFILL_SCAN=sequential \
+# new (default)
 python models/autoports/qwen_qwen3_6_27b/tests/linear_attention_synthetic_pcc.py \
   --mode prefill --sequence 128 --optimized --candidate linear_final --batch 32 --iterations 2
+# old
+QWEN36_SCAN_MATMUL_GRID=0 QWEN36_PREFILL_SCAN=hillis python ...same...
 ```
 
 ## 1. Batched matmuls had no program config (4.21x)
@@ -169,15 +171,18 @@ One bug found and fixed while implementing: `ttnn.concat` of a single tensor
 aliases its input, so deallocating the inputs freed the result. A ragged tail
 chunk of one token hits this. Guarded.
 
-## Status
+## Regression suite (all green, both defaults on)
 
-Not landed. Both knobs default to the old behaviour
-(`QWEN36_SCAN_MATMUL_GRID=8x10` is the default but `_scan_matmul` falls back with
-`0`; `QWEN36_PREFILL_SCAN` defaults to `hillis`). Before landing:
+| check | result |
+|---|---|
+| host contract tests | 20 passed |
+| single-chip traced decode, `linear_final` | 15.859 ms (unchanged) |
+| single-chip traced decode, `linear_kda_conv` | 8.213 ms (unchanged) |
+| multichip decode: linear b32 / b1 | 2.376 / 0.793 ms, PCC 1.0 |
+| multichip decode: full b32 / b1 | 0.626 / 0.508 ms, PCC 1.0 |
+| dense-tap conv, single-chip + TP4 + `active_mask` | OK, fused vs composite >= 0.9999997 |
+| dense-tap conv, TP4 prefill | OK |
+| prefill PCC, both scan modes, b32 S128 / b1 S33 | >= 0.99999523 |
 
-1. multichip decode matrix and the full-model decode A/B, since `_scan_matmul`
-   is shared with `multichip_decoder.py`
-2. `check_conv_taps.py` across single-chip and TP4
-3. long-ISL re-measure — the recorded sweep timed out at ISL 131072, and at
-   3.94x that point should complete well inside a limit that already passes
-   ISL 65536 at 1837 s
+Decode is untouched by both changes, which is the point: they are confined to
+the prefill scan.
