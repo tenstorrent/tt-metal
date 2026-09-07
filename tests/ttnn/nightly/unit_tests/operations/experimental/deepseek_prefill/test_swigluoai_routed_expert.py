@@ -227,15 +227,17 @@ def test_swigluoai_routed_expert_deterministic(mesh_device, device_params):
 
     The act sender multicasts cb_activated -> cb_in0_down_full with MCAST_INCL_SRC, so its
     own copy comes back over the NoC. Receivers are ordered by the valid-sem riding the
-    linked path; the sender has only its own wait, and noc_async_writes_flushed() reports
-    the request as SENT, not landed. Consuming that slot early corrupts one core's block
-    nondeterministically, so this repeats the highest-exposure shape and requires
-    bit-identical output. Uses the M3 dims (emb 6144 / hidden 3072) at 4096 tokens: the
-    multicast payload, and with it the measured landing window, scales with the block
-    size -- instrumented on p100a the loopback was unlanded at the flush point ~4x more
-    often at these dims than at M2.7's. NOT a fail-without-fix reproducer: the residual
-    window is ~1 L1 poll wide and downstream work masks it, so this guards against the
-    window widening (grid, payload or scheduling changes), it does not demonstrate the bug.
+    linked path; the sender's own copy is ordered by the async_write_barrier() at step 5 of
+    the reader. Consuming that slot before the loopback copy lands would make one core's
+    down-matmul output block change run to run, so this requires bit-identical output
+    across repeats -- PCC alone is too coarse to catch it.
+
+    Uses the M3 dims (emb 6144 / hidden 3072) at 4096 tokens because the multicast payload,
+    and with it the landing window, scales with the block size: instrumented on p100a the
+    loopback was unlanded at the flush point ~4x more often at these dims than at M2.7's.
+
+    The exposure is only ~1 L1 poll wide and downstream work masks it, so this is a guard
+    against that window widening (grid, payload or scheduling changes), not a reproducer.
     """
     run_swigluoai_routed_expert(
         mesh_device,
