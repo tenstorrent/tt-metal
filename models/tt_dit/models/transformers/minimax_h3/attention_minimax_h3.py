@@ -303,12 +303,16 @@ class MiniMaxH3Attention(Module):
         if key not in self._sdpa_program_configs:
             tile = ttnn.TILE_SIZE
             measured = self.measured_sdpa_chunk_sizes.get(seq_local)
-            if measured is None:
+            if measured is None and os.environ.get("MINIMAX_H3_SDPA_NEAREST_KEY", "0") == "1":
                 # The table is keyed by the perf test's 512-token shards (4768 / 9216 / 13632); a served
                 # 39-token prompt lands one or two tiles away (4736 / 9152 / 13664) and fell through to
                 # the generic rule -- at 5 s that is the k=256 family the docstring above measured as
                 # clearly worse than (320, 384). The optimum moves with length on a scale of thousands
                 # of rows, not a tile, so take the nearest measured length within a few tiles.
+                # Opt-in (MINIMAX_H3_SDPA_NEAREST_KEY=1): a different chunking changes the flash
+                # accumulation order, and 50 diffusion steps turn that into a different sample (a 5 s
+                # 4x8 run with this and the AGMM v3 switch measured 30 dB against the previous frames),
+                # so it is a quality-gate decision, not a bit-identical one.
                 nearest = min(self.measured_sdpa_chunk_sizes, key=lambda length: abs(length - seq_local))
                 if abs(nearest - seq_local) <= 4 * ttnn.TILE_SIZE:
                     measured = self.measured_sdpa_chunk_sizes[nearest]
