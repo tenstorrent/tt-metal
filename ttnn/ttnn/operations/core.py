@@ -11,6 +11,7 @@ import ttnn.decorators
 from loguru import logger
 
 import ttnn
+from ttnn.operations.golden_common import golden_identity
 
 
 def _validate_file_extension(file_name: pathlib.Path):
@@ -460,23 +461,15 @@ def to_torch(
     return torch_tensor
 
 
-def _golden_function(tensor, *args, **kwargs):
-    return tensor
-
-
 ttnn.register_python_operation(
     name="ttnn.to_device",
-    golden_function=_golden_function,
+    golden_function=golden_identity,
 )(ttnn._ttnn.operations.core.to_device)
-
-
-def _golden_function(tensor, *args, **kwargs):
-    return tensor
 
 
 ttnn.register_python_operation(
     name="ttnn.from_device",
-    golden_function=_golden_function,
+    golden_function=golden_identity,
 )(ttnn._ttnn.operations.core.from_device)
 
 ttnn.register_python_operation(
@@ -529,25 +522,11 @@ Args:
 ttnn.register_python_operation(name="ttnn.deallocate", doc=doc)(ttnn._ttnn.operations.core.deallocate)
 
 
-def _golden_function(tensor, *args, **kwargs):
-    return tensor
+ttnn.attach_golden_function(ttnn.to_memory_config, golden_function=golden_identity)
 
+ttnn.attach_golden_function(ttnn.to_layout, golden_function=golden_identity)
 
-ttnn.attach_golden_function(ttnn.to_memory_config, golden_function=_golden_function)
-
-
-def _golden_function(tensor, *args, **kwargs):
-    return tensor
-
-
-ttnn.attach_golden_function(ttnn.to_layout, golden_function=_golden_function)
-
-
-def _golden_function(tensor, *args, **kwargs):
-    return tensor
-
-
-ttnn.attach_golden_function(ttnn.to_dtype, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.to_dtype, golden_function=golden_identity)
 
 
 def _preprocess_typecast_golden_function_inputs(function_args, function_kwargs):
@@ -645,22 +624,14 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_function(tensor, *args, **kwargs):
-    return tensor
+ttnn.attach_golden_function(ttnn.clone, golden_function=golden_identity)
 
 
-ttnn.attach_golden_function(ttnn.clone, golden_function=_golden_function)
-
-
-def _golden_function(input_tensor, *args, **kwargs):
-    return input_tensor
-
-
-ttnn.register_python_operation(name="ttnn.reallocate", golden_function=_golden_function)(
+ttnn.register_python_operation(name="ttnn.reallocate", golden_function=golden_identity)(
     ttnn._ttnn.operations.core.reallocate
 )
 
-ttnn.attach_golden_function(ttnn.reallocate, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.reallocate, golden_function=golden_identity)
 
 
 @ttnn.register_python_operation(name="ttnn.load_tensor")

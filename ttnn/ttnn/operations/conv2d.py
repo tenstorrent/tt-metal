@@ -8,7 +8,7 @@ from typing import Tuple, Union, Dict, Optional
 import warnings
 import math
 import ttnn
-from ttnn.operations.activations import get_golden_function_for_activation
+from ttnn.operations.golden_common import golden_apply_fused_activations
 
 SlidingWindowParallelConfig = ttnn._ttnn.operations.sliding_window.ParallelConfig
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
@@ -238,8 +238,7 @@ def _golden_function(
     if conv_config is not None:
         activation = conv_config.activation
 
-    act_func = get_golden_function_for_activation(activation)
-    output_tensor = act_func(output_tensor) if act_func is not None else output_tensor
+    output_tensor = golden_apply_fused_activations(output_tensor, activation)
 
     N, C, H, W = output_tensor.shape
     output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C

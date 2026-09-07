@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 
 import ttnn
 from ttnn.decorators import get_golden_function
-from ttnn.operations.activations import get_golden_function_for_activation
+from ttnn.operations.golden_common import golden_apply_fused_activations
 
 MatmulProgramConfig = ttnn._ttnn.operations.matmul.MatmulProgramConfig
 MatmulMultiCoreReuseProgramConfig = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig
@@ -46,14 +46,7 @@ def _golden_function(
         input_tensor_b = input_tensor_b.transpose(-1, -2)
     output_tensor = input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
-    # First check if there is a fused activation in the program config
-    if program_config is not None and hasattr(program_config, "fused_activation") and program_config.fused_activation:
-        program_config_activation = program_config.fused_activation.op_type
-        output_tensor = get_golden_function_for_activation(program_config_activation)(output_tensor)
-
-    # Do the composite op activation function if it is requested
-    elif activation is not None:
-        output_tensor = get_golden_function_for_activation(activation)(output_tensor)
+    output_tensor = golden_apply_fused_activations(output_tensor, activation, program_config=program_config)
 
     while len(output_tensor.shape) > len(input_tensor_a.shape):
         output_tensor = output_tensor.squeeze(0)
@@ -92,14 +85,7 @@ def _golden_function(
             bias = bias[0]
         output_tensor += bias
 
-    # First check if there is a fused activation in the program config
-    if program_config is not None and hasattr(program_config, "fused_activation") and program_config.fused_activation:
-        program_config_activation = program_config.fused_activation.op_type
-        output_tensor = get_golden_function_for_activation(program_config_activation)(output_tensor)
-
-    # Do the composite op activation function if it is requested
-    elif activation is not None:
-        output_tensor = get_golden_function_for_activation(activation)(output_tensor)
+    output_tensor = golden_apply_fused_activations(output_tensor, activation, program_config=program_config)
 
     while len(output_tensor.shape) > len(input_tensor_a.shape):
         output_tensor = output_tensor.squeeze(0)

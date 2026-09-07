@@ -6,6 +6,7 @@ from typing import Union
 
 
 import ttnn
+from ttnn.operations.golden_common import golden_normalize_shape, golden_torch_dtype_for_ttnn
 
 
 def _golden_function(input_tensor: ttnn.Tensor, **_):
@@ -30,7 +31,7 @@ def _golden_function(input_tensor: ttnn.Tensor, fill_value: float, dtype=None, *
     import torch
 
     # Honor the output dtype override instead of always inheriting the input tensor dtype.
-    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else None
+    torch_dtype = golden_torch_dtype_for_ttnn(dtype)
     return torch.full_like(input_tensor, fill_value, dtype=torch_dtype)
 
 
@@ -46,9 +47,8 @@ def _golden_function(shape: ttnn.Shape, dtype=None, *_, **__):
 
     # TTNN accepts Shape directly, while Torch creation functions require a tuple of dimensions.
     # Normalize it in this golden to keep shared comparison preprocessing unchanged.
-    if isinstance(shape, ttnn.Shape):
-        shape = tuple(shape)
-    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.bfloat16
+    shape = golden_normalize_shape(shape)
+    torch_dtype = golden_torch_dtype_for_ttnn(dtype, default=torch.bfloat16)
     return torch.zeros(shape, dtype=torch_dtype)
 
 
@@ -60,9 +60,8 @@ def _golden_function(shape: ttnn.Shape, dtype=None, *_, **__):
 
     # The TTNN API permits dtype, layout, device, and memory config as positional arguments.
     # Torch only needs the requested dtype, so absorb the remaining allocation-only arguments.
-    if isinstance(shape, ttnn.Shape):
-        shape = tuple(shape)
-    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.bfloat16
+    shape = golden_normalize_shape(shape)
+    torch_dtype = golden_torch_dtype_for_ttnn(dtype, default=torch.bfloat16)
     return torch.ones(shape, dtype=torch_dtype)
 
 
@@ -89,7 +88,7 @@ def _golden_function(*args, dtype=ttnn.bfloat16, **kwargs):
     kwargs.pop("memory_config", None)
     kwargs.pop("layout", None)
     # Forward all supported range overloads, then cast to the requested TTNN dtype.
-    return torch.arange(*args, **kwargs).to(ttnn.ttnn_dtype_to_torch_dtype(dtype))
+    return torch.arange(*args, **kwargs).to(golden_torch_dtype_for_ttnn(dtype))
 
 
 ttnn.attach_golden_function(ttnn.arange, golden_function=_golden_function)
