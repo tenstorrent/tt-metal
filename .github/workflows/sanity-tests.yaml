@@ -319,6 +319,26 @@ jobs:
       # Must match what build-artifact was given, or src/ and the wheel disagree.
       source-ref: ${{ inputs.ref || github.sha }}
 
+  bake-env-dev-full:
+    needs: build-artifact
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      # Canonical, never a resolve-docker-pull-refs output: that one is
+      # Harbor-prefixed and the producer runs GitHub-hosted with no Harbor access.
+      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+      source-ref: ${{ inputs.ref || github.sha }}
+
   # Single SKU list that gates every suite (L2-nightly style). Each impl filters this list against
   # its own tests yaml via prepare_test_matrix.py, so an empty intersection just yields no jobs.
   generate-sku-matrix:
@@ -456,7 +476,10 @@ jobs:
 
   t3000-sanity-tests:
     if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-wormhole == 'true' && toJSON(inputs.run-t3000-sanity-tests) != 'false' }}
-    needs: [build-artifact, generate-sku-matrix]
+    # bake-env-dev-full is in needs but deliberately absent from the if: above.
+    # A failed bake leaves the ref empty and the leg falls back to the artifact
+    # path, which a gate on the bake would turn into a skipped suite instead.
+    needs: [build-artifact, generate-sku-matrix, bake-env-dev-full]
     secrets: inherit
     uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
@@ -469,6 +492,7 @@ jobs:
       # SKU set lacking a wh_llmbox entry.
       enabled-skus: ${{ needs.generate-sku-matrix.outputs.sanity-skus }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
