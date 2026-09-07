@@ -62,10 +62,11 @@ uint32_t control_region_bytes(const DispatchFabric2dParams& args, uint32_t exten
     const uint32_t pad_stride =
         dspf2d::META_PAD_STRIDE *
         ((args.num_experts_per_tok * 2 + dspf2d::META_PAD_STRIDE - 1) / dspf2d::META_PAD_STRIDE);
-    const uint32_t words = (extent + 2) * w                      // expert_offsets rows, counts, region offsets
-                           + (w + 1)                             // dispatch table, with its trailing sentinel column
-                           + w                                   // the running per-expert allocator
-                           + 2 * extent * args.experts_per_chip  // chip -> experts inverse, and bucket bounds
+    const uint32_t words = (extent + 2) * w  // expert_offsets rows, counts, region offsets
+                           + (w + 1)         // dispatch table, with its trailing sentinel column
+                           + w               // the running per-expert allocator
+                           +
+                           3 * extent * args.experts_per_chip  // chip -> experts inverse, bucket lengths, bucket starts
                            + 2 * args.seq_len_per_chip * args.num_experts_per_tok;  // (token, page) per entry
     return args.seq_len_per_chip * pad_stride + words * static_cast<uint32_t>(sizeof(uint32_t));
 }
