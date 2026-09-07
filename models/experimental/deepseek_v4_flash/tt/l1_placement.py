@@ -173,9 +173,9 @@ _COMMON: dict[str, WeightPlacement] = {
         #    (all three would be 3 x 2 x 288 KB = 1728 KB/core with two layers).
         _p("q_b_proj", "Z0", K=1024, N=32768, n_blocks=64),
         _p("o_b_proj", "Z0", K=8192, N=4096, n_blocks=64),
-        _p("q_a_proj", "Z0", K=4096, N=1024, k_blocks=2, n_blocks=32),
         # -- Z1: the demoted big pair (batched grouped output projection) runs
         #    32-wide for both layers.
+        _p("q_a_proj", "Z1", K=4096, N=1024, n_blocks=32),
         _p("o_a_proj", "Z1", K=4096, N=1024, batch=8, b_blocks=8, n_blocks=4),
         _p("attn_hc.fn", "Z1", K=16384, N=32, k_blocks=32, n_blocks=1),
         _p("ffn_hc.fn", "Z1", K=16384, N=32, k_blocks=32, n_blocks=1),

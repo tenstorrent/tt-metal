@@ -8,6 +8,7 @@ from .decode_prefetch import (
     DECODE_LAYOUTS,
     HC_FN_GCB,
     HC_FN_GCB_PAGES,
+    Q_A_GCB,
     balanced_qkv_layout,
     check_decode_layout,
     decode_prefetch_page_bytes,
@@ -15,6 +16,7 @@ from .decode_prefetch import (
     hc_fn_page_bytes,
     hc_fn_ring_specs,
     make_decode_prefetch_buffers,
+    q_a_page_bytes,
 )
 from .layers import (
     BatchedLinearDecode,
@@ -403,6 +405,27 @@ def _one_row_per_user(x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.reshape(x, [1, x.shape[-2], 1, x.shape[-1]])
 
 
+def _fold_norm_gamma(weight, gamma):
+    """``nn.Linear`` weight with a preceding RMSNorm's per-channel gamma folded into it.
+
+    ``matmul_decode``'s fused RMSNorm scales by a scalar, so a per-channel gamma has to go
+    somewhere else. Gamma multiplies *after* the normalization and the next layer is linear
+    in that vector, so ``(rmsnorm(x) * gamma) @ W.T == rmsnorm(x) @ (W * gamma).T``: scaling
+    the consumer's input columns is exactly equivalent, and the producing matmul is left with
+    the op's gamma of 1.
+
+    Returned as a thunk so a populated weight cache still reads nothing from the checkpoint
+    (the folded weight is cached tilized under its own name).
+    """
+
+    def fold():
+        w = weight() if callable(weight) else weight
+        g = gamma() if callable(gamma) else gamma
+        return w * g.reshape(1, -1).to(w.dtype)
+
+    return fold
+
+
 def _rope_height_sharded_config(width: int, num_cores: int, device) -> ttnn.MemoryConfig:
     """Height-sharded L1 config: one tile-row (32 rows) per core over ``num_cores`` cores."""
     grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
@@ -495,20 +518,26 @@ def _update_cache_at(
     before the page-table lookup, which is what makes a sliding-window session need
     only ``window / block_size`` blocks; without it any position past that capacity
     resolves through the row's unmapped tail (see :mod:`.paged_cache`).
+
+    ``row`` has to arrive in the writer's own layout (:func:`_height_sharded_l1_config`):
+    it is written as it stands rather than resharded, since a copy here would be paid on
+    every cache write, and it stays the caller's to free.
     """
     num_users, width = row.shape[1], row.shape[-1]
-    row_sharded = ttnn.to_memory_config(row, _height_sharded_l1_config(num_users, width, row.device()))
+    expected = _height_sharded_l1_config(num_users, width, row.device())
+    assert (
+        row.memory_config() == expected
+    ), f"paged_update_cache needs its row one user per core: expected {expected}, got {row.memory_config()}"
     if paged is None:
-        ttnn.experimental.paged_update_cache(cache, row_sharded, update_idxs_tensor=pos_tensor)
+        ttnn.experimental.paged_update_cache(cache, row, update_idxs_tensor=pos_tensor)
     else:
         ttnn.experimental.paged_update_cache(
             paged.pool,
-            row_sharded,
+            row,
             update_idxs_tensor=pos_tensor,
             page_table=paged.page_table,
             cache_position_modulo=paged.position_modulo,
         )
-    ttnn.deallocate(row_sharded)
 
 
 def _softmax_weighted_sum(kv: ttnn.Tensor, gate: ttnn.Tensor, window_axis: int) -> ttnn.Tensor:
@@ -1128,7 +1157,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         if use_prefetcher and prefetch_buffers is None:
             prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype, num_prefetch_pages)
 
-        def projection(name):
+        def projection(name, weight=None, cache_suffix="", rectangle_b_grid=False):
             # A restricted matmul cannot consume a mesh-wide prefetch request:
             # pages sent to inactive ranks would never be acknowledged. q_a/kv
             # therefore use their ordinary L1 weight path under dedicated-rank TP.
@@ -1153,6 +1182,15 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                         num_pages=HC_FN_GCB_PAGES,
                     )
                     prefetch["global_cb_page_bytes"] = hc_fn_page_bytes(weight_dtype)
+                elif name == "q_a_proj":
+                    prefetch["global_cb"] = ensure_named_gcb(
+                        prefetch_buffers,
+                        Q_A_GCB,
+                        device,
+                        [DECODE_LAYOUTS["q_a_proj"]],
+                        weight_dtype,
+                    )
+                    prefetch["global_cb_page_bytes"] = q_a_page_bytes(weight_dtype)
                 else:
                     prefetch["global_cb"] = prefetch_buffers[name]
                     prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
@@ -1195,6 +1233,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 # in the shard branch above.
                 mapper = ttnn.ReplicateTensorToMesh(device)
                 cache_name = f"{name}.tp{tp_size}.{self.qkv_tp_strategy}"
+            if name == "q_a_proj" and not layout.get("partial_width_sharded", False):
+                cache_name += ".full"
+                # q_a's producer grid must be a subset of q_b's filled output-mcast
+                # rectangle. The generic row-wise 32-core set can be ragged on Blackhole.
+                rectangle_b_grid = True
             # Resident L1 for the unfused q_a/kv pair when the profile asks for
             # it and they are *not* prefetched. Packed weights are already L1-resident;
             # the prefetcher streams into in1 and never holds an L1 tensor.
@@ -1207,15 +1250,16 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             ):
                 resident["keep_weights_in_l1"] = True
             return LinearDecode(
-                weights[f"{name}.weight"],
+                weights[f"{name}.weight"] if weight is None else weight,
                 device,
-                cache.file(cache_name),
+                cache.file(cache_name + cache_suffix),
                 dtype=weight_dtype,
                 mesh_mapper=mapper,
                 **layout,
                 **prefetch,
                 **packed,
                 **resident,
+                rectangle_b_grid=rectangle_b_grid,
             )
 
         # q_a and kv both read the block's hidden, so one matmul over their concatenated
@@ -1274,10 +1318,39 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         else:
             self.q_a_proj = projection("q_a_proj")
             self.kv_proj = projection("kv_proj")
-        self.q_b_proj = projection("q_b_proj")
+        # q_a's RMSNorm rides in the q_a matmul's own epilogue when the op can take it, which
+        # saves the separate normalization op and its resharding. The op's gamma is a scalar,
+        # so q_a_norm's per-channel one folds into q_b_proj -- exact, because q_b is the only
+        # consumer of q_a and is linear in it (see :func:`_fold_norm_gamma`). Packed L1
+        # weights are pre-fused into one tensor by ``l1_weights``, so there is no host weight
+        # left to fold into; the TP strategies that post-process q_a (rank replicate, width
+        # gather) would also have to undo the epilogue's output layout.
+        self.fuse_q_a_norm = (
+            not self.fused_qa_kv
+            and self.packed_weights is None
+            and not self.dedicated_qkv_ranks
+            and not self.balanced_qkv
+            and self.q_a_proj.can_fuse_rms_norm()
+        )
+        if self.fuse_q_a_norm:
+            self.q_b_proj = projection(
+                "q_b_proj",
+                weight=_fold_norm_gamma(weights["q_b_proj.weight"], weights["q_a_norm.weight"]),
+                cache_suffix=".qanormfold.rect",
+                rectangle_b_grid=True,
+            )
+        else:
+            self.q_b_proj = projection("q_b_proj")
+        if self.fuse_q_a_norm:
+            self.q_a_proj.enable_fused_rms_norm(self.eps)
+            # Mcast the normalized q_a onto q_b's own B cores: q_b then reads its activation
+            # where it already sits, replicated, instead of resharding a width-sharded one.
+            self.q_a_proj.set_output_core_grid(self.q_b_proj.b_core_grid())
         self.o_b_proj = projection("o_b_proj")
-        self.q_a_norm = DeepSeekV4RMSNorm(
-            weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"), sharded=True
+        self.q_a_norm = (
+            None
+            if self.fuse_q_a_norm
+            else DeepSeekV4RMSNorm(weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"), sharded=True)
         )
         self.kv_norm = DeepSeekV4RMSNorm(
             weights["kv_norm.weight"], self.eps, device, cache.file("kv_norm"), sharded=True
@@ -1426,11 +1499,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         and o_b_proj are left out because their weights do not fit alongside the others.
 
         On the prefetcher path it instead queues each projection configured for a GCB.
-        Shared-ring weights (q_b, compressor, o_a/o_b, ...) use one FIFO. Balanced
-        q_a/kv share :data:`HC_FN_GCB` with the hyper-connections (a second FIFO);
-        they are still queued here in decode order so that ring stays in step with
-        attn_hc (before this) and ffn_hc (after this). Column-parallel o_b and
-        sequential o_a keep a local receiver grid and stay on the transient L1 path.
+        Shared-ring weights (q_b, compressor, o_a/o_b, ...) use one FIFO. Full-width
+        q_a uses its own 32-receiver FIFO; balanced q_a/kv instead share
+        :data:`HC_FN_GCB` with the hyper-connections. They are still queued here in
+        decode order so each ring stays in step. Column-parallel o_b and sequential
+        o_a keep a local receiver grid and stay on the transient L1 path.
 
         Projections on the shared GCB use one FIFO, so they are queued here in the order
         ``decode`` calls them -- which puts the compressor between kv_proj and o_a_proj, since
@@ -1697,11 +1770,19 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         h, dh = self.local_num_heads, self.head_dim
         _profile(self.device)
         kv_raw = None
+        # matmul_decode's full-width hub mode reads A as ROW_MAJOR HEIGHT_SHARDED with the
+        # whole of K replicated on each of the weight's B cores, so its rows are the packed
+        # tokens repeated once per core. The replica stays inside this projection: the
+        # compressor further down the step reads the packed ``tokens`` itself, and a
+        # partial-width weight cannot take this layout at all (there the call below hands
+        # back ``tokens`` untouched).
+        qkv_in = self.qa_kv_proj if self.fused_qa_kv else self.q_a_proj
+        qkv_tokens = qkv_in.to_replicated_rm_hs_activation(tokens)
         if self.fused_qa_kv:
             # One matmul for both projections of ``tokens``. Its output is width-sharded
             # over the reduction cores and the split point is not a shard boundary, so the
             # halves are cut in DRAM; both norms reshard their own input anyway.
-            qa_kv = self.qa_kv_proj(tokens)
+            qa_kv = self.qa_kv_proj(qkv_tokens)
             if self.fused_balanced_qkv:
                 local_q_width = self.q_lora_rank // self.tp_size
                 qa_kv = _gather_tp_width(qa_kv, self.device)
@@ -1721,13 +1802,17 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 q_a_raw, kv_raw = ttnn.split(qa_kv, [self.q_lora_rank, dh], dim=3)
             ttnn.deallocate(qa_kv)
         else:
-            q_a_raw = self.q_a_proj(tokens, mesh_coords=self.q_projection_mesh_coords)
+            q_a_raw = self.q_a_proj(qkv_tokens, mesh_coords=self.q_projection_mesh_coords)
             if self.dedicated_qkv_ranks:
                 q_a_raw = _replicate_from_tp_rank(q_a_raw, self.device, self.q_projection_rank, self.tp_size)
             elif self.balanced_qkv:
                 q_a_raw = _gather_tp_width(q_a_raw, self.device)
 
-        q_a = self.q_a_norm(q_a_raw)
+        if qkv_tokens is not tokens:
+            ttnn.deallocate(qkv_tokens)
+        # ``None`` when the q_a matmul normalized its own output (see __init__): what comes
+        # back is then already ``q_a``, one replica per q_b B core.
+        q_a = q_a_raw if self.q_a_norm is None else self.q_a_norm(q_a_raw)
         q = self.q_b_proj(q_a)  # [1, 1, B, H*Dh]
         q = ttnn.reshape(q, [1, tokens_n, h, dh], memory_config=width_sharded_l1_config(tokens_n * h, dh, self.device))
 
