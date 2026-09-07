@@ -5,6 +5,7 @@
 
 import json
 import os
+import pathlib
 import signal
 import time
 from typing import Optional
@@ -173,6 +174,23 @@ def _socket_next(h2d_service) -> tuple:
         h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES
     )
     return tt_tokens, _decode_metadata(metadata_msg), metadata_msg
+
+
+def _rank_file_barrier(rank: int, num_ranks: int, tag: str, timeout_s: float = 7200.0) -> None:
+    """Meet all ranks of this launch. Under tt-run every rank owns its own mesh context, so the
+    distributed-context barrier does not span the pipeline; the ranks share this host's filesystem."""
+    run = os.environ.get("PREFILL_BARRIER_RUN")
+    if not run:
+        return
+    d = pathlib.Path(os.environ.get("PREFILL_BARRIER_DIR", "/tmp/prefill_pp_barrier")) / run
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{tag}.rank{rank}").touch()
+    t0 = time.time()
+    while len(list(d.glob(f"{tag}.rank*"))) < num_ranks:
+        if time.time() - t0 > timeout_s:
+            raise TimeoutError(f"[pp rank {rank}] barrier {tag!r}: {num_ranks} ranks not seen within {timeout_s:.0f}s")
+        time.sleep(0.5)
+    logger.info(f"[pp rank {rank}] barrier {tag!r} passed after {time.time() - t0:.1f}s")
 
 
 def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_size: int, hidden_size: int):
@@ -507,7 +525,9 @@ def main() -> None:
         gate_mode_name=_gate_mode_name,
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
         dflash_enabled=DFLASH_ENABLED,
-        weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
+        # The tensor-cache dump is collective across the tt-run world: a non-zero rank's dump only completes
+        # while rank 0 is also dumping, so only rank 0 uses the cache and the other ranks convert from source.
+        weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE) if rank == 0 else None,
         tp_shard_kv=TP_SHARD_KV,
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,
@@ -556,6 +576,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     d2d_in = d2d_out = None
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
+        # Ranks finish loading weights at different times (their cache state differs); a sender's D2D
+        # socket setup while its peer is still uploading weights stalls that peer's dispatch, so meet first.
+        _rank_file_barrier(rank, num_ranks, "d2d_endpoints")
         d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, d2d_activation_width)
         ttnn.distributed_context_barrier()
 
