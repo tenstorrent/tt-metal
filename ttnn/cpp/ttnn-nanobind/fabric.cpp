@@ -407,6 +407,9 @@ void bind_fabric_api(nb::module_& mod) {
             Returns the FabricType each compute mesh's dim_types imply, one entry per mesh in
             the active mesh graph descriptor. Callers can map these to a FabricConfig to match
             the wired topology (RING/LINE) instead of inferring it from process count.
+        )");
+
+    mod.def(
         "dump_detailed_fabric_logs",
         [](tt::tt_metal::distributed::MeshDevice* mesh_device, const std::string& out_dir) {
             tt::tt_fabric::dump_detailed_fabric_logs(*mesh_device, out_dir);
