@@ -163,6 +163,8 @@ Blackhole-only groups: ``l1_2``, ``l1_3``, ``l1_4``, ``l1_5`` (extended L1 clien
 
 With ``--perf-counter-multipass`` a request is split into passes (at most three groups and one L1 bank per pass) and ``all`` expands to the architecture's full group set.
 
+**Quasar**: each NEO has its own ``fpu``, ``pack``, ``unpack`` and ``instrn`` units and DM0 reads all four NEOs, so every metric is reported per NEO (the ``risc_type`` of a counter row is ``QUASAR_NEO<n>``). Quasar has no L1 counter groups; ``all`` maps to ``fpu,pack,unpack,instrn``. The l1_client event counter is one CSR behind a subport/event mux, routed per run with ``TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL=<subport*8 + event>`` (37 subports, 8 events); its metric is named after the selection (see *Quasar-Only Metrics*).
+
 **Output**
 
 The profiler generates the standard ops performance CSV at ``generated/profiler/reports/ops_perf_results.csv`` with additional columns for perf counter metrics. Console output also includes raw counter values and derived efficiency metrics with Min/Median/Max/Avg statistics across cores per operation.
@@ -177,6 +179,27 @@ Two metric families appear in the output:
 - Unbounded ratios, with a ``(ratio)`` unit and a raw value: ``Math-to-Pack Handoff Efficiency`` (above 1 the packer is the handoff bottleneck), ``Compute-to-Unpack Ratio`` (above 1 = compute-bound), ``Unpacker/Packer L1 Efficiency`` (above 1 = ample L1 bandwidth), ``FPU Execution Efficiency`` (FPU dequeues from every thread over thread 1's math availability), ``Unpacker-to-Math Data Flow`` (source writes per unpacker busy cycle; THCON and other-thread writes count too) and ``Stall Overlap T0/T1/T2`` (above 1 = several waits overlap in the same cycle). These are never clamped; the excess over 1 is the signal. Every percentage is a fraction whose numerator is a subset of its denominator; the few that are additionally clamped say so in the catalogue.
 
 A metric whose counters do not exist on the running architecture reports N/A (blank), never 0: the Wormhole-only per-engine packer metrics (Packer Engine 0/1/2 Util, Packer Load Imbalance) are N/A on Blackhole, and the Blackhole-only extended L1 metrics (L1 Packer Interfaces Util/Backpressure, L1 Unpacker0 Ext Util/Backpressure) are N/A on Wormhole. A metric is also N/A when any of its input counters was not captured in the run. The three ``Avg ... util on full grid (%)`` columns average the FPU, SFPU and MATH counters over every core of the grid and the kernel duration; a device-only run leaves them blank and reports the per-core ``Avg (%)`` columns instead.
+
+*Quasar-Only Metrics*
+
+These come from counters that only Quasar's NEOs expose (four threads, the XSEARCH and INSTISSUE instruction classes, thread-ORed stall reasons, a third unpacker and the l1_client CSR). They are computed by the same shared engine (``tools/tracy/perf_metrics_common.py``) and read N/A on Wormhole and Blackhole rather than a fake 0%.
+
+- **Thread 3 Stall Rate (%)** and **T3 Instrn Issue Rate (%)**: ``THREAD_STALLS_3 / ref_cnt`` and ``THREAD_INSTRUCTIONS_3 / ref_cnt``, the fourth-thread counterparts of the tt-1xx thread metrics.
+- **CFG/SYNC/THCON/XSEARCH/INSTISSUE/MATH/UNPACK/PACK Instrn Avail Rate T0..T3 (%)**: ``<CLASS>_INSTRN_AVAILABLE_<t> / ref_cnt`` for every (class, thread) pair the tt-1xx list above does not already cover. The MATH class counts math and instissue instructions (the RTL unions them).
+- **<Reason> Stall Rate (%)**: ``<REASON> / ref_cnt`` for the 15 stall reasons the INSTRN unit reports OR-reduced across the four threads: Tile Counter Stall Pack/Unpack, Srcs Stall Pack/SFPU/Unpack, Dest Stall Pack/SFPU/Math/Unpack, SFPU/FPU Data Hazard Stall, SrcB/SrcA Stall Unpack, DValid Stall Math, SrcA Stall Math. They sample a backend stage, so they can exceed the per-thread stall counts.
+- **<Reason> Stall Share (%)**: the same reason as a fraction of the sum of every stall reason captured in the run; only reported when at least two reasons were captured.
+- **Unpacker0/1/2 Busy T0/T1 Util (%)**: ``UNPACK<u>_BUSY_THREAD<t> / ref_cnt`` per unpacker and issuing thread (Quasar runs three unpackers per thread; unpacker 2 is thread 0 only).
+- **SrcA/SrcB Write T1 Share (%)**: thread 1's fraction of the source register writes, complementing the T0 shares.
+- **Math Src Data Ready Rate (%)**: ``MATH_SRC_DATA_READY / ref_cnt``, the fraction of cycles the math unit had both source registers valid.
+- **FPU SFPU Overlap (%)**: ``max(0, FPU_COUNTER + SFPU_COUNTER - MATH_COUNTER) / ref_cnt``, the cycles both units were busy at once (``MATH_COUNTER`` counts fpu-or-sfpu cycles).
+- **T0..T3 Instrn Per Issue-Ready Cycle** (ratio): ``THREAD_INSTRUCTIONS_<t> / max(1, ref_cnt - THREAD_STALLS_<t>)``, instructions issued per cycle the thread was not stalled.
+- **L1_CLIENT_<PORT>_<EVENT> Rate (%)**: the l1_client counter selected for the run over the wall-clock span of the capture window, named after the selection (e.g. ``L1_CLIENT_UNPACK0_IF0_LANE3_SBANK_POP Rate``). Carry events (``*_CARRY`` other than ``PENDING_REQS``) pulse once per four lane events, so their rates are scaled by 4. The column is dynamic and appears after the fixed perf counter columns.
+
+*Composite Metrics*
+
+- **Stall Overlap T0/T1/T2 (x)**: Ratio of sum of stall reasons to total stalls per thread. >1.0 means multiple stall conditions overlap.
+- **Compute-to-Unpack Ratio (%)**: MATH_COUNTER / unpack busy. >100% = compute-bound, <100% = memory-bound.
+- **T0/T1/T2 Instrn Issue Rate** (raw number): Instructions issued per cycle per thread (``THREAD_INSTRUCTIONS_N / ref_cnt``).
 
 **Architecture Differences**
 
