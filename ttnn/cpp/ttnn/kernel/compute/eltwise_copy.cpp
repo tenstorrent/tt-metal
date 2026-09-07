@@ -9,7 +9,9 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
@@ -18,16 +20,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_in_id, dfb_out_id);
 
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::IterationShape::tiles(per_core_tile_cnt),
-        compute_kernel_lib::CopyTile<compute_kernel_lib::input(
-            dfb_in_id,
-            compute_kernel_lib::WaitPolicy::PerTile,
-            compute_kernel_lib::PopPolicy::PerTile,
-            compute_kernel_lib::DataFormatReconfig::Disabled)>{},
-        compute_kernel_lib::PackTile<compute_kernel_lib::output(
-            dfb_out_id,
-            compute_kernel_lib::ReservePolicy::PerTile,
-            compute_kernel_lib::PushPolicy::PerTile,
-            compute_kernel_lib::DataFormatReconfig::Disabled)>{});
+    ckl::copy<
+        ckl::input(dfb_in_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+        ckl::output(
+            dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
+        ckl::IterationShape::tiles(per_core_tile_cnt));
 }

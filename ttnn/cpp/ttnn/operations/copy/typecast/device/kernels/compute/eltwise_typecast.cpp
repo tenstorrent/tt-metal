@@ -15,15 +15,14 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
 
-    // dfb::in  — the typecast source pages, filled by this factory's reader
-    // The writer drains dfb::out on interleaved paths; sharded paths may leave it resident in
-    // borrowed output storage.
-    constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
+    // The raw kernel owned one output window per outer block: reserve and publish
+    // per_core_block_dim output pages around its per-tile typecast walk. PerOuter expresses
+    // that directly; the input retains its raw per-tile wait/pop lifecycle.
+    constexpr auto input =
+        ckl::input(dfb::in, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
     ckl::typecast<
-        ckl::input(dfb::in, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+        input,
         ckl::output(
-            dfb::out,
-            ckl::ReservePolicy::PerBlockSize,
-            ckl::PushPolicy::PerBlockSize,
-            ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::tiles(total_tiles).block_size(per_core_block_dim));
+            dfb::out, ckl::ReservePolicy::PerOuter, ckl::PushPolicy::PerOuter, ckl::DataFormatReconfig::Disabled)>(
+        ckl::IterationShape::grid(per_core_block_cnt, per_core_block_dim));
 }
