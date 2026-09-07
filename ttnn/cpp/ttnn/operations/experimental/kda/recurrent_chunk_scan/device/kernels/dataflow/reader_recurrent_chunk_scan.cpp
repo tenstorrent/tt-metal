@@ -131,6 +131,18 @@ TT_KERNEL void reader(
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         const uint32_t head_chunk = head * num_chunks + chunk;
+        // Publish the post-wrap seed just in time, never before the loop. The state
+        // DFB holds one kv payload and compute frees it only via pop_front at the
+        // end of chunk 0, so hoisting this deadlocks; pushing it here reuses the
+        // same capacity as a queue and costs no extra L1. reset_chunk is >= 1
+        // whenever it is non-zero, so chunk 0 has always been consumed by now.
+        if constexpr (!summary_pair) {
+            if (reset_chunk != 0 && chunk == reset_chunk) {
+                const auto reset_state_accessor = TensorAccessor(tensor::initial_state);
+                read_and_publish_value_slice<Vt, Vt_full>(
+                    reset_state_accessor, state, noc, reset_state_row * Kt * Vt_full, Kt, value_block);
+            }
+        }
         if constexpr (summary_pair) {
             read_and_publish_contiguous_tiles(kd_accessor, kd, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
             read_and_publish_value_slice<Vt, Vt_full>(
