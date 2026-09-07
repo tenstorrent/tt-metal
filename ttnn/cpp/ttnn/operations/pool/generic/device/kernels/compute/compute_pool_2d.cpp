@@ -161,8 +161,8 @@ void kernel_main() {
             }
             if constexpr (tilize_reconfig) {
                 if (first_c_block || last_c_block) {
-                    UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
+                    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
+                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce);
                 }
             }
             tile_regs_acquire();
@@ -205,7 +205,7 @@ void kernel_main() {
                             ((in_nblocks_c - 1) * max_tiles_per_iter + partial_iter_output_tiles);
                         pre_tilize_dfb.push_back(filler_stick_tiles);
                     }
-                    PACK((pack_untilize_uninit(pre_tilize_cb_id)));
+                    pack_untilize_uninit(pre_tilize_cb_id);
 
                     unpack_tilizeA_B_uninit(curr_in_cb_id);
                     pack_reconfig_data_format(out_cb_id);
@@ -232,21 +232,14 @@ void kernel_main() {
 
                     tilize_stick_counter = 0;
 
-                    UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
-                    // init math for reduction again since FPU gets reprogrammed by tilize
-                    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(
-                        in_cb_id_0, in_scalar_cb_id_0)));
-#ifdef ARCH_BLACKHOLE
-                    // need this on BH to set swizzle bit before pack untilize dest
-                    MATH((llk_math_reconfig_remap(true)));
-#endif
+                    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
+                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce);
 
                     if constexpr (is_output_block_format) {
                         pack_reconfig_data_format(pre_tilize_cb_id);
                     }
-                    PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
-                        pre_tilize_cb_id)));
+                    pack_untilize_dest_init<max_tiles_per_iter, max_tiles_per_iter, false /*narrow_row*/, TILE_C_DIM>(
+                        pre_tilize_cb_id);
                 }
             } else {
                 // ROW_MAJOR output: pack directly to output CB
