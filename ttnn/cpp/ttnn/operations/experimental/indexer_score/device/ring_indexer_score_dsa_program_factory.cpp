@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <initializer_list>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -16,6 +18,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/small_vector.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
@@ -29,6 +32,7 @@
 #include "indexer_score_host_common.hpp"  // shared causal geometry / device index / persistent-cache args
 #include "ring_indexer_score_schedule.hpp"
 #include "kernels/indexer_score_cb.hpp"
+#include "kernels/indexer_score_fused_common_args.hpp"
 #include "kernels/indexer_score_work_split.hpp"
 
 namespace ttnn::operations::experimental::indexer_score::program {
@@ -490,9 +494,9 @@ ProgramDescriptor build_ring_program_descriptor(
                 row % group_rows, group_rows, num_groups, /*band0=*/0u, col_num_bands, max_bands};
 
             KernelDescriptor::RTArgList reader_rt;
-            reader_rt.push_back(q.buffer());
-            reader_rt.push_back(k.buffer());
-            reader_rt.push_back(w.buffer());
+            reader_rt.push_back(0u);  // Reserved: address is a common buffer binding.
+            reader_rt.push_back(0u);  // Reserved: address is a common buffer binding.
+            reader_rt.push_back(0u);  // Reserved: address is a common buffer binding.
             append_scalars(reader_rt, sched);
             const auto push_mcast_dir = [&](uint32_t role,
                                             uint32_t xs,
@@ -526,35 +530,49 @@ ProgramDescriptor build_ring_program_descriptor(
                 q_py,
                 q_sender,
                 cols_used - 1);
-            // Reader tail (sequential push; slots named in rt_arg, matched positionally by the kernel).
-            reader_rt.push_back(k_batch_page_offset);  // rt_arg::reader_k_batch_offset (25)
-            reader_rt.push_back(kv_len_tiles);         // rt_arg::reader_kv_len_tiles (26)
+            // Preserve unique tail offsets; changing scalars and addresses are common args.
+            reader_rt.push_back(0u);                   // rt_arg::reader_k_batch_offset (25)
+            reader_rt.push_back(0u);                   // rt_arg::reader_kv_len_tiles (26)
             reader_rt.append(fused_rt);                // rt_arg::reader_fused_rt_base (27..35): ring/dir/sems/split
-            reader_rt.push_back(k_local.buffer());     // rt_arg::reader_k_local_addr (36): local SP shard address
-            reader_rt.push_back(k_local_batch_page_offset);  // selected slot in the original local cache
+            reader_rt.push_back(0u);                   // Reserved k_local address slot (36); bound through common args.
+            reader_rt.push_back(0u);                   // Reserved local batch offset (common args).
             reader_rt.append(physical_starts);               // rt_arg::reader_band_perm_base (38..): physical K starts
             reader_kernel.emplace_runtime_args(core, reader_rt);
 
             KernelDescriptor::RTArgList compute_rt;
             append_scalars(compute_rt, sched);
-            compute_rt.push_back(kv_len_tiles);
-            compute_rt.push_back(chunk_t);
-            compute_rt.push_back(geom.straddle_q_tile);
-            compute_rt.push_back(geom.straddle_jump_tiles);
+            compute_rt.push_back(0u);
+            compute_rt.push_back(0u);
+            compute_rt.push_back(0u);
+            compute_rt.push_back(0u);
             compute_rt.append(physical_starts);  // rt_arg::compute_band_perm_base (10..): physical K starts
             compute_kernel.emplace_runtime_args(core, compute_rt);
 
             KernelDescriptor::RTArgList writer_rt;
-            writer_rt.push_back(out.buffer());
+            writer_rt.push_back(0u);  // Reserved: address is a common buffer binding.
             append_scalars(writer_rt, sched);
-            writer_rt.push_back(kv_len_tiles);
-            writer_rt.push_back(chunk_t);
-            writer_rt.push_back(geom.straddle_q_tile);
-            writer_rt.push_back(geom.straddle_jump_tiles);
+            writer_rt.push_back(0u);
+            writer_rt.push_back(0u);
+            writer_rt.push_back(0u);
+            writer_rt.push_back(0u);
             writer_rt.append(physical_starts);  // rt_arg::writer_band_perm_base (11..): physical K starts
             writer_kernel.emplace_runtime_args(core, writer_rt);
         }
     }
+
+    // Common buffer bindings retain descriptor ownership/alias resolution and are
+    // re-applied on every dispatch. Scalars are uniform within each coordinate's kernel.
+    reader_kernel.emplace_common_runtime_args(
+        {q.buffer(),
+         k.buffer(),
+         w.buffer(),
+         k_local.buffer(),
+         k_batch_page_offset,
+         kv_len_tiles,
+         k_local_batch_page_offset});
+    writer_kernel.emplace_common_runtime_args(
+        {out.buffer(), kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
+    compute_kernel.emplace_common_runtime_args({kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
 
     // Consumer kernels FIRST (indices 0/1/2), then the AG helper appends its workers (3..).
     desc.kernels.push_back(std::move(reader_kernel));
@@ -685,9 +703,48 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     const tensor_args_t& tensors,
     tensor_return_value_t& out) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    // Buffer addresses (q/k/w/out/k_local + the AG's gathered buffer) auto-patch via the descriptor's
-    // BufferBinding fast path.
-    descriptor_adapter_t::apply_descriptor(cached, args, tensors, out);
+    if (cached.shared_variables.empty()) {
+        return;
+    }
+    // The descriptor adapter copies one workload resource list to every coordinate's shared
+    // variables. Operand order and distributed-buffer addresses therefore do not depend on range.
+    // Collect fresh operands once per dispatch, preserving resolved indices and resource ownership.
+    const auto collected = descriptor_adapter_t::collect_tensor_buffers(
+        tensors, out, cached.shared_variables.begin()->second.workload_descriptor);
+    ttsl::SmallVector<uint32_t, 16> addresses;
+    addresses.reserve(collected.buffers.size());
+    for (const auto* buffer : collected.buffers) {
+        addresses.push_back(buffer->address());
+    }
+    for (auto& [range, program] : cached.workload.get_programs()) {
+        const auto& bindings = cached.shared_variables.at(range).resolved_bindings;
+        if (!bindings.cbs.empty()) {
+            // Retain the general implementation for any future CB binding variant.
+            tt::tt_metal::apply_resolved_bindings(program, bindings, collected.buffers);
+            continue;
+        }
+        std::vector<std::vector<tt::tt_metal::RuntimeArgsData>>* kernel_args = nullptr;
+        tt::tt_metal::RuntimeArgsData* common_args = nullptr;
+        uint32_t previous_kernel = 0;
+        uint32_t previous_common_kernel = 0;
+        // Preserve binding order, including duplicate destinations: only cache the last lookup.
+        // References remain local to this apply and never survive dispatch storage retargeting.
+        for (const auto& binding : bindings.rt_args) {
+            if (binding.is_common) {
+                if (common_args == nullptr || previous_common_kernel != binding.kernel_idx) {
+                    common_args = &tt::tt_metal::GetCommonRuntimeArgs(program, binding.kernel_idx);
+                    previous_common_kernel = binding.kernel_idx;
+                }
+                (*common_args)[binding.arg_idx] = addresses[binding.tensor_buffer_idx];
+                continue;
+            }
+            if (kernel_args == nullptr || previous_kernel != binding.kernel_idx) {
+                kernel_args = &tt::tt_metal::GetRuntimeArgs(program, binding.kernel_idx);
+                previous_kernel = binding.kernel_idx;
+            }
+            (*kernel_args)[binding.core.x][binding.core.y][binding.arg_idx] = addresses[binding.tensor_buffer_idx];
+        }
+    }
 
     // The per-dispatch scalars chunk_start_idx / kv_len / cache_batch_idx are HASH-EXCLUDED (see
     // compute_program_hash: one cached program is reused across chunked-prefill chunks and decode steps that
@@ -708,50 +765,7 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     const uint32_t local_slot_pages =
         (k_local_shape[2] / tt::constants::TILE_HEIGHT) * (k_local_shape[3] / tt::constants::TILE_WIDTH);
     const uint32_t k_local_batch_page_offset = args.cache_batch_idx.value_or(0) * local_slot_pages;
-    for (auto& [range, program] : cached.workload.get_programs()) {
-        // Must match the build path's rank, or a cache hit shifts the causal offset.
-        const uint32_t device_index = transport_to_tensor_rank(args, transport_rank_for(args, range.start_coord(), q));
-        const uint32_t tp_index =
-            (args.tp_axis().has_value() && q.device_storage().get_coords().size() > 1)
-                ? ttnn::ccl::get_linearized_index_from_physical_coord(q, range.start_coord(), args.tp_axis())
-                : 0u;
-        const auto geom = device_causal_geometry(args, device_index, tp_index, q.logical_shape()[2]);
-
-        const auto patch_field = [&](uint32_t kernel_idx, uint32_t slot, uint32_t value) {
-            auto& grid_args = GetRuntimeArgs(program, kernel_idx);
-            for (auto& col_args : grid_args) {
-                for (auto& core_args : col_args) {
-                    TT_FATAL(
-                        slot < core_args.size(),
-                        "indexer_score fused override: scalar slot {} out of range (size {}) for kernel {}",
-                        slot,
-                        core_args.size(),
-                        kernel_idx);
-                    core_args[slot] = value;
-                }
-            }
-        };
-
-        patch_field(kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_k_batch_offset, k_batch_page_offset);
-        patch_field(kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_kv_len_tiles, pcache.kv_len_tiles);
-        patch_field(
-            kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_k_local_batch_offset, k_local_batch_page_offset);
-        patch_field(kComputeKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::compute_kv_len_tiles, pcache.kv_len_tiles);
-        patch_field(
-            kComputeKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::compute_chunk_start_tiles, geom.chunk_start_tiles);
-        patch_field(kComputeKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::compute_straddle_q_tile, geom.straddle_q_tile);
-        patch_field(
-            kComputeKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::compute_straddle_jump_tiles, geom.straddle_jump_tiles);
-        patch_field(kWriterKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::writer_kv_len_tiles, pcache.kv_len_tiles);
-        patch_field(
-            kWriterKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::writer_chunk_start_tiles, geom.chunk_start_tiles);
-        patch_field(kWriterKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::writer_straddle_q_tile, geom.straddle_q_tile);
-        patch_field(
-            kWriterKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::writer_straddle_jump_tiles, geom.straddle_jump_tiles);
-
-        // The descriptor fast path patches buffer bindings but not scalar fields embedded in the fused AG
-        // workers. cache_batch_idx and the exact kv_len are hash-excluded (only the structural schedule class is
-        // hashed), so update the selected input slot and slab-rounded gather extent on every cache hit.
+    const auto [input_batch_base, valid_pages, backward_semaphore, forward_semaphore] = [&] {
         const auto& shape = k_local.padded_shape();
         const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
         const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
@@ -759,28 +773,6 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             ag_rt::input_batch_base_pages(args.cache_batch_idx.value_or(0), shape[1], Ht, Wt);
         const auto valid_Ht = gather_valid_height_tiles(args, k_local);
         const uint32_t valid_pages = std::min(valid_Ht.value_or(Ht), Ht) * Wt;
-
-        const auto patch_ag_field = [&](uint32_t kernel_idx, uint32_t slot, uint32_t value) {
-            auto& grid_args = GetRuntimeArgs(program, kernel_idx);
-            bool patched_any_core = false;
-            for (auto& col_args : grid_args) {
-                for (auto& core_args : col_args) {
-                    if (core_args.size() == 0) {
-                        continue;
-                    }
-                    TT_FATAL(
-                        core_args.size() > slot,
-                        "indexer_score fused override: AG scalar slot {} out of range (size {}) for kernel {}",
-                        slot,
-                        core_args.size(),
-                        kernel_idx);
-                    core_args[slot] = value;
-                    patched_any_core = true;
-                }
-            }
-            TT_FATAL(
-                patched_any_core, "indexer_score fused override: AG kernel {} has no runtime arguments", kernel_idx);
-        };
 
         // Semaphore identity is hash-excluded. Rebind both ring directions on every cache hit so callers
         // can alternate double-buffered semaphore pairs without compiling a second otherwise-identical
@@ -792,23 +784,95 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             ag_semaphores.size());
         const uint32_t backward_semaphore = static_cast<uint32_t>(ag_semaphores[0].address());
         const uint32_t forward_semaphore = static_cast<uint32_t>(ag_semaphores[1].address());
-        patch_ag_field(kAllGatherReaderForwardKernelIndex, ag_rt::kReaderReadySemaphoreFieldOffset, forward_semaphore);
-        patch_ag_field(kAllGatherWriterForwardKernelIndex, ag_rt::kWriterReadySemaphoreFieldOffset, forward_semaphore);
-        patch_ag_field(
-            kAllGatherReaderBackwardKernelIndex, ag_rt::kReaderReadySemaphoreFieldOffset, backward_semaphore);
-        patch_ag_field(
-            kAllGatherWriterBackwardKernelIndex, ag_rt::kWriterReadySemaphoreFieldOffset, backward_semaphore);
+        return std::array<uint32_t, 4>{input_batch_base, valid_pages, backward_semaphore, forward_semaphore};
+    }();
+    for (auto& [range, program] : cached.workload.get_programs()) {
+        const auto geom = [&] {
+            // Must match the build path's rank, or a cache hit shifts the causal offset.
+            const uint32_t device_index =
+                transport_to_tensor_rank(args, transport_rank_for(args, range.start_coord(), q));
+            const uint32_t tp_index =
+                (args.tp_axis().has_value() && q.device_storage().get_coords().size() > 1)
+                    ? ttnn::ccl::get_linearized_index_from_physical_coord(q, range.start_coord(), args.tp_axis())
+                    : 0u;
+            return device_causal_geometry(args, device_index, tp_index, q.logical_shape()[2]);
+        }();
 
+        // Visit each AG kernel/core once for all of its changing scalars. The largest field
+        // bounds-check implies every field in this fixed table fits; empty AG cores stay skipped.
+        const auto patch_fields = [&](uint32_t kernel_idx,
+                                      std::initializer_list<std::pair<uint32_t, uint32_t>> fields,
+                                      bool skip_empty = false) {
+            const auto max_slot = std::max_element(fields.begin(), fields.end(), [](const auto& a, const auto& b) {
+                                      return a.first < b.first;
+                                  })->first;
+            auto& grid_args = GetRuntimeArgs(program, kernel_idx);
+            bool patched_any = false;
+            for (auto& col_args : grid_args) {
+                for (auto& core_args : col_args) {
+                    if (skip_empty && core_args.size() == 0) {
+                        continue;
+                    }
+                    TT_FATAL(
+                        max_slot < core_args.size(),
+                        "indexer_score fused override: scalar slot {} out of range (size {}) for kernel {}",
+                        max_slot,
+                        core_args.size(),
+                        kernel_idx);
+                    for (const auto& [slot, value] : fields) {
+                        core_args[slot] = value;
+                    }
+                    patched_any = true;
+                }
+            }
+            TT_FATAL(patched_any, "indexer_score fused override: kernel {} has no runtime arguments", kernel_idx);
+        };
+        {
+            namespace common = indexer_fused_common;
+            auto& reader_common = tt::tt_metal::GetCommonRuntimeArgs(program, kReaderKernelIndex);
+            reader_common.at(common::reader::BatchOffset) = k_batch_page_offset;
+            reader_common.at(common::reader::KvLength) = pcache.kv_len_tiles;
+            reader_common.at(common::reader::LocalBatchOffset) = k_local_batch_page_offset;
+            auto& compute_common = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIndex);
+            compute_common.at(common::compute::KvLength) = pcache.kv_len_tiles;
+            compute_common.at(common::compute::ChunkStart) = geom.chunk_start_tiles;
+            compute_common.at(common::compute::StraddleQ) = geom.straddle_q_tile;
+            compute_common.at(common::compute::StraddleJump) = geom.straddle_jump_tiles;
+            auto& writer_common = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernelIndex);
+            writer_common.at(common::writer::KvLength) = pcache.kv_len_tiles;
+            writer_common.at(common::writer::ChunkStart) = geom.chunk_start_tiles;
+            writer_common.at(common::writer::StraddleQ) = geom.straddle_q_tile;
+            writer_common.at(common::writer::StraddleJump) = geom.straddle_jump_tiles;
+        }
+
+        // Patch coordinate-specific AG destinations with the invocation-wide scalar values above.
+        // The descriptor fast path patches buffer bindings but not scalar fields embedded in the fused AG
+        // workers. cache_batch_idx and the exact kv_len are hash-excluded (only the structural schedule class is
+        // hashed), so update the selected input slot and slab-rounded gather extent on every cache hit.
         constexpr uint32_t ag_reader_input_base =
             ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kInputBatchBaseFieldOffset;
         constexpr uint32_t ag_reader_valid_pages = ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
         constexpr uint32_t ag_writer_valid_pages = ag_rt::kWriterRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
-        patch_ag_field(kAllGatherReaderForwardKernelIndex, ag_reader_input_base, input_batch_base);
-        patch_ag_field(kAllGatherReaderBackwardKernelIndex, ag_reader_input_base, input_batch_base);
-        patch_ag_field(kAllGatherReaderForwardKernelIndex, ag_reader_valid_pages, valid_pages);
-        patch_ag_field(kAllGatherReaderBackwardKernelIndex, ag_reader_valid_pages, valid_pages);
-        patch_ag_field(kAllGatherWriterForwardKernelIndex, ag_writer_valid_pages, valid_pages);
-        patch_ag_field(kAllGatherWriterBackwardKernelIndex, ag_writer_valid_pages, valid_pages);
+        patch_fields(
+            kAllGatherReaderForwardKernelIndex,
+            {{ag_rt::kReaderReadySemaphoreFieldOffset, forward_semaphore},
+             {ag_reader_input_base, input_batch_base},
+             {ag_reader_valid_pages, valid_pages}},
+            true);
+        patch_fields(
+            kAllGatherReaderBackwardKernelIndex,
+            {{ag_rt::kReaderReadySemaphoreFieldOffset, backward_semaphore},
+             {ag_reader_input_base, input_batch_base},
+             {ag_reader_valid_pages, valid_pages}},
+            true);
+        patch_fields(
+            kAllGatherWriterForwardKernelIndex,
+            {{ag_rt::kWriterReadySemaphoreFieldOffset, forward_semaphore}, {ag_writer_valid_pages, valid_pages}},
+            true);
+        patch_fields(
+            kAllGatherWriterBackwardKernelIndex,
+            {{ag_rt::kWriterReadySemaphoreFieldOffset, backward_semaphore}, {ag_writer_valid_pages, valid_pages}},
+            true);
     }
 }
 
