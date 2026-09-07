@@ -89,12 +89,21 @@
 #include "api/dataflow/dataflow_api.h"
 // PERMANENT per-stage device-profiler instrumentation (never remove; free when
 // the profiler is off -- see the header's durability contract).
-// ---- TEMPORARY ABLATION SWITCHES (/perf-measure cumulative peel) -----------
-// Uncomment to strip a stage's NoC PAYLOAD while keeping every CB handshake,
-// barrier and trip count.  Perf measurement only -- the op is WRONG with any of
-// these on.  They stay commented in the committed tree.
-// #define RMS_ABLATE_READ_X
-// #define RMS_ABLATE_PER_CHANNEL
+// ---- ABLATION SWITCHES (/perf-measure cumulative peel) ---------------------
+// `RMS_ABLATE_<STAGE>` strips that stage's PAYLOAD while keeping every CB
+// handshake, barrier, loop trip count and zone.  Perf measurement only -- the op
+// is WRONG with any of them on.
+//
+// They are DEFINES SUPPLIED BY THE HOST, from the `RMS_ABLATE` env var:
+//
+//     RMS_ABLATE=READ_X,WRITE scripts/tt-probe.sh rms_norm_ttnn < bench.py
+//
+// and NOT `#define`s to uncomment here.  Perf 3 measured why: the JIT kernel
+// cache key does not include the source's CONTENT, so an in-place edit is a
+// CACHE HIT on the previously compiled binary -- a "clean baseline" reproduced
+// twice at 56,090 ns with pcc=nan when the truth was 84,510 ns, because it was
+// still the all-stubbed build.  A define is part of the key.  See
+// `_kernel_defines()` in the program descriptor for the one source of truth.
 #include "perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"

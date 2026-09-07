@@ -91,10 +91,21 @@
 #include "hostdevcommon/common_values.hpp"
 // PERMANENT per-stage device-profiler instrumentation (never remove; free when
 // the profiler is off -- see the header's durability contract).
-// ---- TEMPORARY ABLATION SWITCH (/perf-measure cumulative peel) -------------
-// Uncomment to strip the gather boot-zeroing payload.  Perf measurement only.
-// #define RMS_ABLATE_GATHER_ZERO
-// #define RMS_ABLATE_WRITE
+// ---- ABLATION SWITCHES (/perf-measure cumulative peel) ---------------------
+// `RMS_ABLATE_<STAGE>` strips that stage's PAYLOAD while keeping every CB
+// handshake, barrier, loop trip count and zone.  Perf measurement only -- the op
+// is WRONG with any of them on.
+//
+// They are DEFINES SUPPLIED BY THE HOST, from the `RMS_ABLATE` env var:
+//
+//     RMS_ABLATE=READ_X,WRITE scripts/tt-probe.sh rms_norm_ttnn < bench.py
+//
+// and NOT `#define`s to uncomment here.  Perf 3 measured why: the JIT kernel
+// cache key does not include the source's CONTENT, so an in-place edit is a
+// CACHE HIT on the previously compiled binary -- a "clean baseline" reproduced
+// twice at 56,090 ns with pcc=nan when the truth was 84,510 ns, because it was
+// still the all-stubbed build.  A define is part of the key.  See
+// `_kernel_defines()` in the program descriptor for the one source of truth.
 #include "perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
@@ -573,10 +584,10 @@ void kernel_main() {
         // full), and it is a BOOT-TIME ONE-SHOT because the ring is reused in place every
         // round.  ONE lambda, called once per level a core gathers at.
         //
-        // ABLATION PEEL RECIPE (still wired): uncomment RMS_ABLATE_GATHER_ZERO at the head of
-        // this file to strip the payload while the predicate and the zone stay; diff the
-        // profiled zones against the unablated run.  Pair it with RMS_ABLATE_ROOT_SUM in
-        // rms_norm_ttnn_compute.cpp to peel the root chain cumulatively.  Perf-only -- the op is
+        // ABLATION PEEL RECIPE (still wired): `RMS_ABLATE=GATHER_ZERO` strips the payload
+        // while the predicate and the zone stay; diff the profiled zones against the
+        // unablated run.  Pair it with `ROOT_SUM` (compute) to peel the root chain
+        // cumulatively: `RMS_ABLATE=GATHER_ZERO,ROOT_SUM`.  Perf-only -- the op is
         // WRONG with it on wherever the stage still has work.
         auto zero_pad_slots = [&](uint32_t cb, uint32_t slots, uint32_t real_cnt) {
             MaybeDeviceZoneScope("writer_gather_zero");

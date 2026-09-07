@@ -87,14 +87,21 @@
 
 #include <cstdint>
 
-// ---- TEMPORARY ABLATION SWITCHES (/perf-measure cumulative peel) ------------
-// Uncomment to strip a stage's PAYLOAD while keeping every CB handshake and trip
-// count.  Perf measurement only -- the op is wrong with any of these on.  These
-// stay commented in the committed tree.
-// #define RMS_ABLATE_ROOT_SUM
-// #define RMS_ABLATE_ROOT_FINALIZE
-// #define RMS_ABLATE_RECONFIG
-// #define RMS_ABLATE_COMPUTE
+// ---- ABLATION SWITCHES (/perf-measure cumulative peel) ---------------------
+// `RMS_ABLATE_<STAGE>` strips that stage's PAYLOAD while keeping every CB
+// handshake, barrier, loop trip count and zone.  Perf measurement only -- the op
+// is WRONG with any of them on.
+//
+// They are DEFINES SUPPLIED BY THE HOST, from the `RMS_ABLATE` env var:
+//
+//     RMS_ABLATE=READ_X,WRITE scripts/tt-probe.sh rms_norm_ttnn < bench.py
+//
+// and NOT `#define`s to uncomment here.  Perf 3 measured why: the JIT kernel
+// cache key does not include the source's CONTENT, so an in-place edit is a
+// CACHE HIT on the previously compiled binary -- a "clean baseline" reproduced
+// twice at 56,090 ns with pcc=nan when the truth was 84,510 ns, because it was
+// still the all-stubbed build.  A define is part of the key.  See
+// `_kernel_defines()` in the program descriptor for the one source of truth.
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -1638,9 +1645,9 @@ void kernel_main() {
 #if defined(RMS_ABLATE_ROOT_SUM) || defined(RMS_ABLATE_ROOT_FINALIZE)
                 // ABLATION (temporary, /perf-measure): payload removed, every CB handshake
                 // and trip count preserved.  Under D27 the round's handshake is ONE window
-                // in and ONE page out, whatever BLOCK_ROWS is -- peel recipe: uncomment
-                // RMS_ABLATE_ROOT_SUM at the head of this file (and, on the writer,
-                // RMS_ABLATE_GATHER_ZERO) and diff the profiled zones against the
+                // in and ONE page out, whatever BLOCK_ROWS is -- peel recipe:
+                // `RMS_ABLATE=ROOT_SUM` (add `,GATHER_ZERO` for the writer's half of the
+                // same stage) and diff the profiled zones against the
                 // unablated run; the difference is that stage's WALL contribution, which is
                 // what makes the cumulative peel additive.  D28: the ROOT's window is the
                 // level-1 ring when the tree is built, and `compute_tree_fold_l0` above
