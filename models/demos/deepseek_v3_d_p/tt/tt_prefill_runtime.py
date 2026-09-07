@@ -896,6 +896,16 @@ class TtPrefillRuntime:
             stages.append(KvCacheStage(int(index_cache.buffer_address()), first_full, count_full))
         return stages
 
+    def kv_table_layer_rows(self, stage_layouts):
+        """Model layer to publish each dense KV slab at, or None when every layer owns one.
+
+        Only a HYBRID attention stack needs this. `kv_migration_stages` numbers such a model's KVPE
+        stage in compacted slab space (as it already does for the DSA index cache), so the gathered
+        stages count slabs rather than layers; this maps slab -> model layer so the published table
+        keeps the model's layer axis and a consumer indexing by layer is unaffected.
+        """
+        return None
+
     def build_kv_chunk_table(
         self,
         kv_caches: MlaKvCaches,
@@ -925,6 +935,19 @@ class TtPrefillRuntime:
         Under DFlash, this rank's drafter context caches join the same merged table as
         ``2 * num_kv_heads`` further named configs (see the gate below)."""
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
+
+        # The gathered stage is authoritative for this rank's KVPE range, not the caller's arguments.
+        # They can legitimately disagree: `kv_migration_stages` may number the stage in a COMPACTED
+        # space (the DSA index cache does, and a hybrid stack must for KVPE too, since only some
+        # layers own a slab) while the runner passes the rank's MODEL-layer span. Taking the layout
+        # keeps the cache-depth check and the address walk in the space everyone already agreed on.
+        _primary_layout = stage_layouts[0] if stage_layouts else None
+        if _primary_layout:
+            _my_rank = int(ttnn.distributed_context_get_rank())
+            _mine = [st for st in _primary_layout if st["rank"] == _my_rank]
+            if _mine:
+                first_layer_idx = int(_mine[0]["first_layer"])
+                num_my_layers = int(_mine[0]["count"])
 
         # DFlash: register the drafter's context K/V as further configs of the same merged table, so a
         # device-less consumer (prefill_producer) can read them back per (layer, head) and PCC them
@@ -980,6 +1003,7 @@ class TtPrefillRuntime:
             first_layer_idx=first_layer_idx,
             num_my_layers=num_my_layers,
             stage_layouts=stage_layouts,
+            layer_rows=self.kv_table_layer_rows(stage_layouts),
             index_layer_ids=index_layer_ids,
         )
 

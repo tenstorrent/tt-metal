@@ -278,6 +278,7 @@ def create_kv_chunk_address_table_block_cyclic(
     first_layer_idx=0,
     num_my_layers=None,
     stage_layout=None,
+    layer_rows=None,
 ):
     """
     Create and populate a KV chunk address table for disaggregation (Kimi K2.6 model - non-balanced).
@@ -299,6 +300,12 @@ def create_kv_chunk_address_table_block_cyclic(
         stage_layout: optional pre-gathered per-rank stage layout from allgather_kv_stage_layout().
             Pass it when the COLLECTIVE all-gather has already run on all ranks (so only rank 0 builds);
             leave None to run the all-gather inline (single-rank / tests).
+        layer_rows: table row to publish each dense cache layer at, for a model whose attention is
+            HYBRID and whose cache therefore holds fewer layers than its stage spans. Kimi-K3 writes a
+            KV slab on 24 of 93 layers, so its stages are numbered in compacted MLA-slot space and this
+            maps slot -> model layer, keeping published rows on the model's layer axis so a consumer
+            indexing by layer needs no change. None (every layer owns a slab) means row == layer, which
+            is what DeepSeek / Kimi-K2 / GLM want.
 
     Returns:
         lookup_table: Populated KvChunkAddressTable
@@ -322,6 +329,15 @@ def create_kv_chunk_address_table_block_cyclic(
 
     # The merged table spans ALL layers (not just this rank's), so size the table to the global total.
     config.num_layers = merged_num_layers(stage_layout)
+    if layer_rows is not None:
+        # Compacted stages count SLABS, not rows, so their sum is not the published extent. Widen
+        # before construction, where extents are fixed. Same widening the merged builder applies to
+        # the index config.
+        assert len(layer_rows) == config.num_layers, (
+            f"layer_rows has {len(layer_rows)} entries but the gathered stages span "
+            f"{config.num_layers} dense cache layers; every slab needs exactly one published row"
+        )
+        config.num_layers = max(layer_rows) + 1
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
     return populate_kv_chunk_address_table_block_cyclic(
         lookup_table=lookup_table,
@@ -335,6 +351,7 @@ def create_kv_chunk_address_table_block_cyclic(
         num_users=num_users,
         config_id=0,
         stage_layout=stage_layout,
+        layer_rows=layer_rows,
     )
 
 
