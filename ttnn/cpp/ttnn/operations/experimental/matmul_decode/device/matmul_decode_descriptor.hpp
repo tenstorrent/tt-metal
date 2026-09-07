@@ -44,6 +44,7 @@ struct MatmulDecodeParams {
     std::optional<tt::tt_metal::CoreRangeSet> output_core_grid = std::nullopt;
     bool output_mcast_two_hub = false;
     bool rms_norm = false;
+    std::optional<float> rms_norm_gamma = std::nullopt;
     float rms_norm_epsilon = 1.0e-6F;
 };
 

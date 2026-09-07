@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <variant>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -54,7 +55,7 @@ Tensor matmul_decode(
     const std::optional<tt::tt_metal::CoreRangeSet>& output_core_grid = std::nullopt,
     bool output_mcast_two_hub = false,
     bool rms_norm = false,
-    const std::optional<Tensor>& rms_norm_gamma = std::nullopt,
+    const std::optional<std::variant<float, Tensor>>& rms_norm_gamma = std::nullopt,
     float rms_norm_epsilon = 1.0e-6F);
 
 }  // namespace ttnn::experimental

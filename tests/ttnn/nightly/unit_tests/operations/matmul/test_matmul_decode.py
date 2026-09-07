@@ -335,7 +335,8 @@ def test_matmul_decode_row_major_height_sharded_replicated(device, m, k, n, outp
 @pytest.mark.parametrize("m", [1, 4])
 @pytest.mark.parametrize("k", [1024, 4096])
 @pytest.mark.parametrize("n", [2048, 4096])
-def test_matmul_decode_fused_rms_norm(device, m, k, n, expect_error):
+@pytest.mark.parametrize("use_vector_gamma", [False, True])
+def test_matmul_decode_fused_rms_norm(device, m, k, n, use_vector_gamma, expect_error):
     torch.manual_seed(0)
     epsilon = 1e-5
     num_inputB_cores = n // 64
@@ -344,7 +345,13 @@ def test_matmul_decode_fused_rms_norm(device, m, k, n, expect_error):
 
     torch_a = torch.randn((m, k), dtype=torch.bfloat16)
     torch_b = torch.randn((k, n), dtype=torch.bfloat16)
-    torch_gamma = torch.randn((n,), dtype=torch.bfloat16)
+    if use_vector_gamma:
+        torch_gamma = torch.randn((n,), dtype=torch.bfloat16)
+        gamma_arg = None  # filled after tensors are on device
+    else:
+        scalar_gamma = 0.75
+        torch_gamma = torch.full((n,), scalar_gamma, dtype=torch.bfloat16)
+        gamma_arg = scalar_gamma
     mm = torch_a.float() @ torch_b.float()
     ref = mm * torch_gamma.float() * torch.rsqrt(mm.square().mean(dim=-1, keepdim=True) + epsilon)
 
@@ -375,20 +382,24 @@ def test_matmul_decode_fused_rms_norm(device, m, k, n, expect_error):
         ),
     )
 
-    gamma_t = make_width_sharded_gamma(torch_gamma, producer_grid, device, n, num_inputB_cores)
-    # if m == 1:
-    #     with expect_error(RuntimeError, "requires rms_norm_gamma"):
-    #         ttnn.experimental.matmul_decode(a, weight, rms_norm=True)
-    #     with expect_error(RuntimeError, "rms_norm_gamma requires rms_norm"):
-    #         ttnn.experimental.matmul_decode(a, weight, rms_norm=False, rms_norm_gamma=gamma_t)
-    #     with expect_error(RuntimeError, "not supported with ring_gather"):
-    #         ttnn.experimental.matmul_decode(a, weight, rms_norm=True, rms_norm_gamma=gamma_t, ring_gather=True)
+    if use_vector_gamma:
+        gamma_arg = make_width_sharded_gamma(torch_gamma, producer_grid, device, n, num_inputB_cores)
+    if m == 1:
+        with expect_error(RuntimeError, "requires rms_norm_gamma"):
+            ttnn.experimental.matmul_decode(a, weight, rms_norm=True)
+        with expect_error(RuntimeError, "rms_norm_gamma requires rms_norm"):
+            ttnn.experimental.matmul_decode(a, weight, rms_norm=False, rms_norm_gamma=gamma_arg)
+        with expect_error(RuntimeError, "not supported with ring_gather"):
+            ttnn.experimental.matmul_decode(a, weight, rms_norm=True, rms_norm_gamma=gamma_arg, ring_gather=True)
+        if not use_vector_gamma:
+            with expect_error(RuntimeError, "must be finite"):
+                ttnn.experimental.matmul_decode(a, weight, rms_norm=True, rms_norm_gamma=float("inf"))
 
     out = ttnn.experimental.matmul_decode(
         a,
         weight,
         rms_norm=True,
-        rms_norm_gamma=gamma_t,
+        rms_norm_gamma=gamma_arg,
         rms_norm_epsilon=epsilon,
     )
     assert_with_pcc(ref, ttnn.to_torch(out).float(), 0.99)
@@ -740,8 +751,8 @@ def test_matmul_decode_row_major_height_sharded_rejects_ring_gather(device, expe
 @pytest.mark.parametrize("k, n", [(1024, 4096)])
 @pytest.mark.parametrize("num_inputA_cores", [32])
 @pytest.mark.parametrize("ring_gather", [False, True])
-def test_matmul_decode_row_major_m1(device, k, n, num_inputA_cores, ring_gather):
-    """ROW_MAJOR bfloat16 A with M=1 is consumed as a 1x32 tile."""
+def test_matmul_decode_row_major_m1(device, k, n, num_inputA_cores, ring_gather, capfd):
+    """ROW_MAJOR width-sharded bfloat16 A with M=1 is consumed as a 1x32 tile."""
     torch.manual_seed(0)
     m = 1
     num_inputB_cores = n // 64
@@ -782,13 +793,17 @@ def test_matmul_decode_row_major_m1(device, k, n, num_inputA_cores, ring_gather)
     output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b, ring_gather=ring_gather)
     assert output_tensor.shape == (m, n)
     assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
     assert_with_pcc(torch_output_tensor, ttnn.to_torch(output_tensor), 0.99)
+    captured = capfd.readouterr()
+    if ring_gather:
+        assert "falling back to the general block matmul LLKs" in captured.out + captured.err
 
 
 @pytest.mark.parametrize("k, n, k_blocks, n_blocks", [(4096, 1024, 2, 32)])
 @pytest.mark.parametrize("num_inputA_cores", [32])
 @pytest.mark.parametrize("ring_gather", [False, True])
-def test_matmul_decode_partial_row_major_m1(device, k, n, k_blocks, n_blocks, num_inputA_cores, ring_gather):
+def test_matmul_decode_partial_row_major_m1(device, k, n, k_blocks, n_blocks, num_inputA_cores, ring_gather, capfd):
     """ROW_MAJOR bfloat16 A with M=1 on the partial-width-sharded path."""
     torch.manual_seed(0)
     m = 1
@@ -842,7 +857,11 @@ def test_matmul_decode_partial_row_major_m1(device, k, n, k_blocks, n_blocks, nu
     )
     assert output_tensor.shape == (m, n)
     assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
     assert_with_pcc(ref, ttnn.to_torch(output_tensor), 0.99)
+    captured = capfd.readouterr()
+    if ring_gather:
+        assert "falling back to the general block matmul LLKs" in captured.out + captured.err
 
 
 @pytest.mark.parametrize(
@@ -1363,14 +1382,83 @@ def test_matmul_decode_batched_width_sharded(device, d0, d1, m, k, n, b_blocks, 
     print("input_tensor_a.shape:", input_tensor_a.shape)
     print("input_tensor_b.shape:", input_tensor_b.shape)
 
-    # Output is DRAM-interleaved with shape [d0, d1, m, n] (matches the torch reference directly;
-    # b_blocks / n_blocks are inferred from the operand shapes).
+    # TILE A: DRAM-interleaved TILE [d0, d1, m, n]. b_blocks / n_blocks come from the operand shapes.
     output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b_l1)
 
     assert tuple(output_tensor.shape) == (d0, d1, m, n)
 
     out = ttnn.to_torch(output_tensor).float().reshape(batch, m, n)
     assert_with_pcc(ref, out, 0.99)
+
+
+@pytest.mark.parametrize(
+    "d0, d1, k, n, b_blocks, n_blocks",
+    [
+        (1, 8, 1024, 1024, 8, 8),
+    ],
+)
+@pytest.mark.parametrize("num_inputA_cores", [32])
+def test_matmul_decode_batched_row_major_m1(device, d0, d1, k, n, b_blocks, n_blocks, num_inputA_cores):
+    """ROW_MAJOR width-sharded A with M=1 on the batched path; output is ROW_MAJOR width-sharded."""
+    torch.manual_seed(0)
+    m = 1
+    batch = d0 * d1
+    bc = batch // b_blocks
+    nc = n // n_blocks
+    num_inputB_cores = b_blocks * n_blocks
+    if device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y < num_inputB_cores:
+        pytest.skip(f"Skipping test as device doesn't have {num_inputB_cores} cores")
+
+    torch_input_tensor_a = torch.randn((batch, m, k), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((batch, k, n), dtype=torch.bfloat16)
+    ref = torch.matmul(torch_input_tensor_a.to(torch.float32), torch_input_tensor_b.to(torch.float32))
+
+    torch_input_tensor_b_folded = torch_input_tensor_b.reshape(b_blocks, bc, k, n)
+    torch_input_tensor_b_folded = torch.permute(torch_input_tensor_b_folded, (1, 2, 0, 3))
+    torch_input_tensor_b_folded = torch_input_tensor_b_folded.reshape(1, 1, bc * k, b_blocks * n)
+    torch_input_tensor_a_4d = torch_input_tensor_a.reshape(d0, d1, m, k)
+
+    input_a_core_range_set = num_cores_to_rectangle_core_range_set(num_inputA_cores, device)
+    input_b_core_range_set = _rectangle_core_range_set(n_blocks, b_blocks, device)
+    in0_memory_config = ttnn.create_sharded_memory_config(
+        (batch * m, k // num_inputA_cores),
+        core_grid=input_a_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    in1_memory_config = ttnn.create_sharded_memory_config(
+        (bc * k, nc),
+        core_grid=input_b_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a_4d,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b_folded,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat4_b,
+    )
+    input_tensor_b_l1 = ttnn.to_memory_config(input_tensor_b, in1_memory_config)
+
+    output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b_l1)
+
+    assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    # WIDTH_SHARDED geometry matches the folded weights: [Bc*M, b_blocks*N] on B's grid.
+    assert (output_tensor.shape[-2], output_tensor.shape[-1]) == (bc * m, b_blocks * n)
+    out = ttnn.to_torch(output_tensor).float().reshape(bc, m, b_blocks, n)
+    actual = out.permute(2, 0, 1, 3).reshape(batch, m, n)
+    assert_with_pcc(ref, actual, 0.99)
 
 
 # Unique (K, N, layout) used by deepseek_v4_flash decode matmuls. Duplicates are

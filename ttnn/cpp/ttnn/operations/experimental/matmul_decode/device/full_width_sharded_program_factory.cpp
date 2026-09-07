@@ -245,10 +245,11 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     // Streaming issues one custom_mm_block per GCB page into the same DST tiles and finalizes on
     // the last, so a page has to be a legal kt_dim on its own and every output of the row must stay
     // resident in DST across the whole traversal -- which is what restricts it to one tile row.
+    const bool in0_rm = input_tensor_a.layout() == Layout::ROW_MAJOR;
     const bool custom_mm_streams_ok = operation_attributes.global_cb_k_blocks == 1 || M_tiles == 1;
-    const bool use_custom_mm = in0_rm_hs && device->arch() == tt::ARCH::BLACKHOLE && !operation_attributes.all_gather &&
-                               custom_mm_streams_ok && is_custom_mm_kt_dim(k_block_tiles) &&
-                               is_custom_mm_ct_dim(inB_N_tiles_per_core);
+    const bool use_custom_mm = in0_rm && (in0_rm_hs || M_tiles == 1) && device->arch() == tt::ARCH::BLACKHOLE &&
+                               !operation_attributes.all_gather && custom_mm_streams_ok &&
+                               is_custom_mm_kt_dim(k_block_tiles) && is_custom_mm_ct_dim(inB_N_tiles_per_core);
     // The RMSNorm statistics want FP32, but custom_mm cannot give DST a 32-bit mode (see the compute
     // config below), and a 16-bit DST cannot read an FP32 circular buffer: the unpacker consumes each
     // FP32 word as two 16-bit datums, which interleaves the tile instead of converting it. The
@@ -256,8 +257,10 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const bool rms_fp32_stats = rms_norm && !use_custom_mm;
     if (!use_custom_mm) {
         std::string_view reason;
-        if (!in0_rm_hs) {
-            reason = "input A is not ROW_MAJOR HEIGHT_SHARDED";
+        if (!in0_rm) {
+            reason = "input A is not ROW_MAJOR";
+        } else if (!in0_rm_hs && M_tiles != 1) {
+            reason = "ROW_MAJOR width-sharded input A requires M_tiles = 1";
         } else if (device->arch() != tt::ARCH::BLACKHOLE) {
             reason = "custom_mm is Blackhole-only";
         } else if (operation_attributes.all_gather) {
@@ -445,21 +448,23 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
                 .tile = out_tile_desc,
             }}},
         });
-        const auto& gamma = tensor_args.rms_norm_gamma.value();
-        const tt::DataFormat gamma_data_format = datatype_to_dataformat_converter(gamma.dtype());
-        const auto& gamma_tile = gamma.tensor_spec().tile();
-        const uint32_t gamma_tile_size = gamma_tile.get_tile_size(gamma_data_format);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = inB_N_tiles_per_core * gamma_tile_size,
-            .core_ranges = inputB_core_range_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = rms_gamma_cb_index,
-                .data_format = gamma_data_format,
-                .page_size = gamma_tile_size,
-                .tile = TileDescriptor{gamma_tile},
-            }}},
-            .buffer = gamma.buffer(),
-        });
+        if (tensor_args.rms_norm_gamma.has_value()) {
+            const auto& gamma = tensor_args.rms_norm_gamma.value();
+            const tt::DataFormat gamma_data_format = datatype_to_dataformat_converter(gamma.dtype());
+            const auto& gamma_tile = gamma.tensor_spec().tile();
+            const uint32_t gamma_tile_size = gamma_tile.get_tile_size(gamma_data_format);
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = inB_N_tiles_per_core * gamma_tile_size,
+                .core_ranges = inputB_core_range_set,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = rms_gamma_cb_index,
+                    .data_format = gamma_data_format,
+                    .page_size = gamma_tile_size,
+                    .tile = TileDescriptor{gamma_tile},
+                }}},
+                .buffer = gamma.buffer(),
+            });
+        }
         desc.cbs.push_back(CBDescriptor{
             .total_size = M_tiles * rms_tile_size,
             .core_ranges = inputB_core_range_set,
@@ -838,17 +843,21 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_scale", rms_scale_cb_index);
         compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_reduce_scaler", rms_reduce_scaler_cb_index);
         compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_reduced", rms_reduced_cb_index);
-        compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_gamma", rms_gamma_cb_index);
+        if (tensor_args.rms_norm_gamma.has_value()) {
+            compute_kernel_desc.defines.emplace_back("FUSE_RMS_VECTOR_GAMMA", "1");
+            compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_gamma", rms_gamma_cb_index);
+        }
         compute_kernel_desc.named_compile_time_args.emplace_back(
             "rms_packed_tiles_per_row", div_up(num_producers, tt::constants::TILE_HEIGHT / output_tile_height));
         const uint32_t inv_n_bits = std::bit_cast<uint32_t>(1.0F / static_cast<float>(operation_attributes.N));
         const uint32_t epsilon_bits = std::bit_cast<uint32_t>(operation_attributes.rms_norm_epsilon);
+        const uint32_t gamma_bits = std::bit_cast<uint32_t>(operation_attributes.rms_norm_gamma.value_or(1.0F));
         compute_kernel_desc.runtime_args.reserve(producer_cores.size());
         for (const auto& core : producer_cores) {
             compute_kernel_desc.runtime_args.emplace_back(
                 core,
                 KernelDescriptor::CoreRuntimeArgs{
-                    static_cast<uint32_t>(core == rms_hub_logical), inv_n_bits, epsilon_bits});
+                    static_cast<uint32_t>(core == rms_hub_logical), inv_n_bits, epsilon_bits, gamma_bits});
         }
     }
     desc.kernels.push_back(std::move(compute_kernel_desc));

@@ -787,24 +787,11 @@ ProgramDescriptor create_descriptor_ring_gather_partial(
     const uint32_t Kc_tiles = Kc / tt::constants::TILE_HEIGHT;
     const uint32_t Nc_tiles = Nc / tt::constants::TILE_WIDTH;
 
-    const bool use_custom_mm = device->arch() == tt::ARCH::BLACKHOLE && M_tiles == 1 &&
-                               is_custom_mm_in0_tile_height(inputA_tile_height) && is_custom_mm_kt_dim(Kc_tiles) &&
-                               is_custom_mm_ct_dim(Nc_tiles);
-    if (!use_custom_mm) {
-        std::string_view reason;
-        if (device->arch() != tt::ARCH::BLACKHOLE) {
-            reason = "custom_mm is Blackhole-only";
-        } else if (!is_custom_mm_in0_tile_height(inputA_tile_height)) {
-            reason = "in0 tile height is not in {1, 2, 4, 8}";
-        } else if (M_tiles != 1) {
-            reason = "more than one in0 tile row is not contiguous for custom_mm";
-        } else if (!is_custom_mm_kt_dim(Kc_tiles)) {
-            reason = "the per-core Kc block must contain an even number of tiles in [2, 256]";
-        } else {
-            reason = "the per-core output width exceeds 16 tiles";
-        }
-        log_warning(tt::LogOp, "matmul_decode is falling back to the general block matmul LLKs: {}", reason);
-    }
+    const bool use_custom_mm = false;
+    log_warning(
+        tt::LogOp,
+        "matmul_decode is falling back to the general block matmul LLKs: ring-gather and fused all-gather are not "
+        "supported by custom_mm");
 
     const auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
     const auto inputB_core_range_set =

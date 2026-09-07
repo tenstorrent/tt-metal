@@ -43,6 +43,7 @@ RealOp::operation_attributes_t to_real_attributes(const MatmulDecodeParams& p) {
         p.output_core_grid,
         p.output_mcast_two_hub,
         p.rms_norm,
+        p.rms_norm_gamma,
         p.rms_norm_epsilon,
     };
 }

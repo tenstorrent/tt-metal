@@ -34,19 +34,19 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     const tt::DataFormat in1_data_format = datatype_to_dataformat_converter(input_tensor_b.dtype());
     const tt::DataFormat out_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
 
-    const auto& inputA_tile = input_tensor_a.tensor_spec().tile();
     const auto& inputB_tile = input_tensor_b.tensor_spec().tile();
-    const auto& output_tile = output_tensor.tensor_spec().tile();
-    const uint32_t in0_tile_size = inputA_tile.get_tile_size(in0_data_format);
+    const tt::tt_metal::Tile in0_tile = in0_tile_for_compute(input_tensor_a);
+    const tt::tt_metal::Tile output_tile = out_tile_for_compute(input_tensor_a, output_tensor);
+    const uint32_t in0_tile_size = in0_tile.get_tile_size(in0_data_format);
     const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
     const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
 
-    const TileDescriptor in0_tile_desc{inputA_tile};
+    const TileDescriptor in0_tile_desc{in0_tile};
     const TileDescriptor in1_tile_desc{inputB_tile};
     const TileDescriptor out_tile_desc{output_tile};
 
-    const uint32_t inputA_tile_height = inputA_tile.get_height();
-    const uint32_t inputA_tile_width = inputA_tile.get_width();
+    const uint32_t inputA_tile_height = in0_tile.get_height();
+    const uint32_t inputA_tile_width = in0_tile.get_width();
     const uint32_t inputB_tile_height = inputB_tile.get_height();
     const uint32_t inputB_tile_width = inputB_tile.get_width();
     const uint32_t output_tile_height = output_tile.get_height();
@@ -144,7 +144,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         num_B_cores);
 
     IDevice* device = input_tensor_a.device();
-    const uint32_t N_tiles = div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
 
     ProgramDescriptor desc;
 
@@ -307,7 +306,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
             .address_offset = packed.has_value() ? packed->tile_offset * in1_tile_size : 0,
         });
     }
-    desc.cbs.push_back(CBDescriptor{
+    CBDescriptor out_cb_desc{
         .total_size = out_block_num_tiles * out_tile_size,
         .core_ranges = inputB_core_range_set,
         .format_descriptors = {{CBFormatDescriptor{
@@ -316,7 +315,11 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
             .page_size = out_tile_size,
             .tile = out_tile_desc,
         }}},
-    });
+    };
+    if (output_tensor.layout() == Layout::ROW_MAJOR) {
+        out_cb_desc.buffer = output_tensor.buffer();
+    }
+    desc.cbs.push_back(std::move(out_cb_desc));
     desc.cbs.push_back(CBDescriptor{
         .total_size = full_in0_num_tiles * in0_tile_size,
         .core_ranges = inputB_core_range_set,
@@ -389,33 +392,36 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     }
     desc.kernels.push_back(std::move(reader_kernel_desc));
 
-    KernelDescriptor writer_kernel_desc;
-    writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
-        "writer_batched_width_sharded.cpp";
-    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = CoreRangeSet(b_core_ranges);
-    writer_kernel_desc.compile_time_args = {
-        Bc,
-        M_tiles,
-        Nc_tiles,
-        N_tiles,
-    };
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_kernel_desc.compile_time_args);
-    writer_kernel_desc.named_compile_time_args = {
-        {"cb_out", out_cb_index},
-    };
-    writer_kernel_desc.config = DataMovementConfigDescriptor{
-        .processor = DataMovementProcessor::RISCV_0,
-        .noc = NOC::NOC_0,
-    };
-    for (uint32_t idx = 0; idx < b_cores.size(); idx++) {
-        const uint32_t b_idx = idx / n_blocks;
-        const uint32_t n_idx = idx % n_blocks;
-        writer_kernel_desc.emplace_runtime_args(
-            b_cores[idx], {output_tensor.buffer(), static_cast<uint32_t>(b_idx), static_cast<uint32_t>(n_idx)});
+    if (output_tensor.layout() != Layout::ROW_MAJOR) {
+        const uint32_t N_tiles = div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
+        KernelDescriptor writer_kernel_desc;
+        writer_kernel_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
+            "writer_batched_width_sharded.cpp";
+        writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writer_kernel_desc.core_ranges = CoreRangeSet(b_core_ranges);
+        writer_kernel_desc.compile_time_args = {
+            Bc,
+            M_tiles,
+            Nc_tiles,
+            N_tiles,
+        };
+        TensorAccessorArgs(output_tensor.buffer()).append_to(writer_kernel_desc.compile_time_args);
+        writer_kernel_desc.named_compile_time_args = {
+            {"cb_out", out_cb_index},
+        };
+        writer_kernel_desc.config = DataMovementConfigDescriptor{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::NOC_0,
+        };
+        for (uint32_t idx = 0; idx < b_cores.size(); idx++) {
+            const uint32_t b_idx = idx / n_blocks;
+            const uint32_t n_idx = idx % n_blocks;
+            writer_kernel_desc.emplace_runtime_args(
+                b_cores[idx], {output_tensor.buffer(), static_cast<uint32_t>(b_idx), static_cast<uint32_t>(n_idx)});
+        }
+        desc.kernels.push_back(std::move(writer_kernel_desc));
     }
-    desc.kernels.push_back(std::move(writer_kernel_desc));
 
     KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =
