@@ -11,31 +11,6 @@ import torch
 from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_gcb
 
 
-def get_width_shard_num_cores(width: int, device, num_cores: Optional[int] = None) -> int:
-    if num_cores is None:
-        num_cores = width // ttnn.TILE_SIZE
-    device_grid_size = device.compute_with_storage_grid_size()
-    device_cores = device_grid_size.x * device_grid_size.y
-    while num_cores > device_cores:
-        num_cores //= 2
-    return num_cores
-
-
-def regular_width_sharded_l1_config(
-    height: int, width: int, device, num_cores: Optional[int] = None
-) -> ttnn.MemoryConfig:
-    assert width % ttnn.TILE_SIZE == 0, f"width {width} must be tile-aligned"
-    num_cores = get_width_shard_num_cores(width, device, num_cores)
-    shard_width = width // num_cores
-    height_padded = ((height + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-    shard_spec = ttnn.ShardSpec(
-        ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True),
-        [height_padded, shard_width],
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
-
-
 def to_ttnn_device(
     tensor: torch.Tensor,
     device: ttnn.MeshDevice,
@@ -440,6 +415,7 @@ class LinearDecode(DeepSeekV4Module):
         packed_weight_spec=None,
         ring_gather: bool = False,
         tile_height: int = ttnn.TILE_SIZE,
+        rectangle_b_grid: bool = False,
     ):
         self.partial_width_sharded = partial_width_sharded
         self.num_inputA_cores = num_inputA_cores
@@ -456,6 +432,9 @@ class LinearDecode(DeepSeekV4Module):
         self.packed_weight_tensor = packed_weight_tensor
         self.packed_weight_spec = packed_weight_spec
         self.ring_gather = ring_gather
+        self.weights_memory_config = None
+        self.fused_rms_norm_eps = None
+        self.output_core_grid = None
 
         if keep_weights_in_l1 and use_prefetcher:
             raise ValueError(
@@ -503,9 +482,20 @@ class LinearDecode(DeepSeekV4Module):
             )
             return
 
-        b_core_range_set = ttnn.num_cores_to_corerangeset(
-            num_inputB_cores, self.device.compute_with_storage_grid_size(), row_wise=True
-        )
+        if rectangle_b_grid:
+            grid_width = _receiver_ring_cols(num_inputB_cores, self.device)
+            b_core_range_set = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(grid_width - 1, num_inputB_cores // grid_width - 1),
+                    )
+                }
+            )
+        else:
+            b_core_range_set = ttnn.num_cores_to_corerangeset(
+                num_inputB_cores, self.device.compute_with_storage_grid_size(), row_wise=True
+            )
         self.weights_memory_config = ttnn.create_sharded_memory_config(
             shard_shape,
             core_grid=b_core_range_set,
@@ -562,6 +552,164 @@ class LinearDecode(DeepSeekV4Module):
         self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         self.weight.deallocate()
         self.weight = None
+
+    def b_core_grid(self) -> ttnn.CoreRangeSet:
+        """Weight B cores: packed spec, GCB receivers, or the L1/DRAM width-shard grid."""
+        if self.packed_weight_spec is not None:
+            return self.packed_weight_spec.cores
+        if self.global_cb is not None:
+            return self.global_cb.receiver_cores()
+        return self.weights_memory_config.shard_spec.grid
+
+    def _can_matmul_decode_rm_hs(self) -> bool:
+        """ROW_MAJOR HEIGHT_SHARDED A is full-width hub mode only."""
+        if self.partial_width_sharded or self.ring_gather:
+            return False
+        if self.packed_weight_spec is not None and self.packed_weight_spec.k_blocks > 1:
+            return False
+        return True
+
+    def can_fuse_rms_norm(self) -> bool:
+        """Whether this matmul can absorb an RMSNorm of its own output.
+
+        The epilogue reduces one sum-of-squares per output row across the cores that hold
+        that row, which only the full-width factory does, and it takes the statistic from a
+        scalar reduction over a whole tile -- correct only for the one-row tile the
+        replicated-A path uses. ``N`` must be a whole number of those tiles so that no
+        padded column enters the sum.
+        """
+        return self._can_matmul_decode_rm_hs() and self.N % ttnn.TILE_SIZE == 0
+
+    def enable_fused_rms_norm(self, eps: float) -> bool:
+        """Normalize this matmul's output in its epilogue. Returns whether it took effect.
+
+        Gamma is the op's scalar 1.0: a per-channel gamma has to be folded into whatever
+        consumes the result (see ``DeepSeekV4Attention.__init__``, which folds q_a_norm's
+        into q_b_proj).
+        """
+        if not self.can_fuse_rms_norm():
+            return False
+        self.fused_rms_norm_eps = eps
+        return True
+
+    def set_output_core_grid(self, grid: ttnn.CoreRangeSet) -> None:
+        """Mcast the full ``[M, N]`` result to every core of ``grid``, not width-shard it.
+
+        Each destination core then holds a replica, which is exactly the A a following
+        full-width matmul_decode reads -- so pointing this at the next weight's B cores
+        hands that matmul its activation in place. All-core mcast requires this layer's own
+        B cores to sit on the destination grid.
+
+        Blocked on two matmul_decode defects, both written up in the op's
+        ``OUTPUT_CORE_GRID_GAPS.md``: the grid is ignored for a rank-4 activation, and the
+        replica comes back in a layout the next matmul refuses.
+        """
+        if not self._can_matmul_decode_rm_hs():
+            raise ValueError(
+                "matmul_decode output_core_grid is full-width hub mode only, "
+                f"but this weight is {'partial-width' if self.partial_width_sharded else 'ring-gathered'}"
+            )
+        dest = {(c.x, c.y) for c in _receiver_cores_in_order(grid)}
+        # The op mcasts over a NOC rectangle and rejects anything else. Checked here so a
+        # strided grid (a GCB's receivers are laid out with a bank stride) fails while the
+        # model is being built rather than inside a decode step.
+        xs = {x for x, _ in dest}
+        ys = {y for _, y in dest}
+        if len(dest) != len(xs) * len(ys) or len(xs) != max(xs) - min(xs) + 1 or len(ys) != max(ys) - min(ys) + 1:
+            raise ValueError(f"output mcast needs a filled rectangle of cores, but got {sorted(dest)}")
+        b_cores = {(c.x, c.y) for c in _receiver_cores_in_order(self.b_core_grid())}
+        if not b_cores <= dest:
+            raise ValueError(
+                f"all-core output mcast needs this weight's B cores {sorted(b_cores)} to sit on the "
+                f"destination grid {sorted(dest)}"
+            )
+        self.output_core_grid = grid
+
+    def _epilogue_kwargs(self, output_memory_config: ttnn.MemoryConfig) -> dict:
+        """``output_mem_config`` / ``output_core_grid`` (mutually exclusive) plus fused RMSNorm."""
+        if self.output_core_grid is not None:
+            kwargs = {"output_core_grid": self.output_core_grid}
+        else:
+            kwargs = {"output_mem_config": output_memory_config}
+        if self.fused_rms_norm_eps is not None:
+            kwargs["rms_norm"] = True
+            kwargs["rms_norm_gamma"] = 1.0
+            kwargs["rms_norm_epsilon"] = self.fused_rms_norm_eps
+        return kwargs
+
+    def _is_replicated_rm_hs(self, x: ttnn.Tensor) -> bool:
+        """A HEIGHT_SHARDED activation whose shard is one replica of ``[M, K]``.
+
+        Either layout counts: a 1x32 tile holds its 32 elements contiguously, so a tiled
+        replica (what an mcast output is) and a ROW_MAJOR one are the same bytes, and the op
+        takes both on its replicated-A path.
+        """
+        if not x.is_sharded():
+            return False
+        if x.layout != ttnn.ROW_MAJOR_LAYOUT and x.get_tile().tile_shape[0] != 1:
+            return False
+        mem = x.memory_config()
+        return mem.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED and mem.shard_spec is not None
+
+    def to_replicated_rm_hs_activation(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """ROW_MAJOR HEIGHT_SHARDED A on this layer's B grid: full K replicated per core.
+
+        ``matmul_decode`` reads shard ``[M, K]`` on every B core (HEIGHT_SHARDED volume is
+        ``num_cores * M``). M is the packed-token count (``x.shape[-2]`` before replicate).
+
+        A no-op for a layer whose weight the op cannot pair with this layout, so a caller
+        can build it unconditionally and every projection still gets an A it accepts.
+        """
+        if not self._can_matmul_decode_rm_hs():
+            return x
+        grid = self.b_core_grid()
+        k = x.shape[-1]
+        if self._is_replicated_rm_hs(x):
+            spec = x.memory_config().shard_spec
+            if spec.grid == grid and spec.shape[1] == k:
+                return x
+        m = x.memory_config().shard_spec.shape[0] if self._is_replicated_rm_hs(x) else x.shape[-2]
+        num_cores = grid.num_cores()
+        mem_cfg = ttnn.create_sharded_memory_config(
+            (m, k),
+            core_grid=grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        if x.is_sharded():
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        repeats = [1] * len(x.shape)
+        repeats[-2] = num_cores
+        x = ttnn.repeat(x, ttnn.Shape(repeats))
+        return ttnn.to_memory_config(x, mem_cfg)
+
+    def _unreplicate_rm_hs_activation(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """One replica back as a tiled DRAM ``[..., M, K]``.
+
+        Tiled because this feeds the width-sharded A path, whose shard height is a whole
+        tile: a ROW_MAJOR tensor keeps its unpadded height and the shard spec then fails
+        to fit it.
+        """
+        m = x.memory_config().shard_spec.shape[0]
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        starts = [0] * len(x.shape)
+        ends = list(x.shape)
+        ends[-2] = m
+        x = ttnn.slice(x, starts, ends)
+        return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+    def _prepare_decode_activation(self, x: ttnn.Tensor) -> tuple:
+        """``(x, M, use_rm_hs)``. M is the matmul row count (shard height when replicated)."""
+        if self._is_replicated_rm_hs(x) and self._can_matmul_decode_rm_hs():
+            if x.memory_config().shard_spec.grid != self.b_core_grid():
+                x = self.to_replicated_rm_hs_activation(self._unreplicate_rm_hs_activation(x))
+            return x, x.memory_config().shard_spec.shape[0], True
+        if self._is_replicated_rm_hs(x):
+            x = self._unreplicate_rm_hs_activation(x)
+        return x, x.shape[-2], False
 
     def _init_prefetched_weight(
         self,
@@ -733,19 +881,30 @@ class LinearDecode(DeepSeekV4Module):
         return a_memory_config
 
     def forward(self, x: ttnn.Tensor, *, mesh_coords=None) -> ttnn.Tensor:
+        x, m, use_rm_hs = self._prepare_decode_activation(x)
+        if self.fused_rms_norm_eps is not None and not use_rm_hs:
+            # The epilogue's statistic is a scalar reduction over a whole tile, so it is this
+            # row's mean of squares only while a tile holds one row. Dropping the norm here
+            # instead would be a silent numerical bug.
+            raise RuntimeError(
+                "fused RMSNorm needs the replicated ROW_MAJOR activation (a one-row tile), but this "
+                "call was handed a tiled width-sharded one"
+            )
+        m_out = m if use_rm_hs else ((m + self.tile_height - 1) // self.tile_height) * self.tile_height
         if self.packed_weight_tensor is not None:
             # Packed placement is the source of truth: a preceding packed projection may
             # have left this activation on a different zone/core count.
-            tile_height = x.get_tile().tile_shape[0]
-            input_memory_config = self.get_input_memory_config(x.shape[-2], x.shape[-1], tile_height)
-            same_core_grid = x.is_sharded() and (
-                tile_height < ttnn.TILE_SIZE
-                or _receiver_cores_in_order(x.memory_config().shard_spec.grid)
-                == _receiver_cores_in_order(input_memory_config.shard_spec.grid)
-            )
-            if not same_core_grid:
-                x = ttnn.to_memory_config(x, input_memory_config)
-            m_padded = ((x.shape[-2] + tile_height - 1) // tile_height) * tile_height
+            if not use_rm_hs:
+                tile_height = x.get_tile().tile_shape[0]
+                input_memory_config = self.get_input_memory_config(x.shape[-2], x.shape[-1], tile_height)
+                same_core_grid = x.is_sharded() and (
+                    tile_height < ttnn.TILE_SIZE
+                    or _receiver_cores_in_order(x.memory_config().shard_spec.grid)
+                    == _receiver_cores_in_order(input_memory_config.shard_spec.grid)
+                )
+                if not same_core_grid:
+                    x = ttnn.to_memory_config(x, input_memory_config)
+                m_out = ((x.shape[-2] + tile_height - 1) // tile_height) * tile_height
             if self.partial_width_sharded:
                 receiver_cores = _receiver_cores_in_order(self.packed_weight_spec.cores)
                 output_cores = _coalesced_core_range_set(receiver_cores[: self.n_blocks])
@@ -758,7 +917,7 @@ class LinearDecode(DeepSeekV4Module):
                 ttnn.BufferType.L1,
                 ttnn.ShardSpec(
                     output_cores,
-                    [m_padded, self.N // output_num_cores],
+                    [m_out, self.N // output_num_cores],
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
             )
@@ -766,13 +925,13 @@ class LinearDecode(DeepSeekV4Module):
                 x,
                 self.packed_weight_tensor,
                 partial_width_sharded=self.partial_width_sharded,
-                output_mem_config=output_memory_config,
                 packed_weight=self.packed_weight_spec,
                 mesh_coords=mesh_coords,
                 ring_gather=self.ring_gather,
+                **self._epilogue_kwargs(output_memory_config),
             )
         if self.use_prefetcher:
-            if not x.is_sharded():
+            if not use_rm_hs and not x.is_sharded():
                 x = ttnn.to_memory_config(x, self.get_input_memory_config(x.shape[-2], x.shape[-1]))
             # Exactly one queued request per matmul: the matmul waits for one page per
             # receiver, so a missing request hangs it and a doubled one desynchronises the
@@ -780,7 +939,6 @@ class LinearDecode(DeepSeekV4Module):
             if not self.prefetch_queued:
                 self._queue_prefetch()
             self.prefetch_queued = False
-            m_padded = ((x.shape[-2] + self.tile_height - 1) // self.tile_height) * self.tile_height
             try:
                 return ttnn.experimental.matmul_decode(
                     x,
@@ -788,9 +946,9 @@ class LinearDecode(DeepSeekV4Module):
                     partial_width_sharded=self.partial_width_sharded,
                     global_cb=self.global_cb,
                     global_cb_k_blocks=self.gcb_k_blocks,
-                    output_mem_config=self._prefetch_output_memory_config(m_padded),
                     mesh_coords=mesh_coords,
                     ring_gather=self.ring_gather,
+                    **self._epilogue_kwargs(self._prefetch_output_memory_config(m_out)),
                 )
             except Exception:
                 # The request is already with the DRISC senders, and matmul_decode does most
@@ -807,11 +965,10 @@ class LinearDecode(DeepSeekV4Module):
             # bug in whoever freed it rather than something to silently rebuild.
             assert not self.keep_weights_in_l1, "the resident L1 weight was deallocated by someone else"
             self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
-        m = x.shape[-2]
         # Single-user decode uses a 1x32 tile. The width-sharded output must
         # use the same physical height as the matmul output, not a full-tile
-        # height of 32.
-        m_padded = ((m + self.tile_height - 1) // self.tile_height) * self.tile_height
+        # height of 32. Replicated ROW_MAJOR A already carries that height as
+        # the shard spec.
         if self.partial_width_sharded:
             # The partial layout reduces the K-partials onto n_blocks output cores, so shard the
             # output WIDTH_SHARDED across n_blocks cores (shard
@@ -824,7 +981,7 @@ class LinearDecode(DeepSeekV4Module):
                 ttnn.BufferType.L1,
                 ttnn.ShardSpec(
                     output_core_range_set,
-                    [m_padded, self.N // self.n_blocks],
+                    [m_out, self.N // self.n_blocks],
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
             )
@@ -833,18 +990,24 @@ class LinearDecode(DeepSeekV4Module):
             # same core range. Deriving the output grid independently from N
             # diverges for smaller widths (for example TP o_b: N=1024 gives
             # 16 B cores but the generic activation helper chooses 32).
-            output_memory_config = regular_width_sharded_l1_config(
-                m_padded, self.N, self.device, num_cores=self.num_inputB_cores
+            output_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    self.b_core_grid(),
+                    [m_out, self.N // self.num_inputB_cores],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
             )
-        if not x.is_sharded():
+        if not use_rm_hs and not x.is_sharded():
             x = ttnn.to_memory_config(x, self.get_input_memory_config(x.shape[-2], x.shape[-1]))
         result = ttnn.experimental.matmul_decode(
             x,
             self.l1_weights,
             partial_width_sharded=self.partial_width_sharded,
-            output_mem_config=output_memory_config,
             mesh_coords=mesh_coords,
             ring_gather=self.ring_gather,
+            **self._epilogue_kwargs(output_memory_config),
         )
         if not self.keep_weights_in_l1:
             self.l1_weights.deallocate()
