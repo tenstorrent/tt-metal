@@ -1689,6 +1689,7 @@ def _x_squared_wt(wt_chunk: int, partial_w: int) -> int:
     g = max((d for d in range(2, min(int(SQ_FOLD_GROUP), wt_chunk) + 1) if wt_chunk % d == 0), default=1)
     return wt_chunk // g
 
+
 # Faces of each fp32 partial tile that the cross-core width combine's GATHER ships from a
 # member into the group root -- see D13.  A tile is 2x2 faces of 16x16; a REDUCE_ROW partial
 # is a column vector, so only faces 0 and 2 can carry data.
@@ -4440,9 +4441,9 @@ def create_program_descriptor(
         1 if pc_chunked else 0,
     ]
     assert len(compute_ct_args) == COMPUTE_CT_SCALARS, "compute CT-arg count drifted"
-    assert x_squared_wt >= 1 and wt_chunk % x_squared_wt == 0, (
-        "rms_norm_ttnn: x_squared_wt must divide WT_CHUNK (1 == the flat DEST fold, D43)"
-    )
+    assert (
+        x_squared_wt >= 1 and wt_chunk % x_squared_wt == 0
+    ), "rms_norm_ttnn: x_squared_wt must divide WT_CHUNK (1 == the flat DEST fold, D43)"
 
     # ---- the SLOT TREE's ONE extra runtime fact: my level-0 gatherer's coords -------
     tree_parent = {}

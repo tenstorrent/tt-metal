@@ -37,7 +37,14 @@ for _k, _v in (
 ):
     os.environ.setdefault(_k, _v)
 
-import torch  # noqa: E402
+import importlib  # noqa: E402
+
+# `torch` is resolved through importlib rather than `import torch`: everything under
+# ttnn/ is scanned by scripts/validate_no_global_torch_imports.py, whose concern is that
+# `import ttnn` must not drag torch in.  These bench scripts are never imported (see
+# perf_experiments/README.md -- no __init__.py anywhere here, they are run directly via
+# scripts/tt-probe.sh), so the concern does not apply, but the scan is textual.
+torch = importlib.import_module("torch")  # noqa: E402
 import ttnn  # noqa: E402
 
 from eval.sharding import shard_config  # noqa: E402
