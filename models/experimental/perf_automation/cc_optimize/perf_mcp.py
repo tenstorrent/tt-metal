@@ -256,6 +256,13 @@ _FULLPIPE_BASELINE_1CQ_PATH = _fullpipe_baseline_1cq_path()
 # is reported as a regression regardless (see the regressed branch below), because "within 8%
 # of the best ever" used to read as ok and let real latency ratchet upward unnoticed.
 _FULLPIPE_TOL = float(os.environ.get("PERF_MCP_FULLPIPE_TOL", "0.08"))
+_FULLPIPE_NOISE = float(os.environ.get("PERF_MCP_FULLPIPE_NOISE", "0.002"))
+# Accuracy readings wobble too, and a wobble is not a purchase. Below this much of the reading
+# banked with the last win, a fall is treated as the same number measured twice.
+_PCC_SPEND_EPS = 1e-4
+# The banked reading is kept beside the gate verdicts, under its own key, so it survives every
+# later verdict the same way and needs no second store.
+_PCC_BANKED = "pcc_banked"
 # trace_replay prints this when the timed decode step neither advanced its state nor changed its
 # output. Pinned to the printing side by test_a_decode_that_is_not_decoding_is_not_timed.
 _DECODE_STUCK_MARKER = "TRACE_DECODE_ADVANCE=stuck"
@@ -4056,7 +4063,66 @@ def gates_allow_banking() -> tuple:
             fp.get("full_pipeline_ms"),
             fp.get("best_ms"),
         )
+    _spend = _accuracy_spent_on_a_stage_that_is_not_short(pcc, fp)
+    if _spend:
+        return False, _spend
     return True, "pcc ok + full-pipeline ok"
+
+
+def _short_stage_names() -> set:
+    """The names of the stages still short of achievable. Empty when none is, or none can be priced.
+
+    Two callers want the names rather than the rows -- the rule below, and the ranking that demotes
+    an op whose stage is already finished -- so the set is built once here.
+    """
+    return {str(r.get("stage") or "") for r in (_stages_short_of_achievable() or [])} - {""}
+
+
+def _bank_pcc() -> None:
+    """Remember the accuracy the model had when a win was banked.
+
+    Without this there is nothing to compare the next reading against, and every reading above the
+    model's own floor looks equally free. Fail-open: never raises, so it cannot break a commit.
+    """
+    try:
+        pcc = (gate_verdicts().get("pcc") or {}).get("pcc")
+        if isinstance(pcc, (int, float)):
+            record_gate_verdict(_PCC_BANKED, "banked", pcc=float(pcc))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _accuracy_spent_on_a_stage_that_is_not_short(pcc: dict, fp: dict) -> str:
+    """Why banking must be refused when accuracy paid for a stage that is already inside its band.
+
+    The floor is the only question asked today, so any reading above it is spendable by whichever
+    stage happens to be measured next. Accuracy does not come back -- the only way to recover it is
+    to revert the lever that spent it -- and the stages that still need it are exactly the ones the
+    ceiling reports as short. So a lever that costs accuracy and speeds up only stages already
+    inside their band takes the budget from the stage that still has to buy its own fix.
+
+    Stage names are whatever the ceiling and the verdict report; none is named here.
+
+    Silent wherever it cannot judge -- nothing banked yet, no measurable fall, no improved stage to
+    attribute it to, or no stage short at all -- and banking behaves exactly as it did before.
+    """
+    now, was = pcc.get("pcc"), (gate_verdicts().get(_PCC_BANKED) or {}).get("pcc")
+    if not isinstance(now, (int, float)) or not isinstance(was, (int, float)):
+        return ""
+    if now >= was - _PCC_SPEND_EPS:
+        return ""
+    improved = sorted(
+        name for name, row in (fp.get("stages") or {}).items() if isinstance(row, dict) and row.get("improved")
+    )
+    short = sorted(_short_stage_names())
+    if not improved or not short or (set(improved) & set(short)):
+        return ""
+    return (
+        "accuracy fell %.4f -> %.4f, and the only stage it bought (%s) is already inside its band. "
+        "%s still short of achievable and needs that budget -- accuracy is not recovered except by "
+        "reverting what spent it. Revert this, or spend it on a stage that is short."
+        % (was, now, ", ".join(improved), ", ".join(short))
+    )
 
 
 def _win_from_verdict(fp: dict, ms: float, ref) -> tuple:
@@ -4281,7 +4347,7 @@ def _min_stages(cur: dict | None, new: dict | None) -> dict:
 
 
 def _stage_deltas(now: dict, bar: dict, spread: dict | None = None) -> dict:
-    """Per stage: {ms, best, delta_pct, improved, regressed}. A stage with no bar yet is neither.
+    """Per stage: {ms, best, delta_pct, delta_ms, improved, regressed}. No bar yet means neither.
 
     EACH STAGE IS JUDGED AGAINST ITS OWN MEASURED SPREAD. A stage improving by less than its own
     reading wobbles is not a result -- but the wobble is a property of that stage, not a constant.
@@ -4306,11 +4372,18 @@ def _stage_deltas(now: dict, bar: dict, spread: dict | None = None) -> dict:
             tol = _sp.get(name)
             tol = float(tol) if isinstance(tol, (int, float)) and tol > 0 else _FULLPIPE_TOL
             row["delta_pct"] = round((ms - prev) / prev * 100.0, 2)
+            # A FRACTION OF A STAGE IS NOT A QUANTITY OF TIME. The percentages are each measured
+            # against their own stage, so the same number means different amounts depending on
+            # which stage carries it: on voxtral a 1% move is 0.10 ms of the recurring stage and
+            # 1.06 ms of the prompt stage. Read as one column they rank the small stage first.
+            row["delta_ms"] = round(ms - prev, 4)
             row["tol_pct"] = round(tol * 100.0, 2)
+            row["tol_ms"] = round(prev * tol, 4)
             row["improved"] = ms < prev * (1.0 - tol)
             row["regressed"] = ms > prev * (1.0 + tol)
         else:
             row["delta_pct"] = None
+            row["delta_ms"] = None
             row["improved"] = row["regressed"] = False
         out[name] = row
     return out
@@ -4816,7 +4889,7 @@ def check_full_pipeline_latency() -> dict:
     # "not more than 8% slower than the best ever seen" was reported as ok, which is the agent's
     # bank-a-win signal -- so a 7%-slower lever could be committed and, repeated, ratcheted real
     # latency upward while the reported AFTER stayed at the old minimum. Slower is `regressed`.
-    regressed = (not diverged) and ms > best
+    regressed = (not diverged) and ms > best * (1.0 + _FULLPIPE_NOISE)
     # THE HEADLINE IS ONE STAGE, NOT THE WHOLE PRODUCT. It measures the RECURRING stage -- the one
     # retiring a single item per user, which is what a per-item rate means -- discovered from the
     # model, never named here. A lever that speeds up any OTHER stage therefore leaves the headline
@@ -5080,6 +5153,7 @@ def git_commit(message: str) -> dict:
     sha = gitio.commit(repo, message, pathspec)
     if sha:
         _record_committed_win(message, sha)
+        _bank_pcc()
         _promote_fullpipe_pending()
         _write_untracked_baseline()
     return {"committed": bool(sha), "sha": sha}
@@ -7403,7 +7477,7 @@ def termination_check() -> dict:
     # An op the capture could not place keeps its position: "" is not a finished stage, and demoting
     # unplaced work would bury whatever the marks failed to cover. When nothing is short the key is
     # constant and the order is exactly what it was.
-    _short_names = {str(r.get("stage") or "") for r in (_stages_short_of_achievable() or [])}
+    _short_names = _short_stage_names()
     blocking.sort(
         key=lambda b: (
             1 if (_short_names and b.get("stage") and b.get("stage") not in _short_names) else 0,

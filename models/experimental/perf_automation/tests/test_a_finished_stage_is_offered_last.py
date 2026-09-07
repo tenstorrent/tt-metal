@@ -92,9 +92,20 @@ def test_the_stage_is_resolved_once_and_carried():
 
 
 def test_the_bar_is_read_from_the_gate_that_owns_it():
-    """One producer for 'which stacks are short' -- restating it here is how the two drift."""
+    """One producer for 'which stacks are short' -- restating it anywhere is how the two drift.
+
+    A second caller wanted the same names (the rule that refuses to spend accuracy on a stage that
+    is already inside its band), so the set is built in _short_stage_names and both read it. The
+    invariant this protects is not where the call is written but that it is written ONCE, so it is
+    stated that way: the ordering reads the helper, and the helper is the only place that turns the
+    gate's rows into names.
+    """
     i = _SRC.index("_short_names = ")
-    assert "_stages_short_of_achievable()" in _SRC[i : i + 200]
+    assert "_short_stage_names()" in _SRC[i : i + 200]
+
+    j = _SRC.index("def _short_stage_names(")
+    assert "_stages_short_of_achievable()" in _SRC[j : j + 600]
+    assert _SRC.count('.get("stage") or "") for r in') == 1, "the names set is built in more than one place"
 
 
 def test_no_stage_name_is_typed_into_the_ordering():
