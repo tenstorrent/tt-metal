@@ -170,12 +170,42 @@ KERNEL_DIR_RE = re.compile(r"/kernels/(?P<kname>[^/]+)/(?P<khash>[^/]+)/(?P<targ
 # as an extra input file -- clang++ then reports "no such file or directory"
 # once per translation unit. Strip SGR sequences before matching.
 #
-# argv elements are joined with single spaces and never quoted; kernel compile
-# argv elements contain no spaces in practice (paths, -D defines, comma-joined
-# CTAs), so a plain split() recovers the elements verbatim -- including defines
-# that carry literal quote characters, which shlex would eat.
+# argv elements are joined with single spaces and never quoted, so split() is
+# used rather than shlex, which would eat the literal quotes some defines carry.
+# That loses the boundary for the few defines whose value holds a space;
+# rejoin_split_defines puts those back.
 ANSI_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
 LOG_CMD_RE = re.compile(r"g\+\+ compile cmd: (?P<cmd>.+?)(?:\s*\(build\.cpp:\d+\))?\s*$")
+
+
+def rejoin_split_defines(argv):
+    """Repair -D values that the log's unquoted join split on a space.
+
+    build.cpp logs argv as fmt::join(args, " "), so a define whose value holds a
+    space arrives as two tokens: ttnn emits several of the form
+    -DFILL_WITH_VALUE=fill_with_val<1024, int32_t>, which reaches clang as a
+    truncated template-id ("expected '>'") plus a stray input file. Rejoin while
+    the angle brackets are unbalanced, and leave the tokens alone if the run does
+    not close before the next option, so a define holding a bare '<' as
+    less-than cannot swallow the rest of the command.
+    """
+    out, i = [], 0
+    while i < len(argv):
+        a = argv[i]
+        if a.startswith("-D") and a.count("<") > a.count(">"):
+            merged, j = a, i + 1
+            while j < len(argv) and not argv[j].startswith("-"):
+                merged += " " + argv[j]
+                j += 1
+                if merged.count("<") == merged.count(">"):
+                    break
+            if merged.count("<") == merged.count(">"):
+                out.append(merged)
+                i = j
+                continue
+        out.append(a)
+        i += 1
+    return out
 
 
 def entries_from_log(path):
@@ -191,7 +221,7 @@ def entries_from_log(path):
             if cmd in seen_lines:
                 continue
             seen_lines.add(cmd)
-            argv = cmd.split()
+            argv = rejoin_split_defines(cmd.split())
             # directory: the JIT build runs the compiler with cwd = the kernel's
             # out_dir, which is also the (absolute) dirname of the -o object.
             directory = None
@@ -386,6 +416,7 @@ def self_test():
         "-DARCH_WORMHOLE",
         '-DFULL_KERNEL_NAME="reduce_h/42"',
         "-DKERNEL_COMPILE_TIME_ARGS=1,2,3",
+        "-DFILL_WITH_VALUE=fill_with_val<1024, int32_t>",
         "-c",
         "-o",
         f"{out_dir}/._7_0_trisck.o",
@@ -428,6 +459,14 @@ def self_test():
     argv_text = " ".join(entries[0]["arguments"])
     assert "\x1b" not in argv_text, "SGR escape leaked into the captured argv"
     assert "build.cpp" not in argv_text, "source-location suffix leaked into the captured argv"
+    # A define whose value holds a space must survive the log's unquoted join as
+    # one element, or the macro reaches clang as a truncated template-id.
+    assert "-DFILL_WITH_VALUE=fill_with_val<1024, int32_t>" in entries[0]["arguments"], (
+        f"split define was not rejoined: {entries[0]['arguments']}"
+    )
+    # A bare '<' must not let the rejoin swallow the rest of the command.
+    kept = rejoin_split_defines(["-DCOND=a<b", "-DOTHER=1", "x.cc"])
+    assert kept == ["-DCOND=a<b", "-DOTHER=1", "x.cc"], f"unbalanced define was over-merged: {kept}"
 
     # The link argv must also be rejected by the secondary filter (bear-mode path).
     link_argv = link_line.split("g++ link cmd: ", 1)[1].split()

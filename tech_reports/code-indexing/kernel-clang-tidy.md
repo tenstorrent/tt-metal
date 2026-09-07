@@ -823,6 +823,16 @@ follow-up once the `--enable-all` volume is understood.
   entry carried it, and `clang++` reported "no such file or directory" once
   per TU. The parser now strips SGR sequences before matching, with a
   `--self-test` case covering the colourized form.
+* **Defines containing a space (fixed).** `build.cpp:686` logs the argv as
+  `fmt::join(args, " ")` with no quoting, and ttnn emits a handful of defines
+  whose value holds a space —
+  `-DFILL_WITH_VALUE=fill_with_val<1024, int32_t>`. Those arrived as two tokens,
+  so the macro reached clang as a truncated template-id
+  (`expected '>'`, a `clang-diagnostic-error`) and the remainder became a stray
+  input file. `rejoin_split_defines` merges the fragments while the angle
+  brackets are unbalanced, and leaves them alone if the run does not close
+  before the next option, so a define holding a bare `<` cannot swallow the
+  rest of the command. Two of 81 commands in one leg were affected.
 * **Coverage = what the run compiled.** One test lints one test's kernels; a
   suite lints what the suite exercises. Kernels (or TRISC roles, or `#ifdef`
   branches) the run never compiled are not analyzed.
