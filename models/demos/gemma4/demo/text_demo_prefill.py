@@ -483,7 +483,6 @@ def _perf_signposts(layer_type, chunk_idx):
 @torch.no_grad()
 @pytest.mark.timeout(7200)
 @parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
-@pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
 @pytest.mark.parametrize("context_len", LAYER_PERF_CONTEXT_LENGTHS, ids=lambda c: f"ctx_{c // 1024}k")
 @pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"sz{c}")
 @pytest.mark.parametrize("layer_type", ["global", "local", "both"])
@@ -492,9 +491,7 @@ def _perf_signposts(layer_type, chunk_idx):
     [*range(max(LAYER_PERF_CONTEXT_LENGTHS) // min(PREFILL_CHUNK_SIZES)), "all"],
     ids=lambda c: f"chunk{c}",
 )
-def test_prefill_layer_perf_chunk_n(
-    mesh_device, chunk_idx, layer_type, chunk_size, context_len, token_source, reset_seeds, request
-):
+def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_size, context_len, reset_seeds, request):
     """Measure selected layer/chunk pairs with one trace per layer type.
 
     Each layer is compiled and captured once, then each selected chunk is measured once.
@@ -532,7 +529,7 @@ def test_prefill_layer_perf_chunk_n(
         chunk_size=chunk_size,
         context_len=context_len,
     )
-    tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
+    tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size)
 
     layer_idxs = {lt: find_layer_idx(text_config, model_layer_types[lt]) for lt in layer_types}
     type_desc = ", ".join(f"{lt}=layer{layer_idxs[lt]}" for lt in layer_types)
