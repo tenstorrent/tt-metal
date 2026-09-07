@@ -1181,6 +1181,9 @@ ALWI void reduce(
         reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, output_dfb_id);
     }
     ASSERT(partial_mode == ReducePartialMode::None || partial_mode == ReducePartialMode::Scaler);
+    if constexpr (is_sfpu && reduce_type == PoolType::MAX) {
+        ASSERT(partial_mode == ReducePartialMode::None);
+    }
     // REDUCE_SCALAR can't use a partial scaler because it applies the scaler twice.
     if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
         ASSERT(partial_mode == ReducePartialMode::None);

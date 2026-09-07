@@ -349,6 +349,9 @@ struct ReduceInputBlockShape {
  * callers pass the mode directly; reduce() owns the auxiliary-CB layout needed
  * to implement it.
  *
+ * On the native ReduceTile MAX path, a zero partial-scaler exponent excludes
+ * that input from GMPOOL. No separate input mask is needed.
+ *
  * REDUCE_SCALAR does not support a partial mode: ReduceTile applies its scaler
  * twice (row then col), while one AccumulateViaAdd row/column mask cannot encode
  * a 2-D partial corner.
