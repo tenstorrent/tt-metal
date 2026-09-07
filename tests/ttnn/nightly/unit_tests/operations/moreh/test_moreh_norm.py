@@ -708,3 +708,26 @@ def test_moreh_norm_backward_callback(dim_rtol_atol, keepdim, device, is_linalg_
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+
+
+@pytest.mark.parametrize("p", [0.5, 1.0, 2.0, 4.0, 5.0])
+def test_moreh_norm_backward_zero_elements(device, p):
+    x = torch.tensor([[0.0, 0.0, 0.0], [0.0, 3.0, 4.0]], dtype=torch.bfloat16, requires_grad=True)
+    dy = torch.tensor([[1.0], [1.0]], dtype=torch.bfloat16)
+
+    y = torch.linalg.vector_norm(x, ord=p, dim=1, keepdim=True)
+    y.backward(dy)
+    expected_dx = x.grad
+
+    tt_x = ttnn.from_torch(x.detach(), device=device, layout=ttnn.TILE_LAYOUT)
+    tt_y = ttnn.from_torch(y.detach(), device=device, layout=ttnn.TILE_LAYOUT)
+    tt_dy = ttnn.from_torch(dy, device=device, layout=ttnn.TILE_LAYOUT)
+
+    tt_dx = ttnn.operations.moreh.norm_backward(tt_x, tt_y, tt_dy, p=p, dim=1, keepdim=True)
+    res_dx = ttnn.to_torch(tt_dx)
+
+    assert torch.isfinite(res_dx).all()
+    assert (res_dx[0] == 0.0).all()
+    assert res_dx[1, 0] == 0.0
+    assert torch.allclose(res_dx[1, 1:], expected_dx[1, 1:], rtol=1e-1, atol=1e-1)
+
