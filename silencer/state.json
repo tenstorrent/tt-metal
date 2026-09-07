@@ -319,14 +319,16 @@
     {
       "branch": "silencer/unused-var-nlp-qkv-heads-vit-reader",
       "pattern": "-Wunused-but-set-variable: variable 'in1_args' set but not used in nlp_create_qkv_heads_vit reader_tm_tile_layout_nlp_create_qkv_heads.cpp:27 (4x in tail sample)",
-      "status": "open-pr-just-dispatched",
+      "status": "reported-inconclusive-ready-for-review",
       "validation_workflow": "runtime-integration-tests",
       "source_run_id": "33946342890",
       "source_job_id": "101254472532",
       "dispatched": "2026-09-07",
-      "reported": false,
+      "reported": true,
       "nonterminal_reported": false,
-      "note": "Category 2 (JIT/device-kernel) fix: gated in1_args TensorAccessorArgs declaration behind READ_FROM_INPUT_TENSOR_KV, same guard as its only use (s1 TensorAccessor). Dispatched runtime-integration-tests on this branch same turn. Awaiting next run to reconcile PR number + build outcome."
+      "note": "PR #55611 opened, commented, marked ready for review. Dispatched run 34103459793 concluded 'failure' but the failing job (galaxy_eth wh_galaxy) is an unrelated infra error (missing /proc/1/cgroup, null ContainerId/network) not the code fix. Sampled ~5 other completed jobs' logs (runtime_fd_python_*, bh_multicard_sockets, bh_multicard_eth, load-test-matrix, galaxy_eth bh_galaxy) for nlp_create_qkv_heads_vit/in1_args: 0 hits in all - kernel not JIT-compiled by any sampled job, so warning-absence is inconclusive per category-2 rule, not confirmed fixed. Reported this caveat in PR comment for maintainer follow-up. Reconciliation complete for this workflow's purposes.",
+      "pr_number": 55611,
+      "run_id_checked": "34103459793"
     }
   ],
   "backlog_cursor": "Phase B target for 2026-09-07 was this PR. Next run: reconcile this PR + validation outcome first (Phase A), then continue rotation sampling workflows not recently sampled: galaxy-integration-tests, blackhole-sanity-tests, models-t2-e2e-tests."
