@@ -94,7 +94,22 @@ serve:
 
   additional_config:
     tt:
-      sample_on_device_mode: all
+      # decode_only, not all. The plugin picks the sampling path per step, and
+      # steps here are never mixed (a step is entirely prefill or entirely
+      # decode), so this keeps on-device sampling for every decode step, which is
+      # where the 29.5 ms/token comes from, while prefill steps sample on host.
+      #
+      # That is what makes chunked prefill reachable. The adapter can sample a
+      # resumed chunk safely only on the host path, because that path returns
+      # logits and touches no decode state; the device path would seed decode
+      # from a token in the middle of the prompt. Under `all` a resumed prefill
+      # is refused outright.
+      #
+      # The cost is one logits readback per request per chunk rather than per
+      # token, which is negligible against decode. The bring-up validated `all`,
+      # so first-token sampling now takes a different route: identical under
+      # greedy decoding, and worth re-checking if sampled output ever looks off.
+      sample_on_device_mode: decode_only
       trace_region_size: 350000000
 
   # From the run spec. VLLM_TARGET_DEVICE is deliberately NOT here: it is a build-time
