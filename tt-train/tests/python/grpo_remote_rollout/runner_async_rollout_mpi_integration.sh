@@ -37,5 +37,5 @@ CMD="python3 -m pytest -s -p no:cacheprovider --rootdir=${TEST_DIR} ${TEST_FILE}
 
 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
     --rank-binding "${RANK_BINDINGS_FILE}" \
-    --mpi-args "--hostfile ${HOST_FILE} --tag-output" \
+    --mpi-args "--hostfile ${HOST_FILE} --tag-output --oversubscribe" \
     -- ${CMD}
