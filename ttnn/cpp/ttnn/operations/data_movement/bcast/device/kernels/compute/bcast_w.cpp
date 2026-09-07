@@ -15,13 +15,13 @@ void kernel_main() {
     auto Ht = get_arg(args::Ht);
     auto Wt = get_arg(args::Wt);
 
+    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
+
     // The factory launches this kernel across the full device grid and assigns zero work to idle
     // cores. Preserve the legacy kernel's no-op behavior instead of forming an empty grid shape.
     if (B == 0 || Ht == 0 || Wt == 0) {
         return;
     }
-
-    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
 
     ckl::eltwise_chain(
         ckl::IterationShape::grid(B * Ht, Wt),
