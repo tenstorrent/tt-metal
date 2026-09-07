@@ -1163,7 +1163,240 @@ transpose-around-RoPE chain in one step, for bisecting.
 
 ---
 
+## 3.y CP decode-layout head split — TRIED, MEASURED, **REVERTED** (2026-09-07)
+
+Porting 3.x to the CodePredictor. **Not in the tree** — the code was written, proven
+bit-exact and measured on both SKUs, then reverted as not worth its complexity. This
+section exists so nobody spends the day re-deriving it. Do not re-propose without new
+evidence, and read "What would change the verdict" first.
+
+### What it did
+
+CP decode split with `ttnn.experimental.nlp_create_qkv_heads_decode`, which lands q/k/v in
+`[1, 1, heads, head_dim]` HEIGHT_SHARDED `(TILE, head_dim)` on core (0,0) — byte-identical
+to `_rope_decode_memcfg` and to what the paged cache write takes. CP per-chip head counts
+(8 Q / 4 KV at `head_dim=128` on N300) are well under `TILE_SIZE`.
+
+The CP chain had **three** transposes, not the Talker's four — `QWEN3_TTS_CP_K_CACHE_LAYOUT`
+had already dropped K's transpose back. This removed the two on the way *in*. Q's transpose
+back for the prefill-form SDPA stayed, blocked on the same
+`scaled_dot_product_attention_decode` PCC cliff as 3.x (section 5).
+
+### It worked, and these are the numbers
+
+| | OFF | ON | delta |
+|---|--:|--:|--:|
+| N300 `cp_trace` wall, median of 10 replays (3 runs) | 26.16 | **25.58** | **-0.58 ms (-2.2 %)** |
+| — the runs | 26.18 / 26.16 / 26.15 | 25.58 / 25.56 / 25.61 | spread <=0.05 ms |
+| N300 `decode_cp` device ops | 3221 | 3081 | -140 |
+| N300 `decode_cp` device kernel | 26.801 ms | 25.746 ms | -1.055 ms |
+| N150 `cp_trace` wall (2 runs) | 26.90 / 26.93 | **26.47 / 26.35** | **-0.51 ms (-1.9 %)** |
+
+Per-opcode over the N300 fused frame (70 decode layer evaluations + 5 prefill): Transpose
+210 -> 70 ops (-0.430 ms), cache write 150 -> 80 ops (-0.250 ms), LayerNorm -0.195 ms (one
+live tile instead of 8/4 tiles of padding), ShardedToInterleaved -0.184 ms, head split
+-0.050 ms, against +70 V reshards (+0.030 ms).
+
+**Bit-exact**, three ways: four consecutive decode steps `torch.equal` to the flag-off
+chain (a dedicated test, since removed with the code); `test_code_predictor_step_pcc`
+reporting the same 0.999844 against the torch reference in both arms; and the full Japanese
+demo at `--seed 42` producing an **md5-identical WAV** (`c621c204288504e682007be38cf4d1a9`).
+
+### Why it was reverted anyway
+
+A reproducible, bit-exact -2 % of `cp_trace` (~-0.5 % of the AR frame) was judged not to
+pay for what it costs to carry:
+
+- **Two qkv column orders.** The decode split reads plain `q|k|v` concat; the width-sharded
+  prefill split reads KV-group-interleaved. On N300 both weights had to stay resident
+  (+20 MiB/chip) to avoid a prefill regression.
+- **A permanent N150/N300 divergence.** N150's single DRAM-sharded `wqkv_ds` took the other
+  branch of the trade — identity perm with prefill on the interleaved split — so the two
+  SKUs ran structurally different chains for the same flag.
+- **Three new coupled behaviours** in an already heavily flagged `_layer_forward`: the split,
+  the bridged head norms, and a different K/V cache write.
+
+The gain is real; it is just small against that surface area. The CP's remaining time is in
+matmuls (8.28 ms/frame) and AllGathers (2.85 ms/frame) — see section 6 — which is where
+effort belongs.
+
+### What the attempt taught us — these outlive the revert
+
+1. **`nlp_create_qkv_heads_decode` must be fed WIDTH_SHARDED.** An interleaved input selects
+   `NLPCreateQKVHeadsDecodeInterleavedProgramFactory` and the op costs **6.2 us** against
+   **1.9 us** for the sharded factory — enough to erase the whole win. The first working
+   version fed it interleaved to "save" an I2S and came out a net *loss* (0.2543 ms against
+   0.2508 ms flag-off). The I2S that buys the sharded path is the same one the width-sharded
+   split already paid.
+
+2. **V's cache write has to become fused, not a second paged write.** V leaves the decode
+   split as `[1, 1, kv_heads, head_dim]`, which `ttnn.update_cache` rejects. Its own
+   `paged_update_cache` costs **7.7 us against update_cache's 3.6 us**;
+   `paged_fused_update_cache` does K and V in one op instead. It parallelises across their
+   shards and so rejects them on the same core, which is why V had to be moved to core (1,0)
+   right after the split.
+
+3. **The gate must be `seq == 1`, not just `mode != "prefill"`.** The op reads
+   `logical_shape[2]` as the number of decode **users** (capped at 32), not as sequence
+   length, so CP prefill's seq=2 would be split as two batch users — silently wrong, not an
+   error.
+
+4. **`nlp_create_qkv_heads` (interleaved) is single-core at one height tile.** From
+   `nlp_create_qkv_heads_program_factory.cpp`:
+
+       const uint32_t num_blocks = input_shape[0] * input_shape[1] * input_shape[2] / TILE_HEIGHT;
+       auto [num_cores, ...] = split_work_to_cores(grid, num_blocks);
+
+   It parallelises over **height tiles only**. Qwen3-TTS prefill is one tile (CP seq=2, the
+   Talker's smallest bucket 32), so `num_blocks == 1` and the whole fused width runs on one
+   core. Cost scales with fused width, confirming the mechanism:
+
+   | | fused width/chip | width-sharded split | interleaved split |
+   |---|--:|--:|--:|
+   | CP N300 (tp=2) | 2048 | 1.7 us | 23.9 us |
+   | CP N150 (tp=1) | 4096 | 3.1 us | 46.6 us |
+
+   **DRAM does not help** — the work split does not depend on the output memory config, so
+   DRAM only adds write latency: N300 `cp_layer_prefill` one-weight arm measured 23.9 us /
+   0.296 ms with L1 output against 32.5 us / 0.300 ms with DRAM, versus 1.7 us / 0.276 ms
+   width-sharded. This one fact explains both the Talker's bucket-32 regression in 3.x and
+   the CP's prefill fallback cost.
+
+5. **`models/tt_transformers` is the reference, and it never faces any of this.**
+   `tt/attention.py` holds **one** plain-concat weight (`qkv = torch.cat([wq, wk, wv],
+   dim=-1)`) and uses `nlp_create_qkv_heads_decode` for decode plus `nlp_create_qkv_heads`
+   with `DRAM_MEMORY_CONFIG` for prefill — both read concat order, so no conflict and no
+   second weight. `models/common/modules/attention/attention_1d.py` is the same. It gets
+   away with it because its prefill runs at seq=128/512/2048, where `num_blocks` is 4/16/64.
+   It also ends in `scaled_dot_product_attention_decode` + `nlp_concat_heads_decode`, the
+   full decode-layout pipeline that drops the *last* transpose — which Qwen3-TTS cannot use
+   (PCC 0.50 at dh=128, section 5). **Qwen3-TTS's weight-order conflict is self-inflicted**
+   by the KV-group permutation, which exists only to enable the width-sharded core-local
+   prefill split that tt_transformers does not do.
+
+6. **+20 MiB bought 0.11 ms/frame.** Priced directly by running N300 the way N150 had to
+   (one concat weight, prefill on the interleaved split), medians of 3, spread <=0.01 ms:
+   OFF 26.16, one weight 25.69, two weights 25.58. So the second weight was 19 % of the
+   change's total gain.
+
+7. **Single-layer eager captures over-predict prefill deltas by ~2x.** `cp_layer_prefill`
+   said +0.043 ms x 5 evals = +0.22 ms/frame; the frame measured +0.11 ms. The same 2x
+   over-prediction hit the N150 estimate (-0.24 predicted, -0.51 measured). Untraced
+   single-layer windows are for **ranking** ops; price frame-level changes at the frame.
+   This applies to every A/B in this document, not just this one.
+
+### What would change the verdict
+
+Make `build_interleaved_work_split` fan out over the head/width dimension when height is a
+single tile. That is a TTNN change, not a model change, and it would remove the KV-group
+permutation, the second weight and the N150/N300 divergence **all at once** — turning this
+from a 3-behaviour flag into the plain tt_transformers structure with no prefill cost. It
+would also help any model doing short-sequence prefill. With that in place this port is
+worth redoing.
+
+An untested model-side dodge for the same problem: pad the prefill height to more tiles so
+`num_blocks > 1` (the QKV matmul at M=1 tile is weight-bandwidth bound, so extra M rows may
+be near-free), then slice the padding off. Trades one 24 us op for several small ones;
+plausible, unmeasured.
+
+---
+## 3.z CP final RMSNorm on the sharded kernel — UNCONDITIONAL (no flag)
+
+The CodePredictor's final `model.norm` was the only RMSNorm in the CP still running on the
+**default 1-core interleaved** kernel while every per-layer norm is width-sharded. It also
+paid a `ShardedToInterleaved` on the way IN, purely to reach that kernel — the layer stack
+returns the input-LN shard spec, which the norm then threw away:
+
+    if h.is_sharded():
+        h_il = ttnn.to_memory_config(h, ttnn.L1_MEMORY_CONFIG)   # S2I only to reach the slow kernel
+    h_norm = ttnn.rms_norm(h, ...)                               # 1 core, 24.2 us
+
+It now runs on the shard spec it is already handed, with the existing `_ln_attn_progcfg`,
+and bridges out once afterwards for the `lm_head` (a plain interleaved matmul) and for
+`return_hidden_state` callers. **Op count is unchanged** — the S2I moved from the norm's
+input to its output — so this is purely the norm parallelising over the hidden dim.
+
+Gated on `_use_sharded_ln`, which is `self._n150 or self._n300_cp_opt`, so **one code path
+covers both SKUs**. No weight duplication, no N150/N300 divergence.
+
+**Measured, medians of 2 runs per arm, spread <=0.04 ms:**
+
+| | OFF | ON | delta |
+|---|--:|--:|--:|
+| N300 `cp_trace` wall, median of 10 replays | 26.17 / 26.17 | **25.94 / 25.93** | **-0.235 ms (-0.9 %)** |
+| N150 `cp_trace` wall, median of 10 replays | 26.90 / 26.87 | **26.67 / 26.63** | **-0.24 ms (-0.9 %)** |
+| N300 `decode_cp` device kernel | 26.801 ms | 26.595 ms | -0.206 ms |
+| — LayerNorm rollup | 315 ops, 3.354 ms, **max 24.7 us** | 315 ops, 3.153 ms, **max 11.3 us** | **-0.201 ms** |
+| N300 `decode_cp` device ops | 3221 | 3221 | 0 |
+
+The `max us` column is the attribution: the 1-core outlier (14 calls/frame at 24.2 us
+against 10.8 us for the identical 1024-wide norm on 32 cores) is gone, and -0.201 of the
+-0.235 ms wall delta is the norm itself.
+
+### NOT bit-exact — this one needed the audio gate
+
+Unlike the head split in 3.y, the sharded and interleaved RMSNorm kernels are **not
+numerically identical** at this `compute_kernel_config` (the same fact 3.x hit from the
+other direction), so sampled codes shift and the rendered audio changes. `cp_step` PCC
+moves 0.999844 -> **0.999852**, i.e. marginally *closer* to the torch reference (more of the
+reduction lands in fp32 dest across cores) — but a single-step PCC says nothing about a
+60-frame autoregressive render, so it was gated on SIM/WER instead:
+
+| English demo, `--seed 42` | SIM (gate >0.80) | WER (gate <10 %) |
+|---|--:|--:|
+| OFF | 0.9122 | **0.0 %** (sub 0, del 0, ins 0) |
+| ON | 0.9016 | **0.0 %** (sub 0, del 0, ins 0) |
+
+**WER 0.0 % with zero substitutions, deletions and insertions on both arms** is the signal:
+every requested word is present and correct. The 0.0106 SIM difference is **inside the
+noise** — section 2.9's variance baseline is sd 0.0421 / 0.0085 across four seeds with a
+per-seed range of 0.8473-0.9495, and is explicit that one run cannot compare two configs.
+
+**Generated length changes, and in both directions** — Japanese 30 % *shorter*, English 21 %
+*longer*. That asymmetry is the useful diagnostic: a degrading render (early EOS, lost
+codebook precision, sampler collapse) would move length one way consistently. Moving both
+ways is a reseeded sampler walking a different path to a different EOS, which section 3.4
+already documents for any sampling-path change. **Do not read a single length delta as
+truncation** — check WER, which is what actually detects missing words.
+
+### No flag
+
+This ships unconditionally on every SKU that builds the sharded RMSNorm configs — there is
+no env var to turn it off. The `OFF` column above was measured through a temporary flag
+during bring-up, which has since been removed; to reproduce that A/B, revert the
+`if self._use_sharded_ln:` branch at the end of `CodePredictor.forward` to the old
+`h.is_sharded() -> S2I -> ttnn.rms_norm(...)` three-liner.
+
+The `else` branch that remains there is **not** dead code: `_use_sharded_ln` is
+`self._n150 or self._n300_cp_opt`, so T3K and Blackhole never build `_ln_attn_progcfg` and
+still need the plain interleaved norm.
+
+---
+
+
 ## 4. Measurement methodology — read before comparing reports
+
+**A per-op ratio identifies a candidate; only a frame measurement prices it.** Two
+predictions in this document were made from per-op numbers and both were wrong by ~2x or
+more in the same direction — over-optimistic about the gain:
+
+- the interleaved-split prefill fallback: +0.22 ms/frame predicted from `cp_layer_prefill`,
+  **+0.11 ms** measured at the frame (twice, on two SKUs);
+- `bfloat8_b` on the CP QKV weight: -0.6 to -0.8 ms/frame predicted from a 59.2 % DRAM
+  figure, **0.00 ms** measured (section 5).
+
+The shared mistake is treating a *ratio* as a *constraint*. Specifically:
+
+- **DRAM % is utilisation, not a wall.** It is achieved bytes/second over peak, so it falls
+  whenever you cut bytes at constant time. The only test of a bandwidth claim is whether
+  halving the bytes moves the **time**. Check the core count and whether the matmul is
+  DRAM-sharded before believing a DRAM % at all — 12 cores + `DRAM:width+ds` is the regime
+  where it means something; 64 cores interleaved at M=1 tile is latency-bound.
+- **Untraced single-layer windows inflate deltas.** Every op there carries host dispatch
+  (60-210 us of gap per op), which is not present in a captured trace.
+
+Use per-op captures to *rank* and to A/B one op against itself. Quote frame numbers.
+
 
 **N300 CCL timings swing ~2x run to run.** The same `ttnn.all_gather` of a 64 KB payload
 measured 34 us in one Tracy capture and 65-71 us in the next three. Baseline windows for an
@@ -1318,6 +1551,8 @@ export TT_VISIBLE_DEVICES=0 \
 | Moving RoPE cos/sin/trans_mat from DRAM to L1 | 40.9 vs 41.4 us | Irrelevant — the cost is the per-head loop, not memory. |
 | Lowering RoPE math fidelity | 41.4 (LoFi) vs 43.4 (HiFi4) | Same. Not a fidelity problem. |
 | ~~`nlp_create_qkv_heads_decode` instead of the sharded prefill-style split~~ | ~~13.3 us vs 2 us~~ | **Overturned 2026-09-07 — see 3.x.** The 13.3 us does not reproduce: in-model the op is 2.2 us against 1.9 us for the sharded split. The likely cause of the old number is the input sharding — the op validates `num_kv_heads % input_cores == 0`, so probing it on an 8-core-wide xqkv (rather than the `num_kv_heads`-core spec the model builds) fails or falls back. It is now a flag, `QWEN3_TTS_DECODE_HEAD_SPLIT`. |
+| The same decode-layout head split ported to the **CodePredictor** | worked: -0.58 ms (-2.2 %) N300, -0.51 ms (-1.9 %) N150, bit-exact | **Written, measured, reverted 2026-09-07 — see 3.y.** Not a negative result: it is a real, reproducible, bit-exact win that was judged too small for the two qkv column orders (+20 MiB/chip), the permanent N150/N300 divergence and the three coupled behaviours it added to `_layer_forward`. Section 3.y holds the numbers, the four TTNN gotchas it uncovered, and the one TTNN fix that would make it worth redoing. |
+| `bfloat8_b` for the N300 CP **QKV** weight (`wqkv_kvgi`) | 24.5 -> **24.6 us** on the op; frame 25.94 -> 25.92 ms (inside the 0.04 ms spread) | **Zero gain — do not retry.** It looks like an oversight (it is the only CP matmul weight not honouring `QWEN3_TTS_BF8_WEIGHTS`, and N150's own `wqkv_ds` is already bfp8_b) and it looks bandwidth-bound (59.2 % of DRAM peak against 6.2 % FLOPs). Both readings are wrong. Halving the weight bytes moved the DRAM **figure** 59.4 % -> 29.7 % and the **time** not at all: DRAM % is achieved bandwidth over peak, so it halves whenever bytes halve at constant time — it is a utilisation reading, never a ceiling. This matmul is interleaved on **64** cores at M=1 tile and is latency/overhead-bound. The four CP matmuls that *did* gain from `198fc86bba8` are all DRAM-**sharded** on 12 cores (`DRAM:width+ds`) at 28-40 % DRAM — a different regime. The bf16 there is deliberate. |
 | Running the CodePredictor at TP=1 (replicated) on N300 to delete all CCLs | est. matmul growth +103 us vs CCL saving -107 us | Net ~zero for a large, risky change. |
 | DRAM-sharding the CP QKV matmul | ~2 us | N is padded 2048 -> 2304, so it needs an S2I + slice that eats the gain. |
 | `ttnn.transformer.scaled_dot_product_attention_decode` for Talker decode | PCC **0.50** vs 1.00 | Its cross-chunk flash-decode reduction is wrong at dh=128 as soon as the cache spans more than one `k_chunk` — single chunk 0.999995, two full chunks 0.702, 11 chunks 0.504 against an fp32 reference in isolation. And we cannot stay inside one chunk: the op requires `k_chunk_size` to be a **power of two** (`sdpa_decode.cpp:67`) *and* to divide `k_shape[2]`, so kv=352 (=32x11) admits only `k_chunk=32`, i.e. 11 chunks. `models/tt_transformers` documents the same cliff for Gemma-2 at dh=256. Revisit only if kv_max is padded to a power of two (then `k_chunk=kv_max` is single-chunk and correct) — it would also need `nlp_concat_heads_decode` and a new wo in0 spec. The prefill-form SDPA at `q_chunk=32` is 26.8 us and correct. |
