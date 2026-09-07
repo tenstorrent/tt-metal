@@ -33,8 +33,8 @@ ENABLE_LOGGING = True
 # Default Test Configuration
 PRINT_DETAILED_COMPARISON_FLAG = False
 
-# Maximum relative error allowed for any query row
-MAX_QUERY_ROW_REL_ERROR = 0.3
+# Empirical threshold for gatther-scatter row-routing regressions that global PCC can dilute; not an accuracy tolerance.
+MAX_REBATCH_ROW_REL_ERROR = 0.3
 
 
 @pytest.mark.parametrize(
@@ -211,7 +211,6 @@ def test_spatial_cross_attention_forward(
         bev_mask=tt_bev_mask,
         key=tt_camera_features,
         value=tt_camera_features,
-        spatial_shapes=spatial_shapes,
         level_start_index=tt_level_start_index,
     )
 
@@ -281,9 +280,9 @@ def test_spatial_cross_attention_forward(
     row_norm = ref_model_output.flatten(0, -2).norm(dim=-1)
     row_rel_error = row_error / row_norm.clamp(min=1e-6)
     worst_row = int(row_rel_error.argmax())
-    assert row_rel_error[worst_row] <= MAX_QUERY_ROW_REL_ERROR, (
+    assert row_rel_error[worst_row] <= MAX_REBATCH_ROW_REL_ERROR, (
         f"Query row {worst_row % num_queries} of batch item {worst_row // num_queries} has relative "
-        f"error {row_rel_error[worst_row]:.4f} > {MAX_QUERY_ROW_REL_ERROR} "
+        f"error {row_rel_error[worst_row]:.4f} > {MAX_REBATCH_ROW_REL_ERROR} "
         f"(row norm {row_norm[worst_row]:.4f}); mean over rows is {row_rel_error.mean():.4f}."
     )
 
