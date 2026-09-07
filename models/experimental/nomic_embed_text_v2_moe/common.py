@@ -1,13 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned revisions, checkpoint resolution and the per-layer hook harness.
-
-Two separate repositories have to be pinned, which is easy to miss: the weights live in
-`nomic-ai/nomic-embed-text-v2-moe`, but its `auto_map` points at *another* repo,
-`nomic-ai/nomic-bert-2048`, for the modelling code. Pinning only the weights leaves the
-reference model definition floating on `main`.
-"""
+"""Pinned revisions, checkpoint resolution, metrics and test-input helpers."""
 
 from __future__ import annotations
 
@@ -16,26 +10,39 @@ from typing import Optional
 
 import torch
 
-# Weights + tokenizer + config.
+# Two repositories must be pinned. The weights repo's config.json auto_map points the model
+# and config classes at CODE_ID, so pinning only MODEL_REVISION leaves the model definition
+# floating on that repo's main branch.
 MODEL_ID = "nomic-ai/nomic-embed-text-v2-moe"
 MODEL_REVISION = "1066b6599d099fbb93dfcb64f9c37a7c9e503e85"
-
-# Remote modelling code, referenced from the above repo's `auto_map`.
 CODE_ID = "nomic-ai/nomic-bert-2048"
 CODE_REVISION = "7710840340a098cfb869c4f65e87cf2b1b70caca"
 
-# Facts about the pinned checkpoint, asserted by tests/pcc/test_checkpoint_contract.py.
+# Asserted by tests/pcc/test_checkpoint_contract.py.
 N_CHECKPOINT_TENSORS = 148
 N_PARAMETERS = 475_292_928
 
-# The model card's worked example: cosine similarity between the passage-prefixed
-# embeddings of "Hello!" and "¡Hola!". The card prints 0.9118.
+# Tokenizer length. Smaller than config.vocab_size, which is padded up to
+# pad_vocab_size_multiple, so the embedding table has unreachable trailing rows.
+TOKENIZER_LENGTH = 250002
+PAD_TOKEN_ID = 1
+BOS_TOKEN_ID = 0
+EOS_TOKEN_ID = 2
+
+# The model card's worked example: cosine similarity between the passage-prefixed embeddings
+# of these two sentences. The card prints 0.9118; the reference reproduces 0.911788.
 MODEL_CARD_SENTENCES = ("Hello!", "¡Hola!")
 MODEL_CARD_SIMILARITY = 0.9118
+MODEL_CARD_TOLERANCE = 1e-4
+
+# Parity thresholds against upstream. The reference is bit-exact in practice (max-abs 0.0),
+# so these leave room only for fp32 non-determinism. Loosening one is a regression, not a
+# tolerance adjustment.
+PARITY_PCC = 0.9999999
+PARITY_MAX_ABS = 1e-4
 
 
 def resolve_checkpoint(revision: str = MODEL_REVISION, allow_download: bool = True) -> Path:
-    """Path to `model.safetensors` at the pinned revision, preferring the local cache."""
     from huggingface_hub import hf_hub_download
 
     return Path(
@@ -70,26 +77,18 @@ def checkpoint_is_cached(revision: str = MODEL_REVISION) -> bool:
 
 
 def load_tokenizer(revision: str = MODEL_REVISION):
-    """The tokenizer for the pinned checkpoint.
-
-    `AutoTokenizer` is safe here even though `AutoModel`/`AutoConfig` are not: the
-    `tokenizer_class` field in `tokenizer_config.json` outranks the `nomic_bert` entry in
-    the model-type mapping, so this resolves to XLMRobertaTokenizerFast as intended. The
-    tests keep a canary on that precedence.
-    """
+    """AutoTokenizer is safe here even though AutoModel is not: tokenizer_config.json's
+    explicit tokenizer_class outranks the nomic_bert model-type mapping."""
     from transformers import AutoTokenizer
 
     return AutoTokenizer.from_pretrained(MODEL_ID, revision=revision)
 
 
 def capture_hidden_states(model: torch.nn.Module, module_paths: list[str]) -> tuple[dict, list]:
-    """Register forward hooks on `module_paths`, returning `(captures, handles)`.
+    """Register forward hooks on module_paths, returning (captures, handles).
 
-    End-to-end PCC alone can hide compensating errors -- two layers wrong in opposite
-    directions still land near the right answer. Comparing at every layer boundary turns a
-    single number into a ladder that localises the first divergence.
-
-    The caller is responsible for removing the handles.
+    End-to-end PCC can hide compensating errors, so parity is checked at every layer boundary
+    instead. The caller must remove the handles.
     """
     captures: dict[str, torch.Tensor] = {}
     handles = []
@@ -97,7 +96,7 @@ def capture_hidden_states(model: torch.nn.Module, module_paths: list[str]) -> tu
 
     for path in module_paths:
         if path not in named:
-            raise KeyError(f"no module at {path!r}; available example: {next(iter(named))!r}")
+            raise KeyError(f"no module at {path!r}")
 
         def make_hook(name: str):
             def hook(_module, _inputs, output):
@@ -113,16 +112,16 @@ def capture_hidden_states(model: torch.nn.Module, module_paths: list[str]) -> tu
 
 
 def layer_ladder_paths(num_hidden_layers: int, encoder_prefix: str = "encoder.layers") -> list[str]:
-    """The 13 capture points: post-embedding-norm, then each of the 12 blocks."""
+    """Capture points for the parity ladder: post-embedding norm, then each block."""
     return ["emb_ln"] + [f"{encoder_prefix}.{i}" for i in range(num_hidden_layers)]
 
 
 def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     """Pearson correlation over the flattened tensors.
 
-    Note where this is *not* enough: PCC mean-centres, so a near-constant additive offset
-    is invisible to it. The MoE shared-bias bug is exactly that shape and scores 0.9999998.
-    Tests for that class of bug gate on max-abs instead.
+    PCC mean-centres, so a near-constant additive offset is invisible to it. The MoE
+    shared-bias bug has exactly that shape and scores 0.9999998. Use max_abs_diff for that
+    class of bug.
     """
     x = a.detach().to(torch.float64).flatten()
     y = b.detach().to(torch.float64).flatten()
@@ -138,10 +137,6 @@ def max_abs_diff(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((a.detach().to(torch.float64) - b.detach().to(torch.float64)).abs().max())
 
 
-def cosine(a: torch.Tensor, b: torch.Tensor, dim: int = -1) -> torch.Tensor:
-    return torch.nn.functional.cosine_similarity(a, b, dim=dim)
-
-
 def seed_everything(seed: int = 0) -> None:
     torch.manual_seed(seed)
 
@@ -149,23 +144,19 @@ def seed_everything(seed: int = 0) -> None:
 def synthetic_state_dict(config, seed: int = 0, std: float = 0.02) -> dict[str, torch.Tensor]:
     """A deterministic state dict matching the real key/shape contract.
 
-    Lets the structural tests run with no network and no 1.8 GB download while still
-    exercising the real shapes -- the model is never shrunk. LayerNorm weights are ones and
-    biases zeros so norms start as identity; everything else is small-std normal, roughly
-    the initialisation distribution.
+    Lets the structural tests run with no network and no 1.8 GB download at the model's real
+    dimensions. The model is never shrunk; only the weights are synthetic. Norm weights are
+    ones and biases zeros so norms start as identity.
     """
     from models.experimental.nomic_embed_text_v2_moe.reference.loader import expected_checkpoint_keys
 
     generator = torch.Generator().manual_seed(seed)
     state: dict[str, torch.Tensor] = {}
     for key, shape in expected_checkpoint_keys(config).items():
-        if key.endswith(".bias") and ("norm" in key or "emb_ln" in key):
-            state[key] = torch.zeros(shape)
-        elif key.endswith(".weight") and ("norm" in key or "emb_ln" in key):
-            state[key] = torch.ones(shape)
-        elif key.endswith("experts.bias"):
-            state[key] = torch.randn(shape, generator=generator) * std
-        elif key.endswith(".bias"):
+        is_norm = "norm" in key or "emb_ln" in key
+        if is_norm:
+            state[key] = torch.zeros(shape) if key.endswith(".bias") else torch.ones(shape)
+        elif key.endswith(".bias") and not key.endswith("experts.bias"):
             state[key] = torch.zeros(shape)
         else:
             state[key] = torch.randn(shape, generator=generator) * std
@@ -173,7 +164,6 @@ def synthetic_state_dict(config, seed: int = 0, std: float = 0.02) -> dict[str, 
 
 
 def build_synthetic_model(config, seed: int = 0):
-    """A reference model on synthetic weights -- no network, real shapes."""
     from models.experimental.nomic_embed_text_v2_moe.reference.loader import load_reference_model
 
     return load_reference_model(config, synthetic_state_dict(config, seed=seed))
@@ -186,13 +176,13 @@ def random_input_ids(
     seed: int = 0,
     pad_lengths: Optional[list[int]] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Random `(input_ids, attention_mask)`; `pad_lengths` right-pads row `b` by that many."""
+    """Random (input_ids, attention_mask). pad_lengths right-pads row b by that many tokens."""
     generator = torch.Generator().manual_seed(seed)
     input_ids = torch.randint(0, config.vocab_size, (batch, seqlen), generator=generator)
     attention_mask = torch.ones((batch, seqlen), dtype=torch.long)
     if pad_lengths is not None:
-        for b, n_pad in enumerate(pad_lengths):
+        for row, n_pad in enumerate(pad_lengths):
             if n_pad > 0:
-                input_ids[b, seqlen - n_pad :] = config.pad_token_id
-                attention_mask[b, seqlen - n_pad :] = 0
+                input_ids[row, seqlen - n_pad :] = config.pad_token_id
+                attention_mask[row, seqlen - n_pad :] = 0
     return input_ids, attention_mask

@@ -1,17 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Configuration for the vendored nomic-embed-text-v2-moe reference.
+"""Config for the vendored reference, plus validation of everything the reference hard-codes.
 
-The reference in `modeling_nomic_moe.py` covers the *inference* path of one specific
-checkpoint. Every branch upstream takes at runtime that we do not implement is instead
-baked in here as an assertion, so a checkpoint or config that violates one fails loudly
-at construction rather than silently producing a plausible-but-wrong model.
-
-That failure mode is not hypothetical. `transformers` ships a native `nomic_bert` model
-class targeting nomic-embed-text-v1.5 (separate q/k/v, no bias, SwiGLU, eps 1e-12, MoE
-absent). Its config is `@strict`, yet it accepts this checkpoint's `config.json` while
-silently dropping the GPT-2-style keys it does not recognise. See `hf_reference.py`.
+modeling_nomic_moe.py implements one path through upstream's code. Every config field upstream
+branches on, but the reference does not, is listed in REQUIRED_FIELDS and checked by
+from_hf_config. A config that violates one fails at construction instead of producing a
+plausible but wrong model.
 """
 
 from __future__ import annotations
@@ -29,7 +24,7 @@ class ConfigAssumptionError(ValueError):
 
 @dataclass(frozen=True)
 class NomicMoEConfig:
-    """The subset of the upstream config that the vendored reference actually reads."""
+    """The subset of the upstream config that the vendored reference reads."""
 
     vocab_size: int = 250048
     hidden_size: int = 768
@@ -44,6 +39,7 @@ class NomicMoEConfig:
     moe_top_k: int = 2
     moe_every_n_layers: int = 2
     max_trained_positions: int = 2048
+    pad_vocab_size_multiple: int = 64
 
     @property
     def head_dim(self) -> int:
@@ -54,11 +50,22 @@ class NomicMoEConfig:
         # rotary_emb_fraction is asserted to be 1.0, so rotary covers the whole head.
         return self.head_dim
 
-    def is_moe_layer(self, layer_idx: int) -> bool:
-        """Upstream: `NomicBertBlock(config, moe=i % every_n == 1)`.
+    @property
+    def attention_scale(self) -> float:
+        return self.head_dim**-0.5
 
-        Note the `== 1`, not `== 0`: layer 0 is dense and layer 1 is the first MoE layer.
-        """
+    @property
+    def qkv_dim(self) -> int:
+        return 3 * self.hidden_size
+
+    @property
+    def num_ladder_points(self) -> int:
+        """Capture points for a per-layer parity ladder: emb_ln plus every block."""
+        return self.num_hidden_layers + 1
+
+    def is_moe_layer(self, layer_idx: int) -> bool:
+        """Upstream uses `moe=i % every_n == 1`, so layer 0 is dense and layer 1 is the first
+        MoE layer. The more natural `== 0` gives the opposite assignment."""
         return layer_idx % self.moe_every_n_layers == 1
 
     @property
@@ -70,35 +77,34 @@ class NomicMoEConfig:
         return tuple(i for i in range(self.num_hidden_layers) if not self.is_moe_layer(i))
 
 
-# Every upstream config field whose value the vendored reference hard-codes rather than
-# branches on, mapped to the value it must have. Grouped by what a violation would mean.
-_REQUIRED_FIELDS: dict[str, object] = {
-    # --- block structure -------------------------------------------------------------
-    "prenorm": False,  # we implement post-norm only
-    "parallel_block": False,  # we implement sequential attn -> mlp only
-    "causal": False,  # encoder: bidirectional attention
-    "add_pooling_layer": False,  # no `pooler.*` in the checkpoint
-    # --- rotary ----------------------------------------------------------------------
-    "rotary_emb_fraction": 1.0,  # rotary covers the full head dim
-    "rotary_emb_interleaved": False,  # GPT-NeoX halves, not GPT-J pairs
-    "rotary_emb_scale_base": None,  # no xPos
-    "rotary_scaling_factor": None,  # no DynamicNTK
-    # --- mlp / moe -------------------------------------------------------------------
-    "activation_function": "gelu",  # exact-erf GELU, not tanh and not a gated variant
-    "moe_normalize_expert_weights": False,  # top-k weights are NOT renormalised
-    "num_shared_experts": 0,  # no always-on expert
-    "expert_choice_router": False,  # token-choice routing
+# Config fields the reference hard-codes rather than branches on, and the value each must have.
+REQUIRED_FIELDS: dict[str, object] = {
+    # Block structure.
+    "prenorm": False,
+    "parallel_block": False,
+    "causal": False,
+    "add_pooling_layer": False,
+    # Rotary.
+    "rotary_emb_fraction": 1.0,
+    "rotary_emb_interleaved": False,
+    "rotary_emb_scale_base": None,
+    "rotary_scaling_factor": None,
+    # MLP and MoE.
+    "activation_function": "gelu",
+    "moe_normalize_expert_weights": False,
+    "num_shared_experts": 0,
+    "expert_choice_router": False,
     "moe_top_k": 2,
     "moe_every_n_layers": 2,
     "num_experts": 8,
     "ffn_div": 1,
-    # --- biases ----------------------------------------------------------------------
-    "qkv_proj_bias": True,  # Wqkv and out_proj both carry bias
+    # Biases.
+    "qkv_proj_bias": True,
     "mlp_fc1_bias": True,
     "mlp_fc2_bias": True,
-    # --- embeddings ------------------------------------------------------------------
-    "type_vocab_size": 1,  # single token-type row => foldable to a constant
-    # --- dropout (inference: all must be inert) ---------------------------------------
+    # Single token-type row, so the term folds to a constant.
+    "type_vocab_size": 1,
+    # Inference: all dropout must be inert.
     "attn_pdrop": 0.0,
     "resid_pdrop": 0.0,
     "moe_resid_pdrop": 0.0,
@@ -106,16 +112,13 @@ _REQUIRED_FIELDS: dict[str, object] = {
 
 
 def from_hf_config(hf_config: dict) -> NomicMoEConfig:
-    """Validate an upstream `config.json` dict and project it onto `NomicMoEConfig`.
-
-    Raises `ConfigAssumptionError` on the first field that contradicts the reference.
-    """
-    for field, expected in _REQUIRED_FIELDS.items():
+    """Validate an upstream config.json dict and project it onto NomicMoEConfig."""
+    for field, expected in REQUIRED_FIELDS.items():
         if field not in hf_config:
             raise ConfigAssumptionError(
                 f"config is missing {field!r}; the vendored reference assumes {field}={expected!r}. "
                 "A missing GPT-2-style key usually means the config was parsed by the native "
-                "transformers `nomic_bert` class instead of the remote code -- see hf_reference.py."
+                "transformers nomic_bert class instead of the remote code. See hf_reference.py."
             )
         actual = hf_config[field]
         if actual != expected:
@@ -124,21 +127,19 @@ def from_hf_config(hf_config: dict) -> NomicMoEConfig:
                 f"{field}={expected!r}. Upstream branches on this field; we do not."
             )
 
-    # `embd_pdrop` is present in the checkpoint's config as 0.1, but upstream never reads it
-    # (the embedding dropout is `resid_pdrop`). Asserting it would be a false positive.
+    # embd_pdrop is 0.1 in this checkpoint but upstream never reads it (embedding dropout uses
+    # resid_pdrop), so asserting it would be a false positive.
 
     hidden_size = hf_config["n_embd"]
     num_heads = hf_config["n_head"]
     if hidden_size % num_heads != 0:
         raise ConfigAssumptionError(f"n_embd={hidden_size} is not divisible by n_head={num_heads}")
-    head_dim = hidden_size // num_heads
-    if head_dim % 2 != 0:
-        raise ConfigAssumptionError(f"head_dim={head_dim} must be even for rotary halves")
+    if (hidden_size // num_heads) % 2 != 0:
+        raise ConfigAssumptionError(f"head_dim={hidden_size // num_heads} must be even for rotary halves")
 
-    # Upstream rounds vocab_size up to a multiple of `pad_vocab_size_multiple` inside
-    # NomicBertModel.__init__. For this checkpoint 250048 % 64 == 0, so it is a no-op; if it
-    # were not, the embedding table would be larger than the config says and our generated
-    # key/shape contract would be wrong.
+    # Upstream rounds vocab_size up to this multiple inside NomicBertModel.__init__. It is a
+    # no-op for this checkpoint; if it were not, the embedding table would be larger than the
+    # config says and the generated key/shape contract would be wrong.
     multiple = hf_config.get("pad_vocab_size_multiple", 1)
     vocab_size = hf_config["vocab_size"]
     if multiple and vocab_size % multiple != 0:
@@ -161,11 +162,12 @@ def from_hf_config(hf_config: dict) -> NomicMoEConfig:
         moe_top_k=hf_config["moe_top_k"],
         moe_every_n_layers=hf_config["moe_every_n_layers"],
         max_trained_positions=hf_config["max_trained_positions"],
+        pad_vocab_size_multiple=multiple,
     )
 
 
 def load_vendored_hf_config() -> dict:
-    """The pinned `config.json` snapshot, so the no-network tests still validate the real thing."""
+    """The pinned config.json snapshot, so the no-network tests validate the real config."""
     with open(VENDORED_CONFIG_PATH) as f:
         return json.load(f)
 

@@ -1,25 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Vendored PyTorch reference for nomic-ai/nomic-embed-text-v2-moe.
+"""PyTorch reference for nomic-ai/nomic-embed-text-v2-moe. Golden model for the TTNN port.
 
-This is the golden model the TTNN port is validated against. It covers only the inference
-path of one pinned checkpoint; see `configuration_nomic_moe.py` for the assumptions that
-are asserted rather than branched on.
+Inference path only. Parameter names mirror upstream exactly, so load_state_dict(strict=True)
+against the real checkpoint validates the structure without a remapping layer.
 
-Two properties are deliberate:
+Config fields that upstream branches on at runtime are asserted in configuration_nomic_moe.py
+rather than implemented here. Not implemented: vision tower, task heads, pooler, gated MLP,
+DynamicNTK and xPos rotary, megablocks, KV cache, pre-norm.
 
-*   **Name isomorphism.** Every parameter sits at exactly the upstream path (`attn.Wqkv`,
-    `emb_ln`, `mlp.experts.mlp.w1`, ...), so `load_state_dict(strict=True)` against the
-    real checkpoint *is* the structural proof -- no remapping layer to get wrong.
-*   **No `einops`.** Upstream leans on `rearrange`/`repeat`; every such call is written
-    out as an explicit `view`/`cat` here, because those layout choices are precisely what
-    the TTNN port has to reproduce and they should be readable, not inferred.
-
-Excluded from upstream's 2556 lines: the vision tower, all task heads, the pooler, gated
-MLP variants, DynamicNTK and xPos rotary, the megablocks bridge, the custom
-`from_pretrained`, KV-cache, gradient checkpointing, the pre-norm branch, and every
-`use_flash_attn` / `fused_*` path.
+einops is not used. The layout choices are exactly what the TTNN port must reproduce, so they
+are written out as explicit view/cat calls.
 """
 
 from __future__ import annotations
@@ -32,40 +24,31 @@ import torch.nn.functional as F
 
 from models.experimental.nomic_embed_text_v2_moe.reference.configuration_nomic_moe import NomicMoEConfig
 
-# ---------------------------------------------------------------------------------------
-# Rotary embeddings (GPT-NeoX halves)
-# ---------------------------------------------------------------------------------------
-
 
 def rotate_half(x: torch.Tensor) -> torch.Tensor:
-    """GPT-NeoX convention: split the last axis in half, `(x1, x2) -> (-x2, x1)`.
+    """GPT-NeoX convention: split the last axis in half, (x1, x2) -> (-x2, x1).
 
-    NOT the GPT-J / interleaved convention, which pairs even and odd lanes. The two are
-    different maps and produce different -- both finite, both plausible -- outputs. The
-    checkpoint's `rotary_emb_interleaved` is False.
+    Not the GPT-J interleaved convention, which pairs even and odd lanes. Both produce finite
+    output, so picking the wrong one fails silently. config.rotary_emb_interleaved is False.
     """
     x1, x2 = x.chunk(2, dim=-1)
     return torch.cat((-x2, x1), dim=-1)
 
 
 def apply_rotary_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-    """Apply rotary embeddings to `x` of shape (batch, seqlen, nheads, headdim).
+    """Apply rotary embeddings to x of shape (batch, seqlen, nheads, headdim).
 
-    `cos`/`sin` are (seqlen, rotary_dim // 2) -- i.e. HALF width. Upstream widens them with
-    ``repeat(cos, "... d -> ... 1 (2 d)")``, where `(2 d)` makes 2 the *outer* factor, so
-    the result is `concat([c, c])` and not `repeat_interleave`. Getting that backwards
-    yields the GPT-J lane pairing, which composed with NeoX `rotate_half` is not a rotation
-    at all.
+    cos and sin are (seqlen, rotary_dim // 2), i.e. half width. Widening them with
+    repeat_interleave instead of cat gives the GPT-J lane pairing, which combined with NeoX
+    rotate_half is not a rotation and does not preserve the per-plane norm.
     """
     rotary_dim = cos.shape[-1] * 2
     assert rotary_dim <= x.shape[-1]
     seqlen = x.shape[1]
-    cos = cos[:seqlen]
-    sin = sin[:seqlen]
 
-    # (S, rotary_dim // 2) -> (S, 1, rotary_dim); the singleton broadcasts over heads.
-    cos = torch.cat((cos, cos), dim=-1).unsqueeze(-2)
-    sin = torch.cat((sin, sin), dim=-1).unsqueeze(-2)
+    # Trailing singleton broadcasts over heads.
+    cos = torch.cat((cos[:seqlen], cos[:seqlen]), dim=-1).unsqueeze(-2)
+    sin = torch.cat((sin[:seqlen], sin[:seqlen]), dim=-1).unsqueeze(-2)
 
     rotated = x[..., :rotary_dim] * cos + rotate_half(x[..., :rotary_dim]) * sin
     if rotary_dim == x.shape[-1]:
@@ -74,10 +57,8 @@ def apply_rotary_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> t
 
 
 class NomicBertRotaryEmbedding(nn.Module):
-    """Caches `cos`/`sin` at HALF the rotary width; `apply_rotary_emb` widens at use.
-
-    `inv_freq` is non-persistent upstream, so it is absent from the checkpoint.
-    """
+    """Caches cos/sin at half the rotary width. inv_freq is non-persistent, so it is not in
+    the checkpoint."""
 
     def __init__(self, dim: int, base: float = 10000.0):
         super().__init__()
@@ -97,38 +78,28 @@ class NomicBertRotaryEmbedding(nn.Module):
             or self._cos_cached.dtype != dtype
         ):
             self._seq_len_cached = seqlen
-            # Positions in fp32 regardless of model dtype: `t * inv_freq` grows large and
-            # bf16 would collapse distinct late positions onto the same angle.
+            # Positions stay fp32 regardless of model dtype: t * inv_freq grows large, and in
+            # bf16 distinct late positions collapse onto the same angle.
             t = torch.arange(seqlen, device=device, dtype=torch.float32)
-            inv_freq = self.inv_freq.to(device=device, dtype=torch.float32)
-            freqs = torch.outer(t, inv_freq)
+            freqs = torch.outer(t, self.inv_freq.to(device=device, dtype=torch.float32))
             self._cos_cached = torch.cos(freqs).to(dtype)
             self._sin_cached = torch.sin(freqs).to(dtype)
 
     def forward(self, qkv: torch.Tensor) -> torch.Tensor:
-        """`qkv`: (batch, seqlen, 3, nheads, headdim). Rotates q and k, passes v through."""
-        seqlen = qkv.shape[1]
-        self._update_cos_sin_cache(seqlen, device=qkv.device, dtype=qkv.dtype)
+        """qkv: (batch, seqlen, 3, nheads, headdim). Rotates q and k, passes v through."""
+        self._update_cos_sin_cache(qkv.shape[1], device=qkv.device, dtype=qkv.dtype)
         q_rot = apply_rotary_emb(qkv[:, :, 0], self._cos_cached, self._sin_cached)
         k_rot = apply_rotary_emb(qkv[:, :, 1], self._cos_cached, self._sin_cached)
         return torch.stack((q_rot, k_rot, qkv[:, :, 2]), dim=2)
 
 
-# ---------------------------------------------------------------------------------------
-# Embeddings
-# ---------------------------------------------------------------------------------------
-
-
 class NomicBertEmbeddings(nn.Module):
-    """Word + token-type embeddings. No position embeddings -- position is rotary-only.
-
-    `padding_idx` is passed to mirror upstream's construction, but it only zeroes the row
-    at *init*; loading the checkpoint overwrites it. The trained `<pad>` row is NOT zero
-    (absmax ~1.5e-2), so a TTNN port must not reintroduce zeroing.
-    """
+    """Word and token-type embeddings. Position is rotary-only, so there is no learned table."""
 
     def __init__(self, config: NomicMoEConfig):
         super().__init__()
+        # padding_idx mirrors upstream construction. It zeroes the row only at init; loading
+        # the checkpoint restores a trained, non-zero <pad> row. Do not reintroduce zeroing.
         self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
         self.type_vocab_size = config.type_vocab_size
         if self.type_vocab_size > 0:
@@ -138,24 +109,19 @@ class NomicBertEmbeddings(nn.Module):
         embeddings = self.word_embeddings(input_ids)
         if self.type_vocab_size > 0:
             if token_type_ids is None:
-                seqlen = embeddings.shape[1]
-                token_type_ids = torch.zeros(seqlen, dtype=torch.long, device=embeddings.device)
+                token_type_ids = torch.zeros(embeddings.shape[1], dtype=torch.long, device=embeddings.device)
             embeddings = embeddings + self.token_type_embeddings(token_type_ids)
         return embeddings
 
 
-# ---------------------------------------------------------------------------------------
-# Dense MLP (even-numbered layers)
-# ---------------------------------------------------------------------------------------
-
-
 class NomicBertMLP(nn.Module):
+    """Dense FFN, used on even-numbered layers."""
+
     def __init__(self, config: NomicMoEConfig):
         super().__init__()
         self.fc1 = nn.Linear(config.hidden_size, config.intermediate_size, bias=True)
-        # `activation_function == "gelu"` maps to nn.GELU(approximate="none") upstream, i.e.
-        # the exact erf form. The tanh approximation differs by ~5e-4 and would later read
-        # as a hardware precision problem.
+        # Exact erf, not the tanh approximation. They differ by ~5e-4, which is small enough
+        # to pass a loose PCC gate and large enough to look like a device precision problem.
         self.activation = nn.GELU(approximate="none")
         self.fc2 = nn.Linear(config.intermediate_size, config.hidden_size, bias=True)
 
@@ -163,19 +129,13 @@ class NomicBertMLP(nn.Module):
         return self.fc2(self.activation(self.fc1(x)))
 
 
-# ---------------------------------------------------------------------------------------
-# MoE (odd-numbered layers)
-# ---------------------------------------------------------------------------------------
-
-
 class NomicRouter(nn.Module):
-    """Softmax over ALL experts in fp32, then top-k. The top-k weights are NOT renormalised.
+    """Softmax over all experts in fp32, then top-k.
 
-    That is the single most-copied bug in this architecture: Mixtral, Switch and most MoE
-    reference code divide by the top-k sum. Nomic does not (`moe_normalize_expert_weights`
-    is False), so the routed weights sum to ~0.67 on real data, and the residual branch is
-    correspondingly attenuated. Renormalising still scores PCC 0.993 against the correct
-    output -- above any 0.99 gate.
+    The top-k weights are NOT renormalized (config.moe_normalize_expert_weights is False), so
+    they sum to less than 1 and the MoE branch is attenuated relative to the residual. Most
+    MoE implementations divide by the top-k sum; doing that here scores PCC ~0.99, which sits
+    right on a typical gate.
     """
 
     def __init__(self, hidden_size: int, moe_num_experts: int, moe_top_k: int):
@@ -188,18 +148,29 @@ class NomicRouter(nn.Module):
     def forward(self, x: torch.Tensor):
         weights = self.layer(x.view(-1, x.shape[-1])).softmax(dim=-1, dtype=torch.float32)
         top_weights, top_experts = torch.topk(weights, self.moe_top_k, dim=-1)
-        # NO renormalisation here. See the class docstring.
         return weights.to(x.dtype), top_weights.to(x.dtype), top_experts
+
+    def dense_weights(self, top_weights: torch.Tensor, top_experts: torch.Tensor) -> torch.Tensor:
+        """Scatter the top-k weights back to a (tokens, num_experts) tensor, zero off the top-k.
+
+        This is the routing form NomicExperts.dense_forward and the TTNN port consume.
+        """
+        dense = torch.zeros(
+            top_weights.shape[0],
+            self.moe_num_experts,
+            dtype=top_weights.dtype,
+            device=top_weights.device,
+        )
+        return dense.scatter_(1, top_experts, top_weights)
 
 
 class NomicExpertMLP(nn.Module):
-    """Eight experts packed into two `[E * ffn_hidden, hidden]` parameter blocks.
+    """Experts packed into two [num_experts * ffn_hidden, hidden] blocks, expert axis outer.
 
-    The expert axis is the OUTER one: expert `e` owns rows `e * ffn_hidden : (e+1) * ...`.
-    Both `w1` and `w2` are stored `[ffn_hidden, hidden]` per expert, so `w1` is applied
-    transposed and `w2` is applied as-is. Every other combination either raises a shape
-    error or -- for `w2` viewed as `(E, hidden, ffn_hidden)`, which typechecks because
-    `24576 * 768 == 8 * 768 * 3072` -- silently produces garbage (measured PCC -0.013).
+    Both w1 and w2 are stored [ffn_hidden, hidden] per expert, so w1 is applied transposed and
+    w2 is not. Viewing w2 as (num_experts, hidden, ffn_hidden) instead also succeeds, because
+    the element count is symmetric in those two dims, and every downstream matmul typechecks.
+    Nothing raises; the output is uncorrelated noise.
     """
 
     def __init__(self, hidden_size: int, ffn_hidden_size: int, moe_num_experts: int):
@@ -211,9 +182,12 @@ class NomicExpertMLP(nn.Module):
         self.w2 = nn.Parameter(torch.empty(moe_num_experts * ffn_hidden_size, hidden_size))
         self.activation_fn = nn.GELU(approximate="none")
 
+    @property
+    def expert_shape(self) -> tuple[int, int, int]:
+        return (self.moe_num_experts, self.ffn_hidden_size, self.hidden_size)
+
     def expert_weights(self, expert_idx: int):
-        shape = (self.moe_num_experts, self.ffn_hidden_size, self.hidden_size)
-        return self.w1.view(*shape)[expert_idx], self.w2.view(*shape)[expert_idx]
+        return self.w1.view(*self.expert_shape)[expert_idx], self.w2.view(*self.expert_shape)[expert_idx]
 
     def forward(self, x: torch.Tensor, expert_idx: int) -> torch.Tensor:
         expert_w1, expert_w2 = self.expert_weights(expert_idx)
@@ -221,13 +195,12 @@ class NomicExpertMLP(nn.Module):
 
 
 class NomicExperts(nn.Module):
-    """Weighted sum of the top-k expert outputs, plus ONE shared bias added at the end.
+    """Weighted sum of the top-k expert outputs, plus one shared bias.
 
-    The bias is a single `[hidden]` vector for all eight experts and is added *after* the
-    weighted sum -- not inside the per-expert loop. Adding it per-expert instead scales it
-    by the routed-weight sum, an almost-constant offset of `(sum(w) - 1) * bias`. PCC
-    mean-centres, so it scores 0.9999998 and no PCC threshold can catch it; the tests gate
-    this one on max-abs.
+    The bias is a single [hidden] vector for all experts, added after the sum. Adding it inside
+    the per-expert loop scales it by the routed-weight sum, giving an offset of
+    (sum(w) - 1) * bias. That offset is nearly constant, and PCC mean-centres, so it scores
+    0.9999998 against real weights. Gate this on max-abs, not PCC.
     """
 
     def __init__(self, config: NomicMoEConfig):
@@ -250,35 +223,29 @@ class NomicExperts(nn.Module):
             topk_idx, token_idx = torch.where(expert_mask[expert_idx])
             if token_idx.shape[0] == 0:
                 continue
-            expert_tokens = x[token_idx]
-            expert_out = self.mlp(expert_tokens, expert_idx) * top_weights[token_idx, topk_idx, None]
+            expert_out = self.mlp(x[token_idx], expert_idx) * top_weights[token_idx, topk_idx, None]
             out.index_add_(0, token_idx, expert_out)
 
-        out = out.reshape(bsz, q_len, hidden_size)
-        return out + self.bias  # ONE bias, ONCE, after the sum.
+        return out.reshape(bsz, q_len, hidden_size) + self.bias
 
     def dense_forward(self, x: torch.Tensor, dense_weights: torch.Tensor) -> torch.Tensor:
-        """Arithmetically equivalent all-experts formulation -- the shape the TTNN port uses.
+        """All-experts formulation, arithmetically equivalent to forward.
 
-        Instead of gathering each expert's tokens, run every token through every expert and
-        weight by a dense `[tokens, num_experts]` routing tensor whose non-top-k entries are
-        zero. Same result, no ragged gather/scatter, and it maps onto two broadcast-batch
-        matmuls on device.
+        Runs every token through every expert and zeroes the non-top-k contributions via
+        dense_weights, instead of gathering each expert's tokens. This is the shape the TTNN
+        port uses: two broadcast-batch matmuls and a reduce, no ragged gather or scatter.
 
-        `dense_weights`: (tokens, num_experts), zero off the top-k.
+        dense_weights: (tokens, num_experts), zero off the top-k.
         """
         bsz, q_len, hidden_size = x.shape
-        flat = x.reshape(1, -1, hidden_size)  # (1, T, H)
-        shape = (self.moe_num_experts, self.mlp.ffn_hidden_size, hidden_size)
+        flat = x.reshape(1, -1, hidden_size)
 
-        w1 = self.mlp.w1.view(*shape).transpose(1, 2)  # (E, H, F)
-        w2 = self.mlp.w2.view(*shape)  # (E, F, H)
+        w1 = self.mlp.w1.view(*self.mlp.expert_shape).transpose(1, 2)
+        w2 = self.mlp.w2.view(*self.mlp.expert_shape)
 
-        act = self.mlp.activation_fn(torch.matmul(flat, w1))  # (E, T, F)
-        per_expert = torch.matmul(act, w2)  # (E, T, H)
-
-        gate = dense_weights.t().unsqueeze(-1).to(per_expert.dtype)  # (E, T, 1)
-        out = (per_expert * gate).sum(dim=0)  # (T, H)
+        per_expert = torch.matmul(self.mlp.activation_fn(torch.matmul(flat, w1)), w2)
+        gate = dense_weights.t().unsqueeze(-1).to(per_expert.dtype)
+        out = (per_expert * gate).sum(dim=0)
         return out.reshape(bsz, q_len, hidden_size) + self.bias
 
 
@@ -289,24 +256,17 @@ class NomicMoELayer(nn.Module):
         self.experts = NomicExperts(config)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Upstream's block passes an inverted pad mask here and NomicMoELayer.forward
-        # ignores it entirely. We do not thread it through at all: applying it would zero
-        # the real tokens, since in that mask 1 means "pad".
+        # Upstream passes an inverted pad mask here (1 means pad) and then ignores it. Not
+        # threaded through: applying it would zero the real tokens.
         _weights, top_weights, top_experts = self.router(x)
         return self.experts(x, top_weights, top_experts)
-
-
-# ---------------------------------------------------------------------------------------
-# Attention
-# ---------------------------------------------------------------------------------------
 
 
 class NomicBertAttention(nn.Module):
     """Bidirectional MHA with a fused three-major QKV projection and full-head rotary.
 
-    `Wqkv` produces `[q(768) | k(768) | v(768)]`; within each block, heads are contiguous.
-    `norm_factor` is a non-persistent buffer upstream and unused on the SDPA path (SDPA's
-    default scale, `1/sqrt(head_dim)`, already matches), so it is omitted here.
+    norm_factor is a non-persistent buffer upstream and unused on the SDPA path, since SDPA's
+    default scale already equals 1/sqrt(head_dim). It is not defined here.
     """
 
     def __init__(self, config: NomicMoEConfig):
@@ -321,37 +281,27 @@ class NomicBertAttention(nn.Module):
     def forward(self, hidden_states: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         bsz, seqlen, _ = hidden_states.shape
 
-        qkv = self.Wqkv(hidden_states)
-        # Upstream: rearrange(qkv, "... (three h d) -> ... three h d", three=3, d=head_dim).
-        # `three` is the OUTER factor -- q, k and v are contiguous blocks of 768, and heads
-        # are contiguous inside each. Splitting head-major instead scores PCC 0.08.
-        qkv = qkv.view(bsz, seqlen, 3, self.num_heads, self.head_dim)
+        # Three-major: q, k and v are contiguous blocks of embed_dim, heads contiguous inside
+        # each. A head-major view strides across the q/k/v boundaries and scores PCC 0.08.
+        qkv = self.Wqkv(hidden_states).view(bsz, seqlen, 3, self.num_heads, self.head_dim)
         qkv = self.rotary_emb(qkv)
 
-        # (B, S, H, D) -> (B, H, S, D)
         query = qkv[:, :, 0].permute(0, 2, 1, 3)
         key = qkv[:, :, 1].permute(0, 2, 1, 3)
         value = qkv[:, :, 2].permute(0, 2, 1, 3)
 
-        # is_causal=False is not the SDPA default; this is an encoder.
+        # is_causal is not the SDPA default here; this is an encoder.
         attn_output = F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, is_causal=False)
 
-        # (B, H, S, D) -> (B, S, H * D)
         attn_output = attn_output.permute(0, 2, 1, 3).reshape(bsz, seqlen, self.embed_dim)
         return self.out_proj(attn_output)
 
 
-# ---------------------------------------------------------------------------------------
-# Block / encoder / model
-# ---------------------------------------------------------------------------------------
-
-
 class NomicBertBlock(nn.Module):
-    """Post-norm block: `norm1(attn(x) + x)` then `norm2(mlp(h) + h)`.
+    """Post-norm block: norm1(attn(x) + x), then norm2(mlp(h) + h).
 
-    Post-norm, not pre-norm -- the residual is added *before* the norm, so every sub-block
-    output is re-centred. That is why numerical error does not compound across the 12
-    layers the way it does in a pre-norm decoder.
+    Residual is added before the norm, so every sub-block output is re-centred. This is why
+    numerical error does not compound across layers the way it does in a pre-norm decoder.
     """
 
     def __init__(self, config: NomicMoEConfig, moe: bool):
@@ -363,16 +313,13 @@ class NomicBertBlock(nn.Module):
         self.norm2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
 
     def forward(self, hidden_states: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        attn_out = self.attn(hidden_states, attention_mask=attention_mask)
-        hidden_states = self.norm1(attn_out + hidden_states)
-        mlp_out = self.mlp(hidden_states)
-        return self.norm2(mlp_out + hidden_states)
+        hidden_states = self.norm1(self.attn(hidden_states, attention_mask=attention_mask) + hidden_states)
+        return self.norm2(self.mlp(hidden_states) + hidden_states)
 
 
 class NomicBertEncoder(nn.Module):
     def __init__(self, config: NomicMoEConfig):
         super().__init__()
-        # `i % every_n == 1`, so layer 0 is dense and the MoE layers are the odd ones.
         self.layers = nn.ModuleList(
             [NomicBertBlock(config, moe=config.is_moe_layer(i)) for i in range(config.num_hidden_layers)]
         )
@@ -384,24 +331,23 @@ class NomicBertEncoder(nn.Module):
 
 
 def build_extended_attention_mask(attention_mask: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
-    """(B, S) keep-mask of 1/0 -> (B, 1, 1, S) additive mask of 0 / dtype-min.
+    """(B, S) keep-mask of 1/0 to a (B, 1, 1, S) additive mask of 0 / dtype-min.
 
-    This is `PreTrainedModel.get_extended_attention_mask` for a non-decoder, written out.
+    PreTrainedModel.get_extended_attention_mask for a non-decoder, written out. Upstream's own
+    call site is deprecated in transformers 5.12.
     """
     extended = attention_mask[:, None, None, :].to(dtype=dtype)
     return (1.0 - extended) * torch.finfo(dtype).min
 
 
 class NomicBertModel(nn.Module):
-    """Encoder-only backbone. Returns `last_hidden_state` -- no pooler, no task head.
+    """Encoder-only backbone returning last_hidden_state. No pooler, no task head.
 
-    Two upstream behaviours are deliberately NOT reproduced:
-
-    *   Upstream *requires* `attention_mask` and raises `AttributeError` without it. Here
-        it defaults to all-ones.
-    *   Upstream's `matryoshka_dim` slices `sequence_output[:, :matryoshka_dim]` -- the
-        SEQUENCE axis, not the feature axis. That is a bug; truncation belongs after
-        pooling and lives in `pipeline.py`.
+    Two upstream behaviours are deliberately not reproduced:
+      - Upstream requires attention_mask and raises AttributeError without it; here it
+        defaults to all-ones.
+      - Upstream's matryoshka_dim slices the sequence axis, not the feature axis. Truncation
+        belongs after pooling and lives in pipeline.py.
     """
 
     def __init__(self, config: NomicMoEConfig):
@@ -417,11 +363,11 @@ class NomicBertModel(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         token_type_ids: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        hidden_states = self.embeddings(input_ids, token_type_ids=token_type_ids)
-        hidden_states = self.emb_ln(hidden_states)
+        hidden_states = self.emb_ln(self.embeddings(input_ids, token_type_ids=token_type_ids))
 
         if attention_mask is None:
             attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
-        extended_mask = build_extended_attention_mask(attention_mask, hidden_states.dtype)
 
-        return self.encoder(hidden_states, attention_mask=extended_mask)
+        return self.encoder(
+            hidden_states, attention_mask=build_extended_attention_mask(attention_mask, hidden_states.dtype)
+        )

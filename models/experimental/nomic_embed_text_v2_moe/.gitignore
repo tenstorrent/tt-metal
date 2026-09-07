@@ -6,3 +6,4 @@
 *.bin
 *.npz
 *.safetensors
+CURRENT_STATE.md

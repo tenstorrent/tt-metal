@@ -1,29 +1,23 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Loading the upstream HF model safely, and the trap that makes that non-trivial.
+"""Loading the upstream HF model, and containment for the native-class collision.
 
-`transformers` >= 5 ships a NATIVE `transformers.models.nomic_bert` targeting
-**nomic-embed-text-v1.5**: separate q/k/v/o projections, no MoE, a SwiGLU
-`gate_proj`/`up_proj`/`down_proj` MLP. It is registered for `model_type == "nomic_bert"`,
-which is exactly what this checkpoint's `config.json` declares.
+transformers >= 5 ships a native transformers.models.nomic_bert targeting
+nomic-embed-text-v1.5: separate q/k/v/o projections, no bias, SwiGLU MLP, no MoE. It is
+registered for model_type == "nomic_bert", which is what this checkpoint declares.
 
-Measured on transformers 5.12.1 with the pinned revision:
+Measured on transformers 5.12.1 at the pinned revision:
+  AutoConfig.from_pretrained  -> native config class; only use_cache is dropped.
+  AutoModel.from_pretrained   -> native model class, and it does not raise. Every MoE tensor,
+                                 mlp.fc1/fc2, and all q/k/v/o biases are reported UNEXPECTED
+                                 and discarded; gate_proj/up_proj/down_proj are reported
+                                 MISSING and randomly initialised. The result has 136
+                                 parameters, no MoE, and returns finite, wrong numbers.
 
-*   `AutoConfig.from_pretrained(MODEL_ID)` -> the NATIVE config class. It is comparatively
-    benign: every field of `config.json` survives except `use_cache`.
-*   `AutoModel.from_pretrained(MODEL_ID)` -> the NATIVE model class, and this one is not
-    benign at all. It **does not raise**. It reports every MoE tensor
-    (`mlp.experts.mlp.w1/w2`, `mlp.router.layer.weight`, `mlp.experts.bias`), every
-    `mlp.fc1/fc2`, and all q/k/v/o biases as UNEXPECTED -- silently discarded -- and
-    reports `gate_proj`/`up_proj`/`down_proj` as MISSING, i.e. **randomly initialised**.
-    The result is 136 parameters, no MoE, and a forward pass that returns finite,
-    plausible, entirely wrong numbers.
-
-So the containment is: always pass `trust_remote_code=True` *and* `code_revision`, then
-assert the resolved class actually came from `transformers_modules`. The assert is the
-part that matters -- without it, a future transformers release that changes resolution
-order would silently downgrade the golden reference.
+Containment: pass trust_remote_code=True and code_revision, then assert the resolved class
+came from transformers_modules. The assert is the load-bearing part; without it a future
+transformers release that changes resolution order silently downgrades the golden reference.
 """
 
 from __future__ import annotations
@@ -40,14 +34,13 @@ class RemoteCodeResolutionError(RuntimeError):
 
 
 def assert_resolved_from_remote_code(obj: object, what: str) -> None:
-    """Fail loudly if `obj`'s class did not come from the hub's remote code."""
     module = type(obj).__module__
     if not module.startswith(REMOTE_MODULE_PREFIX):
         raise RemoteCodeResolutionError(
             f"{what} resolved to {module}.{type(obj).__name__}, not the remote code under "
-            f"{REMOTE_MODULE_PREFIX!r}. The native transformers `nomic_bert` implementation targets "
-            "nomic-embed-text-v1.5 -- it has no MoE, and it discards this checkpoint's expert "
-            "weights without raising. Pass trust_remote_code=True and code_revision."
+            f"{REMOTE_MODULE_PREFIX!r}. The native transformers nomic_bert implementation targets "
+            "nomic-embed-text-v1.5, has no MoE, and discards this checkpoint's expert weights "
+            "without raising. Pass trust_remote_code=True and code_revision."
         )
 
 
@@ -65,7 +58,7 @@ def load_hf_config(revision: str = MODEL_REVISION, code_revision: str = CODE_REV
 
 
 def load_hf_model(revision: str = MODEL_REVISION, code_revision: str = CODE_REVISION):
-    """The upstream model at the pinned revisions, in eval mode, guaranteed remote-code."""
+    """The upstream model at the pinned revisions, eval mode, guaranteed remote-code."""
     from transformers import AutoModel
 
     model = AutoModel.from_pretrained(
@@ -86,19 +79,15 @@ def hf_last_hidden_state(
     attention_mask: torch.Tensor,
     token_type_ids: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Run the upstream model.
-
-    `attention_mask` is required, not optional: upstream calls
-    `get_extended_attention_mask(attention_mask, ...)` unconditionally and raises
-    `AttributeError` on None. The vendored reference deliberately defaults it instead.
-    """
+    """attention_mask is required here, not optional: upstream calls
+    get_extended_attention_mask unconditionally and raises AttributeError on None."""
     with torch.no_grad():
         out = model(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids)
     return out.last_hidden_state
 
 
 def hf_layer_ladder(model, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> dict[str, torch.Tensor]:
-    """Capture `emb_ln` and every `encoder.layers.{i}` output from the upstream model."""
+    """Capture emb_ln and every encoder.layers.{i} output from the upstream model."""
     from models.experimental.nomic_embed_text_v2_moe.common import capture_hidden_states, layer_ladder_paths
 
     paths = layer_ladder_paths(model.config.n_layer)
