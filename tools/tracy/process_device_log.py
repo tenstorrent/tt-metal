@@ -22,6 +22,16 @@ import tracy.device_post_proc_config as device_post_proc_config
 
 SUM_MARKER_ID_START = 3000
 
+# Rows are read in batches of this size so that a capture never has to fit in memory whole.
+CSV_CHUNK_ROWS = 2000000
+
+# The zones a dispatch core reports, and the riscs that report them. Named here because both
+# the scan that recognises a dispatch core and the pass that reads its zones need the same names.
+DISPATCH_ZONE_NAME = "CQ-DISPATCH"
+PREFETCH_ZONE_NAME = "CQ-PREFETCH"
+DISPATCH_MASTER_RISC = "BRISC"
+DISPATCH_SUBORDINATE_RISC = "NCRISC"
+
 dispatchCores = set()
 
 
@@ -137,49 +147,58 @@ def import_device_profile_log(logPath):
     arch, freq, max_compute_cores = extract_device_info(logPath)
     devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq, max_compute_cores=max_compute_cores)))
 
-    df = pd.read_csv(logPath, skiprows=1, header=0, na_filter=False)
+    # A capture reports the same marker over and over, so each distinct one is built once here
+    # and handed to every row that reports it. A dict per row is what used to make reading a
+    # large log cost tens of gigabytes. Shared markers must stay read-only, so the cores whose
+    # markers are rewritten later are handed private copies by unshare_markers below.
+    markers = {}
 
-    # Convert trace_id and trace_id_count columns to integers
-    df.iloc[:, 8] = pd.to_numeric(df.iloc[:, 8], errors="coerce").fillna(-1).astype(int)  # trace_id
-    df.iloc[:, 9] = pd.to_numeric(df.iloc[:, 9], errors="coerce").fillna(-1).astype(int)  # trace_id_count
+    for df in pd.read_csv(logPath, skiprows=1, header=0, na_filter=False, chunksize=CSV_CHUNK_ROWS):
+        # Convert trace_id and trace_id_count columns to integers
+        df.iloc[:, 8] = pd.to_numeric(df.iloc[:, 8], errors="coerce").fillna(-1).astype(int)  # trace_id
+        df.iloc[:, 9] = pd.to_numeric(df.iloc[:, 9], errors="coerce").fillna(-1).astype(int)  # trace_id_count
 
-    for row in df.itertuples():
-        assert len(row) == 16
+        for row in df.itertuples():
+            assert len(row) == 16
 
-        chipID = row[1]
-        core = (row[2], row[3])
-        risc = row[4]
-        timerID = {"id": row[5], "zone_name": "", "type": "", "src_line": "", "src_file": ""}
-        timeData = row[6]
-        attachedData = 0
-        attachedData = row[7]
-        timerID["run_host_id"] = row[8]
-        timerID["trace_id"] = row[9]
-        timerID["trace_id_count"] = row[10]
-        timerID["zone_name"] = row[11]
-        timerID["type"] = row[12]
-        timerID["src_line"] = row[13]
-        timerID["src_file"] = row[14]
-        timerID["meta_data"] = row[15]
+            chipID = row[1]
+            core = (row[2], row[3])
+            risc = row[4]
+            markerKey = row[5:6] + row[8:16]
+            timerID = markers.get(markerKey)
+            if timerID is None:
+                timerID = markers[markerKey] = {
+                    "id": row[5],
+                    "zone_name": row[11],
+                    "type": row[12],
+                    "src_line": row[13],
+                    "src_file": row[14],
+                    "run_host_id": row[8],
+                    "trace_id": row[9],
+                    "trace_id_count": row[10],
+                    "meta_data": row[15],
+                }
+            timeData = row[6]
+            attachedData = row[7]
 
-        if chipID in devicesData["devices"]:
-            if core in devicesData["devices"][chipID]["cores"]:
-                if risc in devicesData["devices"][chipID]["cores"][core]["riscs"]:
-                    devicesData["devices"][chipID]["cores"][core]["riscs"][risc]["timeseries"].append(
-                        (timerID, timeData, attachedData)
-                    )
+            if chipID in devicesData["devices"]:
+                if core in devicesData["devices"][chipID]["cores"]:
+                    if risc in devicesData["devices"][chipID]["cores"][core]["riscs"]:
+                        devicesData["devices"][chipID]["cores"][core]["riscs"][risc]["timeseries"].append(
+                            (timerID, timeData, attachedData)
+                        )
+                    else:
+                        devicesData["devices"][chipID]["cores"][core]["riscs"][risc] = {
+                            "timeseries": [(timerID, timeData, attachedData)]
+                        }
                 else:
-                    devicesData["devices"][chipID]["cores"][core]["riscs"][risc] = {
-                        "timeseries": [(timerID, timeData, attachedData)]
+                    devicesData["devices"][chipID]["cores"][core] = {
+                        "riscs": {risc: {"timeseries": [(timerID, timeData, attachedData)]}}
                     }
             else:
-                devicesData["devices"][chipID]["cores"][core] = {
-                    "riscs": {risc: {"timeseries": [(timerID, timeData, attachedData)]}}
+                devicesData["devices"][chipID] = {
+                    "cores": {core: {"riscs": {risc: {"timeseries": [(timerID, timeData, attachedData)]}}}}
                 }
-        else:
-            devicesData["devices"][chipID] = {
-                "cores": {core: {"riscs": {risc: {"timeseries": [(timerID, timeData, attachedData)]}}}}
-            }
 
     def sort_timeseries(devicesData):
         for chipID, deviceData in devicesData["devices"].items():
@@ -189,9 +208,11 @@ def import_device_profile_log(logPath):
                     for marker, _, _ in riscData["timeseries"]:
                         # ERISC dispatch is EOL, some models still use it. Need to check and drop it here until it is fully removed.
                         if (
-                            "CQ-DISPATCH" in marker["zone_name"] or "CQ-PREFETCH" in marker["zone_name"]
+                            DISPATCH_ZONE_NAME in marker["zone_name"] or PREFETCH_ZONE_NAME in marker["zone_name"]
                         ) and "ERISC" not in risc:
                             dispatchCores.add((chipID, core))
+                if (chipID, core) in dispatchCores:
+                    unshare_markers(coreData)
 
     # Sort all timeseries
     sort_timeseries(devicesData)
@@ -295,9 +316,24 @@ def get_ops(timeseries):
     return ops
 
 
+def unshare_markers(coreData):
+    """Give a core its own copy of every marker it reports.
+
+    get_dispatch_core_ops rewrites the zone name of the markers that bound each dispatch zone,
+    in place, and the rest of the pipeline reads that rewrite back through each of the
+    timeseries the marker appears in. import_device_profile_log shares one marker between all
+    the rows reporting it, so the cores that get rewritten are unshared first and keep exactly
+    the aliasing they had when every row owned its own.
+    """
+    for riscData in coreData["riscs"].values():
+        timeseries = riscData["timeseries"]
+        for index, entry in enumerate(timeseries):
+            timeseries[index] = (dict(entry[0]),) + entry[1:]
+
+
 def get_dispatch_core_ops(timeseries):
-    masterRisc = "BRISC"
-    subordinateRisc = "NCRISC"
+    masterRisc = DISPATCH_MASTER_RISC
+    subordinateRisc = DISPATCH_SUBORDINATE_RISC
     riscData = {
         masterRisc: {"zone": [], "opID": 0, "cmdType": "", "ops": {}, "orderedOpIDs": [], "opFinished": False},
         subordinateRisc: {"zone": [], "opID": 0, "cmdType": "", "ops": {}, "orderedOpIDs": [], "opFinished": False},
