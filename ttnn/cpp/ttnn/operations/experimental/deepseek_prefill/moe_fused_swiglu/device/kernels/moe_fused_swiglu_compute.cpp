@@ -25,6 +25,7 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
@@ -142,6 +143,11 @@ constexpr uint32_t cb_gather_gate = CT(CB_GATHER_GATE);
 constexpr uint32_t cb_gather_up = CT(CB_GATHER_UP);
 constexpr uint32_t cb_slice_gate = CT(CB_SLICE_GATE);
 constexpr uint32_t cb_slice_up = CT(CB_SLICE_UP);
+#ifdef FUSE_BIAS
+constexpr uint32_t cb_gate_bias = CT(CB_GATE_BIAS);
+constexpr uint32_t cb_up_bias = CT(CB_UP_BIAS);
+constexpr uint32_t cb_down_bias = CT(CB_DOWN_BIAS);
+#endif
 constexpr uint32_t cb_h_slice = CT(CB_H_SLICE);
 
 constexpr uint32_t TILE_H = 32;
@@ -321,6 +327,64 @@ ALWI void fold_binary_act_blocked(uint32_t num_contributors, uint32_t n) {
     }
     cb_pop_front(GATE, num_contributors * n);
     cb_pop_front(UP, num_contributors * n);
+    cb_push_back(OUT, n);
+}
+#endif
+
+#if defined(FUSED_BINARY_ACT) && defined(FUSE_BIAS)
+// Biased twin of fold_binary_act_blocked. `add_tiles_bcast_rows` takes BOTH operands from CBs and
+// overwrites its dst rather than accumulating, so a (1, N) bias cannot be folded onto sums that are
+// still in DEST -- which is exactly what the bias-free fold keeps them in. This one therefore packs
+// the two reductions out and reloads them for the bias add, reintroducing the boundary that fold
+// exists to remove. The scratch is the slice CB pair, which only the SiLU path uses, so the detour
+// costs no L1; it is a separate function so the bias-free hot loop carries none of it.
+//
+// `slice_start` is this core's first tile in the block's flat `m * HN_PAD + n` layout, so the bias
+// column of slice tile j is `(slice_start + j) % HN_PAD` -- a scattered slice is not a contiguous
+// column range, which is why the bias CBs hold the column's whole HN_PAD window.
+template <uint32_t GATE, uint32_t UP, uint32_t OUT, uint32_t SG, uint32_t SU>
+ALWI void fold_binary_act_biased(
+    uint32_t num_contributors, uint32_t n, uint32_t slice_start, uint32_t cb_gbias, uint32_t cb_ubias) {
+    constexpr uint32_t OUTPUTS_PER_WINDOW = DEST_LIMIT / 2;
+    // Pass one: the same reductions, packed out instead of held in DEST. Pops both gather CBs by
+    // num_contributors * n, so the caller's drain accounting is unchanged.
+    fold_chain<SG, GATE>(num_contributors, n);
+    fold_chain<SU, UP>(num_contributors, n);
+
+    cb_wait_front(SG, n);
+    cb_wait_front(SU, n);
+    cb_reserve_back(OUT, n);
+    pack_reconfig_data_format(OUT);
+    for (uint32_t base = 0; base < n; base += OUTPUTS_PER_WINDOW) {
+        uint32_t width = n - base;
+        if (width > OUTPUTS_PER_WINDOW) {
+            width = OUTPUTS_PER_WINDOW;
+        }
+        tile_regs_acquire();
+        // Reconfig before init on both sides, for the reason fold_dest spells out: the unpacker's
+        // format registers still hold the previous operands.
+        reconfig_data_format(SG, cb_gbias);
+        add_bcast_rows_init(SG, cb_gbias);
+        for (uint32_t i = 0; i < width; ++i) {
+            add_tiles_bcast_rows(SG, cb_gbias, base + i, (slice_start + base + i) % HN_PAD, i);
+        }
+        reconfig_data_format(SU, cb_ubias);
+        add_bcast_rows_init(SU, cb_ubias);
+        for (uint32_t i = 0; i < width; ++i) {
+            add_tiles_bcast_rows(SU, cb_ubias, base + i, (slice_start + base + i) % HN_PAD, width + i);
+        }
+        for (uint32_t i = 0; i < width; ++i) {
+            BINARY_ACT_TILE(i, width + i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < width; ++i) {
+            pack_tile(i, OUT);
+        }
+        tile_regs_release();
+    }
+    cb_pop_front(SG, n);
+    cb_pop_front(SU, n);
     cb_push_back(OUT, n);
 }
 #endif
@@ -656,7 +720,12 @@ void kernel_main() {
                 // slices tile the ROOT's cb_h_local as they LAND, so the gather IS the assembly: no
                 // landing CB and no root-side copy.
                 if (slice_tiles) {
-#ifdef FUSED_BINARY_ACT
+#if defined(FUSED_BINARY_ACT) && defined(FUSE_BIAS)
+                    // slice_assigned hands out a contiguous range at `row * (t / w)`, so this
+                    // core's first tile in the block's flat layout is my_row * slice_tiles.
+                    fold_binary_act_biased<cb_gather_gate, cb_gather_up, cb_h_slice, cb_slice_gate, cb_slice_up>(
+                        KGROUPS, slice_tiles, my_row * slice_tiles, cb_gate_bias, cb_up_bias);
+#elif defined(FUSED_BINARY_ACT)
                     fold_binary_act_blocked<cb_gather_gate, cb_gather_up, cb_h_slice>(KGROUPS, slice_tiles);
 #else
                     // Inherits phase 1's hoisted cb_gate_acc pack format, which is correct exactly

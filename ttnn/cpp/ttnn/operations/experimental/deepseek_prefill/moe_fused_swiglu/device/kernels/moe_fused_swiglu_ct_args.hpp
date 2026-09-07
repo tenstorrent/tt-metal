@@ -49,7 +49,8 @@
     X(CB_X_IN) X(CB_X_TILES) X(CB_X_STAGE) X(CB_MAILBOX_COMPUTE) X(CB_W_GATE) X(CB_W_UP) X(CB_W_DOWN) \
     X(CB_GATE_ACC) X(CB_UP_ACC) X(CB_GATE_SILU) X(CB_H_LOCAL) X(CB_H) \
     X(CB_OUT_INTERM) X(CB_OUT_TILES) \
-    X(CB_GATHER_GATE) X(CB_GATHER_UP) X(CB_SLICE_GATE) X(CB_SLICE_UP) X(CB_H_SLICE)
+    X(CB_GATHER_GATE) X(CB_GATHER_UP) X(CB_SLICE_GATE) X(CB_SLICE_UP) X(CB_H_SLICE) \
+    X(CB_GATE_BIAS) X(CB_UP_BIAS) X(CB_DOWN_BIAS)
 // clang-format on
 
 // `CT(NAME)` reads the argument by name; `Ct::COUNT` is the length of the scalar block, i.e. the
