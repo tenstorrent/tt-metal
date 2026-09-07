@@ -999,14 +999,16 @@ def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
     _int_unary_stimuli_spec this cannot stay positive-only. (The positive-only rule over
     there is about ops that are also read as unsigned, which is a different constraint.)
 
-    Negative *inputs* are fine on their own: SFPSWAP orders operands as sign+magnitude, and
-    for a non-negative threshold that misreading cannot change the outcome, because any
-    negative input is below the threshold under either encoding. What negative inputs do
-    expose, once the *threshold* is also negative, is that the kernel loads them under
-    InstrModLoadStore::INT32_2S_COMP, which loads **raw** rather than converting -- so the
-    compare sees a two's-complement input against a sign+magnitude threshold. That is the
-    unsupported path this sweep deliberately drives, and why the negative-threshold cases
-    below are xfailed. See https://github.com/tenstorrent/tt-metal/issues/55643.
+    Negative inputs and a negative threshold matter independently, which is worth keeping
+    straight. Negative *inputs* alone are harmless: the compare orders operands as
+    sign+magnitude, but for a non-negative threshold that ordering cannot change the
+    outcome, because a negative input loses under either encoding. Only once the *threshold*
+    is negative too does the encoding of the two operands have to actually agree.
+
+    On both arches it currently does not, which is the unsupported path this sweep
+    deliberately drives and why the negative cases below are xfailed -- the mechanism
+    differs per arch and is tabulated at that marker.
+    See https://github.com/tenstorrent/tt-metal/issues/55643.
     """
     straddle = [float(threshold + d) for d in (-2, -1, 0, 1, 2)]
     # A decade either side, so the comparison is exercised well away from the boundary too.
@@ -1055,17 +1057,34 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
     #
     # Nothing ships on this path: no Compute API entry point passes a negative integer
     # threshold (relu_tile_int32 passes 0, relu_min_tile_int32 routes to relu_clamp_int), and
-    # the harness itself hard-coded 5u until this test parametrized it. Wormhole-scoped
-    # because this is the raw-TTI kernel; Blackhole's _relu_min_ is plain sfpi and is
-    # expected to handle a negative threshold correctly -- if it does not, that is a real
-    # Blackhole finding and should surface as a failure rather than be pre-excused.
-    if threshold < 0 and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
+    # the harness itself hard-coded 5u until this test parametrized it.
+    #
+    # Both arches fail, for different reasons, and both return the *sign+magnitude* encoding
+    # of the threshold instead of its two's-complement value:
+    #
+    #   Wormhole   raw TTI. The vInt branch hand-re-encodes the threshold to sign+magnitude
+    #              for SFPSWAP, correctly, but loads the input with
+    #              InstrModLoadStore::INT32_2S_COMP, which loads raw -- so the compare comes
+    #              out against a two's-complement input. Threshold -5 returns 0x80000005.
+    #   Blackhole  plain sfpi, and no instruction mode to get wrong -- but _relu_min_impl_
+    #              reads DEST as a bare sfpi::dst_reg[0], with no .mode<DataLayout::I32>()
+    #              to request the converting layout. Dst holds int32 as sign+magnitude (see
+    #              _int_unary_stimuli_spec, which stays positive-only for exactly this
+    #              reason), so a negative threshold does not survive the round trip.
+    #              Threshold -1000 returns 0x800003E8, measured in CI on bh_p150b.
+    #
+    # Non-strict, so the case still executes and reports XPASS per arch as each is fixed.
+    if threshold < 0 and TestConfig.CHIP_ARCH in (
+        ChipArchitecture.WORMHOLE,
+        ChipArchitecture.BLACKHOLE,
+    ):
         request.node.add_marker(
             pytest.mark.xfail(
-                reason="Wormhole _relu_min_ vInt branch mishandles a negative threshold: the "
-                "sign+magnitude re-encoding wins every comparison and is stored raw "
-                "(threshold -5 returns 0x80000005). Unreached before this test; no shipping "
-                "op passes a negative integer threshold. Measurements for both encodings: "
+                reason="relu_min's vInt branch returns the sign+magnitude encoding of a "
+                "negative threshold instead of its value: Wormhole 0x80000005 for -5 "
+                "(wrong SFPLOAD instruction mode), Blackhole 0x800003E8 for -1000 (no "
+                "converting sfpi DataLayout on the DEST access). Unreached before this "
+                "test; no shipping op passes a negative integer threshold. "
                 "https://github.com/tenstorrent/tt-metal/issues/55643",
                 strict=False,
             )
