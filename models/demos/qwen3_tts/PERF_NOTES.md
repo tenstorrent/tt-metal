@@ -504,7 +504,7 @@ Every decode matmul is M=1 tile and weight-bandwidth bound, and they are already
 of Wormhole's 288 GB/s**. No program config beats a bandwidth wall. The only lever that moves
 a bandwidth-bound matmul is fewer weight bytes.
 
-#### bfloat8_b weights — `QWEN3_TTS_BF8_WEIGHTS=1`, default OFF
+#### bfloat8_b weights — `QWEN3_TTS_BF8_WEIGHTS`, default ON (`=0` to revert)
 
 Covers the DRAM-sharded CP weights (qkv / o_proj / gate / up / down) and the Talker's decoder
 layers. RMSNorm weights stay bf16. Measured per shape in isolation on N150, traced:
@@ -527,13 +527,17 @@ End to end:
 | N150 bf16 | 23.81 ms | 48.06 ms | **fails both** |
 | N150 bfp8 | **20.44 ms** | **42.10 ms** | **passes** |
 | N300 bf16 | 19.32 ms | 42.12 ms | passes |
-| N300 bfp8 | 18.21 ms | 40.42 ms | **fails — 40.42 is BELOW the 41.13 lower bound** |
+| N300 bfp8 | 18.21 ms | 40.42 ms | now the default; golden re-measured to 40.1 (was 43.3, failed from below) |
 
 Traced N150 AR frame 46.30 -> 39.88 ms (-13.9 %). Note the last row: the gate is a tight
 bidirectional band, so making the model faster breaks it from the other side. Promoting this
 flag means re-measuring the goldens, not just flipping a default.
 
-**Accuracy, and why it is still default OFF.** On the demo prompt at seed 42, N150: SIM
+**Accuracy.** Promoted to default ON. The gate golden was re-measured with it
+(`EXPECTED_STEADY_MS_PER_FRAME` 43.3 -> 40.1; four N300 runs 40.01/40.26/40.09/40.05).
+What this promotion did NOT do, and what is still owed before treating it as certified:
+the >= 8-seed frame-count + WER sweep, and a listen. Read the rest of this section as the
+open risk register, not as clearance. On the demo prompt at seed 42, N150: SIM
 0.8662 -> 0.8997, WER 9.1 % in both arms (and that 9.1 % is entirely a typo in the prompt — the
 ASR hears the right words), no clipping and no sample-jump artifacts in either. **Do not read
 that SIM move as an improvement: it is inside the noise.** See the variance baseline below —

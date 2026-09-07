@@ -627,7 +627,7 @@ class CodePredictor(LightweightModule):
         # bytes is the only lever with real headroom left -- no program config can beat
         # a bandwidth wall. RMSNorm weights stay bf16 (small, dynamic-range sensitive).
         # This is an ACCURACY change, hence default off; see PERF_NOTES 2.8.
-        _ds_dtype = ttnn.bfloat8_b if os.environ.get("QWEN3_TTS_BF8_WEIGHTS", "0") == "1" else ttnn.bfloat16
+        _ds_dtype = ttnn.bfloat8_b if os.environ.get("QWEN3_TTS_BF8_WEIGHTS", "1") != "0" else ttnn.bfloat16
 
         # DRAM-sharded MLP weights on every SKU. QKV / o_proj DS weights are N150-only.
         for li, lw in enumerate(self.layers_w):
