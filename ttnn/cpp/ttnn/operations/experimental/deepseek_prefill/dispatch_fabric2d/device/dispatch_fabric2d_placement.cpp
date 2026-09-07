@@ -36,6 +36,7 @@ StreamPlacements decide_device_placement(
     const auto self_node = mesh->get_fabric_node_id(coord);
 
     std::map<StreamId, WorkerCandidate> candidates;
+    std::map<StreamId, tt::tt_metal::CoreCoord> eth_core_of;
     for (int delta : {1, -1}) {
         const auto nbr = coord.get_neighbor(
             mesh->shape(), delta, static_cast<int32_t>(axis), ttnn::MeshCoordinate::BoundaryMode::WRAP);
@@ -58,12 +59,33 @@ StreamPlacements decide_device_placement(
             // links[k], not k: the returned indices are the forwarding-capable subset of the
             // direction's channels, so an ordinal is not a link index.
             const uint32_t link_idx = links[k];
+            const auto eth_core = tt::tt_fabric::get_forwarding_eth_core(self_node, nbr_node, link_idx);
             uint32_t noc_hops = 0;
-            const tt::tt_metal::CoreCoord worker = tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(
-                dev, tt::tt_fabric::get_forwarding_eth_core(self_node, nbr_node, link_idx), SENDER_NOC, noc_hops);
-            candidates.emplace(
-                make_stream_id(k, delta == 1), WorkerCandidate{worker, noc_hops, *nbr, nbr_node, link_idx});
+            const tt::tt_metal::CoreCoord worker =
+                tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(dev, eth_core, SENDER_NOC, noc_hops);
+            const StreamId stream = make_stream_id(k, delta == 1);
+            eth_core_of[stream] = eth_core;
+            candidates.emplace(stream, WorkerCandidate{worker, noc_hops, *nbr, nbr_node, link_idx});
         }
+    }
+
+    // Every send is a single hop, so the two directions must leave by different cables. On an axis that
+    // is not wrap-wired the "neighbour" one way round is the far end of the line, and its route's first
+    // hop leaves by the SAME eth core as the other direction -- so both streams would open a connection
+    // on one EDM channel, which stores a single worker_xy and deadlocks both of them permanently at open.
+    // Catching it here turns a 32-chip hang into a message.
+    for (uint32_t k = 0; k < num_links; k++) {
+        const StreamId cw = make_stream_id(k, true);
+        const StreamId ccw = make_stream_id(k, false);
+        TT_FATAL(
+            eth_core_of.at(cw) != eth_core_of.at(ccw),
+            "dispatch_fabric2d {}: link {} leaves by eth core {} in both directions, so axis {} is not "
+            "wrap-wired. This op sends single hops around a ring; run it on a topology that wraps that "
+            "axis (e.g. FABRIC_2D_TORUS_Y or _TORUS_XY), not a line or mesh.",
+            self_node,
+            k,
+            eth_core_of.at(cw),
+            axis);
     }
 
     StreamPlacements placements;
