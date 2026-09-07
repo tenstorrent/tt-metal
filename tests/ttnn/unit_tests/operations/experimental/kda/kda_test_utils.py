@@ -37,14 +37,47 @@ def _pcc(expected: torch.Tensor, actual: torch.Tensor) -> float:
     return float(torch.dot(expected_centered, actual_centered) / denominator)
 
 
+def _relative_rmse(expected: torch.Tensor, actual: torch.Tensor) -> float:
+    """RMS error as a fraction of the signal's own RMS.
+
+    PCC is a correlation, so it is dominated by the bulk of a tensor and can stay
+    above 0.999 while a small region is badly wrong -- eleven wrong rows in 1280
+    passed a PCC gate here. Relative RMSE grows with the error's total energy, so
+    it registers a localised fault that PCC averages away, and being normalised it
+    needs no per-tensor threshold.
+    """
+    if not expected.numel():
+        return 0.0
+    difference = (expected.float() - actual.float()).pow(2).mean().sqrt()
+    scale = expected.float().pow(2).mean().sqrt()
+    return float(difference / scale) if float(scale) > 0 else float(difference)
+
+
 def assert_accurate(
     expected: torch.Tensor,
     actual: torch.Tensor,
     *,
     name: str = "accuracy",
     pcc_threshold: float = 0.999,
+    rmse_threshold: float = 0.05,
+    linf_threshold: float | None = None,
 ) -> float:
-    """Require matching metadata, finite tensors, and PCC at or above a threshold."""
+    """Require matching metadata, finite tensors, PCC, relative RMSE and relative L-inf.
+
+    Three metrics because they fail differently. PCC is a correlation and RMSE is a
+    mean, so both average over the whole tensor: eleven wrong rows in 1280 held PCC
+    at 0.9996 and lifted relative RMSE only from 1.3e-2 to 1.6e-2, inside the BF16
+    output's own noise. Relative L-inf does not average, and on the same data it
+    separated cleanly -- 1.6e-2 when correct against 1.3e-1 to 2.7e-1 when a few
+    rows were fed the wrong carry. That is the failure mode this layer keeps
+    producing, so the peak matters more than the mean.
+
+    Relative L-inf is always reported but gated only when ``linf_threshold`` is
+    given, because a peak divided by a whole-tensor RMS
+    depends on how concentrated the signal is: correct runs here span 1.4e-2 on a
+    convolution carry to 1.6e+0 on a recurrent state, so no single bound is both
+    safe and useful. Pass the clean value you measured for the tensor at hand.
+    """
     failures = []
     if expected.shape != actual.shape:
         failures.append(f"{name} shape {tuple(actual.shape)} != {tuple(expected.shape)}")
@@ -58,12 +91,22 @@ def assert_accurate(
         raise AssertionError("\n".join(failures))
 
     pcc = _pcc(expected, actual)
+    rmse = _relative_rmse(expected, actual)
     max_abs = float((expected.float() - actual.float()).abs().max()) if expected.numel() else 0.0
+    scale = float(expected.float().pow(2).mean().sqrt()) if expected.numel() else 0.0
+    linf = max_abs / scale if scale > 0 else max_abs
     print(expected_summary)
     print(actual_summary)
-    print(f"{name}: PCC={pcc:.6f}, max_abs={max_abs:.6e}")
+    print(f"{name}: PCC={pcc:.6f}, rel_RMSE={rmse:.3e}, rel_Linf={linf:.3e}, max_abs={max_abs:.6e}")
     if pcc < pcc_threshold:
         raise AssertionError(f"{name} PCC {pcc:.6f} < {pcc_threshold}")
+    if rmse > rmse_threshold:
+        raise AssertionError(f"{name} relative RMSE {rmse:.3e} > {rmse_threshold:.3e}")
+    if linf_threshold is not None and linf > linf_threshold:
+        raise AssertionError(
+            f"{name} relative L-inf {linf:.3e} > {linf_threshold:.3e} (max_abs {max_abs:.3e}) -- "
+            "a localised fault, typically a few rows given the wrong carry"
+        )
     return pcc
 
 

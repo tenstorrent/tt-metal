@@ -77,6 +77,14 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         attrs.groups_per_head,
         attrs.batch_heads);
     TT_FATAL(
+        attrs.chunk_start < attrs.num_chunks &&
+            attrs.chunk_start + (attrs.chunk_count == 0 ? 0 : attrs.chunk_count) <= attrs.num_chunks,
+        "{}: chunk range [{}, +{}) must fit in {} chunks",
+        operation_name,
+        attrs.chunk_start,
+        attrs.chunk_count,
+        attrs.num_chunks);
+    TT_FATAL(
         attrs.wrap_chunk < attrs.groups_per_head * attrs.num_chunks,
         "{}: wrap_chunk {} must be inside the local chunk count {}",
         operation_name,
@@ -105,8 +113,6 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         TT_FATAL(in.initial_state.has_value(), "{}: initial_state is required", operation_name);
         check_protocol_tensor(*in.initial_state, "initial_state", false, operation_name);
         check_same_device(in.v_beta, *in.initial_state, operation_name, "initial_state");
-        // A wrap adds one entry-state slot: the straddling group needs both a
-        // chunk-0 seed and a mid-group reload seed.
         check_shape(*in.initial_state, Shape({BH, K, V}), "initial_state", operation_name);
         // The wrap needs no extra entry slot. The head seed is this chip's own entry
         // state; the tail seed is the prefix's final carry, which every chip already
@@ -195,6 +201,8 @@ std::vector<Tensor> recurrent_chunk_scan(
     RecurrentChunkScanMode mode,
     uint32_t groups_per_head,
     uint32_t wrap_chunk,
+    uint32_t chunk_start,
+    uint32_t chunk_count,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     const auto& value_shape = v_beta.logical_shape();
@@ -210,6 +218,8 @@ std::vector<Tensor> recurrent_chunk_scan(
             .value_dim = value_shape[3],
             .groups_per_head = groups_per_head,
             .wrap_chunk = wrap_chunk,
+            .chunk_start = chunk_start,
+            .chunk_count = chunk_count,
             .mode = mode,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},

@@ -140,7 +140,8 @@ def run_summary(
     protocol: Sequence[ttnn.Tensor],
     *,
     groups_per_head: int = 1,
-    wrap_chunk: int = 0,
+    chunk_start: int = 0,
+    chunk_count: int = 0,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> list[ttnn.Tensor]:
@@ -148,7 +149,8 @@ def run_summary(
         return ttnn.experimental.kda.summarize_chunk_recurrence(
             *protocol,
             groups_per_head=groups_per_head,
-            wrap_chunk=wrap_chunk,
+            chunk_start=chunk_start,
+            chunk_count=chunk_count,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
         )
@@ -204,9 +206,16 @@ def assert_outputs_accurate(
     names: Sequence[str],
     context: str,
     pcc_threshold: float = 0.999,
+    linf_threshold: float | None = None,
 ) -> None:
     for name, golden, actual_tt in zip(names, expected, actual, strict=True):
-        assert_accurate(golden, ttnn.to_torch(actual_tt), name=f"{context} {name}", pcc_threshold=pcc_threshold)
+        assert_accurate(
+            golden,
+            ttnn.to_torch(actual_tt),
+            name=f"{context} {name}",
+            pcc_threshold=pcc_threshold,
+            linf_threshold=linf_threshold,
+        )
 
 
 def one_core_height_sharded(shape: tuple[int, int]) -> ttnn.MemoryConfig:

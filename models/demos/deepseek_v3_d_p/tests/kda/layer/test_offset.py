@@ -45,6 +45,16 @@ pytestmark = [
 
 SEQUENCE = 1280
 PCC_THRESHOLD = 0.999
+# Peak error relative to each tensor's own RMS, which PCC and RMSE both average
+# away: a per-device leak that gave eleven rows of 1280 the wrong carry held PCC
+# at 0.9996 but lifted the output's peak absolute error from 1.6e-2 to between
+# 1.3e-1 and 2.7e-1. The bounds below are the worst clean value measured over
+# every offset in this file, with headroom; they differ because the three tensors
+# concentrate their signal differently, and one loose bound would leave the
+# output -- where that fault appeared -- ungated.
+OUTPUT_LINF_THRESHOLD = 0.25  # clean 8.5e-2
+STATE_LINF_THRESHOLD = 0.6  # clean 3.2e-1
+CONVOLUTION_LINF_THRESHOLD = 0.1  # clean 1.4e-2
 
 
 def _mla_row_permutation(actual_start: int, sp_size: int, local_rows: int) -> torch.Tensor:
@@ -117,7 +127,13 @@ def _assert_matches_reference(
     natural_output = torch.empty_like(rotated_output)
     natural_output[:, permutation, :] = rotated_output
 
-    assert_accurate(expected_output, natural_output, name=f"{label} output", pcc_threshold=PCC_THRESHOLD)
+    assert_accurate(
+        expected_output,
+        natural_output,
+        name=f"{label} output",
+        pcc_threshold=PCC_THRESHOLD,
+        linf_threshold=OUTPUT_LINF_THRESHOLD,
+    )
 
     expected_convolution = torch.cat(
         (expected_state.q_convolution, expected_state.k_convolution, expected_state.v_convolution), dim=-1
@@ -131,12 +147,14 @@ def _assert_matches_reference(
             reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tp_axis, sp_rank),
             name=f"{label} sp_rank={sp_rank} recurrent",
             pcc_threshold=PCC_THRESHOLD,
+            linf_threshold=STATE_LINF_THRESHOLD,
         )
         assert_accurate(
             expected_convolution,
             reconstruct_convolution_at_sp_rank(state.convolution, mesh_device, sp_axis, tp_axis, sp_rank, local_width),
             name=f"{label} sp_rank={sp_rank} convolution",
             pcc_threshold=PCC_THRESHOLD,
+            linf_threshold=CONVOLUTION_LINF_THRESHOLD,
         )
 
 
