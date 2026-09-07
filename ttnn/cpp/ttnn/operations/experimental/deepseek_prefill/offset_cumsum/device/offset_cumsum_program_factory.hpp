@@ -15,7 +15,7 @@
 namespace ttnn::experimental::prim {
 
 struct OffsetCumsumProgramFactory {
-    using tensor_return_value_t = std::array<Tensor, 3>;
+    using tensor_return_value_t = std::array<Tensor, 4>;
 
     // Per-coord program build.  `mesh_dispatch_coordinate` is required: this op
     // bakes a per-device `row_idx` (derived from cluster_axis) into the reader's

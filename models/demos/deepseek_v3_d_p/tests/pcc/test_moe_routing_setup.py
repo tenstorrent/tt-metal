@@ -233,6 +233,7 @@ def test_prep_dispatch_combine(
         tt_expert_token_counts,
         tt_expert_region_offsets,
         tt_per_device_expert_counter,
+        _tt_all_dispatch_offsets,
     ) = tt_gate_outputs(
         ttnn_top_k_experts_indices=tt_indices,
         num_routed_experts=num_routed_experts,

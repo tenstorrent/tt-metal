@@ -115,6 +115,14 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
 
+// returns the logical ethernet core on src that link_idx forwards through toward dst. link_idx is an
+// element of get_forwarding_link_indices(src, dst) -- not an ordinal into it -- and is the same index
+// append_fabric_connection_rt_args takes, so the two resolve the same channel.
+// Unlike get_forwarding_link_indices, which returns {} when src cannot reach dst, this throws: on no
+// forwarding direction, and on a link_idx that direction cannot forward to.
+tt::tt_metal::CoreCoord get_forwarding_eth_core(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t link_idx);
+
 FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id);
 
 std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(

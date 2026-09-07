@@ -678,7 +678,7 @@ class TtMoe(LightweightModule):
             actual_start=actual_start or 0,
         )
 
-        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
+        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _, _ = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
             num_experts_per_tok=self.num_experts_per_tok,

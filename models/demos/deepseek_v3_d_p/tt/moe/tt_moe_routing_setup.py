@@ -95,13 +95,41 @@ This is a TTNN wrapper around two device operations executed in sequence:
                all source devices in a dispatch group). Useful when callers need the
                destination-side expert region layout without the per-source-device local
                offset mixed in.
+             all_global_dispatch_offsets
+               Shape per device: (dispatch_group_size, num_routed_experts), uint32,
+               interleaved DRAM, replicated along the dispatch axis. Row k is device k's
+               global_dispatch_offsets, which makes a run's length readable on any device in
+               the group and not only on the one that wrote it or the one that receives it.
+               Rows are absolute positions in the destination buffer, so they carry the
+               expert_region component:
+                   count(k, e) = row[k+1][e] - row[k][e]                     for k < H-1
+                   count(H-1, e) = total_counts_per_expert[e]
+                                   + expert_region_offsets[e] - row[H-1][e]
+               Closing the last row with total_counts_per_expert alone is wrong for every
+               expert that is not first in its chip group.
 """
+
+from typing import NamedTuple
 
 import torch
 from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+
+class MoERoutingOutputs(NamedTuple):
+    """Outputs of TtMoERoutingSetup.forward().
+
+    A NamedTuple so positional unpacking keeps working while a consumer that wants one tensor can
+    name it -- these are five same-dtype uint32 tensors, so a mis-ordered unpack is otherwise silent.
+    """
+
+    global_dispatch_offsets: ttnn.Tensor
+    total_counts_per_expert: ttnn.Tensor
+    expert_region_offsets: ttnn.Tensor
+    expert_histograms: ttnn.Tensor
+    all_global_dispatch_offsets: ttnn.Tensor
 
 
 class TtMoERoutingSetup(LightweightModule):
@@ -189,6 +217,11 @@ class TtMoERoutingSetup(LightweightModule):
                 Shape per device: (1, num_routed_experts), uint32
             expert_histograms: Per-device token count per expert (before cross-chip aggregation).
                 Shape per device: (num_routed_experts,), uint32
+            all_global_dispatch_offsets: global_dispatch_offsets for every source device.
+                Shape per device: (dispatch_group_size, num_routed_experts), uint32, replicated
+                along the dispatch axis. Row k is what device k receives in
+                global_dispatch_offsets, so any chip in the group can size a run it neither wrote
+                nor receives. See the module docstring for how to close the last row.
         """
 
         if isinstance(ttnn_top_k_experts_indices, torch.Tensor):
@@ -225,6 +258,7 @@ class TtMoERoutingSetup(LightweightModule):
             global_dispatch_offsets,
             total_counts_per_expert,
             expert_region_offsets,
+            all_global_dispatch_offsets,
         ) = ttnn.experimental.deepseek_prefill.offset_cumsum(
             expert_histograms,
             cluster_axis=0,
@@ -237,4 +271,10 @@ class TtMoERoutingSetup(LightweightModule):
             use_l1_small_for_semaphores=self.use_l1_small_for_semaphores,
         )
 
-        return global_dispatch_offsets, total_counts_per_expert, expert_region_offsets, expert_histograms
+        return MoERoutingOutputs(
+            global_dispatch_offsets,
+            total_counts_per_expert,
+            expert_region_offsets,
+            expert_histograms,
+            all_global_dispatch_offsets,
+        )

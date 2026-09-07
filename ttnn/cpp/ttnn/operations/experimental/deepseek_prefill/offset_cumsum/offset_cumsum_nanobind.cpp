@@ -21,11 +21,11 @@ void bind_experimental_offset_cumsum_operation(nb::module_& mod) {
             performs all_gather along the specified cluster_axis to produce a 2D tensor
             [num_devices, n_routed_experts], then computes:
               1. Local offsets: shifted prefix sum across devices (row k = sum of rows 0..k-1)
-              2. Expert region offsets: exclusive prefix sum of total counts within each
+              2. Expert region offsets: exclusive prefix sum of tile-aligned total counts within each
                  chip's expert group (experts_per_chip stride)
               3. Global offsets: local offsets + expert region offsets
 
-            Returns a tuple of three UINT32 tensors:
+            Returns a tuple of four UINT32 tensors:
               - global_dispatch_offsets: shape [1, n_routed_experts] combining local and
                 expert region offsets for this device.
               - total_counts_per_expert: shape [1, n_routed_experts] containing the total count
@@ -34,6 +34,12 @@ void bind_experimental_offset_cumsum_operation(nb::module_& mod) {
                 region component (shared across all source devices in a dispatch group):
                 exclusive prefix sum of tile-aligned total counts within each chip's expert
                 group.
+              - all_global_dispatch_offsets: shape [devices along cluster_axis, n_routed_experts],
+                replicated along cluster_axis. Row k is what device k receives in
+                global_dispatch_offsets, so any device can size a run it neither wrote nor
+                receives. Rows are absolute buffer positions and so include the expert region
+                component: device k's count for expert e is row[k+1][e] - row[k][e], and for the
+                last row total_counts_per_expert[e] + expert_region_offsets[e] - row[k][e].
 
             Args:
                 * :attr:`input_tensor`: 1D UINT32 tensor of expert counts [n_routed_experts].

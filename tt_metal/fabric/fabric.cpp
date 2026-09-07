@@ -114,6 +114,30 @@ std::vector<FabricType> get_all_mgd_fabric_types() {
 extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor);
 #endif
 
+// Which direction data leaves src by to reach dst. 2D routing answers from the routing tables; 1D has to
+// scan neighbours instead, because those tables carry no wraparound links (#22524). Callers that resolve an
+// eth core and callers that open a connection must agree, so both go through here.
+std::optional<RoutingDirection> resolve_forwarding_direction(
+    const ControlPlane& control_plane, const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
+    if (control_plane.get_fabric_context().is_2D_routing_enabled()) {
+        return control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    }
+
+    for (const auto& direction : FabricContext::routing_directions) {
+        // This assumes all neighbor chips to the dst mesh are the same
+        auto neighbors = control_plane.get_chip_neighbors(src_fabric_node_id, direction);
+        auto neighbor_mesh_chips = neighbors.find(dst_fabric_node_id.mesh_id);
+        if (neighbor_mesh_chips == neighbors.end() ||
+            (std::find(
+                 neighbor_mesh_chips->second.begin(), neighbor_mesh_chips->second.end(), dst_fabric_node_id.chip_id) ==
+             neighbor_mesh_chips->second.end())) {
+            continue;
+        }
+        return direction;
+    }
+    return std::nullopt;
+}
+
 template <typename ProgramOrDescriptor>
 void append_fabric_connection_rt_args(
     const FabricNodeId& src_fabric_node_id,
@@ -143,30 +167,8 @@ void append_fabric_connection_rt_args(
             dst_fabric_node_id);
     }
 
-    // get the direction in which the data will be forwarded from the src_fabric_node_id
-    std::optional<RoutingDirection> forwarding_direction;
-    if (is_2d_fabric) {
-        forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
-    } else {
-        // TODO: Workaround for #22524 routing tables not having wraparound links
-        // for 1D fabric, we loop to match the dst chip since we need to ensure src and dst are on the same line
-        // remove this once control plane has row/col info/view
-        for (const auto& direction : FabricContext::routing_directions) {
-            // This assumes all neighbor chips to the dst mesh are the same
-            auto neighbors = control_plane.get_chip_neighbors(src_fabric_node_id, direction);
-            auto neighbor_mesh_chips = neighbors.find(dst_fabric_node_id.mesh_id);
-            if (neighbor_mesh_chips == neighbors.end() ||
-                (std::find(
-                     neighbor_mesh_chips->second.begin(),
-                     neighbor_mesh_chips->second.end(),
-                     dst_fabric_node_id.chip_id) == neighbor_mesh_chips->second.end())) {
-                continue;
-            }
-
-            forwarding_direction = direction;
-            break;
-        }
-    }
+    const auto forwarding_direction =
+        resolve_forwarding_direction(control_plane, src_fabric_node_id, dst_fabric_node_id);
     TT_FATAL(
         forwarding_direction.has_value(),
         "Could not find any forwarding direction from src {} to dst {}",
@@ -504,6 +506,48 @@ std::vector<uint32_t> get_forwarding_link_indices(
 
     return get_forwarding_link_indices_in_direction(
         control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+}
+
+tt::tt_metal::CoreCoord get_forwarding_eth_core(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t link_idx) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto forwarding_direction =
+        resolve_forwarding_direction(control_plane, src_fabric_node_id, dst_fabric_node_id);
+    TT_FATAL(
+        forwarding_direction.has_value(),
+        "Could not find any forwarding direction from src {} to dst {}",
+        src_fabric_node_id,
+        dst_fabric_node_id);
+
+    const auto eth_chans =
+        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
+    TT_FATAL(
+        link_idx < eth_chans.size(),
+        "Requested link index {} is out of bounds. {} ethernet channels available to forward b/w src {} and dst {}",
+        link_idx,
+        eth_chans.size(),
+        src_fabric_node_id,
+        dst_fabric_node_id);
+
+    // Only a subset of the direction's channels can forward to dst, so bounds alone would let a plain
+    // 0..num_links counter resolve a channel the fabric never routes through. Same check the connection
+    // path makes, so an index accepted here is one a connection would accept.
+    const auto forwarding_links = get_forwarding_link_indices_in_direction(
+        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+    TT_FATAL(
+        std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
+        "Requested link index {} cannot be used for forwarding b/w src {} and dst {}. Valid forwarding links are {}",
+        link_idx,
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        forwarding_links);
+
+    const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+    const auto core = tt::tt_metal::MetalContext::instance()
+                          .get_cluster()
+                          .get_soc_desc(physical_chip_id)
+                          .get_eth_core_for_channel(eth_chans[link_idx], CoordSystem::LOGICAL);
+    return {core.x, core.y};
 }
 
 tt::tt_fabric::Topology get_fabric_topology() {
