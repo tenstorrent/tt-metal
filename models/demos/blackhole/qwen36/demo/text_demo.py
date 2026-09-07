@@ -200,6 +200,7 @@ def _blocks_for(seqlen, max_generated_tokens):
     "seqlen, max_generated_tokens, use_trace, batch, repeat_batches",
     [
         pytest.param(128, 50, True, 1, 1, id="traced_128"),
+        pytest.param(128, 8, True, 1, 1, id="traced_128_g8"),  # short decode run for device-profiler runs
         pytest.param(4096, 100, True, 1, 1, id="traced_4k"),
         pytest.param(8192, 100, True, 1, 1, id="traced_8k"),
         pytest.param(16384, 100, True, 1, 1, id="traced_16k"),
@@ -374,6 +375,14 @@ def _should_use_chunked_trace(model):
     )
 
 
+def _profiler_flush(model):
+    """QWEN36_DEMO_PROFILER_FLUSH=1: read out the device profiler buffers at each phase boundary so a 64-layer prefill does
+    not fill them before the decode steps (tracy -r otherwise drops every marker after 'Profiler DRAM buffers were full').
+    """
+    if os.environ.get("QWEN36_DEMO_PROFILER_FLUSH") == "1":
+        ttnn.ReadDeviceProfiler(model.mesh_device)
+
+
 def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks):
     """TP generation: traced chunk-outer prefill + paged decode. Returns (tokens, perf_dict)."""
     vocab = model.args.vocab_size
@@ -396,6 +405,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     CHUNK = 2048
     t_cap = time.time()
     signpost("compile_prefill")
+    _profiler_flush(model)
     profiler.start("compile_prefill")
     model.capture_prefill_trace_chunked(model.mesh_device, page_table, chunk_size=CHUNK)
     profiler.end("compile_prefill")
@@ -437,6 +447,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     # Chunk-outer prefill; TTFT includes first-token sampling
     t0 = time.time()
     signpost("inference_prefill")
+    _profiler_flush(model)
     profiler.start("inference_prefill")
     logits_dev = model.prefill_traced_chunked(token_ids[:, :T], page_table, actual_len=T)
     ttnn.synchronize_device(model.device)
@@ -573,6 +584,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     tt_tok = None
     tt_idx = tt_val = None
     signpost("compile_decode")
+    _profiler_flush(model)
     profiler.start("compile_decode")
     if not eager:
         gdn_snap = _snapshot_gdn()
@@ -603,6 +615,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     pos = T
     decode_times = []
     signpost("inference_decode")
+    _profiler_flush(model)
     profiler.start("inference_decode")
     _DEBUG_TIMING = os.environ.get("QWEN36_DEBUG_DECODE_TIMING") == "1"
     _phase_times = {"update": [], "exec_sync": [], "readback": []}

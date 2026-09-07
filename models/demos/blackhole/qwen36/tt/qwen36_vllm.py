@@ -10,6 +10,7 @@ model-bound, so the kv_cache contract param is accepted but unused.
 
 import math
 import os
+import time
 from collections import defaultdict
 from typing import Mapping, Optional
 
@@ -150,7 +151,20 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         the paged KV blocks (kv_cache_shape) already cover all users, and this sizes the per-slot
         GDN recurrent/conv state [B,...] + the decode kv grid. B==1 is the single-sequence path."""
         batch_size = self.model[0].args.max_batch_size
-        return self.model[0].allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=batch_size)
+        model = self.model[0]
+        # Traced masked-bucket prefill (QWEN36_PREFILL_BUCKET_TRACE) needs one scratch KV block that the scheduler never
+        # hands out: allocate num_blocks+1 physically and keep page tables over 0..num_blocks-1 (the model then takes the
+        # extra last block as its pad block). QWEN36_PREFILL_BUCKET_EXTRA_BLOCK=0 disables (then the caller must reserve).
+        shape = list(kv_cache_shape)
+        if (
+            getattr(model, "_mb_trace_buckets", None)
+            and os.environ.get("QWEN36_PREFILL_BUCKET_EXTRA_BLOCK", "1") == "1"
+        ):
+            shape[0] = int(shape[0]) + 1
+            logger.info(
+                f"[prefill] allocating {shape[0]} KV blocks ({kv_cache_shape[0]} scheduler + 1 pad block for bucket traces)"
+            )
+        return model.allocate_kv_caches(shape, ttnn.bfloat16, batch_size=batch_size)
 
     @staticmethod
     def _has_visual(kwargs, pixel_key):
@@ -252,6 +266,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if tokens.shape[1] > T:
             tokens = tokens[:, :T]
         logger.info(f"Prefilling User 1 up to {T} tokens (TP masked-bucket/chunked)")
+        # QWEN36_PREFILL_TIMING=1: per-phase wall times of one serving prefill (perf triage, default off).
+        _timing = os.environ.get("QWEN36_PREFILL_TIMING", "0") == "1"
+        _t0 = time.perf_counter() if _timing else 0.0
         # Multimodal is supported on TP too: prefill_traced_chunked splices the image/video rows via
         # a fixed-shape ttnn.where over hidden-sharded persistent buffers (the vision rows are
         # gathered to full hidden on host, placed along seq, then re-sharded), so no request-time
@@ -259,12 +276,19 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         logits = model.prefill_traced_chunked(
             tokens, page_table, actual_len=T, vision_tokens=vision_tokens
         )  # [1,1,vocab] replicated
+        _t1 = time.perf_counter() if _timing else 0.0
         logits = (
             ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
             .reshape(-1, model.args.vocab_size)[:1]
             .float()
             .view(1, 1, -1)
         )
+        if _timing:
+            _t2 = time.perf_counter()
+            logger.info(
+                f"[PREFILL_TIMING] T={T} model={1e3 * (_t1 - _t0):.1f} ms logits_to_host={1e3 * (_t2 - _t1):.1f} ms "
+                f"total={1e3 * (_t2 - _t0):.1f} ms"
+            )
         logger.info(f"Finished prefill up to {T} tokens, starting decode...")
         return logits, torch.zeros(1, dtype=torch.long)
 
@@ -397,6 +421,10 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         finally:
             if prev is not None:
                 model._unbind_gdn_prefill_scratch(prev)
+        if batched:
+            # Compile the device-side slot-write programs (QWEN36_GDN_SLOT_DEVICE_COPY=2: fill_cache + masked where) and
+            # upload the per-slot row masks now, so the first real request does not pay ~450 ms for it.
+            model.warmup_gdn_slot_write()
 
     def warmup_model_decode(self, *args, **kwargs):
         # Defer to WarmupForwardMixin, which warms the paged-SDPA + GDN decode path at pos 0.
