@@ -1036,6 +1036,30 @@ def test_high_bw_all_gather_512k_fabric_2d_line(mesh_device):
 def test_high_bw_all_gather_selected_batch_prefix(mesh_device):
     """One maximum-size output allocation can gather either cache slot and a shorter valid prefix."""
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    try:
+        _run_high_bw_all_gather_selected_batch_prefix(rank_line, cluster_axis)
+    finally:
+        mesh_device.quiesce_devices()
+        rank_line.clear_program_cache()
+
+
+@run_for_blackhole("selected-prefix coverage requires Blackhole Galaxy")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_high_bw_all_gather_galaxy_selected_batch_prefix(mesh_device):
+    # Parent/submesh allocators overlap physical L1. Release cached semaphore allocations
+    # before each ownership handoff, including when numerical validation fails.
+    mesh_device.quiesce_devices()
+    mesh_device.clear_program_cache()
+    rank_line = mesh_device.create_submesh(ttnn.MeshShape(8, 1), ttnn.MeshCoordinate(0, 0))
+    try:
+        _run_high_bw_all_gather_selected_batch_prefix(rank_line, 0)
+    finally:
+        mesh_device.quiesce_devices()
+        rank_line.clear_program_cache()
+
+
+def _run_high_bw_all_gather_selected_batch_prefix(rank_line, cluster_axis):
     axis_size = rank_line.shape[cluster_axis]
     local_rows, active_local_rows, width = 1024, 512, 576
     torch.manual_seed(0)
@@ -1061,8 +1085,13 @@ def test_high_bw_all_gather_selected_batch_prefix(mesh_device):
 
     cache_entries_after_first = None
     # Start smaller and grow the logical extent. This proves the cached program is compiled for the
-    # worst-case slab rather than the first active prefix.
-    for batch_index, rows_this_call in ((0, active_local_rows // 2), (1, active_local_rows)):
+    # worst-case slab rather than the first active prefix. Return to the first slot and extent to
+    # check that repeated cache hits refresh both controls while reusing the owned semaphores.
+    for batch_index, rows_this_call in (
+        (0, active_local_rows // 2),
+        (1, active_local_rows),
+        (0, active_local_rows // 2),
+    ):
         ttnn.experimental.high_bw_all_gather(
             device_input,
             dim=2,
@@ -1229,3 +1258,68 @@ def test_high_bw_all_gather_token_sweep(mesh_device, axis_0_min_bandwidth_gbps, 
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
     min_bandwidth_gbps = (axis_0_min_bandwidth_gbps, axis_1_min_bandwidth_gbps)[cluster_axis]
     _run_high_bw_all_gather_token_sweep(rank_line, min_bandwidth_gbps, cluster_axis)
+
+
+@run_for_blackhole("common argument refresh requires Blackhole Galaxy")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("links", [1, 2])
+@pytest.mark.parametrize("dtype,width", [(ttnn.bfloat16, 576), (ttnn.fp8_e4m3, 656)])
+def test_high_bw_all_gather_galaxy_common_addresses(mesh_device, links, dtype, width):
+    mesh_device.quiesce_devices()
+    mesh_device.clear_program_cache()
+    device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
+    try:
+        inputs, outputs = [], []
+        for seed in range(3):
+            torch.manual_seed(seed)
+            inputs.append(
+                _make_tensor(
+                    device,
+                    torch.rand((1, 1, 256, width), dtype=torch.bfloat16),
+                    dtype,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    ttnn.ShardTensor2dMesh(device, dims=(2, None), mesh_shape=(8, 1)),
+                )
+            )
+            outputs.append(
+                _make_tensor(
+                    device,
+                    torch.zeros((1, 1, 256, width), dtype=torch.bfloat16),
+                    dtype,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    ttnn.ReplicateTensorToMesh(device),
+                )
+            )
+
+        def run(index):
+            ttnn.experimental.high_bw_all_gather(
+                inputs[index], dim=2, output_tensor=outputs[index], cluster_axis=0, num_links=links
+            )
+
+        def check():
+            ttnn.synchronize_device(device)
+            for source, output in zip(inputs, outputs):
+                _assert_exact_all_gather(source, output, device, dtype)
+
+        # Keep all allocations live and queue distinct addresses without synchronization.
+        for index in range(3):
+            run(index)
+            if index == 0:
+                entries = device.num_program_cache_entries()
+            assert device.num_program_cache_entries() == entries
+        check()
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        for index in range(3):
+            run(index)
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        try:
+            for _ in range(2):
+                ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+                check()
+            assert device.num_program_cache_entries() == entries
+        finally:
+            ttnn.release_trace(device, trace_id)
+    finally:
+        mesh_device.quiesce_devices()
+        device.clear_program_cache()
