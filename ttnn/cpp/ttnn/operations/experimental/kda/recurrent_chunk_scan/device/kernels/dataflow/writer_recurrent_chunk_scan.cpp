@@ -34,14 +34,14 @@ FORCE_INLINE void write_value_slice(
 }
 
 template <uint32_t Kt, uint32_t Vt, uint32_t VtFull>
-FORCE_INLINE void write_summary(uint32_t head, uint32_t value_block) {
+FORCE_INLINE void write_summary(uint32_t out_row, uint32_t value_block) {
     const auto output_accessor = TensorAccessor(tensor::output);
     const auto final_state_accessor = TensorAccessor(tensor::final_state);
     DataflowBuffer output(dfb::output);
     DataflowBuffer final_state(dfb::final_state);
     Noc noc;
 
-    const uint32_t row_base = head * Kt * VtFull;
+    const uint32_t row_base = out_row * Kt * VtFull;
     write_value_slice<Kt, Vt, VtFull>(output_accessor, output, noc, row_base, value_block);
     write_value_slice<Kt, Vt, VtFull>(final_state_accessor, final_state, noc, row_base, value_block);
 }
@@ -63,9 +63,12 @@ FORCE_INLINE void write_recurrent(uint32_t head, uint32_t value_block, uint32_t 
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary_pair>
-TT_KERNEL void writer(uint32_t head, uint32_t value_block, uint32_t num_chunks) {
+TT_KERNEL void writer(
+    uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t out_row, uint32_t second_out_row) {
     if constexpr (summary_pair) {
-        write_summary<Kt, Vt, Vt_full>(head, value_block);
+        // out_row addresses the summary slot; a wrap makes the straddling core emit
+        // a second pair, which second_out_row will name. Zero means one pair only.
+        write_summary<Kt, Vt, Vt_full>(out_row, value_block);
     } else {
         write_recurrent<Ct, Kt, Vt, Vt_full>(head, value_block, num_chunks);
     }
