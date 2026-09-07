@@ -551,7 +551,7 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
  * - implementation supports any 1D "squeezable tensor" at input operands
  *   by running reshape.
  */
-Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const ttnn::Shape& s_a = input_a.logical_shape();
     const ttnn::Shape& s_b = input_b.logical_shape();
     auto num_ones = [](const ttnn::Shape& s) -> uint32_t {
@@ -595,7 +595,7 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
         }
     }
 
-    return ttnn::matmul(a_slim, b_slim);
+    return ttnn::matmul(a_slim, b_slim, /*transpose_a=*/false, /*transpose_b=*/false, output_mem_config);
 }
 
 Tensor polyval(
