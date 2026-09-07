@@ -1916,21 +1916,32 @@
 
 # ── VibeVoice ──────────────────────────────────────────────────────
 
-# bh_p150b_civ2 is an LFC-mode SKU (.github/sku_config.yaml): the per-runner
-# cache is mounted at /mnt/MLPerf/huggingface :rw and is NOT pre-populated, so
-# the impl yaml sets HF_HUB_OFFLINE=0 and the first run on a runner downloads
-# the checkpoints there (VibeVoice ~5 GB, plus whisper-medium for WER and
-# wavlm-base-plus-sv for SIM); later runs reuse them. VIBEVOICE_MODEL_PATH aims
-# the snapshot at that persistent cache rather than the default ephemeral repo
-# checkout (models/experimental/vibevoice/weights/).
+# bh_p150b_civ2 is an LFC-mode SKU (.github/sku_config.yaml). "lfc" does NOT
+# map to the shared MLPerf NFS: models-e2e-tests-impl.yaml mounts the per-node
+# host dir /localdev/blackhole_demos/huggingface_data at /mnt/MLPerf/huggingface
+# :rw. It is not pre-populated, so the impl yaml sets HF_HUB_OFFLINE=0 and the
+# first run on a given Kubernetes node downloads the checkpoints there
+# (VibeVoice ~5.4 GB, plus whisper-medium for WER and wavlm-base-plus-sv for
+# SIM). Runs that later land on that same node reuse them; a job scheduled onto
+# a fresh node pays the download again, so the timeout below carries cold-node
+# headroom over the warm measurement rather than tracking it tightly.
+#
+# VIBEVOICE_MODEL_PATH aims the checkpoint snapshot at that cache instead of the
+# default ephemeral repo checkout (models/experimental/vibevoice/weights/), and
+# TT_CACHE_PATH does the same for the *tiled device-weight* cache. Without
+# TT_CACHE_PATH that one falls back to generated/ttnn/vibevoice/weight_cache
+# inside the ephemeral checkout, so all 1135 tensors (~4.2 GB) are re-tilized on
+# every run and discarded at job end -- the cost that timed this job out at
+# 22 min on its first CI run. See common/weight_cache.py:resolve_weight_cache.
 #
 # Tier 3 is accuracy-only, so there are no perf assertions here. Each step is
-# guarded so one failure does not mask the others. Measured on a single P150:
-# demo smoke 1:07, WER 10:19, SIM 6:30 (17:56 total).
+# guarded so one failure does not mask the others. Measured on a single P150
+# with both caches warm: demo smoke 1:07, WER 10:19, SIM 6:30 (17:56 total).
 - name: VibeVoice-1.5B e2e accuracy tests (P150 1x1)
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface
     export VIBEVOICE_MODEL_PATH=/mnt/MLPerf/huggingface/microsoft/VibeVoice-1.5B
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/VibeVoice-1.5B
     export MESH_DEVICE=P150
     exit_code=0
     # Demo smoke: the user-facing entry point (arg parsing, script/voice
@@ -1946,7 +1957,7 @@
   model_family: VibeVoice
   skus:
     bh_p150b_civ2:
-      timeout: 22
+      timeout: 30
       tier: 3
       release_ready: false
   team: models

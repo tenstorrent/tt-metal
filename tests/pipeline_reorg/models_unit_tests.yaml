@@ -1924,13 +1924,16 @@
 # covers, which makes them the tier-3 "most critical modules". The Qwen2.5-1.5B
 # backbone (test_lm_head_pcc / test_decoder_layer_pcc) is left to tt_transformers
 # coverage, and prefill/decode are exercised by the e2e leg. Weights-cache notes
-# are on the VibeVoice entry in models_e2e_tests.yaml.
-# Measured 3:19 for all 10 tests on a single P150.
+# are on the VibeVoice entry in models_e2e_tests.yaml -- in particular why both
+# VIBEVOICE_MODEL_PATH and TT_CACHE_PATH have to point at the per-node
+# /mnt/MLPerf/huggingface mount, and why the timeout carries cold-node headroom.
+# Measured 3:19 for all 10 tests on a single P150 with both caches warm.
 - name: VibeVoice-1.5B unit tests (P150 1x1)
   cmd: |
     export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     export VIBEVOICE_MODEL_PATH=/mnt/MLPerf/huggingface/microsoft/VibeVoice-1.5B
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/VibeVoice-1.5B
     export MESH_DEVICE=P150
     pytest --timeout 600 \
       models/experimental/vibevoice/tests/pcc/test_diffusion_head_pcc.py \
@@ -1942,6 +1945,6 @@
   model_family: VibeVoice
   skus:
     bh_p150b_civ2:
-      timeout: 6
+      timeout: 8
       tier: 3
   team: models

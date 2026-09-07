@@ -367,7 +367,7 @@ models:
     wh_n150: 105
     wh_n300: 60
     bh_p150: 33
-    bh_p150b_civ2: 22
+    bh_p150b_civ2: 30
     bh_p300: 8
     bh_quietbox_2: 42
   unit_tier1:
@@ -396,7 +396,7 @@ models:
     wh_n150_civ2: 12
     wh_n300: 33
     bh_p150: 30
-    bh_p150b_civ2: 6
+    bh_p150b_civ2: 8
     bh_p300: 30
     bh_quietbox_2: 21
   integration:
@@ -418,7 +418,7 @@ models:
     wh_n300_perf: 200
     bh_p150: 250
     bh_p150_perf: 420
-    bh_p150b_civ2: 102
+    bh_p150b_civ2: 92
     bh_p150b_civ2_viommu: 50
     bh_loudbox: 1200
     bh_p300: 800

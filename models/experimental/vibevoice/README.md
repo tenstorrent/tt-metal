@@ -757,10 +757,10 @@ with `|| exit_code=$?` so one failure does not mask the others:
 
 | Job | Step | Gate | Measured |
 |-----|------|------|----------|
-| **e2e** (22 min) | `demo.py --demo 2p_goat --trace` | render completes | 1:07 |
+| **e2e** (30 min) | `demo.py --demo 2p_goat --trace` | render completes | 1:07 |
 | | `pytest tests/pcc/test_e2e_wer.py` (`VV_WER_MAX_NEW_TOKENS=128`) | TT-vs-reference WER ≤ 0.05 | 10:19 (WER 0.0000) |
 | | `pytest tests/pcc/test_e2e_sim.py` | SIM floor 0.5 / margin 0.05 | 6:30 (0.9915 vs 0.6415) |
-| **unit** (6 min) | `pytest` over diffusion head, acoustic + semantic tokenizer, connector, DPM scheduler | per-module PCC | 3:19 (10 tests) |
+| **unit** (8 min) | `pytest` over diffusion head, acoustic + semantic tokenizer, connector, DPM scheduler | per-module PCC | 3:19 (10 tests) |
 
 The demo step is a smoke check of the user-facing entry point — arg parsing, script/voice resolution,
 asset download, output writing — which the two accuracy tests bypass by driving the model directly.
@@ -775,19 +775,28 @@ does not gate perf. Run it manually (see [Running the demo](#running-the-demo)).
 > **Timeout budget.** Budgets live in [`.github/time_budget.yaml`](../../../.github/time_budget.yaml)
 > keyed on `(team, pipeline_tier, sku)` and are enforced as the *sum* of per-job timeouts at
 > matrix-load time — a violation fails the whole tier pipeline, not just this model. VibeVoice holds
-> `models → e2e_tier3 → bh_p150b_civ2 = 22` and `models → unit_tier3 → bh_p150b_civ2 = 6`, both
-> measured on a single P150 plus ~15% runner margin. These 28 minutes were *moved* from the retired
-> `models → demo → bh_p150b_civ2` allocation (130 → 102), not added.
+> `models → e2e_tier3 → bh_p150b_civ2 = 30` and `models → unit_tier3 → bh_p150b_civ2 = 8`. The
+> warm-cache workloads are 17:56 and 3:19 on a single P150; the rest is headroom for a cold-node
+> download (see Weights below), not measured runtime. These 38 minutes were *moved* from the retired
+> `models → demo → bh_p150b_civ2` allocation (130 → 92), not added.
 
 > **Weights.** `bh_p150b_civ2` is an **LFC-mode** SKU ([`.github/sku_config.yaml`](../../../.github/sku_config.yaml)):
 > the per-runner cache `/localdev/blackhole_demos/huggingface_data` is mounted at
 > `/mnt/MLPerf/huggingface` read-write and is **not** pre-populated. The impl yaml sets
 > `HF_HUB_OFFLINE=0` for this mode so first use fills it, and the entries set
-> `VIBEVOICE_MODEL_PATH=/mnt/MLPerf/huggingface/microsoft/VibeVoice-1.5B` so the ~5 GB snapshot lands
-> in that persistent cache rather than the ephemeral repo checkout. WER additionally pulls
-> `openai/whisper-medium` and SIM `microsoft/wavlm-base-plus-sv` into the same cache. **The first run
-> on a cold runner pays ~8.5 GB of download inside the job timeout and may time out; the cache is
-> still populated, so a re-run succeeds.**
+> `VIBEVOICE_MODEL_PATH=/mnt/MLPerf/huggingface/microsoft/VibeVoice-1.5B` so the ~5.4 GB snapshot
+> lands in that cache rather than the ephemeral repo checkout. WER additionally pulls
+> `openai/whisper-medium` and SIM `microsoft/wavlm-base-plus-sv` into the same cache.
+>
+> The entries also set `TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/VibeVoice-1.5B` so
+> the **tiled device-weight cache** lands there too. Without it, `resolve_weight_cache` falls back to
+> `generated/ttnn/vibevoice/weight_cache` inside the ephemeral checkout, and all 1135 tensors
+> (~4.2 GB) are re-tilized on every run and thrown away at job end — a per-run cost no other model in
+> the pipeline pays, and what timed the e2e job out at 22 min on its first CI run.
+>
+> **The cache is per-Kubernetes-node**, so a job scheduled onto a node that has not run VibeVoice
+> before still pays the ~9.5 GB download inside the job timeout. That is what the timeout headroom
+> above covers; the cache is populated either way, so a re-run on the same node is fast.
 
 Trigger manually with **Actions → (Tier 3) Models End-To-End Tests** (or **Models Unit Tests**) **→
 Run workflow → model: `vibevoice-1.5b`, sku: `bh_p150b_civ2 (P150 CIv2)`**.
