@@ -32,6 +32,7 @@ struct ActivationInitHelper {
 #endif
 
     FORCE_INLINE static void init() {
+#ifndef ARCH_QUASAR
         if constexpr (ACT == KernelActivation::SILU) {
             silu_tile_init_pack();
         } else if constexpr (ACT == KernelActivation::TANH) {
@@ -54,6 +55,7 @@ struct ActivationInitHelper {
         } else if constexpr (ACT == KernelActivation::SOFTPLUS) {
             softplus_tile_init_pack();
         }
+#endif
     }
 };
 
@@ -78,6 +80,9 @@ struct ActivationApplyHelper {
 #endif
 
     FORCE_INLINE static void apply(uint32_t tile_index) {
+#ifdef ARCH_QUASAR
+        (void)tile_index;
+#else
         if constexpr (ACT == KernelActivation::SILU) {
             silu_tile_pack(tile_index);
         } else if constexpr (ACT == KernelActivation::TANH) {
@@ -108,6 +113,7 @@ struct ActivationApplyHelper {
             // PARAM0 is beta, PARAM2 beta reciprocal, PARAM1 is threshold
             softplus_tile_pack(tile_index, PARAM0, PARAM2, PARAM1);
         }
+#endif
     }
 };
 
