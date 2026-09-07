@@ -187,7 +187,6 @@ if __name__ == "__main__":
 # --------------------------------------------------------------------------- #
 # pytest side (ttnn venv).
 # --------------------------------------------------------------------------- #
-import contextlib  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
@@ -205,9 +204,7 @@ from models.experimental.deepseek_v4_flash.tt.attention import (  # noqa: E402
     int32_pos_tensor,
     make_rope_table,
 )
-from models.experimental.deepseek_v4_flash.tt.system_config import active_system_config  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache  # noqa: E402
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.weight_loader import (  # noqa: E402
     DeepseekV4WeightLoader,
@@ -363,15 +360,16 @@ def test_attention_real_weights_decode(
     loader = DeepseekV4WeightLoader(_DEFAULT_MODEL_DIR)
     cache = _weight_cache(layer_idx)
     weights = _build_attn_weights(loader, layer_idx, layer_type)
-    # Take the DRISC-prefetched weight path wherever the device supports it (Blackhole with
-    # programmable DRAM cores); elsewhere the block falls back to the DRAM->L1 copy. Same
-    # arithmetic either way, so one PCC threshold covers both.
-    use_prefetcher = (
-        ttnn.experimental.is_tensor_prefetcher_supported(device) and not active_system_config().decode.packed_l1_weights
-    )
-    logger.info(f"attention weights via {'the DRISC tensor prefetcher' if use_prefetcher else 'a DRAM->L1 copy'}")
+    # Weights reach the cores by DRAM->L1 copy, not through the DRISC prefetcher: this test
+    # is a correctness check, and the prefetcher's H2D request sockets make a failure much
+    # harder to read. Any op that throws mid-step leaves a queued weight nothing will drain,
+    # so the session has to force-stop, and each abandoned socket's destructor then logs its
+    # own drain timeout with a full backtrace -- burying the error being unwound. The
+    # arithmetic is identical on both paths, so this PCC covers the prefetched one too, and
+    # ``test_linear_decode_prefetcher.py`` exercises the transfers themselves.
+    logger.info("attention weights via a DRAM->L1 copy")
     attn = DeepSeekV4Attention(
-        cfg, layer_idx, weights, device, cache=cache, weight_dtype=_WEIGHT_DTYPE, use_prefetcher=use_prefetcher
+        cfg, layer_idx, weights, device, cache=cache, weight_dtype=_WEIGHT_DTYPE, use_prefetcher=False
     )
 
     hidden = bundle["hidden"]  # [B, S, D]
@@ -386,67 +384,55 @@ def test_attention_real_weights_decode(
     kv_cache = build_static_layer_cache(
         device, cfg.sliding_window, layer_type, cfg.head_dim, seq_len, cfg.compress_rates, batch=batch_size
     )
-    # One prefetcher session spans every decode step: starting and stopping it per step would
-    # serialise the DRISC transfers against the compute they exist to overlap. The fence is
-    # needed once, after the weights have been written over CQ 0, so the senders cannot read
-    # DRAM before those writes land.
-    with contextlib.ExitStack() as prefetcher:
-        if use_prefetcher:
-            prefetcher.enter_context(tensor_prefetcher_session(device))
-            ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+    for pos in range(seq_len):
+        # Stage this step's projection weights before anything else it needs, so the copies
+        # run while the host builds the RoPE tables and mask below.
+        attn.prefetch_weights()
 
-        for pos in range(seq_len):
-            # Stage this step's projection weights before anything else it needs: on the
-            # prefetcher path the DRISC transfers then run while the host builds the RoPE
-            # tables and mask below and the workers finish the previous step.
-            attn.prefetch_weights()
+        cos_d, sin_d, neg_sin_d = _rope_rows(bundle["cos_q"][pos : pos + 1], bundle["sin_q"][pos : pos + 1], device)
+        cos_win_d = sin_win_d = win_slot = win_row = None
+        pool = False
+        if is_compressor:
+            # Incremental pooling: this token fills slot ``pos % cr`` of the one-window
+            # buffer, and only a step that closes window ``wi`` pools it into row
+            # ``sliding_window + wi`` (RoPE'd at that window's own row).
+            wi = max((pos + 1) // cr - 1, 0)
+            pool = (pos + 1) % cr == 0
+            cw, sw = make_rope_table(bundle["cos_win"][wi : wi + 1], bundle["sin_win"][wi : wi + 1])
+            cos_win_d = _to_tt(cw, device)
+            sin_win_d = _to_tt(sw, device)
+            win_slot = int32_pos_tensor(pos % cr, device, batch_size)
+            win_row = int32_pos_tensor(cfg.sliding_window + wi, device, batch_size)
 
-            cos_d, sin_d, neg_sin_d = _rope_rows(bundle["cos_q"][pos : pos + 1], bundle["sin_q"][pos : pos + 1], device)
-            cos_win_d = sin_win_d = win_slot = win_row = None
-            pool = False
-            if is_compressor:
-                # Incremental pooling: this token fills slot ``pos % cr`` of the one-window
-                # buffer, and only a step that closes window ``wi`` pools it into row
-                # ``sliding_window + wi`` (RoPE'd at that window's own row).
-                wi = max((pos + 1) // cr - 1, 0)
-                pool = (pos + 1) % cr == 0
-                cw, sw = make_rope_table(bundle["cos_win"][wi : wi + 1], bundle["sin_win"][wi : wi + 1])
-                cos_win_d = _to_tt(cw, device)
-                sin_win_d = _to_tt(sw, device)
-                win_slot = int32_pos_tensor(pos % cr, device, batch_size)
-                win_row = int32_pos_tensor(cfg.sliding_window + wi, device, batch_size)
+        mask, sdpa_cur_pos = decode_sdpa_bounds(cfg.sliding_window, layer_type, cr, pos, seq_len, device, batch_size)
+        out_tt = attn.decode(
+            _to_tt(hidden[:, pos : pos + 1].reshape(batch_size, 1, 1, cfg.hidden_size), device),
+            cos_d,
+            sin_d,
+            neg_sin_d,
+            cos_win_d,
+            sin_win_d,
+            mask,
+            kv_cache,
+            int32_pos_tensor(pos % cfg.sliding_window, device, batch_size),
+            int32_pos_tensor(pos, device, batch_size),
+            pool_compressor=pool,
+            win_slot=win_slot,
+            win_row=win_row,
+            sdpa_cur_pos=sdpa_cur_pos,
+        )
+        if pos < split:
+            continue  # seeding the cache; no reference row to compare yet
 
-            mask, sdpa_cur_pos = decode_sdpa_bounds(
-                cfg.sliding_window, layer_type, cr, pos, seq_len, device, batch_size
+        ref_row = reference[:, pos : pos + 1]
+        out_torch = ttnn.to_torch(out_tt).reshape(ref_row.shape).to(torch.float32)
+        # Per user as well as over the whole batch: a batched step that leaked one user's
+        # KV into another would still score well pooled over the batch.
+        for user in range(batch_size):
+            passing, pcc_message = comp_pcc(ref_row[user], out_torch[user], pcc=DECODE_PCC_THRESHOLD)
+            logger.info(comp_allclose(ref_row[user], out_torch[user]))
+            logger.info(f"[attention layer {layer_idx} ({layer_type}) pos {pos} user {user}] PCC: {pcc_message}")
+            assert passing, (
+                f"layer {layer_idx} attention decode pos {pos} user {user} PCC < "
+                f"{DECODE_PCC_THRESHOLD}: {pcc_message}"
             )
-            out_tt = attn.decode(
-                _to_tt(hidden[:, pos : pos + 1].reshape(batch_size, 1, 1, cfg.hidden_size), device),
-                cos_d,
-                sin_d,
-                neg_sin_d,
-                cos_win_d,
-                sin_win_d,
-                mask,
-                kv_cache,
-                int32_pos_tensor(pos % cfg.sliding_window, device, batch_size),
-                int32_pos_tensor(pos, device, batch_size),
-                pool_compressor=pool,
-                win_slot=win_slot,
-                win_row=win_row,
-                sdpa_cur_pos=sdpa_cur_pos,
-            )
-            if pos < split:
-                continue  # seeding the cache; no reference row to compare yet
-
-            ref_row = reference[:, pos : pos + 1]
-            out_torch = ttnn.to_torch(out_tt).reshape(ref_row.shape).to(torch.float32)
-            # Per user as well as over the whole batch: a batched step that leaked one user's
-            # KV into another would still score well pooled over the batch.
-            for user in range(batch_size):
-                passing, pcc_message = comp_pcc(ref_row[user], out_torch[user], pcc=DECODE_PCC_THRESHOLD)
-                logger.info(comp_allclose(ref_row[user], out_torch[user]))
-                logger.info(f"[attention layer {layer_idx} ({layer_type}) pos {pos} user {user}] PCC: {pcc_message}")
-                assert passing, (
-                    f"layer {layer_idx} attention decode pos {pos} user {user} PCC < "
-                    f"{DECODE_PCC_THRESHOLD}: {pcc_message}"
-                )

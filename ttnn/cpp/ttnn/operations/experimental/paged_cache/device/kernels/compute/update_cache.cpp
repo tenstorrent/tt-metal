@@ -32,17 +32,23 @@ void kernel_main() {
     constexpr uint32_t out_cb = get_compile_time_arg_val(5);
     constexpr uint32_t Wt = get_compile_time_arg_val(6);
     constexpr uint32_t num_heads = get_compile_time_arg_val(7);
+    constexpr bool input_is_row_major = get_compile_time_arg_val(8) == 1;
 
-    compute_kernel_hw_startup(in_cb, untilized_in_cb);
+    if constexpr (input_is_row_major) {
+        // Row-major decode input is already a contiguous token row; skip untilize.
+        compute_kernel_hw_startup(cache_cb, untilized_cache_cb);
+    } else {
+        compute_kernel_hw_startup(in_cb, untilized_in_cb);
 
-    // Untilize input (standalone operation)
-    compute_kernel_lib::untilize<
-        Wt,
-        in_cb,
-        untilized_in_cb,
-        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+        // Untilize tiled input (standalone operation)
+        compute_kernel_lib::untilize<
+            Wt,
+            in_cb,
+            untilized_in_cb,
+            compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+    }
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);

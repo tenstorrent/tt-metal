@@ -494,14 +494,19 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
                 .tile = rms_reduce_tile_desc,
             }}},
         });
+        // Full reduction tiles, like the gathered input and the scaler: this is where
+        // ``compute_kernel_lib::reduce`` packs, and it requires every buffer it touches to hold a
+        // whole 32x32 page (``is_valid_dfb_tile_page_size``). The narrow ``output_tile`` page this
+        // used to carry tripped that PACK-side assert on the hub under watcher. Only the hub
+        // allocates it, and only ``[0, 0]`` of each tile is ever read, so the wider page is free.
         desc.cbs.push_back(CBDescriptor{
-            .total_size = M_tiles * rms_tile_size,
+            .total_size = M_tiles * rms_reduce_tile_size,
             .core_ranges = rms_hub_core,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = rms_reduced_cb_index,
                 .data_format = rms_data_format,
-                .page_size = rms_tile_size,
-                .tile = rms_tile_desc,
+                .page_size = rms_reduce_tile_size,
+                .tile = rms_reduce_tile_desc,
             }}},
         });
         // Hub only. Compute is the sole producer and the writer RISC the sole consumer: the writer
@@ -886,20 +891,58 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     };
 
     if (rms_norm && !mcast_out) {
-        KernelDescriptor rms_writer;
-        rms_writer.kernel_source =
-            "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
-            "writer_full_width_rms_norm.cpp";
-        rms_writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        rms_writer.core_ranges = inputB_core_range_set;
-        rms_writer.named_compile_time_args = rms_writer_named;
-        rms_writer.config =
-            DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_1};
-        rms_writer.runtime_args.reserve(producer_cores.size());
+        auto build_rms_writer = [&](const std::vector<CoreCoord>& cores, NOC noc) {
+            std::vector<CoreRange> ranges;
+            ranges.reserve(cores.size());
+            for (const auto& core : cores) {
+                ranges.emplace_back(core, core);
+            }
+            KernelDescriptor rms_writer;
+            rms_writer.kernel_source =
+                "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
+                "writer_full_width_rms_norm.cpp";
+            rms_writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+            rms_writer.core_ranges = CoreRangeSet(ranges);
+            rms_writer.named_compile_time_args = rms_writer_named;
+            rms_writer.config = DataMovementConfigDescriptor{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = noc,
+            };
+            rms_writer.runtime_args.reserve(cores.size());
+            for (const auto& core : cores) {
+                rms_writer.runtime_args.emplace_back(core, rms_runtime_args(core));
+            }
+            return rms_writer;
+        };
+
+        // Opposite NOC from this core's reader, for the reason spelled out at the output-mcast
+        // writer below: the two RISCs count their own non-posted writes but share the NIU's
+        // registers, so putting both on one NOC corrupts the bookkeeping. Sharing NOC 1 with the
+        // reader here tripped the firmware's end-of-kernel "non-posted writes sent" assert (the
+        // per-RISC issued count can no longer match the NIU's sent count) rather than hanging a
+        // barrier. The transport kernel is NOC-agnostic: it flips the multicast rectangle's
+        // corners when it runs on NOC 1.
+        std::vector<CoreCoord> noc0_w;
+        std::vector<CoreCoord> noc1_w;
         for (const auto& core : producer_cores) {
-            rms_writer.runtime_args.emplace_back(core, rms_runtime_args(core));
+            const auto noc_it = reader_noc_by_core.find(core);
+            TT_FATAL(
+                noc_it != reader_noc_by_core.end(),
+                "full_width_sharded matmul_decode fused RMSNorm: writer core {} has no reader, so its NOC cannot be "
+                "chosen opposite the reader's",
+                core.str());
+            if (noc_it->second == NOC::NOC_0) {
+                noc1_w.push_back(core);
+            } else {
+                noc0_w.push_back(core);
+            }
         }
-        desc.kernels.push_back(std::move(rms_writer));
+        if (!noc0_w.empty()) {
+            desc.kernels.push_back(build_rms_writer(noc0_w, NOC::NOC_0));
+        }
+        if (!noc1_w.empty()) {
+            desc.kernels.push_back(build_rms_writer(noc1_w, NOC::NOC_1));
+        }
     }
 
     if (mcast_out) {
@@ -911,6 +954,12 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         const CoreRange dest_bbox = output_core_range_set.bounding_box();
         const CoreCoord hub0_logical = dest_bbox.start_coord;
         const CoreCoord hub1_logical = dest_bbox.end_coord;
+        // Both hubs come from the dest bbox corners, so a one-core grid collapses them into the
+        // same core: it would be tagged Hub0 and hub1's half of N would never be written.
+        TT_FATAL(
+            !mcast_two_hub || hub0_logical != hub1_logical,
+            "matmul_decode output_mcast_two_hub needs an output_core_grid of at least two cores, but got {}",
+            output_core_range_set.str());
         const CoreCoord dest_start_phys = device->worker_core_from_logical_core(hub0_logical);
         const CoreCoord dest_end_phys = device->worker_core_from_logical_core(hub1_logical);
         const uint32_t num_dest_cores = output_core_range_set.num_cores();
