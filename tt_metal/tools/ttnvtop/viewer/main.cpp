@@ -37,6 +37,7 @@
 #include "../collector/shm_publisher.hpp"
 #include "../common/program_registry.hpp"
 #include "../common/shm_schema.hpp"
+#include "percore_direct.hpp"
 
 namespace {
 
@@ -458,11 +459,25 @@ uint64_t monotonic_us() {
 
 int main(int argc, char* argv[]) {
     std::set<uint64_t> chip_filter;
+    // Read the driver directly instead of a collector's SHM. See percore_direct.hpp: the
+    // ioctls cost 0.5 ms to open+arm+read against 7.8 s of UMD discovery, so for that
+    // source a separate writer has stopped earning its place -- and the sweep is then armed
+    // by THIS process's fd, so it stops when the TUI does.
+    bool direct_mode = false;
+    ttnvtop::direct::Source direct;
     for (int i = 1; i < argc; ++i) {
         const std::string_view a = argv[i];
+        if (a == "--direct") {
+            direct_mode = true;
+            continue;
+        }
         if (a == "-h" || a == "--help") {
             std::cout << "ttnvtop — TUI viewer of ttnvtop-collector SHM.\n\n"
-                         "Usage: ttnvtop [--chip N]...\n\n"
+                         "Usage: ttnvtop [--direct] [--chip N]...\n\n"
+                         "  --direct         Read tt-kmd's PERCORE ioctls directly: no\n"
+                         "                   collector and no /dev/shm. Arms the sweep for as\n"
+                         "                   long as this process lives. Needs access to\n"
+                         "                   /dev/tenstorrent, which the SHM path does not.\n"
                          "  --chip N         Only show chip with asic_id N. Repeatable; default shows all.\n\n"
                          "Each Tensix core is drawn as a bordered box containing F/S/D bars\n"
                          "(matrix/vector/dispatch), a percentage per bar, the (x,y) noc coord,\n"
@@ -485,6 +500,16 @@ int main(int argc, char* argv[]) {
             continue;
         }
     }
+    if (direct_mode) {
+        std::string why;
+        if (!direct.open("/dev/tenstorrent/0", why)) {
+            std::cerr << "ttnvtop --direct: " << why << "\n"
+                      << "  The SHM path needs none of this: run ttnvtop-collector (or the\n"
+                      << "  ARC bridge) and start ttnvtop without --direct.\n";
+            return 1;
+        }
+    }
+
     std::signal(SIGINT, handle_sigint);
     std::signal(SIGTERM, handle_sigint);
 
@@ -594,6 +619,21 @@ int main(int argc, char* argv[]) {
 
     // Refresh the set of SHM files: add any new ones, drop any that vanished or
     // whose collector PID is no longer alive.
+    // In direct mode `maps` is built once over buffers this process owns and refilled in
+    // place; there is no file to discover, restart, or go stale.
+    auto refresh_direct = [&]() {
+        direct.update(monotonic_us());
+        if (maps.empty()) {
+            for (uint32_t i = 0; i < direct.dies(); ++i) {
+                MappedShm m;
+                m.path = "driver:" + std::to_string(i);
+                m.header = &direct.view(i).header;
+                m.cores = direct.view(i).cores.data();
+                maps.push_back(std::move(m));
+            }
+        }
+    };
+
     auto refresh_maps = [&]() {
         auto entries = ttnvtop::list_shm_files();
         std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.asic_id < b.asic_id; });
@@ -682,7 +722,11 @@ int main(int argc, char* argv[]) {
             case 'q': g_stop.store(true, std::memory_order_relaxed); continue;
             default: break;
         }
-        refresh_maps();
+        if (direct_mode) {
+            refresh_direct();
+        } else {
+            refresh_maps();
+        }
         refresh_registry();
 
         // Helper to resolve a program name from the cache. Returns nullptr
