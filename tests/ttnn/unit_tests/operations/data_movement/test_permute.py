@@ -821,3 +821,59 @@ def test_permute_cache_miss_different_factory_row_major(device, isolate_program_
     assert_with_pcc(ref2, out2, 0.9999)
 
     assert device.cache_entries_counter.total == 2
+
+
+# =============================================================================
+# Codegen-path coverage
+# =============================================================================
+#
+# ttnn.permute routes gate-supported cases to the codegen path and the rest to native, and offers no
+# way to ask for one: the verification-only entry below lives in the private module for that reason
+# (see permute_force.hpp). These pin the codegen path so the suite exercises it regardless of the
+# gate's verdict -- which matters most for the width-changing cases, since the routed entry demotes
+# every one of them to native on perf grounds and would otherwise never run those kernels.
+#
+# The codegen path supports only a subset of cases (see permute_codegen_supported.cpp): ROW_MAJOR,
+# interleaved input and output, rank 2-8, bfloat16/float32/int32, no zero-length dim, not the
+# transpose op's fused width-height case, and a last dim narrow enough for the row-invariant CB.
+# Every case below is picked to satisfy that gate, so the forced entry resolves instead of raising.
+# A permutation copies values verbatim, so a lossless round-trip means assert_equal holds.
+_permute_force_codegen = ttnn._ttnn.operations.data_movement.permute_force_codegen
+
+# (shape, dims) -- last dim fixed selects the row-invariant kernels, last dim moved the blocked ones.
+permute_codegen_supported_cases = [
+    ((3, 64, 96), (1, 0, 2)),  # row-invariant, rank 3
+    ((2, 3, 4, 32), (0, 2, 1, 3)),  # row-invariant, rank 4
+    ((1, 2, 3, 64, 96), (1, 2, 0, 3, 4)),  # row-invariant, rank 5
+    ((32, 64), (1, 0)),  # blocked, rank 2 -- below the fused width-height case's batch floor
+    ((1, 4, 96, 128), (3, 2, 1, 0)),  # blocked, rank 4
+    ((2, 3, 4, 32, 64), (2, 1, 4, 3, 0)),  # blocked, rank 5
+]
+permute_codegen_dtypes = [ttnn.bfloat16, ttnn.float32, ttnn.int32]
+
+
+@pytest.mark.parametrize("shape, dims", permute_codegen_supported_cases)
+@pytest.mark.parametrize("dtype", permute_codegen_dtypes)
+def test_permute_codegen(device, shape, dims, dtype):
+    torch.manual_seed(2005)
+    torch_input = random_torch_tensor(dtype, shape)
+    torch_output = torch.permute(torch_input, dims)
+
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=device)
+    tt_output = ttnn.to_torch(_permute_force_codegen(tt_input, dims))
+
+    assert_equal(torch_output, tt_output)
+
+
+@pytest.mark.parametrize("shape, dims", [((1, 4, 96, 128), (3, 2, 1, 0)), ((1, 2, 3, 64, 96), (1, 2, 0, 3, 4))])
+def test_pc_permute_codegen(device, shape, dims, isolate_program_cache):
+    """One cached program per config, rebound to a fresh allocation on each of three dispatches."""
+    num_iters = 3
+    torch_inputs = [random_torch_tensor(ttnn.bfloat16, shape) for _ in range(num_iters)]
+    for torch_input in torch_inputs:
+        tt_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
+        with device.cache_entries_counter.measure():
+            tt_output = _permute_force_codegen(tt_input, dims)
+        assert_equal(torch.permute(torch_input, dims), ttnn.to_torch(tt_output))
+
+    assert device.cache_entries_counter.total == 1
