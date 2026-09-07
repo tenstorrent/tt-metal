@@ -42,8 +42,13 @@ class OffsetTopology:
 
     @property
     def is_split(self) -> bool:
-        """Whether the boundary chip holds two causally non-adjacent segments."""
-        return self.tail_rows > 0
+        """Whether the boundary chip holds two causally non-adjacent segments.
+
+        With a single partition the wrapped tail immediately follows the head in
+        absolute position, so the rows stay contiguous and nothing is split.
+        Non-adjacency needs at least one other chip between the two pieces.
+        """
+        return self.tail_rows > 0 and self.sp_size > 1
 
     @property
     def chip_order(self) -> tuple[int, ...]:
