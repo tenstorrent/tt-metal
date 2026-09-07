@@ -269,3 +269,71 @@ def test_weight_cache_path_ro_mount_falls_back_writable(tmp_path, monkeypatch):
     assert "gemma4_tt_cache" in p4.parts
     # Sanity: helper used by resolve path.
     assert mc._ensure_cache_dir(ro_root / "nested").is_dir()
+
+
+class _FakeNormGrid:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+
+class _FakeNormMesh:
+    def compute_with_storage_grid_size(self):
+        return _FakeNormGrid(8, 8)
+
+    def get_devices(self):
+        raise RuntimeError("no device")
+
+
+def _norm_core_grid(spec):
+    _, program_config = spec
+    grid = program_config.compute_with_storage_grid_size
+    gx, gy = int(grid.x), int(grid.y)
+    return gx * gy, gx, gy
+
+
+def test_sharded_norm_l1_budget_rejects_26b_prefill_1024(monkeypatch):
+    """26B hidden=2816 @ 8 cores / 1024 rows: I+O exceed the WH L1 bank."""
+    from models.demos.gemma4.tt.rms_norm import sharded_norm_fits_l1, sharded_norm_per_core_bytes, width_shard_spec
+
+    monkeypatch.delenv("GEMMA4_SHARDED_NORM_L1_BANK", raising=False)
+    per = sharded_norm_per_core_bytes(1024, 2816, 8)
+    assert per == 720896
+    assert not sharded_norm_fits_l1(1024, 2816, 8)
+    # 31B hidden=5376 on 56 cores still fits (the height-only cutoff case).
+    assert sharded_norm_fits_l1(1024, 5376, 56)
+    assert width_shard_spec(_FakeNormMesh(), 2816, 1024) is None
+
+
+@pytest.mark.parametrize(
+    "label,dim,expect_cores",
+    [
+        ("12B", 3840, 40),
+        ("31B", 5376, 56),
+    ],
+)
+@pytest.mark.parametrize("height", [32, 128, 512, 1024])
+def test_sharded_norm_l1_budget_keeps_12b_31b_wh_t3k(monkeypatch, label, dim, expect_cores, height):
+    """WH T3K 8x8: 12B/31B stay on the same width-shard grid as before the L1 check.
+
+    Worst case (prefill 1024) uses 393,216 B/bank of 1,393,472 B — decode and
+    the prefill island (h<=128) are ~12–49 KB. Height 2048 is still rejected
+    by the pre-existing 1024 row cutoff, not L1.
+    """
+    from models.demos.gemma4.tt import rms_norm as rn
+
+    monkeypatch.delenv("GEMMA4_SHARDED_NORM_L1_BANK", raising=False)
+    mesh = _FakeNormMesh()
+    spec = rn.width_shard_spec(mesh, dim, height)
+    assert spec is not None, f"{label} h={height} unexpectedly fell back to interleaved"
+    n, gx, gy = _norm_core_grid(spec)
+    assert n == expect_cores, f"{label} h={height}: cores {n} ({gx}x{gy}), expected {expect_cores}"
+    per = rn.sharded_norm_per_core_bytes(height, dim, n)
+    assert 2 * per <= rn._DEFAULT_L1_BANK_BYTES
+
+    orig = rn.sharded_norm_fits_l1
+    rn.sharded_norm_fits_l1 = lambda *a, **k: True
+    try:
+        spec_nol1 = rn.width_shard_spec(mesh, dim, height)
+    finally:
+        rn.sharded_norm_fits_l1 = orig
+    assert _norm_core_grid(spec_nol1) == (n, gx, gy)

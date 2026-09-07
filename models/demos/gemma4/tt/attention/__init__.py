@@ -274,6 +274,8 @@ class Gemma4Attention:
                 if group is None:
                     continue
                 for t in group:
+                    if not hasattr(t, "deallocate"):
+                        continue
                     tid = id(t)
                     if tid in seen:
                         continue
@@ -286,11 +288,11 @@ class Gemma4Attention:
             self.config.sliding_prefill_tail_persistent = None
             return
         if tail is not None:
-            is_persistent = (
-                persistent is not None and len(tail) == 2 and len(persistent) == 2 and tail[0] is persistent[0]
-            )
+            is_persistent = persistent is not None and tail is not None and tail[0] is persistent[0]
             if not is_persistent:
                 for t in tail:
+                    if not hasattr(t, "deallocate"):
+                        continue
                     try:
                         t.deallocate(True)
                     except Exception:

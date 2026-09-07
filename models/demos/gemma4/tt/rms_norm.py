@@ -9,12 +9,18 @@ import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
-# Row cutoff for the width-sharded fast path. The per-core input shard is
-# (height, dim/num_cores) elements resident in L1 alongside other live
-# buffers; at hidden=5376 / TP=8 a seq=4096 prefill norm needs ~786 KB/bank
-# and TT_FATALs (Out of Memory) with only ~607 KB free. seq=1024 fits
-# comfortably (~197 KB/bank). Longer prefill keeps the plain interleaved path.
+# Row cutoff for the width-shard *search*. Height alone is not enough: 26B
+# hidden=2816 on an 8-core WH grid needs 720,896 B/bank for the input *and*
+# again for the output (1,441,792 B) against a 1,393,472 B bank — CI
+# test_rms_norm / test_layer prefill_1024 OOMs. :func:`width_shard_spec`
+# rejects layouts whose per-core I/O exceeds the bank. 31B hidden=5376
+# still fits at 1024 (~197 KB/bank × 2). Longer prefill stays interleaved.
 _SHARDED_NORM_MAX_HEIGHT = 1024
+# Observed WH worker L1 bank after firmware (run 32690156816, 26B unit).
+# BH banks are larger; override with GEMMA4_SHARDED_NORM_L1_BANK.
+_DEFAULT_L1_BANK_BYTES = 1_393_472
+_SHARDED_NORM_ELEM_BYTES = 2  # bf16 activations on this path
+_SHARDED_NORM_SCRATCH_BYTES = 0
 
 
 def sharded_norm_enabled() -> bool:
@@ -123,6 +129,44 @@ def decode_width_shard_spec(mesh_device, dim):
     return (memcfg, program_config, num_cores)
 
 
+def sharded_norm_per_core_bytes(height, dim, num_cores, dtype_bytes=_SHARDED_NORM_ELEM_BYTES) -> int:
+    """Bytes of one width-shard of a ``[height, dim]`` activation on ``num_cores``."""
+    if num_cores <= 0 or dim % num_cores != 0:
+        return 1 << 62
+    return int(height) * (int(dim) // int(num_cores)) * int(dtype_bytes)
+
+
+def sharded_norm_fits_l1(
+    height,
+    dim,
+    num_cores,
+    l1_bank_bytes=_DEFAULT_L1_BANK_BYTES,
+    dtype_bytes=_SHARDED_NORM_ELEM_BYTES,
+    scratch_bytes=_SHARDED_NORM_SCRATCH_BYTES,
+) -> bool:
+    """True when input + output (+ scratch) fit in one L1 bank.
+
+    The sharded RMSNorm keeps the width-sharded input live while allocating the
+    output into the same banks. Height-only cutoffs miss 26B hidden=2816 @ 8
+    cores: each tensor is 720,896 B and the pair exceeds the WH bank.
+    """
+    per = sharded_norm_per_core_bytes(height, dim, num_cores, dtype_bytes)
+    return (2 * per + int(scratch_bytes)) <= int(l1_bank_bytes)
+
+
+def _l1_bank_bytes(mesh_device) -> int:
+    env = os.environ.get("GEMMA4_SHARDED_NORM_L1_BANK")
+    if env:
+        return int(env)
+    try:
+        dev = mesh_device.get_devices()[0] if hasattr(mesh_device, "get_devices") else mesh_device
+        if hasattr(dev, "l1_size_per_core"):
+            return int(dev.l1_size_per_core())
+    except Exception:
+        pass
+    return _DEFAULT_L1_BANK_BYTES
+
+
 def activation_physical_height(shape) -> int:
     """Tile-padded row count a width-sharded layout must use for ``shape``.
 
@@ -158,6 +202,8 @@ def width_shard_spec(mesh_device, dim, height):
     if best is None or best[0] == 1:
         return None
     num_cores, gx, gy = best
+    if not sharded_norm_fits_l1(height, dim, num_cores, l1_bank_bytes=_l1_bank_bytes(mesh_device)):
+        return None
     block_w = tiles // num_cores
     subblock_w = 4
     while subblock_w > 1 and block_w % subblock_w != 0:

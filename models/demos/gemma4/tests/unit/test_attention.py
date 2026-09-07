@@ -809,7 +809,9 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     # The tail must be alive after the first call.
     tail = getattr(tt_attn, "_sliding_prefill_tail", None)
     assert tail is not None, "Sliding tail was not persisted after chunk 1"
-    assert all(t.is_allocated() for t in tail), "Sliding tail tensor(s) are not allocated — the clone fix is missing"
+    assert all(
+        t.is_allocated() for t in tail if hasattr(t, "is_allocated")
+    ), "Sliding tail tensor(s) are not allocated — the clone fix is missing"
     # endregion
 
     # region Chunk 2 (chunk_start_idx=chunk_size, consumes persisted tail)
@@ -860,7 +862,9 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
 
     tail_after_decode = getattr(tt_attn, "_sliding_prefill_tail", None)
     assert tail_after_decode is not None, "Tail must survive decode so async APC continuations keep sliding_tail_in"
-    assert all(t.is_allocated() for t in tail_after_decode), "Tail deallocated during decode"
+    assert all(
+        t.is_allocated() for t in tail_after_decode if hasattr(t, "is_allocated")
+    ), "Tail deallocated during decode"
 
     # A fresh prefill at chunk_start==0 must release the prior request's tail.
     x_new = torch.randn(1, 1, chunk_size, config.hidden_size, dtype=torch.bfloat16)
@@ -879,7 +883,7 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     out_new.deallocate(True)
     tail_after_reset = getattr(tt_attn, "_sliding_prefill_tail", None)
     assert tail_after_reset is not None, "New prefill at start=0 should stash a fresh tail"
-    assert all(t.is_allocated() for t in tail_after_reset)
+    assert all(t.is_allocated() for t in tail_after_reset if hasattr(t, "is_allocated"))
     # endregion
 
 
@@ -949,9 +953,12 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     )
     out1.deallocate(True)
     tail = getattr(tt_attn, "_sliding_prefill_tail", None)
-    assert tail is not None, "Short first chunk must stash a padded sliding tail"
-    assert all(t.is_allocated() for t in tail)
-    assert int(tail[0].shape[-2]) == hist, f"Expected padded hist={hist}, got {tail[0].shape[-2]}"
+    from models.demos.gemma4.tt.attention.prefill import unpack_sliding_tail
+
+    assert tail is not None, "Short first chunk must stash a sliding tail"
+    k_tail, v_tail, valid = unpack_sliding_tail(tail)
+    assert k_tail.is_allocated() and v_tail.is_allocated()
+    assert valid == short_len, f"Expected valid history {short_len}, got {valid}"
 
     # Continuation at chunk_start=384 with chunk_page_table — needs the tail.
     x2 = torch.randn(1, 1, cont_len, config.hidden_size, dtype=torch.bfloat16)
@@ -968,6 +975,9 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     )
     out2_torch = _from_device(out2, mesh_device)
     assert out2_torch.shape[-2] == cont_len
+    tail2 = getattr(tt_attn, "_sliding_prefill_tail", None)
+    _, _, valid2 = unpack_sliding_tail(tail2)
+    assert valid2 == hist, f"after 384+1024 expected hist={hist} valid, got {valid2}"
 
     # Short continuation with seq < hist must still consume the padded tail
     # (Q filler previously sliced hist rows from a short tt_q → TT_FATAL).
@@ -985,3 +995,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     )
     out3_torch = _from_device(out3, mesh_device)
     assert out3_torch.shape[-2] == short_cont, "short continuation with seq < hist failed"
+    tail3 = getattr(tt_attn, "_sliding_prefill_tail", None)
+    _, _, valid3 = unpack_sliding_tail(tail3)
+    # 384+1024+128 exceeds hist; live window must stay hist, not just the 128-row chunk.
+    assert valid3 == hist, f"consecutive short continuation dropped live history: valid={valid3} hist={hist}"

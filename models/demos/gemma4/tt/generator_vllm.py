@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.tt.async_decode import apply_slot_remap_to_row_phys, bounded_sliding_block_ids
 from models.demos.gemma4.tt.common import create_tt_model, get_gemma4_padded_prefill_len
 from models.demos.gemma4.tt.generator import (
     ChunkedPrefillPageTableGuardMixin,
@@ -1104,7 +1105,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # Remap the *full* batch first so sliding block IDs stay global. Chunk
         # loops only slice those tables (never re-remap local rows 0..N).
         full_page_tables = self._build_per_layer_page_tables(page_tables_per_layer, kwargs.get("page_table"))
-        full_page_tables = self._pad_sliding_page_tables_for_bounded(full_page_tables, kwargs.get("kv_cache"))
+        full_page_tables = self._pad_sliding_page_tables_for_bounded(
+            full_page_tables, kwargs.get("kv_cache"), slot_remap=kwargs.get("slot_remap")
+        )
         full_page_tables = self._pad_page_tables_batch_to_max(full_page_tables)
         if self._bounded_sliding_kv_cache and full_page_tables:
             sliding_idxs = self._sliding_layer_indices()
@@ -1117,6 +1120,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             start_pos_for_clear = kwargs.get("start_pos")
             if start_pos_for_clear is None:
                 self._clear_bounded_sliding_kv_rings(kwargs.get("kv_cache"))
+                self._bounded_sliding_row_to_phys = None
+                self._bounded_sliding_pt_cache = None
             else:
                 try:
                     start_vals = [int(p) for p in list(start_pos_for_clear)]
@@ -1124,6 +1129,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                     start_vals = [int(start_pos_for_clear)]
                 if all(p == 0 for p in start_vals):
                     self._clear_bounded_sliding_kv_rings(kwargs.get("kv_cache"))
+                    self._bounded_sliding_row_to_phys = None
+                    self._bounded_sliding_pt_cache = None
 
         # Align vLLM chunked-prefill continuations to SDPA q_chunk_size (128).
         # tokens[:, :prompt_lens] still holds the full prefix, so aligning
@@ -1258,7 +1265,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
         page_tables_per_layer = self._build_per_layer_page_tables(page_tables_per_layer, kwargs.get("page_table"))
-        page_tables_per_layer = self._pad_sliding_page_tables_for_bounded(page_tables_per_layer, kwargs.get("kv_cache"))
+        page_tables_per_layer = self._pad_sliding_page_tables_for_bounded(
+            page_tables_per_layer, kwargs.get("kv_cache"), slot_remap=kwargs.get("slot_remap")
+        )
         # Do *not* pad decode page tables to max_batch — keep the plugin's
         # nearest-bucket batch so B=1 uses the B=1 decode trace / SDPA grid.
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
@@ -1571,7 +1580,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             out.append(padded)
         return out
 
-    def _pad_sliding_page_tables_for_bounded(self, page_tables_per_layer, kv_cache):
+    def _pad_sliding_page_tables_for_bounded(self, page_tables_per_layer, kv_cache, slot_remap=None):
         """Remap sliding-layer page tables onto the bounded physical pool.
 
         With hybrid groups OFF, vLLM hands every layer the same full-ISL
@@ -1579,8 +1588,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         Bounded mode allocates only ``sliding_window/block_size * B`` physical
         blocks per sliding layer (see :meth:`_shrink_bounded_sliding_kv_specs`),
         so those global IDs would OOB. Rebuild each sliding row with dense
-        local IDs — same layout as ``build_hybrid_page_tables`` in the metal
-        demo: user ``u`` owns ``[u*W, (u+1)*W)`` where ``W=sliding_window/block_size``.
+        local IDs — demo layout ``user u`` owns ``[phys*W, (phys+1)*W)``.
+
+        Physical slot ownership is sticky across ``slot_remap``: if request B
+        moves from row 1 to row 0, it keeps row 1's blocks. Row-index mapping
+        would hand B request A's KV with no migration.
 
         Tables are sized to exactly ``W`` columns so ``cache_position_modulo``
         shape checks pass on short prompts without retaining vLLM's full-ISL
@@ -1623,8 +1635,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return page_tables_per_layer
         target_cols = int(sliding_window) // block_size
 
-        # Dense sliding IDs depend only on (batch, W) — cache across decode
-        # steps so we don't rebuild 50 layer tables every token.
+        # Dense sliding IDs depend on (batch, W, row→phys). Cache across
+        # decode steps so we don't rebuild 50 layer tables every token.
         batch = None
         for i, pt in enumerate(page_tables_per_layer):
             if (
@@ -1635,9 +1647,25 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             ):
                 batch = int(pt.shape[0])
                 break
+        if batch is None:
+            return page_tables_per_layer
+
+        row_to_phys = getattr(self, "_bounded_sliding_row_to_phys", None)
+        if slot_remap is not None:
+            row_to_phys = apply_slot_remap_to_row_phys(row_to_phys, slot_remap, batch)
+            self._bounded_sliding_row_to_phys = row_to_phys
+            self._bounded_sliding_pt_cache = None
+        elif row_to_phys is None or len(row_to_phys) < batch:
+            if row_to_phys is None:
+                row_to_phys = list(range(batch))
+            else:
+                row_to_phys = row_to_phys + list(range(len(row_to_phys), batch))
+            self._bounded_sliding_row_to_phys = row_to_phys
+
         cache = getattr(self, "_bounded_sliding_pt_cache", None)
+        owner_key = tuple(row_to_phys[:batch])
         cached_row = None
-        if cache is not None and cache[0] == batch and cache[1] == target_cols:
+        if cache is not None and cache[0] == batch and cache[1] == target_cols and cache[3] == owner_key:
             cached_row = cache[2]
 
         out = []
@@ -1655,13 +1683,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             if cached_row is not None and cached_row.shape[0] == batch:
                 out.append(cached_row)
                 continue
-            # Always W columns (demo layout). Keeping vLLM's full-ISL width
-            # here thrash-reallocates persistent buffers vs short prefill
-            # tables and is unused under cache_position_modulo.
-            remapped = torch.empty((batch, target_cols), dtype=torch.int32)
-            for u in range(batch):
-                remapped[u] = torch.arange(u * target_cols, (u + 1) * target_cols, dtype=torch.int32)
-            self._bounded_sliding_pt_cache = (batch, target_cols, remapped)
+            remapped = bounded_sliding_block_ids(batch, target_cols, row_to_phys)
+            self._bounded_sliding_pt_cache = (batch, target_cols, remapped, owner_key)
             cached_row = remapped
             out.append(remapped)
         return out

@@ -15,6 +15,55 @@ from __future__ import annotations
 import torch
 
 
+def apply_slot_remap_to_row_phys(row_to_phys, slot_remap, batch: int) -> list[int]:
+    """Follow bounded-sliding physical slots across vLLM compaction.
+
+    ``row_to_phys[r]`` is the physical sliding slot backing logical row ``r``.
+    ``slot_remap[new_row]`` is the old device row that moved here (same
+    convention as :func:`merge_async_ahead_decode_tokens`). New / unmapped
+    rows take a free physical slot, preferring their own index.
+    """
+    if batch <= 0:
+        return []
+    old = list(row_to_phys) if row_to_phys is not None else list(range(batch))
+    while len(old) < batch:
+        old.append(len(old))
+    new: list[int | None] = [None] * batch
+    used: set[int] = set()
+    if slot_remap is not None:
+        remap = (slot_remap if isinstance(slot_remap, torch.Tensor) else torch.tensor(slot_remap)).long().reshape(-1)
+        for new_row in range(min(batch, int(remap.numel()))):
+            src = int(remap[new_row])
+            if 0 <= src < len(old):
+                new[new_row] = int(old[src])
+                used.add(int(new[new_row]))
+    max_phys = max(batch, len(old), max(used) + 1 if used else batch)
+    free = [p for p in range(max_phys) if p not in used]
+    fi = 0
+    for r in range(batch):
+        if new[r] is not None:
+            continue
+        if r not in used:
+            new[r] = r
+            used.add(r)
+        elif fi < len(free):
+            new[r] = free[fi]
+            used.add(free[fi])
+            fi += 1
+        else:
+            new[r] = r
+    return [int(p) for p in new]
+
+
+def bounded_sliding_block_ids(batch: int, target_cols: int, row_to_phys=None) -> torch.Tensor:
+    """Dense sliding block IDs. Row ``u`` owns ``row_to_phys[u]``'s W-block range."""
+    remapped = torch.empty((batch, target_cols), dtype=torch.int32)
+    for u in range(batch):
+        phys = u if row_to_phys is None else int(row_to_phys[u])
+        remapped[u] = torch.arange(phys * target_cols, (phys + 1) * target_cols, dtype=torch.int32)
+    return remapped
+
+
 def merge_async_ahead_decode_tokens(
     host_toks: torch.Tensor,
     host_pos: torch.Tensor,
