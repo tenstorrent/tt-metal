@@ -10,7 +10,8 @@ output memory config supplies a sharded layout but no shard spec
 ttnn/cpp/ttnn/operations/reduction/generic/device/common.cpp:207). The three
 TensorSpec sharding builders then honour that grid verbatim while deriving a shard
 shape that may need far fewer cores, so a 16x1-tile reduction result can claim the
-88- or 109-core grid of its 16x64-tile input.
+88-core grid of its 16x64-tile input (in the originating model, the vocab-loss sum
+claims the 109-core grid of its 16x4008-tile input for a single shard).
 
 Nothing rejects it: the shard-count checks at tt_metal/impl/tensor/spec/tensor_spec.cpp
 only fire when there are too *few* cores. The numerics stay correct, which is why no
