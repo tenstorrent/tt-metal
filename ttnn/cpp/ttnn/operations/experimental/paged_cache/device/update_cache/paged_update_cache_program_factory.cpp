@@ -57,6 +57,29 @@ bool enable_fp32_dest(
     return fp32_dest_acc_en;
 }
 
+// Row-major input is copied as raw bytes into the untilized cache tile, so dest-acc
+// format must match the input dtype. Tiled input is untilized into dest-acc format, which is
+// forced to FP32 for a FLOAT32 cache to preserve its precision.
+bool update_cache_fp32_dest(
+    const Tensor& input_tensor,
+    const Tensor& cache_tensor,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
+    bool fp32_dest_acc_en = enable_fp32_dest(*input_tensor.device(), compute_kernel_config) ||
+                            cache_tensor.dtype() == DataType::FLOAT32;
+    if (input_tensor.layout() == Layout::ROW_MAJOR && input_tensor.dtype() != DataType::FLOAT32) {
+        fp32_dest_acc_en = false;
+    }
+    return fp32_dest_acc_en;
+}
+
+uint32_t update_cache_row_bytes(const Tensor& input_tensor, bool fp32_dest_acc_en) {
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        return input_tensor.padded_shape()[-1] * input_tensor.element_size();
+    }
+    return fp32_dest_acc_en ? input_tensor.padded_shape()[-1] * static_cast<uint32_t>(sizeof(float))
+                            : input_tensor.padded_shape()[-1] * 2u;
+}
+
 // Worker cores in the exact order the artifacts build emplaces per-core runtime args (core i handles
 // user i, i.e. update_idxs[i]). Shared by create_program_artifacts (cache miss) and
 // override_runtime_arguments (cache hit) so the two cannot drift.
@@ -89,12 +112,10 @@ std::vector<UpdateCachePerCoreOffsets> compute_update_cache_offsets(
     const auto& cache_tensor = tensor_args.cache_tensor;
     const auto& input_tensor = tensor_args.input_tensor;
     const bool fp32_dest_acc_en =
-        enable_fp32_dest(*input_tensor.device(), operation_attributes.compute_kernel_config) ||
-        cache_tensor.dtype() == DataType::FLOAT32;
+        update_cache_fp32_dest(input_tensor, cache_tensor, operation_attributes.compute_kernel_config);
 
     const uint32_t Wt = input_tensor.padded_shape()[-1] / TILE_WIDTH;
-    const uint32_t Wbytes = fp32_dest_acc_en ? input_tensor.padded_shape()[-1] * sizeof(float)
-                                             : input_tensor.padded_shape()[-1] * 2;  // 2 bytes for bfloat16
+    const uint32_t Wbytes = update_cache_row_bytes(input_tensor, fp32_dest_acc_en);
     const uint32_t cache_total_num_tiles = cache_tensor.physical_volume() / TILE_HW;
     // share_cache => batch offset is 0 (one shared cache buffer); mirror the artifacts build exactly.
     const uint32_t cache_batch_num_tiles =
@@ -145,8 +166,9 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
 
     const bool preserve_fp32_cache = cache_tensor.dtype() == DataType::FLOAT32;
+    const bool input_is_row_major = input_tensor.layout() == Layout::ROW_MAJOR;
     bool fp32_dest_acc_en =
-        enable_fp32_dest(*device, operation_attributes.compute_kernel_config) || preserve_fp32_cache;
+        update_cache_fp32_dest(input_tensor, cache_tensor, operation_attributes.compute_kernel_config);
 
     tt::DataFormat interm_dfb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t interm_single_tile_size = tt::tile_size(interm_dfb_data_format);
@@ -189,8 +211,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     // mode, cache seq-len-in-tiles otherwise.
     uint32_t Wt = input_tensor.padded_shape()[-1] / TILE_WIDTH;
     uint32_t St = is_paged_cache ? block_size_t : cache_tensor.padded_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wbytes = fp32_dest_acc_en ? input_tensor.padded_shape()[-1] * sizeof(float)
-                                       : input_tensor.padded_shape()[-1] * 2;  // 2 bytes for bfloat16
+    uint32_t Wbytes = update_cache_row_bytes(input_tensor, fp32_dest_acc_en);
     uint32_t cache_total_num_tiles = cache_tensor.physical_volume() / TILE_HW;
     uint32_t cache_batch_num_tiles =
         operation_attributes.share_cache
@@ -211,7 +232,12 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
     CoreRangeSet all_cores = shard_spec.value().grid;
     uint32_t num_cores = all_cores.num_cores();
-    uint32_t num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
+    // Tiled input DFB is one page per tile. Row-major input is already untilized: one
+    // borrowed shard page, which the writer copies from directly.
+    const uint32_t input_dfb_page_size =
+        input_is_row_major ? input_tensor.buffer()->aligned_page_size() : input_single_tile_size;
+    const uint32_t num_input_pages =
+        input_is_row_major ? 1u : shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
 
     uint32_t num_cache_tiles = 2 * Wt;   // double buffered
     uint32_t num_interm_tiles = 2 * Wt;  // double buffered
@@ -236,8 +262,8 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
         // is the tensor access. Its SRAM address resolves per dispatch from the input tensor argument.
         DataflowBufferSpec{
             .unique_id = UC_INPUT_SHARD,
-            .entry_size = input_single_tile_size,
-            .num_entries = num_input_tiles,
+            .entry_size = input_dfb_page_size,
+            .num_entries = num_input_pages,
             .data_format_metadata = input_dfb_data_format,
             .borrowed_from = UC_INPUT,
         },
@@ -259,18 +285,22 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
             .advanced_options = {.alias_with = {UC_UNTILIZED_CACHE}},
         },
         DataflowBufferSpec{
-            .unique_id = UC_UNTILIZED_INPUT,
-            .entry_size = interm_single_tile_size,
-            .num_entries = num_interm_tiles,
-            .data_format_metadata = interm_dfb_data_format,
-        },
-        DataflowBufferSpec{
             .unique_id = UC_OUT_TILES,
             .entry_size = cache_single_tile_size,
             .num_entries = num_output_tiles,
             .data_format_metadata = cache_dfb_data_format,
         },
     };
+    if (!input_is_row_major) {
+        // Tiled path: compute untilizes the input shard into this buffer; writer splices from it.
+        // Row-major input is already a token row, so the writer reads the input shard directly.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = UC_UNTILIZED_INPUT,
+            .entry_size = interm_single_tile_size,
+            .num_entries = num_interm_tiles,
+            .data_format_metadata = interm_dfb_data_format,
+        });
+    }
     if (use_index_tensor) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = UC_INDEX,
@@ -302,6 +332,10 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     if (is_paged_cache && page_table->element_size() == sizeof(uint16_t)) {
         // Sharded page tables are UINT16 (see validate_on_program_cache_miss); the kernels default to UINT32.
         optional_resource_defines.emplace("PAGE_TABLE_ENTRY_UINT16", "1");
+    }
+    KernelSpec::CompilerOptions::Defines compute_defines = optional_resource_defines;
+    if (input_is_row_major) {
+        compute_defines.emplace("INPUT_IS_ROW_MAJOR", "1");
     }
 
     // ---------------- Reader ----------------
@@ -376,6 +410,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
                 {"page_table_stick_size", page_table_stick_size},
                 {"St", St},
                 {"cache_position_modulo", cache_position_modulo},
+                {"input_is_row_major", static_cast<uint32_t>(input_is_row_major)},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"cache_start_id", "my_batch_idx", "wait_to_start"}},
         .hw_config = create_reader_datamovement_config(),
@@ -403,7 +438,9 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
         DFBBinding{
-            .dfb_spec_name = UC_UNTILIZED_INPUT,
+            // Row-major input is already untilized; splice from the input shard. Tiled input is
+            // untilized by compute into UC_UNTILIZED_INPUT.
+            .dfb_spec_name = input_is_row_major ? UC_INPUT_SHARD : UC_UNTILIZED_INPUT,
             .accessor_name = "untilized_input",
             .endpoint_type = DFBEndpointType::CONSUMER,
         },
@@ -455,6 +492,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
                 {"max_blocks_per_seq", max_blocks_per_seq},
                 {"St", St},
                 {"cache_position_modulo", cache_position_modulo},
+                {"input_is_row_major", static_cast<uint32_t>(input_is_row_major)},
             },
         .runtime_arg_schema =
             {.runtime_arg_names =
@@ -489,8 +527,45 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
             }
         };
         require_unpack_mode(UC_CACHE_TILES, cache_dfb_data_format);
-        require_unpack_mode(UC_INPUT_SHARD, input_dfb_data_format);
+        if (!input_is_row_major) {
+            require_unpack_mode(UC_INPUT_SHARD, input_dfb_data_format);
+        }
         require_unpack_mode(UC_UNTILIZED_CACHE2, interm_dfb_data_format);
+    }
+
+    Group<DFBBinding> compute_dfb_bindings = {
+        DFBBinding{
+            .dfb_spec_name = UC_CACHE_TILES,
+            .accessor_name = "cache",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = UC_UNTILIZED_CACHE,
+            .accessor_name = "untilized_cache",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = UC_UNTILIZED_CACHE2,
+            .accessor_name = "untilized_cache2",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = UC_OUT_TILES,
+            .accessor_name = "out",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+    };
+    if (!input_is_row_major) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = UC_INPUT_SHARD,
+            .accessor_name = "in",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = UC_UNTILIZED_INPUT,
+            .accessor_name = "untilized_in",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
     }
 
     KernelSpec compute{
@@ -498,40 +573,8 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
         .source = "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/compute/update_cache.cpp",
         // Legacy compute kernels default to O3; Metal 2.0's type-agnostic default is O2, so it is set
         // explicitly here to keep the compile and link at the level the op has always used.
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
-        .dfb_bindings =
-            {
-                DFBBinding{
-                    .dfb_spec_name = UC_CACHE_TILES,
-                    .accessor_name = "cache",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = UC_INPUT_SHARD,
-                    .accessor_name = "in",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = UC_UNTILIZED_CACHE,
-                    .accessor_name = "untilized_cache",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = UC_UNTILIZED_CACHE2,
-                    .accessor_name = "untilized_cache2",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = UC_UNTILIZED_INPUT,
-                    .accessor_name = "untilized_in",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = UC_OUT_TILES,
-                    .accessor_name = "out",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-            },
+        .compiler_options = {.defines = std::move(compute_defines), .opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args =
             {
                 {"Wt", Wt},

@@ -33,13 +33,18 @@ void kernel_main() {
     // helper forms build their own buffers, and on Quasar a DataflowBuffer drains when it goes out of scope
     // (#60848): the input untilize's untilized_in would wait at helper return for the writer, which pops it
     // only after the head loop, and each head's cache drain would wait on the reader's next head.
-    DataflowBuffer in(dfb::in), untilized_in(dfb::untilized_in);
     DataflowBuffer cache(dfb::cache), untilized_cache(dfb::untilized_cache);
     DataflowBuffer untilized_cache2(dfb::untilized_cache2), out(dfb::out);
 
+#ifdef INPUT_IS_ROW_MAJOR
+    // Row-major decode input is already a contiguous token row; skip untilize.
+    // dfb::in / dfb::untilized_in are unbound on this path (writer splices from the input shard).
+    compute_kernel_hw_startup(dfb::cache, dfb::untilized_cache);
+#else
+    DataflowBuffer in(dfb::in), untilized_in(dfb::untilized_in);
     compute_kernel_hw_startup(dfb::in, dfb::untilized_in);
 
-    // Untilize input (standalone operation)
+    // Untilize tiled input (standalone operation)
     compute_kernel_lib::untilize<
         Wt,
         dfb::in,
@@ -47,6 +52,7 @@ void kernel_main() {
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(in, untilized_in, 1);
+#endif
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         compute_kernel_lib::untilize<Wt, dfb::cache, dfb::untilized_cache>(cache, untilized_cache, 1);
