@@ -120,7 +120,8 @@ def _paged_msa_memory_config(device, page_size, width, shard_height=None):
 @pytest.mark.parametrize("page_size,shard_height", [(32, 32), (64, 32)], ids=["page32", "page64_shard32"])
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_msa_paged_perf_matches_contiguous(device, kv_dtype, page_size, shard_height):
+@pytest.mark.parametrize("slot_idx", [0, 2], ids=["slot0", "slot2"])
+def test_msa_paged_perf_matches_contiguous(device, kv_dtype, page_size, shard_height, slot_idx):
     """Paged tile remapping must preserve production MSA throughput and numerical output."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for sparse_sdpa_msa perf checks (needs IOMMU)")
@@ -148,8 +149,8 @@ def test_msa_paged_perf_matches_contiguous(device, kv_dtype, page_size, shard_he
         v.reshape(T // page_size, 1, page_size, d).to(torch.bfloat16), kv_dtype, ttnn.TILE_LAYOUT, paged_mem
     )
     tt_table = upload(
-        torch.arange(T // page_size, dtype=torch.int64).reshape(1, 1, 1, -1),
-        ttnn.uint16,
+        torch.arange(T // page_size, dtype=torch.int64).repeat(3, 1),
+        ttnn.uint32,
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -169,6 +170,7 @@ def test_msa_paged_perf_matches_contiguous(device, kv_dtype, page_size, shard_he
         kv_cache_num_layers=1,
         kv_cache_layer_idx=0,
         page_bundle_indices=tt_table,
+        kv_cache_slot_idx=slot_idx,
         kv_cache_page_size=page_size,
     )
     contiguous_out = invoke(tt_k, tt_v)
@@ -188,7 +190,7 @@ def test_msa_paged_perf_matches_contiguous(device, kv_dtype, page_size, shard_he
     paged_ms = sorted(paged_ns)[len(paged_ns) // 2] / 1e6
     ratio = paged_ms / contiguous_ms
     logger.info(
-        f"sparse_sdpa_msa {kv_dtype} page={page_size} shard={shard_height} perf: contiguous={contiguous_ms:.3f} ms, "
+        f"sparse_sdpa_msa {kv_dtype} page={page_size} shard={shard_height} slot={slot_idx} perf: contiguous={contiguous_ms:.3f} ms, "
         f"paged={paged_ms:.3f} ms, ratio={ratio:.4f}; "
         f"production target={MSA_PROD_EXPECTED_MS[kv_dtype]:.3f} ms +/- {MSA_PERF_MARGIN * 100:.0f}%"
     )

@@ -177,7 +177,7 @@ def _make_paged_msa_pools(k, v, page_size, num_layers=3, layer_idx=1, extra_bund
                 if layer == layer_idx:
                     k_pool[flat_page, 0] = k[0, kv_head, start : start + page_size]
                     v_pool[flat_page, 0] = v[0, kv_head, start : start + page_size]
-    table = torch.tensor(order, dtype=torch.int64).reshape(1, 1, 1, logical_bundles)
+    table = torch.tensor(order, dtype=torch.int64).reshape(1, logical_bundles)
     return k_pool, v_pool, table
 
 
@@ -191,7 +191,7 @@ def _upload_paged_msa(device, k_pool, v_pool, table, page_size, kv_dtype=ttnn.bf
             memory_config=_paged_msa_memory_config(device, page_size, pool.shape[-1], shard_height),
         )
 
-    tt_table = _rm(table, device, ttnn.uint16)
+    tt_table = _rm(table, device, ttnn.uint32)
     return upload(k_pool), upload(v_pool), tt_table
 
 
@@ -292,8 +292,8 @@ def test_msa_paged_validation(device, expect_error):
         ttnn.transformer.sparse_sdpa_msa(tt_q, tt_k, tt_v, tt_idx, **{**args, "kv_cache_page_size": 64})
     with expect_error(RuntimeError, "smaller than"):
         ttnn.transformer.sparse_sdpa_msa(tt_q, tt_k, tt_v, tt_idx, **{**args, "kv_cache_layer_idx": 2})
-    with expect_error(RuntimeError, "uint16"):
-        bad_table = _rm(table.to(torch.int32), device, ttnn.uint32)
+    with expect_error(RuntimeError, "uint32"):
+        bad_table = _rm(table.to(torch.int32), device, ttnn.uint16)
         ttnn.transformer.sparse_sdpa_msa(tt_q, tt_k, tt_v, tt_idx, **{**args, "page_bundle_indices": bad_table})
 
 
@@ -456,3 +456,40 @@ def test_msa_native_block_cyclic_chunk_local_rejected(device, expect_error):
     q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk, d, causal=False, seed=1)
     with expect_error(RuntimeError, "block_cyclic_chunk_local"):
         run_op_msa_native(q, k, v, indices, device, block_cyclic_sp_axis=0, block_cyclic_chunk_local=S - 32)
+
+
+@run_for_blackhole()
+def test_msa_paged_slots_uint32_ids_and_cache_reuse(device, expect_error):
+    """Select different rows of one page table, including IDs that cannot fit in UINT16."""
+    dim, page_size, seq_len, block_size = 64, 32, 512, 32
+    q, k0, v0, indices = make_msa_inputs(32, 1, 160, seq_len, 16, dim, blk_kv=block_size, seed=831)
+    _, k2, v2, _ = make_msa_inputs(32, 1, 160, seq_len, 16, dim, blk_kv=block_size, seed=832)
+    k_pool0, v_pool0, ids0 = _make_paged_msa_pools(k0, v0, page_size, num_layers=1, layer_idx=0, seed=833)
+    k_pool2, v_pool2, ids2 = _make_paged_msa_pools(k2, v2, page_size, num_layers=1, layer_idx=0, seed=834)
+    high_base = 1 << 16
+    k_pool = torch.zeros((high_base + k_pool2.shape[0], 1, page_size, dim), dtype=torch.bfloat16)
+    v_pool = torch.zeros_like(k_pool)
+    k_pool[: k_pool0.shape[0]], v_pool[: v_pool0.shape[0]] = k_pool0, v_pool0
+    k_pool[high_base:], v_pool[high_base:] = k_pool2, v_pool2
+    table = torch.zeros((3, seq_len // page_size), dtype=torch.int64)
+    table[0], table[2] = ids0[0], ids2[0] + high_base
+    tt_k, tt_v, tt_table = _upload_paged_msa(device, k_pool, v_pool, table, page_size)
+    tt_q = _rm(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = _rm(indices, device, ttnn.uint32)
+    device.clear_program_cache()
+    entries = None
+    for slot, k, v in ((2, k2, v2), (0, k0, v0), (2, k2, v2)):
+        out = ttnn.transformer.sparse_sdpa_msa(
+            tt_q, tt_k, tt_v, tt_idx, block_size=block_size, page_bundle_indices=tt_table, kv_cache_slot_idx=slot
+        )
+        expected = sparse_attention_ref_msa(q, k, v, indices, dim**-0.5, blk_kv=block_size)
+        score = pcc(ttnn.to_torch(out), expected)
+        assert score >= DEVICE_PCC, f"Allocator slot {slot} PCC {score:.5f}"
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "slot change rebuilt the program"
+    with expect_error(RuntimeError, "kv_cache_slot_idx"):
+        ttnn.transformer.sparse_sdpa_msa(
+            tt_q, tt_k, tt_v, tt_idx, block_size=block_size, page_bundle_indices=tt_table, kv_cache_slot_idx=3
+        )

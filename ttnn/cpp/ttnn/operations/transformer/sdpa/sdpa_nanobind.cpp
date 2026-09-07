@@ -474,12 +474,15 @@ void bind_sdpa(nb::module_& mod) {
                 iff block_cyclic_sp_axis is set; cross-checked against q (must equal q_isl or tp*q_isl).
             kv_cache_num_layers (int, optional): layers interleaved in each physical paged-cache bundle.
             kv_cache_layer_idx (int, optional): layer to read from each physical paged-cache bundle.
-            page_bundle_indices (ttnn.Tensor, optional): ROW_MAJOR uint16 [1,1,1,num_logical_bundles] table.
+            page_bundle_indices (ttnn.Tensor, optional): replicated ROW_MAJOR UINT32 [slots,max_pages] table.
                 When present, K/V are separate TILE ND-sharded pools shaped
                 [physical_bundles*num_layers*n_kv,1,kv_cache_page_size,feature_dim], ordered
                 [bundle][layer][kv_head]. Logical block ids may span physical pages.
             kv_cache_page_size (int): tokens per physical page; a positive multiple of 32. Defaults to 32.
 
+            kv_cache_slot_idx (int): page-table row selected at runtime, including program-cache hits. Defaults to 0.
+            kv_cache_sp_axis (int, optional): SP mesh axis of the local K/V pools. Local page i uses entry
+                i*SP+SP_rank of the selected row. Unset means SP=1. Block ids address local sequence rows.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
 
@@ -503,7 +506,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_cache_num_layers") = nb::none(),
         nb::arg("kv_cache_layer_idx") = nb::none(),
         nb::arg("page_bundle_indices").noconvert() = nb::none(),
-        nb::arg("kv_cache_page_size") = 32);
+        nb::arg("kv_cache_page_size") = 32,
+        nb::arg("kv_cache_slot_idx") = 0,
+        nb::arg("kv_cache_sp_axis") = nb::none());
 
     const auto* const chunked_doc =
         R"doc(

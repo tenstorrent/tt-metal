@@ -22,8 +22,12 @@ uint32_t logical_n_kv(const SparseSDPAMsaInputs& t) {
 }
 
 uint32_t logical_kv_length(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
-    return t.has_paged_kv_cache() ? t.page_bundle_indices->logical_volume() * attrs.kv_cache_page_size
-                                  : t.k.logical_shape()[2];
+    if (!t.has_paged_kv_cache()) {
+        return t.k.logical_shape()[2];
+    }
+    const uint32_t sp = attrs.kv_cache_sp_axis.has_value() ? t.q.device()->shape()[attrs.kv_cache_sp_axis.value()] : 1u;
+    const uint32_t pages = t.page_bundle_indices->logical_shape()[1];
+    return ((pages + sp - 1) / sp) * attrs.kv_cache_page_size;
 }
 
 // Re-check invariants excluded from the program hash. Interleaved K/V shape fields (T, batch slots, and n_kv)
@@ -37,17 +41,36 @@ void validate_non_hashed(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaIn
     TT_FATAL(
         q.device() == k.device() && q.device() == v.device() && q.device() == idx.device(),
         "sparse_sdpa_msa: all inputs must be on the same device");
+    TT_FATAL(
+        t.has_paged_kv_cache() || (attrs.kv_cache_slot_idx == 0 && !attrs.kv_cache_sp_axis.has_value()),
+        "kv_cache_slot_idx and kv_cache_sp_axis require page_bundle_indices");
     if (t.has_paged_kv_cache()) {
         const auto& bundles = t.page_bundle_indices.value();
         TT_FATAL(bundles.storage_type() == StorageType::DEVICE, "page_bundle_indices must be on device");
         TT_FATAL(bundles.device() == q.device(), "page_bundle_indices must be on the same device as q/k/v/indices");
         TT_FATAL(bundles.layout() == Layout::ROW_MAJOR, "page_bundle_indices must use ROW_MAJOR layout");
         TT_FATAL(bundles.padded_shape() == bundles.logical_shape(), "page_bundle_indices must not be padded");
-        TT_FATAL(bundles.dtype() == DataType::UINT16, "page_bundle_indices must have uint16 dtype");
+        TT_FATAL(bundles.dtype() == DataType::UINT32, "page_bundle_indices must have uint32 dtype");
         TT_FATAL(
             bundles.memory_config().buffer_type() == BufferType::DRAM && !bundles.memory_config().is_sharded(),
             "page_bundle_indices must be DRAM interleaved");
         TT_FATAL(bundles.buffer() != nullptr, "page_bundle_indices must have an allocated device buffer");
+        const auto& shape = bundles.logical_shape();
+        TT_FATAL(
+            shape.rank() == 2 && shape[0] > 0 && shape[1] > 0,
+            "page_bundle_indices must have shape [slots, max_pages] (got {})",
+            shape);
+        TT_FATAL(
+            attrs.kv_cache_slot_idx < shape[0],
+            "kv_cache_slot_idx ({}) must be smaller than page-table slots ({})",
+            attrs.kv_cache_slot_idx,
+            shape[0]);
+        if (attrs.kv_cache_sp_axis.has_value()) {
+            TT_FATAL(attrs.kv_cache_sp_axis.value() < q.device()->shape().dims(), "kv_cache_sp_axis is out of range");
+            TT_FATAL(
+                shape[1] >= q.device()->shape()[attrs.kv_cache_sp_axis.value()],
+                "page table must have at least one page per SP");
+        }
     }
     // q and indices: ROW_MAJOR, DRAM, interleaved, unpadded.
     for (const Tensor* tp : {&q, &idx}) {
@@ -156,8 +179,6 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
     validate_non_hashed(attrs, t);
 
     if (t.has_paged_kv_cache()) {
-        const auto& bundles = t.page_bundle_indices.value();
-        const auto& bundle_shape = bundles.logical_shape();
         const auto& ks = k.logical_shape();
         const auto& vs = v.logical_shape();
         const uint32_t n_kv = logical_n_kv(t);
@@ -175,11 +196,6 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
             "kv_cache_page_size must be a positive multiple of {} (got {})",
             tt::constants::TILE_HEIGHT,
             attrs.kv_cache_page_size);
-        TT_FATAL(
-            bundle_shape.rank() == 4 && bundle_shape[0] == 1 && bundle_shape[1] == 1 && bundle_shape[2] == 1 &&
-                bundle_shape[3] > 0,
-            "page_bundle_indices must have shape [1,1,1,num_logical_bundles] (got {})",
-            bundle_shape);
         const uint32_t pages_per_bundle = attrs.kv_cache_num_layers * n_kv;
         TT_FATAL(
             ks[0] > 0 && ks[0] % pages_per_bundle == 0,
@@ -187,9 +203,6 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
             ks[0],
             attrs.kv_cache_num_layers,
             n_kv);
-        TT_FATAL(
-            ks[0] / pages_per_bundle <= (1u << 16),
-            "uint16 page_bundle_indices support at most 65536 physical bundles");
         for (const auto* cache : {&k, &v}) {
             const auto nd = cache->nd_shard_spec();
             TT_FATAL(nd.has_value(), "Paged K/V pools must use an ND-sharded memory config");
@@ -303,11 +316,12 @@ ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         t.has_paged_kv_cache(),
+        attrs.kv_cache_sp_axis,
         t.has_paged_kv_cache() ? attrs.kv_cache_num_layers : 1u,
         t.has_paged_kv_cache() ? attrs.kv_cache_layer_idx : 0u,
         t.has_paged_kv_cache() ? attrs.kv_cache_page_size : tt::constants::TILE_HEIGHT,
         t.has_paged_kv_cache() ? t.page_bundle_indices->logical_shape() : tt::tt_metal::Shape{},
-        t.has_paged_kv_cache() ? t.page_bundle_indices->dtype() : DataType::UINT16,
+        t.has_paged_kv_cache() ? t.page_bundle_indices->dtype() : DataType::UINT32,
         t.has_paged_kv_cache() ? t.page_bundle_indices->memory_config() : tt::tt_metal::MemoryConfig{},
         t.indices.logical_shape(),
         t.indices.dtype());
@@ -356,6 +370,9 @@ SparseSDPAMsaOperation::DispatchArgs SparseSDPAMsaOperation::compute_dispatch_ar
         .k_group_tile_stride = k_group_tile_stride,
         .v_group_tile_stride = v_group_tile_stride,
         .chunk_start_local = compute_chunk_start_local(attrs, t, mesh_dispatch_coordinate),
+        .page_table_slot = attrs.kv_cache_slot_idx,
+        .page_table_sp_rank =
+            attrs.kv_cache_sp_axis.has_value() ? mesh_dispatch_coordinate.value()[attrs.kv_cache_sp_axis.value()] : 0u,
     };
 }
 
@@ -383,6 +400,8 @@ void SparseSDPAMsaOperation::SparseSDPAMsaProgramFactory::override_runtime_argum
     constexpr uint32_t kComputeKernelIdx = 2;
 
     const auto dyn = compute_dispatch_args(attrs, t, mesh_dispatch_coordinate);
+    const uint32_t reader_arg_count =
+        kReaderArgCount + (t.has_paged_kv_cache() && dyn.base_work > 0 && dyn.grid.y > 1 ? 2 * (dyn.grid.y - 1) : 0u);
     const uint32_t q_addr = t.q.buffer()->address();
     const uint32_t k_addr = t.k.buffer()->address();
     const uint32_t v_addr = t.v.buffer()->address();
@@ -397,9 +416,9 @@ void SparseSDPAMsaOperation::SparseSDPAMsaProgramFactory::override_runtime_argum
 
         auto& reader = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx, core);
         TT_FATAL(
-            reader.size() == kReaderArgCount,
+            reader.size() == reader_arg_count,
             "sparse_sdpa_msa reader expected {} runtime args, cached program has {}",
-            static_cast<uint32_t>(kReaderArgCount),
+            reader_arg_count,
             reader.size());
         reader[kReaderQAddr] = q_addr;
         reader[kReaderKAddr] = k_addr;
@@ -413,6 +432,8 @@ void SparseSDPAMsaOperation::SparseSDPAMsaProgramFactory::override_runtime_argum
         reader[kReaderVGroupStride] = dyn.v_group_tile_stride;
         reader[kReaderChunkStart] = dyn.chunk_start_local;
         reader[kReaderPageBundleAddr] = page_bundle_addr;
+        reader[kReaderPageTableSlot] = dyn.page_table_slot;
+        reader[kReaderPageTableSpRank] = dyn.page_table_sp_rank;
 
         auto& writer = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, core);
         TT_FATAL(
@@ -456,7 +477,9 @@ Tensor sparse_sdpa_msa(
     uint32_t kv_cache_num_layers,
     uint32_t kv_cache_layer_idx,
     const std::optional<Tensor>& page_bundle_indices,
-    uint32_t kv_cache_page_size) {
+    uint32_t kv_cache_page_size,
+    uint32_t kv_cache_slot_idx,
+    std::optional<uint32_t> kv_cache_sp_axis) {
     using OperationType = ttnn::prim::SparseSDPAMsaOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -470,6 +493,8 @@ Tensor sparse_sdpa_msa(
             .kv_cache_num_layers = kv_cache_num_layers,
             .kv_cache_layer_idx = kv_cache_layer_idx,
             .kv_cache_page_size = kv_cache_page_size,
+            .kv_cache_slot_idx = kv_cache_slot_idx,
+            .kv_cache_sp_axis = kv_cache_sp_axis,
         },
         OperationType::tensor_args_t{
             .q = q,

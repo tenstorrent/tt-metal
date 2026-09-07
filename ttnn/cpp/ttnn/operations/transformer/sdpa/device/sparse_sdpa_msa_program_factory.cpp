@@ -55,7 +55,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         cb_kack,           // writer->reader ack that its half of the block landed in cb_k_in/cb_v_in
         cb_neginf,         // causal mask: persistent all -inf tile (writer-built); masks full future key-tiles
         cb_vmask,          // causal mask: per-token partial-column "vertical" tile (reader-built) for the boundary
-        cb_page_bundle,    // paged K/V only: logical-page -> physical-bundle uint16 table
+        cb_page_bundle,    // paged K/V only: logical-page -> physical-bundle uint32 table
         cb_count
     };
 
@@ -64,7 +64,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     const uint32_t H_total = t.q.logical_shape()[1];  // total query heads
     const bool paged_kv = t.has_paged_kv_cache();
     const uint32_t n_kv = paged_kv ? t.indices.logical_shape()[1] : t.k.logical_shape()[1];  // KV groups
-    const uint32_t H_logical = H_total / n_kv;        // query heads per KV group
+    const uint32_t H_logical = H_total / n_kv;                                               // query heads per KV group
     const uint32_t H =
         ((H_logical + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
     const uint32_t S = t.q.logical_shape()[2];
@@ -151,11 +151,24 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         cb(cb_neginf, tile_bytes, 1, bf);
         cb(cb_vmask, tile_bytes, 2, bf);
     }
-    const uint32_t page_bundle_count = paged_kv ? t.page_bundle_indices->logical_volume() : 0;
-    const uint32_t page_bundle_bytes = ((page_bundle_count * sizeof(uint16_t) + 31) / 32) * 32;
+    const uint32_t page_bundle_count = paged_kv ? t.page_bundle_indices->logical_shape()[1] : 0;
+    const uint32_t page_bundle_bytes = ((page_bundle_count * sizeof(uint32_t) + 31) / 32) * 32;
     const uint32_t cb_page_bundle_id = paged_kv ? cb_page_bundle : cb_idx;
+    // Every column fetches one metadata row, then distributes its local-SP view over L1 unicast.
+    // Sparse workloads retain independent reads so idle columns need not participate.
+    const bool share_page_table = paged_kv && dyn.base_work > 0 && grid.y > 1;
+    const uint32_t table_peers = share_page_table ? grid.y - 1 : 0u;
+    uint32_t table_ready_sem = 0, table_valid_sem = 0;
+    if (share_page_table) {
+        table_ready_sem = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = table_ready_sem, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
+        table_valid_sem = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = table_valid_sem, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
+    }
     if (paged_kv) {
-        cb(cb_page_bundle, page_bundle_bytes, 1, tt::DataFormat::UInt16);
+        cb(cb_page_bundle, page_bundle_bytes, 1, tt::DataFormat::UInt32);
     }
 
     // Block-cyclic ("slab") cache: the invP remap is baked as compile-time args, so a natural-order cache folds
@@ -200,7 +213,12 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
          paged_kv ? attrs.kv_cache_num_layers : 1u,
          paged_kv ? attrs.kv_cache_layer_idx : 0u,
          cb_page_bundle_id,
-         page_bundle_count});
+         page_bundle_count,
+         attrs.kv_cache_sp_axis.has_value() ? t.q.device()->shape()[attrs.kv_cache_sp_axis.value()] : 1u,
+         static_cast<uint32_t>(share_page_table),
+         table_ready_sem,
+         table_valid_sem,
+         table_peers});
     std::vector<uint32_t> reader_crt;
     tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -326,7 +344,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         // Both sides index the same slot enums, so a reorder here cannot silently desync the
         // cache-hit patch in override_runtime_arguments; Buffer* slots stay address bindings.
         using RArg = SparseSDPAMsaOperation::ReaderArg;
-        RtArgs reader_rt(RArg::kReaderArgCount);
+        RtArgs reader_rt(RArg::kReaderArgCount + 2 * table_peers);
         reader_rt[RArg::kReaderQAddr] = q_buf;
         reader_rt[RArg::kReaderKAddr] = k_buf;
         reader_rt[RArg::kReaderVAddr] = v_buf;
@@ -341,6 +359,19 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         // position) and re-applied on cache hits.
         reader_rt[RArg::kReaderChunkStart] = dyn.chunk_start_local;
         reader_rt[RArg::kReaderPageBundleAddr] = page_bundle_buf;
+        reader_rt[RArg::kReaderPageTableSlot] = dyn.page_table_slot;
+        reader_rt[RArg::kReaderPageTableSpRank] = dyn.page_table_sp_rank;
+        if (share_page_table) {
+            const auto leader = t.q.device()->worker_core_from_logical_core({core.x, 0});
+            reader_rt[RArg::kReaderPageTableIsLeader] = static_cast<uint32_t>(core.y == 0);
+            reader_rt[RArg::kReaderPageTableLeaderX] = static_cast<uint32_t>(leader.x);
+            reader_rt[RArg::kReaderPageTableLeaderY] = static_cast<uint32_t>(leader.y);
+            for (uint32_t y = 1; y < grid.y; ++y) {
+                const auto peer = t.q.device()->worker_core_from_logical_core({core.x, y});
+                reader_rt[RArg::kReaderArgCount + 2 * (y - 1)] = static_cast<uint32_t>(peer.x);
+                reader_rt[RArg::kReaderArgCount + 2 * (y - 1) + 1] = static_cast<uint32_t>(peer.y);
+            }
+        }
         reader_desc.emplace_runtime_args(core, reader_rt);
 
         using WArg = SparseSDPAMsaOperation::WriterArg;

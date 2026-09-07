@@ -25,7 +25,9 @@ ttnn::Tensor sparse_sdpa_msa(
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& page_bundle_indices,
-    uint32_t kv_cache_page_size) {
+    uint32_t kv_cache_page_size,
+    uint32_t kv_cache_slot_idx,
+    std::optional<uint32_t> kv_cache_sp_axis) {
     const uint32_t d = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(d)));
 
@@ -81,7 +83,9 @@ ttnn::Tensor sparse_sdpa_msa(
         kv_cache_num_layers.value_or(1),
         kv_cache_layer_idx.value_or(0),
         page_bundle_indices,
-        kv_cache_page_size);
+        kv_cache_page_size,
+        kv_cache_slot_idx,
+        kv_cache_sp_axis);
 }
 
 }  // namespace ttnn::transformer

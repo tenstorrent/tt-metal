@@ -60,7 +60,7 @@ void kernel_main() {
     constexpr uint32_t page_bundle_count = get_compile_time_arg_val(33);
 
     // K/V use RuntimeTensorShape so T can vary without recompilation.
-    constexpr auto q_args = TensorAccessorArgs<34, 0>();
+    constexpr auto q_args = TensorAccessorArgs<39, 0>();
     constexpr auto k_args =
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto v_args =
@@ -88,6 +88,14 @@ void kernel_main() {
     // Per-device global position of this core's query row 0 (chunk_start_idx + rank*S); patched at dispatch.
     const uint32_t chunk_start_local = CAUSAL_MASK_ENABLED ? get_arg_val<uint32_t>(10) : 0;
     const uint32_t page_bundle_addr = get_arg_val<uint32_t>(11);
+    const uint32_t page_table_slot = get_arg_val<uint32_t>(12);
+    const uint32_t page_table_sp_rank = get_arg_val<uint32_t>(13);
+    constexpr uint32_t page_table_sp_size = get_compile_time_arg_val(34);
+    constexpr bool share_page_table = get_compile_time_arg_val(35) != 0;
+    constexpr uint32_t table_ready_sem = get_compile_time_arg_val(36);
+    constexpr uint32_t table_valid_sem = get_compile_time_arg_val(37);
+    constexpr uint32_t table_peers = get_compile_time_arg_val(38);
+    const bool table_leader = !share_page_table || get_arg_val<uint32_t>(14) != 0;
     constexpr uint32_t keys_per_tile = tt::constants::TILE_WIDTH;
 
     Noc noc;
@@ -103,14 +111,56 @@ void kernel_main() {
     if constexpr (paged_kv) {
         page_bundle_cb.reserve_back(1);
         page_bundle_l1 = page_bundle_cb.get_write_ptr();
-        noc.async_read(
-            page_bundle_reader,
-            CoreLocalMem<uint16_t>(page_bundle_l1),
-            page_bundle_count * sizeof(uint16_t),
-            {.page_id = 0},
-            {});
-        noc.async_read_barrier();
-        invalidate_l1_cache();
+        if (work_count > 0 && table_leader) {
+            noc.async_read(
+                page_bundle_reader,
+                CoreLocalMem<uint32_t>(page_bundle_l1),
+                page_bundle_count * sizeof(uint32_t),
+                {.page_id = page_table_slot},
+                {});
+            noc.async_read_barrier();
+            invalidate_l1_cache();
+            if constexpr (page_table_sp_size > 1) {
+                // Compact this SP's entries in place; payload gathers retain their local page indices.
+                auto table = CoreLocalMem<volatile uint32_t>(page_bundle_l1);
+                for (uint32_t src = page_table_sp_rank, dst = 0; src < page_bundle_count;
+                     src += page_table_sp_size, ++dst) {
+                    table[dst] = table[src];
+                }
+            }
+        }
+        if constexpr (share_page_table) {
+            const uint32_t ready_addr = get_semaphore(table_ready_sem);
+            const uint32_t valid_addr = get_semaphore(table_valid_sem);
+            auto* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
+            auto* valid = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid_addr);
+            if (table_leader) {
+                noc_semaphore_wait(ready, table_peers);
+                noc_semaphore_set(ready, 0);
+                const uint32_t local_entries =
+                    (page_bundle_count + page_table_sp_size - 1 - page_table_sp_rank) / page_table_sp_size;
+                // CB geometry and addresses are identical on every core in this program.
+                for (uint32_t peer = 0; peer < table_peers; ++peer) {
+                    const uint32_t x = get_arg_val<uint32_t>(17 + 2 * peer);
+                    const uint32_t y = get_arg_val<uint32_t>(18 + 2 * peer);
+                    noc_async_write(
+                        page_bundle_l1, get_noc_addr(x, y, page_bundle_l1), local_entries * sizeof(uint32_t));
+                }
+                // Publish only after every data write has landed; receivers may immediately read the table.
+                noc_async_write_barrier();
+                for (uint32_t peer = 0; peer < table_peers; ++peer) {
+                    const uint32_t x = get_arg_val<uint32_t>(17 + 2 * peer);
+                    const uint32_t y = get_arg_val<uint32_t>(18 + 2 * peer);
+                    noc_semaphore_inc(get_noc_addr(x, y, valid_addr), 1);
+                }
+            } else {
+                noc_semaphore_set(valid, 0);
+                noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(15), get_arg_val<uint32_t>(16), ready_addr), 1);
+                noc_semaphore_wait(valid, 1);
+                invalidate_l1_cache();
+            }
+        }
+        // Empty independent workers also publish the unused CB for the writer's constant setup.
         page_bundle_cb.push_back(1);
     }
 

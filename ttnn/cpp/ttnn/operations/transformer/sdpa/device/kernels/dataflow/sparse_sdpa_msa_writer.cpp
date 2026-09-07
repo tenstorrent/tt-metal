@@ -81,10 +81,6 @@ void kernel_main() {
     const auto v = TensorAccessor(v_args, v_addr);
     experimental::CB page_bundle_cb(cb_page_bundle);
     uint32_t page_bundle_l1 = 0;
-    if constexpr (paged_kv) {
-        page_bundle_cb.wait_front(1);
-        page_bundle_l1 = page_bundle_cb.get_read_ptr();
-    }
 
     // Reduce identity scaler; softmax scale is applied in compute.
     dataflow_kernel_lib::
@@ -99,6 +95,11 @@ void kernel_main() {
         experimental::CB(cb_neginf).reserve_back(1);
         fill_neginf_tile<mask_tile_bytes>(cb_neginf, 0);
         experimental::CB(cb_neginf).push_back(1);
+    }
+
+    if constexpr (paged_kv) {
+        page_bundle_cb.wait_front(1);
+        page_bundle_l1 = page_bundle_cb.get_read_ptr();
     }
 
     uint32_t tok = work_start;

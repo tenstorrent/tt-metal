@@ -29,7 +29,7 @@ FORCE_INLINE uint32_t cache_tile_id(
         constexpr uint32_t tile_rows_per_page = PageSize / tt::constants::TILE_HEIGHT;
         const uint32_t logical_bundle = logical_tile_row / tile_rows_per_page;
         const uint32_t tile_row_in_page = logical_tile_row % tile_rows_per_page;
-        const uint32_t physical_bundle = CoreLocalMem<volatile uint16_t>(page_bundle_l1)[logical_bundle];
+        const uint32_t physical_bundle = CoreLocalMem<volatile uint32_t>(page_bundle_l1)[logical_bundle];
         const uint32_t physical_page = (physical_bundle * NumLayers + LayerIdx) * n_kv + kv_group;
         return (physical_page * tile_rows_per_page + tile_row_in_page) * feature_tiles + feature_tile;
     }

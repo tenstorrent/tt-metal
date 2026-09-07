@@ -31,6 +31,10 @@ struct SparseSDPAMsaParams {
     uint32_t kv_cache_num_layers = 1;
     uint32_t kv_cache_layer_idx = 0;
     uint32_t kv_cache_page_size = 32;
+    // Runtime row selection in the replicated allocator page table; excluded from the hash.
+    uint32_t kv_cache_slot_idx = 0;
+    // Local page i uses table[slot, i*SP + coordinate[axis]]. Unset means SP=1.
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt;
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
     bool causal_enabled() const { return chunk_start_idx.has_value(); }
     bool has_block_cyclic() const { return block_cyclic.has_value(); }

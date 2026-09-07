@@ -60,6 +60,11 @@ struct SparseSDPAMsaOperation {
         kReaderVGroupStride,
         kReaderChunkStart,
         kReaderPageBundleAddr,
+        kReaderPageTableSlot,
+        kReaderPageTableSpRank,
+        kReaderPageTableIsLeader,
+        kReaderPageTableLeaderX,
+        kReaderPageTableLeaderY,
         kReaderArgCount,
     };
     enum WriterArg : uint32_t {
@@ -103,6 +108,8 @@ struct SparseSDPAMsaOperation {
         uint32_t k_group_tile_stride = 0;
         uint32_t v_group_tile_stride = 0;
         uint32_t chunk_start_local = 0;
+        uint32_t page_table_slot = 0;
+        uint32_t page_table_sp_rank = 0;
     };
     static DispatchArgs compute_dispatch_args(
         const operation_attributes_t& attrs,
@@ -125,6 +132,8 @@ Tensor sparse_sdpa_msa(
     uint32_t kv_cache_num_layers = 1,
     uint32_t kv_cache_layer_idx = 0,
     const std::optional<Tensor>& page_bundle_indices = std::nullopt,
-    uint32_t kv_cache_page_size = 32);
+    uint32_t kv_cache_page_size = 32,
+    uint32_t kv_cache_slot_idx = 0,
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt);
 
 }  // namespace ttnn::prim
