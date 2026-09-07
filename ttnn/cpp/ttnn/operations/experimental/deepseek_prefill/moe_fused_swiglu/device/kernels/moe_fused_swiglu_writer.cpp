@@ -119,10 +119,7 @@ constexpr uint32_t RT_HRECT = RT_PEERS + 2 * KGROUPS;
 // Per-expert weight bases, role-major: EXPERTS_PER_CHIP W_up addresses then EXPERTS_PER_CHIP
 // W_down addresses. Appended AFTER the mcast rectangle, so none of the offsets above moved.
 constexpr uint32_t RT_WEIGHTS = RT_HRECT + 4;
-// Non-posted, for the reason the reader's twin spells out: Noc::async_write_multicast rejects
-// POSTED at compile time.
 constexpr bool kHMcastPosted = (H_MCAST_POSTED != 0);
-static_assert(!kHMcastPosted, "POSTED multicast is not expressible through Noc::async_write_multicast");
 
 inline bool h_round_on_writer(uint32_t r) { return ((H_ROUND_NOC1_MASK >> r) & 1u) != 0; }
 
@@ -139,14 +136,31 @@ inline void h_slot_send_posted_noc1(uint32_t slot, uint32_t l1, uint32_t size) {
     constexpr uint32_t ndest = NUM_CORES - 1;
     Semaphore<> hf(SEM_H_RDY_BASE + slot);
 
-    noc.async_write_multicast(
-        CoreLocalMem<uint32_t>(l1),
-        MulticastEndpoint{},
-        size,
-        ndest,
-        {},
-        {.noc_x_start = rb.sx, .noc_y_start = rb.sy, .noc_x_end = rb.ex, .noc_y_end = rb.ey, .addr = l1},
-        /*linked=*/true);
+    // Both arms as in the reader's twin: the POSTED variant stays raw because
+    // Noc::async_write_multicast static_asserts against it.
+    if constexpr (kHMcastPosted) {
+        ncrisc_noc_fast_write_any_len<noc_mode>(
+            noc.get_noc_id(),
+            write_cmd_buf,
+            l1,
+            get_noc_multicast_addr(rb.sx, rb.sy, rb.ex, rb.ey, l1, noc.get_noc_id()),
+            size,
+            NOC_MULTICAST_WRITE_VC,
+            /*mcast=*/true,
+            /*linked=*/true,
+            ndest,
+            /*multicast_path_reserve=*/true,
+            /*posted=*/true);
+    } else {
+        noc.async_write_multicast(
+            CoreLocalMem<uint32_t>(l1),
+            MulticastEndpoint{},
+            size,
+            ndest,
+            {},
+            {.noc_x_start = rb.sx, .noc_y_start = rb.sy, .noc_x_end = rb.ex, .noc_y_end = rb.ey, .addr = l1},
+            /*linked=*/true);
+    }
     hf.set(VALID);
     hf.set_multicast(noc, rb.sx, rb.sy, rb.ex, rb.ey, ndest, /*linked=*/false);
     noc.async_writes_flushed();

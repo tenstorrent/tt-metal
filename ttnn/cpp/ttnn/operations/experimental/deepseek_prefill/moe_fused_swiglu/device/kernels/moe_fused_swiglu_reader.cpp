@@ -21,6 +21,10 @@
 //     a throttle on a stream whose whole point is that all HGROUPS W_down blocks leave as one
 //     batch. It is also a compile-time flag against a runtime `prefetch_next_x`, so every tagged
 //     read would need both instantiations behind a branch. Five sticky calls express all of it.
+//   * the h payload multicast keeps a raw arm for its POSTED variant, because
+//     Noc::async_write_multicast static_asserts against POSTED. Both arms are always compiled (an
+//     `if constexpr` outside a template still type-checks the discarded one), so the H_MCAST_POSTED
+//     build cannot rot unnoticed while the flag is false.
 //   * the reduce-scatter transport is raw unicast + counting semaphores: mcast_pipe's SenderPipe is
 //     a rectangle multicast, while a gather leg is point-to-point with a different destination per
 //     peer, and the fan-in needs counting.
@@ -199,12 +203,10 @@ constexpr uint32_t RT_HGROUP_RECT = RT_HMCAST + 4 + 2 * HGROUPS * KGROUPS;
 // W_down addresses. Appended AFTER every mcast block, so none of the offsets above moved.
 constexpr uint32_t RT_WEIGHTS = RT_HGROUP_RECT + 4;
 
-// The h payload send is non-posted, so it pays `ndest` write-acks and the VALID flag behind it is
-// LINKED on the same VC and cannot overtake it. POSTED would drop those acks, but
-// Noc::async_write_multicast rejects POSTED at compile time, so the geometry flag stays false until
-// the library grows one — an un-LINKED flag lets a receiver read a half-written slot, silently.
+// POSTED drops the `ndest` payload write-acks and changes nothing else: the VALID flag stays
+// non-posted and LINKED on the same VC, so it cannot overtake the payload. Keep 0 reachable — if
+// that ordering ever fails a receiver reads a half-written slot, silently.
 constexpr bool kHMcastPosted = (H_MCAST_POSTED != 0);
-static_assert(!kHMcastPosted, "POSTED multicast is not expressible through Noc::async_write_multicast");
 
 inline bool h_round_on_writer(uint32_t r) { return ((H_ROUND_NOC1_MASK >> r) & 1u) != 0; }
 
@@ -229,14 +231,31 @@ inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size, bool g
 
     // 1. the payload — LINKED, so the flag below cannot overtake it. `src == dst` on every
     //    destination, which is why one address serves as both the local source and the mcast offset.
-    noc.async_write_multicast(
-        CoreLocalMem<uint32_t>(l1),
-        MulticastEndpoint{},
-        size,
-        ndest,
-        {},
-        {.noc_x_start = rb.sx, .noc_y_start = rb.sy, .noc_x_end = rb.ex, .noc_y_end = rb.ey, .addr = l1},
-        /*linked=*/true);
+    //    The two arms are the SAME transaction apart from `posted`: Noc::async_write_multicast
+    //    static_asserts against POSTED, so that variant has to stay on the raw primitive.
+    if constexpr (kHMcastPosted) {
+        ncrisc_noc_fast_write_any_len<noc_mode>(
+            noc.get_noc_id(),
+            write_cmd_buf,
+            l1,
+            get_noc_multicast_addr(rb.sx, rb.sy, rb.ex, rb.ey, l1, noc.get_noc_id()),
+            size,
+            NOC_MULTICAST_WRITE_VC,
+            /*mcast=*/true,
+            /*linked=*/true,
+            ndest,
+            /*multicast_path_reserve=*/true,
+            /*posted=*/true);
+    } else {
+        noc.async_write_multicast(
+            CoreLocalMem<uint32_t>(l1),
+            MulticastEndpoint{},
+            size,
+            ndest,
+            {},
+            {.noc_x_start = rb.sx, .noc_y_start = rb.sy, .noc_x_end = rb.ex, .noc_y_end = rb.ey, .addr = l1},
+            /*linked=*/true);
+    }
     // 2. re-assert VALID locally: `set_multicast` broadcasts THIS core's own cell as the source, and
     //    a core that also receives on this cell left it INVALID after its last receive.
     hf.set(VALID);
