@@ -2139,6 +2139,27 @@ class MiniMaxH3Pipeline:
             num_frames=video.shape[2],
         )
 
+    # The canvases the serving policy admits (packing.resolve_canvas_size of each ratio); one and two
+    # keyframes at each give the vision tower every padded patch count it will see, and the two prompt
+    # lengths put the presentation into every SP-alignment bucket the 2048-byte request prompt can reach.
+    _WARMUP_ASPECT_RATIOS = ((21, 9), (16, 9), (4, 3), (1, 1), (3, 4), (9, 16))
+
+    def _warmup_encoder_envelope(self, prompt: str) -> None:
+        """Run the keyframe conditioner (vision tower + text encoder) once per served geometry so its programs
+        are compiled and cached before the denoise traces are captured. Encoder outputs are discarded."""
+        long_prompt = " ".join([prompt] * (2048 // (len(prompt) + 1) + 1))[:2000]
+        warm = self._warmup_image()
+        n = 0
+        for aspect_w, aspect_h in self._WARMUP_ASPECT_RATIOS:
+            height, width = resolve_canvas_size(aspect_w, aspect_h)
+            for n_keyframes in (1, 2):
+                keyframes = [prepare_keyframe_image(warm, height, width, stretch=(i == 0)) for i in range(n_keyframes)]
+                for text in (prompt, long_prompt):
+                    prompt_embeds, _ = self.encode_prompt(text, keyframes=keyframes)
+                    ttnn.deallocate(prompt_embeds)
+                    n += 1
+        self._log(f"encoder envelope warmed: {n} conditioner passes over {len(self._WARMUP_ASPECT_RATIOS)} canvases")
+
     @staticmethod
     def _warmup_image(size: int = 512) -> Image.Image:
         y, x = np.mgrid[0:size, 0:size].astype(np.uint8)
@@ -2291,6 +2312,16 @@ class MiniMaxH3Pipeline:
                     if shrink:
                         shrunk = request
                 fitted[rung] = request
+            # Compile every encoder program a served fl2va request can need BEFORE any capture is live
+            # (the fl2va runner constructs the pipeline with task="t2va"; only ref2va is distinguishable here).
+            # The binds above only warm the warmup image's own geometry; a keyframe at another canvas, a
+            # second keyframe, or a prompt that pads the presentation into another 1024-token bucket would
+            # otherwise JIT-compile under the live captures and allocate into the band the replays rewrite
+            # (the program-cache check in _denoise then has to release and re-capture every rung, which
+            # costs the first request at each new geometry a few seconds). A few dozen encodes here, at
+            # ~1 s each, and nothing compiles at serve time.
+            if self.task != "ref2va":
+                self._warmup_encoder_envelope(prompt)
             if not self.trace_denoise:
                 return
             capture_rungs = sorted(fitted, reverse=True)
