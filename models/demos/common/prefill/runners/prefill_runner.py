@@ -268,13 +268,23 @@ def _forward_shutdown(d2d_out, rank: int, hidden_size: int) -> None:
     logger.info(f"[pp rank {rank}] forwarded SHUTDOWN sentinel to rank {rank + 1}")
 
 
-def _lease_reclaim(d2d_in, d2d_out) -> None:
+def _lease_reclaim(d2d_in, d2d_out) -> tuple:
+    """Reclaim last chunk's fabric leases and grant the inbound one for this chunk.
+
+    Returns (wait_out_ms, wait_in_ms) for the phase breakdown. The OUTBOUND wait is where a
+    non-last rank actually pays for its D2D transfer: _d2d_send only ENQUEUES (its own timer reads
+    ~0.3 ms), and the bytes move while the host runs on, so the cost lands here, one chunk later.
+    Reading the send timer alone therefore reports the hop as free."""
+    t0 = time.perf_counter()
     if d2d_in is not None:
         d2d_in.wait_for_fabric_links()
+    t1 = time.perf_counter()
     if d2d_out is not None:
         d2d_out.wait_for_fabric_links()
+    t2 = time.perf_counter()
     if d2d_in is not None:
         d2d_in.release_fabric_links()
+    return (t2 - t1) * 1000.0, (t1 - t0) * 1000.0
 
 
 def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: float) -> None:
@@ -284,6 +294,29 @@ def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: fl
         fd = os.open(os.path.join(TIMING_DIR, f"rank{rank}.csv"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
         try:
             os.write(fd, f"{rank},{c},{compute_start:.6f},{compute_ms:.3f}\n".encode())
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def _record_phase_timing(rank: int, c: int, **phases) -> None:
+    """One row per chunk of where the wall time between chunk starts actually went.
+
+    Compute is only part of a rank's interval; the rest is lease waits, the inbound socket sync and
+    the outbound enqueue. Without this split the remainder is a single unattributed number and the
+    obvious reading of it -- that the D2D push is ~0.3 ms and therefore free -- is wrong (see
+    _lease_reclaim). Costs two clock reads per phase and writes only when PREFILL_TIMING_DIR is set."""
+    if not TIMING_DIR:
+        return
+    try:
+        path = os.path.join(TIMING_DIR, f"phases_rank{rank}.csv")
+        header = not os.path.exists(path)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            if header:
+                os.write(fd, ("chunk," + ",".join(phases) + "\n").encode())
+            os.write(fd, (f"{c}," + ",".join(f"{v:.3f}" for v in phases.values()) + "\n").encode())
         finally:
             os.close(fd)
     except OSError:
@@ -368,11 +401,14 @@ def run_request_loop(
     c = 0
     first = None
     while not _shutdown:
-        _lease_reclaim(d2d_in, d2d_out)
+        _t_phase = time.perf_counter()
+        wait_out_ms, wait_in_ms = _lease_reclaim(d2d_in, d2d_out)
+        _t_recv = time.perf_counter()
         if cfg.is_first_rank:
             inp, meta, metadata_msg = _socket_next(h2d_service)
         else:
             inp, meta, metadata_msg = _d2d_recv(d2d_in)
+        recv_ms = (time.perf_counter() - _t_recv) * 1000.0
         if _is_shutdown_sentinel(meta):
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
@@ -380,8 +416,18 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
+        _t_cs = time.perf_counter()
         t = _compute_and_send(
             runtime, kv_caches, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, metadata_msg=metadata_msg
+        )
+        _record_phase_timing(
+            rank,
+            c,
+            lease_wait_out_ms=wait_out_ms,
+            lease_wait_in_ms=wait_in_ms,
+            recv_ms=recv_ms,
+            compute_and_send_ms=(time.perf_counter() - _t_cs) * 1000.0,
+            loop_ms=(time.perf_counter() - _t_phase) * 1000.0,
         )
         if first is None:
             first = t

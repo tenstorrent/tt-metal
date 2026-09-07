@@ -21,6 +21,7 @@ class Gemma4PrefillConfig:
     NUM_LAYERS = 60
     NUM_ATTENTION_HEADS = 32
     NUM_KEY_VALUE_HEADS = 16
+    NUM_GLOBAL_KEY_VALUE_HEADS = 4
     HEAD_DIM = 256
     GLOBAL_HEAD_DIM = 512
     VOCAB_SIZE = 262144
@@ -31,7 +32,13 @@ def _model_path() -> str:
 
 
 class Gemma4PrefillAdapter(PrefillModelAdapter):
-    """Single-rank CP8/TP4 Gemma 4 prefill with durable migration-ready KV."""
+    """Context-parallel Gemma 4 prefill with durable migration-ready KV.
+
+    Pipeline-parallel capable: the engine hands each rank its own layer window and
+    ``is_first_rank`` / ``is_last_rank``, and everything downstream is keyed by the
+    GLOBAL layer index. The canonical shapes are a single (8,4) rank (CP=8 x TP=4) and
+    four (8,1) ranks (CP=8 x TP=1), one per column of a Blackhole galaxy.
+    """
 
     name = "gemma4_31b"
     model_config = Gemma4PrefillConfig
@@ -67,10 +74,26 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
 
     @staticmethod
     def _validate(params: PrefillRunParams) -> None:
-        if params.mesh_shape != (8, 4):
-            raise NotImplementedError(f"Gemma 4 common prefill currently requires CP8/TP4, got {params.mesh_shape}")
-        if not (params.first_layer_idx == 0 and params.is_first_rank and params.is_last_rank):
-            raise NotImplementedError("Gemma 4 common prefill currently supports one pipeline rank")
+        cp = params.sp_factor
+        tp = params.tp_factor
+        if cp <= 1:
+            raise NotImplementedError(f"Gemma 4 common prefill requires context parallelism, got sp={cp}")
+        # ring_joint asserts halo_tokens <= N_local_q, and the 1024-token sliding window
+        # rounds up to a 32-tile halo, so a CP rank's Q slab must cover a whole window.
+        if params.chunk_size % (cp * 1024):
+            raise ValueError(
+                f"chunk_size={params.chunk_size} must be a multiple of 1024*cp={1024 * cp}: every CP "
+                f"rank needs a Q slab at least one sliding window wide"
+            )
+        if params.max_seq_len % params.chunk_size:
+            raise ValueError(f"max_seq_len={params.max_seq_len} must be divisible by chunk={params.chunk_size}")
+        for heads, what in (
+            (Gemma4PrefillConfig.NUM_ATTENTION_HEADS, "query"),
+            (Gemma4PrefillConfig.NUM_KEY_VALUE_HEADS, "sliding KV"),
+            (Gemma4PrefillConfig.NUM_GLOBAL_KEY_VALUE_HEADS, "global KV"),
+        ):
+            if heads % tp:
+                raise ValueError(f"TP={tp} does not divide Gemma 4's {heads} {what} heads")
 
     @staticmethod
     def _model_args(hf_config, params: PrefillRunParams):
@@ -91,6 +114,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             num_users=params.num_users,
             max_seq_len=params.max_seq_len,
             num_layers=params.num_layers,
+            first_layer_idx=params.first_layer_idx,
         )
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):

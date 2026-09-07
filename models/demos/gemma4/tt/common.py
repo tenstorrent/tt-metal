@@ -58,6 +58,12 @@ def create_tt_model(
     prefill_chunk_size=None,
     ring_kv_caches=None,
     prefill_weights_only: bool = False,
+    # Pipeline-parallel slicing: this process builds GLOBAL layers
+    # [first_layer_idx, first_layer_idx + num_layers). Defaults keep every existing
+    # caller (demos, unit tests, single-rank serving) on the whole-model path.
+    first_layer_idx=0,
+    is_first_rank=True,
+    is_last_rank=True,
 ):
     """
     Create Gemma4 model, optionally omitting output weights for KV-only prefill.
@@ -160,6 +166,9 @@ def create_tt_model(
         bounded_sliding_cache_slots=bounded_sliding_cache_slots,
         ring_kv_caches=ring_kv_caches,
         prefill_weights_only=prefill_weights_only,
+        first_layer_idx=first_layer_idx,
+        is_first_rank=is_first_rank,
+        is_last_rank=is_last_rank,
     )
 
     # After a full cold build, record completion (+ capture host-consumed weights to the sidecar)

@@ -1,7 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Common-prefill runtime for Gemma 4 CP8/TP4."""
+"""Common-prefill runtime for Gemma 4 context-parallel prefill.
+
+One instance per pipeline rank. A rank owns GLOBAL layers ``[first_layer_idx,
+first_layer_idx + num_layers)``; ``is_first_rank`` decides whether the chunk input is
+token IDs (embedded here) or a hidden-state activation arriving over the D2D socket, and
+``is_last_rank`` decides whether the output is the populated KV cache (nothing to return)
+or the residual stream to hand downstream. Single-rank is the all-defaults case.
+"""
 
 from __future__ import annotations
 
@@ -63,14 +70,49 @@ class TtPrefillRuntime:
         self._trace_request_id = 0
         self._trace_d2h_service = None
         self._trace_metadata_msg = None
-        if not (
-            config.is_first_rank and config.is_last_rank and config.first_layer_idx == 0 and config.mesh_shape == (8, 4)
-        ):
-            raise NotImplementedError("Gemma 4 common prefill currently supports one CP8/TP4 rank")
+        if config.sp_factor * config.tp_factor != mesh_device.get_num_devices():
+            raise ValueError(
+                f"mesh_shape {config.mesh_shape} (sp={config.sp_factor} x tp={config.tp_factor}) does not "
+                f"match the {mesh_device.get_num_devices()} devices opened"
+            )
+        if config.first_layer_idx < 0 or config.num_layers <= 0:
+            raise ValueError(f"invalid layer window [{config.first_layer_idx}, +{config.num_layers})")
         if config.max_seq_len % config.chunk_size:
             raise ValueError("max_seq_len must be divisible by chunk_size")
         if config.chunk_size % (config.sp_factor * 1024):
             raise ValueError("chunk_size must give every CP rank at least one 1024-token sliding window")
+        # Needed before the model exists, to size a non-first rank's placeholder activation.
+        # Read from the checkpoint's config rather than carried in the config object so it
+        # cannot disagree with the model the next rank actually built.
+        from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+
+        _hf = Gemma4ModelArgs.load_hf_config(model_path)
+        self.hidden_size = int(getattr(_hf, "text_config", _hf).hidden_size)
+
+    def _host_state_dict(self):
+        """Host weights for THIS rank: the cache-completion pair, or a cold layer window.
+
+        Warm cache (the normal path): only what ttnn.as_tensor cannot serve from a tensorbin --
+        the per-layer scalars (read as Python floats) and the embedding table.
+
+        Cold build (GEMMA4_PREFILL_LOAD_FULL_WEIGHTS=1): the real weights, but only for the layers
+        this rank owns. Reading the whole 62 GiB checkpoint per rank is what makes four concurrent
+        ranks a host-RAM problem rather than an NFS one; a window is ~1/PP of that.
+        """
+        from models.demos.gemma4.demo.prefill_runtime import _load_full_weights
+        from models.demos.gemma4.utils.partial_weights import load_layer_window_state
+
+        if not _load_full_weights():
+            return _cache_completion_state(self.model_path)
+        return load_layer_window_state(
+            self.model_path,
+            self.config.first_layer_idx,
+            self.config.num_layers,
+            # First rank only. This service builds the model with prefill_weights_only=True (see
+            # _build_model), so no rank builds an LM head -- the KV cache IS the product -- and the
+            # 2.8 GiB embedding table is needed nowhere but where tokens are embedded.
+            with_embedding=self.config.is_first_rank,
+        )
 
     def _resolve_kv(self, kv_caches):
         if not isinstance(kv_caches, Gemma4KvCaches):
@@ -88,7 +130,7 @@ class TtPrefillRuntime:
             max_batch_size=1,
             max_seq_len=self.config.max_seq_len,
             dtype=ttnn.bfloat16,
-            state_dict=_cache_completion_state(self.model_path),
+            state_dict=self._host_state_dict(),
             num_layers=self.config.num_layers,
             mesh_config=self.mesh_config,
             create_kv_cache=False,
@@ -96,6 +138,9 @@ class TtPrefillRuntime:
             model_path=self.model_path,
             prefill_chunk_size=self.config.chunk_size,
             ring_kv_caches=kv_caches.layers,
+            first_layer_idx=self.config.first_layer_idx,
+            is_first_rank=self.config.is_first_rank,
+            is_last_rank=self.config.is_last_rank,
         )
         self.model._ring_metadata_external = True
         self.model._prefill_trace_mode = True
@@ -115,8 +160,32 @@ class TtPrefillRuntime:
         self._trace_input = self.make_chunk_input([0] * self.config.chunk_size)
         self._trace_metadata_msg = self._make_metadata_msg((0, 0, self.config.chunk_size))
 
+    def make_placeholder_activation(self):
+        """A non-first rank's stand-in for the hidden state it will receive over D2D.
+
+        Same per-device shape and layout as ``activation_global_spec(chunk, hidden)``
+        mapped ``[Shard(2), Replicate()]`` by the runner: sequence CP-sharded, embedding
+        whole (Gemma 4 sets ``pipeline_activation_emb_tp_sharded = False``). Used to
+        compile and to capture the trace before any real activation exists.
+        """
+        chunk_per_chip = self.config.chunk_size // self.config.sp_factor
+        return ttnn.from_torch(
+            torch.zeros(1, 1, chunk_per_chip, self.hidden_size, dtype=torch.bfloat16),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
     def make_chunk_input(self, token_ids: list[int]):
-        """Create the same CP-major local shape produced by H2DStreamService."""
+        """Create the same CP-major local shape produced by H2DStreamService.
+
+        First rank only: a later pipeline rank never sees token IDs, it receives an
+        already-embedded activation, so it gets a placeholder of that shape instead.
+        """
+        if not self.config.is_first_rank:
+            return self.make_placeholder_activation()
         if len(token_ids) != self.config.chunk_size:
             raise ValueError(f"expected {self.config.chunk_size} token ids, got {len(token_ids)}")
         tokens = torch.tensor(token_ids, dtype=torch.int32).reshape(
@@ -136,10 +205,22 @@ class TtPrefillRuntime:
         )
 
     def _normalize_input(self, input_tensor):
+        expected_local = self.config.chunk_size // self.config.sp_factor
+        if not self.config.is_first_rank:
+            # Hidden state from upstream: [1, 1, chunk/cp, hidden] per device. Check the
+            # two dims that actually carry meaning -- a wrong sequence split or a
+            # TP-sharded embedding would otherwise surface as a matmul shape error 60
+            # layers later.
+            shape = tuple(int(d) for d in input_tensor.shape)
+            if shape[-2:] != (expected_local, self.hidden_size):
+                raise ValueError(
+                    f"unexpected Gemma 4 pipeline activation shape {shape}; expected "
+                    f"(..., {expected_local}, {self.hidden_size}) on a non-first rank"
+                )
+            return input_tensor
         local_tokens = 1
         for dim in input_tensor.shape:
             local_tokens *= int(dim)
-        expected_local = self.config.chunk_size // self.config.sp_factor
         if local_tokens != expected_local:
             raise ValueError(
                 f"unexpected Gemma 4 local chunk shape {tuple(input_tensor.shape)}; "
@@ -181,7 +262,21 @@ class TtPrefillRuntime:
 
     def _forward(self, input_tensor, chunk_start: int, *, d2h_service=None, metadata_msg=None):
         with _lm_head_deferred(self.model):
-            embeds, _, _, _ = self.model.transform_and_embed_prefill_inputs_device(input_tensor, None, None, None)
+            if self.config.is_first_rank:
+                embeds, _, _, _ = self.model.transform_and_embed_prefill_inputs_device(input_tensor, None, None, None)
+            else:
+                # Already the residual stream: the upstream stage embedded it and ran its own
+                # layers. Embedding again would be nonsense (these are not token ids).
+                #
+                # Clone rather than pass it straight through: Gemma4DecoderLayer DEALLOCATES its
+                # input (it is the residual it adds into, freed after the add), so handing it
+                # self._trace_input would free the persistent buffer the captured trace reads
+                # from and that prefill_chunk copies each chunk into -- a use-after-free that
+                # surfaces as a segfault inside the next forward's first rms_norm, not as an
+                # error here. The first rank gets this for free because ttnn.embedding produces
+                # a fresh tensor and leaves the token buffer alone. One 11 MB device copy per
+                # chunk, inside the trace.
+                embeds = ttnn.clone(input_tensor)
             return self.model.ttnn_prefill_forward(
                 x=embeds,
                 chunk_start_idx=chunk_start,
@@ -200,7 +295,8 @@ class TtPrefillRuntime:
         self._stage_metadata(0, 0)
         output = self._forward(self._trace_input, 0)
         ttnn.synchronize_device(self.mesh_device)
-        output.deallocate(True)
+        if output is not None:
+            output.deallocate(True)
         self.compiled = True
         logger.info(f"Gemma 4 runtime compiled in {time.perf_counter() - started:.1f}s")
 
@@ -226,9 +322,10 @@ class TtPrefillRuntime:
                 metadata_msg=self._trace_metadata_msg,
             )
             ttnn.synchronize_device(self.mesh_device)
-            warm_output.deallocate(True)
+            if warm_output is not None:
+                warm_output.deallocate(True)
         controller.begin_capture()
-        self._trace_output = self._forward(
+        out = self._forward(
             self._trace_input,
             0,
             d2h_service=self._trace_d2h_service,
@@ -236,6 +333,11 @@ class TtPrefillRuntime:
         )
         controller.end_capture()
         ttnn.synchronize_device(self.mesh_device)
+        # Non-last rank: this is the persistent activation buffer every replay refreshes in
+        # place, and it is what prefill_chunk hands back for the driver to push over D2D.
+        # Last/single rank: the populated KV cache is the output, so the post-norm hidden is
+        # dead -- but it stays allocated because the captured trace writes to its address.
+        self._trace_output = out
         self._trace_controller = controller
         self._trace_captured = True
         logger.info(
@@ -278,15 +380,23 @@ class TtPrefillRuntime:
                 ttnn.copy(metadata_msg, self._trace_metadata_msg)
             ttnn.copy(source, self._trace_input)
             self._trace_controller.replay()
-            ttnn.deallocate(input_tensor)
-            return None
+            if input_tensor is not self._trace_input:
+                ttnn.deallocate(input_tensor)
+            # Non-last rank: the replay just refreshed the persistent output buffer; hand it
+            # back for the driver to forward over D2D. It must NOT be deallocated -- the
+            # captured trace writes to that exact address on every subsequent chunk, which is
+            # why the runner sends it with deallocate=False under use_trace.
+            return None if self.config.is_last_rank else self._trace_output
         if d2h_service is not None and metadata_msg is None:
             raise ValueError("metadata_msg is required for D2H layer acknowledgements")
         output = self._forward(source, actual_start, d2h_service=d2h_service, metadata_msg=metadata_msg)
-        ttnn.deallocate(input_tensor)
-        if output is not None:
-            output.deallocate(True)
-        return None
+        if input_tensor is not output:
+            ttnn.deallocate(input_tensor)
+        if self.config.is_last_rank:
+            if output is not None:
+                output.deallocate(True)
+            return None
+        return output
 
     def set_layer_ack_channel(self, channel):
         if not self.compiled:

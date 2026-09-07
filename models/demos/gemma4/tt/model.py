@@ -333,13 +333,32 @@ class Gemma4Model:
         # ring KV cache slabs. None means single-chunk prefill.
         prefill_chunk_size=None,
         ring_kv_caches=None,
-        transformation_mats=None,  # Legacy parameter — ignored
         prefill_weights_only: bool = False,
+        # Pipeline-parallel slicing. This instance owns GLOBAL layers
+        # [first_layer_idx, first_layer_idx + num_layers). ``layer_types``, the
+        # checkpoint weight keys and the weight-cache paths are all keyed by the
+        # GLOBAL index, so every one of those lookups goes through ``_gidx``;
+        # only ``self.layers[...]`` is indexed locally. ``is_first_rank`` gates the
+        # token embedding, ``is_last_rank`` gates the final norm + LM head + sampling.
+        # All default so a single-rank instance builds the whole model unchanged.
+        first_layer_idx: int = 0,
+        is_first_rank: bool = True,
+        is_last_rank: bool = True,
+        # Legacy parameters — ignored
+        transformation_mats=None,
     ):
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         # KV-only service returns the decoder output without final norm or logits.
         self.prefill_weights_only = prefill_weights_only
+        self.first_layer_idx = int(first_layer_idx)
+        self.is_first_rank = bool(is_first_rank)
+        self.is_last_rank = bool(is_last_rank)
+        # A non-last pipeline rank wants exactly what prefill_weights_only already gives: no final
+        # norm, no LM head, no sampling, and forward returning the raw residual stream for the next
+        # stage. The two knobs arrived independently and mean the same thing at the tail of the
+        # model, so collapse them into one condition rather than testing both at five sites.
+        self._build_head = self.is_last_rank and not prefill_weights_only
         self.prefill_chunk_size = prefill_chunk_size
         self.mesh_config = mesh_config
         self.hidden_size = hf_config.hidden_size
@@ -379,6 +398,11 @@ class Gemma4Model:
         )
         self._tt_vllm_always_refresh_decode_trace_inputs = bool(self.hidden_size_per_layer_input) or force_refresh
         n_layers = num_layers or hf_config.num_hidden_layers
+        if self.first_layer_idx + n_layers > len(hf_config.layer_types):
+            raise ValueError(
+                f"layer window [{self.first_layer_idx}, {self.first_layer_idx + n_layers}) exceeds the "
+                f"model's {len(hf_config.layer_types)} layers"
+            )
 
         # Per-module dtype resolution. ``precision`` (Gemma4Precision) holds
         # any overrides loaded from precision_overrides.json; modules without
@@ -405,7 +429,16 @@ class Gemma4Model:
         full_n_layers = hf_config.num_hidden_layers
         num_kv_shared = getattr(hf_config, "num_kv_shared_layers", 0) or 0
         first_shared_idx = full_n_layers - num_kv_shared
-        self.kv_shared_layer_map = {}  # layer_idx -> source_layer_idx
+        self.kv_shared_layer_map = {}  # local layer idx -> local source layer idx
+        if num_kv_shared > 0 and self.first_layer_idx != 0:
+            # A shared layer reads K/V from an earlier layer of the same type, which a
+            # later pipeline rank does not own. Supporting it needs a cross-rank K/V
+            # hand-off that does not exist. Gemma4-31B has num_kv_shared_layers=0, so
+            # refuse loudly rather than build a model that silently attends to zeros.
+            raise NotImplementedError(
+                f"num_kv_shared_layers={num_kv_shared} is not supported on a pipeline rank "
+                f"(first_layer_idx={self.first_layer_idx}): the KV source layer lives on another rank"
+            )
         if num_kv_shared > 0 and first_shared_idx < n_layers:
             prev_layers = hf_config.layer_types[:first_shared_idx]
             for i in range(first_shared_idx, n_layers):
@@ -456,7 +489,15 @@ class Gemma4Model:
         else:
             embed_key = None
 
-        if embed_key and state_dict:
+        # A middle pipeline rank embeds nothing and emits no logits, so building either
+        # tensor would burn DRAM it needs for its layers -- 2.8 GB/device each at TP=1,
+        # where the 262144 x 5376 table is no longer sharded across the TP axis.
+        if embed_key is not None and not (self.is_first_rank or self._build_head):
+            embed_key = None
+
+        self.embedding_weight = None
+        self.lm_head_weight = None
+        if embed_key and state_dict and self.is_first_rank:
             embed_weight = state_dict[embed_key]
 
             # Embedding: column-parallel (shard hidden dim across TP devices)
@@ -476,33 +517,28 @@ class Gemma4Model:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            self.lm_head_weight = None
-            if not prefill_weights_only:
-                # LM head (tied with embeddings): column-parallel (shard vocab dim)
-                # Each device holds [hidden, vocab/TP]; all-gather logits after softcapping.
-                # Default is bfloat16 — bfloat8_b is generally too lossy for 262k-vocab
-                # argmax, but the override is exposed for systems that genuinely
-                # need the DRAM relief and can tolerate the precision loss.
-                lm_head_weight = embed_weight.transpose(0, 1).unsqueeze(0).unsqueeze(0)
-                if tp > 1:
-                    lm_mapper = mesh_config.column_parallel(mesh_device)
-                else:
-                    lm_mapper = replicate
-                lm_head_suffix = f"_{dtype_to_str(lm_head_dtype)}"
-                self.lm_head_weight = ttnn.as_tensor(
-                    lm_head_weight,
-                    device=mesh_device,
-                    dtype=lm_head_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=lm_mapper,
-                    cache_file_name=get_cache_file_name(
-                        tensor_cache_path, f"lm_head.weight{tp_suffix}{lm_head_suffix}"
-                    ),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-        else:
-            self.embedding_weight = None
-            self.lm_head_weight = None
+        if embed_key and state_dict and self._build_head:
+            embed_weight = state_dict[embed_key]
+            # LM head (tied with embeddings): column-parallel (shard vocab dim)
+            # Each device holds [hidden, vocab/TP]; all-gather logits after softcapping.
+            # Default is bfloat16 — bfloat8_b is generally too lossy for 262k-vocab
+            # argmax, but the override is exposed for systems that genuinely
+            # need the DRAM relief and can tolerate the precision loss.
+            lm_head_weight = embed_weight.transpose(0, 1).unsqueeze(0).unsqueeze(0)
+            if tp > 1:
+                lm_mapper = mesh_config.column_parallel(mesh_device)
+            else:
+                lm_mapper = replicate
+            lm_head_suffix = f"_{dtype_to_str(lm_head_dtype)}"
+            self.lm_head_weight = ttnn.as_tensor(
+                lm_head_weight,
+                device=mesh_device,
+                dtype=lm_head_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=lm_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, f"lm_head.weight{tp_suffix}{lm_head_suffix}"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         # Per-layer input embeddings (E2B/E4B) — kept as CPU torch tensors for computation
         # Also store embedding weight reference for decode per-layer input
@@ -558,7 +594,7 @@ class Gemma4Model:
                 mesh_device=mesh_device,
                 hf_config=hf_config,
                 state_dict=state_dict,
-                layer_idx=i,
+                layer_idx=self._gidx(i),
                 ccl_manager=ccl_manager,
                 dtype=dtype,
                 shared_mlp_dtype=shared_mlp_dtype,
@@ -579,7 +615,7 @@ class Gemma4Model:
             if create_kv_cache and i not in self.kv_shared_layer_map and layer.self_attn.ring_kv_cache is None:
                 from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
 
-                attn_cfg = Gemma4AttentionConfig(hf_config, i)
+                attn_cfg = Gemma4AttentionConfig(hf_config, self._gidx(i))
                 # Bounded SlidingWindowSpec allocation for sliding layers: only enough
                 # physical blocks to cover one sliding-window-sized region per user,
                 # instead of one max_seq_len-sized region. Mirrors vLLM's hybrid
@@ -623,12 +659,17 @@ class Gemma4Model:
         # KV the Gemma4 *it-assistant* drafter cross-attends into (HF
         # ``shared_kv_states`` exposes "the last layer of each layer_type"). Used
         # by speculative decoding (see tt/assistant/model.py + tt/spec_decode.py).
+        # Keyed by the GLOBAL layer type, valued by the LOCAL position (it indexes
+        # self.layers). On a pipeline rank this is "last of each type on THIS rank".
         self.last_kv_layer_by_type = {}
         for i in range(n_layers):
-            self.last_kv_layer_by_type[hf_config.layer_types[i]] = i
+            self.last_kv_layer_by_type[hf_config.layer_types[self._gidx(i)]] = i
 
+        # Only a rank that is BOTH the last pipeline stage and wants a head builds the final norm.
+        # A non-last rank hands the RAW residual stream to the next stage's layer 0, which applies
+        # its own input_layernorm; normalizing here would apply the final norm once per boundary.
         self.norm = None
-        if not prefill_weights_only:
+        if self._build_head:
             # Final norm
             if state_dict and "model.language_model.norm.weight" in state_dict:
                 norm_state = substate(state_dict, "model.language_model.norm")
@@ -645,6 +686,7 @@ class Gemma4Model:
                 mesh_config=mesh_config,
             )
 
+
         # sampling_dp: number of independent sampling groups (one per mesh row).
         # This is 1 for standard TP-only meshes (e.g. 1x8), and >1 for multi-row
         # meshes where each row samples users independently (e.g. Galaxy 4x8).
@@ -654,7 +696,7 @@ class Gemma4Model:
 
         # On-device sampling (greedy/top-k/top-p) — avoids reading full vocab logits to CPU
         self.sampling = None
-        if not prefill_weights_only and is_mesh and tp > 1:
+        if self._build_head and is_mesh and tp > 1:
             per_device_padded = _compute_per_device_vocab(hf_config.vocab_size, tp)
             if per_device_padded <= 64 * 1024:
                 sampling_args = self._make_sampling_args(hf_config, mesh_device, tp)
@@ -703,6 +745,16 @@ class Gemma4Model:
         self.prefill_valid_len_dev = None
         if bounded_sliding_kv_cache:
             self._init_prefill_valid_len_dev()
+
+    def _gidx(self, local_idx: int) -> int:
+        """Local layer position (index into ``self.layers``) -> GLOBAL layer index.
+
+        Identity for a single-rank model. Everything keyed by the model's own layer
+        numbering — ``hf_config.layer_types``, the checkpoint's ``layers.{i}.*`` keys,
+        the weight-cache ``layer_{i}/`` dirs, and the per-layer RoPE cache — must be
+        looked up with this, never with the position in ``self.layers``.
+        """
+        return self.first_layer_idx + int(local_idx)
 
     def _init_prefill_valid_len_dev(self):
         """Allocate the persistent valid_seq_len tensor and stash it on every
@@ -1014,8 +1066,11 @@ class Gemma4Model:
                 here and routed to ``packed_decode_forward``.
         """
         seq_len = hidden_states.shape[2]
-        if self.prefill_weights_only and is_decode:
-            raise ValueError("prefill_weights_only models support KV-only prefill, not decode")
+        if not self._build_head and is_decode:
+            raise ValueError(
+                "a KV-only or non-last pipeline stage supports prefill only, not decode "
+                f"(prefill_weights_only={self.prefill_weights_only}, is_last_rank={self.is_last_rank})"
+            )
 
         rope_seq_len = seq_len // batch_size if (not is_decode and batch_size > 1) else seq_len
         caches = kv_caches or self.tt_kv_cache
@@ -1073,7 +1128,7 @@ class Gemma4Model:
         # internal-cache decode path (rope_mats override paths keep their behavior).
         decode_rope_presliced = {}
         if is_decode and rope_mats is None and self.rope_caches_2d and position_idx is not None:
-            used_types = {self.hf_config.layer_types[i] for i in range(len(self.layers))}
+            used_types = {self.hf_config.layer_types[self._gidx(i)] for i in range(len(self.layers))}
             for lt in used_types:
                 if lt not in self.rope_caches_2d:
                     continue
@@ -1087,7 +1142,7 @@ class Gemma4Model:
         # the position tensor, so a replay picks up whatever positions the host staged.
         prefill_rope_presliced = {}
         if not is_decode and self._rope_prefill_positions is not None and self.rope_caches_2d:
-            for lt in {self.hf_config.layer_types[i] for i in range(len(self.layers))}:
+            for lt in {self.hf_config.layer_types[self._gidx(i)] for i in range(len(self.layers))}:
                 if lt not in self.rope_caches_2d:
                     continue
                 cos_2d, sin_2d = self.rope_caches_2d[lt]
@@ -1141,17 +1196,17 @@ class Gemma4Model:
             if rope_mats is not None:
                 if isinstance(rope_mats, dict):
                     # Dict mapping layer_type -> (cos, sin) — pre-sliced for trace decode
-                    layer_type = self.hf_config.layer_types[i]
+                    layer_type = self.hf_config.layer_types[self._gidx(i)]
                     layer_rope = rope_mats[layer_type]
                 else:
                     layer_rope = rope_mats  # Single (cos, sin) override (backward compat / tests)
             elif is_decode and decode_rope_presliced:
                 # Decode: use the per-layer-type cos/sin gathered once before the loop.
-                layer_rope = decode_rope_presliced[self.hf_config.layer_types[i]]
+                layer_rope = decode_rope_presliced[self.hf_config.layer_types[self._gidx(i)]]
                 rope_presliced = True
             elif is_decode:
                 # Decode fallback: return 2D caches for on-device embedding lookup
-                layer_rope = self._get_rope_mats(i, for_decode=True)
+                layer_rope = self._get_rope_mats(self._gidx(i), for_decode=True)
             else:
                 # Generator-level multi-chunk prefill: chunk N's tokens occupy
                 # absolute positions [chunk_start_idx, chunk_start_idx+seq_len);
@@ -1159,7 +1214,7 @@ class Gemma4Model:
                 # Device-tensor offsets stay inside the traced graph.
                 if isinstance(chunk_start_idx, ttnn.Tensor):
                     layer_rope = self._slice_prefill_rot_mats(
-                        self._get_rope_mats(i, start_pos=chunk_start_idx),
+                        self._get_rope_mats(self._gidx(i), start_pos=chunk_start_idx),
                         chunk_start_idx,
                         rope_seq_len,
                     )
@@ -1172,7 +1227,7 @@ class Gemma4Model:
                     cp = cp_degree(self.mesh_config)
                     if cp > 1:
                         rope_start_pos //= cp
-                    layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len, start_pos=rope_start_pos)
+                    layer_rope = self._get_rope_mats(self._gidx(i), seq_len=rope_seq_len, start_pos=rope_start_pos)
 
             # Convert per-layer input to device tensor if available
             pli_tt = None
@@ -1213,7 +1268,7 @@ class Gemma4Model:
 
             layer_packed = None
             if packed is not None:
-                lt = self.hf_config.layer_types[i]
+                lt = self.hf_config.layer_types[self._gidx(i)]
                 sliding = lt == "sliding_attention"
                 rope_packed = packed.get("rope_packed") or {}
                 layer_packed = {
@@ -1228,7 +1283,7 @@ class Gemma4Model:
 
             if (
                 not is_decode
-                and self.hf_config.layer_types[i] == "full_attention"
+                and self.hf_config.layer_types[self._gidx(i)] == "full_attention"
                 and packed_global_rope is None
                 and self._packed_global_rope_trans_mat is not None
             ):
@@ -1239,7 +1294,7 @@ class Gemma4Model:
 
             if (
                 not is_decode
-                and self.hf_config.layer_types[i] == "sliding_attention"
+                and self.hf_config.layer_types[self._gidx(i)] == "sliding_attention"
                 and packed_sliding_rope is None
                 and self._packed_global_rope_trans_mat is not None
             ):
@@ -1269,9 +1324,11 @@ class Gemma4Model:
                 packed=layer_packed,
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
-                packed_global_rope=(packed_global_rope if self.hf_config.layer_types[i] == "full_attention" else None),
+                packed_global_rope=(
+                    packed_global_rope if self.hf_config.layer_types[self._gidx(i)] == "full_attention" else None
+                ),
                 packed_sliding_rope=(
-                    packed_sliding_rope if self.hf_config.layer_types[i] == "sliding_attention" else None
+                    packed_sliding_rope if self.hf_config.layer_types[self._gidx(i)] == "sliding_attention" else None
                 ),
             )
 
@@ -1304,7 +1361,9 @@ class Gemma4Model:
                 kv_pair[0].deallocate(True)
                 kv_pair[1].deallocate(True)
 
-        if self.prefill_weights_only:
+        # KV-only service, or any pipeline stage that is not the last one: the output IS the raw
+        # residual stream (plus the KV this rank just wrote). self.norm was not even built.
+        if not self._build_head:
             self._flush_deferred_bounded_fills_if_needed()
             return hidden_states
 

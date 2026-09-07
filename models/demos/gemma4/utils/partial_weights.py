@@ -181,3 +181,47 @@ def load_layer_state(model_path, layer_idx) -> dict[str, torch.Tensor]:
     if not stripped:
         raise ValueError(f"No weights for decoder layer {layer_idx} in {model_path}")
     return stripped
+
+
+def load_layer_window_state(model_path, first_layer_idx: int, num_layers: int, *, with_embedding: bool):
+    """The full host state dict a PIPELINE RANK needs, and nothing else.
+
+    A rank owns global layers ``[first_layer_idx, first_layer_idx + num_layers)``. Building its
+    tensor cache cold needs those layers' real weights -- but only those: reading the whole
+    checkpoint costs ~62 GiB of host RAM per rank, and four concurrent ranks doing it is most of a
+    566 GiB box. Keys come back with their ORIGINAL global prefixes (``model.language_model.
+    layers.17.*``), because that is what ``Gemma4DecoderLayer`` looks up and what keeps the
+    weight-cache paths global.
+
+    Every layer's ``layer_scalar`` is included regardless of the window. They are scalars, so
+    carrying all 60 is free, and their presence is what lets ``Gemma4DecoderLayer`` tell "this rank
+    does not own that layer" (fine) from "the lookup used the wrong index" (silently wrong
+    numerics). The final norm is small and shared, so it comes along too.
+
+    ``with_embedding`` should be True only where the model actually builds the table -- the first
+    rank (token embedding) and the last (tied LM head). It is 2.8 GiB.
+    """
+    prefixes = tuple(f"{p}{i}." for p in _LAYER_PREFIXES for i in range(first_layer_idx, first_layer_idx + num_layers))
+    norm_keys = ("model.language_model.norm.weight", "model.norm.weight")
+
+    def wanted(key: str) -> bool:
+        if key.startswith(prefixes):
+            return True
+        if _is_text_layer_scalar(key) or key in norm_keys:
+            return True
+        return with_embedding and key in _EMBED_KEYS
+
+    state = load_state_dict_subset(model_path, wanted)
+
+    owned = sum(1 for k in state if k.startswith(prefixes))
+    if not owned:
+        raise ValueError(
+            f"No weights for layers [{first_layer_idx}, {first_layer_idx + num_layers}) in {model_path}"
+        )
+    gib = sum(t.numel() * t.element_size() for t in state.values()) / 2**30
+    logger.info(
+        f"Layer-window state: layers [{first_layer_idx}, {first_layer_idx + num_layers}) -> "
+        f"{owned} tensors, {len(state)} total, {gib:.1f} GiB "
+        f"(embedding {'included' if with_embedding else 'skipped'})"
+    )
+    return state

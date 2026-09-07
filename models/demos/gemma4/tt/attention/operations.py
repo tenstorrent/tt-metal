@@ -574,6 +574,39 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
     return out
 
 
+
+# nlp_concat_heads holds ONE full head-block per core in L1: its src0 circular buffer is
+# 2 (double buffered) x num_heads x head_dim/32 tiles, with no dependence on sequence length.
+# That is a per-DEVICE head count, so it scales with 1/TP -- and a Gemma 4 global layer at TP=1
+# (32 Q heads x head_dim 512 = 512 tiles = 2.0 MB) does not fit Blackhole's 1.5 MB L1, while the
+# same layer at TP=4 (8 heads = 0.5 MB) does. The concat is exactly a per-head-group operation,
+# so splitting the heads and concatenating the results on the embedding axis is numerically
+# identical and keeps each program inside L1.
+#
+# Budget leaves headroom below the 1.5 MB hard limit for the op's other CBs (~112 KB measured)
+# and any reserved L1. Override to re-tune without an edit; a group count of 1 reproduces the
+# original single-call path exactly, which is what every TP>=2 shape still gets.
+_CONCAT_HEADS_CB_BUDGET = int(os.environ.get("GEMMA4_CONCAT_HEADS_CB_BUDGET", 1179648))
+_TILE_BYTES = {ttnn.bfloat16: 2048, ttnn.float32: 4096, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}
+
+
+def _concat_heads_groups(tensor) -> int:
+    """Fewest even head groups whose per-group nlp_concat_heads CB fits ``_CONCAT_HEADS_CB_BUDGET``."""
+    heads = int(tensor.shape[1])
+    tiles_per_head = max(1, int(tensor.shape[3]) // ttnn.TILE_SIZE)
+    max_tiles = _CONCAT_HEADS_CB_BUDGET // (2 * _TILE_BYTES.get(tensor.dtype, 2048))
+    max_heads = max(1, max_tiles // tiles_per_head)
+    if heads <= max_heads:
+        return 1
+    for groups in range(2, heads + 1):
+        if heads % groups == 0 and heads // groups <= max_heads:
+            return groups
+    raise ValueError(
+        f"cannot split {heads} heads of head_dim {int(tensor.shape[3])} into groups whose "
+        f"nlp_concat_heads CB fits {_CONCAT_HEADS_CB_BUDGET} B"
+    )
+
+
 def concat_heads(
     tensor,
     is_decode_mode: bool,
@@ -637,7 +670,28 @@ def concat_heads(
             out_padded.deallocate(True)
         return out
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
-    return ttnn.experimental.nlp_concat_heads(tensor, memory_config=memory_config)
+    groups = _concat_heads_groups(tensor)
+    if groups == 1:
+        return ttnn.experimental.nlp_concat_heads(tensor, memory_config=memory_config)
+
+    # Head-grouped concat: heads are contiguous on the embedding axis in head order, so
+    # concatenating the per-group results along the last dim reproduces the single-call output
+    # bit for bit. Costs one extra pass over the activation; only global layers at low TP take it.
+    heads = int(tensor.shape[1])
+    per_group = heads // groups
+    parts = []
+    for g in range(groups):
+        head_slice = ttnn.slice(
+            tensor,
+            (0, g * per_group, 0, 0),
+            (tensor.shape[0], (g + 1) * per_group, tensor.shape[2], tensor.shape[3]),
+        )
+        parts.append(ttnn.experimental.nlp_concat_heads(head_slice, memory_config=memory_config))
+        head_slice.deallocate(True)
+    out = ttnn.concat(parts, dim=-1, memory_config=memory_config)
+    for part in parts:
+        part.deallocate(True)
+    return out
 
 
 def apply_output_projection(tensor, weights: AttentionWeights):

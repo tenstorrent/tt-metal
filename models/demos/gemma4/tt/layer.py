@@ -122,10 +122,24 @@ class Gemma4DecoderLayer:
             self.pre_feedforward_layernorm_2 = _norm("pre_feedforward_layernorm_2")
             self.post_feedforward_layernorm_2 = _norm("post_feedforward_layernorm_2")
 
-        # Layer scalar
+        # Layer scalar. Read as a Python float, so it never goes through the tensor
+        # cache -- a warm-cache build still has to be handed it (see
+        # utils/partial_weights.load_cache_completion_state). Missing means silently
+        # 1.0 while the real 31B values are 0.089 / 0.065 / 0.992: wrong numerics with
+        # no other failure signal, and this branch has no PCC test to catch it. So when
+        # a state dict was supplied AND it carries scalars for other layers, a miss on
+        # THIS layer is a lookup bug (typically a pipeline rank indexing layer_scalar by
+        # its local position instead of its global layer index) -- fail instead.
         if layer_state and "layer_scalar" in layer_state:
             self.layer_scalar = layer_state["layer_scalar"].item()
         else:
+            if state_dict and any(k.endswith(".layer_scalar") for k in state_dict):
+                raise KeyError(
+                    f"layer {layer_idx}: no layer_scalar in the state dict, but other layers have one "
+                    f"(looked for 'model.language_model.layers.{layer_idx}.layer_scalar' and "
+                    f"'model.layers.{layer_idx}.layer_scalar'). Falling back to 1.0 here would be "
+                    f"silently wrong numerics; check that layer_idx is the GLOBAL layer index."
+                )
             self.layer_scalar = 1.0
 
         # Attention
