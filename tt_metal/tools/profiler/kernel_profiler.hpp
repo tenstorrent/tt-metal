@@ -28,7 +28,12 @@
 #define MakeString(M, L) M(L)
 #define $Line MakeString(Stringize, __LINE__)
 
-#define PROFILER_MSG __FILE__ "," $Line ",KERNEL_PROFILER"
+// Zone source locations are keyed on the zone name alone: __FILE__ and
+// __LINE__ would make one logical zone ~130 distinct locations under
+// --ttl-specialize-cores, and the host's 16-bit location hash
+// (profiler.cpp:255) TT_THROWs on collision after the run completes.
+// See docs/blaze_parity_porting_errors.md PR3 and PR9.
+#define PROFILER_MSG "ttl,1,KERNEL_PROFILER"
 #define PROFILER_MSG_NAME(name) name "," PROFILER_MSG
 
 #define SrcLocNameToHash(name)                   \
@@ -638,7 +643,9 @@ struct profileScope {
         }
     }
 
-    inline __attribute__((always_inline)) ~profileScope() {
+    inline __attribute__((always_inline)) ~profileScope() { finish(); }
+
+    inline __attribute__((always_inline)) void finish() {
         if (start_marked) {
             mark_time_at_index_inlined(wIndex, get_const_id(timer_id, ZONE_END));
             wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
@@ -1035,4 +1042,21 @@ __attribute__((noinline)) void trace_only_init() {
 #define StopPerfCounters()
 #define RecordPerfCounters()
 
+#endif
+
+// Explicit endpoints preserve the surrounding C++ scope for compiler-generated zones.
+#if defined(PROFILE_KERNEL) && (!defined(DISPATCH_KERNEL) || (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
+#if defined(DISPATCH_KERNEL)
+#define PROFILER_EXPLICIT_DISPATCH kernel_profiler::DoingDispatch::DISPATCH
+#else
+#define PROFILER_EXPLICIT_DISPATCH kernel_profiler::DoingDispatch::NOT_DISPATCH
+#endif
+#define DeviceZoneBeginN(name, identifier)                                                                         \
+    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                                                   \
+    kernel_profiler::profileScope<kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)), PROFILER_EXPLICIT_DISPATCH> \
+        identifier
+#define DeviceZoneEnd(identifier) identifier.finish()
+#else
+#define DeviceZoneBeginN(name, identifier) (void(sizeof(name)))
+#define DeviceZoneEnd(identifier) ((void)0)
 #endif

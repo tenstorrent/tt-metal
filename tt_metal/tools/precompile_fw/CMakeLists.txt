@@ -24,7 +24,9 @@ if(NOT TT_METAL_SKIP_LINKING)
         OUTPUT
             ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp
         COMMAND
-            ${CMAKE_COMMAND} -E env ASAN_OPTIONS=detect_odr_violation=0 $<TARGET_FILE:precompile_fw>
+            ${CMAKE_COMMAND} -E env ASAN_OPTIONS=detect_odr_violation=0 TT_METAL_RUNTIME_ROOT=${PROJECT_SOURCE_DIR}
+            TT_METAL_HOME=${PROJECT_SOURCE_DIR} TT_METAL_CACHE=${PROJECT_BINARY_DIR}/tt-metal-cache
+            $<TARGET_FILE:precompile_fw>
         COMMAND
             ${CMAKE_COMMAND} -E touch ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
@@ -33,7 +35,7 @@ if(NOT TT_METAL_SKIP_LINKING)
         COMMENT "Pre-compiling firmware binaries"
     )
 
-    add_custom_target(precompile-fw ALL DEPENDS ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp)
+    add_custom_target(precompile-fw DEPENDS ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp)
 else()
     add_custom_target(precompile-fw ALL)
 endif()

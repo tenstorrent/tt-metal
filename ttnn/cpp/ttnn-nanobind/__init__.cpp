@@ -85,7 +85,7 @@ namespace nb = nanobind;
 namespace ttnn::operations {
 
 void py_module(nb::module_& mod) {
-    nb::set_leak_warnings(true);
+    nb::set_leak_warnings(false);
 
     auto m_core = mod.def_submodule("core", "core operations");
     core::py_module_types(m_core);
@@ -341,9 +341,10 @@ NB_MODULE(_ttnn, mod) {
     // via setattr (e.g. manage_config context manager).  We must bind by reference
     // so mutations are visible across C++ and Python.  Suppress the leak warning
     // for this one binding — the object is intentionally static-lifetime.
+    bool printLeakWarnings = nb::leak_warnings();
     nb::set_leak_warnings(false);
     mod.attr("CONFIG") = nb::cast(&ttnn::CONFIG, nb::rv_policy::reference);
-    nb::set_leak_warnings(true);
+    nb::set_leak_warnings(printLeakWarnings);
     mod.def(
         "get_python_operation_id",
         []() -> std::uint64_t { return ttnn::CoreIDs::instance().get_python_operation_id(); },

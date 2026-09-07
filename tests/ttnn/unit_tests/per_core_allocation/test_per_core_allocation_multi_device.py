@@ -16,6 +16,45 @@ from loguru import logger
 import ttnn
 
 
+def test_fragmented_per_core_upload_preserves_neighbors(mesh_device):
+    """Uneven core allocations must use each shard's address for host I/O."""
+    core0 = ttnn.CoreCoord(0, 0)
+    core1 = ttnn.CoreCoord(1, 0)
+    tensors = []
+    expected = []
+    for cores, rows, offset in (((core0,), 1, 100), ((core0, core1), 2, 0), ((core1,), 1, -100)):
+        data = torch.arange(rows * 32, dtype=torch.bfloat16).reshape(rows, 32) + offset
+        memory = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in cores]),
+                [1, 32],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        memory.experimental_set_per_core_allocation(True)
+        host = ttnn.from_torch(
+            data,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            tile=ttnn.Tile((1, 32)),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        tensors.append(ttnn.to_device(host, mesh_device, memory_config=memory))
+        expected.append(data)
+
+    for shard in ttnn.get_device_tensors(tensors[1]):
+        assert shard.experimental_per_core_buffer_address(core0) != shard.experimental_per_core_buffer_address(core1)
+    for tensor, data in zip(tensors, expected):
+        actual = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).reshape(
+            -1, *data.shape
+        )
+        for card in actual:
+            assert torch.allclose(card, data, rtol=0, atol=0)
+            assert torch.corrcoef(torch.stack((card.float().flatten(), data.float().flatten())))[0, 1] > 0.99999
+
+
 # --- Helpers ---
 
 
