@@ -309,10 +309,24 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     DataflowBuffer final_state(dfb::final_state);
     DataflowBuffer scratch(dfb::scratch);
 
+    constexpr uint32_t key_value_tiles = Kt * Vt;
+
     compute_kernel_hw_startup<SrcOrder::Reverse>(kd.get_id(), v_beta.get_id(), output.get_id());
     pack_reconfig_data_format(dfb::scratch);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
-        DataflowBuffer& current_state = chunk == 0 ? state : state_ring;
+        // A wrap restarts the causal stream mid-group. The recurrence is affine in
+        // the state, so no per-chunk term changes -- only where the carry comes
+        // from. reset_chunk 0 means never, which is exact rather than a sentinel:
+        // r == 0 means no group straddles, and chunk 0 always seeds from `state`.
+        const bool reseed = (reset_chunk != 0) && (chunk == reset_chunk);
+        if (reseed) {
+            // Mandatory. The previous chunk routed its carry into state_ring, which
+            // is FIFO, so leaving it resident makes the chunk AFTER the wrap pop the
+            // stale pre-wrap carry -- plausible output with a corrupted state.
+            state_ring.wait_front(key_value_tiles);
+            state_ring.pop_front(key_value_tiles);
+        }
+        DataflowBuffer& current_state = (chunk == 0 || reseed) ? state : state_ring;
         DataflowBuffer& destination = chunk == num_chunks - 1 ? final_state : state_ring;
 
         compute_value_new<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(

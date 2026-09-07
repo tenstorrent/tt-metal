@@ -564,3 +564,86 @@ def test_recurrent_chunk_scan_does_not_expose_prototype_modes(
     state = to_device(initial_state(2, 32, 32), device)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.recurrent_chunk_scan(*inputs, state, **{removed_keyword: True})
+
+
+def _wrap_case(groups_per_head: int, group_chunks: int, wrap_offset: int):
+    """Protocol plus two deliberately mismatched seeds for a mid-group barrier.
+
+    The seeds differ by five orders of magnitude so a leaked carry cannot hide
+    inside a PCC tolerance -- the failure mode this barrier risks is a plausible
+    output with a corrupted state, not an obviously wrong one.
+    """
+    batch_heads, key_dim, value_dim = 2, 32, 32
+    folded = batch_heads * groups_per_head
+    slots = groups_per_head + (1 if wrap_offset else 0)
+    protocol = host_protocol(folded, group_chunks, key_dim, value_dim)
+    seeds = torch.zeros(batch_heads * slots, key_dim, value_dim)
+    eye = torch.eye(key_dim, value_dim)
+    for row in range(batch_heads * slots):
+        seeds[row] = eye * (1e-3 if row % 2 == 0 else 1e2)
+    return protocol, seeds, batch_heads, groups_per_head, slots
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "groups_per_head,group_chunks,wrap_offset",
+    [
+        pytest.param(1, 8, 3, id="G1-mid"),
+        pytest.param(2, 8, 1, id="G2-first"),
+        pytest.param(2, 8, 7, id="G2-last"),
+        pytest.param(4, 4, 2, id="G4-mid"),
+    ],
+)
+def test_wrap_reloads_the_carry_mid_group(device, groups_per_head, group_chunks, wrap_offset):
+    """A wrap must restart the carry at its chunk and leave earlier chunks untouched."""
+    protocol, seeds, batch_heads, G, slots = _wrap_case(groups_per_head, group_chunks, wrap_offset)
+    wrap_group = 0
+    wrap_chunk = wrap_group * group_chunks + wrap_offset
+
+    device_inputs = device_protocol(protocol, device)
+    outputs = run_recurrent(
+        device_inputs,
+        to_device(seeds, device),
+        groups_per_head=G,
+        wrap_chunk=wrap_chunk,
+    )
+
+    # Oracle: every folded row scans from its own slot seed, except the straddling
+    # group, which scans [0,r) from its slot then [r,g) from the reload slot.
+    expected = torch.empty(batch_heads * G, group_chunks, CHUNK_SIZE, protocol[0].shape[3], dtype=torch.bfloat16)
+    for folded in range(batch_heads * G):
+        group = folded % G
+        real_head = folded // G
+        slot = group + (1 if (wrap_offset and group > wrap_group) else 0)
+        row = protocol_row = folded
+        sub = tuple(t[row : row + 1] for t in protocol)
+        if wrap_offset and group == wrap_group:
+            head_sub = tuple(t[:, :wrap_offset] for t in sub)
+            tail_sub = tuple(t[:, wrap_offset:] for t in sub)
+            head_out, _ = recurrent_oracle(head_sub, seeds[real_head * slots + slot : real_head * slots + slot + 1])
+            reload_row = real_head * slots + wrap_group + 1
+            tail_out, _ = recurrent_oracle(tail_sub, seeds[reload_row : reload_row + 1])
+            expected[row] = torch.cat((head_out, tail_out), dim=1)
+        else:
+            whole, _ = recurrent_oracle(sub, seeds[real_head * slots + slot : real_head * slots + slot + 1])
+            expected[row] = whole
+
+    assert_outputs_accurate(
+        [expected],
+        [outputs[0]],
+        names=["output"],
+        context=f"G{G} r{wrap_offset} wrapped",
+    )
+
+
+@run_for_blackhole()
+def test_wrap_on_a_group_boundary_matches_no_wrap(device):
+    """r == 0 means nothing straddles, so it must be indistinguishable from wrap 0."""
+    batch_heads, G, group_chunks, key_dim, value_dim = 2, 2, 8, 32, 32
+    folded = batch_heads * G
+    protocol = device_protocol(host_protocol(folded, group_chunks, key_dim, value_dim), device)
+    seeds = to_device(initial_state(folded, key_dim, value_dim), device)
+
+    plain = ttnn.to_torch(run_recurrent(protocol, seeds, groups_per_head=G, wrap_chunk=0)[0])
+    aligned = ttnn.to_torch(run_recurrent(protocol, seeds, groups_per_head=G, wrap_chunk=group_chunks)[0])
+    assert torch.equal(plain, aligned), "a group-aligned wrap must be bit-identical to no wrap"
