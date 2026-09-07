@@ -36,8 +36,8 @@ FORCE_INLINE void load_weight_block(
 // Rows of causal history per fragment: one fewer than the four learned taps.
 constexpr uint32_t history_rows_per_plane = 3;
 
-template <uint32_t block_ct, uint32_t num_blocks, uint32_t wrap_row>
-TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
+template <uint32_t block_ct, uint32_t num_blocks>
+TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t wrap_row) {
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
     const auto tap0 = TensorAccessor(tensor::tap0);
@@ -69,14 +69,12 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         // A wrap restarts the causal stream mid-buffer. wrap_row is tile aligned, so
         // this whole 32-row output tile lies on one side of it: rows below the wrap
         // reach back into history plane 0, rows at or above it into plane 1. With
-        // wrap_row == 0 both terms fold away at compile time.
+        // wrap_row == 0 the whole branch is skipped.
         int32_t row_floor = 0;
         uint32_t history_plane = 0;
-        if constexpr (wrap_row != 0) {
-            if (mt * tile_height >= wrap_row) {
-                row_floor = static_cast<int32_t>(wrap_row);
-                history_plane = history_rows_per_plane;
-            }
+        if (wrap_row != 0 && mt * tile_height >= wrap_row) {
+            row_floor = static_cast<int32_t>(wrap_row);
+            history_plane = history_rows_per_plane;
         }
 
         for (uint32_t tap = 0; tap < 4; ++tap) {
