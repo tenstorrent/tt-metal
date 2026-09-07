@@ -105,8 +105,13 @@ L1_RING1 = (
 # It is reported on its own (L1 Port 1 Util), not inside an unpacker or packer group.
 L1_PORT1 = "L1_0_UNPACKER_1_ECC_PACK1"
 L1_UNPACKER = ("L1_0_UNPACKER_0",)
-L1_EXT_UNPACKER = tuple(f"L1_1_EXT_UNPACKER_{i}" for i in (1, 2, 3)) + tuple(
-    f"L1_2_EXT_UNPACKER_{i}" for i in (4, 5, 6, 7)
+# Extended unpacker read interfaces 1-14 span L1 banks 1, 2, 4 and 5 (mux positions), so a single capture
+# only ever holds a subset; the port means average over whatever was captured.
+L1_EXT_UNPACKER = (
+    tuple(f"L1_1_EXT_UNPACKER_{i}" for i in (1, 2, 3))
+    + tuple(f"L1_2_EXT_UNPACKER_{i}" for i in (4, 5, 6, 7))
+    + tuple(f"L1_4_EXT_UNPACKER_{i}" for i in (8, 9, 10, 11, 12))
+    + tuple(f"L1_5_EXT_UNPACKER_{i}" for i in (13, 14))
 )
 L1_EXT_PACK = tuple(f"L1_3_EXT_PACKER_{i}" for i in (2, 3, 4, 5)) + tuple(f"L1_4_EXT_PACKER_{i}" for i in (6, 7))
 L1_TAG_SEARCH = ("L1_4_TAG_SEARCH_PACKER_1",)
