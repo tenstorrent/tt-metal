@@ -162,24 +162,25 @@ COUNTER_TYPE_NAMES = {
     129: "DEST_READ_GRANTED_2",
     130: "DEST_READ_GRANTED_3",
     131: "MATH_NOT_STALLED_DEST_WR_PORT",
-    # L1 Bank 4 req (BH only, mux position 4): ext packers 6-7 and tag-search packer 1 (ports 32-34)
+    # L1 Bank 4 req (BH only, mux position 4): ext packers 6-7, tag-search packer 1 (ports 32-34) and
+    # ext unpacker read interfaces 8-12 (ports 35-39)
     132: "L1_4_EXT_PACKER_6",
     133: "L1_4_EXT_PACKER_7",
     134: "L1_4_TAG_SEARCH_PACKER_1",
-    135: "L1_4_MISC_PORT_3",
-    136: "L1_4_MISC_PORT_4",
-    137: "L1_4_MISC_PORT_5",
-    138: "L1_4_MISC_PORT_6",
-    139: "L1_4_MISC_PORT_7",
+    135: "L1_4_EXT_UNPACKER_8",
+    136: "L1_4_EXT_UNPACKER_9",
+    137: "L1_4_EXT_UNPACKER_10",
+    138: "L1_4_EXT_UNPACKER_11",
+    139: "L1_4_EXT_UNPACKER_12",
     # L1 Bank 4 grant counters
     140: "L1_4_EXT_PACKER_6_GRANT",
     141: "L1_4_EXT_PACKER_7_GRANT",
     142: "L1_4_TAG_SEARCH_PACKER_1_GRANT",
-    143: "L1_4_MISC_PORT_3_GRANT",
-    144: "L1_4_MISC_PORT_4_GRANT",
-    145: "L1_4_MISC_PORT_5_GRANT",
-    146: "L1_4_MISC_PORT_6_GRANT",
-    147: "L1_4_MISC_PORT_7_GRANT",
+    143: "L1_4_EXT_UNPACKER_8_GRANT",
+    144: "L1_4_EXT_UNPACKER_9_GRANT",
+    145: "L1_4_EXT_UNPACKER_10_GRANT",
+    146: "L1_4_EXT_UNPACKER_11_GRANT",
+    147: "L1_4_EXT_UNPACKER_12_GRANT",
     # L1 Bank 2 (BH only, mux position 2): ext unpackers 4-7 (16-19), ring 0 ports 2-3 (20-23)
     148: "L1_2_EXT_UNPACKER_4",
     149: "L1_2_EXT_UNPACKER_5",
@@ -216,6 +217,11 @@ COUNTER_TYPE_NAMES = {
     179: "L1_3_EXT_PACKER_5_GRANT",
     # Cycles any thread is stalled (OR across threads).
     180: "ANY_THREAD_STALL",
+    # L1 Bank 5 (BH only, mux position 5): ext unpacker read interfaces 13-14 (ports 40-41)
+    181: "L1_5_EXT_UNPACKER_13",
+    182: "L1_5_EXT_UNPACKER_14",
+    183: "L1_5_EXT_UNPACKER_13_GRANT",
+    184: "L1_5_EXT_UNPACKER_14_GRANT",
 }
 
 

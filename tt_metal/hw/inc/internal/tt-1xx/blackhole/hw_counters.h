@@ -121,19 +121,41 @@ constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 16> l1_3_counter
      {PerfCounterType::L1_3_EXT_PACKER_5_GRANT, 263}}};
 constexpr size_t NUM_L1_3_COUNTERS = 16;
 
-// L1 bank 4 (BH only, MUX_CTRL[6:4] = 4): ext packers 6-7 and tag-search packer 1 (ports 32-34)
-// Ports 35-39 of this group are tied off in hardware, so only the three live interfaces are captured.
-constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 6> l1_4_counters = {
+// L1 bank 4 (BH only, MUX_CTRL[6:4] = 4): ext packers 6-7, tag-search packer 1 (ports 32-34) and the
+// TDMA extended unpacker L1 read interfaces 8-12 (ports 35-39). The tapeout RTL (ws-tensix BH_A0_RC6,
+// tt_tensix.sv) wires ports 35-41 to those unpacker read interfaces; an older snapshot had them tied off.
+constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 16> l1_4_counters = {
     {{PerfCounterType::L1_4_EXT_PACKER_6, 0},
      {PerfCounterType::L1_4_EXT_PACKER_7, 1},
      {PerfCounterType::L1_4_TAG_SEARCH_PACKER_1, 2},
+     {PerfCounterType::L1_4_EXT_UNPACKER_8, 3},
+     {PerfCounterType::L1_4_EXT_UNPACKER_9, 4},
+     {PerfCounterType::L1_4_EXT_UNPACKER_10, 5},
+     {PerfCounterType::L1_4_EXT_UNPACKER_11, 6},
+     {PerfCounterType::L1_4_EXT_UNPACKER_12, 7},
      // Grant counters
      {PerfCounterType::L1_4_EXT_PACKER_6_GRANT, 256},
      {PerfCounterType::L1_4_EXT_PACKER_7_GRANT, 257},
-     {PerfCounterType::L1_4_TAG_SEARCH_PACKER_1_GRANT, 258}}};
+     {PerfCounterType::L1_4_TAG_SEARCH_PACKER_1_GRANT, 258},
+     {PerfCounterType::L1_4_EXT_UNPACKER_8_GRANT, 259},
+     {PerfCounterType::L1_4_EXT_UNPACKER_9_GRANT, 260},
+     {PerfCounterType::L1_4_EXT_UNPACKER_10_GRANT, 261},
+     {PerfCounterType::L1_4_EXT_UNPACKER_11_GRANT, 262},
+     {PerfCounterType::L1_4_EXT_UNPACKER_12_GRANT, 263}}};
 constexpr size_t NUM_L1_4_COUNTERS = l1_4_counters.size();
 
-// BH: 3-bit L1 mux at MUX_CTRL[6:4], values 0-4
+// L1 bank 5 (BH only, MUX_CTRL[6:4] = 5): TDMA extended unpacker L1 read interfaces 13-14 (ports 40-41).
+// The mux decode wires only slots 0 and 1 at this position and forces slots 2-7 to zero, so only two
+// clients are captured. Ports 42-47 are unused in the 2-NOC build.
+constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 4> l1_5_counters = {
+    {{PerfCounterType::L1_5_EXT_UNPACKER_13, 0},
+     {PerfCounterType::L1_5_EXT_UNPACKER_14, 1},
+     // Grant counters
+     {PerfCounterType::L1_5_EXT_UNPACKER_13_GRANT, 256},
+     {PerfCounterType::L1_5_EXT_UNPACKER_14_GRANT, 257}}};
+constexpr size_t NUM_L1_5_COUNTERS = l1_5_counters.size();
+
+// BH: 3-bit L1 mux at MUX_CTRL[6:4], values 0-5 (6 and 7 fall back to 0 in the RTL decode)
 constexpr std::uint32_t L1_MUX_MASK = 0x7 << 4;
 
 // BH INSTRN_THREAD: sel gaps at 9-11 (XSEARCH kick tied to 0).

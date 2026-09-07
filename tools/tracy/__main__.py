@@ -276,13 +276,71 @@ def main():
             generate_logs_folder(os.path.abspath(outputFolder))
         )
 
-    # Schedule and validate once, in the outer capture process; the inner --no-capture-tool run
-    # only honors the TT_METAL_PROFILE_PERF_COUNTERS mask it inherits via env.
-    inherited_mask = options.noCapture and "TT_METAL_PROFILE_PERF_COUNTERS" in os.environ
-    if options.perf_counter_groups and not inherited_mask:
-        options.perf_counter_pass_bitfields = plan_perf_counter_capture(
-            options.perf_counter_groups, options.perf_counter_multipass, can_replay=not options.noCapture
-        )
+    if options.perf_counter_groups:
+        # Bit positions match PROFILE_PERF_COUNTERS_* in perf_counters.hpp. l1_2 to l1_5 are BH-only.
+        counter_group_bits = {
+            "fpu": 0,
+            "pack": 1,
+            "unpack": 2,
+            "l1_0": 3,
+            "l1_1": 4,
+            "instrn": 5,
+            "l1_2": 6,
+            "l1_3": 7,
+            "l1_4": 8,
+            "l1_5": 9,
+        }
+
+        bitfield = 0
+        for group in options.perf_counter_groups:
+            group_lower = group.lower()
+            if group_lower == "all":
+                # fpu | pack | unpack | l1_0 | instrn (L1 bank 1 requires a separate run).
+                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5)
+                break
+            elif group_lower in counter_group_bits:
+                bitfield |= 1 << counter_group_bits[group_lower]
+            else:
+                logger.warning(
+                    f"Unknown counter group '{group}'. "
+                    f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, l1_5, instrn, all"
+                )
+
+        # L1 bank mutual exclusion (one mux, one active bank) is enforced in rtoptions.cpp.
+
+        # Reject BH-only groups on non-BH architectures.
+        bh_only_groups = {"l1_2", "l1_3", "l1_4", "l1_5"}
+        requested_groups = {group.lower() for group in options.perf_counter_groups}
+        requested_bh_only = sorted(requested_groups & bh_only_groups)
+        if requested_bh_only:
+            declared_arch = next(
+                (
+                    os.environ.get(env_var)
+                    for env_var in ("TT_METAL_DEVICE_ARCH", "TT_ARCH_NAME", "ARCH_NAME")
+                    if os.environ.get(env_var)
+                ),
+                None,
+            )
+            if declared_arch is None:
+                try:
+                    import ttnn
+
+                    device = ttnn.open_device(device_id=0)
+                    declared_arch = str(device.arch()).split(".")[-1]
+                    ttnn.close_device(device)
+                except Exception:
+                    logger.debug("Failed to detect device arch via ttnn")
+            is_blackhole = declared_arch is not None and declared_arch.strip().lower() in ("blackhole",)
+            if not is_blackhole:
+                arch_desc = declared_arch if declared_arch is not None else "undeclared"
+                raise ValueError(
+                    f"Performance counter groups {', '.join(requested_bh_only)} are supported only on Blackhole, "
+                    f"but device arch is {arch_desc}."
+                )
+
+        if bitfield > 0:
+            os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
+            logger.info(f"Setting performance counter groups: {options.perf_counter_groups} (bitfield: {bitfield})")
 
     if not (
         options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores or options.perf_counter_groups

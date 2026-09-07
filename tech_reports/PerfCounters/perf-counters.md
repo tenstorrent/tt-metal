@@ -48,9 +48,10 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 | `1 << 3` | 8 | L1 bank 0 (ring0 NOC, L1 arbitration) |
 | `1 << 4` | 16 | L1 bank 1 (ring1 NOC, TDMA extended) |
 | `1 << 5` | 32 | INSTRN (instruction thread) |
-| `1 << 6` | 64 | L1 bank 2 (BH only: NOC Ring 2) |
-| `1 << 7` | 128 | L1 bank 3 (BH only: NOC Ring 3) |
-| `1 << 8` | 256 | L1 bank 4 (BH only: misc ports) |
+| `1 << 6` | 64 | L1 bank 2 (BH only: extended unpackers 4-7, ring0 NOC ports 2-3) |
+| `1 << 7` | 128 | L1 bank 3 (BH only: ring1 NOC ports 2-3, extended packers 2-5) |
+| `1 << 8` | 256 | L1 bank 4 (BH only: extended packers 6-7, tag search, extended unpackers 8-12) |
+| `1 << 9` | 512 | L1 bank 5 (BH only: extended unpackers 13-14; the mux wires only two slots here) |
 
 The BRISC firmware fits the readout code for 3 groups per run (a 4th overflows `.text` on Blackhole), so a mask with more than three groups is not usable directly; `python -m tracy --perf-counter-multipass` schedules the passes and merges the logs instead. A three-group example: `7` (`0x7`) = FPU | PACK | UNPACK.
 
@@ -64,7 +65,7 @@ export TT_METAL_PROFILE_PERF_COUNTERS=7
 
 | | Wormhole | Blackhole |
 |---|---|---|
-| Tensix counters read | 135 | 154 |
+| Tensix counters read (sum of the per-group tables) | 130 | 173 |
 | Derived metrics | 60+ | 60+ |
 
 **Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
