@@ -64,8 +64,8 @@ def offset_topology(actual_start: int, sp_size: int, local_rows: int) -> OffsetT
     """
     if sp_size <= 0:
         raise ValueError(f"sp_size must be positive, got {sp_size}")
-    if local_rows <= 0 or local_rows % KDA_CHUNK_SIZE:
-        raise ValueError(f"local_rows must be a positive multiple of {KDA_CHUNK_SIZE}, got {local_rows}")
+    if local_rows <= 0:
+        raise ValueError(f"local_rows must be positive, got {local_rows}")
     if actual_start < 0:
         raise ValueError(f"actual_start must be non-negative, got {actual_start}")
     if actual_start % KDA_CHUNK_SIZE:
@@ -73,11 +73,19 @@ def offset_topology(actual_start: int, sp_size: int, local_rows: int) -> OffsetT
 
     start = actual_start % (sp_size * local_rows)
     tail_rows = start % local_rows
+    head_rows = local_rows - tail_rows
+    # Only a split constrains the geometry: each segment must hold whole KDA
+    # chunks, so the boundary chip's two pieces must both be chunk-aligned.
+    if tail_rows and (head_rows % KDA_CHUNK_SIZE or tail_rows % KDA_CHUNK_SIZE):
+        raise ValueError(
+            f"actual_start {actual_start} splits chip {(start // local_rows) % sp_size} into "
+            f"{head_rows}+{tail_rows} rows, which are not both multiples of {KDA_CHUNK_SIZE}"
+        )
     return OffsetTopology(
         sp_size=sp_size,
         local_rows=local_rows,
         boundary_chip=(start // local_rows) % sp_size,
-        head_rows=local_rows - tail_rows,
+        head_rows=head_rows,
         tail_rows=tail_rows,
     )
 

@@ -283,6 +283,7 @@ def _distributed_recurrence_case(
         KDARecurrenceProgramConfig(summary_group_chunks=8),
         sequence_parallel_axis=sp_axis,
     )
+    sp_size = tuple(mesh_device.shape)[sp_axis]
     topology = offset_topology(0, sp_size, sequence // sp_size)
     return executor, inputs, expected_output.to(torch.bfloat16), expected_state, sp_axis, topology
 
