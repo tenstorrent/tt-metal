@@ -439,8 +439,17 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Relu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
+    # relu_max(x) = clamp(x, 0, RELU_MAX_THRESHOLD) -- two cutoffs, and the upper one is a
+    # strict `result > threshold`, so the bound has to clear the threshold for a *finite*
+    # input to reach it. At low=-5/high=5 against a threshold of 5.0 the sampler is
+    # half-open and only the relu knee at 0 ever fired; +inf from the edge sweep was the
+    # sole thing exercising the clamp. See _OP_EDGE_POINTS for the straddled cutoffs.
     MathOperation.ReluMax: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM,
+            low=-5.0,
+            high=2.0 * RELU_MAX_THRESHOLD,
+        )
     ),
     # relu_min(x) = max(x, RELU_MIN_THRESHOLD), so the upper bound has to clear the
     # threshold or the op has no pass-through half: at low=-5/high=5 against a threshold of
@@ -1829,8 +1838,20 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     MathOperation.Hardmish: (-2.0, 0.0),
     # Below THRESHOLD_T the output jumps to THRESHOLD_V.
     MathOperation.Threshold: (THRESHOLD_T,),
-    # relu_max clamps above at its threshold, and keeps relu's own knee at 0.
-    MathOperation.ReluMax: (0.0, RELU_MAX_THRESHOLD),
+    # relu_max clamps above at its threshold, and keeps relu's own knee at 0. Both cutoffs
+    # are strict compares (`> threshold`, `< 0`), so each needs a value on either side and
+    # not just the cutoff itself: at exactly the threshold the clamp does not fire, and at
+    # exactly 0 the relu does not. -0.0 is deliberately absent -- the relu branch is
+    # SFPSETCC, whose contract holds only "provided that VC is neither negative zero nor
+    # any kind of NaN", so that input is unspecified on hardware (see sfpu_relu_max).
+    MathOperation.ReluMax: (
+        -1.0,
+        0.0,
+        1.0,
+        RELU_MAX_THRESHOLD - 1.0,
+        RELU_MAX_THRESHOLD,
+        RELU_MAX_THRESHOLD + 1.0,
+    ),
     # The threshold alone only proves the clamp branch. Straddle it so the edge face also
     # carries a value that passes through unchanged; 4.0/5.0/6.0 are exact in every format
     # this sweep runs, so the pair does not blur together in bf16.
