@@ -228,11 +228,18 @@ void kernel_main() {
         CircularBuffer cb(cb_id);
         CircularBuffer cb_pad(a->cb_pad);
 
-        // Fill pad tile in scratch CB
+        // Fill pad tile in scratch CB. The bound and the fill value are hoisted
+        // because the volatile store may alias the L1 runtime args `a` points at:
+        // left in the loop, the compiler reloads both from L1 and repeats the
+        // divide every iteration, which costs ~20 cycles per store instead of ~4
+        // and dominates the whole kernel. `volatile` stays — the buffer is only
+        // ever read back over NOC, so dropping it risks dead-store elimination.
         {
             CoreLocalMem<volatile uint32_t> ptr(cb_pad.get_write_ptr());
-            for (uint32_t i = 0; i < a->tile_bytes / 4; ++i) {
-                ptr[i] = a->packed_pad_val;
+            const uint32_t fill_words = a->tile_bytes / sizeof(uint32_t);
+            const uint32_t fill_value = a->packed_pad_val;
+            for (uint32_t i = 0; i < fill_words; ++i) {
+                ptr[i] = fill_value;
             }
         }
         const uint32_t pad_l1 = cb_pad.get_read_ptr();
