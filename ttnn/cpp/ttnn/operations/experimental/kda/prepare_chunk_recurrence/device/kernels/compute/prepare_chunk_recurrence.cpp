@@ -547,19 +547,19 @@ inline void prepare_pairwise_matrices(
     DataflowBuffer& k_pairwise,
     DataflowBuffer& causal_mask,
     DataflowBuffer& akk,
-    DataflowBuffer& intra) {
+    DataflowBuffer& intra,
+    DataflowBuffer& aqk) {
     constexpr uint32_t chunk_matrix_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
     // Materialize both anchored pairwise products, then release k_beta_pairwise/q_pairwise before
-    // the block inverse reuses those CBs as private scratch. Only the masked Aqk is published to
+    // their whole-row storage is reused. Aqk uses separate single-tile scratch; only its masked value reaches
     // writer-facing intra; publishing the raw matrix creates a second consumer race.
     matmul_blocks<Ct, Kt, Ct, true>(k_beta_pairwise, k_pairwise, akk);
     akk.wait_front(chunk_matrix_tiles);  // raw beta*k_i*k_j*exp(G_i-G_j)
     k_beta_pairwise.pop_front(chunk_key_tiles);
 
     {
-        DataflowBuffer& aqk = k_beta_pairwise;
         matmul_blocks<Ct, Kt, Ct, true>(q_pairwise, k_pairwise, aqk);
         aqk.wait_front(chunk_matrix_tiles);  // raw q_i*k_j*exp(G_i-G_j)
         q_pairwise.pop_front(chunk_key_tiles);
@@ -672,7 +672,11 @@ TT_KERNEL void compute(uint32_t work_item_count) {
     DataflowBuffer anchor_decay(dfb::anchor_decay);
     DataflowBuffer normalized_q(dfb::normalized_q);
     DataflowBuffer normalized_k(dfb::normalized_k);
-    DataflowBuffer inverse_n3(dfb::inverse_n3);
+    DataflowBuffer tile_workspace_3(dfb::tile_workspace_3);
+    DataflowBuffer tile_workspace_0(dfb::tile_workspace_0);
+    DataflowBuffer tile_workspace_1(dfb::tile_workspace_1);
+    DataflowBuffer tile_workspace_2(dfb::tile_workspace_2);
+
     DataflowBuffer akk(dfb::akk);
 
     // Reusable physical storage. Live values crossing helper boundaries are named below.
@@ -694,21 +698,21 @@ TT_KERNEL void compute(uint32_t work_item_count) {
         g.wait_front(chunk_key_tiles);
         beta.wait_front(Ct);
 
-        normalize_l2_rows<Ct, Kt, true, dfb::workspace_3, dfb::workspace_1>(
+        normalize_l2_rows<Ct, Kt, true, dfb::workspace_3, dfb::tile_workspace_0>(
             q,
             normalized_q,
             EPS_BITS,
             SCALE_BITS,
             /*squared=*/workspace_3,
-            /*inverse_norms=*/workspace_1);
+            /*inverse_norms=*/tile_workspace_0);
 
-        normalize_l2_rows<Ct, Kt, false, dfb::workspace_3, dfb::workspace_1>(
+        normalize_l2_rows<Ct, Kt, false, dfb::workspace_3, dfb::tile_workspace_0>(
             k,
             normalized_k,
             EPS_BITS,
             SCALE_BITS,
             /*squared=*/workspace_3,
-            /*inverse_norms=*/workspace_1);
+            /*inverse_norms=*/tile_workspace_0);
 
         // PACK state persists across helpers. Reconfigure only at actual destination-format transitions.
         pack_reconfig_data_format(normalized_k.get_id(), v_beta.get_id());
@@ -739,19 +743,19 @@ TT_KERNEL void compute(uint32_t work_item_count) {
         DataflowBuffer& k_pairwise = workspace_3;
         prepare_k_pairwise<Ct, Kt>(normalized_k, centered_inverse_decay, k_pairwise);
 
-        prepare_pairwise_matrices<Ct, Kt>(k_beta_pairwise, q_pairwise, k_pairwise, tril, akk, intra);
+        prepare_pairwise_matrices<Ct, Kt>(k_beta_pairwise, q_pairwise, k_pairwise, tril, akk, intra, tile_workspace_0);
 
-        // normalized_k is fully consumed and popped; reuse its empty DFB as local scratch.
+        // All inverse scratch transactions are one tile; row-buffer cursors stay aligned.
         prepare_t_inv<Ct>(
             akk,
             tril,
             eye,
             block_masks,
             t_inv,
-            /*scratch_0=*/workspace_1,
-            /*scratch_1=*/workspace_2,
-            /*scratch_2=*/inverse_n3,
-            /*product=*/normalized_k);
+            /*scratch_0=*/tile_workspace_0,
+            /*scratch_1=*/tile_workspace_1,
+            /*scratch_2=*/tile_workspace_3,
+            /*product=*/tile_workspace_2);
 
         pack_reconfig_data_format(t_inv.get_id(), final_decay.get_id());
         prepare_decay_outputs<Ct, Kt>(k_pairwise, anchor_decay, final_decay_rows, k_decay_transposed, final_decay);

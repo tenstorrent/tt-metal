@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 import torch
@@ -617,3 +618,31 @@ def test_prepare_chunk_recurrence_rejects_invalid_options(device: ttnn.Device, e
     sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     with expect_error(RuntimeError, "output memory layout must be INTERLEAVED, got HEIGHT_SHARDED"):
         _run(inputs, 2, memory_config=sharded)
+
+
+def _real_chunk_inputs() -> tuple[torch.Tensor, ...]:
+    from safetensors.torch import load_file
+
+    tensors = load_file(str(Path(__file__).with_name("fixtures") / "layer13_head50_chunk6.safetensors"))
+    return tuple(tensors[name].float() for name in ("q", "k", "v", "g", "beta"))
+
+
+@pytest.mark.parametrize("output_bf16_mask", [0x00, 0x20, 0x26], ids=["all-fp32", "decay-bf16", "production"])
+def test_prepare_chunk_recurrence_scratch_wrap(device: ttnn.Device, output_bf16_mask: int) -> None:
+    """Repeat the small fixture far enough to cross the old mixed-width scratch rings on every core."""
+    grid = device.compute_with_storage_grid_size()
+    chunks = grid.x * grid.y * 32
+    chunk = _real_chunk_inputs()
+    inputs = tuple(x.repeat(1, chunks, 1) for x in chunk[:4]) + (chunk[4].repeat(1, chunks, 1, 1),)
+    expected = torch.exp(chunk[3].sum(dim=1)).reshape(1, 1, 128, 1).repeat(1, chunks, 1, 1)
+    if output_bf16_mask & (1 << 5):
+        expected = expected.to(torch.bfloat16).float()
+    outputs = _run(
+        _device_inputs(inputs, device),
+        1,
+        output_bf16_mask=output_bf16_mask,
+        compute_kernel_config=_production_compute_config(device),
+    )
+    actual = ttnn.to_torch(outputs[5]).float()
+    assert torch.isfinite(actual).all()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0.004)
