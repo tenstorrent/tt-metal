@@ -349,6 +349,54 @@ def _last_group_state(
     return ttnn.reshape(last_final_state, (geometry.batch_heads, geometry.key_dim, geometry.value_dim))
 
 
+def _shared_group_chunks(
+    split_chunk: int,
+    num_chunks: int,
+    configured_group_chunks: int,
+    max_groups: int,
+) -> int | None:
+    """Largest group size dividing both fragments and fitting the worker budget.
+
+    When one exists the fragment boundary lands on a group boundary, so the split
+    needs no slicing of the prepared chunks at all: one reshape and one summarize
+    serve both fragments and the split shows up only in which entry state each
+    group receives. Returns ``None`` when the two fragment lengths share no
+    workable group size, which a prime fragment guarantees.
+    """
+    from math import gcd
+
+    shared = gcd(split_chunk, num_chunks - split_chunk)
+    for group_chunks in range(min(shared, configured_group_chunks), 0, -1):
+        if shared % group_chunks == 0 and num_chunks // group_chunks <= max_groups:
+            return group_chunks
+    return None
+
+
+def _slice_group_range(
+    summary: ttnn.Tensor,
+    batch_heads: int,
+    groups_per_head: int,
+    start_group: int,
+    end_group: int,
+) -> ttnn.Tensor:
+    """Take a contiguous group range from every head of a head-major summary.
+
+    Summaries are laid out head-major and group-minor, so a per-head group range
+    is strided; reshaping to expose the group axis makes it a plain slice. These
+    tensors are two orders of magnitude smaller than the prepared chunks, which
+    is the entire point of slicing here instead of there.
+    """
+    shape = tuple(summary.shape)
+    exposed = ttnn.reshape(summary, (batch_heads, groups_per_head, shape[1], shape[2]))
+    taken = ttnn.slice(
+        exposed,
+        (0, start_group, 0, 0),
+        (batch_heads, end_group, shape[1], shape[2]),
+        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+    )
+    return ttnn.reshape(taken, (batch_heads * (end_group - start_group), shape[1], shape[2]))
+
+
 def _slice_chunk_range(prepared: _PreparedChunks, start_chunk: int, end_chunk: int) -> _PreparedChunks:
     """Restrict every prepared term to a half-open chunk range.
 
@@ -411,13 +459,38 @@ def _scan_grouped_chunks(
     by the whole mesh, so a ragged split -- two fragments on one chip and one
     elsewhere -- is not expressible; splitting uniformly keeps every shape equal
     while only the boundary chip's fragments are actually non-adjacent.
+
+    A split is served two ways, and the difference is only how each fragment's
+    summaries are obtained. When a group size divides both fragment lengths the
+    boundary lands on a group boundary, so one reshape, one summarize and one
+    scan cover both fragments and only the small summaries are sliced. Otherwise
+    the prepared chunks themselves must be split, which costs an order of
+    magnitude more data movement.
     """
     split_chunk = topology.head_rows // geometry.chunk_size if topology is not None and topology.is_split else None
-    if split_chunk is None:
-        fragment_chunks = [(0, geometry.num_chunks)]
-    else:
-        fragment_chunks = [(0, split_chunk), (split_chunk, geometry.num_chunks)]
+    grid = prepared.v_beta.device().compute_with_storage_grid_size()
+    max_groups = max((grid.x * grid.y) // geometry.batch_heads, 1)
+    shared_group_chunks = (
+        _shared_group_chunks(split_chunk, geometry.num_chunks, summary_group_chunks, max_groups)
+        if split_chunk is not None
+        else None
+    )
 
+    if shared_group_chunks is not None:
+        return _scan_shared_groups(
+            prepared,
+            initial_state,
+            geometry,
+            group_chunks=shared_group_chunks,
+            split_chunk=split_chunk,
+            sequence_parallel_axis=sequence_parallel_axis,
+            topology=topology,
+            compute_config=compute_config,
+        )
+
+    fragment_chunks = (
+        [(0, geometry.num_chunks)] if split_chunk is None else [(0, split_chunk), (split_chunk, geometry.num_chunks)]
+    )
     fragments = [
         _group_fragment(
             prepared if len(fragment_chunks) == 1 else _slice_chunk_range(prepared, start, end),
@@ -445,14 +518,11 @@ def _scan_grouped_chunks(
             )
             for _, summary_a, summary_b, groups_per_head in fragments
         ]
-        order = (
-            fragment_order(topology) if split_chunk is not None else tuple((chip, 0) for chip in topology.chip_order)
-        )
         prefix_initial_states, distributed_final_state = _distributed_fragment_prefix(
             partition_transforms,
             initial_state,
             sequence_parallel_axis=sequence_parallel_axis,
-            order=order,
+            order=_composition_order(topology, split_chunk is not None),
             sp_size=topology.sp_size,
             compute_config=compute_config.affine_prefix,
         )
@@ -484,6 +554,102 @@ def _scan_grouped_chunks(
     if distributed_final_state is not None:
         return _ScanResult(output=output, final_state=distributed_final_state)
     return _ScanResult(output=output, final_state=last_local_state)
+
+
+def _composition_order(topology: OffsetTopology, split: bool) -> tuple[tuple[int, int], ...]:
+    if split:
+        return fragment_order(topology)
+    return tuple((chip, 0) for chip in topology.chip_order)
+
+
+def _scan_shared_groups(
+    prepared: _PreparedChunks,
+    initial_state: ttnn.Tensor,
+    geometry: _RecurrenceGeometry,
+    *,
+    group_chunks: int,
+    split_chunk: int,
+    sequence_parallel_axis: int | None,
+    topology: OffsetTopology,
+    compute_config: _RecurrenceComputeConfig,
+) -> _ScanResult:
+    """Scan a split partition without slicing the prepared chunks.
+
+    The fragment boundary is a group boundary here, so grouping, summarizing and
+    scanning are byte-identical to the unsplit path. The split appears only in
+    the entry state each group receives: groups before the boundary continue from
+    the head fragment's entry, groups after it from the tail fragment's.
+    """
+    if sequence_parallel_axis is None:
+        raise ValueError("shared-group split requires sequence parallelism")
+    groups_per_head = geometry.num_chunks // group_chunks
+    head_groups = split_chunk // group_chunks
+    batch_heads = geometry.batch_heads
+
+    grouped = _reshape_chunks_for_groups(
+        prepared,
+        geometry,
+        group_heads=batch_heads * groups_per_head,
+        summary_group_chunks=group_chunks,
+    )
+    summary_a, summary_b = _summarize_chunk_groups(grouped, geometry, compute_config=compute_config)
+
+    fragment_ranges = ((0, head_groups), (head_groups, groups_per_head))
+    fragment_summaries = [
+        (
+            _slice_group_range(summary_a, batch_heads, groups_per_head, first, last),
+            _slice_group_range(summary_b, batch_heads, groups_per_head, first, last),
+            last - first,
+        )
+        for first, last in fragment_ranges
+    ]
+    partition_transforms = [
+        ttnn.experimental.kda.reduce_affine_transforms(
+            fragment_a,
+            fragment_b,
+            fragment_groups,
+            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+            compute_kernel_config=compute_config.affine_prefix,
+        )
+        for fragment_a, fragment_b, fragment_groups in fragment_summaries
+    ]
+    entry_states, final_state = _distributed_fragment_prefix(
+        partition_transforms,
+        initial_state,
+        sequence_parallel_axis=sequence_parallel_axis,
+        order=fragment_order(topology),
+        sp_size=topology.sp_size,
+        compute_config=compute_config.affine_prefix,
+    )
+
+    per_fragment_initials = [
+        ttnn.reshape(
+            ttnn.experimental.kda.affine_exclusive_scan(
+                fragment_a,
+                fragment_b,
+                entry_state,
+                fragment_groups,
+                memory_config=KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
+                compute_kernel_config=compute_config.affine_prefix,
+            ),
+            (batch_heads, fragment_groups, geometry.key_dim, geometry.value_dim),
+        )
+        for (fragment_a, fragment_b, fragment_groups), entry_state in zip(fragment_summaries, entry_states, strict=True)
+    ]
+    group_initial_states = ttnn.reshape(
+        ttnn.concat(per_fragment_initials, dim=1, memory_config=KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG),
+        (batch_heads * groups_per_head, geometry.key_dim, geometry.value_dim),
+    )
+
+    # One scan over every group: groups are independent given their entry states.
+    scan = _scan_chunks(grouped, group_initial_states, compute_config=compute_config.scan)
+    return _ScanResult(
+        output=ttnn.reshape(
+            scan.output,
+            (batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim),
+        ),
+        final_state=final_state,
+    )
 
 
 class KDARecurrence:
