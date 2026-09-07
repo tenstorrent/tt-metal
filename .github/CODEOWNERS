@@ -27,8 +27,8 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/instructions/ttnn-core.instructions.md @tenstorrent/metalium-developers-ttnn-core @aliaksei-sala
 .github/instructions/ttnn-ops.instructions.md @tenstorrent/metalium-developers-ops-leads
 .github/instructions/ttnn.instructions.md @tenstorrent/metalium-developers-ttnn-core
-.github/time_budget.yaml @roseli-TT @tdowdallTT
-.github/time_budgets/ @roseli-TT @tdowdallTT
+.github/time_budget.yaml @roseli-TT @tdowdallTT @dpopovTT
+.github/time_budgets/ @roseli-TT @tdowdallTT @dpopovTT
 .github/workflows/fabric-cpu-only-tests-impl.yaml @Riddy21 @tt-asaigal @aliuTT @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra
@@ -47,9 +47,9 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/workflows/ttnn-run-sweeps*.yaml @stevendae @cmaryanTT @sjameelTT @bbradelTT @ntarafdar
 .github/workflows/vllm-model-tests-impl.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
 .github/workflows/vllm-model-tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
-tests/pipeline_reorg/galaxy_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT
-tests/pipeline_reorg/single_card_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT
-tests/pipeline_reorg/t3k_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT
+tests/pipeline_reorg/galaxy_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT @dpopovTT
+tests/pipeline_reorg/single_card_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT @dpopovTT
+tests/pipeline_reorg/t3k_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT @dpopovTT
 
 /infra/ @tenstorrent/metalium-developers-infra
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra
@@ -72,7 +72,7 @@ tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @jonathansuTT @cgl
 tests/pipeline_reorg/models_sweep_tests.yaml @mtairum @uaydonat @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/models_unit_tests.yaml @mtairum @uaydonat @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/vllm_model_tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
-tests/pipeline_reorg/ttsim-skip-list.yaml @roseli-TT @tdowdallTT @mcraigheadTT @tenstorrent-github-bot
+tests/pipeline_reorg/ttsim-skip-list.yaml @roseli-TT @tdowdallTT @mcraigheadTT @tenstorrent-github-bot @dpopovTT
 tests/scripts/ @tenstorrent/metalium-developers-infra
 tests/scripts/quasar @kstevensTT @fvranicTT @tenstorrent/metalium-developers-infra
 tests/scripts/single_card/run_single_card_profiler_tests.sh @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra
@@ -107,6 +107,7 @@ tt_metal/api/ @tenstorrent/metalium-api-owners
 tt_metal/api/tt-metalium/experimental/disaggregation/ @SeanNijjar @ubcheema # disaggregation experimental APIs
 tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr # fabric experimental APIs
 tt_metal/api/tt-metalium/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT
+tt_metal/api/tt-metalium/experimental/dispatch_telemetry.hpp @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/api/tt-metalium/experimental/udm/ @yugaoTT @SeanNijjar
 tt_metal/api/internal/disaggregation/ @SeanNijjar @ubcheema # disaggregation internal APIs (moved from experimental in #48638)
 tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu
@@ -123,6 +124,7 @@ tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNij
 tt_metal/hal.cpp @ruizhangTT
 tt_metal/hostdevcommon/ @tenstorrent/metalium-runtime # this should go away
 tt_metal/hostdevcommon/**/CMakeLists.txt @tenstorrent/metalium-runtime @tenstorrent/metalium-developers-infra # this should go away
+tt_metal/hostdevcommon/api/hostdevcommon/dispatch_telemetry_types.hpp @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @tenstorrent/metalium-runtime
 tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT
 tt_metal/hw/ckernels/**/llk_api/llk_sfpu @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @nmauriceTT
@@ -148,6 +150,7 @@ tt_metal/impl/dataflow_buffer/ @abhullar-tt @arikTT
 tt_metal/impl/debug/ @abhullar-tt @ruizhangTT @sidnadTT @tenstorrent/metalium-developers-triage
 tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu
 tt_metal/impl/dispatch/ @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
+tt_metal/impl/dispatch/*telemetry* @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/impl/dispatch/kernels/*telemetry* @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/impl/dispatch/kernels/*realtime_profiler* @mo-tenstorrent @yusufbashiTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/impl/dispatch/kernels/REALTIME_PROFILER.md @mo-tenstorrent @yusufbashiTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
@@ -245,6 +248,7 @@ tests/tt_metal/test_utils/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-a
 tests/tt_metal/test_utils/**/CMakeLists.txt @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @tenstorrent/metalium-developers-infra
 tests/tt_metal/tt_metal/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
 tests/tt_metal/tt_metal/dispatch/dispatch_program/*realtime_profiler* @mo-tenstorrent @yusufbashiTT @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
+tests/tt_metal/tt_metal/dispatch/dispatch_util/test_dispatch_telemetry.cpp @anashTT @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
 tests/tt_metal/tt_metal/misc/test_broadcast_ring.cpp @yusufbashiTT @mo-tenstorrent @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
 tests/tt_metal/tt_metal/sources.cmake @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT @riverwuTT @akerteszTT
 tests/tt_metal/tt_metal/**/CMakeLists.txt @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @tenstorrent/metalium-developers-infra
