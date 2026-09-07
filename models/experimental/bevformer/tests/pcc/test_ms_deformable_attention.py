@@ -33,6 +33,13 @@ ENABLE_LOGGING = True
 PRINT_DETAILED_COMPARISON_FLAG = False
 
 
+def test_ms_deformable_attention_requires_spatial_shapes(expect_error):
+    config = DeformableAttentionConfig(embed_dims=256, num_heads=8, num_levels=4, num_points=4)
+
+    with expect_error(ValueError, "spatial_shapes is required"):
+        TTMSDeformableAttention(config=config, device=None, params=None, spatial_shapes=None)
+
+
 @pytest.mark.parametrize(
     "config_name, batch_size, num_queries, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
@@ -138,7 +145,6 @@ def test_ms_deformable_attention_forward(
         query=tt_query,
         value=tt_value,
         reference_points=tt_reference_points,
-        spatial_shapes=spatial_shapes,
     )
     tt_model_output = ttnn.to_torch(tt_model_output)
 
