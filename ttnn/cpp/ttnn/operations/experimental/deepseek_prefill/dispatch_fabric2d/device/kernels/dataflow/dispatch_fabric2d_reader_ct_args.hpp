@@ -233,6 +233,23 @@ struct ReaderCtArgs {
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }
+
+#ifdef KERNEL_BUILD
+    // TensorAccessorArgs are chained on by the program factory after every block above, in
+    // ReaderRtArg order. Derived from the block bases, so adding a scalar or widening a block cannot
+    // silently shift them.
+    static constexpr uint32_t accessor_base = get_compile_time_arg_val(kScheduleBase) +
+                                              get_compile_time_arg_val(kNumOwn) + get_compile_time_arg_val(kNumRelay);
+    static constexpr auto in_args = TensorAccessorArgs<accessor_base>();
+    static constexpr auto indices_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+    static constexpr auto offsets_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
+    static constexpr auto table_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
+    static constexpr auto counts_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
+    static constexpr auto region_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
+    static constexpr auto out_payload_args = TensorAccessorArgs<region_args.next_compile_time_args_offset()>();
+    static constexpr auto out_meta_args = TensorAccessorArgs<out_payload_args.next_compile_time_args_offset()>();
+    static constexpr auto fwd_args = TensorAccessorArgs<out_meta_args.next_compile_time_args_offset()>();
+#endif
 };
 
 }  // namespace dspf2d
