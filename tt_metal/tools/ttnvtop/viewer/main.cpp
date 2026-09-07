@@ -132,6 +132,33 @@ char poll_key() {
 // because FPU compute% is the closest analogue of htop's CPU%.
 enum class Metric { Fpu, Sfpu, Dispatch, All };
 
+// WHICH SIGNAL IS THE THIRD COLUMN? The schema has always carried signal_sources for this
+// and the viewer has always ignored it, so a producer publishing instruction-issue activity
+// in dispatch_busy_p1000 -- which the ARC per-core sweep does, never sampling go_msg at all
+// -- was rendered under a "D"/"DISPATCH" label that named a different measurement.
+//
+// Both are real and they are complementary: dispatch says the host gave this core work,
+// activity says the core is issuing instructions. They diverge on a stalled core, which is
+// the case worth seeing. So the fix is to say which one is on screen, not to hide either.
+const char* third_metric_short(uint32_t sources) { return (sources & ttnvtop::SIGNAL_SRC_ACTIVITY) ? "A" : "D"; }
+
+// Across chips, because two producers can feed one viewer -- an ARC-sourced file and a
+// collector-sourced one. Mixed is reported rather than silently picking one.
+const char* third_metric_name(const std::vector<uint32_t>& sources) {
+    bool any_act = false, any_disp = false;
+    for (uint32_t s : sources) {
+        if (s & ttnvtop::SIGNAL_SRC_ACTIVITY) {
+            any_act = true;
+        } else {
+            any_disp = true;
+        }
+    }
+    if (any_act && any_disp) {
+        return "DISPATCH/ACTIVITY (mixed sources)";
+    }
+    return any_act ? "ACTIVITY" : "DISPATCH";
+}
+
 const char* metric_name(Metric m) {
     switch (m) {
         case Metric::Fpu: return "FPU";
@@ -713,16 +740,21 @@ int main(int argc, char* argv[]) {
         std::ostringstream out;
         out << "\x1b[H\x1b[2J";
         size_t total_cores = 0;
+        std::vector<uint32_t> chip_sources;
         for (const auto& m : maps) {
             total_cores += m.header->num_cores;
+            chip_sources.push_back(m.header->signal_sources);
         }
         out << kAnsiBold << "ttnvtop" << kAnsiReset << "   " << maps.size() << " chip" << (maps.size() == 1 ? "" : "s")
             << "   " << total_cores << " cores   " << kRenderHz << " Hz"
-            << "   showing " << kAnsiBold << metric_name(metric) << "%" << kAnsiReset << "\n"
-            << kAnsiDim << "  [f] FPU  [s] SFPU  [d] dispatch  [a] all   [g] " << (meter_view ? "NoC grid" : "meters")
-            << "   [q] quit     saturation: " << kAnsiReset << kPctGray << "idle" << kAnsiReset << " " << kPctGreen
-            << "low" << kAnsiReset << " " << kPctYellow << "mid" << kAnsiReset << " " << kPctRed << "hot" << kAnsiReset
-            << "\n";
+            << "   showing " << kAnsiBold
+            << (metric == Metric::Dispatch ? third_metric_name(chip_sources) : metric_name(metric)) << "%" << kAnsiReset
+            << "\n"
+            << kAnsiDim << "  [f] FPU  [s] SFPU  [d] "
+            << (third_metric_name(chip_sources)[0] == 'A' ? "activity" : "dispatch") << "  [a] all   [g] "
+            << (meter_view ? "NoC grid" : "meters") << "   [q] quit     saturation: " << kAnsiReset << kPctGray
+            << "idle" << kAnsiReset << " " << kPctGreen << "low" << kAnsiReset << " " << kPctYellow << "mid"
+            << kAnsiReset << " " << kPctRed << "hot" << kAnsiReset << "\n";
 
         // ---- htop-style meter view -------------------------------------
         // One meter per core, laid out in as many columns as the terminal
@@ -768,8 +800,25 @@ int main(int argc, char* argv[]) {
                 } else {
                     out << "clk n/a";
                 }
-                out << "   " << kMetricFpuCol << "F " << af << "%" << kAnsiReset << "  " << kMetricSfpuCol << "S " << as
-                    << "%" << kAnsiReset << "  " << kMetricDispCol << "D " << ad << "%" << kAnsiReset << render_dram(h);
+                // A producer without SIGNAL_SRC_COMPUTE never sampled the compute pipes, so
+                // its 0% is "not measured" and reads as "idle". Say n/a instead -- the
+                // schema has specified this behaviour from the start and nothing implemented
+                // it.
+                const bool has_compute = (h->signal_sources & ttnvtop::SIGNAL_SRC_COMPUTE) != 0;
+                out << "   " << kMetricFpuCol << "F ";
+                if (has_compute) {
+                    out << af << "%";
+                } else {
+                    out << "n/a";
+                }
+                out << kAnsiReset << "  " << kMetricSfpuCol << "S ";
+                if (has_compute) {
+                    out << as << "%";
+                } else {
+                    out << "n/a";
+                }
+                out << kAnsiReset << "  " << kMetricDispCol << third_metric_short(h->signal_sources) << " " << ad << "%"
+                    << kAnsiReset << render_dram(h);
                 if (chip_stale) {
                     const double age = static_cast<double>(monotonic_us() - h->last_update_us) / 1e6;
                     out << kAnsiBold << "   (STALE " << std::fixed << std::setprecision(0) << age

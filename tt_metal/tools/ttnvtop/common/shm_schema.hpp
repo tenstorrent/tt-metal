@@ -35,6 +35,20 @@ enum SignalSource : uint32_t {
     SIGNAL_SRC_NONE = 0,
     SIGNAL_SRC_DISPATCH = 1u << 0,  // go_msg.signal sampling (Phase 1)
     SIGNAL_SRC_COMPUTE = 1u << 1,   // perf-counter sampling (Phase 2+)
+    // dispatch_busy_p1000 carries instruction-issue ACTIVITY, not go_msg dispatch
+    // occupancy. Set by producers that read the Tensix INSTRN_THREAD counter -- the ARC
+    // per-core sweep does, and never samples go_msg at all.
+    //
+    // The two are not interchangeable and diverge exactly where it matters: a core with a
+    // kernel resident but stalled on data reads high dispatch and low activity. Measured on
+    // an n300 under a 4x4 matmul, the same 16 cores read 92.7% activity and 28.4% FPU, so a
+    // viewer that called activity "dispatch" would report a number that is correct and
+    // named for something else.
+    //
+    // Activity is not the lesser signal -- it has dynamic range where dispatch occupancy
+    // saturates, and it is what makes a low FPU% legible as "busy but not computing". This
+    // bit exists so a viewer can say which one it is showing, not to mark it second-class.
+    SIGNAL_SRC_ACTIVITY = 1u << 2,
 };
 
 // Written once at collector startup; `last_update_us` refreshed every tick.
