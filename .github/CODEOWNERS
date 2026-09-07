@@ -27,8 +27,8 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/instructions/ttnn-core.instructions.md @tenstorrent/metalium-developers-ttnn-core @aliaksei-sala
 .github/instructions/ttnn-ops.instructions.md @tenstorrent/metalium-developers-ops-leads
 .github/instructions/ttnn.instructions.md @tenstorrent/metalium-developers-ttnn-core
-.github/time_budget.yaml @roseli-TT @tdowdallTT
-.github/time_budgets/ @roseli-TT @tdowdallTT
+.github/time_budget.yaml @roseli-TT @tdowdallTT @dpopovTT
+.github/time_budgets/ @roseli-TT @tdowdallTT @dpopovTT
 .github/workflows/fabric-cpu-only-tests-impl.yaml @Riddy21 @tt-asaigal @aliuTT @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra
@@ -47,9 +47,9 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/workflows/ttnn-run-sweeps*.yaml @stevendae @cmaryanTT @sjameelTT @bbradelTT @ntarafdar
 .github/workflows/vllm-model-tests-impl.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
 .github/workflows/vllm-model-tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
-tests/pipeline_reorg/galaxy_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT
-tests/pipeline_reorg/single_card_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT
-tests/pipeline_reorg/t3k_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT
+tests/pipeline_reorg/galaxy_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT @dpopovTT
+tests/pipeline_reorg/single_card_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT @dpopovTT
+tests/pipeline_reorg/t3k_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT @dpopovTT
 
 /infra/ @tenstorrent/metalium-developers-infra
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra
@@ -72,7 +72,7 @@ tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @jonathansuTT @cgl
 tests/pipeline_reorg/models_sweep_tests.yaml @mtairum @uaydonat @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/models_unit_tests.yaml @mtairum @uaydonat @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/vllm_model_tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
-tests/pipeline_reorg/ttsim-skip-list.yaml @roseli-TT @tdowdallTT @mcraigheadTT @tenstorrent-github-bot
+tests/pipeline_reorg/ttsim-skip-list.yaml @roseli-TT @tdowdallTT @mcraigheadTT @tenstorrent-github-bot @dpopovTT
 tests/scripts/ @tenstorrent/metalium-developers-infra
 tests/scripts/quasar @kstevensTT @fvranicTT @tenstorrent/metalium-developers-infra
 tests/scripts/single_card/run_single_card_profiler_tests.sh @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra

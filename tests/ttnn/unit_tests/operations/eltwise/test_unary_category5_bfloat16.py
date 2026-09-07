@@ -23,14 +23,16 @@ All four ops split the input tensor in half along dim=-1:
 
 1. ttnn.glu    - Gated Linear Unit:      gate_fn(B) = sigmoid(B)
 2. ttnn.reglu  - ReLU-gated Linear Unit: gate_fn(B) = relu(B)
-3. ttnn.geglu  - GELU-gated Linear Unit: gate_fn(B) = gelu(B)   [tanh approx]
+3. ttnn.geglu  - GELU-gated Linear Unit: gate_fn(B) = gelu(B)   [Accurate variant]
 4. ttnn.swiglu - SiLU-gated Linear Unit: gate_fn(B) = silu(B) = B * sigmoid(B)
 
 Accuracy criteria
 ─────────────────
   glu    : ULP ≤ 2  (sigmoid via SFPU, multiplication rounds at most 1 ULP)
   reglu  : ULP ≤ 1  (relu is exact piecewise linear, multiplication ≤ 1 ULP)
-  geglu  : PCC ≥ 0.999  (GELU uses a tanh polynomial approximation)
+  geglu  : bitwise equality against ttnn.gelu on an A = 1.0 gate, per variant
+                          (pins the gate implementation, so ttnn.gelu's own
+                          accuracy tests apply)
   swiglu : PCC ≥ 0.999  (silu = B*sigmoid(B); SFPU FTZ for B < -88 gives
                           device → 0 while CPU returns a tiny non-zero value;
                           ULP cannot distinguish legitimate hardware FTZ)
@@ -121,28 +123,52 @@ def test_swiglu_op(device, dim):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# geglu — PCC (GELU tanh polynomial approximation)
+# geglu — bitwise gate comparison against ttnn.gelu, per GELU variant
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("dim", [-1, 3])
-def test_geglu_op(device, dim):
-    """Exhaustive normal bfloat16 coverage for geglu.
+@pytest.mark.parametrize(
+    "variant",
+    [None, ttnn.GeluVariant.Accurate, ttnn.GeluVariant.FastLut, ttnn.GeluVariant.Tanh],
+    ids=["default", "accurate", "fast_lut", "tanh"],
+)
+def test_geglu_op(device, dim, variant):
+    """Exhaustive normal bfloat16 coverage for geglu, for every GELU variant.
 
-    PCC ≥ 0.999 is used because GELU uses a tanh polynomial approximation
-    with ~0.1-0.5% relative error in [-3, 3].  A uses values in [-1, 1] to
-    prevent A * gelu(B) from overflowing to inf for large-magnitude B.
+    geglu's gate must be bitwise-identical to ttnn.gelu with the same variant,
+    which pins the gate implementation exactly and makes ttnn.gelu's own
+    accuracy tests carry over.  Passing no variant must resolve to Accurate.
+
+    A = 1.0 isolates the gate: the multiply becomes exact, so the output is the
+    gate value itself and can be compared bit-for-bit.  A half-swap is still
+    detectable, since it would produce B * gelu(1.0) instead of gelu(B).
     """
-    B = generate_bfloat16_bits(include_spl_values=False)  # (256, 256) — all normal bf16
-    A_vals = generate_bfloat16_bits_in_range(-1.0, 1.0).flatten()
-    A = A_vals.repeat(B.numel() // A_vals.numel() + 1)[: B.numel()].view(B.shape)
-    input_tensor = _build_glu_input(A, B)
+    B = generate_bfloat16_bits(include_spl_values=False)  # (256, 256) — all normal bf16 values
+    input_tensor = _build_glu_input(torch.ones_like(B), B)
 
     tt_in = to_tt_tensor(input_tensor, device)
-    golden_function = ttnn.get_golden_function(ttnn.geglu)
-    golden = golden_function(input_tensor, dim=dim, device=device)
+    gate_in = to_tt_tensor(B.unsqueeze(0).unsqueeze(0), device)
+    geglu_kwargs = {} if variant is None else {"variant": variant}
 
-    tt_result = ttnn.geglu(tt_in, dim=dim)
-    result = ttnn.to_torch(tt_result)
+    expected_variant = ttnn.GeluVariant.Accurate if variant is None else variant
+    expected = ttnn.to_torch(ttnn.gelu(gate_in, variant=expected_variant))
+    result = ttnn.to_torch(ttnn.geglu(tt_in, dim=dim, **geglu_kwargs))
 
-    assert_with_pcc(golden, result, pcc=0.999)
+    assert torch.equal(result, expected), (
+        f"geglu gate diverged from ttnn.gelu(variant={expected_variant}) for "
+        f"{int((result != expected).sum().item())} of {result.numel()} elements"
+    )
+    # Verify the golden function resolves variant=None to GeluVariant.Accurate by
+    # comparing its output against the golden called with the explicit expected_variant.
+    # Both calls go through the identical code path (same split tensors, same gelu
+    # kernel), so they must agree regardless of subnormal/FTZ behaviour on the runner
+    golden = ttnn.get_golden_function(ttnn.geglu)(input_tensor, dim=dim, device=device, **geglu_kwargs)
+    golden_explicit = ttnn.get_golden_function(ttnn.geglu)(
+        input_tensor, dim=dim, device=device, variant=expected_variant
+    )
+
+    assert torch.equal(golden, golden_explicit), (
+        f"geglu golden with variant={variant!r} differs from explicit variant={expected_variant} "
+        f"for {int((golden != golden_explicit).sum().item())} of {golden.numel()} elements"
+    )
