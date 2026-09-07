@@ -17,6 +17,8 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 
 #include "moe_fused_swiglu_bank_runs.hpp"
 #include "moe_fused_swiglu_common.hpp"
@@ -62,7 +64,10 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* sem_ptr(uint32_t id) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(id)));
 }
 
-FORCE_INLINE void sem_wait_min(uint32_t id, uint32_t target) { noc_semaphore_wait_min(sem_ptr(id), target); }
+FORCE_INLINE void sem_wait_min(uint32_t id, uint32_t target) {
+    Semaphore<> sem(id);
+    sem.wait_min(target);
+}
 
 //: An intra-core publish: producer and consumer are two RISC-Vs on the same core sharing one L1,
 //: and the word has exactly one writer, so a plain volatile store is the whole handshake.
@@ -183,12 +188,16 @@ FORCE_INLINE void scatter_payload(
 //: `scatter_payload` so the reader and writer can retain concurrent up/gate transfers on the two
 //: NoCs while one RISC emits a single readiness notification only after both legs are complete.
 FORCE_INLINE void scatter_signal(uint32_t rt_peers, uint32_t sem_data, uint32_t workers) {
-    const uint32_t sem = static_cast<uint32_t>(get_semaphore(sem_data));
+    // A default-constructed Noc carries the calling kernel's noc_index, which is the NoC the
+    // free-function form used implicitly -- this helper runs on the reader's and the writer's, and
+    // each must keep signalling on its own.
+    Semaphore<> sem(sem_data);
+    Noc noc;
     for (uint32_t i = 0; i < workers; ++i) {
         const Peer p = peer_at(rt_peers, i);
-        noc_semaphore_inc(get_noc_addr(p.x, p.y, sem), 1);
+        sem.up(noc, p.x, p.y, 1);
     }
-    noc_async_atomic_barrier();
+    noc.async_atomic_barrier();
 }
 
 FORCE_INLINE void scatter_leg(
