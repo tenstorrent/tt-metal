@@ -1470,9 +1470,9 @@ def compute_device_only_metrics(
             lambda x: safe_div(x.get("value_MATH_NOT_SCOREBOARD_STALLED", 0), x.get("value_PACKER_BUSY", 0)),
             axis=1,
         )
-    elif "ref_cnt_AVAILABLE_MATH" in eff_pivot.columns:
+    elif "ref_cnt_MATH_NOT_SCOREBOARD_STALLED" in eff_pivot.columns:
         eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_MATH_NOT_SCOREBOARD_STALLED", 0), x.get("ref_cnt_AVAILABLE_MATH", 0)),
+            lambda x: safe_div(x.get("value_MATH_NOT_SCOREBOARD_STALLED", 0), x.get("ref_cnt_MATH_NOT_SCOREBOARD_STALLED", 0)),
             axis=1,
         )
     eff_pivot["Unpacker-to-Math Data Flow"] = eff_pivot.apply(
