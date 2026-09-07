@@ -36,6 +36,12 @@ struct DispatchFabric2dInputs {
     ttnn::Tensor indices_tensor;
     ttnn::Tensor expert_offsets_tensor;
     ttnn::Tensor expert_dispatch_table_tensor;
+    // A relay sizes a chunk as expert_offsets[origin+1][e] - expert_offsets[origin][e]. The last origin
+    // has no next row, and rows are absolute buffer positions, so it closes against
+    // total_counts_per_expert + expert_region_offsets -- totals alone is wrong for every expert that is
+    // not first in its chip group.
+    ttnn::Tensor expert_token_counts;
+    ttnn::Tensor expert_region_offsets;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d
