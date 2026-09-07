@@ -67,6 +67,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("v_width"),
         nb::kw_only(),
         nb::arg("program_config").noconvert(),
+        nb::arg("wrap_row") = 0,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 }
