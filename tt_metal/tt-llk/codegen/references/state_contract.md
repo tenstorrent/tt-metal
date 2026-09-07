@@ -4,7 +4,16 @@
 `★` = agent must write those keys back into `run`.
 `LOCK_TESTS` (boolean, from router; default `false`): when true the tester runs test-locked — it treats the existing test as the immutable source of truth, authors or modifies no test, and only runs it and debugs the kernel; the writer→tester→refiner loop is otherwise unchanged.
 `REMOVE_TESTS` (boolean, from router; default `false`): when true, `execute_step_remove_existing_tests` (Step 2c) git-removes and commits the op's dedicated arch-specific test files on the worktree branch before the analyzer runs, and the tester authors the test fresh from the analysis spec; overrides `LOCK_TESTS`. `execute_step_setup_run` mirrors it from `boot` into `run` exactly like `LOCK_TESTS`.
-`HIDE_EXISTING_KERNEL` (boolean, from router; default `false`): when true, `execute_step_hide_existing_kernel` (Step 2b) git-removes and commits the target op's existing files on the worktree branch before the analyzer runs, so the pipeline regenerates blind. `execute_step_setup_run` mirrors it from `boot` into `run` exactly like `LOCK_TESTS`.
+`HIDE_EXISTING_KERNEL` (boolean, from router; default `false`): when true, `execute_step_hide_existing_kernel` (Step 2b) git-removes and commits the target op's existing files on the worktree branch before the analyzer runs, so the pipeline regenerates blind. The same commit repoints test includes of the hidden header at `GENERATED_KERNEL` and records them in `REPOINTED_INCLUDES`. `execute_step_setup_run` mirrors it from `boot` into `run` exactly like `LOCK_TESTS`.
+`PERF_COMPARE` (boolean, from router; default `true`) and `PERF_REGRESS_PCT` (number, from router; default `2.0`): opt-out and regression threshold for the perf comparison against the original kernel. The comparison itself is gated on `HIDE_EXISTING_KERNEL=true` and `LOCK_TESTS=true` with `REMOVE_TESTS` unset.
+
+### Perf comparison keys (all in `run`)
+
+Written by `execute_step_perf_baseline` (Step 2a): `PERF_ENABLED` (false with `PERF_REASON` when the gate fails, no module collects the op, or the baseline run fails), `PERF_MODULE`, `PERF_K`, `PERF_TEST_ID` (representative node id), `PERF_METRIC` (`mean(MATH_ISOLATE)` for SFPU, else `mean(L1_TO_L1)`), `PERF_BASELINE_CSV`, `PERF_MAX_ATTEMPTS`, `PERF_REGRESS_PCT`.
+
+Written by the optimizer through the step helpers: `execute_step_perf_measure` sets `PERF_LAST_*` and bumps `PERF_ATTEMPTS` for `attempt_*` labels; `execute_step_perf_keep` sets `PERF_BEST_*` (csv, label, full, verdicts, deltas, cycles, variant tally, worst key), snapshots the kernel to `$LOG_DIR/perf_best_*`, bumps `PERF_KEPT` for `attempt_*` labels, and re-aims `PERF_TEST_ID` at the worst variant after a regressed full sweep; `execute_step_perf_revert [label]` restores the snapshot and counts an unmeasured attempt.
+
+Written by `execute_step_perf_finalize` (Step 6b): `PERF_VERDICT` (median variant), `PERF_VERDICT_NOTE` (regressed variants) and the run.json `perf` object, which also carries `verdict_worst_case`. `execute_step_finalize_run` re-emits the object so a run that never reached the optimizer still records `enabled: false` with its reason.
 
 ## Orchestrator ⇄ agents
 
