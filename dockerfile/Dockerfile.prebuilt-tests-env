@@ -12,8 +12,9 @@ FROM ${BASE}
 #         /work/ttnn on PYTHONPATH as well as /work, since /work/ttnn is a
 #         namespace dir and the package itself is /work/ttnn/ttnn. Nothing here
 #         runs pip, so ttnn's declared dependencies are installed from the tree's
-#         pyproject.toml: no base image is guaranteed to carry them already (the
-#         dev image lacks graphviz and ml_dtypes, and ci-test lacks graphviz).
+#         pyproject.toml: no base image is guaranteed to carry them already. Both
+#         ci-test and dev lack graphviz and ml_dtypes; an import error names only
+#         the first one missing, so do not read it as the whole gap.
 # wheel = source tree plus the wheel installed; no build tree.
 ARG PROFILE=full
 
