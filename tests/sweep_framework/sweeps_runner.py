@@ -37,6 +37,7 @@ from framework.vector_source import VectorSourceFactory
 from sweep_utils.perf_utils import (
     run_single,
     run_with_cache_comparison,
+    run_with_determinism_check,
     DEVICE_PERF_SKIPPED,
     DEVICE_PERF_READBACK_FAILED,
 )
@@ -57,6 +58,10 @@ class SweepsConfig:
     measure_perf_with_cache: bool = False
     measure_device_perf: bool = False
     measure_memory: bool = False
+    # --determinism-runs N: execute every vector N times in-process and require the raw
+    # ttnn outputs to be bit-identical across runs (0 = off). See
+    # sweep_utils.perf_utils.run_with_determinism_check.
+    determinism_runs: int = 0
     dry_run: bool = False
     sweeps_tag: str | None = None
     skip_modules: str | None = None
@@ -91,6 +96,7 @@ def create_config_from_args(args) -> SweepsConfig:
         measure_perf_with_cache=args.perf_with_cache,
         measure_device_perf=args.device_perf,
         measure_memory=args.measure_memory,
+        determinism_runs=args.determinism_runs,
         dry_run=args.dry_run,
         sweeps_tag=args.tag,
         skip_modules=args.skip_modules,
@@ -152,6 +158,17 @@ def validate_arguments(args, parser):
     if getattr(args, "perf_with_cache", False) and args.perf:
         logger.error(
             "Cannot use both --perf and --perf-with-cache flags simultaneously. Use --perf-with-cache to get both cached and uncached performance measurements."
+        )
+        exit(1)
+
+    determinism_runs = getattr(args, "determinism_runs", 0) or 0
+    if determinism_runs == 1:
+        logger.error("--determinism-runs needs at least 2 runs to compare (or 0 to disable).")
+        exit(1)
+    if determinism_runs and getattr(args, "perf_with_cache", False):
+        logger.error(
+            "Cannot use both --perf-with-cache and --determinism-runs. The determinism check already runs "
+            "each vector uncached then cached; use --perf for e2e perf alongside it."
         )
         exit(1)
 
@@ -401,7 +418,12 @@ def run(input_queue, output_queue, config: SweepsConfig):
 
             test_vector = deserialize_vector_structured(test_vector)
             try:
-                if config.measure_perf_with_cache:
+                determinism = None
+                if config.determinism_runs:
+                    status, message, e2e_perf, device_perf, peak_memory, determinism = run_with_determinism_check(
+                        test_module, test_vector, cur_device, config
+                    )
+                elif config.measure_perf_with_cache:
                     status, message, e2e_perf, device_perf, peak_memory = run_with_cache_comparison(
                         test_module, test_vector, cur_device, config
                     )
@@ -428,6 +450,7 @@ def run(input_queue, output_queue, config: SweepsConfig):
                         device_perf if config.measure_device_perf else None,
                         peak_memory if config.measure_memory else None,
                         canary_detail,
+                        determinism,
                     ]
                 )
             except Exception as e:
@@ -439,7 +462,7 @@ def run(input_queue, output_queue, config: SweepsConfig):
                     if not healthy:
                         canary_detail = detail
                         logger.error(f"Device canary FAILED after a raised vector: {detail}")
-                output_queue.put([False, str(e), None, None, None, canary_detail])
+                output_queue.put([False, str(e), None, None, None, canary_detail, None])
     finally:
         _exhaust_fixture()
         close_job_device()
@@ -479,7 +502,12 @@ def _create_main_proc_runner(module_name, input_queue, output_queue, config):
             # Deserialize the test vector (same as subprocess mode)
             test_vector = deserialize_vector_structured(test_vector)
 
-            if config.measure_perf_with_cache:
+            determinism = None
+            if config.determinism_runs:
+                status, message, e2e_perf, device_perf, peak_memory, determinism = run_with_determinism_check(
+                    test_module, test_vector, device, config
+                )
+            elif config.measure_perf_with_cache:
                 status, message, e2e_perf, device_perf, peak_memory = run_with_cache_comparison(
                     test_module, test_vector, device, config
                 )
@@ -494,13 +522,15 @@ def _create_main_proc_runner(module_name, input_queue, output_queue, config):
                     e2e_perf,
                     device_perf if config.measure_device_perf else None,
                     peak_memory if config.measure_memory else None,
+                    None,  # canary detail (main-proc mode has no post-failure canary)
+                    determinism,
                 ]
             )
         except Exception as e:
             if config.main_proc_verbose:
                 logger.exception(e)
             status, message = False, str(e)
-            output_queue.put([status, message, None, None, None])
+            output_queue.put([status, message, None, None, None, None, None])
 
     # Return runner function and device generator for cleanup
     return runner, device_gen
@@ -553,7 +583,11 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
     # 6th element (optional, so older/other producers of this tuple still unpack): set only
     # when the vector FAILED and the post-failure device canary also failed.
     canary_detail = response[5] if len(response) > 5 else None
+    # 7th element (optional): the --determinism-runs verdict dict, exported as metrics.
+    determinism = response[6] if len(response) > 6 else None
     result["message"] = message
+    if determinism:
+        result["determinism"] = determinism
 
     logger.info(f"Test status: {status}")
     logger.info(f"Test message: {message}")
@@ -658,7 +692,11 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
                     f"The following assertion was thrown: {message}"
                 )
                 logger.info("Device error detected. The suite will be aborted after this test.")
-            if "Out of Memory: Not enough space to allocate" in str(message):
+            if determinism and determinism.get("verdict") == "non_deterministic":
+                # Every run passed its own PCC check but the outputs were not bit-identical
+                # across runs (run_with_determinism_check). Distinct from a correctness failure.
+                result["status"] = TestStatus.FAIL_NON_DETERMINISTIC
+            elif "Out of Memory: Not enough space to allocate" in str(message):
                 result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
             elif "Watcher" in str(message):
                 result["status"] = TestStatus.FAIL_WATCHER
@@ -684,6 +722,7 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
             TestStatus.FAIL_L1_OUT_OF_MEM,
             TestStatus.FAIL_WATCHER,
             TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF,
+            TestStatus.FAIL_NON_DETERMINISTIC,
         ]:
             result["status"] = TestStatus.XFAIL
             logger.info(f"EXPECTED FAILURE: Test in XFail suite '{suite_name}' failed as expected: {input_hash}")
@@ -1246,6 +1285,11 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         output_queue = worker["output_queue"]
         p = worker["p"]
     timeout = get_timeout(module_name)
+    if config.determinism_runs:
+        # Each vector is executed N times (plus a host readback of every output), so the
+        # per-vector watchdog must stretch accordingly or a slow-but-healthy vector is
+        # misreported as FAIL_CRASH_HANG.
+        timeout *= config.determinism_runs
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
     timeout_before_rejoin = 5
@@ -1885,6 +1929,7 @@ def run_sweeps(
             TestStatus.FAIL_L1_OUT_OF_MEM.name,
             TestStatus.FAIL_WATCHER.name,
             TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF.name,
+            TestStatus.FAIL_NON_DETERMINISTIC.name,
         }
         failed_count = sum(count for name, count in status_counts.items() if name in fail_status_names)
         if failed_count > 0:
@@ -2138,6 +2183,21 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--determinism-runs",
+        type=int,
+        default=0,
+        required=False,
+        metavar="N",
+        help=(
+            "Run every vector N times (N >= 2) in-process and require the raw ttnn outputs to be "
+            "bit-identical across runs. Run 1 is uncached, runs 2..N cached. A vector that passes its "
+            "own PCC every time but differs between runs is reported as FAIL_NON_DETERMINISTIC. "
+            "Outputs are captured with a ttnn post-op hook, so no sweep module changes are needed. "
+            "0 (default) disables the check."
+        ),
+    )
+
+    parser.add_argument(
         "--device-perf",
         required=False,
         action="store_true",
@@ -2257,6 +2317,12 @@ if __name__ == "__main__":
         logger.info("Memory measurement: Enabled (using graph trace NO_DISPATCH mode)")
     else:
         logger.info("Memory measurement: Disabled")
+
+    if config.determinism_runs:
+        logger.info(
+            f"Determinism check: Enabled ({config.determinism_runs} runs per vector, outputs compared bit-exactly; "
+            "mismatches reported as FAIL_NON_DETERMINISTIC)"
+        )
 
     if config.skip_on_timeout:
         logger.info("Timeout behavior: Skip remaining tests in suite when a test times out.")

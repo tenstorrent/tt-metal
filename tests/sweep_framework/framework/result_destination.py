@@ -31,7 +31,6 @@ from infra.data_collection.pydantic_models import (
     TestStatus,
 )
 
-
 # Optional numpy import for numeric handling in hot paths
 try:
     import numpy as np
@@ -81,6 +80,7 @@ def _map_status(value: Any) -> TestStatus | None:
                 RunnerStatus.FAIL_L1_OUT_OF_MEM: "fail_l1_out_of_mem",
                 RunnerStatus.FAIL_WATCHER: "fail_watcher",
                 RunnerStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
+                RunnerStatus.FAIL_NON_DETERMINISTIC: "fail_non_deterministic",
                 RunnerStatus.XFAIL: "xfail",  # Expected failure
                 RunnerStatus.XPASS: "xpass",  # Unexpected pass
             }
@@ -109,8 +109,26 @@ def _collect_all_metrics(raw: dict[str, Any]) -> set[PerfMetric] | None:
     _add_e2e_metrics(metrics, raw)
     _add_device_metrics(metrics, raw)
     _add_memory_metrics(metrics, raw)
+    _add_determinism_metrics(metrics, raw)
 
     return metrics if metrics else None
+
+
+def _add_determinism_metrics(metrics: set, raw: dict[str, Any]) -> None:
+    """Export the --determinism-runs verdict as metrics (no schema change needed downstream).
+
+    determinism_runs            number of repeated executions that were compared
+    determinism_mismatch_elems  elements that differed between run 1 and the first divergent run (0 = bit-identical)
+    determinism_max_abs_delta   max |run_1 - run_k| over those elements
+    determinism_divergent_run   1-based index of the first run that differed (absent when deterministic)
+    """
+    info = raw.get("determinism")
+    if not isinstance(info, dict):
+        return
+    _add_metric(metrics, "determinism_runs", info.get("runs"))
+    _add_metric(metrics, "determinism_mismatch_elems", info.get("mismatch_elems"))
+    _add_metric(metrics, "determinism_max_abs_delta", info.get("max_abs_delta"))
+    _add_metric(metrics, "determinism_divergent_run", info.get("divergent_run"))
 
 
 def _coerce_to_optional_string(value: Any) -> str | None:

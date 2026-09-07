@@ -600,6 +600,10 @@ on:
         description: "Capture peak L1 memory usage using graph trace (--measure-memory flag)."
         type: boolean
         default: false
+      determinism_runs:
+        description: "Determinism check: run each vector N times and require bit-identical outputs (--determinism-runs N). 0 disables. Incompatible with measure_e2e_perf."
+        type: string
+        default: "0"
       arch:
         required: true
         type: choice
@@ -680,6 +684,7 @@ jobs:
       measure-device-perf: ${{ steps.resolve.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ steps.resolve.outputs.measure-e2e-perf }}
       measure-memory: ${{ steps.resolve.outputs.measure-memory }}
+      determinism-runs: ${{ steps.resolve.outputs.determinism-runs }}
       arch: ${{ steps.resolve.outputs.arch }}
       runner-label: ${{ steps.resolve.outputs.runner-label }}
       log-level: ${{ steps.resolve.outputs.log-level }}
@@ -714,6 +719,9 @@ jobs:
             MEASURE_E2E_PERF=false
             MEASURE_MEMORY=true
             TRACY=true
+            # Determinism check is opt-in (dispatch only) for now: it multiplies every
+            # vector's device time by N across all op groups, not just eltwise.
+            DETERMINISM_RUNS=0
           else
             SKIP_ON_TIMEOUT=${{ github.event.inputs.skip_on_timeout || 'true' }}
             GENERATE_SWEEPS_GROUP_BY="${{ github.event.inputs.generate_sweeps_group_by || 'hw' }}"
@@ -722,6 +730,16 @@ jobs:
             MEASURE_E2E_PERF=${{ github.event.inputs.measure_e2e_perf || 'false' }}
             MEASURE_MEMORY=${{ github.event.inputs.measure_memory || 'false' }}
             TRACY=${{ github.event.inputs.measure_device_perf || 'true' }}
+            DETERMINISM_RUNS="${{ github.event.inputs.determinism_runs || '0' }}"
+          fi
+
+          if ! [[ "$DETERMINISM_RUNS" =~ ^[0-9]+$ ]] || [[ "$DETERMINISM_RUNS" == "1" ]]; then
+            echo "::error::determinism_runs must be 0 (off) or an integer >= 2, got '$DETERMINISM_RUNS'"
+            exit 1
+          fi
+          if [[ "$DETERMINISM_RUNS" != "0" && "$MEASURE_E2E_PERF" == "true" ]]; then
+            echo "::error::determinism_runs and measure_e2e_perf cannot both be enabled (both re-run each vector)"
+            exit 1
           fi
 
           echo "sweep-name=$SWEEP_NAME" >> $GITHUB_OUTPUT
@@ -732,6 +750,7 @@ jobs:
           echo "measure-device-perf=$MEASURE_DEVICE_PERF" >> $GITHUB_OUTPUT
           echo "measure-e2e-perf=$MEASURE_E2E_PERF" >> $GITHUB_OUTPUT
           echo "measure-memory=$MEASURE_MEMORY" >> $GITHUB_OUTPUT
+          echo "determinism-runs=$DETERMINISM_RUNS" >> $GITHUB_OUTPUT
           echo "arch=${{ github.event.inputs.arch || 'wormhole_b0' }}" >> $GITHUB_OUTPUT
           echo "runner-label=${{ github.event.inputs['runner-label'] || 'N150' }}" >> $GITHUB_OUTPUT
           echo "log-level=${{ github.event.inputs['log-level'] || 'INFO' }}" >> $GITHUB_OUTPUT
@@ -1158,6 +1177,11 @@ jobs:
             CMD+=("$MEMORY_FLAG")
           fi
 
+          DETERMINISM_RUNS="${{ needs.resolve-inputs.outputs.determinism-runs }}"
+          if [[ -n "$DETERMINISM_RUNS" && "$DETERMINISM_RUNS" != "0" ]]; then
+            CMD+=(--determinism-runs "$DETERMINISM_RUNS")
+          fi
+
           "${CMD[@]}"
       - name: Upload sweep results
         if: ${{ always() }}
@@ -1200,6 +1224,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      determinism-runs: ${{ needs.resolve-inputs.outputs.determinism-runs }}
       fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
