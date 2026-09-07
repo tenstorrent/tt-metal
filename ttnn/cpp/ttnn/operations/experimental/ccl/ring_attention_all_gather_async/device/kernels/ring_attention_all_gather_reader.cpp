@@ -103,7 +103,14 @@ FORCE_INLINE void prefetch_bank_owned_slices(
     uint32_t output_page_base,
     uint32_t valid_pages,
     uint32_t first_bank,
-    uint32_t bank_stride) {
+    uint32_t bank_stride,
+    uint32_t bundle_table = 0,
+    uint32_t rows_per_bundle = 1,
+    uint32_t num_layers = 1,
+    uint32_t layer_idx = 0,
+    uint32_t num_heads = 1,
+    uint32_t head_idx = 0,
+    uint32_t width_tiles = 1) {
     ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
         output_page_base, valid_pages, first_bank, bank_stride, packet_size_in_pages);
     const auto next_packet = [&](uint32_t& pages_to_read) {
@@ -126,7 +133,36 @@ FORCE_INLINE void prefetch_bank_owned_slices(
             cb_fifo_size,
             accessor,
             next_packet,
-            [](uint32_t first_page_id, uint32_t page) { return first_page_id + page * num_dram_banks; });
+            [&](uint32_t first_page_id, uint32_t page) {
+                const uint32_t logical_tile = first_page_id + page * num_dram_banks;
+                if constexpr (has_page_bundles) {
+                    // Packet ownership is determined by the gathered output bank. The local source
+                    // can still be an arbitrary bundle: translate each logical tile before its read.
+                    uint32_t logical_bundle, row_in_bundle, col;
+                    if (rows_per_bundle == 1 && width_tiles == 4) {
+                        // Avoid software division for the indexer's production 32x128 pages.
+                        logical_bundle = logical_tile >> 2;
+                        row_in_bundle = 0;
+                        col = logical_tile & 3;
+                    } else {
+                        const uint32_t logical_row = logical_tile / width_tiles;
+                        logical_bundle = logical_row / rows_per_bundle;
+                        row_in_bundle = logical_row % rows_per_bundle;
+                        col = logical_tile % width_tiles;
+                    }
+                    const uint32_t bundle = CoreLocalMem<volatile uint16_t>(bundle_table)[logical_bundle];
+                    const uint32_t physical_page = (bundle * num_layers + layer_idx) * num_heads + head_idx;
+                    if constexpr (num_inputs == 1) {
+                        return ShardNocReadAddress{accessor.get_shard_noc_addr(
+                            physical_page, (row_in_bundle * width_tiles + col) * input_tensor_page_size)};
+                    } else {
+                        return ShardNocReadAddress{accessor.get_noc_addr(
+                            (physical_page * rows_per_bundle + row_in_bundle) * width_tiles + col)};
+                    }
+                } else {
+                    return logical_tile;
+                }
+            });
     }
 }
 
@@ -283,8 +319,16 @@ void kernel_main() {
         const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
         const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
         if constexpr (output_bank_owned_schedule) {
+            const auto& bank_input_accessor = [&]() -> decltype(auto) {
+                if constexpr (has_page_bundles && num_inputs == 1) {
+                    return std::get<0>(inputs_tuple);
+                } else {
+                    return input_tensor_addrgens[input_idx];
+                }
+            }();
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
-                const uint32_t input_page_base = input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
+                const uint32_t input_page_base =
+                    has_page_bundles ? 0u : input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
                 const uint32_t output_page_base =
                     bh_idx * output_pages_per_batch_head + my_tensor_rank * input_pages_per_batch_head;
                 if constexpr (partial_readiness_enabled) {
@@ -295,35 +339,56 @@ void kernel_main() {
                         cb_output,
                         cb_fifo_limit,
                         cb_fifo_size,
-                        input_tensor_addrgens[input_idx],
+                        bank_input_accessor,
                         input_page_base,
                         output_page_base,
                         first_pages,
                         worker_link[input_idx],
-                        num_links);
+                        num_links,
+                        page_bundle_scratch,
+                        page_bundle_size_tiles,
+                        page_bundle_num_layers,
+                        page_bundle_layer_idx,
+                        input_batch_head_count[input_idx],
+                        bh_idx,
+                        input_tensor_Wt[input_idx]);
                     prefetch_bank_owned_slices<false>(
                         noc_obj,
                         cb_output,
                         cb_fifo_limit,
                         cb_fifo_size,
-                        input_tensor_addrgens[input_idx],
+                        bank_input_accessor,
                         input_page_base + first_pages,
                         output_page_base + first_pages,
                         input_valid_pages[input_idx] - first_pages,
                         worker_link[input_idx],
-                        num_links);
+                        num_links,
+                        page_bundle_scratch,
+                        page_bundle_size_tiles,
+                        page_bundle_num_layers,
+                        page_bundle_layer_idx,
+                        input_batch_head_count[input_idx],
+                        bh_idx,
+                        input_tensor_Wt[input_idx]);
                 } else {
                     prefetch_bank_owned_slices<false>(
                         noc_obj,
                         cb_output,
                         cb_fifo_limit,
                         cb_fifo_size,
-                        input_tensor_addrgens[input_idx],
+                        bank_input_accessor,
                         input_page_base,
                         output_page_base,
                         input_valid_pages[input_idx],
                         worker_link[input_idx],
-                        num_links);
+                        num_links,
+                        page_bundle_scratch,
+                        page_bundle_size_tiles,
+                        page_bundle_num_layers,
+                        page_bundle_layer_idx,
+                        input_batch_head_count[input_idx],
+                        bh_idx,
+                        input_tensor_Wt[input_idx]);
                 }
             }
         } else {

@@ -672,7 +672,6 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     const bool output_bank_owned_schedule =
-        !page_bundle_indices.has_value() &&
         ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(input_tensor, output_tensor, dim);
     if (partial_readiness_enabled) {
         TT_FATAL(fuse_op, "Partial all-gather readiness requires a fused consumer");
@@ -685,7 +684,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             "Partial all-gather readiness currently requires the bank-owned packet schedule");
         TT_FATAL(!split_forwarding_enabled, "Partial readiness and split forwarding cannot be enabled together");
         TT_FATAL(input_tensor.size() == 1, "Partial all-gather readiness currently supports one input tensor");
-        const auto shape = input_tensor.front().padded_shape();
+        const auto shape = page_bundle_indices.has_value() ? output_tensor.front().padded_shape()
+                                                           : input_tensor.front().padded_shape();
         const uint32_t batch_heads =
             (input_batch_slice_idx.has_value() ? 1u : shape[kBatchDimension]) * shape[kHeadDimension];
         TT_FATAL(

@@ -540,9 +540,15 @@ def _small_ring_msa_ref(q, k, num_groups, block_size):
     )
 
 
-def test_indexer_score_ring4_fused_paged_dsa_4d():
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring], ids=["linear", "ring"])
+def test_indexer_score_ring4_fused_paged_dsa_4d(topology):
     """Ring DSA gathers logical local shards from permuted multi-layer page pools."""
-    mesh, ccl_semaphores, subdevice_id, stall_group = _open_ccl((1, RING4))
+    mesh, ccl_semaphores, subdevice_id, stall_group = _open_ccl(
+        (1, RING4),
+        fabric_config=ttnn.FabricConfig.FABRIC_1D_RING
+        if topology == ttnn.Topology.Ring
+        else ttnn.FabricConfig.FABRIC_1D,
+    )
     try:
         q, k, w, q_dev, w_dev, k_local, k_gathered, paged_kwargs = _small_ring_inputs(mesh, 8, paged=True)
         cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
@@ -553,7 +559,7 @@ def test_indexer_score_ring4_fused_paged_dsa_4d():
             k_local,
             ccl_semaphores,
             cluster_axis=SP4_AXIS,
-            topology=ttnn.Topology.Linear,
+            topology=topology,
             ag_sub_device_id=subdevice_id,
             program_config=cfg,
             **paged_kwargs,
@@ -565,9 +571,15 @@ def test_indexer_score_ring4_fused_paged_dsa_4d():
         _close_ccl(mesh)
 
 
-def test_indexer_score_ring4_fused_paged_cache_hit_4d():
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring], ids=["linear", "ring"])
+def test_indexer_score_ring4_fused_paged_cache_hit_4d(topology):
     """Ring cache hits repatch both the physical local pool and page-table addresses."""
-    mesh, ccl_semaphores, subdevice_id, stall_group = _open_ccl((1, RING4))
+    mesh, ccl_semaphores, subdevice_id, stall_group = _open_ccl(
+        (1, RING4),
+        fabric_config=ttnn.FabricConfig.FABRIC_1D_RING
+        if topology == ttnn.Topology.Ring
+        else ttnn.FabricConfig.FABRIC_1D,
+    )
     try:
         mesh.clear_program_cache()
         keep_alive = []
@@ -584,7 +596,7 @@ def test_indexer_score_ring4_fused_paged_cache_hit_4d():
                 k_local,
                 ccl_semaphores,
                 cluster_axis=SP4_AXIS,
-                topology=ttnn.Topology.Linear,
+                topology=topology,
                 ag_sub_device_id=subdevice_id,
                 program_config=cfg,
                 **paged_kwargs,
@@ -602,9 +614,15 @@ def test_indexer_score_ring4_fused_paged_cache_hit_4d():
 
 @pytest.mark.parametrize("paged", [False, True], ids=["contiguous", "paged"])
 @pytest.mark.parametrize("num_groups,block_size", [(1, 0), (4, 0), (4, 128)], ids=["g1_fused", "g4", "g4_block_pool"])
-def test_indexer_score_ring4_fused_msa_4d(paged, num_groups, block_size):
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring], ids=["linear", "ring"])
+def test_indexer_score_ring4_fused_msa_4d(paged, num_groups, block_size, topology):
     """Ring MSA equivalence for fused-head, grouped, and pooled modes, with and without paging."""
-    mesh, ccl_semaphores, subdevice_id, stall_group = _open_ccl((1, RING4))
+    mesh, ccl_semaphores, subdevice_id, stall_group = _open_ccl(
+        (1, RING4),
+        fabric_config=ttnn.FabricConfig.FABRIC_1D_RING
+        if topology == ttnn.Topology.Ring
+        else ttnn.FabricConfig.FABRIC_1D,
+    )
     try:
         q, k, _, q_dev, _, k_local, k_gathered, paged_kwargs = _small_ring_inputs(
             mesh, num_groups, paged=paged, seed=83 + num_groups + block_size
@@ -617,7 +635,7 @@ def test_indexer_score_ring4_fused_msa_4d(paged, num_groups, block_size):
             k_local,
             ccl_semaphores,
             cluster_axis=SP4_AXIS,
-            topology=ttnn.Topology.Linear,
+            topology=topology,
             num_groups=num_groups,
             ag_sub_device_id=subdevice_id,
             scale=QB_DIM**-0.5,

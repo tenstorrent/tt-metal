@@ -160,12 +160,12 @@ FORCE_INLINE void prefetch_batch_read_packets(
                 if (l1_write_addr >= cb_fifo_limit) {
                     l1_write_addr -= cb_fifo_size;
                 }
-                noc.async_read(
+                async_read_accessor_page(
+                    noc,
                     accessor,
                     CoreLocalMem<uint8_t>(l1_write_addr),
                     input_page_size,
-                    {.page_id = packet_page_id(first_page_id, page)},
-                    {});
+                    packet_page_id(first_page_id, page));
                 l1_write_addr += input_page_size;
             }
             l1_write_addr += (packet_size_in_pages - pages_to_read) * input_page_size;

@@ -74,7 +74,7 @@ constexpr uint32_t rank_mapping_mesh_cols = get_compile_time_arg_val(bc_ct_base 
 constexpr bool partial_readiness_enabled = get_compile_time_arg_val(bc_ct_base + 9) != 0;
 constexpr uint32_t fused_physical_sp = get_compile_time_arg_val(bc_ct_base + 10);
 
-constexpr uint32_t paged_ct_base = bc_ct_base + 10;
+constexpr uint32_t paged_ct_base = bc_ct_base + 11;
 constexpr bool has_page_bundles = get_compile_time_arg_val(paged_ct_base) != 0;
 constexpr uint32_t page_bundle_size_tiles = get_compile_time_arg_val(paged_ct_base + 1);
 constexpr uint32_t page_bundle_num_layers = get_compile_time_arg_val(paged_ct_base + 2);

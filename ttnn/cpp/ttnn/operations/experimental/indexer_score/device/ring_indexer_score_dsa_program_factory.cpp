@@ -204,8 +204,7 @@ ProgramDescriptor build_ring_program_descriptor(
     const uint32_t sll_t = Tt / ring_size;  // physical tiles per SP shard in gathered K
     // The two-marker protocol requires both ring directions to carry slices. Linear topologies and a two-chip
     // ring leave one direction with no targets, whose writer intentionally discards its local packet stream.
-    const bool partial_readiness_enabled = !tensors.has_paged_kv_cache() &&
-                                           fused.topology == ttnn::ccl::Topology::Ring && ring_size > 2 &&
+    const bool partial_readiness_enabled = fused.topology == ttnn::ccl::Topology::Ring && ring_size > 2 &&
                                            ag_rt::uses_output_bank_owned_schedule({k_local}, {k}, /*dim=*/2);
     const uint32_t units_per_shard = units_in_group(KC, sll_t);
     const uint32_t work_unit_count = ring_size * units_per_shard;
