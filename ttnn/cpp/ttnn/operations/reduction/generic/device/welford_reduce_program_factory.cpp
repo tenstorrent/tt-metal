@@ -57,8 +57,6 @@ WelfordReducePlan WelfordReduceDeviceOperation::WelfordReduceProgramFactory::sel
     plan.use_post_mul = post_mul_scaler != 1.0f;
     plan.post_mul_scaler_bits = std::bit_cast<std::uint32_t>(post_mul_scaler);
     plan.narrow_scratch_to_bf16 = !plan.is_std && !plan.use_post_mul && plan.output_format == DataFormat::Float16_b;
-    plan.scratch_format =
-        plan.fp32_dest_acc_en && !plan.narrow_scratch_to_bf16 ? DataFormat::Float32 : DataFormat::Float16_b;
     plan.combined_format = plan.narrow_scratch_to_bf16 ? DataFormat::Float16_b : DataFormat::Float32;
     const auto arch = tensor_arg.device()->arch();
     plan.use_sfpu_leaf_combine = plan.reduce_hw && (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0) &&
@@ -96,7 +94,6 @@ WelfordReducePlan WelfordReduceDeviceOperation::WelfordReduceProgramFactory::sel
         plan.work_group_1 > 1 || plan.work_group_2 > 1 ? multi_output_replay_min_tiles : single_output_replay_min_tiles;
     std::uint64_t footprint =
         static_cast<std::uint64_t>(replay_tiles) * plan.input_tile_size + 2 * plan.output_tile_size;
-    footprint += plan.reduce_w ? tile_size(plan.scratch_format) : 0;
     footprint += plan.reduce_hw ? 4 * tile_size(DataFormat::Float32) + tile_size(plan.combined_format) : 0;
 
     // Live allocator occupancy intentionally participates in planning. use_l1_replay is included in the operation
@@ -220,7 +217,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     // factories, so no anonymous-namespace constants are introduced.
     const DFBSpecName IN_DFB{"in"};
     const DFBSpecName OUT_DFB{"out"};
-    const DFBSpecName VAR_DFB{"var"};
     const DFBSpecName PARTIAL_DFB{"partial"};
     const DFBSpecName COMBINED_DFB{"combined"};
     const KernelSpecName READER{"reader"};
@@ -258,23 +254,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         .num_entries = output_tiles_per_cb,
         .data_format_metadata = dst_cb_data_format,
     });
-
-    // var: W-reduce only -- scratch buffer for the variance tile between
-    // the two transpose steps (Welford produces row-oriented results that must
-    // be transposed back to column orientation).
-    tt::DataFormat scratch_cb_data_format = tt::DataFormat::Float16_b;
-    if (reduce_w) {
-        // Float32 only when the DST register is fp32 and we are not narrowing the scratch
-        // to the output dtype (variance output to bf16 -- see narrow_scratch_to_bf16 above);
-        // bf16 otherwise.
-        scratch_cb_data_format = plan.scratch_format;
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = VAR_DFB,
-            .entry_size = tt::tile_size(scratch_cb_data_format),
-            .num_entries = 1,
-            .data_format_metadata = scratch_cb_data_format,
-        });
-    }
 
     // partial: HW-reduce only -- holds per-column mean+var tile pairs
     // from the compute kernel, consumed by the writer kernel.
@@ -534,15 +513,10 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             //   - Input: needed on all three reduction paths (H, W, HW) with FP32 input. The Welford
             //     SFPU intake reads it directly via copy_tile/transpose_tile, so UnpackToDest
             //     preserves the full FP32 into DEST (there is no input pre-scaling -- see post_mul_scaler).
-            //   - W-reduce only: var -- the variance tile is read back after the initial
-            //     transpose to undo it.
             //   - HW-reduce only: combined -- the variance tile is read back after the
             //     writer-side cross-core re-reduction.
             if (input_cb_data_format == tt::DataFormat::Float32) {
                 compute_cfg.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
-            }
-            if (reduce_w && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
-                compute_cfg.unpack_modes.emplace(VAR_DFB, UnpackMode::UnpackToDest);
             }
             if (reduce_hw && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
                 compute_cfg.unpack_modes.emplace(COMBINED_DFB, UnpackMode::UnpackToDest);
@@ -556,9 +530,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
                 }
             };
             require_explicit_unpack_mode(IN_DFB, input_cb_data_format);
-            if (reduce_w) {
-                require_explicit_unpack_mode(VAR_DFB, scratch_cb_data_format);
-            }
             if (reduce_hw) {
                 require_explicit_unpack_mode(COMBINED_DFB, combined_cb_data_format);
             }
@@ -578,20 +549,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
                 .endpoint_type = DFBEndpointType::PRODUCER,
             },
         };
-        if (reduce_w) {
-            // Self-loop: compute packs the variance tile into var and reads it straight back to
-            // transpose it; nothing else touches it.
-            dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = VAR_DFB,
-                .accessor_name = "var",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            });
-            dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = VAR_DFB,
-                .accessor_name = "var",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            });
-        }
         if (reduce_hw) {
             dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = PARTIAL_DFB,

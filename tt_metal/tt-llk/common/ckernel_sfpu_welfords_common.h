@@ -840,11 +840,12 @@ sfpi_inline void _two_pass_combine_block_to_dst_(std::uint32_t total_reciprocal_
 }
 
 /**
- * Finalise mean and variance into row-zero vectors of consecutive DST tiles.
+ * Finalise variance and optionally the mean into row-zero vectors of consecutive DST tiles.
  * @tparam dual_m2 Whether LREG6 must be folded into LREG5 before scaling.
+ * @tparam store_mean Whether to write the mean tile as well as the following variance tile.
  * @param reciprocal_bits FP32 bits for the reciprocal population count.
  */
-template <bool dual_m2>
+template <bool dual_m2, bool store_mean = true>
 sfpi_inline void _two_pass_store_mean_var_to_dst_row_(std::uint32_t reciprocal_bits)
 {
     if constexpr (dual_m2)
@@ -852,16 +853,21 @@ sfpi_inline void _two_pass_store_mean_var_to_dst_row_(std::uint32_t reciprocal_b
         TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG5, 0);
     }
 
-    // Save the mean before LREG4 is reused for variance. This independent move
-    // also separates the optional M2 combine from its first consumer.
-    TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, 0);
+    if constexpr (store_mean)
+    {
+        // Save the mean before LREG4 is reused for variance.
+        TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, 0);
+    }
     TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, reciprocal_bits >> 16);
     TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, reciprocal_bits & 0xffff);
     TTI_SFPMUL(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG4, 0);
 
-    TTI_SFPLOADI(ckernel::p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0);
-    TTI_SFPLOADI(ckernel::p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0);
-    TTI_SFPLOADI(ckernel::p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    if constexpr (store_mean)
+    {
+        TTI_SFPLOADI(ckernel::p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+        TTI_SFPLOADI(ckernel::p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+        TTI_SFPLOADI(ckernel::p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    }
     TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
     TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
     TTI_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0);
@@ -873,10 +879,13 @@ sfpi_inline void _two_pass_store_mean_var_to_dst_row_(std::uint32_t reciprocal_b
     constexpr std::uint32_t offset2 = 16;
     constexpr std::uint32_t offset3 = 18;
 
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + offset0);
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + offset1);
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + offset2);
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + offset3);
+    if constexpr (store_mean)
+    {
+        TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + offset0);
+        TTI_SFPSTORE(ckernel::p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + offset1);
+        TTI_SFPSTORE(ckernel::p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + offset2);
+        TTI_SFPSTORE(ckernel::p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + offset3);
+    }
     TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_M2_TILE_OFFSET + offset0);
     TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_M2_TILE_OFFSET + offset1);
     TTI_SFPSTORE(ckernel::p_sfpu::LREG6, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_M2_TILE_OFFSET + offset2);

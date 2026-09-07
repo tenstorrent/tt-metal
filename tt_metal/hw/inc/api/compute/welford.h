@@ -193,14 +193,15 @@ ALWI void two_pass_stats_combine_block(
 }
 
 /**
- * @brief Finalises the current mean and variance into the first row of consecutive DST tiles.
+ * @brief Finalises variance and optionally the mean into the first row of consecutive DST tiles.
  * @tparam dual_m2 If true, combines the two M2 accumulators before scaling.
- * @param mean_dst_idx Index of the mean tile; variance is stored in the following tile.
+ * @tparam store_mean If false, leaves the mean tile unchanged and stores only variance.
+ * @param mean_dst_idx Index of the optional mean tile; variance is always stored in the following tile.
  * @param reciprocal_bits Bit representation of the FP32 reciprocal population count.
  */
-template <bool dual_m2 = true>
+template <bool dual_m2 = true, bool store_mean = true>
 ALWI void two_pass_stats_finalize_to_row(std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
-    MATH((llk_math_two_pass_sfpu_store_mean_var_to_dst_row<dual_m2>(mean_dst_idx, reciprocal_bits)));
+    MATH((llk_math_two_pass_sfpu_store_mean_var_to_dst_row<dual_m2, store_mean>(mean_dst_idx, reciprocal_bits)));
 }
 
 /**

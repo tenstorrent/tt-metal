@@ -36,7 +36,6 @@ struct WelfordReducePlan {
     std::uint32_t post_mul_scaler_bits = 0;
     tt::DataFormat input_format = tt::DataFormat::Float16_b;
     tt::DataFormat output_format = tt::DataFormat::Float16_b;
-    tt::DataFormat scratch_format = tt::DataFormat::Float16_b;
     tt::DataFormat combined_format = tt::DataFormat::Float32;
     CoreRangeSet all_cores;
     CoreRangeSet core_group_1;

@@ -7,6 +7,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/welford.h"
 #include "api/compute/transpose.h"
+#include "api/compute/transpose_dest.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 
@@ -48,13 +49,9 @@ void kernel_main() {
     constexpr auto two_pass_variance_reciprocal = get_arg(args::two_pass_variance_reciprocal);
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
-    DataflowBuffer dfb_var(dfb::var);
 
-    // Destination register indices inside the Tensix DST register file.
-    // The statistics LLK uses three adjacent dst registers:
-    //   input_dst (0) – scratch for the current transposed input tile,
-    //   mean_dst  (1) – running / final mean accumulator,
-    //   var_dst   (2) – running / final variance accumulator.
+    // Statistics accumulate in LREGs. The variance-only finaliser writes the
+    // tile after mean_dst, leaving mean_dst available for retained input.
     constexpr uint32_t input_dst = 0;
     constexpr uint32_t mean_dst = 1;
     constexpr uint32_t var_dst = 2;
@@ -125,22 +122,10 @@ void kernel_main() {
             two_pass_stats_update_rows(input_dst, 0, last_tile_rows);
         }
 #endif
-        two_pass_stats_finalize_to_row(mean_dst, two_pass_variance_reciprocal);
-        tile_regs_commit();
-
-        // Pack variance and transpose back to column format
-        dfb_var.reserve_back(onetile);
-        tile_regs_wait();
-        pack_reconfig_data_format(dfb::var);
-        pack_tile(var_dst, dfb::var);
-        tile_regs_release();
-        dfb_var.push_back(onetile);
-
-        dfb_var.wait_front(onetile);
-        reconfig_data_format_srca(dfb::var);
-        transpose_init(dfb::var);
-        tile_regs_acquire();
-        transpose_tile(dfb::var, 0, var_dst);
+        two_pass_stats_finalize_to_row<true, false /* store_mean */>(mean_dst, two_pass_variance_reciprocal);
+        // Orient variance in DEST, avoiding a pack/reload round trip through L1.
+        transpose_dest_init<DST_ACCUM_MODE>();
+        transpose_dest<DST_ACCUM_MODE>(var_dst);
         if constexpr (is_std) {
             sqrt_tile_init();
             sqrt_tile(var_dst);
@@ -152,12 +137,10 @@ void kernel_main() {
         mul_unary_tile(var_dst, post_mul_scaler_bits);
 #endif
         tile_regs_commit();
-        dfb_var.pop_front(onetile);
 
-        // Pack transposed variance to output
+        // Pack column-oriented variance directly to output.
         dfb_out.reserve_back(onetile);
         tile_regs_wait();
-        pack_reconfig_data_format(dfb::out);
         pack_tile(var_dst, dfb::out);
         tile_regs_release();
         dfb_out.push_back(onetile);

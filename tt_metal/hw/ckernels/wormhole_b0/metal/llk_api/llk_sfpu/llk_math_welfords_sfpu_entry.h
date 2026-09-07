@@ -159,20 +159,21 @@ inline void llk_math_two_pass_sfpu_combine_block_to_dst(
 }
 
 /**
- * @brief Finalise mean and variance into row zero of two consecutive DST tiles.
+ * @brief Finalise variance and optionally the mean into row zero of two consecutive DST tiles.
  *
  * @tparam dual_m2: Fold the secondary M2 accumulator before scaling.
+ * @tparam store_mean: Store the mean as well as variance; otherwise leave the mean tile unchanged.
  * @param mean_dst_idx: First of the consecutive output DST tiles.
  * @param reciprocal_bits: FP32 bit pattern for the reciprocal population count.
  */
-template <bool dual_m2>
+template <bool dual_m2, bool store_mean = true>
 inline void llk_math_two_pass_sfpu_store_mean_var_to_dst_row(
     std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
     LLK_ASSERT(
         (mean_dst_idx + 1 < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "two-pass statistics require two consecutive DST tiles");
     _llk_math_welfords_sfpu_params_(
-        ckernel::sfpu::_two_pass_store_mean_var_to_dst_row_<dual_m2>, mean_dst_idx, reciprocal_bits);
+        ckernel::sfpu::_two_pass_store_mean_var_to_dst_row_<dual_m2, store_mean>, mean_dst_idx, reciprocal_bits);
 }
 
 /**

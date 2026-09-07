@@ -8,6 +8,8 @@
 
 #include <cstdint>
 
+#include "api/compute/eltwise_unary/fill.h"
+
 #include "api/compute/bcast.h"
 #include "api/compute/welford.h"
 #include "api/compute/tile_move_copy.h"
@@ -40,6 +42,11 @@ void kernel_main() {
 #endif
     // Whether to compute standard deviation (sqrt of variance) instead of variance.
     constexpr bool is_std = get_arg(args::is_std) != 0;
+#ifdef WELFORD_POST_MUL
+    constexpr bool materialize_padding = true;
+#else
+    constexpr bool materialize_padding = is_std;
+#endif
     constexpr auto two_pass_mean_reciprocal = get_arg(args::two_pass_mean_reciprocal);
     constexpr auto two_pass_variance_reciprocal = get_arg(args::two_pass_variance_reciprocal);
 
@@ -50,11 +57,8 @@ void kernel_main() {
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
 
-    // Destination register indices inside the Tensix DST register file.
-    // The statistics LLK uses three adjacent dst registers:
-    //   input_dst (0) – scratch for the current input tile,
-    //   mean_dst  (1) – running / final mean accumulator,
-    //   var_dst   (2) – running / final variance accumulator.
+    // Statistics accumulate in LREGs. The variance-only finaliser writes the
+    // tile after mean_dst, leaving mean_dst available for retained input.
     constexpr uint32_t input_dst = 0;
     constexpr uint32_t mean_dst = 1;
     constexpr uint32_t var_dst = 2;
@@ -71,6 +75,12 @@ void kernel_main() {
     for (uint32_t ncwt = 0; ncwt < NCWt; ncwt++) {
         copy_init(dfb::in);
         tile_regs_acquire();
+        if constexpr (materialize_padding) {
+            // Tile-wide SFPU operations read physical DST, not its lazy zero flags.
+            // Clear before statistics initialise their live LREG accumulators.
+            fill_tile_init();
+            fill_tile(var_dst, 0.0f);
+        }
         two_pass_stats_init_shifted();
 
         for (uint32_t ht = 0; ht < Ht; ++ht) {
@@ -119,7 +129,7 @@ void kernel_main() {
             two_pass_stats_update_rows(input_dst, 0, last_tile_rows);
         }
 #endif
-        two_pass_stats_finalize_to_row(mean_dst, two_pass_variance_reciprocal);
+        two_pass_stats_finalize_to_row<true, false /* store_mean */>(mean_dst, two_pass_variance_reciprocal);
         if constexpr (is_std) {
             sqrt_tile_init();
             sqrt_tile(var_dst);

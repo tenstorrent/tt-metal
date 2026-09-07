@@ -162,6 +162,33 @@ def test_std_var_hw_output_padding_is_zero(device, torch_dtype, ttnn_dtype, ttnn
     assert torch.count_nonzero(padding) == 0
 
 
+@pytest.mark.parametrize("ttnn_op,torch_op", [(ttnn.var, torch.var), (ttnn.std, torch.std)], ids=["var", "std"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b], ids=["bf16", "fp32", "bfp8"])
+@pytest.mark.parametrize("dim", [-1, -2], ids=["W", "H"])
+@pytest.mark.parametrize("width", [33, 96, 128])
+@pytest.mark.parametrize("scalar", [1.0, 2.5])
+def test_std_var_w_h_output_padding_is_zero(device, ttnn_op, torch_op, dtype, dim, width, scalar):
+    torch.manual_seed(17)
+    # Repeated outputs exercise DST reuse, including retained-input and streaming paths.
+    source = -torch.rand((1, 256, 33, width))
+    input_tensor = ttnn.from_torch(source, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    quantised = ttnn.to_torch(ttnn.from_device(input_tensor)).double()
+    reference = torch_op(quantised * scalar, dim=dim, correction=0, keepdim=True)
+    output = ttnn_op(input_tensor, dim=dim, correction=False, keepdim=True, scalar=scalar)
+    padded = output.cpu().to_torch_with_padded_shape()
+    logical_h, logical_w = reference.shape[-2:]
+    actual = padded[..., :logical_h, :logical_w].double()
+    torch.testing.assert_close(
+        actual,
+        reference,
+        rtol=1e-4 if dtype == ttnn.float32 else 0.03,
+        atol=2e-6 if dtype == ttnn.float32 else 0.004,
+    )
+    assert torch.isfinite(padded).all()
+    padded[..., :logical_h, :logical_w] = 0
+    assert torch.count_nonzero(padded) == 0
+
+
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
