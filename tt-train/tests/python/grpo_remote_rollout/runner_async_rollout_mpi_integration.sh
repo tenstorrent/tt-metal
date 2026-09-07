@@ -10,8 +10,7 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
 fi
 
 TEST_DIR="${TT_METAL_HOME}/tt-train/tests/python/grpo_remote_rollout"
-EXAMPLE_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo_remote_rollout/gsm8k_onestep"
-CONFIG_DIR="${EXAMPLE_DIR}/configurations/split_1_1"
+CONFIG_DIR="${TEST_DIR}/configurations/independent_1x1"
 HOST_FILE="${CONFIG_DIR}/hosts.txt"
 RANK_BINDINGS_FILE="${CONFIG_DIR}/rank_bindings.yaml"
 TEST_FILE="${TEST_DIR}/test_async_rollout_mpi_integration.py"
@@ -41,10 +40,9 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
     export PRTE_MCA_plm="^slurm"
 fi
 
-# Reuse the one-step example's two-rank 1x1 MGD. HostWeightBridge is pure MPI,
-# so run without the rollout test conftest that enables FABRIC_2D; the MGD's
-# intermesh connection then remains a no-op, as in the fully-async example.
-cd "${EXAMPLE_DIR}"
+# HostWeightBridge is pure MPI, so use two independent 1x1 meshes and run
+# without the rollout test conftest that enables FABRIC_2D.
+cd "${TEST_DIR}"
 export PYTHONPATH="${TT_METAL_HOME}/tt-train/sources/examples/grpo_remote_rollout:${TEST_DIR}:${TT_METAL_HOME}:${PYTHONPATH:-}"
 
 CMD="python3 -m pytest -s -p no:cacheprovider --noconftest --rootdir=${TEST_DIR} ${TEST_FILE}"
