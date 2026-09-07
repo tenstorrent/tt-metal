@@ -62,6 +62,7 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("t_inv").noconvert(),
         nb::arg("initial_state").noconvert(),
         nb::kw_only(),
+        nb::arg("tail_state") = nb::none(),
         nb::arg("groups_per_head") = 1,
         nb::arg("wrap_chunk") = 0,
         nb::arg("memory_config") = nb::none(),

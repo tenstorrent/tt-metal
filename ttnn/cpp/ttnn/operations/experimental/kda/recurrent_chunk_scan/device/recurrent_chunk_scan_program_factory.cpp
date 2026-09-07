@@ -114,6 +114,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
     const tt::tt_metal::experimental::TensorParamName final_decay_tensor_name{"final_decay"};
     const tt::tt_metal::experimental::TensorParamName t_inv_tensor_name{"t_inv"};
     const tt::tt_metal::experimental::TensorParamName initial_state_tensor_name{"initial_state"};
+    const tt::tt_metal::experimental::TensorParamName tail_state_tensor_name{"tail_state"};
     const tt::tt_metal::experimental::TensorParamName output_tensor_name{"output"};
     const tt::tt_metal::experimental::TensorParamName final_state_tensor_name{"final_state"};
 
@@ -184,7 +185,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"Vt_full", Vt_full},
              {"summary_pair", static_cast<uint32_t>(summary)}},
         .runtime_arg_schema =
-            {.runtime_arg_names = {"head", "value_block", "num_chunks", "state_row", "reset_chunk", "reset_state_row"}},
+            {.runtime_arg_names = {"head", "value_block", "num_chunks", "active_chunks", "reset_chunk"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
     if (!summary) {
@@ -192,12 +193,15 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{intra_tensor_name, "intra"});
         reader.tensor_bindings.push_back(
             tt::tt_metal::experimental::TensorBinding{initial_state_tensor_name, "initial_state"});
+        reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{
+            in.tail_state.has_value() ? tail_state_tensor_name : initial_state_tensor_name, "tail_state"});
     } else {
         // The discarded recurrence branch is still parsed; aliases provide its binding names without extra parameters.
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{v_beta_tensor_name, "q_decay"});
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{t_inv_tensor_name, "intra"});
         reader.tensor_bindings.push_back(
             tt::tt_metal::experimental::TensorBinding{v_beta_tensor_name, "initial_state"});
+        reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{v_beta_tensor_name, "tail_state"});
     }
 
     tt::tt_metal::experimental::KernelSpec writer{
@@ -217,7 +221,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"Vt", Vt},
              {"Vt_full", Vt_full},
              {"summary_pair", static_cast<uint32_t>(summary)}},
-        .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks", "out_row", "second_out_row"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
 
@@ -281,11 +285,10 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
                 tt::tt_metal::experimental::ConsumerOf(summary_ring_dfb_name, "summary_ring"),
             },
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"summary_pair", static_cast<uint32_t>(summary)}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_chunks", "reset_chunk"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"active_chunks", "reset_chunk"}},
         .hw_config = std::move(compute_hw),
     };
 
-    const auto layout = wrap_layout(attrs);
     tt::tt_metal::experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel_name};
     tt::tt_metal::experimental::KernelRunArgs writer_run_args{.kernel = writer_kernel_name};
     tt::tt_metal::experimental::KernelRunArgs compute_run_args{.kernel = compute_kernel_name};
@@ -293,35 +296,29 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         const auto& core = distribution.cores[index];
         const uint32_t head = distribution.head[index];
         const uint32_t value_block = distribution.value_block[index];
-        // Map the folded work index onto the wrap's slot layout. Only the core
-        // owning the straddling group gets a live reset; everyone else keeps 0.
-        const uint32_t group = head % layout.groups;
-        const uint32_t real_head = head / layout.groups;
-        const uint32_t straddles = layout.wrap_offset != 0 && group == layout.wrap_group;
-        const uint32_t state_row = real_head * layout.slots + layout.slot_of(group);
-        const uint32_t reset_chunk = straddles ? layout.wrap_offset : 0;
-        const uint32_t reset_state_row = real_head * layout.slots + layout.wrap_group + 1;
-        const uint32_t out_row = state_row;
-        const uint32_t second_out_row = straddles ? reset_state_row : 0;
+        // Two runtime counts, no compile-time offset and no slot arithmetic.
+        // SUMMARY on a wrapped chip stops after the head chunks, so it publishes
+        // T(head) -- the only transform the prefix chain consumes. RECURRENT runs
+        // every chunk and reloads its carry from tail_state at the wrap.
+        const bool wrapped = attrs.wrap_chunk != 0;
+        const uint32_t reset_chunk = wrapped ? attrs.wrap_chunk : 0;
+        const uint32_t active_chunks = (summary && wrapped) ? attrs.wrap_chunk : NC;
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
             {{"head", head},
              {"value_block", value_block},
              {"num_chunks", NC},
-             {"state_row", state_row},
-             {"reset_chunk", reset_chunk},
-             {"reset_state_row", reset_state_row}});
+             {"active_chunks", active_chunks},
+             {"reset_chunk", reset_chunk}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,
-            {{"head", head},
-             {"value_block", value_block},
-             {"num_chunks", NC},
-             {"out_row", out_row},
-             {"second_out_row", second_out_row}});
+            {{"head", head}, {"value_block", value_block}, {"num_chunks", NC}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values, core, {{"num_chunks", NC}, {"reset_chunk", reset_chunk}});
+            compute_run_args.runtime_arg_values,
+            core,
+            {{"active_chunks", active_chunks}, {"reset_chunk", reset_chunk}});
     }
 
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::TensorParameter> tensor_parameters = {
@@ -345,6 +342,10 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
             .unique_id = intra_tensor_name, .spec = intra_tensor.tensor_spec()});
         tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
             .unique_id = initial_state_tensor_name, .spec = in.initial_state->mesh_tensor().tensor_spec()});
+        if (in.tail_state.has_value()) {
+            tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
+                .unique_id = tail_state_tensor_name, .spec = in.tail_state->mesh_tensor().tensor_spec()});
+        }
     }
     tt::tt_metal::experimental::ProgramSpec spec{
         .name = summary ? "summarize_chunk_recurrence" : "recurrent_chunk_scan",
@@ -371,6 +372,9 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         run_args.tensor_args.emplace(q_decay_tensor_name, q_decay_tensor);
         run_args.tensor_args.emplace(intra_tensor_name, intra_tensor);
         run_args.tensor_args.emplace(initial_state_tensor_name, in.initial_state->mesh_tensor());
+        if (in.tail_state.has_value()) {
+            run_args.tensor_args.emplace(tail_state_tensor_name, in.tail_state->mesh_tensor());
+        }
     }
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }

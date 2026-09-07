@@ -87,12 +87,7 @@ FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary_pair>
 TT_KERNEL void reader(
-    uint32_t head,
-    uint32_t value_block,
-    uint32_t num_chunks,
-    uint32_t state_row,
-    uint32_t reset_chunk,
-    uint32_t reset_state_row) {
+    uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t active_chunks, uint32_t reset_chunk) {
     const auto v_beta_accessor = TensorAccessor(tensor::v_beta);
     const auto kd_accessor = TensorAccessor(tensor::kd);
     const auto k_decay_transposed_accessor = TensorAccessor(tensor::k_decay_transposed);
@@ -123,13 +118,14 @@ TT_KERNEL void reader(
         seed_identity<Kt, Vt>(summary_seed, noc, value_block);
     } else {
         const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
-        // state_row, not head: a wrap gives the straddling group a second entry
-        // slot, so the seed row and the work row are no longer the same index.
         read_and_publish_value_slice<Vt, Vt_full>(
-            initial_state_accessor, state, noc, state_row * Kt * Vt_full, Kt, value_block);
+            initial_state_accessor, state, noc, head * Kt * Vt_full, Kt, value_block);
     }
 
-    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+    // num_chunks stays the tensor stride; active_chunks is the loop bound. They
+    // differ only for SUMMARY on a wrapped chip, which stops after the head chunks
+    // so that it publishes T(head).
+    for (uint32_t chunk = 0; chunk < active_chunks; ++chunk) {
         const uint32_t head_chunk = head * num_chunks + chunk;
         // Publish the post-wrap seed just in time, never before the loop. The state
         // DFB holds one kv payload and compute frees it only via pop_front at the
@@ -138,9 +134,9 @@ TT_KERNEL void reader(
         // whenever it is non-zero, so chunk 0 has always been consumed by now.
         if constexpr (!summary_pair) {
             if (reset_chunk != 0 && chunk == reset_chunk) {
-                const auto reset_state_accessor = TensorAccessor(tensor::initial_state);
+                const auto tail_state_accessor = TensorAccessor(tensor::tail_state);
                 read_and_publish_value_slice<Vt, Vt_full>(
-                    reset_state_accessor, state, noc, reset_state_row * Kt * Vt_full, Kt, value_block);
+                    tail_state_accessor, state, noc, head * Kt * Vt_full, Kt, value_block);
             }
         }
         if constexpr (summary_pair) {
