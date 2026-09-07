@@ -487,3 +487,87 @@ Scope any such mount to `models/autoports/...` only, never the whole tt-metal
 tree: the image carries compiled tt-metal, so this is sound **only for
 Python-only deltas**. Mounting a tree whose C++ also changed pairs new Python
 with older binaries, and that failure would be confusing rather than loud.
+
+## Pre-registered expectations for the CI results
+
+Written **before** the runs finished, so the comparison is a check rather than a
+rationalisation. Each row says what to expect, the mechanism, and what would
+falsify it.
+
+### Read this first: which image carries which fix
+
+Three separate things landed today and they are **not** in the same place.
+
+| change | in image `19714d4b553`? | effect |
+| --- | --- | --- |
+| prefill config + sequential recurrence | **yes** | 16.2x single layer, 3.94x full-model TTFT at b32 |
+| batch-aware chunk bound | **no** | removes the b32 long-ISL OOM |
+| active-row prefill | **no** | 23.66x at b32 |
+
+The in-flight runs (benchmarks `34116873055`, evals `34116898537`) built from
+tt-metal `19714d4b553`, so they carry **only the first**. Comparing them against
+the active-row numbers would be comparing the wrong thing. A run that includes
+the last two needs either a rebuild on `32ca7160061` or the mount plumbing.
+
+### Benchmarks: the in-flight runs (image 19714d4b553, 32 slots)
+
+| point | recorded (1-slot server) | expect now | why |
+| --- | --- | --- | --- |
+| ISL 128 TTFT | 3643 ms | **~27000 ms, i.e. WORSE** | the recorded sweep was a 1-slot server; a 32-slot server pays the 31.3x slot-width factor, which this image does not fix. Measured locally at 27060 ms. |
+| ISL 128 TPOT | 69.67 ms | ~56-62 ms | decode already improved by the fused KDA conv, which *is* in this image |
+| ISL 1024-32768 TTFT | grows ~linearly | ~31x the recorded value | same slot-width factor at every ISL |
+| ISL 65536 / 131072 | 1837 s / timeout | **hard failure**, `Out of Memory: 10737418240 B` | `32 x 32768 x 5120 x 2` embedding; the chunk bound is not in this image |
+| graded verdict | fail | fail | TTFT target 62 ms, tput_user target 41 |
+
+**If ISL 128 TTFT comes back near 3643 ms rather than ~27000 ms**, then the CI
+server is not running 32 slots and my whole 1-slot-baseline inference is wrong.
+That is the single most informative number in these runs.
+
+### Benchmarks: a run including `32ca7160061`
+
+| point | expect | why |
+| --- | --- | --- |
+| ISL 128 TTFT | **~1144 ms** | active-row prefill; measured locally, and within 1.5% of the 1127 ms a batch-1 server pays |
+| ISL 65536 TTFT | **~569 s** | matches the batch-1 vLLM measurement, 0.8% from the bare harness |
+| ISL 131072 TTFT | **~1150 s** | matches the batch-1 vLLM measurement, 0.07% from the bare harness |
+| no OOM at any ISL | yes | embed is batch-1 (335 MB); if `k>1` batching occurs the chunk bound caps it at the same 335 MB |
+| graded verdict | still fail | 1144 ms vs a 62 ms target is an 18x miss; nothing today touched decode, so tput_user stays ~16-18 vs 41 |
+
+### Evals
+
+| | expect | why |
+| --- | --- | --- |
+| in-flight runs | ~31x slower prefill than a 1-slot server; long-context tasks may time out | `max_concurrent: 32` clamped to spec 32, but prefill is one request per step, so 32 sequential full-width prefills (~70 min recorded) |
+| with `32ca7160061` | prefill portion ~23.7x faster where `k=1` | active-row prefill |
+| `r1_gpqa_diamond` accuracy | **unchanged** | prefill-only change; per-slot logits PCC 0.99966-0.99978 with every argmax identical |
+| `r1_gpqa_diamond` wall time | modest gain | R1-style reasoning emits long outputs, so this task is decode-dominated |
+| `terminal_bench_2_1`, `swe_bench_verified` | may fail for unrelated reasons | agentic and Docker-dependent, the same class stage 11 recorded as blocking. Nothing today addresses it |
+
+### What must NOT change
+
+Any movement here is a regression, not a result.
+
+| | value | evidence |
+| --- | --- | --- |
+| decode single-chip `linear_final` | 15.856 ms, PCC 0.99997 | recorded 15.859 ms |
+| decode single-chip `linear_kda_conv` | 8.196 ms | recorded 8.213 ms |
+| decode multichip b32 / b1 linear | 2.376 / 0.793 ms, PCC 1.0 | recorded 2.376 / 0.793 ms |
+| decode multichip b32 / b1 full | 0.628 / 0.509 ms, PCC 1.0 | recorded 0.626 ms |
+| dense-tap conv | `DENSE_TAPS OK` in 4 configurations | `regression_active_row.log` |
+
+### Known risks, ranked
+
+1. **Recurrent-state divergence at long context is unmeasured.** Per-slot PCC
+   was taken at 96 tokens and 4 layers (state 0.9986 vs logits 0.9997). State
+   accumulates a per-step difference across the prompt and then feeds decode, so
+   65536 tokens over 64 layers is extrapolation. An eval accuracy drop with
+   unchanged benchmarks would point here first.
+2. **`k>1` prefill batching is unobserved.** If vLLM packs several prefills into
+   one scheduler step, those calls fall back to full width and the 23.7x
+   silently does not apply. Correct, just not fast. The conc-8 local run is the
+   first test of this path.
+3. **Graded targets still fail** on both TTFT and tput_user. Expect a red
+   verdict with much better numbers, and do not read the red as "no change".
+4. **The recorded baselines are a soft comparison.** The sweep never recorded
+   its server-side `max_num_seqs`, and two independent facts say it was 1. Treat
+   any recorded-vs-now ratio as approximate.
