@@ -82,14 +82,14 @@ WEIGHT_SCALE = 0.02
 # other, so the winner flips between runs while the minimum does not. The winner is logged per case
 # instead, against the one the model's threshold picks.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k26", 0): 3_936,
-    ("kimi_k26", 128): 96_516,
-    ("kimi_k26", 256): 120_004,
-    ("kimi_k26", 512): 199_965,
-    ("kimi_k26", 1024): 346_680,
-    ("kimi_k26", 2048): 638_824,
-    ("kimi_k26", 4096): 1_229_701,
-    ("kimi_k26", 5120): 1_523_330,
+    ("kimi_k2_7", 0): 3_936,
+    ("kimi_k2_7", 128): 96_516,
+    ("kimi_k2_7", 256): 120_004,
+    ("kimi_k2_7", 512): 199_965,
+    ("kimi_k2_7", 1024): 346_680,
+    ("kimi_k2_7", 2048): 638_824,
+    ("kimi_k2_7", 4096): 1_229_701,
+    ("kimi_k2_7", 5120): 1_523_330,
     ("glm_51", 0): 3_732,
     ("glm_51", 128): 85_255,
     ("glm_51", 256): 107_508,
