@@ -251,6 +251,26 @@ jobs:
       checkout-source: true
       build-args: PROFILE=full
 
+  # Every Sanity impl that consumes an env image uses the dev base, so testing only
+  # ci-test leaves the wave's actual base unexercised. Full profile on dev is where
+  # in-place import has to work.
+  bake-env-dev-full:
+    name: "Bake env image / dev full"
+    needs: build-env
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-env.outputs.build-artifact-name }}
+      base-image: ${{ needs.build-env.outputs.dev-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+
   bake-env-wheel:
     name: "Bake env image / wheel"
     needs: build-env
@@ -292,11 +312,11 @@ jobs:
       source-ref: ${{ github.sha }}
 
   # Payload shape is what breaks silently: a wrong one still builds and publishes.
-  # Checking both costs no hardware, so only the full image needs a real leg below.
+  # Checking them costs no hardware, so only the full image needs a real leg below.
   verify-env-payloads:
-    name: "Check both env images carry the right payload"
+    name: "Check the env images carry the right payload"
     # build-env too: the base ref is needed to tell payload layers from base ones.
-    needs: [build-env, bake-env-full, bake-env-wheel, bake-env-source-ref]
+    needs: [build-env, bake-env-full, bake-env-dev-full, bake-env-wheel, bake-env-source-ref]
     if: ${{ needs.bake-env-full.outputs.image != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -312,6 +332,7 @@ jobs:
       - name: Assert each payload
         env:
           FULL: ${{ needs.bake-env-full.outputs.image }}
+          DEV_FULL: ${{ needs.bake-env-dev-full.outputs.image }}
           WHEEL: ${{ needs.bake-env-wheel.outputs.image }}
           BASE: ${{ needs.build-env.outputs.ci-test-docker-image }}
         run: |
@@ -329,6 +350,17 @@ jobs:
             -e TT_METAL_HOME=/work \
             -e LD_LIBRARY_PATH=/work/build/lib \
             --entrypoint python3 "$FULL" -c 'import ttnn; print("ttnn imported from", ttnn.__file__)'
+          echo "::endgroup::"
+          echo "::group::${DEV_FULL}"
+          docker run --rm --entrypoint cat "$DEV_FULL" /etc/prebuilt-tests-env-manifest | grep -q '^profile=full$'
+          docker run --rm --entrypoint sh "$DEV_FULL" -c 'test -d /work/build && test -d /work/tests'
+          # The base a consumer actually uses. Bases differ in what their venv carries,
+          # so an import that works on ci-test says nothing about this one.
+          docker run --rm \
+            -e PYTHONPATH=/work:/work/ttnn \
+            -e TT_METAL_HOME=/work \
+            -e LD_LIBRARY_PATH=/work/build/lib \
+            --entrypoint python3 "$DEV_FULL" -c 'import ttnn; print("ttnn imported from", ttnn.__file__)'
           echo "::endgroup::"
           echo "::group::${WHEEL}"
           docker run --rm --entrypoint cat "$WHEEL" /etc/prebuilt-tests-env-manifest | grep -q '^profile=wheel$'
