@@ -66,7 +66,9 @@ _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 #          because the tail reuses CB slots the full block already cycled.
 _ISL_SHORT_BLOCK_SWEEP = [67, 289]
 _ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 1024, 2048, 4096, 5120]
-_ISL_EXHAUSTIVE_MODELS = ("kimi_k26", "glm_51")
+# "kimi_k26" used to sit here and matched nothing: SINGLE_EXPERT_MODELS calls that shape
+# kimi_k2_7, so the sweep silently ran ONE model for however long the name was stale.
+_ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_51")
 
 # SwiGLU-OAI's production shapes. Neither is reachable through SINGLE_EXPERT_MODELS at its real
 # dims (minimax_m3 is absent; gptoss is there but only ever runs SiLU), so the activation had no
