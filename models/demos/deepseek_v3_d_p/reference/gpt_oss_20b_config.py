@@ -25,7 +25,12 @@ class GptOss20BConfig:
     # ~30% at 512 against the fused op's ~8%, because the fused path adds gate/up bias on a
     # pack-and-reload pass it already needed while the composite pays a full extra broadcast pass.
     # Measuring this bias-free would send 512 and 768 to the slower op.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 768
+    # Not enabled: the gpt-oss MoE builds TtRoutedExpert directly and forwards no threshold, so
+    # nothing reads this. Both op-side blockers are gone -- moe_fused_swiglu carries SwiGluOai and
+    # the per-expert bias, and TtRoutedExpert no longer refuses a threshold on biased experts.
+    # Kept under _MEASURED so it is not re-derived; rename it back to
+    # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD once that path forwards one.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 768
     # The 120B shares this routed-expert shape exactly, so the crossover is the same.
     INTERMEDIATE_SIZE = 2880
     HEAD_DIM = 64
