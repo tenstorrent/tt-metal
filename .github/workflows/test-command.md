@@ -439,6 +439,21 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
    catch a regression in what changed. Ask of each candidate: *if this change is broken,
    would this pipeline fail?* If you cannot answer yes, drop it.
 
+   **Mandatory selections.** The path rules below are not judgement calls; when a rule
+   matches, the pipeline it names is always dispatched with the inputs it specifies, on
+   top of whatever else you select. Count it toward the cap of 8.
+
+   | If any changed path matches | Always dispatch | With inputs |
+   |---|---|---|
+   | `ttnn/cpp/ttnn/operations/eltwise/**` (op implementation, C++ or kernels), `tests/ttnn/unit_tests/operations/eltwise/**`, or `tests/ttnn/nightly/unit_tests/operations/eltwise/**` (test files) | `tt-metal-l2-nightly` | `additional_test_categories: eltwise` |
+
+   The `eltwise` category runs `tests/ttnn/nightly/unit_tests/operations/eltwise` (the four
+   `ttnn nightly eltwise tests` groups in `tests/pipeline_reorg/ops_unit_tests.yaml`), which
+   no pr-gate or post-commit job covers — so a change under those paths that skips it is
+   not tested where it is most likely to break. A hint in the comment that names other
+   hardware (e.g. `/test blackhole`) narrows the *rest* of your selection, not this rule;
+   only an explicit `/test skip nightly` (or equivalent) opts out, and say so in the comment.
+
 5. **Narrow each survivor to the relevant platforms _and suites_** via its inputs (next
    section). Running `runtime-unit-tests` across every SKU when only Blackhole code
    changed wastes hours of scarce silicon — and so does running the fabric and T3000
@@ -467,7 +482,7 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 | `models-t1-*` | Selectable SKU | Tier-1 (highest-priority) model changes under `models/` |
 | `models-t2-*`, `models-t3-*` | Selectable SKU | Tier-2/3 model changes |
 | `perf-device-models` | Single card | Device-perf regressions from op or kernel changes |
-| `tt-metal-l2-nightly` | WH + BH | Broad L2 coverage for wide-reaching `tt_metal/` changes |
+| `tt-metal-l2-nightly` | WH + BH | Broad L2 coverage for wide-reaching `tt_metal/` changes. **Mandatory** with `additional_test_categories: eltwise` for any change under the eltwise op or eltwise test directories (see *Mandatory selections*) |
 | `ttnn-run-sweeps` | Selectable | `ttnn/` op changes where sweep coverage is the real signal |
 | `vllm-model-tests` | Selectable SKU | vLLM serving integration |
 | `metal-run-microbenchmarks` | Single card | Low-level metal performance primitives |
@@ -539,6 +554,16 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   runs the tt-llk python_tests on WH + BH and the Quasar compile check), and leave it out
   otherwise — the same reasoning as above, just inverted.
 
+- **`additional_test_categories` on `tt-metal-l2-nightly` is a comma-separated string**
+  (e.g. `eltwise`, or `eltwise,fused`), not a boolean toggle. Its default is `""`, which
+  under `workflow_dispatch` runs *no* op category — so a bare dispatch of this pipeline
+  tests almost nothing. Always pass the categories you mean. For the eltwise rule above
+  that is exactly `additional_test_categories: eltwise`; add further categories only when
+  the diff also reaches them (e.g. `fused` for `ttnn/cpp/ttnn/operations/fused/**`).
+  `run_wormhole` / `run_blackhole` both default to `true`; set one to `false` only when
+  the change is provably confined to the other architecture. Leave the other
+  `run_*` toggles (`run_cpp_tests`, `run_ccl_tests`, `run_didt_tests`, …) at their
+  defaults unless the change reaches that suite.
 - **Do not touch inputs that change behaviour rather than scope.** `mlperf-read-only`,
   `mlperf-write-access`, `upload_results`, `skip_on_timeout`, `build-inplace-wheel`,
   `enable-watcher`, `enable-llk-asserts`, and `run_triage_tests` are not narrowing knobs;
