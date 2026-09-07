@@ -480,13 +480,13 @@ class TtIndexer:
 
     def _tp_all_reduce_via_gather(self, t):
         """All-reduce over TP via gather (dim 1) + local reduce, instead of _tp_rs_ag's reduce-scatter
-        (dim 3) + all-gather. For a narrow dim-3 width (e.g. wts' H_idx=32) that doesn't divide evenly
+        (dim 3) + all-gather. For a narrow dim-3 width (e.g. weights' H_idx=32) that doesn't divide evenly
         into tile-sized TP shards, _tp_rs_ag's reduce-scatter hits ttnn's composite fallback
         (use_composite_reduce_scatter) and balloons into ~30 tilize/pad/slice ops. Gathering on dim 1 —
         the batch/placeholder axis, always size 1 here — has no tile-alignment constraint, so it always
         takes the fused fast path; fast_reduce_nc then sums the gathered TP axis locally (pure on-device
         compute, no fabric traffic). Mirrors ttMLA._kv_stem's kv_a_proj_with_mqa all-reduce (mla.py:
-        917-929), measured cheaper even on an 18x-wider tensor than wts."""
+        917-929), measured cheaper even on an 18x-wider tensor than weights."""
         if self.tp_factor == 1:
             return t
         assert self._weights_all_gather_output is not None
@@ -796,7 +796,7 @@ class TtIndexer:
         # weights_proj: device stem -> FULL all-reduce over tp (all H_idx heads, matching the replicated
         # wq_b heads) -> scale -> [1, 1, S/sp, H_idx].
         wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
-        wts = ttnn.linear(
+        weights = ttnn.linear(
             hidden_states,
             self._idx_wproj,
             compute_kernel_config=self.default_compute_kernel_config,
@@ -806,14 +806,15 @@ class TtIndexer:
         # H_idx=32 doesn't divide evenly into tile-sized TP=4 shards (8 < tile width), so _tp_rs_ag's
         # dim-3 reduce-scatter would hit ttnn's composite fallback (~30 extra tilize/pad/slice ops, see
         # use_composite_reduce_scatter). Gather-then-local-reduce on dim 1 has no such tile constraint.
-        wts = self._tp_all_reduce_via_gather(wts)  # full all-reduce over tp -> all H_idx head-weights, replicated
+        weights = self._tp_all_reduce_via_gather(
+            weights
+        )  # full all-reduce over tp -> all H_idx head-weights, replicated
         # Indexer softmax scale = index_head_dim**-0.5 (NO mscale), matching the reference IndexerCPU
         # (model.py: softmax_scale = head_dim**-0.5). Distinct from MLA's qk_head_dim*mscale**2 scale —
         # though as a uniform positive multiplier it cannot change the top-k selection regardless.
-        wts = ttnn.multiply(wts, a.index_n_heads**-0.5 * a.index_head_dim**-0.5)  # [1,1,S/sp,H_idx] repl on tp
-
-        # indexer_score wants per-head weights [1, H_idx, S/sp, 1]; wts is [1, 1, S/sp, H_idx].
-        weights = ttnn.permute(wts, (0, 3, 2, 1))
+        weights = ttnn.multiply(
+            weights, a.index_n_heads**-0.5 * a.index_head_dim**-0.5
+        )  # [1,1,S/sp,H_idx] repl on tp
 
         # TP×SP query parallelism (rope-then-split). q_dev/weights were roped on the FULL S/sp slab
         # (block-cyclic-correct, cluster_axis=sp_axis), so every row already carries its true position; now
@@ -829,7 +830,7 @@ class TtIndexer:
                 weights,
             )  # release the full-S slabs once TP-split (mesh_partition allocates new)
             q_dev = ttnn.mesh_partition(q_dev, dim=2, cluster_axis=self.tp_axis)  # [1,H_idx,S/(sp·tp),D_idx]
-            weights = ttnn.mesh_partition(weights, dim=2, cluster_axis=self.tp_axis)  # [1,H_idx,S/(sp·tp),1]
+            weights = ttnn.mesh_partition(weights, dim=2, cluster_axis=self.tp_axis)  # [1,1,S/(sp·tp),H_idx]
             ttnn.deallocate(q_full)
             ttnn.deallocate(weights_full)
             sq_local = seq_len // self.tp_factor
