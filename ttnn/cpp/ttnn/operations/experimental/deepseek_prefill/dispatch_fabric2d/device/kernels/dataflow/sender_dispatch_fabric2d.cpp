@@ -124,14 +124,15 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump
         fabric.send_payload_without_header_non_blocking_from_address(slot_base, ct.token_size_bytes);
         fabric.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
 
-        // The metadata words live in the slot's tail. Sending them from there keeps the reader's staging
-        // to one place. Its own header, so setting this address cannot disturb the payload send above.
+        // The metadata words sit at the very start of the slot's tail, which is where a fabric write's
+        // L1 source can be aligned. Its own header, so setting this address cannot disturb the payload
+        // send above.
         volatile PACKET_HEADER_TYPE* hdr_meta = slot_hdr(slot, 1);
-        const uint32_t meta_src = slot_base + ct.token_size_bytes + offsetof(dspf2d::FwdMetadata, meta);
+        const uint32_t meta_src = slot_base + ct.token_size_bytes;
         hdr_meta->to_noc_unicast_write(
-            tt::tt_fabric::NocUnicastCommandHeader{metadata->final_meta_addr}, ct.metadata_page_bytes);
+            tt::tt_fabric::NocUnicastCommandHeader{metadata->final_meta_addr}, dspf2d::METADATA_WIRE_BYTES);
         fabric.wait_for_empty_write_slot();
-        fabric.send_payload_without_header_non_blocking_from_address(meta_src, ct.metadata_page_bytes);
+        fabric.send_payload_without_header_non_blocking_from_address(meta_src, dspf2d::METADATA_WIRE_BYTES);
         fabric.send_payload_flush_non_blocking_from_address((uint32_t)hdr_meta, sizeof(PACKET_HEADER_TYPE));
     }
     return cmd;
