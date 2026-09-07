@@ -117,7 +117,7 @@ def test_counter_type_names_match_enum():
     # The decode table maps enum ordinals to names; regenerating the enum without updating the
     # table silently mislabels every counter, so pin them together.
     hpp = (REPO_ROOT / "tt_metal" / "tools" / "profiler" / "perf_counters.hpp").read_text()
-    enum_body = re.search(r"enum PerfCounterType : uint16_t \{(.*?)\};", hpp, re.S).group(1)
+    enum_body = re.search(r"enum PerfCounterType : (?:std::)?uint16_t \{(.*?)\};", hpp, re.S).group(1)
     enum_names = re.findall(r"^\s*([A-Z][A-Z0-9_]*)(?:\s*=\s*\d+)?,", enum_body, re.M)
     assert enum_names[0] == "UNDEF"
     assert len(COUNTER_TYPE_NAMES) == len(enum_names)
