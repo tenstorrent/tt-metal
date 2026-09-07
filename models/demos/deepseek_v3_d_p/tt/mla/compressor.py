@@ -19,6 +19,25 @@ def rope_table_tokens(max_seq_len: int, chunk_tokens: int) -> int:
     return -(-int(max_seq_len) // chunk_tokens) * chunk_tokens + chunk_tokens
 
 
+# Rows in one Blaze-compatible CSA overlap state. The state carries 8 rows of real overlap in a
+# parity-mapped 64-row slab, which is the layout decode consumes, so prefill keeps the same shape.
+CSA_STATE_ROWS = 64
+
+
+def csa_slab_align(compress_rate: int, sp_factor: int, tp_factor: int = 1) -> int:
+    """The token granularity a CSA slab has to be a multiple of, which is everything CSA asks of a
+    slab's width at once:
+
+    - ``compress_rate * sp_factor``: every SP shard owns whole compression windows,
+    - ``compress_rate * TILE_SIZE``: the entries one slab produces are a whole number of tiles, which
+      is what keeps the compressed append offset on a tile boundary,
+    - ``TILE_SIZE * sp_factor * tp_factor``: each chip's share of the slab is a whole number of tiles,
+      which the indexer's TP gathers need.
+
+    ``max`` stands in for the LCM because every factor here is a power of two."""
+    return max(compress_rate * ttnn.TILE_SIZE, compress_rate * sp_factor, ttnn.TILE_SIZE * sp_factor * tp_factor)
+
+
 class TtCompressorUtils:
     """Mesh, tensor, and indexed-RoPE operations used by compressors and their consumers."""
 
@@ -163,6 +182,7 @@ class TtCompressorBase(LightweightModule):
             weights_dtype=weights_dtype,
             memory_config=memory_config,
         )
+        self._mask_consts = None  # built by alloc_tables, and only when the caller wants a mask block
 
     @staticmethod
     def prepare_input(hidden: torch.Tensor, sp_factor: int, compress_rate: int):
@@ -257,6 +277,51 @@ class TtCompressorBase(LightweightModule):
             )
         return compressed_kv
 
+    def _build_mask_consts(self, seq_global: int, width: int):
+        """Build the constant vectors and mutable scalars for the compressed mask."""
+        sp_mapper = self.ops.mesh_mapper(sp_dim=2)
+        rate = self.compress_rate
+        return {
+            "seq": seq_global,
+            "thr": self.ops.from_torch(
+                ((torch.arange(seq_global) + 1) // rate).float().view(1, 1, seq_global, 1),
+                sp_mapper,
+                dtype=ttnn.float32,
+            ),
+            "ic": self.ops.from_torch(
+                torch.arange(seq_global).float().view(1, 1, seq_global, 1),
+                sp_mapper,
+                dtype=ttnn.float32,
+            ),
+            "w": self.ops.from_torch(torch.arange(width).float().view(1, 1, 1, width), dtype=ttnn.float32),
+            "ec": self.ops.scalar_buffer(ttnn.float32),
+            "rl": self.ops.scalar_buffer(ttnn.float32),
+        }
+
+    def _mask_block(self, seq: int, first_window_position: int, seq_len_actual: int):
+        """Build additive compressed-cache mask columns on device.
+
+        Entry ``w`` is visible to query ``i`` iff ``w < (position_i + 1) // compress_rate``, which is the
+        reference's ``causal_threshold``; the offset ``kv_actual`` splits off as ``first_window_position /
+        rate`` because a chunk only ever starts on a window boundary. Rows past the chunk's real length
+        are pad and get -inf outright."""
+        rate = self.compress_rate
+        seq_global = seq * self.sp_factor
+        consts = self._mask_consts
+        assert consts is not None and consts["seq"] == seq_global, (
+            f"mask constants cover {None if consts is None else consts['seq']} query rows but this call has "
+            f"{seq_global}; alloc_tables has to be given the slab forward is called with"
+        )
+        within = ttnn.lt(
+            consts["w"],
+            ttnn.add(
+                consts["thr"],
+                self.ops.push_scalar(consts["ec"], first_window_position // rate),
+            ),
+        )
+        live = ttnn.lt(consts["ic"], self.ops.push_scalar(consts["rl"], seq_len_actual))
+        return ttnn.typecast(ttnn.log(ttnn.multiply(within, live)), self.dtype)
+
 
 class TtHCACompressor(TtCompressorBase):
     def __init__(
@@ -301,7 +366,6 @@ class TtHCACompressor(TtCompressorBase):
             kv_norm_weight=kv_norm_weight,
             projection_dim=self.head_dim,
         )
-        self._mask_consts = None
 
     def alloc_tables(self, max_seq_len: int, chunk_tokens: int, mask_width: int):
         """Build the indexed-RoPE and mask constants needed by forward."""
@@ -323,46 +387,6 @@ class TtHCACompressor(TtCompressorBase):
             rms_norm_eps=config.rms_norm_eps,
             **kwargs,
         )
-
-    def _build_mask_consts(self, seq_global: int, width: int):
-        """Build the constant vectors and mutable scalars for the compressed mask."""
-        sp_mapper = self.ops.mesh_mapper(sp_dim=2)
-        rate = self.compress_rate
-        return {
-            "seq": seq_global,
-            "thr": self.ops.from_torch(
-                ((torch.arange(seq_global) + 1) // rate).float().view(1, 1, seq_global, 1),
-                sp_mapper,
-                dtype=ttnn.float32,
-            ),
-            "ic": self.ops.from_torch(
-                torch.arange(seq_global).float().view(1, 1, seq_global, 1),
-                sp_mapper,
-                dtype=ttnn.float32,
-            ),
-            "w": self.ops.from_torch(torch.arange(width).float().view(1, 1, 1, width), dtype=ttnn.float32),
-            "ec": self.ops.scalar_buffer(ttnn.float32),
-            "rl": self.ops.scalar_buffer(ttnn.float32),
-        }
-
-    def _mask_block(self, seq: int, first_window_position: int, seq_len_actual: int):
-        """Build additive compressed-cache mask columns on device."""
-        rate = self.compress_rate
-        seq_global = seq * self.sp_factor
-        consts = self._mask_consts
-        assert consts is not None and consts["seq"] == seq_global, (
-            f"mask constants cover {None if consts is None else consts['seq']} query rows but this call has "
-            f"{seq_global}; alloc_tables has to be given the slab forward is called with"
-        )
-        within = ttnn.lt(
-            consts["w"],
-            ttnn.add(
-                consts["thr"],
-                self.ops.push_scalar(consts["ec"], first_window_position // rate),
-            ),
-        )
-        live = ttnn.lt(consts["ic"], self.ops.push_scalar(consts["rl"], seq_len_actual))
-        return ttnn.typecast(ttnn.log(ttnn.multiply(within, live)), self.dtype)
 
     def forward(
         self,
@@ -403,6 +427,16 @@ class TtHCACompressor(TtCompressorBase):
 
 class TtCSACompressor(TtCompressorBase):
     """CSA compressor with Blaze-compatible overlap state."""
+
+    @staticmethod
+    def prepare_input(hidden: torch.Tensor, sp_factor: int, compress_rate: int, tp_factor: int = 1):
+        """Pad sequence rows up to what ``csa_slab_align`` asks for. The TP factor has to be passed for a
+        slab the indexer will see; the compressor alone does not care about it."""
+        seq_len_actual = hidden.shape[1]
+        pad = (-seq_len_actual) % csa_slab_align(compress_rate, sp_factor, tp_factor)
+        if pad:
+            hidden = torch.nn.functional.pad(hidden, (0, 0, 0, pad))
+        return hidden, seq_len_actual
 
     def __init__(
         self,
@@ -456,8 +490,43 @@ class TtCSACompressor(TtCompressorBase):
             self._entry_rope = None
             self._entry_index = None
 
-    def alloc_tables(self, max_seq_len: int, chunk_tokens: int):
+    def alloc_overlap_state(self, batch: int = 1):
+        """The zero/-inf overlap state a first chunk starts from: no predecessor window, so its slot
+        carries a zero KV and a -inf score, which is softmax weight 0.
+
+        One state per SP chip, each covering that chip's own slab, so the host tensor is sp_factor
+        states tall and sharded on the sequence axis."""
+        rows = CSA_STATE_ROWS * self.sp_factor
+        mapper = self.ops.mesh_mapper(sp_dim=2)
+        kv_state = self.ops.from_torch(torch.zeros(batch, 1, rows, self.head_dim), mapper)
+        score_state = self.ops.from_torch(
+            torch.full((batch, 1, rows, self.head_dim), float("-inf")),
+            mapper,
+        )
+        return kv_state, score_state
+
+    def terminal_state(self, state):
+        """The state the NEXT chunk starts from, given this chunk's outgoing per-chip states.
+
+        Every chip emits the state for its own slab, but the chunk's last window lives on the last SP
+        chip, so that is the only one the next chunk may start from. Gather and take it; the rest are
+        freed here."""
+        if self.sp_factor == 1:
+            return state
+        rows = state.shape[2]
+        gathered = ttnn.all_gather(state, dim=2, cluster_axis=self.sp_axis, topology=self.ccl_topology)
+        start = (self.sp_factor - 1) * rows
+        terminal = ttnn.slice(gathered, [0, 0, start, 0], [state.shape[0], 1, start + rows, self.head_dim])
+        ttnn.deallocate(state)
+        ttnn.deallocate(gathered)
+        return terminal
+
+    def alloc_tables(self, max_seq_len: int, chunk_tokens: int, mask_width: int | None = None):
+        """``mask_width`` is the compressed-cache capacity the mask columns have to span. The indexer's
+        inner compressor leaves it out: its keys go to a block-cyclic cache the score op masks itself."""
         self._alloc_rope_tables(max_seq_len, chunk_tokens)
+        if mask_width is not None:
+            self._mask_consts = self._build_mask_consts(chunk_tokens, mask_width)
 
     @classmethod
     def from_reference(cls, device, reference, config, **kwargs) -> "TtCSACompressor":
@@ -486,8 +555,11 @@ class TtCSACompressor(TtCompressorBase):
     ):
         """Compress one SP slab and return its decode-compatible outgoing state.
 
-        ``gather_sp=False`` keeps transformed compressed rows local so a caller
-        can write them directly into a block-cyclic cache.
+        ``gather_sp=False`` keeps the transformed compressed rows local. The CSA
+        indexer uses this path to write directly into its block-cyclic key cache.
+
+        Returns ``(compressed_kv, mask_block, kv_state, score_state)``. ``mask_block`` holds the causal
+        compressed-cache mask columns and is None unless ``alloc_tables`` was given a mask width.
         """
         input_shape = tuple(hidden_states.shape)
         if len(input_shape) != 4 or input_shape[1] != 1:
@@ -519,4 +591,9 @@ class TtCSACompressor(TtCompressorBase):
         )
         pooled = ttnn.reshape(pooled, [batch, n_windows, self.head_dim])
         compressed_kv = self._normalize_rotate_and_gather(pooled, first_window_position, gather_sp=gather_sp)
-        return compressed_kv, None, local_kv_state, local_score_state
+
+        mask_block = None
+        if self._mask_consts is not None and seq_len_actual > 1 and seq_len_actual // self.compress_rate > 0:
+            mask_block = self._mask_block(seq_len, first_window_position, seq_len_actual)
+
+        return compressed_kv, mask_block, local_kv_state, local_score_state

@@ -125,10 +125,14 @@ def _torch_csa_compressor(
     )
 
 
-def _make_inputs(sp_factor, local_seq_len, remainder, first_token_position, head_dim):
+def _make_inputs(sp_factor, local_seq_len, remainder, first_token_position, head_dim, empty_ranks=0):
+    """``empty_ranks`` trailing SP ranks are left with no valid tokens at all, which is what a chunk
+    shorter than its padded slab does to the tail of the mesh. Those ranks must still emit a state -- the
+    exchange chains it along the axis, so the last rank's state is the one the next chunk starts from
+    whether or not it saw a token."""
     torch.manual_seed(42)
     padded_seq_len = local_seq_len * sp_factor
-    seq_len_actual = padded_seq_len - _COMPRESS_RATE + remainder
+    seq_len_actual = local_seq_len * (sp_factor - empty_ranks) - _COMPRESS_RATE + remainder
     kv = torch.randn(_BATCH, 1, padded_seq_len, 2 * head_dim, dtype=torch.bfloat16)
     gate = torch.randn_like(kv)
     position_bias = torch.randn(1, 1, _COMPRESS_RATE, 2 * head_dim, dtype=torch.bfloat16)
@@ -148,11 +152,11 @@ def _make_inputs(sp_factor, local_seq_len, remainder, first_token_position, head
     return kv, gate, position_bias, initial_kv_state, initial_score_state, seq_len_actual, expected
 
 
-def _run_csa_compressor(mesh_device, local_seq_len, remainder, first_token_position, head_dim):
+def _run_csa_compressor(mesh_device, local_seq_len, remainder, first_token_position, head_dim, empty_ranks=0):
     mesh_shape = tuple(mesh_device.shape)
     sp_factor, tp_factor = mesh_shape
     kv, gate, bias, initial_kv, initial_score, seq_len_actual, expected = _make_inputs(
-        sp_factor, local_seq_len, remainder, first_token_position, head_dim
+        sp_factor, local_seq_len, remainder, first_token_position, head_dim, empty_ranks
     )
     sp_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None))
     replicated_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -243,3 +247,25 @@ def test_csa_compressor_single_device(mesh_device, device_params, remainder, fir
 )
 def test_csa_compressor_mesh(mesh_device, device_params, local_seq_len, head_dim, remainder, first_token_position):
     _run_csa_compressor(mesh_device, local_seq_len, remainder, first_token_position, head_dim)
+
+
+@pytest.mark.parametrize("first_token_position", [0, _COMPRESS_RATE])
+@pytest.mark.parametrize("remainder", range(_COMPRESS_RATE))
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (2, 2),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric1d-2x2",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_csa_compressor_mesh_empty_tail(mesh_device, device_params, remainder, first_token_position):
+    """A chunk whose real length stops short of the padded slab leaves the trailing SP ranks with no
+    valid tokens. Chunked prefill hits this whenever a non-final chunk is narrower than chunk_tokens, and
+    the state those ranks emit is what the NEXT chunk starts from, so it has to be their predecessor's
+    rather than the base state they were handed."""
+    _run_csa_compressor(mesh_device, _LOCAL_SEQ_LEN, remainder, first_token_position, _HEAD_DIM, empty_ranks=1)

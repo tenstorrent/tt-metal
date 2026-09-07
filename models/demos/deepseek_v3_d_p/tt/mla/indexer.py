@@ -1335,46 +1335,12 @@ class TtCsaIndexer(TtIndexerBase):
         self._idx_knorm = weights["kv_norm"]
 
     def reset_overlap_state(self) -> None:
+        """Start over from no predecessor window. The inner compressor owns the layout, since it is the
+        one that consumes and emits these."""
         if hasattr(self, "_overlap_kv_state"):
             ttnn.deallocate(self._overlap_kv_state)
             ttnn.deallocate(self._overlap_score_state)
-        shape = (1, 1, 64 * self.sp_factor, self.index_args.index_head_dim)
-        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=(2, None))
-        self._overlap_kv_state = ttnn.from_torch(
-            torch.zeros(shape, dtype=torch.bfloat16),
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper,
-        )
-        self._overlap_score_state = ttnn.from_torch(
-            torch.full(shape, float("-inf"), dtype=torch.bfloat16),
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper,
-        )
-
-    def _terminal_overlap_state(self, state: ttnn.Tensor) -> ttnn.Tensor:
-        if self.sp_factor == 1:
-            return state
-        gathered = ttnn.all_gather(
-            state,
-            dim=2,
-            cluster_axis=self.sp_axis,
-            topology=self.sp_ccl_topology,
-        )
-        start = (self.sp_factor - 1) * 64
-        terminal = ttnn.slice(
-            gathered,
-            [0, 0, start, 0],
-            [1, 1, start + 64, self.index_args.index_head_dim],
-        )
-        ttnn.deallocate(state)
-        ttnn.deallocate(gathered)
-        return terminal
+        self._overlap_kv_state, self._overlap_score_state = self._compressor.alloc_overlap_state()
 
     def _apply_index_hadamard(self, tensor: ttnn.Tensor, *, dtype) -> ttnn.Tensor:
         return ttnn.matmul(
@@ -1432,7 +1398,13 @@ class TtCsaIndexer(TtIndexerBase):
         cache_user_id: int,
         cache_layer_idx: int,
         index_kbuf: ttnn.Tensor,
+        seq_len_actual: int | None = None,
     ) -> None:
+        """``seq_len_actual`` is the chunk's real pre-pad length, defaulting to the whole padded slab.
+        It has to be the real one whenever another chunk follows: the outgoing overlap state is what that
+        chunk's first window reads, so a state that advanced over pad rows would hand it the wrong
+        predecessor. The cache write itself always covers the padded width, which the next chunk
+        overwrites and the score op's causal mask ignores until then."""
         assert start_pos % self.compress_rate == 0
         prior_kv_state = self._overlap_kv_state
         prior_score_state = self._overlap_score_state
@@ -1440,7 +1412,7 @@ class TtCsaIndexer(TtIndexerBase):
             hidden_states,
             prior_kv_state,
             prior_score_state,
-            seq_len_actual=seq_len * self.sp_factor,
+            seq_len_actual=seq_len * self.sp_factor if seq_len_actual is None else seq_len_actual,
             first_window_position=start_pos,
             gather_sp=False,
         )
@@ -1463,8 +1435,8 @@ class TtCsaIndexer(TtIndexerBase):
         ttnn.deallocate(keys)
         ttnn.deallocate(prior_kv_state)
         ttnn.deallocate(prior_score_state)
-        self._overlap_kv_state = self._terminal_overlap_state(kv_state)
-        self._overlap_score_state = self._terminal_overlap_state(score_state)
+        self._overlap_kv_state = self._compressor.terminal_state(kv_state)
+        self._overlap_score_state = self._compressor.terminal_state(score_state)
 
     def _score(
         self,
@@ -1527,7 +1499,10 @@ class TtCsaIndexer(TtIndexerBase):
         cache_user_id: int = 0,
         cache_layer_idx: int = 0,
         index_kv_cache: ttnn.Tensor = None,
+        seq_len_actual: int | None = None,
     ) -> ttnn.Tensor:
+        """``seq_len`` is the padded LOCAL slab width, fixed for the whole prefill; ``seq_len_actual`` the
+        chunk's real global pre-pad length, which only the overlap state needs (see write_k)."""
         assert index_kv_cache is not None, "CSA indexer requires a caller-owned block-cyclic index key cache"
         assert seq_len == self.active_seq_len_local
         assert start_pos % self.compress_rate == 0
@@ -1540,6 +1515,7 @@ class TtCsaIndexer(TtIndexerBase):
             cache_user_id=cache_user_id,
             cache_layer_idx=cache_layer_idx,
             index_kbuf=index_kv_cache,
+            seq_len_actual=seq_len_actual,
         )
         q = self._q_stem(qr)
         q_rotated = self._rotate_query(q, start_pos)
