@@ -123,3 +123,15 @@ def test_split_that_would_straddle_a_chunk_is_rejected(expect_error):
     """A split must leave whole KDA chunks on both sides of the boundary."""
     with expect_error(ValueError, "not both multiples"):
         offset_topology(32, SP_SIZE, 48)
+
+
+@pytest.mark.parametrize("start", [32, 960, GLOBAL_ROWS - 32])
+def test_single_partition_is_never_split(start):
+    """One partition keeps rows contiguous, so no offset splits it.
+
+    The wrapped tail immediately follows the head in absolute position, which
+    MLA's oracle confirms: the single chip carries the whole interval in order.
+    """
+    topology = offset_topology(start, 1, GLOBAL_ROWS)
+    assert not topology.is_split
+    assert rotated_chip_positions(start, 1, GLOBAL_ROWS)[0] == list(range(start, start + GLOBAL_ROWS))
