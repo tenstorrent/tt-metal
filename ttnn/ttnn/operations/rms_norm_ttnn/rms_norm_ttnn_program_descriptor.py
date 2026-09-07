@@ -967,6 +967,39 @@ is priced in l1_ledger.md's "Deviations" table with its measurement:
       kernel / runtime-arg call from both factories and diffs (9/9 cases, the
       engaged mode landing on a non-engaged plan included).
 
+  D41 Perf 2 (perf) -- RESIDENT PICKS ITS BLOCK ON ROW-BLOCKS PER CORE, AND MAY BUY
+      A DEEPER RING TO GET ONE MORE.  The seed's RESIDENT search took the COARSEST
+      BLOCK_ROWS that fit, which on a shape whose whole per-core assignment fits in
+      one block leaves the core with a SINGLE row-block: it reads all of its work,
+      then computes all of it, then writes all of it, with no cross-stage overlap at
+      all.  `(1,1,8192,1024)` interleaved is exactly that -- BLOCK_ROWS == rows_max
+      == 3 -- and it is the 2nd-worst cell of the `perf` group.  The search now picks
+      the candidate that gives the core the MOST row-blocks, which lets a DEEPER
+      `cb_input_tiles` / `cb_output_tiles` pay for itself by forcing a smaller block:
+      BLOCK_ROWS 3 at depth 2 becomes BLOCK_ROWS 2 at depth 3, 84,906 -> 83,544 ns
+      (1.016x; 1.023x on a second session).
+      TWO things keep it from costing anything anywhere else, and both are the same
+      principle -- a deeper ring is only worth what it buys in overlap:
+        * THE TIE-BREAK IS THE SHALLOWEST.  Candidates are walked shallowest-first
+          and only a STRICTLY larger block count displaces the incumbent, so where
+          the deeper ring cannot raise the block count it is pure L1 and is refused.
+          That covers every one-tile-row-per-core plan (all the WIDTH shards, the
+          interleaved decode, the HEIGHT shard) and the BLOCK shard, whose block
+          count the shallow ring already reaches.  All of them keep their pre-D41
+          program byte for byte -- verified with `RMS_TRACE_BLOCKING` across the
+          guard set, where `(1,1,8192,1024)` is the ONLY plan that moves.
+        * THE DEEPER CANDIDATE IS OFFERED ONLY TO THE RESIDENT SEARCH
+          (`CB_DEPTH_CANDIDATES_RESIDENT`, a second ladder).  What a deeper ring
+          trades against is regime-dependent: RESIDENT has NUM_W_CHUNKS == 1 so it
+          can only cost BLOCK_ROWS, which is the point; but ROW_RESIDENT and STREAM
+          already sit at one tile-row, so there a deeper ring can only be bought with
+          a FINER WIDTH CHUNK.  MEASURED, that trade LOSES: `(1,1,8192,5120)`
+          gamma_bias_residual fp32_dest went WT_CHUNK 18x9 -> 11x15 and 608,816 ->
+          621,203 ns (0.980x), and `(1,1,1024,16384)` gbr went 57x9 -> 43x12 and
+          501,932 -> 509,953 (0.984x).  Before D39 freed the L1 that pays for depth
+          3, neither shape could reach it and this loss was invisible -- which is why
+          the isolated bench that found the win did not find the trap.
+
 """
 
 from __future__ import annotations
@@ -1247,12 +1280,27 @@ CB_SQ_EXACT = 0
 # cb_output_tiles), COARSEST FIRST.  The regime search (D4) walks them and takes
 # the RESIDENT regime at the first depth whose whole-row working set fits L1.
 #
-# Parked at the single value 2 -- byte-identical to the design's fixed-depth
-# predicate -- because (2, 1) was MEASURED to be a net loss today; see D4 for
-# the numbers and for the complementary step (Lamp L5 / L1) that would make a
-# shallower depth worth offering.  This stays a live knob: appending 1 is the
-# one-line change a later refinement flips once that step lands.
+# (2, 1) was MEASURED a net loss (see D4), so a SHALLOWER depth is still not on
+# offer.  This ladder is the one the CHUNKED regimes (ROW_RESIDENT, STREAM) walk,
+# and D41 deliberately leaves it alone -- see `CB_DEPTH_CANDIDATES_RESIDENT`.
 CB_DEPTH_CANDIDATES = (2,)
+
+# D41 (Perf 2) -- THE DEEPER RING, OFFERED ONLY WHERE IT IS NOT PAID FOR IN CHUNK.
+# What a deeper `cb_input_tiles` / `cb_output_tiles` trades against is regime-
+# dependent, and that is the whole reason this is a SECOND ladder rather than an
+# extra entry in the first one:
+#   * RESIDENT       the row IS one chunk (NUM_W_CHUNKS == 1), so the only thing a
+#                    deeper ring can cost is BLOCK_ROWS -- which is exactly what we
+#                    want it to cost when the core would otherwise get ONE row-block.
+#   * ROW_RESIDENT / the block is already one tile-row, so a deeper ring can only be
+#     STREAM         bought with a FINER WIDTH CHUNK.  MEASURED on the integrated
+#                    tree, that trade LOSES: (1,1,8192,5120) gamma_bias_residual
+#                    fp32_dest went WT_CHUNK 18x9 -> 11x15 and 608,816 -> 621,203 ns
+#                    (0.980x), and (1,1,1024,16384) gbr went 57x9 -> 43x12 and
+#                    501,932 -> 509,953 (0.984x).  Before D39 freed the L1 that pays
+#                    for depth 3, neither shape could reach it and the loss was
+#                    invisible.
+CB_DEPTH_CANDIDATES_RESIDENT = (3, 2)
 
 # Cores along the `width` axis (Lamp L1: the cross-core width split on an
 # INTERLEAVED input).  Phase 0 pinned this at the trivial 1 (one core owns the
@@ -3323,6 +3371,8 @@ def create_program_descriptor(
         do0 = 0 if plan.native_out else None
         dr0 = 0 if (has_residual and plan.native_in) else None
         depth_candidates = CB_DEPTH_CANDIDATES if is_tile else (1,)
+        # D41: the deeper ring is RESIDENT's alone (see CB_DEPTH_CANDIDATES_RESIDENT).
+        resident_depths = CB_DEPTH_CANDIDATES_RESIDENT if is_tile else (1,)
 
         combine_tree = _combine_tree_arity(plan.group_size, 1) if plan.combine else None
         # Pages the NARROW per-channel staging ring gets (D30): a knob-derived depth
@@ -3381,14 +3431,34 @@ def create_program_descriptor(
             per_tilerow = wt_core * bt * mult - (wt_core - sq_wt) * bt + per_row_bytes
             return max(0, (budget - fixed) // max(1, per_tilerow)), mult
 
-        for depth in depth_candidates:
+        # D41 -- RESIDENT PICKS ON ROW-BLOCKS PER CORE, NOT ON DEPTH ORDER.
+        # The seed took the coarsest BLOCK_ROWS that fit, which on a shape whose
+        # whole assignment fits in one block leaves the core with ONE row-block: it
+        # reads all of its work, then computes all of it, then writes all of it,
+        # with zero cross-stage overlap.  A deeper ring buys a SMALLER block and
+        # therefore MORE blocks, which is the only thing there is to pipeline over.
+        # MEASURED: (1,1,8192,1024) interleaved is BLOCK_ROWS == rows_max == 3 -- one
+        # block -- at depth 2 and BLOCK_ROWS 2 at depth 3, 84,906 -> 82,961 ns, 1.023x.
+        # The TIE-BREAK IS THE SHALLOWEST, and it is what keeps this from costing
+        # anything: where the deeper ring cannot raise the block count it buys no
+        # overlap at all and is pure L1 -- one tile-row per core (every WIDTH shard,
+        # the interleaved decode), or a block count the shallow ring already reaches
+        # (the BLOCK shard).  Every one of those keeps its pre-D41 program, byte for
+        # byte, because the shallow candidate is evaluated first and only a STRICTLY
+        # larger block count displaces it.
+        best = None
+        for depth in reversed(resident_depths):
             brmax, _ = _resident_fit(depth, compact=True)
             if brmax < 2:
                 brmax = min(1, _resident_fit(depth, compact=False)[0])
             if brmax >= 1:
-                # RESIDENT: the whole per-core row slice is resident; take the
-                # coarsest row block that fits, i.e. the entire assignment when it does.
-                return min(max_rows, brmax), wt_core, 1, depth, depth, True, CB_RM_STAGE_DEPTH, False, False
+                br = min(max_rows, brmax)
+                blocks = -(-max_rows // br)
+                if best is None or blocks > best[0]:
+                    best = (blocks, depth, br)
+        if best is not None:
+            _, depth, br = best
+            return br, wt_core, 1, depth, depth, True, CB_RM_STAGE_DEPTH, False, False
 
         if plan.band:
             # The BAND scheme's WIDTH is shard-derived, so it cannot be chunked, and
