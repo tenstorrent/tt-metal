@@ -337,6 +337,7 @@ this domain:
 | `clang-diagnostic-unused-parameter` | Redundant: 846 of its 907 findings share an exact file, line *and* column with `misc-unused-parameters`, which is kept because it also carries an auto-fix. Costs 61 unique positions. |
 | `prefix:cert` | Every one of the 41 `cert-*` checks is an alias, so the prefix removes no capability; 461 of the 463 findings it drops are reported at an identical position under the aliased original. See the note on alias duplication for the two it does cost. |
 | `clang-diagnostic-reserved-identifier` | The third name for a rule `bugprone-reserved-identifier` already covers. Its only 3 unique findings are the linker-mandated `_start` entry symbol. |
+| `clang-diagnostic-documentation` | 561 of its 642 findings object to a documented LLK convention, in comments no docs build reads; see below. |
 
 Two more are muted on volume. `modernize-use-trailing-return-type` (1,182
 findings) is pure style and tt-umd mutes it too.
@@ -515,6 +516,37 @@ named, and 65 findings do not justify a rule. `performance-no-int-to-ptr` (694) 
 five files hold 13–29% of their findings, so any path glob would be arbitrary.
 `readability-uppercase-literal-suffix` (3,766) failed it too, but turned out to be
 addressable through a check option instead; see below.
+
+`clang-diagnostic-documentation` (642) is disabled because the great majority of
+it disputes a deliberate house style rather than reporting a defect. 561 findings
+are the two messages `parameter 'X:' not found in the function declaration` and
+its `@tparam` twin — note the trailing colon inside the quotes. The LLK headers
+write `@param name: description`, and clang takes `name:` including the colon as
+the parameter name, so it never matches. The documentation is correct; clang even
+emits `did you mean 'name'?` alongside.
+
+That style is prescribed, not accidental.
+`tt_metal/tt-llk/.claude/references/doxygen-style.md` states "The codebase uses
+`@param name: description` (colon after the name). Match it.", and PRs #45825 and
+#45841 bulk-applied it to the Blackhole and Wormhole `llk_lib` on that basis.
+Since the file is agent guidance, a report telling an agent to delete the colons
+directly contradicts the instructions the same agent reads, which is the more
+expensive failure mode. It also costs nothing today: `docs/Doxyfile` uses an
+explicit INPUT list with `RECURSIVE = NO` and names no `tt-llk` path, so no
+documentation build parses these comments.
+
+Three routes were considered before disabling. A narrower compiler flag does not
+exist — `-Wdocumentation`'s only sub-groups are `-Wdocumentation-html` and
+`-Wdocumentation-deprecated-sync`, and the parameter-mismatch diagnostic sits in
+the parent with no separate switch. A `review_status.yaml` rule on `*/tt-llk/*`
+and `*/llk_api/*` would have scoped it well, the colon findings being 98%
+concentrated there, at the cost of 9 genuine findings in those paths. Removing
+the colons would be mechanical rather than manual, since clang emits applicable
+FixIts, but it needs the style guide changed first and is not a call to make from
+a static-analysis report. Disabling was chosen over the path rule because the 81
+genuine findings — 41 `@tparam` on a non-template, 11 and 10 real parameter-name
+mismatches, 6 `@return` on a void function, 6 empty paragraphs — did not justify
+carrying the config. Revisit if the LLK convention ever changes.
 
 **Alias duplication** is a side effect of `--enable-all` worth knowing about,
 because it inflates the report without adding problems. Aliased checkers report

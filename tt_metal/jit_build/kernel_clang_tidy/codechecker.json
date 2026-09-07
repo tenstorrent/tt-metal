@@ -52,6 +52,8 @@
         "checker:clang-diagnostic-unused-parameter",
         "--disable",
         "checker:clang-diagnostic-reserved-identifier",
+        "--disable",
+        "checker:clang-diagnostic-documentation",
         "--checker-config",
         "clang-tidy:readability-function-cognitive-complexity:IgnoreMacros=false",
         "--checker-config",
