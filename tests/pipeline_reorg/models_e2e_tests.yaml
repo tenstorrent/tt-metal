@@ -1874,8 +1874,8 @@
 # TT_CACHE_PATH does the same for the *tiled device-weight* cache. Without
 # TT_CACHE_PATH that one falls back to generated/ttnn/vibevoice/weight_cache
 # inside the ephemeral checkout, so all 1135 tensors (~4.2 GB) are re-tilized on
-# every run and discarded at job end -- the cost that timed this job out at
-# 22 min on its first CI run. See common/weight_cache.py:resolve_weight_cache.
+# every run and discarded at job end -- a per-run cost no other model in the
+# pipeline pays. See common/weight_cache.py:resolve_weight_cache.
 #
 # Tier 3 is accuracy-only, so there are no perf assertions here. Each step is
 # guarded so one failure does not mask the others. Measured on a single P150
