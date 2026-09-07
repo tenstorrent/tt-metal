@@ -16,9 +16,10 @@
 //      iteration, with a posted per-slot-flag multicast.
 //
 // RAW-DATAFLOW DEVIATIONS, each because no in-tree helper expresses the thing:
-//   * weight/activation/output DRAM traffic uses raw `noc_async_read` over a contiguous RUN of
-//     pages; the page-granular TensorAccessor helper issues one transaction per tile, which is
-//     transaction-rate-bound rather than bandwidth-bound. Addresses still go via TensorAccessor.
+//   * weight/output DRAM traffic uses raw `noc_async_read`/`noc_async_write` over a contiguous RUN
+//     of pages (moe_fused_swiglu_bank_runs.hpp); one transaction per page would be
+//     transaction-rate-bound rather than bandwidth-bound, and no NoC helper takes a page RANGE.
+//     Addresses still go via TensorAccessor.
 //   * the reduce-scatter transport is raw unicast + counting semaphores: mcast_pipe's SenderPipe is
 //     a rectangle multicast, while a gather leg is point-to-point with a different destination per
 //     peer, and the fan-in needs counting.
@@ -562,15 +563,21 @@ void kernel_main() {
             if constexpr (INPUT_FORMAT == 0) {
                 for (uint32_t i = 0; i < TILE_H; ++i) {
                     const uint32_t s = (i + my_col + my_row) % TILE_H;
-                    noc_async_read(
-                        x_acc.get_noc_addr(x_stick_base + row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
-                        dst + s * X_SLICE,
-                        kr_rows * BF16_TILE_ROW_BYTES);
+                    noc.async_read(
+                        x_acc,
+                        CoreLocalMem<uint32_t>(dst + s * X_SLICE),
+                        kr_rows * BF16_TILE_ROW_BYTES,
+                        {.page_id = x_stick_base + row * TILE_H + s, .offset_bytes = kstart * BF16_TILE_ROW_BYTES},
+                        {});
                 }
             } else {
                 for (uint32_t i = 0; i < kr_rows; ++i) {
-                    noc_async_read(
-                        x_acc.get_noc_addr(x_tile_base + row * EMB_T + kstart + i), dst + i * BFP8_TILE, BFP8_TILE);
+                    noc.async_read(
+                        x_acc,
+                        CoreLocalMem<uint32_t>(dst + i * BFP8_TILE),
+                        BFP8_TILE,
+                        {.page_id = x_tile_base + row * EMB_T + kstart + i},
+                        {});
                 }
             }
         };
