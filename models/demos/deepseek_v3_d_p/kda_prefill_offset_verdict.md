@@ -5,7 +5,41 @@ whether a small activation exchange or a segment-aware scan gives the better
 latency -- with device evidence rather than argument. Implementation detail is
 in [`kda_prefill_offset_dev_spec.md`](kda_prefill_offset_dev_spec.md).
 
-**Recommendation: prototype A, the one-hop ring exchange.**
+**Recommendation: prototype A, the one-hop ring exchange -- but see the
+correction below before acting on it.**
+
+> ## Correction: B's measured cost is its plumbing, not its strategy
+>
+> A per-op profile taken after this report was written shows B's overhead is
+> almost entirely tensor plumbing that its design does not require, so the
+> comparison below is not a fair test of the two strategies.
+>
+> At `o=C/2`, total `+2092 us` (+21.7%), op count 59 -> 115:
+>
+> | op | base | n | split | n | delta | share |
+> | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+> | `data_movement` | 507 us | 21 | 1621 us | 55 | **+1114 us** | **53%** |
+> | `recurrent_chunk_scan` | 668 | 2 | 1065 | 4 | +397 | 19% |
+> | `data_movement+eltwise` | 271 | 5 | 662 | 11 | +391 | 19% |
+> | `qkv_causal_conv` | 1148 | 1 | 1192 | 2 | +44 | 2% |
+> | `ccl.all_gather` | 121 | 2 | 135 | 2 | +14 | 0.7% |
+>
+> The genuinely doubled *compute* costs about 6% of the overhead. The doubled
+> summary payload costs 14 us, so the 91 us figure quoted later in this document
+> is seven times too pessimistic. The cost is `_slice_chunk_range` slicing all
+> seven prepared-chunk tensors per fragment, reshaping each, and concatenating
+> two scan outputs.
+>
+> **When a group size divides both fragment chunk counts, none of that slicing is
+> needed.** At `o=C/2` both fragments are 40 chunks, so one reshape into 4 groups
+> of 20 is byte-identical to baseline and the split appears only in which entry
+> state each group receives -- one scan, not two. That plausibly takes B into
+> single digits and would reverse the recommendation.
+>
+> Tracked as `tt-metal_tracker-6ls.7`. **Treat "A wins" as unproven for offsets
+> where a shared group size exists** (`o=C/2` among them). It still holds where
+> the fragment counts share no workable group size, such as `o=32`, since B is
+> forced into the slicing path there.
 
 ## The two prototypes
 
