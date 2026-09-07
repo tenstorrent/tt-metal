@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/compute/compute_kernel_api.h"
+#include "noc/noc_overlay_parameters.h"
 #include "hostdev/realtime_profiler_msgs.h"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 
@@ -38,6 +39,11 @@ FORCE_INLINE void dispatch_subordinate_realtime_profiler() {
     rt_profiler_msg->realtime_profiler_remote_state_addr = 0;
     rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
 
+    rt_profiler_msg->dropped_records = 0;
+    for (uint32_t i = 0; i < REALTIME_PROFILER_RECORD_CAPACITY; ++i) {
+        rt_profiler_msg->records[i].state = REALTIME_PROFILER_RECORD_FREE;
+    }
+
     // Wait until host explicitly enables RT profiler, or terminate if RT is not used.
     while (rt_profiler_msg->realtime_profiler_core_noc_xy == 0) {
         if (rt_profiler_msg->realtime_profiler_state == REALTIME_PROFILER_STATE_TERMINATE) {
@@ -49,26 +55,27 @@ FORCE_INLINE void dispatch_subordinate_realtime_profiler() {
         rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
     }
 
-    uint32_t last_counts[num_streams_to_monitor];
-    for (uint32_t i = 0; i < num_streams_to_monitor; i++) {
-        uint32_t stream_id = first_stream_index + i;
-        volatile uint32_t* stream_reg =
-            (volatile uint32_t*)STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
-        last_counts[i] = *stream_reg;
-    }
-
     while (rt_profiler_msg->realtime_profiler_state != REALTIME_PROFILER_STATE_TERMINATE) {
-        for (uint32_t i = 0; i < num_streams_to_monitor; i++) {
-            uint32_t stream_id = first_stream_index + i;
-            volatile uint32_t* stream_reg =
-                (volatile uint32_t*)STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
-
-            uint32_t current_count = *stream_reg;
-            if (current_count != last_counts[i]) {
-                DeviceZoneScopedN("TRISC0-record-end-ts");
-                last_counts[i] = current_count;
-                record_realtime_timestamp(rt_profiler_msg, false);
+        invalidate_l1_cache();
+        for (uint32_t i = 0; i < REALTIME_PROFILER_RECORD_CAPACITY; ++i) {
+            auto* record = &rt_profiler_msg->records[i];
+            if (record->state != REALTIME_PROFILER_RECORD_PENDING) {
+                continue;
             }
+            const uint32_t stream = record->completion_stream;
+            ASSERT(stream >= first_stream_index && stream < first_stream_index + num_streams_to_monitor);
+            volatile uint32_t* stream_reg =
+                (volatile uint32_t*)STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+            constexpr uint32_t shift = 32 - MEM_WORD_ADDR_WIDTH;
+            const int32_t remaining = static_cast<int32_t>((record->completion_count - *stream_reg) << shift);
+            if (remaining > 0) {
+                continue;
+            }
+            const uint64_t timestamp = realtime_profiler_read_timestamp();
+            record->end.time_lo = static_cast<uint32_t>(timestamp);
+            record->end.time_hi = timestamp >> 32;
+            asm volatile("fence rw, rw" ::: "memory");
+            record->state = REALTIME_PROFILER_RECORD_READY;
         }
     }
 }

@@ -109,7 +109,7 @@ public:
 
     void add_dispatch_go_signal_mcast() {
         this->add_prefetch_relay_inline();
-        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
+        this->cmd_write_offsetB += sizeof(CQDispatchGoSignalCmd);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 

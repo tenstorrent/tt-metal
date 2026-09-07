@@ -107,8 +107,9 @@ def profile_realtime_program_merged(
     device, run_fn, *, record_timeout_seconds=DEFAULT_RT_PROFILER_RECORD_TIMEOUT_SECONDS
 ) -> tuple:
     """profile_realtime_program with the per-chip records merged per program: returns (result,
-    {runtime_id -> {"duration_ns" (max across chips = critical path), "kernel_sources"}}) in dispatch
-    order. Callers identify their own program, by kernel path or as the only entry."""
+    {runtime_id -> {"duration_ns" (max across chips), "kernel_sources"}}) in first-delivery order.
+    The maximum duration alone does not establish a cross-chip critical path.
+    Callers identify their own program, by kernel path or as the only entry."""
     result, records = profile_realtime_program(
         device, run_fn, collect_all=True, record_timeout_seconds=record_timeout_seconds
     )
@@ -140,7 +141,7 @@ def assert_op_duration_merged(
     _, per_program = profile_realtime_program_merged(device, run_all)
 
     def dump(log):
-        for seq, (runtime_id, entry) in enumerate(per_program.items()):  # arrival = dispatch order
+        for seq, (runtime_id, entry) in enumerate(per_program.items()):  # delivery order
             log(
                 f"  [{seq}] runtime_id={runtime_id} duration_ns={entry['duration_ns']:.0f} "
                 f"kernels={sorted({source.rsplit('/', 1)[-1] for source in entry['kernel_sources']})}"

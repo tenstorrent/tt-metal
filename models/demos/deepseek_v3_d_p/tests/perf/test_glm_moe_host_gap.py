@@ -240,9 +240,10 @@ def test_glm_moe_host_gap(mesh_device, device_params, mode, monkeypatch):
                 diagnostic_limitation="Host operation envelopes overlap and are not additive removable costs.",
             )
             if mode == "profile":
-                result[
-                    "device_record_semantics"
-                ] = "Use program identities/counts only: completion intervals are unreliable with overlapping subdevices."
+                result["device_record_semantics"] = (
+                    "Dispatch-GO to observed final-worker completion; clock alignment and observer effects require "
+                    "independent validation before cross-device attribution."
+                )
         result["status"] = "PASS"
         output_path.write_text(json.dumps(result, indent=2) + "\n")
         print(f"GLM_MOE_RESULT {output_path}: {result.get('median_ms', mode)}")

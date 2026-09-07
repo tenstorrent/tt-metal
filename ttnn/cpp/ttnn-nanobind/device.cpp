@@ -185,7 +185,8 @@ void py_device_module_types(nb::module_& m_device) {
         .def_ro(
             "records",
             &PythonProgramRealtimeRecordBatch::records,
-            "ProgramRealtimeRecord entries in this batch; non-empty, oldest first")
+            "ProgramRealtimeRecord entries in delivery order, which need not match timestamp order; "
+            "may be empty when reporting dropped records")
         .def_ro(
             "dropped",
             &PythonProgramRealtimeRecordBatch::dropped,
@@ -754,8 +755,8 @@ void device_module(nb::module_& m_device) {
         R"doc(
             Register a callback to be invoked when real-time profiler data arrives from a device.
             The callback receives a ProgramRealtimeRecordBatch and is called from its own thread.
-            Callbacks that are too slow to keep up with incoming profiler data may miss records;
-            this is reported by ProgramRealtimeRecordBatch.dropped.
+            Device queue overflow and callbacks that are too slow may lose records;
+            this is reported by ProgramRealtimeRecordBatch.dropped, including in batches with no records.
 
             Multiple callbacks can be registered.
 

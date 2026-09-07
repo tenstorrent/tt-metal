@@ -569,6 +569,9 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores),
             static_cast<uint8_t>(this->id()));
 
+        program_cmd_seq.profiled_go_signal_cmd_ptr->program_host_id = static_cast<uint16_t>(program.get_runtime_id());
+        program_cmd_seq.profiled_go_signal_cmd_ptr->num_completion_workers = num_workers;
+
         const auto& local_devices = mesh_device_->impl().get_local_devices(device_range);
         {
             ZoneNamedN(__tracy_scoped_zone, "HostProfile::record_sub_devices", ([] {
@@ -1636,6 +1639,10 @@ void FDMeshCommandQueue::record_end() {
                 ProgramBinaryStatus::Committed,
                 std::pair<bool, int>(mesh_node.unicast_go_signals, num_virtual_eth_cores),
                 static_cast<uint8_t>(this->id()));
+
+            cached_program_command_sequence.profiled_go_signal_cmd_ptr->program_host_id =
+                static_cast<uint16_t>(node.program_runtime_id);
+            cached_program_command_sequence.profiled_go_signal_cmd_ptr->num_completion_workers = node.num_workers;
 
             const SubDeviceRecorder trace_sub_device_recorder(mesh_device_, sub_device_id);
             if (trace_sub_device_recorder.enabled()) {

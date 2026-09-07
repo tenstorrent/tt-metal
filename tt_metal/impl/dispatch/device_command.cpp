@@ -559,7 +559,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         "Number of unicast destinations {} exceeds maximum {}",
         num_unicast_txns,
         std::numeric_limits<uint8_t>::max());
-    uint32_t lengthB = sizeof(CQDispatchCmd);
+    uint32_t lengthB = sizeof(CQDispatchGoSignalCmd);
     TT_ASSERT(
         lengthB <= (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE),
         "Data for go signal mcast must fit within one page");
@@ -574,14 +574,15 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         mcast_cmd->mcast.noc_data_start_index = noc_data_start_index;
         mcast_cmd->mcast.wait_stream = wait_stream;
     };
-    CQDispatchCmd* mcast_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
+    auto* mcast_cmd_dst = this->reserve_space<CQDispatchGoSignalCmd*>(sizeof(CQDispatchGoSignalCmd));
 
     if constexpr (hugepage_write) {
-        alignas(MEMCPY_ALIGNMENT) CQDispatchCmd mcast_cmd{};
-        initialize_mcast_cmd(&mcast_cmd);
-        this->memcpy(mcast_cmd_dst, &mcast_cmd, sizeof(CQDispatchCmd));
+        alignas(MEMCPY_ALIGNMENT) CQDispatchGoSignalCmd mcast_cmd{};
+        initialize_mcast_cmd(&mcast_cmd.command);
+        this->memcpy(mcast_cmd_dst, &mcast_cmd, sizeof(mcast_cmd));
     } else {
-        initialize_mcast_cmd(mcast_cmd_dst);
+        *mcast_cmd_dst = {};
+        initialize_mcast_cmd(&mcast_cmd_dst->command);
     }
     this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
 }

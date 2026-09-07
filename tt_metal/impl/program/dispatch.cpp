@@ -2473,11 +2473,11 @@ public:
             noc_data_start_idx,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(sub_device_index));
 
+        program_command_sequence.profiled_go_signal_cmd_ptr = reinterpret_cast<CQDispatchGoSignalCmd*>(
+            reinterpret_cast<uint32_t*>(device_command_sequence.data()) +
+            ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t)));
         program_command_sequence.mcast_go_signal_cmd_ptr =
-            &(reinterpret_cast<CQDispatchCmd*>(
-                  reinterpret_cast<uint32_t*>(device_command_sequence.data()) +
-                  ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
-                 ->mcast;
+            &program_command_sequence.profiled_go_signal_cmd_ptr->command.mcast;
     }
 };
 

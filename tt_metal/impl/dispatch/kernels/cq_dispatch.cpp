@@ -168,9 +168,8 @@ constexpr uint32_t dispatch_cb_pages_per_block = dispatch_cb_pages / dispatch_cb
 // Dispatch-core-local L1 region assigned by DispatchMemMap via
 // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address is supplied by host through
 // the REALTIME_PROFILER_MSG_ADDR compile-time define; the same value is wired into the
-// co-located cq_dispatch_subordinate kernel and the reserved RT-profiler tensix core, so
-// all three view the same physical L1. The embedded program_id_fifo is the BRISC
-// (producer) / dispatch_s NCRISC (consumer) handoff.
+// co-located cq_dispatch_subordinate kernel. The reserved RT-profiler tensix core
+// reads this dispatch-core region through NOC; its own control block is separate.
 volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
@@ -1122,6 +1121,9 @@ static void process_wait() {
     WAYPOINT("PWD");
 
     if (clear_stream) {
+        if constexpr (!distributed_dispatcher) {
+            realtime_profiler_retire_stream(rt_profiler_msg, stream);
+        }
         // DEVICE_PRINT("DISPATCH WAIT CLEAR STREAM 0x{:08x} count {}\n", stream, count);
         static uint32_t local_worker_stream_reset_update = 0;
         volatile uint32_t* sem_addr = reinterpret_cast<volatile uint32_t*>(
@@ -1240,7 +1242,7 @@ void process_go_signal_mcast_cmd() {
             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(aligned_go_signal_storage)), dst, sizeof(uint32_t));
     }
 
-    cmd_ptr += sizeof(CQDispatchCmd);
+    cmd_ptr += sizeof(CQDispatchGoSignalCmd);
 }
 
 FORCE_INLINE
@@ -1427,12 +1429,6 @@ re_run_command:
                 reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
                     dispatch_telemetry_base)
                     ->program_count = ++program_counter;
-            }
-            if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0 &&
-                program_host_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
-                while (!program_id_fifo_append(rt_profiler_msg, program_host_id)) {
-                    invalidate_l1_cache();
-                }
             }
             uint32_t offset_count = cmd->set_write_offset.offset_count;
 

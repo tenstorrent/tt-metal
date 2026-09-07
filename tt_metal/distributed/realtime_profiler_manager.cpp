@@ -82,6 +82,7 @@ std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> g_rt_profile
 
 // Sync marker ID — must match device-side REALTIME_PROFILER_SYNC_MARKER_ID.
 constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
+constexpr uint32_t REALTIME_PROFILER_DROPPED_MARKER_ID = 0xFFFFFFFE;
 
 // Real-time profiler runtime constants. On-device L1 layout sizes are reused from
 // realtime_profiler_ring_buffer.hpp so host and device share a single source of truth.
@@ -352,6 +353,10 @@ void RealtimeProfilerManager::publish_pages(
     const DataCollector* const data_collector = data_collector_;
     for (uint32_t page = 0; page < num_pages; ++page) {
         const uint32_t* rp = page_buf + page * kPageWords;
+        if (rp[3] == REALTIME_PROFILER_DROPPED_MARKER_ID) {
+            device_dropped_records_.fetch_add(rp[2], std::memory_order_relaxed);
+            continue;
+        }
         if (!is_record(rp)) {
             continue;
         }
@@ -706,21 +711,12 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
 
             uint32_t dispatch_core_noc_x = 0;
             uint32_t dispatch_core_noc_y = 0;
-            uint32_t dispatch_data_addr_a = 0;
-            uint32_t dispatch_data_addr_b = 0;
             if (dispatch_core_manager.is_dispatcher_s_core_allocated(device_id, 0, 0)) {
                 const tt_cxy_pair& dispatch_s_cxy = dispatch_core_manager.dispatcher_s_core(device_id, 0, 0);
                 CoreCoord dispatch_s_virtual = device->virtual_core_from_logical_core(
                     CoreCoord(dispatch_s_cxy.x, dispatch_s_cxy.y), CoreType::WORKER);
                 dispatch_core_noc_x = dispatch_s_virtual.x;
                 dispatch_core_noc_y = dispatch_s_virtual.y;
-
-                uint32_t kernel_start_a_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_a);
-                uint32_t kernel_start_b_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_b);
-                dispatch_data_addr_a = realtime_profiler_base_addr + kernel_start_a_offset;
-                dispatch_data_addr_b = realtime_profiler_base_addr + kernel_start_b_offset;
             }
 
             DataMovementConfig brisc_config;
@@ -728,8 +724,6 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             brisc_config.noc = NOC::RISCV_0_default;
             brisc_config.defines["DISPATCH_CORE_NOC_X"] = std::to_string(dispatch_core_noc_x);
             brisc_config.defines["DISPATCH_CORE_NOC_Y"] = std::to_string(dispatch_core_noc_y);
-            brisc_config.defines["DISPATCH_DATA_ADDR_A"] = std::to_string(dispatch_data_addr_a);
-            brisc_config.defines["DISPATCH_DATA_ADDR_B"] = std::to_string(dispatch_data_addr_b);
             brisc_config.defines["RING_BUFFER_ADDR"] = std::to_string(ring_buffer_addr);
             brisc_config.defines["REALTIME_PROFILER_MSG_ADDR"] = std::to_string(realtime_profiler_base_addr);
             CreateKernel(
@@ -1108,12 +1102,14 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
         // wake and hang
         const auto token = consumer.reader.wait_token();
         std::span<tt::ProgramRealtimeRecord> batch = consumer.reader.read_batch(records);
-        const uint64_t dropped_total = consumer.reader.dropped();
+        const uint64_t dropped_total = consumer.reader.dropped() +
+                                       device_dropped_records_.load(std::memory_order_relaxed) -
+                                       consumer.initial_device_dropped;
         const ConsumerStopMode stop_mode = consumer.stop_mode.load(std::memory_order_acquire);
         if (stop_mode == ConsumerStopMode::StopWithoutDrain) {
             break;
         }
-        if (!batch.empty()) {
+        if (!batch.empty() || dropped_total != reported_dropped) {
             deliver_batch(batch, dropped_total);
         } else if (stop_mode == ConsumerStopMode::DrainThenStop) {
             break;
@@ -1122,7 +1118,8 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
             consumer.reader.wait(token);
         }
     }
-    consumer.dropped = consumer.reader.dropped();
+    consumer.dropped = consumer.reader.dropped() + device_dropped_records_.load(std::memory_order_relaxed) -
+                       consumer.initial_device_dropped;
 }
 
 void RealtimeProfilerManager::stop_consumer(Consumer& consumer, ConsumerStopMode stop_mode) {
@@ -1136,6 +1133,7 @@ void RealtimeProfilerManager::stop_consumer(Consumer& consumer, ConsumerStopMode
 void RealtimeProfilerManager::on_callback_registered(
     tt::ProgramRealtimeProfilerCallbackHandle handle, const tt::ProgramRealtimeProfilerCallback& callback) {
     auto consumer = std::make_unique<Consumer>(ring_->make_reader(), callback, handle);
+    consumer->initial_device_dropped = device_dropped_records_.load(std::memory_order_relaxed);
     Consumer* raw = consumer.get();
     std::lock_guard<std::mutex> lock(consumers_mutex_);
     const auto caller = std::this_thread::get_id();

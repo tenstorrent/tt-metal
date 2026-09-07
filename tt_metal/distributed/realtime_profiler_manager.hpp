@@ -130,6 +130,7 @@ private:
         tt::ProgramRealtimeProfilerCallbackHandle handle;
         std::atomic<ConsumerStopMode> stop_mode{ConsumerStopMode::Running};
         uint64_t dropped = 0;
+        uint64_t initial_device_dropped = 0;
         std::thread thread;
     };
 
@@ -190,6 +191,7 @@ private:
     // Receiver diagnostics
     std::atomic<uint32_t> peak_fifo_pages_{0};        // all-time peak D2H FIFO usage
     uint32_t windowed_peak_fifo_pages_ = 0;           // for plotting in Tracy; gets reset each plot sample
+    std::atomic<uint64_t> device_dropped_records_{0};
     std::atomic<uint64_t> num_published_records_{0};  // count of records published to the ring
     std::atomic<uint64_t> num_published_batches_{0};  // count of batches published to the ring
 

@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 constexpr uint32_t CQ_DISPATCH_CMD_SIZE = 16;  // for L1 alignment
@@ -467,6 +468,20 @@ struct CQDispatchCmdLarge {
         uint8_t padding[32 - sizeof(CQDispatchBaseCmd)];
     } __attribute__((packed));
 };
+
+// GO commands carry their profiling identity beside the launch, rather than in
+// a separate FIFO shared with unrelated dispatch commands. The completion
+// increment is the workload's worker count (including virtual ETH workers),
+// not the multicast destination count or the number of active kernels.
+struct CQDispatchGoSignalCmd {
+    CQDispatchCmd command;
+    uint32_t program_host_id;
+    uint32_t num_completion_workers;
+    uint32_t reserved[2];
+};
+
+static_assert(sizeof(CQDispatchGoSignalCmd) == 2 * CQ_DISPATCH_CMD_SIZE);
+static_assert(offsetof(CQDispatchGoSignalCmd, program_host_id) == CQ_DISPATCH_CMD_SIZE);
 
 //////////////////////////////////////////////////////////////////////////////
 

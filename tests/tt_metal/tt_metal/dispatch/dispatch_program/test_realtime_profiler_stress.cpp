@@ -80,27 +80,9 @@ constexpr double kMaxStressDurationNs = 1'000'000'000.0;
 // Quiesce + drain window before unregistering the callback.
 constexpr auto kPostQuiesceDrain = std::chrono::milliseconds(2000);
 
-// Allowed slack for the deterministic startup race where the compute kernel
-// detects dispatch_d's stream-register clearing before dispatch_s has
-// recorded the first start_timestamp, producing one record where
-// end_timestamp < start_timestamp by a handful of cycles. Same value the
-// host/device correlation test tolerates (see test_realtime_profiler.py
-// :: test_host_device_correlation, "startup_race_threshold") and the same
-// value the production Tracy handler uses to distinguish "benign" from
-// "noisy" skips (see realtime_profiler_tracy_handler.cpp,
-// kStartupRaceThreshold).
+// Keep separate diagnostics for small negative deltas and torn clock halves.
+// Both are invalid; the keyed completion protocol must not emit either class.
 constexpr uint64_t kStartupRaceSlackCycles = 100'000;
-
-// Hard upper bound on the fraction of records that can come back with
-// end_timestamp < start_timestamp before this test fails. The production
-// host receiver already silently skips any such record on the Tracy path
-// (see realtime_profiler_tracy_handler.cpp:HandleRecord), so a tiny number
-// of these is tolerated by the live system; we only want this test to flag
-// a *regression* where the corruption rate balloons (e.g. an off-by-one in
-// rt_ring_full leading to systemic slot reuse). Empirically the live
-// system produces ~1 such record per ~4000 launches on Blackhole p100a
-// (rate ≈ 0.025%); 1% gives ~40x headroom over the observed baseline.
-constexpr double kMaxBadTimestampFraction = 0.01;
 
 distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     Program program = CreateProgram();
@@ -265,16 +247,9 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     EXPECT_EQ(ring_full_waits, 0u)
         << "device ring reached capacity; the receiver drained it slower than the device filled it";
 
-    const uint64_t max_allowed_large_negative =
-        static_cast<uint64_t>(static_cast<double>(stress_records) * kMaxBadTimestampFraction);
-    EXPECT_LE(large_negative_skips, max_allowed_large_negative)
-        << large_negative_skips << " stress record(s) had end_timestamp < start_timestamp by more than "
-        << kStartupRaceSlackCycles << " cycles, exceeding the allowed budget of " << max_allowed_large_negative
-        << " (= " << (kMaxBadTimestampFraction * 100.0) << "% of " << stress_records << " stress records). "
-        << "These are torn 64-bit reads or stale-slot residue from BRISC writing the timestamp slot before "
-        << "bumping write_index; the production Tracy handler silently drops them. A spike here means the "
-        << "corruption rate has become systemic — most likely an off-by-one in the rt_ring_full check or a "
-        << "missing memory barrier between slot write and write_index increment.";
+    EXPECT_EQ(startup_race_skips, 0u) << "profiler emitted a negative program duration";
+    EXPECT_EQ(large_negative_skips, 0u) << "profiler emitted torn timestamp halves or stale record data; worst delta="
+                                        << worst_negative_delta;
     EXPECT_EQ(bad_frequency, 0u) << bad_frequency << " stress record(s) had a non-positive frequency";
     EXPECT_EQ(implausible_duration, 0u) << implausible_duration
                                         << " stress record(s) reported duration >= " << kMaxStressDurationNs

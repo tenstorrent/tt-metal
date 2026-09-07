@@ -177,7 +177,7 @@ uint32_t compute_trace_cmd_size(ContextId context_id, uint32_t num_sub_devices) 
     const auto& hal = metal_ctx.hal();
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     uint32_t go_signals_cmd_size =
-        align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * num_sub_devices;
+        align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchGoSignalCmd), pcie_alignment) * num_sub_devices;
 
     uint32_t cmd_sequence_sizeB =
         (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled() *

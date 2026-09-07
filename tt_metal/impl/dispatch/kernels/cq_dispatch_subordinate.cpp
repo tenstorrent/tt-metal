@@ -151,7 +151,7 @@ constexpr uintptr_t cb_end = cb_base + cb_size;
 // Dispatch-core-local L1 region assigned by DispatchMemMap via
 // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address comes from host through the
 // REALTIME_PROFILER_MSG_ADDR compile-time define. See cq_dispatch.cpp for the full mailbox
-// description; this kernel is the consumer side of the embedded program_id_fifo.
+// description; this kernel publishes a pending record immediately before each profiled GO.
 volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
@@ -235,21 +235,6 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
 }
 
 FORCE_INLINE
-void signal_realtime_profiler_and_switch(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
-    RealtimeProfilerState current_state = static_cast<RealtimeProfilerState>(msg->realtime_profiler_state);
-    bool used_buffer_a = (current_state == REALTIME_PROFILER_STATE_PUSH_B);
-
-    RealtimeProfilerState new_state = used_buffer_a ? REALTIME_PROFILER_STATE_PUSH_A : REALTIME_PROFILER_STATE_PUSH_B;
-    msg->realtime_profiler_state = new_state;
-
-    if (msg->realtime_profiler_core_noc_xy != 0) {
-        uint64_t realtime_profiler_addr =
-            get_noc_addr_helper(msg->realtime_profiler_core_noc_xy, msg->realtime_profiler_remote_state_addr);
-        dispatch_s_noc_inline_dw_write(realtime_profiler_addr, static_cast<uint32_t>(new_state), my_noc_index);
-    }
-}
-
-FORCE_INLINE
 uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
     constexpr uint32_t shift = 32 - MEM_WORD_ADDR_WIDTH;
     // Careful below: have to take the signed diff for 2s complement to handle the wrap
@@ -277,9 +262,6 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
 #else
     while (stream_wrap_gt(wait_count, *worker_sem)) {
 #endif
-        if (rt_profiler_enabled) {
-            record_realtime_timestamp(rt_profiler_msg, false);
-        }
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
@@ -338,7 +320,8 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 #ifdef ARCH_QUASAR
     Semaphore<programmable_core_type>(sem_id).up(n);
 #else
-    dispatch_s_noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<programmable_core_type>(sem_id)), n, my_noc_index);
+    dispatch_s_noc_semaphore_inc(
+        get_noc_addr_helper(noc_xy, get_semaphore<programmable_core_type>(sem_id)), n, my_noc_index);
 #endif
 }
 
@@ -380,6 +363,9 @@ void process_go_signal_mcast_cmd() {
     uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
     uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
     uint32_t wait_stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
+    const auto* profiled_cmd = uncached_l1_ptr<CQDispatchGoSignalCmd>(cmd_ptr);
+    const uint32_t program_id = profiled_cmd->program_host_id;
+    const uint32_t completion_count = wait_count + profiled_cmd->num_completion_workers;
 
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
@@ -414,10 +400,18 @@ void process_go_signal_mcast_cmd() {
 #if !DEVICE_PRINT_DISPATCH_ENABLED
         wait_for_workers(wait_count, wait_stream);
 #endif
+        if (rt_profiler_enabled) {
+            realtime_profiler_publish_record(
+                realtime_profiler_begin_record(rt_profiler_msg, program_id, wait_stream, completion_count));
+        }
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0, num_dests);
         noc_increment_nonposted_writes_issued(noc_index, 1);
     } else {
         wait_for_workers(wait_count, wait_stream);
+        if (rt_profiler_enabled) {
+            realtime_profiler_publish_record(
+                realtime_profiler_begin_record(rt_profiler_msg, program_id, wait_stream, completion_count));
+        }
     }
 
     *aligned_go_signal_storage_uncached = go_signal_value;
@@ -473,7 +467,7 @@ void process_go_signal_mcast_cmd() {
 #endif
 
     update_worker_completion_count_on_dispatch_d();
-    cmd_ptr += sizeof(CQDispatchCmd);
+    cmd_ptr += sizeof(CQDispatchGoSignalCmd);
 }
 
 FORCE_INLINE
@@ -499,6 +493,7 @@ void process_dispatch_s_wait_cmd() {
     // Send updated worker count to dispatch_d and wait for updated count to get picked up by NOC before clearing the
     // counter. dispatch_d will clear it's own counter
     update_worker_completion_count_on_dispatch_d<true>();
+    realtime_profiler_retire_stream(rt_profiler_msg, stream);
     // Reset SPACE_AVAILABLE to 0.
     NOC_STREAM_WRITE_REG(stream, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX, 0);
     worker_count_update_for_dispatch_d[index] =
@@ -539,8 +534,8 @@ void merge_dispatch_d_noc_counter_deltas() {
 
     constexpr auto dispatch_d_proc_type = static_cast<decltype(proc_type)>(TensixProcessorTypes::DM0);
 
-    volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id));
+    volatile tt_l1_ptr uint32_t* shutdown_sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        get_semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id));
     noc_semaphore_wait(shutdown_sem_addr, 1);
 
     invalidate_l1_cache();
@@ -614,26 +609,15 @@ void kernel_main() {
 #endif
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
-        rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
-        uint32_t popped_pid = 0;
-        if (rt_profiler_enabled) {
-            record_realtime_timestamp(rt_profiler_msg, true);
-            popped_pid = pop_program_id(rt_profiler_msg);
-        }
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
+        // Host activation can happen while waiting for the first command.
+        rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
 
         volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
-        if (rt_profiler_enabled) {
-            const bool is_profiled_cmd = cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL ||
-                                         cmd->base.cmd_id == CQ_DISPATCH_CMD_RT_PROFILER_FLUSH;
-            write_buffer_id(
-                rt_profiler_msg,
-                is_profiled_cmd ? popped_pid : static_cast<uint32_t>(REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID));
-        }
         switch (cmd->base.cmd_id) {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
                 DPRINT("CQ_DISPATCH_CMD_SEND_GO_SIGNAL\n");
@@ -669,9 +653,8 @@ void kernel_main() {
             case CQ_DISPATCH_CMD_TERMINATE:
                 DPRINT("CQ_DISPATCH_CMD_TERMINATE\n");
                 if (rt_profiler_enabled) {
-                    signal_realtime_profiler_and_switch(rt_profiler_msg);
-                    noc_async_writes_flushed();
-                    for (volatile uint32_t delay = 0; delay < 5000; delay++) {
+                    for (uint32_t i = 0; i < max_num_worker_sems; ++i) {
+                        realtime_profiler_retire_stream(rt_profiler_msg, first_stream_used + i);
                     }
                 }
 
@@ -700,10 +683,6 @@ void kernel_main() {
             cmd_ptr = cb_base;
         }
         total_pages_acquired++;
-
-        if (!done && rt_profiler_enabled) {
-            signal_realtime_profiler_and_switch(rt_profiler_msg);
-        }
     }
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);

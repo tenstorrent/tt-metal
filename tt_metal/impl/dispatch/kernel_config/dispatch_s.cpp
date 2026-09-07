@@ -44,48 +44,13 @@ using namespace tt::tt_metal;
 
 namespace {
 
-// Zeros selected realtime_profiler_msg_t fields on dispatch_s L1 (REALTIME_PROFILER_MSG carve); order matches
-// former cq_dispatch_subordinate kernel_main init (signalling fields before FIFO, then timestamp .id words).
+// Clear the dispatch-local control block and record ownership before firmware starts.
 void zero_dispatch_s_realtime_profiler_msg_fields(
     IDevice* device, const CoreCoord& logical_core, tt::CoreType core_type, const Hal& hal, uint32_t msg_base_l1_addr) {
     const auto& factory = hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
-    // WriteToDeviceL1(..., vector<uint32_t>&) requires a mutable vector (non-const ref overload).
-    std::vector<uint32_t> zero_word = {0u};
-    const uint32_t ts_id_byte_off = offsetof(realtime_profiler_timestamp_t, id);
-
-    auto write_u32 = [&](uint32_t addr) {
-        tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, addr, zero_word, core_type);
-    };
-
-    const uint32_t base = msg_base_l1_addr;
-    write_u32(
-        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_core_noc_xy));
-    write_u32(
-        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_remote_state_addr));
-    write_u32(
-        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_state));
-    write_u32(
-        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::program_id_fifo_start));
-    write_u32(
-        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::program_id_fifo_end));
-
-    const uint32_t ksa = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_a);
-    const uint32_t kea = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_end_a);
-    const uint32_t ksb = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_b);
-    const uint32_t keb = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_end_b);
-    write_u32(base + ksa + ts_id_byte_off);
-    write_u32(base + kea + ts_id_byte_off);
-    write_u32(base + ksb + ts_id_byte_off);
-    write_u32(base + keb + ts_id_byte_off);
+    const uint32_t size = factory.size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
+    std::vector<uint32_t> zeros(size / sizeof(uint32_t), 0);
+    tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, msg_base_l1_addr, zeros, core_type);
 }
 
 }  // namespace
