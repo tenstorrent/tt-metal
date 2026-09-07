@@ -35,8 +35,8 @@
 #   test_group: Group identifier for selecting multiple related tests at once.
 #   test_tags: Optional list of coarse selectors for workflow_dispatch, matched exactly and
 #              OR-ed with test_type / test_group. Two vocabularies in one list: the model a
-#              leg covers (kimi_k2_7, kimi_k3, glm_5_2, dsv4_flash, minimax_m3)
-#              and the unit under test (moe, gate, mla, hca, swa, sdpa, ccl, block, transformer,
+#              leg covers (kimi_k2_6, kimi_k2_7, kimi_k3, glm_5_2, dsv4_flash, minimax_m3)
+#              and the unit under test (moe, gate, mla, hca, csa, sdpa, ccl, block, transformer,
 #              kv_cache, dflash, runner, determinism). So `moe` runs every MoE leg and `kimi_k3` every K3
 #              leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
 #              leg plus every K3 leg, not the K3 MoE legs.
@@ -813,6 +813,30 @@
     bh_sc1_high_power:
       timeout: 3
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  sp_config: sc1
+
+
+# CSA gates accuracy only, with no perf counterpart to the HCA leg above. That asymmetry is deliberate:
+# the indexer's top-k is computed but currently only used to build a mask, so attention still costs
+# O(S * S/4) and neither the time nor the memory figures would represent the sparse attention this is
+# meant to become. See the module docstring of tt/mla/compressed_sparse_attention.py. Add a perf leg
+# once the mask is replaced by real gathered attention.
+- name: "(DeepSeek-V4-Flash) CSA chunked accuracy 2.5k@1k"
+  fabric_profile: torus_xy
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_csa.py::test_csa_chunked_prefill_mesh -k "flash and 3chunk-varying and torus-xy-8x4" -vvv --tb=short
+    '
+  test_type: csa_chunked
+  test_tags: [dsv4_flash, csa]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 3
+  owner_id: U08RL15T4N8  # Danilo Djekic
   team: models
   sp_config: sc1
 

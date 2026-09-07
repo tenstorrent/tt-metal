@@ -8,7 +8,11 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    fabric_1d_plain_device_params,
+    fabric_disabled_device_params,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import (
     CSA_STATE_ROWS,
     csa_slab_align,
@@ -24,6 +28,18 @@ _INDEX_HEAD_DIM = 128
 _STATE_ROWS = CSA_STATE_ROWS
 _LOCAL_SEQ_LEN = 128
 _PCC = 0.999
+
+# (remainder, first_token_position). ``remainder`` moves the partial-window boundary inside the chunk;
+# ``first_token_position`` flips the parity the slab starts on, which is what decides which of its two
+# tiles a window writes its Ca half into. Between them they are the whole state layout, so the primary
+# configuration of each test below runs the full grid.
+_STATE_GRID = [(remainder, position) for position in (0, _COMPRESS_RATE) for remainder in range(_COMPRESS_RATE)]
+_STATE_GRID_IDS = [f"rem{remainder}-pos{position}" for remainder, position in _STATE_GRID]
+# The secondary configurations vary something orthogonal to that grid -- head_dim only changes how many
+# tiles wide a row is, and fabric2d only changes which collective carries the state -- so they run one
+# point of it rather than all eight. This is the hardest point: a three-token partial window that starts
+# on odd parity.
+_STATE_POINT = (_COMPRESS_RATE - 1, _COMPRESS_RATE)
 
 
 def _update_state(kv_state, score_state, kv, gate, position_bias, start_position, head_dim):
@@ -198,41 +214,49 @@ def _run_csa_compressor(mesh_device, local_seq_len, remainder, first_token_posit
         assert torch.equal(actual[2][:, tp_rank : tp_rank + 1], expected_score)
 
 
-@pytest.mark.parametrize("head_dim", [_HEAD_DIM, _INDEX_HEAD_DIM], ids=["head512", "head128"])
-@pytest.mark.parametrize("first_token_position", [0, _COMPRESS_RATE])
-@pytest.mark.parametrize("remainder", range(_COMPRESS_RATE))
+@pytest.mark.parametrize("remainder, first_token_position", _STATE_GRID, ids=_STATE_GRID_IDS)
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
         pytest.param(
             (1, 1),
-            {"fabric_config": ttnn.FabricConfig.DISABLED},
+            fabric_disabled_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="mesh-1x1"),
             id="1x1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_csa_compressor_single_device(mesh_device, device_params, remainder, first_token_position, head_dim):
-    _run_csa_compressor(mesh_device, _LOCAL_SEQ_LEN, remainder, first_token_position, head_dim)
+def test_csa_compressor_single_device(mesh_device, device_params, remainder, first_token_position):
+    """The no-collective path: at sp_factor 1 the state hand-off is the identity, so the op has to read
+    its predecessor Ca out of the initial state it was handed rather than out of a neighbour's."""
+    _run_csa_compressor(mesh_device, _LOCAL_SEQ_LEN, remainder, first_token_position, _HEAD_DIM)
 
 
-@pytest.mark.parametrize("first_token_position", [0, _COMPRESS_RATE])
-@pytest.mark.parametrize("remainder", range(_COMPRESS_RATE))
+@pytest.mark.parametrize("remainder, first_token_position", _STATE_GRID, ids=_STATE_GRID_IDS)
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (2, 2),
+            fabric_1d_plain_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric1d-2x2",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_csa_compressor_mesh(mesh_device, device_params, remainder, first_token_position):
+    """The chained path: each SP rank's state comes from its predecessor, over point_to_point."""
+    _run_csa_compressor(mesh_device, _LOCAL_SEQ_LEN, remainder, first_token_position, _HEAD_DIM)
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, local_seq_len, head_dim",
     [
         pytest.param(
             (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            _LOCAL_SEQ_LEN,
-            _HEAD_DIM,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-            id="fabric1d-2x2",
-        ),
-        pytest.param(
-            (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            fabric_1d_plain_device_params(),
             _LOCAL_SEQ_LEN,
             _INDEX_HEAD_DIM,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
@@ -249,18 +273,24 @@ def test_csa_compressor_single_device(mesh_device, device_params, remainder, fir
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_csa_compressor_mesh(mesh_device, device_params, local_seq_len, head_dim, remainder, first_token_position):
+def test_csa_compressor_mesh_variants(mesh_device, device_params, local_seq_len, head_dim):
+    """The two axes orthogonal to ``_STATE_GRID``, at one point of it.
+
+    ``head128`` is the width the indexer's own compressor runs at, so it is a real configuration and not
+    just a smaller number. ``fabric2d`` takes the other branch of the state exchange -- all_gather plus
+    compressor_state_select, where fabric1d above uses point_to_point -- and runs a 16-token local slab,
+    which is the narrowest one that still carries whole compression windows."""
+    remainder, first_token_position = _STATE_POINT
     _run_csa_compressor(mesh_device, local_seq_len, remainder, first_token_position, head_dim)
 
 
-@pytest.mark.parametrize("first_token_position", [0, _COMPRESS_RATE])
-@pytest.mark.parametrize("remainder", range(_COMPRESS_RATE))
+@pytest.mark.parametrize("remainder, first_token_position", _STATE_GRID, ids=_STATE_GRID_IDS)
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
         pytest.param(
             (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            fabric_1d_plain_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
             id="fabric1d-2x2",
         ),
@@ -278,7 +308,7 @@ def test_csa_compressor_mesh_empty_tail(mesh_device, device_params, remainder, f
 # Every (sp, tp) the V4 tests and the demo run at. tp < compress_rate is the interesting half: that is
 # where the per-chip entry-tiling term binds, and where an 8x4-only reading of the alignment is wrong.
 @pytest.mark.parametrize("sp_factor, tp_factor", [(1, 1), (2, 1), (2, 2), (4, 2), (2, 4), (8, 4)])
-def test_csa_slab_align_tile_aligns_each_chip_share_of_the_entries(sp_factor, tp_factor):
+def test_csa_slab_align(sp_factor, tp_factor):
     """A slab has to leave every chip a whole number of entry TILES, not just whole entries.
 
     The block-cyclic indexer score op is handed the local slab in tokens as block_cyclic_chunk_local,

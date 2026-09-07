@@ -11,7 +11,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 
 
 def rope_table_tokens(max_seq_len: int, chunk_tokens: int) -> int:
@@ -27,16 +27,24 @@ CSA_STATE_ROWS = 64
 def csa_state_rows(position: int, compress_rate: int) -> tuple[int, int]:
     """The two rows of a CSA overlap state that token ``position`` writes, as ``(ca_row, cb_row)``.
 
-    This is the host-side statement of the ``csa_compressor`` / ``compressor_state_exchange`` state
-    layout, which Blaze decode also consumes. Nothing in the model path calls it -- the op owns the
-    write -- but the op's torch references live in ``tests/op_unit_tests`` and need the mapping, so it
-    belongs here next to the constant that sizes the slab rather than restated in each of them.
+    This is the host-side statement of the ``csa_compressor`` state layout, which Blaze decode also
+    consumes. Nothing in the model path calls it -- the op owns the write -- but the op's torch
+    reference in ``tests/op_unit_tests/test_csa_compressor.py`` needs the mapping, so it belongs here
+    next to the constant that sizes the slab rather than restated there.
 
     The slab is two tiles of ``TILE_SIZE`` rows, indexed by the window's parity. A window writes its Ca
     half into the tile of the OPPOSITE parity, which is where its successor -- the next window, of
     opposite parity -- looks for a predecessor Ca. Cb stays in the window's own tile, past the
     ``compress_rate`` Ca slots. Consecutive windows therefore never write the same tile, which is what
-    lets one read a predecessor while the other is still being filled."""
+    lets one read a predecessor while the other is still being filled.
+
+    A corollary the SP hand-off depends on: the row a token writes is a function of its position alone,
+    and positions repeat every ``2 * compress_rate`` rows, so a slab filled in position order retains
+    only the last ``2 * compress_rate`` tokens -- everything earlier has been overwritten. Any chip
+    whose local slab is at least that wide therefore ends a chunk holding exactly the slab that packing
+    the WHOLE prefix would produce. That is why ``terminal_state`` can take the last SP chip's outgoing
+    state as-is and hand it to the next chunk, and why the same tensor is what Blaze decode consumes,
+    with no fix-up for a partially filled final window."""
     slot = position % compress_rate
     parity = (position // compress_rate) & 1
     ca_row = (parity ^ 1) * ttnn.TILE_SIZE + slot
@@ -81,25 +89,6 @@ def csa_slab_align(compress_rate: int, sp_factor: int, tp_factor: int = 1) -> in
             f"csa_slab_align uses max as an LCM, which needs every factor to be a power of two; " f"{name} is {factor}"
         )
     return max(compress_rate * ttnn.TILE_SIZE * sp_factor, ttnn.TILE_SIZE * sp_factor * tp_factor)
-
-
-def resolve_per_axis_topology(topology, sp_axis: int, tp_axis: int):
-    """Split a ``topology`` argument into ``(sp_topology, tp_topology)``.
-
-    Ring is valid only on an axis the fabric physically wraps, so the two axes can legitimately differ:
-    under ``FABRIC_2D_TORUS_X`` the TP axis rings and the SP axis has no wrap (see
-    ``tt_ccl.per_axis_topology``). Handing one axis's topology to a collective on the other makes it wait
-    forever on a wrap link the fabric does not service, so a ``(dim0, dim1)`` tuple is unpacked per axis.
-    A scalar applies to both, which preserves non-torus and 1D-ring behavior. Mirrors ttMLA.
-    """
-    if isinstance(topology, tuple):
-        assert len(topology) == 2, f"a per-axis topology tuple must be (dim0, dim1), got {topology}"
-        # Unpacking the (dim0, dim1) tuple as (sp, tp) is only correct at sp_axis=0/tp_axis=1. Guard it so
-        # a future axis swap fails loudly here instead of cross-wiring Ring onto the wrong axis, which
-        # deadlocks at runtime rather than returning a wrong answer.
-        assert sp_axis == 0 and tp_axis == 1, "per-axis topology tuple assumes sp_axis=0, tp_axis=1"
-        return topology
-    return topology, topology
 
 
 class TtCompressorUtils:

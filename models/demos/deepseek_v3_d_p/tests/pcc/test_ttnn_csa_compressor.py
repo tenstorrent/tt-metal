@@ -1,7 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC coverage for the overlap-aware TtCSACompressor."""
+"""PCC coverage for the overlap-aware TtCSACompressor.
+
+Scoped deliberately narrow. What is unique here is the RMSNorm + indexed-RoPE wrapper the compressor
+puts around ``ttnn.experimental.deepseek_prefill.csa_compressor`` -- the op's own pooling and state
+output are checked bit-exactly against a torch reference in
+``tests/op_unit_tests/test_csa_compressor.py``, and the compressed entries this produces are checked
+end-to-end against ``ref.compressor(...)`` by the cache-PCC leg of ``tests/pcc/test_ttnn_csa.py``.
+That wrapper does not vary with the prompt length or the model variant, so this runs one ragged shape
+on flash only, once per mesh. The ragged length is the interesting one: it leaves a partial
+compression window, so the trim to ``valid_entries`` has something to trim."""
 
 import pytest
 import torch
@@ -11,16 +20,18 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
     DeepseekV4CSACompressor,
     apply_rotary_pos_emb,
 )
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_csa_compressor import _torch_csa_compressor
-from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_hca import _MESH_CONFIGS, _MODEL_CONFIGS, _SEED, _config
-from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import V4_MESH_CONFIGS
+from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_csa import _SEED, _config
+from models.demos.deepseek_v3_d_p.tt.mla.compressor import CSA_STATE_ROWS, TtCSACompressor
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-_SHAPES = [32, 34]
+_SHAPES = [34]
 _PCC = 0.999
 
 
-def _golden(reference, hidden_states, seq_len_actual, compress_rate, sp_factor, initial_kv, initial_score):
+def _golden(reference, hidden_states, seq_len_actual, compress_rate, sp_factor, initial_kv, initial_score, head_dim):
     batch, seq_len, _ = hidden_states.shape
     kv = reference.kv_proj(hidden_states).unsqueeze(1).to(torch.bfloat16)
     gate = reference.gate_proj(hidden_states).unsqueeze(1).to(torch.bfloat16)
@@ -34,6 +45,7 @@ def _golden(reference, hidden_states, seq_len_actual, compress_rate, sp_factor, 
         sp_factor,
         seq_len_actual,
         0,
+        head_dim,
     )
     valid_entries = seq_len_actual // compress_rate
     compressed = reference.kv_norm(pooled[:, 0, :valid_entries].to(hidden_states.dtype))
@@ -47,14 +59,13 @@ def _golden(reference, hidden_states, seq_len_actual, compress_rate, sp_factor, 
 @pytest.mark.parametrize("seq_len", _SHAPES, ids=[f"seq{s}" for s in _SHAPES])
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
-    _MESH_CONFIGS,
+    V4_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("model_config", _MODEL_CONFIGS)
-def test_csa_compressor_mesh(mesh_device, device_params, topology, seq_len, model_config):
+def test_csa_compressor_mesh(mesh_device, device_params, topology, seq_len):
     torch.manual_seed(_SEED)
 
-    config = _config(model_config)
+    config = _config(DeepSeekV4FlashConfig)
     reference = DeepseekV4CSACompressor(config).eval()
     with torch.no_grad():
         reference.position_bias.normal_(0.0, 0.02)
@@ -64,7 +75,7 @@ def test_csa_compressor_mesh(mesh_device, device_params, topology, seq_len, mode
     compress_rate = config.compress_rates["compressed_sparse_attention"]
     hidden_padded, seq_len_actual = TtCSACompressor.prepare_input(hidden, mesh_device.shape[0], compress_rate)
     head_dim = config.head_dim
-    initial_kv = torch.zeros(1, 1, 64, head_dim, dtype=torch.bfloat16)
+    initial_kv = torch.zeros(1, 1, CSA_STATE_ROWS, head_dim, dtype=torch.bfloat16)
     initial_score = torch.full_like(initial_kv, float("-inf"))
     with torch.no_grad():
         expected, expected_kv_state, expected_score_state = _golden(
@@ -75,6 +86,7 @@ def test_csa_compressor_mesh(mesh_device, device_params, topology, seq_len, mode
             mesh_device.shape[0],
             initial_kv,
             initial_score,
+            head_dim,
         )
 
     tt_model = TtCSACompressor.from_reference(
