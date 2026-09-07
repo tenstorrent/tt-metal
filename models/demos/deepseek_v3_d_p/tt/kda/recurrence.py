@@ -192,12 +192,31 @@ def _summarize_chunk_groups(
     return summary_a, summary_b
 
 
-def _effective_summary_group_chunks(num_chunks: int, configured_group_chunks: int) -> int:
-    """Return the largest configured-or-smaller group size that divides the local chunk count."""
+def _effective_summary_group_chunks(
+    num_chunks: int,
+    configured_group_chunks: int,
+    max_groups: int | None = None,
+) -> int:
+    """Return a group size that divides the chunk count and fits the worker budget.
+
+    ``configured_group_chunks`` is a performance ceiling; ``max_groups`` is a
+    hardware limit, since every group needs its own summary owner core. A
+    fragment whose chunk count is prime -- which an offset split can easily
+    produce -- has no divisor at or below the ceiling other than one, and one
+    chunk per group can demand far more owners than exist. When the ceiling and
+    the budget conflict, the budget wins and the group grows past the ceiling.
+    """
+    preferred = 1
     for group_chunks in range(min(num_chunks, configured_group_chunks), 0, -1):
         if num_chunks % group_chunks == 0:
+            preferred = group_chunks
+            break
+    if max_groups is None or max_groups < 1 or num_chunks // preferred <= max_groups:
+        return preferred
+    for group_chunks in range(preferred + 1, num_chunks + 1):
+        if num_chunks % group_chunks == 0 and num_chunks // group_chunks <= max_groups:
             return group_chunks
-    return 1
+    return num_chunks
 
 
 def _scan_chunks(
@@ -358,7 +377,12 @@ def _group_fragment(
     compute_config: _RecurrenceComputeConfig,
 ) -> tuple[_PreparedChunks, ttnn.Tensor, ttnn.Tensor, int]:
     """Group one fragment's chunks and summarize each group."""
-    group_chunks = _effective_summary_group_chunks(num_chunks, summary_group_chunks)
+    grid = fragment.v_beta.device().compute_with_storage_grid_size()
+    group_chunks = _effective_summary_group_chunks(
+        num_chunks,
+        summary_group_chunks,
+        max_groups=(grid.x * grid.y) // geometry.batch_heads,
+    )
     groups_per_head = num_chunks // group_chunks
     grouped = _reshape_chunks_for_groups(
         fragment,
