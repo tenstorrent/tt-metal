@@ -38,7 +38,7 @@ class AsyncTrainingEvent(IntEnum):
     """Typed events exchanged between the training rank and the inference rank.
 
     Fire-and-forget: no ack round-trip. Actual weight transfer runs over a
-    dedicated bridge (see ``ThreadedHostWeightBridge``); these events are for
+    dedicated bridge (see ``ThreadedWeightBridge``); these events are for
     lifecycle handshakes plus observability of weight-push cadence only.
     """
 

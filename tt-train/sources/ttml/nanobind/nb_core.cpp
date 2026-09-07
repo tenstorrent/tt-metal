@@ -239,7 +239,7 @@ void py_module(nb::module_& m) {
         // GIL RELEASE: every blocking MPI call below must run without the GIL,
         // otherwise a background Python thread stuck in send/recv would starve
         // the main thread on the same rank (Python cannot switch threads while
-        // the GIL is held in C++). Concretely: on the ThreadedHostWeightBridge,
+        // the GIL is held in C++). Concretely: on the ThreadedWeightBridge,
         // the receiver thread's recv on the private context would block the
         // main thread from ever calling AsyncTrainingEventChannel.send /
         // channel.wait_for_next_event on the world context, deadlocking the

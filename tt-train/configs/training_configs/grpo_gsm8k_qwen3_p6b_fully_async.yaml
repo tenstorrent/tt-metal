@@ -1,53 +1,71 @@
-# Two-rank Qwen3-0.6B GRPO for GSM8K, FULLY-ASYNC rollout variant (first cut).
-# 1 mock training chip + 1 TTT rollout chip (2 chips total on one host).
+# Two-rank Qwen3-0.6B GRPO for the GSM8K math-reasoning task, FULLY-ASYNC
+# rollout variant: 1 TTML training chip + 1 TTT rollout chip (2 chips total).
 #
-# Sibling of grpo_gsm8k_qwen3_p6b_remote_rollout.yaml. Differences:
-#   - No optimizer / actual training happens on rank 0 in this cut: rank 0 is
-#     a sleep-based mock that pushes a fixed-size dummy ttnn.Tensor over the
-#     new ThreadedHostWeightBridge every step (real MPI transfer, mock content).
-#   - AsyncTrainingEvent channel is trimmed to TRAINING_BATCH_SIZE / DRAIN /
-#     TRAINING_STOPPED; no ack -- fire-and-forget weight pushes.
+# Sibling of grpo_gsm8k_qwen3_p6b_remote_rollout.yaml (one-step off-policy).
+# Differences:
+#   - The trainer is FullyAsyncGRPOTrainer instead of OneStepAsyncGRPOTrainer.
+#     Rank 0 consumes rollout batches from a RolloutQueue and fires weight
+#     updates through a ThreadedWeightBridge asynchronously; rank 1 generates
+#     continuously without per-step handshakes.
+#   - ``fully_async_config`` replaces the WeightSyncCallback + weight_bridge
+#     knobs. Sets aReal-style max_staleness, hard step count, and queue depth.
 #
-# Rank 1 (TTT) runs a real TttGenerationWorker with the same sampling config,
-# collects per-token sampled log-probs alongside completions, and polls the
-# bridge between generation batches for freshly received (mock) weights.
+# The single-chip batch ceiling on Blackhole is unchanged: 32 completions per
+# generate call (per_device_train_batch_size * gradient_accumulation_steps),
+# matching remote_rollout_config.max_batch_size.
 
 training_config:
-  # Only max_sequence_length is read from here.
+  # Only max_sequence_length is read from here; the Qwen3 architecture comes
+  # from the HuggingFace config of ``model_id`` (loaded by the completer).
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b.yaml"
 
-  # HF repo (rank 1 uses this for the tokenizer + the TttGenerationWorker's
-  # model_source; rank 0 doesn't touch it in this cut).
+  # HF repo path (both ranks use this: TTML for the tokenizer + the local ttml
+  # Qwen3 rebuild + reference weights, TTT for stop/pad-token lookup and the
+  # TttGenerationWorker's model source).
   model_id: "ichovpanTT/qwen3-0.6b-base-think-sft"
 
-  # Reproducibility knob for the dataset shuffle on the TTT rank.
+  # Reproducibility knob picked up by the inference-side dataset shuffle.
   seed: 0
 
-  # Kept so ``num_devices`` and ``completions_per_batch`` still resolve on
-  # rank 0 the same way the real trainer will size them.
+  optimizer:
+    type: MorehAdamW
+    lr: 1.0e-5
+    beta1: 0.9
+    beta2: 0.99
+    epsilon: 1.0e-8
+    weight_decay: 0.0
+    amsgrad: false
+    kahan_summation: false
+
   grpo_config:
     epsilon: 0.2
     per_device_train_batch_size: 16   # one prompt's group of 16 completions
-    num_iterations: 1
+    num_iterations: 1                 # required by FullyAsyncGRPOTrainer
     gradient_accumulation_steps: 2    # 2 prompts x 16 completions = 32 per generate call
     logging_steps: 1
-    checkpointing: false              # no trainer to checkpoint in this cut
+    checkpointing: false              # deferred for the first cut
     checkpoint_interval: 20
-    prompts_to_train: 200
+    prompts_to_train: 200             # unused (queue-driven), kept for GRPOConfig compat
     temperature: 1.0
     max_completion_length: 512
     num_generations: 16
     warmup_steps: 20
 
-  # First-cut, mock-only knobs.
+  # FullyAsyncGRPOTrainer knobs.
   fully_async_config:
-    wait_step_s: 5                    # mock trainer sleeps this long per step
-    steps: 100                         # number of mock training iterations
-    # Size of the dummy weight tensor pushed each step (bfloat16, tile-aligned).
-    # 100 MiB = 52,428,800 elems = shape (1024, 51200) at bf16 -- both dims are
-    # multiples of 32 so ThreadedHostWeightBridge's TILE-layout validation
-    # passes. See _weight_bytes_to_shape in the example script.
-    weight_bytes_size: 104857600
+    # Hard rank-0 optimizer step count.
+    max_steps: 100
+
+    # aReal-style stale-drop: at step s (1-indexed) with a rollout tagged
+    # version vgen, drop if (s - 1) - vgen > max_staleness. 1 keeps rollouts
+    # at most one theta version behind; raise to trade freshness for
+    # throughput when rank 1 is slower than rank 0.
+    max_staleness: 1
+
+    # In-flight bound on the SPSC rollout queue between rank 1 (producer)
+    # and rank 0 (consumer). Caps memory footprint + provides back-pressure.
+    # Not a staleness bound (the aReal check above does that job).
+    rollout_queue_capacity: 2
 
 device_config:
   enable_ddp: false
@@ -55,6 +73,10 @@ device_config:
   device_ids: [0]
 
 # TTT rollout-rank settings (mesh, batch, seq-len for the generation worker).
+# max_batch_size sizes the KV cache and the on-device sampling batch; the
+# rank-1 loop packs multiple worker calls into one RolloutBatch when
+# completions_per_batch (=per_device_train_batch_size * num_devices *
+# gradient_accumulation_steps) exceeds max_batch_size.
 remote_rollout_config:
   mesh_shape: [1, 1]
   max_batch_size: 32
