@@ -48,9 +48,10 @@ enum class SparseKVFormat : uint8_t {
 //
 // page_bundle_indices: enables a paged KV cache. `indices` remain logical token positions. The physical cache
 // is [num_bundles * num_layers, 1, kv_cache_page_size, row_width], ND-sharded with exactly one physical page
-// per shard, and flat_page = bundle * num_layers + layer. The uint16 table has shape
-// [1, 1, 1, num_logical_bundles] and maps each logical page to a physical bundle. Paged mode is incompatible
-// with cache_batch_idx and block-cyclic remapping.
+// per shard, and flat_page = bundle * num_layers + layer. The replicated UINT32 table has shape
+// [slots, max_pages]. kv_cache_slot_idx selects its row at runtime. When kv_cache_sp_axis is set,
+// local page i selects table[slot, i * SP + SP_rank]; otherwise SP=1. Indices address local token rows.
+// Paged mode is incompatible with cache_batch_idx and block-cyclic remapping.
 //
 // Producer preconditions (NOT validated per-element): sentinels are a contiguous tail, every row has >= 1
 // valid key, all non-sentinel indices are < logical T, and every page-bundle id is in the physical pool.
@@ -75,6 +76,8 @@ ttnn::Tensor sparse_sdpa(
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
     std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
     const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
-    uint32_t kv_cache_page_size = 32);
+    uint32_t kv_cache_page_size = 32,
+    uint32_t kv_cache_slot_idx = 0,
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt);
 
 }  // namespace ttnn::transformer

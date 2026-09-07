@@ -86,6 +86,9 @@ void kernel_main() {
     // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
     const uint32_t kv_batch_page_offset = get_arg_val<uint32_t>(5);
     const uint32_t page_bundle_addr = get_arg_val<uint32_t>(6);
+    const uint32_t page_table_slot = get_arg_val<uint32_t>(7);
+    const uint32_t page_table_sp_rank = get_arg_val<uint32_t>(8);
+    constexpr uint32_t page_table_sp_size = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PAGE_TABLE_SP_SIZE);
 
     constexpr uint32_t q_row_bytes = k_dim * q_elem_bytes;   // Q row (bf16)
     constexpr uint32_t k_row_bytes = k_dim * kv_elem_bytes;  // K row (native dtype: fp8 or bf16)
@@ -108,12 +111,20 @@ void kernel_main() {
         page_bundle_l1 = page_bundle_cb.get_write_ptr();
         noc.async_read(
             page_bundle_reader,
-            CoreLocalMem<uint16_t>(page_bundle_l1),
-            page_bundle_count * sizeof(uint16_t),
-            {.page_id = 0},
+            CoreLocalMem<uint32_t>(page_bundle_l1),
+            page_bundle_count * sizeof(uint32_t),
+            {.page_id = page_table_slot},
             {});
         noc.async_read_barrier();
         invalidate_l1_cache();
+        if constexpr (page_table_sp_size > 1) {
+            // Compact this SP's entries in place; payload gathers retain their local page indices.
+            auto table = CoreLocalMem<volatile uint32_t>(page_bundle_l1);
+            for (uint32_t src = page_table_sp_rank, dst = 0; src < page_bundle_count;
+                 src += page_table_sp_size, ++dst) {
+                table[dst] = table[src];
+            }
+        }
         page_bundle_cb.push_back(1);
     }
     // Reader-internal scratch for one token's index row (reserved once, reused).

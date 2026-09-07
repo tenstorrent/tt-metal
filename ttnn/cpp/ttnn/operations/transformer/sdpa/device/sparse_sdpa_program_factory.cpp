@@ -47,12 +47,15 @@ enum SparseCB : uint32_t {
     cb_k_scale_bcast,  // scaled FP8 only: one FP32 per-row broadcast tile per scale block
     cb_k_latent_tile,  // scaled FP8 only: one TILE_HEIGHT-row BFP8 latent slab
     cb_k_rope_tile,    // scaled FP8 only: one K chunk's BF16 RoPE tiles
-    cb_page_bundle,    // paged KV only: logical-page -> physical-bundle uint16 table
+    cb_page_bundle,    // paged KV only: logical-page -> physical-bundle uint32 table
     cb_count
 };
 
 tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::create_descriptor(
-    const SparseSDPAParams& attrs, const SparseSDPAInputs& t, Tensor& output) {
+    const SparseSDPAParams& attrs,
+    const SparseSDPAInputs& t,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     tt::tt_metal::ProgramDescriptor desc;
 
     const uint32_t H = t.q.logical_shape()[1];  // head count, from the tensor (any multiple of TILE_HEIGHT)
@@ -172,14 +175,14 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         cb(cb_k_rope_tile, tile_bytes, Skt * (DHt - vDHt), bf);
     }
     const bool paged_kv = t.has_paged_kv_cache();
-    const uint32_t page_bundle_count = paged_kv ? t.page_bundle_indices->logical_volume() : 0;
+    const uint32_t page_bundle_count = paged_kv ? t.page_bundle_indices->logical_shape()[1] : 0;
     const uint32_t paged_page_size = paged_kv ? attrs.kv_cache_page_size : tt::constants::TILE_HEIGHT;
     const uint32_t paged_num_layers = paged_kv ? attrs.kv_cache_num_layers : 1;
     const uint32_t paged_layer_idx = paged_kv ? attrs.kv_cache_layer_idx : 0;
-    const uint32_t page_bundle_bytes = ((page_bundle_count * sizeof(uint16_t) + 31) / 32) * 32;
+    const uint32_t page_bundle_bytes = ((page_bundle_count * sizeof(uint32_t) + 31) / 32) * 32;
     const uint32_t cb_page_bundle_id = paged_kv ? cb_page_bundle : cb_idx;
     if (paged_kv) {
-        cb(cb_page_bundle_id, page_bundle_bytes, 1, tt::DataFormat::UInt16);
+        cb(cb_page_bundle_id, page_bundle_bytes, 1, tt::DataFormat::UInt32);
     }
 
     // ---- compile-time args ----
@@ -222,7 +225,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
          paged_num_layers,
          paged_layer_idx,
          cb_page_bundle_id,
-         page_bundle_count});
+         page_bundle_count,
+         attrs.kv_cache_sp_axis.has_value() ? t.q.device()->shape()[attrs.kv_cache_sp_axis.value()] : 1u});
     TT_FATAL(
         reader_ct.size() == ::sparse_sdpa::reader_ct_arg::END,
         "sparse_sdpa reader compile-time argument layout is out of sync");
@@ -357,12 +361,23 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // source of truth run by override_runtime_arguments on a hit). 0 when not indexed (single [1,1,T,K_DIM]).
     const uint32_t kv_T = t.kv.logical_shape()[2];
     const uint32_t kv_batch_page_offset = attrs.cache_batch_idx.value_or(0) * kv_T;
+    const uint32_t sp_rank =
+        attrs.kv_cache_sp_axis.has_value() ? mesh_dispatch_coordinate.value()[attrs.kv_cache_sp_axis.value()] : 0u;
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
         reader_desc.emplace_runtime_args(
-            core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset, page_bundle_buf});
+            core,
+            {q_buf,
+             kv_buf,
+             idx_buf,
+             tok_start,
+             tok_count,
+             kv_batch_page_offset,
+             page_bundle_buf,
+             attrs.kv_cache_slot_idx,
+             sp_rank});
         writer_desc.emplace_runtime_args(core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset});
         compute_desc.emplace_runtime_args(core, {tok_start, tok_count});
     }
@@ -378,7 +393,7 @@ void SparseSDPAOperation::SparseSDPAProgramFactory::override_runtime_arguments(
     const SparseSDPAParams& operation_attributes,
     const SparseSDPAInputs& tensor_args,
     Tensor& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     // Only the buffer addresses and kv_batch_page_offset vary per dispatch (tok_start/tok_count are pinned by
     // the hashed q shape); patch those slots in place instead of rebuilding the whole descriptor on every hit.
     const SparseSDPAInputs& t = tensor_args;
@@ -396,6 +411,10 @@ void SparseSDPAOperation::SparseSDPAProgramFactory::override_runtime_arguments(
         r[2] = idx;
         r[5] = offset;
         r[6] = page_bundles;
+        r[7] = operation_attributes.kv_cache_slot_idx;
+        r[8] = operation_attributes.kv_cache_sp_axis.has_value()
+                   ? mesh_dispatch_coordinate.value()[operation_attributes.kv_cache_sp_axis.value()]
+                   : 0u;
         w[0] = out;
         w[3] = kv;
         w[4] = offset;

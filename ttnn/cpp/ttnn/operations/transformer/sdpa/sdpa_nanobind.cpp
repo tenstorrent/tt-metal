@@ -408,10 +408,13 @@ void bind_sdpa(nb::module_& mod) {
             kv_cache_num_layers (int, optional): number of layers packed into every physical paged-cache bundle.
                 Defaults to 1.
             kv_cache_layer_idx (int, optional): layer selected within every physical bundle. Defaults to 0.
-            page_bundle_indices (ttnn.Tensor, optional): ROW_MAJOR uint16 [1,1,1,num_logical_bundles] table
-                mapping logical kv_cache_page_size-token pages to physical bundles. When present, kv must be
+            page_bundle_indices (ttnn.Tensor, optional): ROW_MAJOR UINT32 [slots,max_pages] replicated DRAM table
+                mapping SP-interleaved logical pages to local physical bundles. When present, kv must be
                 [num_bundles*num_layers,1,kv_cache_page_size,row_width], ND-sharded one physical page per shard.
             kv_cache_page_size (int): tokens per physical page; a positive multiple of 32. Defaults to 32.
+            kv_cache_slot_idx (int): page-table row selected at runtime, including program-cache hits. Defaults to 0.
+            kv_cache_sp_axis (int, optional): SP mesh axis of the local KV pool. Local page i uses entry
+                i*SP+SP_rank in the selected row. Unset selects SP=1. Indices address local sequence rows.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -432,7 +435,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_cache_num_layers") = nb::none(),
         nb::arg("kv_cache_layer_idx") = nb::none(),
         nb::arg("page_bundle_indices").noconvert() = nb::none(),
-        nb::arg("kv_cache_page_size") = 32);
+        nb::arg("kv_cache_page_size") = 32,
+        nb::arg("kv_cache_slot_idx") = 0,
+        nb::arg("kv_cache_sp_axis") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,

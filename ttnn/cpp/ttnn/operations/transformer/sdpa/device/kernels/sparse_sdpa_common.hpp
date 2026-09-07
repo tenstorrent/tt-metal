@@ -88,6 +88,7 @@ enum : uint32_t {
     KV_CACHE_LAYER_IDX,
     CB_PAGE_BUNDLE,
     PAGE_BUNDLE_COUNT,
+    PAGE_TABLE_SP_SIZE,
     END,
 };
 }  // namespace reader_ct_arg

@@ -455,7 +455,7 @@ def _make_paged_kv(kv, page_size, num_layers=2, layer_idx=1, extra_bundles=2, se
     for logical_bundle, physical_bundle in enumerate(order):
         src = kv[0, 0, logical_bundle * page_size : (logical_bundle + 1) * page_size]
         pool[physical_bundle * num_layers + layer_idx, 0] = src
-    table = torch.tensor(order, dtype=torch.int64).reshape(1, 1, 1, logical_bundles)
+    table = torch.tensor(order, dtype=torch.int64).reshape(1, logical_bundles)
     return pool, table
 
 
@@ -478,7 +478,7 @@ def _upload_paged_kv(device, pool, table, page_size, dtype):
 def _upload_page_table(device, table):
     return ttnn.from_torch(
         table,
-        dtype=ttnn.uint16,
+        dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -623,8 +623,8 @@ def test_sparse_sdpa_paged_validation(device, expect_error):
         ttnn.transformer.sparse_sdpa(tt_q, tt_pool, tt_idx, V_DIM, **{**base, "kv_cache_page_size": 64})
     with expect_error(RuntimeError, "must be smaller"):
         ttnn.transformer.sparse_sdpa(tt_q, tt_pool, tt_idx, V_DIM, **{**base, "kv_cache_layer_idx": 2})
-    bad_table = to_dev(table.to(torch.int32), device, ttnn.uint32)
-    with expect_error(RuntimeError, "uint16"):
+    bad_table = to_dev(table.to(torch.int32), device, ttnn.uint16)
+    with expect_error(RuntimeError, "uint32"):
         ttnn.transformer.sparse_sdpa(tt_q, tt_pool, tt_idx, V_DIM, **{**base, "page_bundle_indices": bad_table})
 
 
@@ -745,3 +745,54 @@ def test_sparse_sdpa_bad_layout_rejected_on_hit(device, expect_error):
     tt_q_tile = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT)  # same shape+dtype (same hash) but wrong layout -> HIT
     with expect_error(RuntimeError, "ROW_MAJOR"):
         ttnn.transformer.sparse_sdpa(tt_q_tile, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, k_chunk_size=kc)
+
+
+@run_for_blackhole()
+def test_sparse_sdpa_paged_slots_uint32_ids_and_cache_reuse(device, expect_error):
+    """Switch rows of one allocator-format table; slot 2 uses bundle IDs above UINT16's range."""
+    device.clear_program_cache()
+    dim, page_size, seq_len = 32, 32, 128
+    q, kv0, indices = make_inputs(32, 32, seq_len, 32, dim, lambda s: 32, seed=791)
+    gen = torch.Generator().manual_seed(792)
+    kv2 = torch.randn(kv0.shape, generator=gen, dtype=kv0.dtype)
+    pool0, table0 = _make_paged_kv(kv0, page_size, num_layers=1, layer_idx=0, seed=793)
+    pool2, table2 = _make_paged_kv(kv2, page_size, num_layers=1, layer_idx=0, seed=794)
+    high_base = 1 << 16
+    pool = torch.zeros((high_base + pool2.shape[0], 1, page_size, dim), dtype=torch.bfloat16)
+    pool[: pool0.shape[0]] = pool0
+    pool[high_base:] = pool2
+    table = torch.zeros((3, seq_len // page_size), dtype=torch.int64)
+    table[0] = table0[0]
+    table[2] = table2[0] + high_base
+    tt_pool, tt_table = _upload_paged_kv(device, pool, table, page_size, ttnn.bfloat16)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    entries = None
+    for slot, kv in ((2, kv2), (0, kv0), (2, kv2)):
+        out = ttnn.transformer.sparse_sdpa(
+            tt_q,
+            tt_pool,
+            tt_idx,
+            dim,
+            kv_format=BF16_KV,
+            k_chunk_size=32,
+            page_bundle_indices=tt_table,
+            kv_cache_slot_idx=slot,
+        )
+        score = pcc(ttnn.to_torch(out), golden(q, kv, indices, dim**-0.5, dim))
+        assert score >= 0.99, f"PCC {score:.5f} for allocator slot {slot}"
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "slot change recompiled the program"
+    with expect_error(RuntimeError, "kv_cache_slot_idx"):
+        ttnn.transformer.sparse_sdpa(
+            tt_q,
+            tt_pool,
+            tt_idx,
+            dim,
+            kv_format=BF16_KV,
+            k_chunk_size=32,
+            page_bundle_indices=tt_table,
+            kv_cache_slot_idx=3,
+        )

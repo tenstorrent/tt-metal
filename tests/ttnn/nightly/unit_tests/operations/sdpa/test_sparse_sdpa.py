@@ -334,8 +334,8 @@ def test_sparse_sdpa_paged_perf_matches_contiguous(device):
         memory_config=paged_mem,
     )
     tt_table = ttnn.from_torch(
-        torch.arange(T // page_size, dtype=torch.int64).reshape(1, 1, 1, -1),
-        dtype=ttnn.uint16,
+        torch.arange(T // page_size, dtype=torch.int64).repeat(3, 1),
+        dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -357,6 +357,7 @@ def test_sparse_sdpa_paged_perf_matches_contiguous(device):
         "kv_cache_num_layers": 1,
         "kv_cache_layer_idx": 0,
         "page_bundle_indices": tt_table,
+        "kv_cache_slot_idx": 2,
         "kv_cache_page_size": page_size,
     }
     invoke(tt_kv)

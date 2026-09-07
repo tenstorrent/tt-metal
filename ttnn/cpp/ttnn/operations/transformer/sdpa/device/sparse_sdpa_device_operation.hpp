@@ -25,7 +25,10 @@ struct SparseSDPAOperation {
 
     struct SparseSDPAProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
-            const operation_attributes_t& attrs, const tensor_args_t& t, tensor_return_value_t& output);
+            const operation_attributes_t& attrs,
+            const tensor_args_t& t,
+            tensor_return_value_t& output,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 
         // Cache-hit re-apply of the per-dispatch state the hash excludes: buffer addresses and
         // kv_batch_page_offset (cache_batch_idx * kv length T). Patched in place; no rebuild.
@@ -63,6 +66,8 @@ Tensor sparse_sdpa(
     uint32_t kv_cache_num_layers = 1,
     uint32_t kv_cache_layer_idx = 0,
     const std::optional<Tensor>& page_bundle_indices = std::nullopt,
-    uint32_t kv_cache_page_size = 32);
+    uint32_t kv_cache_page_size = 32,
+    uint32_t kv_cache_slot_idx = 0,
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -30,6 +30,10 @@ struct SparseSDPAParams {
     uint32_t kv_cache_num_layers = 1;
     uint32_t kv_cache_layer_idx = 0;
     uint32_t kv_cache_page_size = 32;
+    // Runtime row selection in the replicated allocator table; excluded from the program hash.
+    uint32_t kv_cache_slot_idx = 0;
+    // When set, local page i uses table[slot, i * SP + coordinate[axis]].
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt;
     bool has_scaled_kv() const { return kv_format == transformer::SparseKVFormat::SCALED_FP8; }
 };
 

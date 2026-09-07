@@ -13,7 +13,7 @@
 // cache pages are flattened as [bundle][layer][head], and each page contains
 // page_size_rows sequence rows. Supports random logical rows and a sequential
 // cursor that caches the current bundle-table entry.
-template <typename ReaderType>
+template <typename ReaderType, typename BundleId = uint16_t>
 struct PagedKVAccessor {
 private:
     ReaderType reader_;
@@ -63,7 +63,7 @@ public:
             load_bundle();
         }
 
-        void load_bundle() { physical_bundle_id = CoreLocalMem<volatile uint16_t>(bundle_ids_l1_addr)[logical_bundle]; }
+        void load_bundle() { physical_bundle_id = CoreLocalMem<volatile BundleId>(bundle_ids_l1_addr)[logical_bundle]; }
 
         uint32_t physical_bundle() const { return physical_bundle_id; }
 
@@ -88,7 +88,7 @@ public:
     uint32_t layer_head_offset(uint32_t head_idx = 0) const { return layer_idx * num_heads + head_idx; }
 
     uint32_t physical_bundle_for_row(uint32_t logical_row) const {
-        return CoreLocalMem<volatile uint16_t>(bundle_ids_l1_addr)[logical_row / page_size_rows];
+        return CoreLocalMem<volatile BundleId>(bundle_ids_l1_addr)[logical_row / page_size_rows];
     }
 
     uint32_t physical_page(uint32_t logical_row, uint32_t head_idx = 0) const {

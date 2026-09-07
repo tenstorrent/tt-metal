@@ -87,7 +87,7 @@ FORCE_INLINE void trid_ring_gather(
     constexpr uint32_t D = RingDepth;
     const UnicastEndpoint local_l1;
     const uint32_t cnt = hi - lo;
-    const PagedKVAccessor<Accessor> paged_kv{kv, page_bundle_l1, PageSize, NumLayers, 1, LayerIdx};
+    const PagedKVAccessor<Accessor, uint32_t> paged_kv{kv, page_bundle_l1, PageSize, NumLayers, 1, LayerIdx};
     for (uint32_t i = 0; i < cnt; ++i) {
         const uint32_t p = lo + i;
         const uint32_t trid = (i % D) + 1;
