@@ -17,7 +17,9 @@ sizes:
       wh_galaxy_perf:
         trace_region_size: 50000000
       bh_p150:
-        trace_region_size: 52000000
+        # TTTv2 P150 batch-32 captures measured 55,787,520 and 70,017,024
+        # bytes for the same gate. Use dynamic allocation while unstable.
+        trace_region_size: 0
       bh_p300:
         trace_region_size: 52000000
       p300x2:
@@ -43,7 +45,12 @@ sizes:
     aliases: ["Llama-3.3-70B", "meta-llama/Llama-3.3-70B-Instruct"]
     skus:
       wh_llmbox_perf:
-        trace_region_size: 90000000
+        # Current-main performance batch-32 exceeded 120 MB after capturing
+        # decode plus Q128 prefill batches 32, 1, 2, 4, 8, and 16; the next
+        # capture raised the cumulative requirement to 124,559,360 bytes.
+        # Use the already-proven full-set 70B reservation rather than iterate
+        # around partial capture boundaries.
+        trace_region_size: 224000000
       wh_galaxy_perf:
         trace_region_size: 80000000
       bh_p150:
@@ -51,7 +58,11 @@ sizes:
       bh_p300:
         trace_region_size: 80000000
       p300x2:
-        trace_region_size: 96000000
+        # performance-batch-32-ci exceeded 128 MB after capturing decode plus
+        # Q128 prefill batches 32, 1, and 2; the declared warmup set continues
+        # through batches 4, 8, and 16. Reserve the complete set with headroom
+        # instead of iterating over partial capture boundaries.
+        trace_region_size: 224000000
       bh_loudbox:
         trace_region_size: 84000000
 
@@ -98,7 +109,10 @@ sizes:
       bh_p300:
         trace_region_size: 90000000
       p300x2:
-        trace_region_size: 90000000
+        # performance-batch-32-ci captured 92,299,264 bytes on a physical
+        # P300_X2 quietbox. Keep measured headroom for repeatable full-trace
+        # capture instead of relying on the former 90 MB estimate.
+        trace_region_size: 100000000
       bh_loudbox:
         trace_region_size: 90000000
 
@@ -247,12 +261,6 @@ sizes:
     skus:
       wh_n150:
         trace_region_size: 10000000
-
-  llama3.1-70b-legacy:
-    aliases: ["Llama-3.1-70B-legacy", "Llama-2-70B-legacy"]
-    skus:
-      wh_llmbox_perf:
-        trace_region_size: 14227456
 
   llama3.3-70b-galaxy:
     aliases: ["llama3.3-70b-galaxy"]

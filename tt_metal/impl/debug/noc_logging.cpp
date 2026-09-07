@@ -15,7 +15,7 @@
 #include "core_coord.hpp"
 #include "debug_helpers.hpp"
 #include "llrt.hpp"
-#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
@@ -50,11 +50,11 @@ void DumpCoreNocData(
     MetalEnvImpl& env, ChipId device_id, const umd::CoreDescriptor& logical_core, noc_data_t& noc_data) {
     CoreCoord virtual_core = env.get_cluster().get_virtual_coordinate_from_logical_coordinates(
         device_id, logical_core.coord, logical_core.type);
-    uint32_t num_processors = env.get_hal().get_num_risc_processors(llrt::get_core_type(device_id, virtual_core));
+    uint32_t num_processors = env.get_hal().get_num_risc_processors(llrt::get_core_type(env, device_id, virtual_core));
     // The kernel-side log_noc_xfer (noc_logging.h) lays out NOC_DATA_SIZE uint32_t buckets per
     // RISC at the base of the device-print buffer. NOC logging is mutually exclusive with DPRINT,
     // so the buffer is fully available for histograms.
-    const uint64_t base_addr = GetDevicePrintBufAddr(env.get_hal(), device_id, virtual_core);
+    const uint64_t base_addr = GetDevicePrintBufAddr(env, device_id, virtual_core);
     const uint32_t bytes_per_risc = NOC_DATA_SIZE * sizeof(uint32_t);
     for (uint32_t risc_id = 0; risc_id < num_processors; risc_id++) {
         auto from_dev =
@@ -126,11 +126,11 @@ void ClearNocData(MetalEnvImpl& env, ChipId device_id) {
     for (const umd::CoreDescriptor& logical_core : all_cores) {
         CoreCoord virtual_core =
             cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
-        uint32_t num_processors = env.get_hal().get_num_risc_processors(llrt::get_core_type(device_id, virtual_core));
+        uint32_t num_processors =
+            env.get_hal().get_num_risc_processors(llrt::get_core_type(env, device_id, virtual_core));
         // Zero out the entire NOC histogram region across all RISCs in one write.
         std::vector<uint32_t> initbuf(num_processors * NOC_DATA_SIZE, 0);
-        cluster.write_core(
-            device_id, virtual_core, initbuf, GetDevicePrintBufAddr(env.get_hal(), device_id, virtual_core));
+        cluster.write_core(device_id, virtual_core, initbuf, GetDevicePrintBufAddr(env, device_id, virtual_core));
     }
 }
 

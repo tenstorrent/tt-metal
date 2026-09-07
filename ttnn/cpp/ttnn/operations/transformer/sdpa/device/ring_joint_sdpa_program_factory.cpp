@@ -195,10 +195,13 @@ constexpr uint32_t kComputeKernelIndex = 2;
 
 // Dense all-gather appends reader-forward, writer-forward, reader-backward, writer-backward.
 // Compact sliding appends only its predecessor reader/writer pair at indices 3 and 4.
-constexpr uint32_t kAllGatherReaderForwardKernelIndex = 3;
-constexpr uint32_t kAllGatherWriterForwardKernelIndex = 4;
-constexpr uint32_t kAllGatherReaderBackwardKernelIndex = 5;
-constexpr uint32_t kAllGatherWriterBackwardKernelIndex = 6;
+constexpr uint32_t kFirstAllGatherKernelIndex = 3;
+constexpr uint32_t kAllGatherReaderForwardKernelIndex = kFirstAllGatherKernelIndex + ag_rt::kReaderForwardKernelOffset;
+constexpr uint32_t kAllGatherWriterForwardKernelIndex = kFirstAllGatherKernelIndex + ag_rt::kWriterForwardKernelOffset;
+constexpr uint32_t kAllGatherReaderBackwardKernelIndex =
+    kFirstAllGatherKernelIndex + ag_rt::kReaderBackwardKernelOffset;
+constexpr uint32_t kAllGatherWriterBackwardKernelIndex =
+    kFirstAllGatherKernelIndex + ag_rt::kWriterBackwardKernelOffset;
 constexpr uint32_t kNeighborHaloReaderKernelIndex = 3;
 constexpr uint32_t kNeighborHaloWriterKernelIndex = 4;
 
@@ -578,6 +581,18 @@ std::optional<uint32_t> compute_gather_valid_Ht(
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t n_local_q = tensor_args.input_q.padded_shape()[2];  // per-device Q slab (chunk_local)
     const uint32_t chunk_global = n_local_q * ring_size;
+    if (tensor_args.has_metadata()) {
+        // Metadata path: the all-gather reader recomputes this per dispatch from kv_actual_isl
+        // (ring_attention_all_gather_reader.cpp) and CLAMPS against the value baked here, so a
+        // create-time bound derived from host logical_n silently caps every later dispatch at the
+        // creating chunk's prefix. Under a captured trace that is permanent — the host patch that
+        // would otherwise grow it per dispatch never runs on replay — and later chunks attend a
+        // truncated history, which degrades with ring depth instead of failing outright.
+        //
+        // The device value is authoritative here, so bound to the full per-device K extent and let
+        // the on-device recompute do the narrowing.
+        return tensor_args.input_k.padded_shape()[2] / tt::constants::TILE_HEIGHT;
+    }
     const uint32_t valid_slabs = (static_cast<uint32_t>(args.logical_n) + chunk_global - 1) / chunk_global;
     return valid_slabs * (n_local_q / tt::constants::TILE_HEIGHT);
 }
@@ -610,6 +625,11 @@ void apply_ring_joint_scalar_runtime_args(
     const std::array<const Tensor*, 2> ag_inputs = {
         &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
     const bool uses_neighbor_halo = args.has_sliding_window();
+    const uint32_t tensor_descriptor_field_count =
+        tensor_args.has_metadata() ? ag_rt::kMetadataTensorDescriptorFieldCount : ag_rt::kTensorDescriptorFieldCount;
+    const uint32_t neighbor_reader_tensor_descriptor_field_count =
+        tensor_args.has_metadata() ? ag_rt::kNeighborReaderMetadataTensorDescriptorFieldCount
+                                   : ag_rt::kNeighborReaderTensorDescriptorFieldCount;
 
     // Re-patch the fused all-gather readers to gather the single cache slot `kv_cache_batch_idx`.
     // input_batch_base is uniform across all gather cores/links, so patch every core that runs the
@@ -641,18 +661,18 @@ void apply_ring_joint_scalar_runtime_args(
             patch_reader_batch_base(
                 kNeighborHaloReaderKernelIndex,
                 ag_rt::kNeighborReaderRuntimeArgHeaderCount,
-                ag_rt::kNeighborReaderTensorDescriptorFieldCount,
+                neighbor_reader_tensor_descriptor_field_count,
                 ag_rt::kNeighborReaderInputBatchBaseFieldOffset);
         } else {
             patch_reader_batch_base(
                 kAllGatherReaderForwardKernelIndex,
                 ag_rt::kReaderRuntimeArgHeaderCount,
-                ag_rt::kTensorDescriptorFieldCount,
+                tensor_descriptor_field_count,
                 ag_rt::kInputBatchBaseFieldOffset);
             patch_reader_batch_base(
                 kAllGatherReaderBackwardKernelIndex,
                 ag_rt::kReaderRuntimeArgHeaderCount,
-                ag_rt::kTensorDescriptorFieldCount,
+                tensor_descriptor_field_count,
                 ag_rt::kInputBatchBaseFieldOffset);
         }
     }
@@ -690,22 +710,22 @@ void apply_ring_joint_scalar_runtime_args(
         patch_valid_pages(
             kAllGatherReaderForwardKernelIndex,
             ag_rt::kReaderRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
+            tensor_descriptor_field_count,
             ag_rt::kValidPagesFieldOffset);
         patch_valid_pages(
             kAllGatherWriterForwardKernelIndex,
             ag_rt::kWriterRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
+            tensor_descriptor_field_count,
             ag_rt::kValidPagesFieldOffset);
         patch_valid_pages(
             kAllGatherReaderBackwardKernelIndex,
             ag_rt::kReaderRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
+            tensor_descriptor_field_count,
             ag_rt::kValidPagesFieldOffset);
         patch_valid_pages(
             kAllGatherWriterBackwardKernelIndex,
             ag_rt::kWriterRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
+            tensor_descriptor_field_count,
             ag_rt::kValidPagesFieldOffset);
     }
 
@@ -741,7 +761,7 @@ void apply_ring_joint_scalar_runtime_args(
                     reader_args.size() != 0 && writer_args.size() != 0, "Directional gather worker pair is incomplete");
                 for (uint32_t in = 0; in < num_ag_inputs; ++in) {
                     const uint32_t reader_base = ag_rt::kNeighborReaderRuntimeArgHeaderCount +
-                                                 in * ag_rt::kNeighborReaderTensorDescriptorFieldCount;
+                                                 in * neighbor_reader_tensor_descriptor_field_count;
                     const uint32_t writer_base = ag_rt::kNeighborWriterRuntimeArgHeaderCount +
                                                  in * ag_rt::kNeighborWriterTensorDescriptorFieldCount;
                     const uint32_t writer_origin_idx = writer_base + ag_rt::kNeighborWriterInputOriginPageFieldOffset;
@@ -2629,6 +2649,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             {tensor_args.slot_id->buffer()->address(),  // smuggled-rta-ok: metadata tensor addr (on-device)
              args.kv_cache_num_layers,
              args.kv_cache_layer_idx,
+             std::min(
+                 tensor_args.input_k.logical_shape()[0],
+                 tensor_args.input_v.has_value() ? tensor_args.input_v->logical_shape()[0]
+                                                 : tensor_args.input_k.logical_shape()[0]),
              tensor_args.kv_actual_isl->buffer()->address()});  // smuggled-rta-ok: metadata tensor addr (on-device)
     }
 
@@ -2850,11 +2874,23 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         TT_FATAL(
             halo_transport_coord.has_value() && halo_destination_coord.has_value(),
             "Sliding attention requires a next-device route");
+        // send_to_next_start_Ht is linear in the chunk index, so on the scalar path the host relocates
+        // the halo page ranges every dispatch (apply_ring_joint_scalar_runtime_args). A captured trace
+        // never replays that, so on the metadata path hand the halo kernels the same kv_actual_isl the
+        // rest of the op reads and let them derive the start themselves; the value above then serves as
+        // the baked origin they shift away from.
         const RingAttentionNeighborHaloConfig neighbor_halo{
             .send_to_next_start_Ht = chunked_sliding_halo_layout.send_tail_start_tile(transport_rank),
             .send_to_next_count_Ht = chunked_sliding_halo_layout.halo_tile_rows,
             .send_backward = linear_wrap_halo,
             .unicast_hops = linear_wrap_halo ? ring_size - 1 : 1,
+            .slot_id = tensor_args.has_metadata() ? &tensor_args.slot_id.value() : nullptr,
+            .kv_actual_isl = tensor_args.has_metadata() ? &tensor_args.kv_actual_isl.value() : nullptr,
+            .kv_cache_num_layers = args.kv_cache_num_layers,
+            .kv_cache_layer_idx = args.kv_cache_layer_idx,
+            .q_local_tile_rows = chunked_sliding_halo_layout.q_local_tile_rows,
+            .halo_tile_rows = chunked_sliding_halo_layout.halo_tile_rows,
+            .source_device = transport_rank,
         };
         log_debug(
             tt::LogOp,
@@ -2926,6 +2962,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // Share the split-forwarding decision derived above so the all-gather only splits when this
             // consumer implements the second-half wait.
             sdpa_fused_op_signaler->split_forwarding_enabled,
+            /*partial_readiness_enabled=*/false,
             rank_mapping);
     }
 

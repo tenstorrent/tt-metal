@@ -247,6 +247,18 @@ bool IsValidCppIdentifier(std::string_view s) {
     return !kCppKeywords.contains(s);
 }
 
+template <typename KernelId>
+void ValidateAccessorNameLength(const KernelId& kernel_id, std::string_view kind, std::string_view name) {
+    TT_FATAL(
+        name.size() <= MAX_ACCESSOR_NAME_LENGTH,
+        "Kernel '{}' {} accessor_name '{}' is {} characters; an accessor_name must be at most {} characters",
+        kernel_id,
+        kind,
+        name,
+        name.size(),
+        MAX_ACCESSOR_NAME_LENGTH);
+}
+
 // ============================================================================
 // Step 1: Spec Collection & Validation
 // ============================================================================
@@ -326,6 +338,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                     "Kernel '{}' DFB accessor_name '{}' must be a valid C++ identifier",
                     kernel.unique_id,
                     dfb_binding.accessor_name);
+                ValidateAccessorNameLength(kernel.unique_id, "DFB", dfb_binding.accessor_name);
             } else {
                 TT_FATAL(
                     info.dfb_spec_name == dfb_binding.dfb_spec_name,
@@ -429,6 +442,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' semaphore accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            ValidateAccessorNameLength(kernel.unique_id, "semaphore", binding.accessor_name);
             TT_FATAL(
                 collected.semaphore_by_name.contains(binding.semaphore_spec_name),
                 "Kernel '{}' references unknown semaphore '{}'",
@@ -469,6 +483,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' scratchpad accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            ValidateAccessorNameLength(kernel.unique_id, "scratchpad", binding.accessor_name);
             TT_FATAL(
                 collected.scratchpad_by_name.contains(binding.scratchpad_spec_name),
                 "Kernel '{}' references unknown scratchpad '{}'",
@@ -524,6 +539,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' tensor accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            ValidateAccessorNameLength(kernel.unique_id, "tensor", binding.accessor_name);
             TT_FATAL(
                 collected.tensor_parameter_by_name.contains(binding.tensor_parameter_name),
                 "Kernel '{}' references unknown TensorParameter '{}'",
@@ -2541,8 +2557,15 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
 
 // Create map of local accessor name -> DFB device slot. This is the value baked into the kernel's
 // dfb::<name> accessor, so it must be the device slot rather than the program-wide id.
+// `dfb_name_to_is_relay` marks CrossNode/PrefetcherPipe relay locals so codegen emits
+// RelayDFBBindingToken instead of DFBBindingToken.
+// `dfb_name_to_prefetcher_pipe_id` carries the PrefetcherPipe slot for PrefetcherPipe relays (0xFF
+// otherwise) so TRISC construction can align to the durable checkpoint.
 tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
-    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
+    const KernelSpec& kernel_spec,
+    const DFBNameToSlotMap& dfb_name_to_slot,
+    const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
+    const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
@@ -2553,7 +2576,14 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
             kernel_spec.unique_id,
             dfb_binding.dfb_spec_name,
             slot);
-        out.emplace(dfb_binding.accessor_name, static_cast<uint16_t>(slot));
+        const bool is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
+        const uint8_t prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
+        out.emplace(
+            dfb_binding.accessor_name,
+            tt::tt_metal::DataflowBufferBindingHandle{
+                .logical_dfb_id = static_cast<uint16_t>(slot),
+                .is_relay = is_relay,
+                .prefetcher_pipe_id = prefetcher_pipe_id});
     }
     return out;
 }
@@ -3037,6 +3067,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     //       deterministic DFB ID assignment based on user-specified order.
     DFBNameToIdMap dfb_name_to_id;
     DFBNameToSlotMap dfb_name_to_slot;
+    std::unordered_map<DFBSpecName, bool> dfb_name_to_is_relay;
     for (const auto& dfb_spec : spec.dataflow_buffers) {
         const DFBSpecName& dfb_name = dfb_spec.unique_id;
         const auto& dfb_endpoint_info = collected.dfb_endpoints.at(dfb_name);
@@ -3050,7 +3081,9 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         uint32_t dfb_id = program_impl->add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
         program_impl->register_dfb_spec_name(dfb_name.get(), dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
+        const auto& created_config = program_impl->get_dataflow_buffer(dfb_id)->config;
         dfb_name_to_slot[dfb_name] = program_impl->get_dataflow_buffer(dfb_id)->device_slot;
+        dfb_name_to_is_relay[dfb_name] = created_config.is_relay;
 
         // Borrowed-memory DFB: record the dfb_id ↔ TensorParamName binding so that
         // SetProgramRunArgs / UpdateTensorArgs can resolve and attach the actual L1 Buffer
@@ -3058,6 +3091,11 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         if (dfb_spec.borrowed_from.has_value()) {
             program_impl->register_dfb_borrowed_binding(dfb_id, dfb_spec.borrowed_from->get());
         }
+    }
+
+    std::unordered_map<DFBSpecName, uint8_t> dfb_name_to_prefetcher_pipe_id;
+    for (const auto& [dfb_name, dfb_id] : dfb_name_to_id) {
+        dfb_name_to_prefetcher_pipe_id[dfb_name] = program_impl->get_prefetcher_pipe_id_for_relay(dfb_id).value_or(0xFF);
     }
 
     // Wire alias groups: for each DFB that has alias_with entries, make the first
@@ -3109,8 +3147,8 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         const NodeRangeSet& node_ranges = collected.kernel_node_set.at(kernel_spec.unique_id);
 
         // Make the local accessor name -> DFB device slot map for this kernel
-        const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles =
-            MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_slot);
+        const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles = MakeDataflowBufferBindingHandles(
+            kernel_spec, dfb_name_to_slot, dfb_name_to_is_relay, dfb_name_to_prefetcher_pipe_id);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
             MakeSemaphoreBindingHandles(kernel_spec, semaphore_binders, semaphore_name_to_id, semaphore_name_to_scope);
 
