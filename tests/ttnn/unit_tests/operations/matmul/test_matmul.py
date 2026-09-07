@@ -4465,7 +4465,7 @@ def test_matmul_mcast_in1_single_core_h_and_w_tail(device):
 
     in0 = ttnn.from_torch(torch_in0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     in1 = ttnn.from_torch(torch_in1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    program_config = _mcast_in1_tail_config(grid=(1, 1), per_core_m=2, per_core_n=8, out_block_h=2, out_block_w=8)
+    program_config = _mcast_in1_tail_config(grid=(1, 1), per_core_m=1, per_core_n=8, out_block_h=1, out_block_w=8)
 
     output = ttnn.to_torch(ttnn.matmul(in0, in1, program_config=program_config))
     assert_with_pcc(torch_output, output, pcc=0.999)
