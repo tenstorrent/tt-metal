@@ -437,18 +437,18 @@ sfpi_inline void _two_pass_accumulate_m2_single_()
 /** Accumulate four centred squares in row order while pipelining residual formation. */
 sfpi_inline void _two_pass_accumulate_m2_block_()
 {
-    // Alternate residuals between LREG6 and LREG7 so useful work separates
-    // their two-cycle producers from consumers. M2 updates remain in row
-    // order, preserving the numerical behavior of the serial implementation.
+    // Alternate residuals between LREG6 and the now-dead first input in LREG0.
+    // This preserves a retained shift anchor in LREG7 without changing the
+    // producer/consumer spacing or the row order of serial M2 updates.
     TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, 0);
-    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG7, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG0, 0);
     TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
     TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG6, 0);
-    TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
-    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG7, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG0, 0);
     TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
     WELFORD_SFPU_ONLINE_HAZARD_NOP();
-    TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
     // Protect the following block's transpose, which reads LREG5.
     TTI_SFPNOP;
 }
