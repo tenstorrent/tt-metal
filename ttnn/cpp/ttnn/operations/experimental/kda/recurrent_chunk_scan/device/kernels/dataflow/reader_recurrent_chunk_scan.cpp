@@ -87,7 +87,12 @@ FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary_pair>
 TT_KERNEL void reader(
-    uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t active_chunks, uint32_t reset_chunk) {
+    uint32_t head,
+    uint32_t value_block,
+    uint32_t num_chunks,
+    uint32_t active_chunks,
+    uint32_t reset_chunk,
+    uint32_t chunk_start) {
     const auto v_beta_accessor = TensorAccessor(tensor::v_beta);
     const auto kd_accessor = TensorAccessor(tensor::kd);
     const auto k_decay_transposed_accessor = TensorAccessor(tensor::k_decay_transposed);
@@ -126,7 +131,7 @@ TT_KERNEL void reader(
     // differ only for SUMMARY on a wrapped chip, which stops after the head chunks
     // so that it publishes T(head).
     for (uint32_t chunk = 0; chunk < active_chunks; ++chunk) {
-        const uint32_t head_chunk = head * num_chunks + chunk;
+        const uint32_t head_chunk = head * num_chunks + chunk_start + chunk;
         // Publish the post-wrap seed just in time, never before the loop. The state
         // DFB holds one kv payload and compute frees it only via pop_front at the
         // end of chunk 0, so hoisting this deadlocks; pushing it here reuses the

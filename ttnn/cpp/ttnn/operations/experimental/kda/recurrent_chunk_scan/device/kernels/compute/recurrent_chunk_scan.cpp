@@ -223,7 +223,7 @@ FORCE_INLINE void update_state(
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void compute_summary(uint32_t active_chunks, uint32_t reset_chunk) {
+FORCE_INLINE void compute_summary(uint32_t active_chunks) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
     DataflowBuffer v_beta(dfb::v_beta);
@@ -343,7 +343,7 @@ FORCE_INLINE void compute_recurrent(uint32_t active_chunks, uint32_t reset_chunk
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary_pair>
 TT_KERNEL void compute(uint32_t active_chunks, uint32_t reset_chunk) {
     if constexpr (summary_pair) {
-        compute_summary<Ct, Kt, Vt>(active_chunks, reset_chunk);
+        compute_summary<Ct, Kt, Vt>(active_chunks);
     } else {
         compute_recurrent<Ct, Kt, Vt>(active_chunks, reset_chunk);
     }
