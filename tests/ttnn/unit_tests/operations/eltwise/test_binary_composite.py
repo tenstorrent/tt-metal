@@ -7,7 +7,7 @@ import random
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import is_blackhole, is_slow_dispatch
+from models.common.utility_functions import is_blackhole, is_quasar, is_slow_dispatch
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
@@ -373,26 +373,61 @@ def test_binary_floor_div_overload_ttnn(input_shapes, value, device):
     assert comp_pass
 
 
+@pytest.mark.skipif(
+    is_quasar(),
+    reason="Quasar still uses unfused DIV+FLOOR; fused Markstein floor_div is WH/BH only",
+)
+@pytest.mark.parametrize("divisor", [1, 3, 7, 16, 41, 100, 999])
 @pytest.mark.parametrize(
     "torch_dtype,ttnn_dtype",
-    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16), (torch.int32, ttnn.int32)],
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+        # int32 uses div_int32_floor_tile, not the fused float path; non-regression control.
+        (torch.int32, ttnn.int32),
+    ],
 )
 @pytest.mark.parametrize("tensor_tensor", [False, True])
-def test_binary_floor_div_exact_multiples(torch_dtype, ttnn_dtype, tensor_tensor, device):
-    values = torch.tensor([41, 82, 164, -41, -82, -164], dtype=torch_dtype)
+def test_binary_floor_div_exact_multiples(torch_dtype, ttnn_dtype, tensor_tensor, divisor, device):
+    values = torch.tensor([k * divisor for k in (1, 2, 3, 4, -1, -2)], dtype=torch_dtype)
     host = values.repeat(171)[:1024].reshape(1, 1, 32, 32)
     input_tensor = ttnn.from_torch(host, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    divisor = torch.tensor(41, dtype=torch_dtype)
+    divisor_t = torch.tensor(divisor, dtype=torch_dtype)
     if tensor_tensor:
-        rhs = ttnn.from_torch(torch.full_like(host, 41), dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        rhs = ttnn.from_torch(torch.full_like(host, divisor), dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
         output_tensor = ttnn.floor_div(input_tensor, rhs)
     else:
-        output_tensor = ttnn.floor_div(input_tensor, value=41)
-    # Compare against floor(x / y) in the same dtype the device uses for both operands
-    # (a Python int packed into bf16 is not the same as float32 41 for every integer).
-    golden_tensor = torch.floor_divide(host, divisor)
+        output_tensor = ttnn.floor_div(input_tensor, value=divisor)
+    golden_tensor = torch.floor_divide(host, divisor_t)
 
+    assert torch.equal(ttnn.to_torch(output_tensor), golden_tensor)
+
+
+@pytest.mark.skipif(is_quasar(), reason="fused float floor_div is WH/BH only")
+@pytest.mark.parametrize("tensor_tensor", [False, True])
+def test_binary_floor_div_finite_over_inf(tensor_tensor, device):
+    host = torch.tensor([1.0, -2.0, 3.0, -4.0], dtype=torch.float32).repeat(256).reshape(1, 1, 32, 32)
+    inf = float("inf")
+    input_tensor = ttnn.from_torch(host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    if tensor_tensor:
+        rhs = ttnn.from_torch(torch.full_like(host, inf), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        output_tensor = ttnn.floor_div(input_tensor, rhs)
+    else:
+        output_tensor = ttnn.floor_div(input_tensor, value=inf)
+    golden_tensor = torch.floor(host / inf)
+    assert torch.equal(ttnn.to_torch(output_tensor), golden_tensor)
+
+
+@pytest.mark.skipif(is_quasar(), reason="fused float floor_div is WH/BH only")
+def test_binary_floor_div_bf16_large_quotient(device):
+    # 1816/7 = 259.428...; floor is 259, which is not a bf16 integer (ULP=2 in this range).
+    # Truncating the fp32 floor to bf16 would store 258; RNE matches torch (260).
+    host = torch.full((1, 1, 32, 32), 1816, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    rhs = ttnn.from_torch(torch.full_like(host, 7), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.floor_div(input_tensor, rhs)
+    golden_tensor = torch.floor_divide(host, torch.tensor(7, dtype=torch.bfloat16))
     assert torch.equal(ttnn.to_torch(output_tensor), golden_tensor)
 
 

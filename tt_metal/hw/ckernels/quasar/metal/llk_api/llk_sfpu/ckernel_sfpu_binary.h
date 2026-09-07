@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_assert.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -121,6 +122,56 @@ inline void calculate_sfpu_binary(
         sfpi::dst_reg++;
     }
 }
+
+/**
+ * Fused float floor_div is implemented on Wormhole/Blackhole. These entry points
+ * exist so the Compute API is architecture-uniform; BinaryNg does not select them
+ * on Quasar (DIV + FLOOR postprocess). Calling them is a programming error.
+ */
+template <
+    [[maybe_unused]] bool APPROXIMATION_MODE,
+    [[maybe_unused]] BinaryOp BINOP,
+    [[maybe_unused]] bool is_fp32_dest_acc_en,
+    [[maybe_unused]] DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
+    [[maybe_unused]] int ITERATIONS = SFPU_ITERATIONS,
+    [[maybe_unused]] trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
+inline void calculate_sfpu_binary_floor_div(
+    const std::uint32_t /*dst_index_in0*/,
+    const std::uint32_t /*dst_index_in1*/,
+    const std::uint32_t /*dst_index_out*/) {
+    LLK_ASSERT(false, "fused float floor_div is not implemented on Quasar");
+}
+
+template <
+    [[maybe_unused]] bool APPROXIMATION_MODE,
+    [[maybe_unused]] BinaryOp BINOP,
+    [[maybe_unused]] bool is_fp32_dest_acc_en,
+    [[maybe_unused]] DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
+    [[maybe_unused]] int ITERATIONS = SFPU_ITERATIONS,
+    [[maybe_unused]] trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
+inline void calculate_sfpu_store_scalar_recip(
+    const std::uint32_t /*dst_index_in0*/,
+    const std::uint32_t /*dst_index_in1*/,
+    const std::uint32_t /*dst_index_out*/) {
+    LLK_ASSERT(false, "fused float floor_div scalar recip is not implemented on Quasar");
+}
+
+template <
+    [[maybe_unused]] bool APPROXIMATION_MODE,
+    [[maybe_unused]] BinaryOp BINOP,
+    [[maybe_unused]] bool is_fp32_dest_acc_en,
+    [[maybe_unused]] DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
+    [[maybe_unused]] int ITERATIONS = SFPU_ITERATIONS,
+    [[maybe_unused]] trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
+inline void calculate_sfpu_binary_floor_div_scalar(
+    const std::uint32_t /*dst_index_in0*/,
+    const std::uint32_t /*dst_index_in1*/,
+    const std::uint32_t /*dst_index_out*/) {
+    LLK_ASSERT(false, "fused float floor_div scalar is not implemented on Quasar");
+}
+
+constexpr std::uint32_t kScalarFloorDivScalarDst = 1;
+constexpr std::uint32_t kScalarFloorDivRecipDst = 3;
 
 /**
  * @brief Initialisation hook for binary SFPU kernels.

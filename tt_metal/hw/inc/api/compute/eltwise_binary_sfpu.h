@@ -20,6 +20,10 @@
 
 namespace ckernel {
 
+// SCALAR_RHS_ONCE dest layout. Must match ckernel_sfpu_binary.h on WH/BH/Quasar.
+constexpr std::uint32_t kScalarFloorDivScalarDst = 1;
+constexpr std::uint32_t kScalarFloorDivRecipDst = 3;
+
 // clang-format off
 /**
  * Performs an elementwise binop operation with the two floating point inputs: y = binop(x0,x1)
@@ -64,9 +68,33 @@ ALWI void div_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_
 #endif
 }
 
-#ifndef ARCH_QUASAR
+// clang-format off
+/**
+ * Elementwise fused floor(x0 / x1) with a Markstein residual before floor.
+ * Output overwrites odst in DST. Same DST occupancy rules as div_binary_tile.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void floor_div_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+#ifdef ARCH_QUASAR
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_sfpu_binary_floor_div,
+        (APPROX, ckernel::BinaryOp::DIV, is_fp32_dest_acc_en),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -76,10 +104,38 @@ ALWI void floor_div_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::u
         idst1,
         odst,
         VectorMode::RC)));
+#endif
 }
 
+// clang-format off
+/**
+ * Stores sfpu_reciprocal(scalar) into DST tile kScalarFloorDivRecipDst (must equal idst_r).
+ * Call once per scalar tile before floor_div_binary_scalar_tile. The scalar tile must be uniform.
+ *
+ * | Argument       | Description                                | Type     | Required |
+ * |----------------|--------------------------------------------|----------|----------|
+ * | idst_s         | DST index of the broadcast scalar tile     | uint32_t | True     |
+ * | idst_r         | DST index for the reciprocal; must be 3    | uint32_t | True     |
+ */
+// clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void floor_div_binary_scalar_recip_tile(std::uint32_t idst_s, std::uint32_t idst_r) {
+#ifdef TRISC_MATH
+    LLK_ASSERT(
+        idst_r == ckernel::kScalarFloorDivRecipDst,
+        "floor_div_binary_scalar_recip_tile idst_r must be kScalarFloorDivRecipDst");
+#endif
+#ifdef ARCH_QUASAR
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_sfpu_store_scalar_recip,
+        (APPROX, ckernel::BinaryOp::DIV, is_fp32_dest_acc_en),
+        idst_s,
+        idst_s,
+        idst_r,
+        VectorMode::RC)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -89,10 +145,41 @@ ALWI void floor_div_binary_scalar_recip_tile(std::uint32_t idst_s, std::uint32_t
         idst_s,
         idst_r,
         VectorMode::RC)));
+#endif
 }
 
+// clang-format off
+/**
+ * Elementwise floor(x0 / scalar) using a reciprocal cached at kScalarFloorDivRecipDst.
+ * Unlike div_binary_tile, a zero divisor is not mapped to NaN/±inf here — the host
+ * floor_div scalar path short-circuits rhs==0. idst1 must be a uniform scalar tile
+ * (typically kScalarFloorDivScalarDst). odst must not be kScalarFloorDivRecipDst.
+ *
+ * | Argument       | Description                                | Type     | Required |
+ * |----------------|--------------------------------------------|----------|----------|
+ * | idst0          | DST index of the LHS tile                  | uint32_t | True     |
+ * | idst1          | DST index of the scalar RHS tile           | uint32_t | True     |
+ * | odst           | DST index of the output tile               | uint32_t | True     |
+ */
+// clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void floor_div_binary_scalar_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+#ifdef TRISC_MATH
+    LLK_ASSERT(
+        odst != ckernel::kScalarFloorDivRecipDst,
+        "floor_div_binary_scalar_tile odst must not clobber the cached reciprocal");
+#endif
+#ifdef ARCH_QUASAR
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_sfpu_binary_floor_div_scalar,
+        (APPROX, ckernel::BinaryOp::DIV, is_fp32_dest_acc_en),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -102,8 +189,8 @@ ALWI void floor_div_binary_scalar_tile(std::uint32_t idst0, std::uint32_t idst1,
         idst1,
         odst,
         VectorMode::RC)));
-}
 #endif
+}
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {

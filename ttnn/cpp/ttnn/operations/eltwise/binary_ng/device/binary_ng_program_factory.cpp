@@ -905,6 +905,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // INT32 keeps the dedicated div_int32_floor path from OpConfig.
     const bool use_fused_float_floor_div = op_type == BinaryOpType::DIV_FLOOR &&
                                            tt::tt_metal::is_floating_point(a_dtype) &&
+                                           // Quasar has the Compute API symbols but no fused SFPU body
+                                           // (_floor_body_ / rounding_ops are WH/BH). Keep DIV+FLOOR
+                                           // postprocess there; exact-multiple tests skip Quasar.
                                            tt::tt_metal::hal::get_arch() != tt::ARCH::QUASAR;
     const bool use_scalar_float_floor_div =
         use_fused_float_floor_div && operation_attributes.scalar.has_value() && a_dtype == DataType::FLOAT32;

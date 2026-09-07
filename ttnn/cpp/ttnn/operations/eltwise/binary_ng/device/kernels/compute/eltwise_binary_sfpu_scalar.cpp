@@ -52,8 +52,11 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
         copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
     }
 #ifdef SCALAR_RHS_ONCE
-    constexpr std::uint32_t scalar_dst = 1;
-    constexpr std::uint32_t recip_dst = 3;
+#if HAS_ACTIVATIONS(POST)
+#error "SCALAR_RHS_ONCE floor_div path does not implement POST activations or BINARY_SFPU_INIT"
+#endif
+    constexpr std::uint32_t scalar_dst = ckernel::kScalarFloorDivScalarDst;
+    constexpr std::uint32_t recip_dst = ckernel::kScalarFloorDivRecipDst;
     reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
     copy_init(cb_post_rhs.get_cb_id());
     copy_tile(cb_post_rhs.get_cb_id(), 0, scalar_dst);

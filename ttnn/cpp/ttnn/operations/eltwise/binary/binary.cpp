@@ -18,6 +18,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include <tt-metalium/hal.hpp>
 
 // Implementation macros for binary operations (must match declarations in binary.hpp)
 #define TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(NAME, OP_TYPE)                             \
@@ -1248,12 +1249,28 @@ Tensor floor_div(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     const float rhs_f = std::visit([](auto value) -> float { return static_cast<float>(value); }, rhs);
     if (rhs_f == 0.0f) {
+        auto resolved_sub_core_grids = sub_core_grids;
+        if (sub_device_id.has_value()) {
+            TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
+            resolved_sub_core_grids =
+                lhs.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+        }
         const float infinity = std::numeric_limits<float>::infinity();
         const float nan = std::nanf("");
         return ttnn::where(
-            ttnn::eqz(lhs, memory_config),
+            ttnn::eqz(lhs, memory_config, /*optional_output_tensor=*/std::nullopt, resolved_sub_core_grids),
             nan,
-            ttnn::multiply(ttnn::sign(lhs, memory_config), infinity, std::nullopt, memory_config));
+            ttnn::multiply(
+                ttnn::sign(lhs, memory_config, /*optional_output_tensor=*/std::nullopt, resolved_sub_core_grids),
+                infinity,
+                std::nullopt,
+                memory_config,
+                std::nullopt,
+                {},
+                {},
+                {},
+                std::nullopt,
+                resolved_sub_core_grids));
     }
     return ttnn::detail::invoke_binary_ng(
         lhs,
