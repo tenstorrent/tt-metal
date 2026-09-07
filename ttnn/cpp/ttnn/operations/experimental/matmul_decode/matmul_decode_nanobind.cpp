@@ -53,7 +53,7 @@ void bind_matmul_decode_operation(nb::module_& mod) {
 
     ttnn::bind_function<"matmul_decode", "ttnn.experimental.">(
         mod,
-        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False, mesh_coords: Optional[list[ttnn.MeshCoordinate]] = None, ring_gather: bool = False, output_core_grid: Optional[ttnn.CoreRangeSet] = None, output_mcast_two_hub: bool = False, rms_norm: bool = False, rms_norm_gamma: Optional[float] = None, rms_norm_epsilon: float = 1e-6) -> ttnn.Tensor
+        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False, mesh_coords: Optional[list[ttnn.MeshCoordinate]] = None, ring_gather: bool = False, output_core_grid: Optional[ttnn.CoreRangeSet] = None, output_mcast_two_hub: bool = False, rms_norm: bool = False, rms_norm_gamma: Optional[ttnn.Tensor] = None, rms_norm_epsilon: float = 1e-6) -> ttnn.Tensor
 
         Returns the matrix product of two tensors.
 
@@ -63,7 +63,8 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 program factory; the fold geometry is inferred from the operand shapes.
                 Full-width decode also accepts ROW_MAJOR HEIGHT_SHARDED A on B's core grid:
                 A is replicated on every core, M is the shard height, and compute treats each
-                row as a 1x32 tile.
+                row as a 1x32 tile. That output is ROW_MAJOR as well, so it can feed the next
+                decode without a relayout.
             input_tensor_b (ttnn.Tensor): the second tensor to be multiplied.
 
         Keyword Args:
@@ -143,8 +144,9 @@ void bind_matmul_decode_operation(nb::module_& mod) {
             rms_norm (bool, optional): fuse distributed RMS normalization of the full
                 logical output row before it is written or multicast. Full-width only.
                 Defaults to False.
-            rms_norm_gamma (float, optional): scalar RMSNorm gamma. Required when
-                ``rms_norm`` is True.
+            rms_norm_gamma (ttnn.Tensor, optional): WIDTH_SHARDED vector gamma on the
+                weight core grid, TILE 1x32, shard shape ``[1, N / num_weight_cores]``.
+                Required when ``rms_norm`` is True.
             rms_norm_epsilon (float, optional): non-negative RMSNorm epsilon. Defaults
                 to 1e-6.
 
@@ -203,19 +205,23 @@ void bind_matmul_decode_descriptor(nb::module_& mod) {
         .def_rw("output_core_grid", &ttnn::prim::MatmulDecodeParams::output_core_grid)
         .def_rw("output_mcast_two_hub", &ttnn::prim::MatmulDecodeParams::output_mcast_two_hub)
         .def_rw("rms_norm", &ttnn::prim::MatmulDecodeParams::rms_norm)
-        .def_rw("rms_norm_gamma", &ttnn::prim::MatmulDecodeParams::rms_norm_gamma)
         .def_rw("rms_norm_epsilon", &ttnn::prim::MatmulDecodeParams::rms_norm_epsilon);
 
     nb::class_<ttnn::prim::MatmulDecodeInputs>(mod, "MatmulDecodeInputs")
         .def(
             "__init__",
-            [](ttnn::prim::MatmulDecodeInputs* t, const Tensor& a, const Tensor& b) {
-                new (t) ttnn::prim::MatmulDecodeInputs{a, b};
+            [](ttnn::prim::MatmulDecodeInputs* t,
+               const Tensor& a,
+               const Tensor& b,
+               const std::optional<Tensor>& rms_norm_gamma) {
+                new (t) ttnn::prim::MatmulDecodeInputs{a, b, rms_norm_gamma};
             },
             nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"))
+            nb::arg("input_tensor_b"),
+            nb::arg("rms_norm_gamma") = nb::none())
         .def_rw("input_tensor_a", &ttnn::prim::MatmulDecodeInputs::input_tensor_a)
-        .def_rw("input_tensor_b", &ttnn::prim::MatmulDecodeInputs::input_tensor_b);
+        .def_rw("input_tensor_b", &ttnn::prim::MatmulDecodeInputs::input_tensor_b)
+        .def_rw("rms_norm_gamma", &ttnn::prim::MatmulDecodeInputs::rms_norm_gamma);
 
     nb::class_<ttnn::prim::MatmulDecodeDeviceOperation>(mod, "MatmulDecodeDeviceOperation")
         .def_static(

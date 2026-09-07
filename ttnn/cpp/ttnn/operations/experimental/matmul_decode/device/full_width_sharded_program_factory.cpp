@@ -93,8 +93,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const tt::DataFormat out_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
 
     const auto& inputB_tile = input_tensor_b.tensor_spec().tile();
-    const auto& output_tile = output_tensor.tensor_spec().tile();
     const tt::tt_metal::Tile in0_tile = in0_tile_for_compute(input_tensor_a);
+    const tt::tt_metal::Tile output_tile = out_tile_for_compute(input_tensor_a, output_tensor);
     const uint32_t in0_tile_size = in0_tile.get_tile_size(in0_data_format);
     const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
     const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
@@ -295,6 +295,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const uint32_t rms_scale_src_cb_index = CBIndex::c_13;
     const uint32_t rms_reduce_scaler_cb_index = CBIndex::c_14;
     const uint32_t rms_reduced_cb_index = CBIndex::c_15;
+    const uint32_t rms_gamma_cb_index = CBIndex::c_16;
     desc.cbs.push_back(CBDescriptor{
         .total_size = M_tiles * (in0_rm_hs ? K_tiles : inA_K_tiles_per_core) * in0_tile_size,
         .core_ranges = all_compute_cores_with_bbox,
@@ -443,6 +444,21 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
                 .page_size = out_tile_size,
                 .tile = out_tile_desc,
             }}},
+        });
+        const auto& gamma = tensor_args.rms_norm_gamma.value();
+        const tt::DataFormat gamma_data_format = datatype_to_dataformat_converter(gamma.dtype());
+        const auto& gamma_tile = gamma.tensor_spec().tile();
+        const uint32_t gamma_tile_size = gamma_tile.get_tile_size(gamma_data_format);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = inB_N_tiles_per_core * gamma_tile_size,
+            .core_ranges = inputB_core_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = rms_gamma_cb_index,
+                .data_format = gamma_data_format,
+                .page_size = gamma_tile_size,
+                .tile = TileDescriptor{gamma_tile},
+            }}},
+            .buffer = gamma.buffer(),
         });
         desc.cbs.push_back(CBDescriptor{
             .total_size = M_tiles * rms_tile_size,
@@ -817,17 +833,17 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_scale", rms_scale_cb_index);
         compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_reduce_scaler", rms_reduce_scaler_cb_index);
         compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_reduced", rms_reduced_cb_index);
+        compute_kernel_desc.named_compile_time_args.emplace_back("cb_rms_gamma", rms_gamma_cb_index);
         compute_kernel_desc.named_compile_time_args.emplace_back(
             "rms_packed_tiles_per_row", div_up(num_producers, tt::constants::TILE_HEIGHT / output_tile_height));
         const uint32_t inv_n_bits = std::bit_cast<uint32_t>(1.0F / static_cast<float>(operation_attributes.N));
         const uint32_t epsilon_bits = std::bit_cast<uint32_t>(operation_attributes.rms_norm_epsilon);
-        const uint32_t gamma_bits = std::bit_cast<uint32_t>(*operation_attributes.rms_norm_gamma);
         compute_kernel_desc.runtime_args.reserve(producer_cores.size());
         for (const auto& core : producer_cores) {
             compute_kernel_desc.runtime_args.emplace_back(
                 core,
                 KernelDescriptor::CoreRuntimeArgs{
-                    static_cast<uint32_t>(core == rms_hub_logical), inv_n_bits, epsilon_bits, gamma_bits});
+                    static_cast<uint32_t>(core == rms_hub_logical), inv_n_bits, epsilon_bits});
         }
     }
     desc.kernels.push_back(std::move(compute_kernel_desc));
@@ -1057,8 +1073,8 @@ ProgramDescriptor create_descriptor_ring_gather_full(
     const tt::DataFormat out_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
 
     const auto& inputB_tile = input_tensor_b.tensor_spec().tile();
-    const auto& output_tile = output_tensor.tensor_spec().tile();
     const tt::tt_metal::Tile in0_tile = in0_tile_for_compute(input_tensor_a);
+    const tt::tt_metal::Tile output_tile = out_tile_for_compute(input_tensor_a, output_tensor);
     const uint32_t in0_tile_size = in0_tile.get_tile_size(in0_data_format);
     const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
     const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);

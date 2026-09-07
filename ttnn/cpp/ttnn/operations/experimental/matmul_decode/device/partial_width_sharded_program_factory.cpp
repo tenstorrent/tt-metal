@@ -76,8 +76,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     const tt::DataFormat out_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
 
     const auto& inputB_tile = input_tensor_b.tensor_spec().tile();
-    const auto& output_tile = output_tensor.tensor_spec().tile();
     const tt::tt_metal::Tile in0_tile = in0_tile_for_compute(input_tensor_a);
+    const tt::tt_metal::Tile output_tile = out_tile_for_compute(input_tensor_a, output_tensor);
     const uint32_t in0_tile_size = in0_tile.get_tile_size(in0_data_format);
     const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
     const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
@@ -745,8 +745,8 @@ ProgramDescriptor create_descriptor_ring_gather_partial(
     const tt::DataFormat out_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
 
     const auto& inputB_tile = input_tensor_b.tensor_spec().tile();
-    const auto& output_tile = output_tensor.tensor_spec().tile();
     const tt::tt_metal::Tile in0_tile = in0_tile_for_compute(input_tensor_a);
+    const tt::tt_metal::Tile output_tile = out_tile_for_compute(input_tensor_a, output_tensor);
     const uint32_t in0_tile_size = in0_tile.get_tile_size(in0_data_format);
     const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
     const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
