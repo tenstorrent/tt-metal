@@ -12,17 +12,11 @@ Needs the checkpoint and a warm HF cache or network.
 import pytest
 import torch
 
+from models.common.metrics import compute_max_abs_error, compute_pcc
 from models.experimental.nomic_embed_text_v2_moe.common import (
-    BOS_TOKEN_ID,
-    EOS_TOKEN_ID,
-    MODEL_CARD_SENTENCES,
-    MODEL_CARD_SIMILARITY,
-    MODEL_CARD_TOLERANCE,
-    PAD_TOKEN_ID,
-    PARITY_PCC,
-    TOKENIZER_LENGTH,
-    max_abs_diff,
-    pcc,
+    MODEL_CARD,
+    PARITY,
+    TOKENIZER,
     random_input_ids,
 )
 from models.experimental.nomic_embed_text_v2_moe.reference import pipeline
@@ -36,10 +30,10 @@ def test_tokenizer_identity_and_special_tokens(tokenizer):
     """AutoTokenizer is safe even though AutoModel is not: tokenizer_config.json's explicit
     tokenizer_class outranks the nomic_bert model-type mapping. This is the canary on that."""
     assert "XLMRoberta" in type(tokenizer).__name__
-    assert tokenizer.pad_token_id == PAD_TOKEN_ID
-    assert tokenizer.bos_token_id == BOS_TOKEN_ID
-    assert tokenizer.eos_token_id == EOS_TOKEN_ID
-    assert len(tokenizer) == TOKENIZER_LENGTH
+    assert tokenizer.pad_token_id == TOKENIZER.pad_token_id
+    assert tokenizer.bos_token_id == TOKENIZER.bos_token_id
+    assert tokenizer.eos_token_id == TOKENIZER.eos_token_id
+    assert len(tokenizer) == TOKENIZER.length
     assert tokenizer.model_max_length == pipeline.MAX_SEQ_LENGTH
 
 
@@ -50,11 +44,11 @@ def test_vocab_size_exceeds_tokenizer_length(config, tokenizer):
 
 
 def test_model_card_similarity(config, reference_model, tokenizer):
-    embeddings = pipeline.encode(reference_model, tokenizer, list(MODEL_CARD_SENTENCES), prompt_name="passage")
+    embeddings = pipeline.encode(reference_model, tokenizer, list(MODEL_CARD.sentences), prompt_name="passage")
 
-    assert embeddings.shape == (len(MODEL_CARD_SENTENCES), config.hidden_size)
+    assert embeddings.shape == (len(MODEL_CARD.sentences), config.hidden_size)
     similarity = float(embeddings[0] @ embeddings[1])
-    assert abs(similarity - MODEL_CARD_SIMILARITY) < MODEL_CARD_TOLERANCE, f"got {similarity:.6f}"
+    assert abs(similarity - MODEL_CARD.cosine_similarity) < MODEL_CARD.tolerance, f"got {similarity:.6f}"
 
 
 def test_pipeline_matches_hf_backbone(reference_model, hf_model, tokenizer):
@@ -62,8 +56,8 @@ def test_pipeline_matches_hf_backbone(reference_model, hf_model, tokenizer):
     ours = pipeline.encode(reference_model, tokenizer, texts)
     theirs = pipeline.encode(hf_model, tokenizer, texts)
 
-    assert pcc(ours, theirs) > PARITY_PCC
-    assert max_abs_diff(ours, theirs) < 1e-5
+    assert compute_pcc(ours, theirs) > PARITY.pcc
+    assert compute_max_abs_error(ours, theirs) < 1e-5
 
 
 def test_embeddings_are_unit_norm(reference_model, tokenizer):
@@ -125,7 +119,7 @@ def test_mean_pool_excludes_padding(reference_model, tokenizer):
     batched = pipeline.encode(reference_model, tokenizer, ragged, prompt_name="passage")
 
     assert float(alone[0] @ batched[0]) > 0.9999
-    assert max_abs_diff(alone[0], batched[0]) < 1e-3
+    assert compute_max_abs_error(alone[0], batched[0]) < 1e-3
 
 
 def test_mean_pool_is_not_cls_pooling(reference_model, tokenizer):

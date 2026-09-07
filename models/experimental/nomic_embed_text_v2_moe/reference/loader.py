@@ -14,7 +14,7 @@ from typing import Optional
 
 import torch
 
-from models.experimental.nomic_embed_text_v2_moe.common import MODEL_REVISION, resolve_checkpoint
+from models.experimental.nomic_embed_text_v2_moe.common import resolve_checkpoint
 from models.experimental.nomic_embed_text_v2_moe.reference.configuration_nomic_moe import (
     NomicMoEConfig,
     load_vendored_config,
@@ -100,17 +100,9 @@ def load_reference_model(
 def load_pretrained_reference_model(allow_download: bool = True) -> NomicBertModel:
     """One call for a reference model holding the real pinned checkpoint weights.
 
-    Composes checkpoint resolution, the safetensors load, config validation and the strict
-    load. Prefer this over repeating the sequence; `load_reference_model` stays available for
-    callers that already hold a state dict, such as the synthetic-weight tests.
-
-    Deliberately offers no revision argument. The config comes from the vendored snapshot, so
-    a revision knob here would pair one revision's weights with another's config: a mismatch
-    in any non-shape field would load cleanly under strict=True and compute silently wrong.
-    Loading a different revision means composing the four steps and validating that revision's
-    own config through from_hf_config.
+    Composes checkpoint resolution, the safetensors load and the strict load. Prefer this over
+    repeating the sequence; `load_reference_model` stays available for callers that already
+    hold a state dict, such as the synthetic-weight tests.
     """
-    state_dict = load_state_dict_from_safetensors(
-        resolve_checkpoint(revision=MODEL_REVISION, allow_download=allow_download)
-    )
+    state_dict = load_state_dict_from_safetensors(resolve_checkpoint(allow_download=allow_download))
     return load_reference_model(load_vendored_config(), state_dict)

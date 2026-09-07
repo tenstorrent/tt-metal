@@ -49,10 +49,17 @@ def reference_model(checkpoint_path):
 
 @pytest.fixture(scope="session")
 def hf_model():
-    from models.experimental.nomic_embed_text_v2_moe.reference.hf_reference import load_hf_model
+    from models.experimental.nomic_embed_text_v2_moe.reference.hf_reference import (
+        RemoteCodeResolutionError,
+        load_hf_model,
+    )
 
     try:
         return load_hf_model()
+    except RemoteCodeResolutionError:
+        # The containment guard firing is the failure these tests exist to catch. Skipping it
+        # here would turn a downgraded golden reference into a green run.
+        raise
     except Exception as exc:
         pytest.skip(f"could not load the upstream HF model: {type(exc).__name__}: {exc}")
 

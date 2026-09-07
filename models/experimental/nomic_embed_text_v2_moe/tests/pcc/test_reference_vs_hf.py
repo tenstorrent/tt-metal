@@ -12,13 +12,11 @@ Needs the checkpoint and a warm HF cache or network.
 import pytest
 import torch
 
+from models.common.metrics import compute_max_abs_error, compute_pcc
 from models.experimental.nomic_embed_text_v2_moe.common import (
-    PARITY_MAX_ABS,
-    PARITY_PCC,
+    PARITY,
     capture_hidden_states,
     layer_ladder_paths,
-    max_abs_diff,
-    pcc,
     random_input_ids,
 )
 from models.experimental.nomic_embed_text_v2_moe.reference.hf_reference import (
@@ -74,8 +72,8 @@ def test_end_to_end_parity(config, reference_model, hf_model, batch, seqlen, pad
     theirs = hf_last_hidden_state(hf_model, input_ids, attention_mask)
 
     assert ours.shape == theirs.shape
-    assert pcc(ours, theirs) > PARITY_PCC
-    assert max_abs_diff(ours, theirs) < PARITY_MAX_ABS
+    assert compute_pcc(ours, theirs) > PARITY.pcc
+    assert compute_max_abs_error(ours, theirs) < PARITY.max_abs
 
 
 def test_layer_ladder_parity(config, reference_model, hf_model):
@@ -89,9 +87,10 @@ def test_layer_ladder_parity(config, reference_model, hf_model):
     assert len(paths) == config.num_ladder_points
 
     failures = [
-        f"{path}: pcc={pcc(ours[path], theirs[path]):.9f} max_abs={max_abs_diff(ours[path], theirs[path]):.3e}"
+        f"{path}: pcc={compute_pcc(ours[path], theirs[path]):.9f} max_abs={compute_max_abs_error(ours[path], theirs[path]):.3e}"
         for path in paths
-        if pcc(ours[path], theirs[path]) <= PARITY_PCC or max_abs_diff(ours[path], theirs[path]) >= PARITY_MAX_ABS
+        if compute_pcc(ours[path], theirs[path]) <= PARITY.pcc
+        or compute_max_abs_error(ours[path], theirs[path]) >= PARITY.max_abs
     ]
     assert not failures, "first divergence at " + failures[0]
 
@@ -127,7 +126,7 @@ def test_upstream_requires_an_attention_mask_but_the_reference_does_not(config, 
 
     with torch.no_grad():
         ours_masked = reference_model(input_ids, attention_mask=attention_mask)
-    assert pcc(ours_masked, hf_last_hidden_state(hf_model, input_ids, attention_mask)) > PARITY_PCC
+    assert compute_pcc(ours_masked, hf_last_hidden_state(hf_model, input_ids, attention_mask)) > PARITY.pcc
 
 
 def test_upstream_matryoshka_dim_slices_the_sequence_axis(config, hf_model):

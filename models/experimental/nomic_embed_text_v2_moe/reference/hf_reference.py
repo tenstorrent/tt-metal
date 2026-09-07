@@ -15,16 +15,16 @@ Measured on transformers 5.12.1 at the pinned revision:
                                  MISSING and randomly initialised. The result has 136
                                  parameters, no MoE, and returns finite, wrong numbers.
 
-Containment: pass trust_remote_code=True and code_revision, then assert the resolved class
-came from transformers_modules. The assert is the load-bearing part; without it a future
-transformers release that changes resolution order silently downgrades the golden reference.
+Containment: pass trust_remote_code=True, then assert the resolved class came from
+transformers_modules. The assert is the load-bearing part; without it a future transformers
+release that changes resolution order silently downgrades the golden reference.
 """
 
 from __future__ import annotations
 
 import torch
 
-from models.experimental.nomic_embed_text_v2_moe.common import CODE_REVISION, MODEL_ID, MODEL_REVISION
+from models.experimental.nomic_embed_text_v2_moe.common import MODEL
 
 REMOTE_MODULE_PREFIX = "transformers_modules"
 
@@ -40,32 +40,30 @@ def assert_resolved_from_remote_code(obj: object, what: str) -> None:
             f"{what} resolved to {module}.{type(obj).__name__}, not the remote code under "
             f"{REMOTE_MODULE_PREFIX!r}. The native transformers nomic_bert implementation targets "
             "nomic-embed-text-v1.5, has no MoE, and discards this checkpoint's expert weights "
-            "without raising. Pass trust_remote_code=True and code_revision."
+            "without raising. Pass trust_remote_code=True."
         )
 
 
-def load_hf_config(revision: str = MODEL_REVISION, code_revision: str = CODE_REVISION):
+def load_hf_config():
     from transformers import AutoConfig
 
     config = AutoConfig.from_pretrained(
-        MODEL_ID,
-        revision=revision,
+        MODEL.model_id,
+        revision=MODEL.revision,
         trust_remote_code=True,
-        code_revision=code_revision,
     )
     assert_resolved_from_remote_code(config, "AutoConfig")
     return config
 
 
-def load_hf_model(revision: str = MODEL_REVISION, code_revision: str = CODE_REVISION):
-    """The upstream model at the pinned revisions, eval mode, guaranteed remote-code."""
+def load_hf_model():
+    """The upstream model at the pinned revision, eval mode, guaranteed remote-code."""
     from transformers import AutoModel
 
     model = AutoModel.from_pretrained(
-        MODEL_ID,
-        revision=revision,
+        MODEL.model_id,
+        revision=MODEL.revision,
         trust_remote_code=True,
-        code_revision=code_revision,
         dtype=torch.float32,
     )
     assert_resolved_from_remote_code(model, "AutoModel")

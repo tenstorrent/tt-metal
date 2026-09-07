@@ -16,10 +16,9 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from models.common.metrics import compute_max_abs_error, compute_pcc
 from models.experimental.nomic_embed_text_v2_moe.common import (
     build_synthetic_model,
-    max_abs_diff,
-    pcc,
     random_input_ids,
     synthetic_state_dict,
 )
@@ -117,12 +116,12 @@ def test_rotary_cos_sin_is_concat_duplicated_not_repeat_interleaved(cfg):
         2, dim=-1
     ).unsqueeze(-2)
 
-    assert pcc(good, bad) < 0.95
+    assert compute_pcc(good, bad) < 0.95
 
     half = cfg.head_dim // 2
     bad_norm = bad[..., :half] ** 2 + bad[..., half:] ** 2
     good_norm = x[..., :half] ** 2 + x[..., half:] ** 2
-    assert max_abs_diff(bad_norm, good_norm) > 1e-3
+    assert compute_max_abs_error(bad_norm, good_norm) > 1e-3
 
 
 def test_wqkv_is_three_major(cfg):
@@ -210,7 +209,7 @@ def test_router_topk_weights_are_not_renormalized(cfg, moe_layer):
     assert int(top_experts.max()) < cfg.num_experts
 
     renormalized = top_weights / top_weights.sum(-1, keepdim=True)
-    assert max_abs_diff(renormalized, top_weights) > 1e-2
+    assert compute_max_abs_error(renormalized, top_weights) > 1e-2
 
 
 def test_softmax_over_topk_is_not_equivalent_to_topk_of_softmax(cfg, moe_layer):
@@ -222,7 +221,7 @@ def test_softmax_over_topk_is_not_equivalent_to_topk_of_softmax(cfg, moe_layer):
     wrong = torch.topk(logits, cfg.moe_top_k, dim=-1).values.softmax(dim=-1)
 
     torch.testing.assert_close(wrong.sum(-1), torch.ones(wrong.shape[0]), rtol=1e-5, atol=1e-5)
-    assert max_abs_diff(wrong, top_weights) > 1e-2
+    assert compute_max_abs_error(wrong, top_weights) > 1e-2
 
 
 def test_expert_shared_bias_is_added_once_after_the_sum(cfg, moe_layer):
@@ -245,8 +244,8 @@ def test_expert_shared_bias_is_added_once_after_the_sum(cfg, moe_layer):
         buggy.index_add_(0, token_idx, out)
     buggy = buggy.reshape(x.shape)
 
-    assert pcc(correct, buggy) > 0.99, "if PCC separated these, this test would be unnecessary"
-    assert max_abs_diff(correct, buggy) > 1e-3
+    assert compute_pcc(correct, buggy) > 0.99, "if PCC separated these, this test would be unnecessary"
+    assert compute_max_abs_error(correct, buggy) > 1e-3
 
     predicted_offset = (top_weights.sum(-1) - 1.0).reshape(x.shape[0], x.shape[1], 1) * experts.bias
     torch.testing.assert_close(buggy - correct, predicted_offset, rtol=1e-4, atol=1e-4)
@@ -260,8 +259,8 @@ def test_expert_loop_equals_dense_all_experts(cfg, moe_layer):
     loop_out = moe_layer.experts(x, top_weights, top_experts)
     dense_out = moe_layer.experts.dense_forward(x, dense_weights)
 
-    assert pcc(loop_out, dense_out) > 0.9999999
-    assert max_abs_diff(loop_out, dense_out) < 1e-4
+    assert compute_pcc(loop_out, dense_out) > 0.9999999
+    assert compute_max_abs_error(loop_out, dense_out) < 1e-4
 
 
 def test_w2_transposed_view_typechecks_but_is_garbage(cfg, moe_layer):
@@ -279,7 +278,7 @@ def test_w2_transposed_view_typechecks_but_is_garbage(cfg, moe_layer):
     per_expert = torch.matmul(act, w2_wrong.transpose(1, 2))
     wrong = (per_expert * dense_weights.t().unsqueeze(-1)).sum(0).reshape(x.shape) + experts.bias
 
-    assert abs(pcc(correct, wrong)) < 0.2
+    assert abs(compute_pcc(correct, wrong)) < 0.2
 
 
 def test_expert_axis_is_outer(cfg, moe_layer):
@@ -299,7 +298,7 @@ def test_gelu_is_exact_erf_not_tanh():
     exact = x * 0.5 * (1.0 + torch.erf(x / torch.sqrt(torch.tensor(2.0))))
 
     torch.testing.assert_close(F.gelu(x, approximate="none"), exact, rtol=1e-5, atol=1e-5)
-    assert max_abs_diff(F.gelu(x, approximate="tanh"), exact) > 1e-4
+    assert compute_max_abs_error(F.gelu(x, approximate="tanh"), exact) > 1e-4
 
 
 def test_token_type_embedding_is_a_single_row_constant(cfg, synthetic_model):
@@ -348,8 +347,8 @@ def test_padding_does_not_leak_into_kept_positions(cfg, synthetic_model):
         full = synthetic_model(input_ids[:, :keep], attention_mask=attention_mask[:, :keep])
         padded = synthetic_model(padded_ids, attention_mask=padded_mask)
 
-    assert pcc(full, padded[:, :keep]) > 0.9999999
-    assert max_abs_diff(full, padded[:, :keep]) < 1e-4
+    assert compute_pcc(full, padded[:, :keep]) > 0.9999999
+    assert compute_max_abs_error(full, padded[:, :keep]) < 1e-4
 
 
 def test_strict_load_of_synthetic_state_dict_is_clean(cfg):

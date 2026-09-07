@@ -1,87 +1,127 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned revisions, checkpoint resolution, metrics and test-input helpers."""
+"""Pinned revision, checkpoint resolution, contracts and test-input helpers."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import torch
 
-# Two repositories must be pinned. The weights repo's config.json auto_map points the model
-# and config classes at CODE_ID, so pinning only MODEL_REVISION leaves the model definition
-# floating on that repo's main branch.
-MODEL_ID = "nomic-ai/nomic-embed-text-v2-moe"
-MODEL_REVISION = "1066b6599d099fbb93dfcb64f9c37a7c9e503e85"
-CODE_ID = "nomic-ai/nomic-bert-2048"
-CODE_REVISION = "7710840340a098cfb869c4f65e87cf2b1b70caca"
+
+@dataclass(frozen=True)
+class ModelReference:
+    model_id: str
+    revision: str
+
+
+@dataclass(frozen=True)
+class CheckpointContract:
+    n_tensors: int
+    n_parameters: int
+
+
+@dataclass(frozen=True)
+class TokenizerContract:
+    length: int
+    pad_token_id: int
+    bos_token_id: int
+    eos_token_id: int
+
+
+@dataclass(frozen=True)
+class ModelCardExample:
+    sentences: tuple[str, str]
+    cosine_similarity: float
+    tolerance: float
+
+
+@dataclass(frozen=True)
+class ParityThresholds:
+    pcc: float
+    max_abs: float
+
+
+MODEL = ModelReference(
+    model_id="nomic-ai/nomic-embed-text-v2-moe",
+    revision="1066b6599d099fbb93dfcb64f9c37a7c9e503e85",
+)
 
 # Asserted by tests/pcc/test_checkpoint_contract.py.
-N_CHECKPOINT_TENSORS = 148
-N_PARAMETERS = 475_292_928
+CHECKPOINT = CheckpointContract(
+    n_tensors=148,
+    n_parameters=475_292_928,
+)
 
-# Tokenizer length. Smaller than config.vocab_size, which is padded up to
-# pad_vocab_size_multiple, so the embedding table has unreachable trailing rows.
-TOKENIZER_LENGTH = 250002
-PAD_TOKEN_ID = 1
-BOS_TOKEN_ID = 0
-EOS_TOKEN_ID = 2
+# length is smaller than config.vocab_size, which is padded up to pad_vocab_size_multiple,
+# so the embedding table has unreachable trailing rows.
+TOKENIZER = TokenizerContract(
+    length=250002,
+    pad_token_id=1,
+    bos_token_id=0,
+    eos_token_id=2,
+)
 
 # The model card's worked example: cosine similarity between the passage-prefixed embeddings
 # of these two sentences. The card prints 0.9118; the reference reproduces 0.911788.
-MODEL_CARD_SENTENCES = ("Hello!", "¡Hola!")
-MODEL_CARD_SIMILARITY = 0.9118
-MODEL_CARD_TOLERANCE = 1e-4
+MODEL_CARD = ModelCardExample(
+    sentences=("Hello!", "¡Hola!"),
+    cosine_similarity=0.9118,
+    tolerance=1e-4,
+)
 
-# Parity thresholds against upstream. The reference is bit-exact in practice (max-abs 0.0),
-# so these leave room only for fp32 non-determinism. Loosening one is a regression, not a
-# tolerance adjustment.
-PARITY_PCC = 0.9999999
-PARITY_MAX_ABS = 1e-4
+# Thresholds against upstream. The reference is bit-exact in practice (max-abs 0.0), so these
+# leave room only for fp32 non-determinism. Loosening one is a regression, not a tolerance
+# adjustment.
+PARITY = ParityThresholds(
+    pcc=0.9999999,
+    max_abs=1e-4,
+)
 
 
-def resolve_checkpoint(revision: str = MODEL_REVISION, allow_download: bool = True) -> Path:
+def resolve_checkpoint(allow_download: bool = True) -> Path:
     from huggingface_hub import hf_hub_download
 
     return Path(
         hf_hub_download(
-            repo_id=MODEL_ID,
+            repo_id=MODEL.model_id,
             filename="model.safetensors",
-            revision=revision,
+            revision=MODEL.revision,
             local_files_only=not allow_download,
         )
     )
 
 
-def resolve_config(revision: str = MODEL_REVISION, allow_download: bool = True) -> Path:
+def resolve_config(allow_download: bool = True) -> Path:
     from huggingface_hub import hf_hub_download
 
     return Path(
         hf_hub_download(
-            repo_id=MODEL_ID,
+            repo_id=MODEL.model_id,
             filename="config.json",
-            revision=revision,
+            revision=MODEL.revision,
             local_files_only=not allow_download,
         )
     )
 
 
-def checkpoint_is_cached(revision: str = MODEL_REVISION) -> bool:
+def checkpoint_is_cached() -> bool:
     try:
-        resolve_checkpoint(revision=revision, allow_download=False)
+        resolve_checkpoint(allow_download=False)
         return True
     except Exception:
         return False
 
 
-def load_tokenizer(revision: str = MODEL_REVISION):
+def load_tokenizer():
     """AutoTokenizer is safe here even though AutoModel is not: tokenizer_config.json's
     explicit tokenizer_class outranks the nomic_bert model-type mapping."""
     from transformers import AutoTokenizer
 
-    return AutoTokenizer.from_pretrained(MODEL_ID, revision=revision)
+    return AutoTokenizer.from_pretrained(MODEL.model_id, revision=MODEL.revision)
 
 
 def capture_hidden_states(model: torch.nn.Module, module_paths: list[str]) -> tuple[dict, list]:
@@ -111,37 +151,12 @@ def capture_hidden_states(model: torch.nn.Module, module_paths: list[str]) -> tu
     return captures, handles
 
 
-def layer_ladder_paths(num_hidden_layers: int, encoder_prefix: str = "encoder.layers") -> list[str]:
+def layer_ladder_paths(num_hidden_layers: int) -> list[str]:
     """Capture points for the parity ladder: post-embedding norm, then each block."""
-    return ["emb_ln"] + [f"{encoder_prefix}.{i}" for i in range(num_hidden_layers)]
+    return ["emb_ln"] + [f"encoder.layers.{i}" for i in range(num_hidden_layers)]
 
 
-def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    """Pearson correlation over the flattened tensors.
-
-    PCC mean-centres, so a near-constant additive offset is invisible to it. The MoE
-    shared-bias bug has exactly that shape and scores 0.9999998. Use max_abs_diff for that
-    class of bug.
-    """
-    x = a.detach().to(torch.float64).flatten()
-    y = b.detach().to(torch.float64).flatten()
-    x = x - x.mean()
-    y = y - y.mean()
-    denom = torch.linalg.norm(x) * torch.linalg.norm(y)
-    if denom == 0:
-        return 1.0 if torch.allclose(x, y) else 0.0
-    return float((x @ y) / denom)
-
-
-def max_abs_diff(a: torch.Tensor, b: torch.Tensor) -> float:
-    return float((a.detach().to(torch.float64) - b.detach().to(torch.float64)).abs().max())
-
-
-def seed_everything(seed: int = 0) -> None:
-    torch.manual_seed(seed)
-
-
-def synthetic_state_dict(config, seed: int = 0, std: float = 0.02) -> dict[str, torch.Tensor]:
+def synthetic_state_dict(config, seed: int = 0) -> dict[str, torch.Tensor]:
     """A deterministic state dict matching the real key/shape contract.
 
     Lets the structural tests run with no network and no 1.8 GB download at the model's real
@@ -159,7 +174,7 @@ def synthetic_state_dict(config, seed: int = 0, std: float = 0.02) -> dict[str, 
         elif key.endswith(".bias") and not key.endswith("experts.bias"):
             state[key] = torch.zeros(shape)
         else:
-            state[key] = torch.randn(shape, generator=generator) * std
+            state[key] = torch.randn(shape, generator=generator) * 0.02
     return state
 
 

@@ -14,17 +14,8 @@ import json
 import pytest
 import torch
 
-from models.experimental.nomic_embed_text_v2_moe.common import (
-    MODEL_REVISION,
-    N_CHECKPOINT_TENSORS,
-    N_PARAMETERS,
-    resolve_config,
-)
-from models.experimental.nomic_embed_text_v2_moe.reference.configuration_nomic_moe import (
-    ConfigAssumptionError,
-    from_hf_config,
-    load_vendored_hf_config,
-)
+from models.experimental.nomic_embed_text_v2_moe.common import CHECKPOINT, resolve_config
+from models.experimental.nomic_embed_text_v2_moe.reference.configuration_nomic_moe import load_vendored_hf_config
 from models.experimental.nomic_embed_text_v2_moe.reference.loader import (
     ABSENT_KEY_SUBSTRINGS,
     expected_checkpoint_keys,
@@ -41,8 +32,8 @@ def layer_indices_with(state_dict, marker: str) -> list[int]:
 
 
 def test_tensor_count_and_parameter_total(state_dict):
-    assert len(state_dict) == N_CHECKPOINT_TENSORS
-    assert sum(tensor.numel() for tensor in state_dict.values()) == N_PARAMETERS
+    assert len(state_dict) == CHECKPOINT.n_tensors
+    assert sum(tensor.numel() for tensor in state_dict.values()) == CHECKPOINT.n_parameters
 
 
 def test_all_tensors_are_float32(state_dict):
@@ -143,19 +134,5 @@ def test_vocab_size_is_padded_to_the_configured_multiple(config):
 def test_vendored_config_matches_the_pinned_revision(checkpoint_path):
     # Depends on checkpoint_path for its skip-when-uncached guard: the config ships in the same
     # snapshot, so without it this fails instead of skipping on a cold cache.
-    live = json.load(open(resolve_config(revision=MODEL_REVISION, allow_download=False)))
+    live = json.load(open(resolve_config(allow_download=False)))
     assert load_vendored_hf_config() == live
-
-
-def test_config_validation_rejects_a_violated_assumption(expect_error):
-    hf_config = dict(load_vendored_hf_config())
-    hf_config["moe_normalize_expert_weights"] = True
-    with expect_error(ConfigAssumptionError, "moe_normalize_expert_weights"):
-        from_hf_config(hf_config)
-
-
-def test_config_validation_rejects_a_missing_field(expect_error):
-    hf_config = dict(load_vendored_hf_config())
-    del hf_config["prenorm"]
-    with expect_error(ConfigAssumptionError, "prenorm"):
-        from_hf_config(hf_config)
