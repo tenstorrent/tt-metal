@@ -227,11 +227,13 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
         matmul_init(cb_q_in, cb_k_in);
-        // #49266: The Q tilize runs on SrcA; on galaxy Q is a half-tile (num_faces=2), and
-        // tilize_uninit correctly restores SrcA to Q's geometry. But the QK matmul reads operands
-        // REVERSED (SrcA <- in1 = cb_k_in, num_faces=4), and the per-k_chunk reconfig below is
-        // IGNORE (format-only). Reprogram SrcA/SrcB tile geometry ONCE here for the matmul
-        // operands (is_tile_dim_reconfig_en=true) so K is unpacked with the correct num_faces.
+        // #49266: The Q tilize runs on SrcA; on galaxy Q is a half-tile (num_faces=2). On
+        // Wormhole tilize_uninit does NOT restore SrcA geometry -- it reverts only the tilize-mode
+        // config word and Tile_x_dim, never the tile-descriptor Z-dim (tt-llk#1161). And the QK
+        // matmul reads operands REVERSED (SrcA <- in1 = cb_k_in, num_faces=4), while the
+        // per-k_chunk reconfig below is IGNORE (format-only). Reprogram SrcA/SrcB tile geometry
+        // ONCE here for the matmul operands (is_tile_dim_reconfig_en=true) so K is unpacked with
+        // the correct num_faces.
         // One-time, not per-chunk: nothing after this re-establishes Q's geometry on SrcA (K and V
         // are both full tiles), so the per-chunk reconfig can stay IGNORE. Without this, SrcA stays
         // at num_faces=2 and the matmul reads K wrong -> Top-1 0%. (Full-tile Q: this is a no-op

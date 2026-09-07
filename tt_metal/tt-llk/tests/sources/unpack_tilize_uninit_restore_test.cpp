@@ -30,10 +30,18 @@
 //         tile-descriptor Z-dim at a tilize-specific value, or leaves
 //         tilize_mode set), this datacopy is corrupted and the test fails.
 //
-// The `num_faces ∈ {1, 2}` cases specifically exercise that the tile-descriptor
-// Z-dim is preserved (not corrupted) across tilize+uninit for non-4-face operands
-// — a case no other tilize test covers, since every other uninit call site uses
-// num_faces=4.
+// What the `num_faces ∈ {1, 2}` cases prove is that uninit restores word-0 and
+// `Tile_x_dim_cntx0` to the *operand* baseline rather than a hardcoded 4-face /
+// 16-row one — a case no other tilize test covers, since every other uninit call
+// site uses num_faces=4.
+//
+// What they do NOT prove is descriptor Z-dim preservation. `_llk_unpack_hw_configure_`
+// and `_llk_unpack_tilize_uninit_wrapper_` below are handed the SAME `num_faces`, so the
+// descriptor write this teardown used to perform stored a bit-identical value: the test passes
+// identically under the old (descriptor-writing) and new (descriptor-preserving)
+// teardown, for every `num_faces`. Telling the two apart needs a pre-tilize Z-dim that
+// *differs* from the tilize operand's `num_faces` — see
+// `unpack_tilize_uninit_descriptor_test.cpp`.
 
 #include <algorithm>
 #include <cstdint>

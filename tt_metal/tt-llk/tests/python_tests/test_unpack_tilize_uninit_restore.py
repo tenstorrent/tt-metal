@@ -18,14 +18,20 @@ The C++ source runs two ops back-to-back on the SAME operand format:
 
 Because there is no reconfig, the uninit is the only thing that resets the
 unpacker state between the two ops. If it leaves ``tilize_mode`` or
-``Tile_x_dim_cntx0`` in a tilize-specific / wrong-faces state — or if it
-corrupts the SrcA tile-descriptor Z-dim (num_faces) or Y-dim, which on Wormhole
-it must leave exactly as ``configure_unpack_AB`` programmed them (tt-llk#1161)
-— the second datacopy reads corrupted data and the result diverges from
+``Tile_x_dim_cntx0`` in a tilize-specific / wrong-faces state, the second
+datacopy reads corrupted data and the result diverges from
 ``TilizeGolden(src_A, num_faces)``.
 
-``num_faces ∈ {1, 2}`` specifically covers non-4-face operands, for which no
-other tilize test reaches this teardown.
+``num_faces ∈ {1, 2}`` covers non-4-face operands, for which no other tilize
+test reaches this teardown — so what these cases prove is that uninit restores
+the *operand* baseline, not a hardcoded 4-face / 16-row one.
+
+They do **not** prove SrcA tile-descriptor Z-dim preservation. ``hw_configure``
+and the uninit here are given the same ``num_faces``, so the descriptor write
+that tt-llk#1161 removed stored a bit-identical value — this test passes
+identically under both teardowns. Distinguishing them needs a pre-tilize Z-dim
+that differs from the tilize operand's ``num_faces``: see
+``test_unpack_tilize_uninit_descriptor.py``.
 """
 
 import pytest
