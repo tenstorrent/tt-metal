@@ -49,6 +49,13 @@ enum SignalSource : uint32_t {
     // saturates, and it is what makes a low FPU% legible as "busy but not computing". This
     // bit exists so a viewer can say which one it is showing, not to mark it second-class.
     SIGNAL_SRC_ACTIVITY = 1u << 2,
+    // The TDMA counters, declared separately because a producer can sample one and not the
+    // other. The ARC sweep has four per-core slots and slot 3 is OVERLOADED: it carries
+    // unpack, or SFPU on a -DTU_SFPU_CONCURRENT build, never both. So on that firmware
+    // unpack_busy_p1000 is zero because it was not measured, which is not the same as a
+    // core that unpacked nothing. Pack has a slot of its own and is always sampled.
+    SIGNAL_SRC_PACK = 1u << 3,
+    SIGNAL_SRC_UNPACK = 1u << 4,
 };
 
 // Written once at collector startup; `last_update_us` refreshed every tick.
