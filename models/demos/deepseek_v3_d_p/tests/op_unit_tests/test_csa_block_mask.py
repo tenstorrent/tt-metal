@@ -12,6 +12,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_plain_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.compressed_sparse_attention import block_mask
 
 _BATCH = 1
@@ -73,7 +74,7 @@ def _assert_every_chip_agrees(mesh_device, actual, expected, note=""):
 _MESH = [
     pytest.param(
         (2, 2),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        fabric_1d_plain_device_params(),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
         id="2x2",
     )

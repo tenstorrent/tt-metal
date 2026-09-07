@@ -42,7 +42,3 @@ target_link_libraries(
 
 install(TARGETS ttnn_op_experimental_deepseek_prefill_compressor_state_exchange LIBRARY COMPONENT tar)
 install(TARGETS ttnn_op_experimental_deepseek_prefill_compressor_state_exchange FILE_SET api COMPONENT ttnn-dev)
-
-if(TARGET ttnn)
-    target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_COMPRESSOR_STATE_EXCHANGE_NANOBIND_SRCS})
-endif()
