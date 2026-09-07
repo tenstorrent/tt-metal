@@ -2717,6 +2717,7 @@ class MiniMaxH3Pipeline:
 
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
+        step_timers: dict[str, float] | None = {} if os.environ.get("MINIMAX_H3_STEP_TIMERS", "0") == "1" else None
         if _is_host_rank():
             _tqdm_spacer()
         for i, t in enumerate(
@@ -2772,6 +2773,17 @@ class MiniMaxH3Pipeline:
             ttnn.add_(self._tt_video.value, video_velocity)
             ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
             ttnn.add_(self._tt_audio.value, audio_velocity)
+            if step_timers is not None:
+                # MINIMAX_H3_STEP_TIMERS=1: the transformer synchronised at each of its section
+                # boundaries; sync once more to time the Euler update, then fold this step's sections
+                # into the steady-state averages reported in the breakdown line.
+                mark = time.perf_counter()
+                ttnn.synchronize_device(self.mesh_device)
+                sections = dict(getattr(transformer, "last_step_timers", {}))
+                sections["euler"] = time.perf_counter() - mark
+                if i > 0:
+                    for name, seconds in sections.items():
+                        step_timers[name] = step_timers.get(name, 0.0) + seconds
             t_step = time.time() - t_step
             if i == 0:
                 t_first = t_step
@@ -2789,6 +2801,12 @@ class MiniMaxH3Pipeline:
             f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "
             f"first step {t_first:.1f}s | steady {t_steady:.1f}s over {steady_steps} steps "
             f"({t_steady / steady_steps * 1000:.0f} ms/step)"
+            + (
+                " | synced sections/step: "
+                + ", ".join(f"{name} {seconds / steady_steps * 1000:.0f} ms" for name, seconds in step_timers.items())
+                if step_timers
+                else ""
+            )
         )
 
         # condition rows live in their own arenas, so `[:num_cond]` stays pristine -- the return
