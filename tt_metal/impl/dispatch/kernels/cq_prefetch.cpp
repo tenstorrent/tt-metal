@@ -798,12 +798,6 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                     fence,
                     cmd_ptr);
 #endif
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-                // NoC reads land in TL1 without snooping the DM cache, so lines this ring region left
-                // cached from an earlier wrap are stale. Every command the prefetcher reads comes through
-                // here.
-                invalidate_l2_cache_range(inflight[idx].read_start, inflight[idx].reserved_size);
-#endif
                 noc_async_read_barrier_with_trid(inflight[idx].trid);
 
 #if ENABLE_PREFETCH_DPRINTS
@@ -1660,7 +1654,7 @@ uint32_t process_relay_paged_packed_cmd(uintptr_t cmd_ptr, uint32_t& downstream_
     if (cmddat_wrap_enable && sub_cmds_length > remaining) {
         // wrap cmddat
         uint32_t amt = remaining / sizeof(uint32_t);
-        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
+        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true>(
             reinterpret_cast<volatile uint32_t tt_l1_ptr*>(data_ptr), amt, l1_cache_pos);
         sub_cmds_length -= remaining;
         data_ptr = cmddat_q_base;
@@ -1675,8 +1669,11 @@ uint32_t process_relay_paged_packed_cmd(uintptr_t cmd_ptr, uint32_t& downstream_
                    ((amt + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
                        l1_to_local_cache_copy_chunk -
                    l1_cache) < l1_cache_elements_rounded);
-    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
-        reinterpret_cast<volatile uint32_t tt_l1_ptr*>(data_ptr), amt, l1_cache_pos);
+    careful_copy_from_l1_to_local_cache<
+        l1_to_local_cache_copy_chunk,
+        l1_cache_elements_rounded,
+        true,
+        !cmddat_wrap_enable>(reinterpret_cast<volatile uint32_t tt_l1_ptr*>(data_ptr), amt, l1_cache_pos);
     // Store a sentinel non 0 value at the end to save a test/branch in read path
     ((CQPrefetchRelayPagedPackedSubCmd*)&l1_cache_pos[amt])->length = 1;
 
@@ -1859,11 +1856,6 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
                 pages_to_read--;
             }
         }
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-        // Same as fetch_q_get_cmds: the NoC read does not snoop. Safe ahead of the barrier because nothing
-        // reads the region until it returns.
-        invalidate_l2_cache_range(cmd_ptr, initial_read_length);
-#endif
         noc_async_read_barrier_with_trid(1);
         // update length always after barrier to make sure data in cmddat_q
         exec_buf_state.page_id = page_id;
@@ -1872,10 +1864,6 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
         exec_buf_state.read_ptr = read_ptr;
     } else {
         ASSERT(exec_buf_state.length == 0);
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-        // As above; prefetch_length is the extent the previous call issued.
-        invalidate_l2_cache_range(cmd_ptr, exec_buf_state.prefetch_length);
-#endif
         // add barrier to wait for prefetch noc read to complete
         noc_async_read_barrier_with_trid(1);
         // update always after barrier to make sure data in cmddat_q
@@ -2056,7 +2044,7 @@ void* copy_into_l1_cache(
     uint32_t* l1_cache_pos = l1_cache;
     while (sub_cmds_length > remaining) {
         uint32_t amt = remaining / sizeof(uint32_t);
-        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
+        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true>(
             l1_ptr, amt, l1_cache_pos);
 
         l1_cache_pos += amt;
@@ -2077,7 +2065,7 @@ void* copy_into_l1_cache(
                    ((amt + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
                        l1_to_local_cache_copy_chunk -
                    l1_cache) < l1_cache_elements_rounded);
-    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true>(
         l1_ptr, amt, l1_cache_pos);
 
     // Return a pointer to right after the last copy
@@ -2243,7 +2231,7 @@ uint32_t process_relay_ringbuffer_cmd(uintptr_t cmd_ptr, uint32_t& downstream__d
     if (cmddat_wrap_enable && sub_cmds_length > remaining) {
         // wrap cmddat
         uint32_t amt = remaining / sizeof(uint32_t);
-        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
+        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true>(
             reinterpret_cast<volatile uint32_t tt_l1_ptr*>(data_ptr), amt, l1_cache_pos);
         sub_cmds_length -= remaining;
         data_ptr = cmddat_q_base;
@@ -2258,8 +2246,11 @@ uint32_t process_relay_ringbuffer_cmd(uintptr_t cmd_ptr, uint32_t& downstream__d
                    ((amt + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
                        l1_to_local_cache_copy_chunk -
                    l1_cache) < l1_cache_elements_rounded);
-    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
-        reinterpret_cast<volatile uint32_t tt_l1_ptr*>(data_ptr), amt, l1_cache_pos);
+    careful_copy_from_l1_to_local_cache<
+        l1_to_local_cache_copy_chunk,
+        l1_cache_elements_rounded,
+        true,
+        !cmddat_wrap_enable>(reinterpret_cast<volatile uint32_t tt_l1_ptr*>(data_ptr), amt, l1_cache_pos);
 
     process_relay_ringbuffer_sub_cmds(count, l1_cache);
     return stride;
@@ -2380,7 +2371,7 @@ uint32_t process_relay_linear_packed_cmd(uintptr_t cmd_ptr, uint32_t& downstream
     if (cmddat_wrap_enable && sub_cmds_length > remaining) {
         // wrap cmddat
         uint32_t amt = remaining / sizeof(uint32_t);
-        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
+        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true>(
             reinterpret_cast<volatile uint32_t tt_l1_ptr*>(data_ptr), amt, l1_cache_pos);
         sub_cmds_length -= remaining;
         data_ptr = cmddat_q_base;
@@ -2395,8 +2386,11 @@ uint32_t process_relay_linear_packed_cmd(uintptr_t cmd_ptr, uint32_t& downstream
                    ((amt + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
                        l1_to_local_cache_copy_chunk -
                    l1_cache) < l1_cache_elements_rounded);
-    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
-        reinterpret_cast<volatile uint32_t tt_l1_ptr*>(data_ptr), amt, l1_cache_pos);
+    careful_copy_from_l1_to_local_cache<
+        l1_to_local_cache_copy_chunk,
+        l1_cache_elements_rounded,
+        true,
+        !cmddat_wrap_enable>(reinterpret_cast<volatile uint32_t tt_l1_ptr*>(data_ptr), amt, l1_cache_pos);
 
     process_relay_linear_packed_sub_cmds(noc_xy_addr, total_length, l1_cache);
     return stride;
@@ -2424,6 +2418,11 @@ bool process_cmd(
     uint32_t& stride,
     uint32_t* l1_cache,
     PrefetchExecBufState& exec_buf_state) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Every command invalidates its own header extent, sized to CQPrefetchCmdLarge because the variant is
+    // unknown until cmd_id is read. Both fetch paths reach this, so exec_buf is covered too.
+    invalidate_l2_cache_range(cmd_ptr, sizeof(CQPrefetchCmdLarge));
+#endif
     volatile CQPrefetchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQPrefetchCmd tt_l1_ptr*>(cmd_ptr);
     bool done = false;
 
@@ -2715,7 +2714,7 @@ uint32_t process_relay_linear_packed_h_cmd(uintptr_t cmd_ptr, uint32_t& downstre
     // Copy sub-commands into L1 cache (same pattern as process_relay_linear_packed_cmd)
     uintptr_t data_ptr = cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader) + sizeof(CQPrefetchCmd);
     uint32_t amt = sub_cmds_length / sizeof(uint32_t);
-    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true>(
         reinterpret_cast<volatile uint32_t tt_l1_ptr*>(data_ptr), amt, l1_cache);
 
     // Setup scratch buffer for relay

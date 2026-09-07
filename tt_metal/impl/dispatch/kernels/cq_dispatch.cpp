@@ -719,7 +719,7 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
     ASSERT(count <= (mcast ? packed_write_max_multicast_sub_cmds : packed_write_max_unicast_sub_cmds));
     constexpr uint32_t sub_cmd_size = sizeof(WritePackedSubCmd);
     // Copying in a burst is about a 30% net gain vs reading one value per loop below
-    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true>(
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true, true>(
         reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr + sizeof(CQDispatchCmd)),
         count * sub_cmd_size / sizeof(uint32_t),
         l1_cache);
@@ -850,7 +850,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
     data_ptr = round_up_pow2(data_ptr, L1_ALIGNMENT);
 
     constexpr uint32_t sub_cmd_size = sizeof(CQDispatchWritePackedLargeSubCmd);
-    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true>(
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true, true>(
         reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr + sizeof(CQDispatchCmd)),
         count * sub_cmd_size / sizeof(uint32_t),
         l1_cache);
@@ -982,7 +982,7 @@ void process_write_packed_large_unicast(uint32_t* l1_cache) {
     data_ptr = round_up_pow2(data_ptr, L1_ALIGNMENT);
 
     constexpr uint32_t sub_cmd_size = sizeof(CQDispatchWritePackedLargeUnicastSubCmd);
-    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true>(
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true, true>(
         reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr + sizeof(CQDispatchCmd)),
         count * sub_cmd_size / sizeof(uint32_t),
         l1_cache);
