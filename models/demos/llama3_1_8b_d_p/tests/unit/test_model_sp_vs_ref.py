@@ -17,6 +17,8 @@ are all visible at 2+ layers, and a 32-layer random-weight build costs ~4.5 GB o
 run for no extra coverage. The full 32-layer path is exercised with real weights at P1.
 """
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -39,6 +41,10 @@ from ..test_factory import (
 from .test_kv_cache_write_vs_ref import gather_kv_cache
 
 PCC = 0.99
+
+# The spec runs 4096-token chunks; 2048 keeps the default cheap enough for the standard sweep.
+# Override to measure end-to-end PCC at the spec's own chunk size.
+SEQ_LEN = int(os.getenv("PREFILL_MODEL_SEQ_LEN", "2048"))
 
 
 def model_state_dict(ref_model, head_dim):
@@ -69,7 +75,7 @@ def model_state_dict(ref_model, head_dim):
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)])
 @pytest.mark.parametrize("num_layers", [2, 4], ids=["L2", "L4"])
-@pytest.mark.parametrize("seq_len", [2048], ids=["s2048"])
+@pytest.mark.parametrize("seq_len", [SEQ_LEN], ids=[f"s{SEQ_LEN}"])
 def test_model_sp_vs_ref(mesh_device, device_params, num_layers, seq_len, reset_seeds):
     cfg_full = llama_config()
     hd = cfg_full.head_dim

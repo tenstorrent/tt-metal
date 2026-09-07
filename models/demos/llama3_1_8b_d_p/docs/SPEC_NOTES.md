@@ -269,6 +269,63 @@ number:
 
 *Verified by* `tests/unit/test_dense_mlp_vs_ref.py`, parametrized over both dtypes.
 
+### 6c. The prediction in 6b came true: `chunk_size` and `per_layer_kv` are jointly unsatisfiable
+
+6b warned that "a longer context or a different prompt could dip a layer below it without anything
+having regressed". Running the same test at the spec's **own** `chunking.chunk_size = 4096` does
+exactly that. Real checkpoint, 32 layers, bf16 weights, one-shot, vs the fp32 CPU reference:
+
+| seq_len | result | detail |
+|---|---|---|
+| 2048 | PASS | all 32 layers >= 0.99 |
+| 3072 | PASS | all 32 layers >= 0.99 |
+| **4096** | **FAIL** | 3 of 32 layers below, **V only** |
+
+```
+layer 3:  K=0.99856  V=0.98999
+layer 4:  K=0.99859  V=0.98987
+layer 6:  K=0.99867  V=0.98969
+```
+
+The misses are 0.0001-0.0003 below the line, K passes everywhere at ~0.9986, and the crossing is
+smooth between 3072 and 4096 — the signature of bf16 error accumulating with sequence length, not of
+a kernel that breaks at a threshold. Two candidate explanations were checked and **ruled out**:
+
+- *SDPA program config.* `tt/attention/config.py` selects the large (256/256) q/k config when
+  `seq_len >= prefill_threshold`, and the threshold is 2048 — so 2048 and 4096 use the **same**
+  config. Config selection cannot explain the difference.
+- *Model quality.* End-to-end output PCC is unchanged at 4096:
+
+  | seq_len | L2 final hidden | L4 final hidden |
+  |---|---|---|
+  | 2048 | 0.999957 | 0.999914 |
+  | 4096 | 0.999949 | 0.999898 |
+
+  A ~1.6e-5 difference. Nothing the model emits is measurably worse.
+
+**So the spec asks for two things that cannot both hold.** `chunking.chunk_size = 4096` and
+`acceptance.pcc.per_layer_kv = 0.99` are each reasonable, and jointly unsatisfiable for this model in
+bf16 — the same failure mode as §6, one block over. The gate is also **distribution-dependent**: the
+composed-weight model test reports V=0.9998 at the same 4096 where the real checkpoint reports
+0.9897, so no single fixed number gates this robustly across prompts.
+
+**Proposed:** make the KV gate a function of the chunk size it will be evaluated at, and say which
+tensor it gates.
+
+```jsonc
+"acceptance": {
+  "pcc": {
+    "per_layer_kv": { "k": 0.995, "v": { "le_2048": 0.99, "le_8192": 0.985 } },
+    "_note": "V is the binding constraint and degrades ~0.001 per doubling of chunk_size. A single
+              number gates V at one unstated sequence length. End-to-end output PCC is the check
+              that actually tracks quality; per-layer KV is a debugging aid."
+  }
+}
+```
+
+*Verified by* `tests/galaxy_prefill_kv_pcc.py` at `PREFILL_KV_PCC_SEQ_LEN` 2048/3072/4096 and
+`tests/unit/test_model_sp_vs_ref.py` at `PREFILL_MODEL_SEQ_LEN` 2048/4096.
+
 ---
 
 ## 7. `topology.fabric_mode` does not capture what the fabric actually needs
@@ -467,6 +524,55 @@ from the spec rather than from a wrong-KV debugging session:
   }
 }
 ```
+
+---
+
+## 8e. `chunking.chunk_size = 4096` costs 3.5x on full-context prefill
+
+**Severity: high — the single largest measured performance number in this bring-up, and it is a spec
+value, not a code defect.**
+
+Prefill cost on this hardware is **linear in layers and flat in tokens** (`docs/PROFILING.md` §2):
+a layer processing 16384 tokens takes barely longer than one processing 4096, because the pipeline is
+host-dispatch-bound rather than compute-bound. Total work therefore scales with
+**(layers x chunks)**, and chunk count is `context / chunk_size`. Halving the chunk count halves the
+prefill.
+
+Measured at the spec's own full `context_length = 131072`, 32 layers, real weights, best of 2 warm:
+
+| `chunk_size` | chunks | best | tok/s | vs spec |
+|---|---|---|---|---|
+| **4096** (spec) | 32 | 28,659.9 ms | 4,573 | 1.00x |
+| 8192 | 16 | 15,805.7 ms | 8,293 | **1.81x** |
+| 16384 | 8 | 8,245.1 ms | 15,897 | **3.48x** |
+
+The same ordering holds at a 16384 context (1,940 / 4,966 / 8,007 tok/s for 2048 / 4096 / 8192), so
+this is not an artefact of one shape. **Full-context prefill drops from 28.7 s to 8.2 s** with no
+model change at all.
+
+This is worth stating plainly because the spec records `chunk_size: 4096` with no `_provenance`
+tying it to a measurement on this class of hardware, and the value is inherited from decode-oriented
+sizing where smaller chunks bound interleaving latency. On a dispatch-bound prefill the tradeoff runs
+the other way.
+
+**The tradeoff is real and should be represented, not just the number.** Larger chunks raise peak
+activation memory and coarsen scheduling granularity — a queued request waits for a whole chunk
+boundary, so time-to-first-token for the *next* request rises with chunk size even as aggregate
+throughput improves. 16384 is a throughput ceiling; 8192 is the low-risk move.
+
+**Proposed:** carry the tradeoff rather than a bare number.
+
+```jsonc
+"chunking": {
+  "chunk_size": { "value": 8192, "min": 4096, "max": 16384,
+                  "_provenance": "MEASURED, 8x4 BH Galaxy, 131072 context, 32 layers",
+                  "_tradeoff": "throughput scales ~1/chunks; TTFT jitter and peak activation memory
+                                scale with chunk_size. Pick on the serving SLO, not on the model." }
+}
+```
+
+*Verified by* `tests/prefill_perf.py` with `PREFILL_PERF_SEQ_LEN=131072` and
+`PREFILL_PERF_CHUNK_SIZES` in {4096, 8192, 16384}.
 
 ---
 
