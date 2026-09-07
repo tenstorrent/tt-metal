@@ -540,6 +540,24 @@ void run_throttled_sequence<5>()
 }
 
 /**
+ * @brief Whether the throttled matmul MOP supports this operand geometry.
+ *
+ * Its replay sequences are hand-written for a full 32x32 tile; on any other geometry the recorded
+ * window and the emitted sequence disagree. Single source of truth for both the assert inside
+ * matmul_configure_mop_throttled and the dispatch guard in _llk_math_matmul_init_.
+ */
+inline constexpr bool matmul_throttle_supports_tile(
+    const std::uint32_t in0_tile_r_dim,
+    const std::uint32_t in0_tile_c_dim,
+    const std::uint32_t in1_tile_r_dim,
+    const std::uint32_t in1_tile_c_dim,
+    const bool partial_face)
+{
+    return (in0_tile_r_dim == TILE_R_DIM) && (in0_tile_c_dim == TILE_C_DIM) && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == TILE_C_DIM) &&
+           !partial_face;
+}
+
+/**
  * @brief Build the throttled matmul MOP, inserting NOPs between MVMULs to cap compute throughput.
  *
  * Records a per-level @ref run_throttled_sequence into the replay buffer and wraps it in a ckernel_template.
@@ -576,7 +594,7 @@ inline void matmul_configure_mop_throttled(
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     static_assert((THROTTLE_LEVEL > 0) && (THROTTLE_LEVEL <= 5), "MM throttling only enabled for THROTTLE_LEVEL={1,2,3,4,5}");
     LLK_ASSERT(
-        (in0_tile_r_dim == TILE_R_DIM) && (in0_tile_c_dim == TILE_C_DIM) && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == TILE_C_DIM) && !partial_face,
+        matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face),
         "MM throttling only enabled for full 32x32 tile size");
 
     const bool reuse_a = ct_dim >= rt_dim;
@@ -677,19 +695,24 @@ inline void _llk_math_matmul_init_(
 
     if constexpr (THROTTLE_LEVEL > 0)
     {
-        // The throttled MOP's replay sequences are written for a full 32x32 tile only; on any other
-        // geometry its record window and emitted sequence disagree and the matmul wedges. Throttling
-        // is a throughput cap, so fall back to the unthrottled MOP rather than corrupt the loop.
-        const bool throttle_supported_tile = (in0_tile_r_dim == TILE_R_DIM) && (in0_tile_c_dim == TILE_C_DIM) && (in1_tile_r_dim == TILE_R_DIM) &&
-                                             (in1_tile_c_dim == TILE_C_DIM) && !partial_face;
-        if (throttle_supported_tile)
+        // On a geometry the throttled MOP does not support, fall back to the unthrottled one:
+        // throttling is only a throughput cap, and the throttled sequence wedges there.
+        //
+        // Sound only while the execute path is a single ckernel_template::run(). For
+        // THROTTLE_LEVEL > 3 with high fidelity, _llk_math_matmul_ runs the MOP once per fidelity
+        // phase, whereas the unthrottled MOP already walks the phases in its own inner loop -- so
+        // falling back there would execute every phase math_fidelity times over. Those levels keep
+        // the throttled path (and its assert) until the execute side can be told which MOP is live.
+        constexpr bool fallback_matches_execute = !(THROTTLE_LEVEL > 3 && is_high_fidelity(math_fidelity));
+
+        if (fallback_matches_execute && !matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face))
         {
-            matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL>(
-                ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
         else
         {
-            matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL>(
+                ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
     }
     else
