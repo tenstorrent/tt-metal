@@ -1165,12 +1165,16 @@ def test_bias_gelu_output_dtype(device, input_dtype, output_dtype):
     # standalone ttnn.gelu, so torch is not a usable reference for the value. What the op owes the
     # caller is that the dtype is honoured and that both overloads answer identically -- the
     # tensor-tensor one used to honour it while the tensor-scalar one dropped it.
-    torch_a = torch.tensor([[2.0, -3.0, 5.0, 0.5]])
+    #
+    # The sums below are deliberately not representable in bfloat16, so converting them either side
+    # of the gelu rather than at the end shows up here. A bias of 0.5 is exact in every dtype, so
+    # both overloads genuinely see the same operand.
+    torch_a = torch.tensor([[0.1, 1.37, -0.73, 2.61]])
     a = ttnn.from_torch(torch_a, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    bias = ttnn.from_torch(torch.full_like(torch_a, 3.0), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch.full_like(torch_a, 0.5), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     from_tensor = ttnn.bias_gelu(a, bias, dtype=output_dtype)
-    from_scalar = ttnn.bias_gelu(a, 3.0, dtype=output_dtype)
+    from_scalar = ttnn.bias_gelu(a, 0.5, dtype=output_dtype)
 
     assert from_tensor.dtype == output_dtype
     assert from_scalar.dtype == output_dtype
@@ -1180,16 +1184,30 @@ def test_bias_gelu_output_dtype(device, input_dtype, output_dtype):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_bias_gelu_output_dtype_noop_for_input_dtype(device, dtype):
     # Asking for the dtype the op would have produced anyway must not change a single bit.
-    torch_a = torch.tensor([[2.0, -3.0, 5.0, 0.5]])
+    torch_a = torch.tensor([[0.1, 1.37, -0.73, 2.61]])
     a = ttnn.from_torch(torch_a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    bias = ttnn.from_torch(torch.full_like(torch_a, 3.0), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch.full_like(torch_a, 0.5), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     for default, requested in [
         (ttnn.bias_gelu(a, bias), ttnn.bias_gelu(a, bias, dtype=dtype)),
-        (ttnn.bias_gelu(a, 3.0), ttnn.bias_gelu(a, 3.0, dtype=dtype)),
+        (ttnn.bias_gelu(a, 0.5), ttnn.bias_gelu(a, 0.5, dtype=dtype)),
     ]:
         assert requested.dtype == dtype
         assert_with_ulp(ttnn.to_torch(default).float(), requested, ulp_threshold=0)
+
+
+@pytest.mark.parametrize("op", ["maximum", "minimum", "bias_gelu"])
+def test_scalar_output_dtype_conflicting_with_output_tensor(device, op, expect_error):
+    # These three take a composed path rather than binary_ng, so the "dtypes should match" guard
+    # binary_ng applies to the tensor overloads has to be enforced by them directly.
+    torch_a = torch.tensor([[2.0, -3.0, 5.0, 0.5]], dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    preallocated = ttnn.from_torch(
+        torch.zeros_like(torch_a, dtype=torch.float32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, "dtypes should match"):
+        getattr(ttnn, op)(a, 1.0, dtype=ttnn.bfloat16, output_tensor=preallocated)
 
 
 def test_binary_composite_output_dtype_defaults_to_input(device):

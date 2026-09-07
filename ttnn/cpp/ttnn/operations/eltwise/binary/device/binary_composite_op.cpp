@@ -82,6 +82,10 @@ Tensor minimum(
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/) {
     // binary_ng has no tensor-scalar MINIMUM kernel, so this stays on the unary path, which packs
     // its result in the input dtype. A requested output dtype is applied after the compare.
+    TT_FATAL(
+        !output_dtype.has_value() || !optional_output_tensor.has_value() ||
+            *output_dtype == optional_output_tensor->dtype(),
+        "If both output dtype and output tensor are provided, their dtypes should match");
     const bool retype = output_dtype.has_value() && *output_dtype != input_a.dtype();
     const std::optional<Tensor> compare_output = retype ? std::optional<Tensor>{} : optional_output_tensor;
     Tensor result = std::visit(
@@ -128,6 +132,10 @@ Tensor maximum(
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/) {
     // binary_ng has no tensor-scalar MAXIMUM kernel, so this stays on the unary path, which packs
     // its result in the input dtype. A requested output dtype is applied after the compare.
+    TT_FATAL(
+        !output_dtype.has_value() || !optional_output_tensor.has_value() ||
+            *output_dtype == optional_output_tensor->dtype(),
+        "If both output dtype and output tensor are provided, their dtypes should match");
     const bool retype = output_dtype.has_value() && *output_dtype != input_a.dtype();
     const std::optional<Tensor> compare_output = retype ? std::optional<Tensor>{} : optional_output_tensor;
     Tensor result = std::visit(
@@ -941,15 +949,24 @@ Tensor bias_gelu(
         resolved_sub_core_grids =
             device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
     }
-    // gelu preserves its input dtype, so the requested output dtype is applied by the add. This
-    // matches the tensor-tensor overload, where binary_ng packs the fused add+gelu to that dtype.
-    return ttnn::gelu(
+    // The tensor-tensor overload runs the gelu as a binary_ng postprocess whose dest accumulation
+    // follows the output dtype, so it computes at the wider of input and output and packs only at
+    // the end. Match that here: widen the operand up front when float32 is asked for, and narrow
+    // once the gelu is done. Doing either conversion on the sum instead changes the result.
+    TT_FATAL(
+        !dtype.has_value() || !optional_output_tensor.has_value() || *dtype == optional_output_tensor->dtype(),
+        "If both output dtype and output tensor are provided, their dtypes should match");
+    const bool widen = dtype.has_value() && *dtype == DataType::FLOAT32 && input_tensor_a.dtype() != DataType::FLOAT32;
+    const Tensor operand = widen ? ttnn::typecast(input_tensor_a, DataType::FLOAT32, memory_config) : input_tensor_a;
+    const bool narrow = dtype.has_value() && *dtype != operand.dtype();
+    const std::optional<Tensor> gelu_output = narrow ? std::optional<Tensor>{} : optional_output_tensor;
+    Tensor result = ttnn::gelu(
         ttnn::add(
-            input_tensor_a,
+            operand,
             bias,
-            dtype,
+            std::nullopt,
             memory_config,
-            optional_output_tensor,
+            gelu_output,
             {},
             {},
             {},
@@ -957,8 +974,10 @@ Tensor bias_gelu(
             resolved_sub_core_grids),
         true,
         memory_config,
-        optional_output_tensor,
+        gelu_output,
         resolved_sub_core_grids);
+    return narrow ? ttnn::typecast(result, *dtype, memory_config, optional_output_tensor, resolved_sub_core_grids)
+                  : result;
 }
 
 // At/below this width the intermediates are worth keeping in L1: it skips the DRAM round-trip
