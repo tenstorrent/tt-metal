@@ -70,12 +70,9 @@ void kernel_main() {
     transpose_init(dfb::input_tensor);
 #endif
 
-    if constexpr (stable) {
-        // Tie-break polarity is a property of the GLOBAL sort order and is programmed exactly
-        // once: it must never follow the per-block merge direction (dir below). Survives the
-        // mid-kernel topk_tile_init re-inits of the ROW_MAJOR path.
-        ckernel::topk_set_stable_descending_mode(descending);
-    }
+    // Tie order follows the GLOBAL sort order, never the per-call idir.
+    constexpr auto tie_order =
+        (descending) ? ckernel::TopkTieOrder::Descending : ckernel::TopkTieOrder::Ascending;
 
     for (uint32_t h = 0; h < Ht; h++) {
         const bool ascending = !descending;
@@ -169,11 +166,14 @@ void kernel_main() {
 
                             if (sub == 1) {
                                 // Use sort LLK only the last substage to sort the last pair of tiles - speed up
-                                ckernel::topk_local_sort<stable>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                                ckernel::topk_local_sort<stable, DST_ACCUM_MODE, false, false, tie_order>(
+                                    /*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                             } else {
                                 // For all other stages use topk_merge to put the top K values in one tile, and the
                                 // bottom K values in another tile
-                                ckernel::topk_merge</*idir=*/false, stable>(/*idst=*/0, m_iter, /*k=*/32);
+                                ckernel::
+                                    topk_merge</*idir=*/false, stable, DST_ACCUM_MODE, false, false, false, tie_order>(
+                                        /*idst=*/0, m_iter, /*k=*/32);
 
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                                 // We swap their indices when using descending order

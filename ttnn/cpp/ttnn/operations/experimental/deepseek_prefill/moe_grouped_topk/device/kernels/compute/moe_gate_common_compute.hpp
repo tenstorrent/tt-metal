@@ -153,11 +153,6 @@ void process_and_sort_tiles(
     CircularBuffer cb_sorted_group_scores(cb_sorted_group_scores_id);
     CircularBuffer cb_sorted_expert_indices_temp(cb_sorted_expert_indices_temp_id);
     topk_tile_init();
-    if constexpr (stable_sort) {
-        // Tie-break polarity is a property of the GLOBAL sort order; MoE grouped top-k always
-        // selects largest-first (descending). Set once, never per-call from the bitonic direction.
-        ckernel::topk_set_stable_descending_mode(true);
-    }
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
     cb_expert_index_template.wait_front(Wt);
     cb_biased_scores.wait_front(Wt);
@@ -176,7 +171,8 @@ void process_and_sort_tiles(
         transpose_tile(cb_expert_index_template_id, wt + 1, 3);
 
         // llk_topk_sort -> inplace
-        ckernel::topk_local_sort<stable_sort>(0, (int)ascending, end_phase);
+        ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
+            0, (int)ascending, end_phase);
 
         // pack sorted score tiles
         pack_reconfig_data_format(cb_sorted_group_scores_id);
@@ -246,10 +242,6 @@ void topk_group_scores(
     CircularBuffer cb_group_index_template(cb_group_index_template_id);
     CircularBuffer cb_sorted_group_order(cb_sorted_group_order_id);
     topk_tile_init();
-    if constexpr (stable_sort) {
-        // Tie-break polarity follows the GLOBAL (largest-first / descending) order; see above.
-        ckernel::topk_set_stable_descending_mode(true);
-    }
     cb_sorted_group_order.reserve_back(1);
 
     // Sort single input and index tile that have already ben transposed.
@@ -266,7 +258,8 @@ void topk_group_scores(
     copy_tile(cb_group_index_template_id, 0, 2);
 
     // llk_topk_sort -> inplace
-    ckernel::topk_local_sort<stable_sort>(0, (int)ascending, log_topk_groups);
+    ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
+        0, (int)ascending, log_topk_groups);
     ckernel::topk_finalize_uint16_indices(2);
 
     tile_regs_commit();
@@ -320,10 +313,6 @@ void topk(
     int end_phase = (tiles <= 2) ? log_tiles - 1 : 5;
 
     topk_tile_init();
-    if constexpr (stable_sort) {
-        // Tie-break polarity follows the GLOBAL (largest-first / descending) order; see above.
-        ckernel::topk_set_stable_descending_mode(true);
-    }
     tile_regs_acquire();
     cb_winning_group_scores.wait_front(tiles);
     cb_winning_group_indices.wait_front(tiles);
@@ -347,8 +336,11 @@ void topk(
         transpose_tile(cb_winning_group_indices_id, 1, 3);
     }
     // llk_topk_sort -> inplace
-    ckernel::topk_local_sort<stable_sort>(0, (int)ascending, 4);
-    ckernel::topk_merge<false, stable_sort>(0, 0, 32);
+    ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
+        0, (int)ascending, 4);
+    ckernel::
+        topk_merge<false, stable_sort, DST_ACCUM_MODE, false, false, false, ckernel::TopkTieOrder::Descending>(
+            0, 0, 32);
 
     // Use insertion sort; discard lower half and keep upper half
     // Compare upper half with the next tile; insert into correct position
@@ -366,10 +358,19 @@ void topk(
             transpose_tile(cb_winning_group_indices_id, j, 3);
         }
 
-        ckernel::topk_local_sort<stable_sort>(0, (int)ascending, 4);
-        ckernel::topk_merge<false, stable_sort>(0, 0, 32);
+        ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
+            0, (int)ascending, 4);
+        ckernel::topk_merge<
+            false,
+            stable_sort,
+            DST_ACCUM_MODE,
+            false,
+            false,
+            false,
+            ckernel::TopkTieOrder::Descending>(0, 0, 32);
     }
-    ckernel::topk_rebuild<stable_sort>(0, (int)ascending, 0, 32, 5, true);
+    ckernel::topk_rebuild<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
+        0, (int)ascending, 0, 32, 5, true);
     ckernel::topk_finalize_uint16_indices(2);
     tile_regs_commit();
     tile_regs_wait();

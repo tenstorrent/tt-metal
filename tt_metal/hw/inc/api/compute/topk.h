@@ -12,6 +12,9 @@
 
 namespace ckernel {
 
+// Mirrors ckernel::sfpu::TopkTieOrder, which is math-TRISC only.
+enum class TopkTieOrder : std::uint8_t { Unset, Ascending, Descending };
+
 // topK local sort
 // clang-format off
 /**
@@ -58,14 +61,18 @@ template <
     bool stable_sort = false,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool fused = false,
-    bool rank_stamped = false>
+    bool rank_stamped = false,
+    TopkTieOrder tie_order = TopkTieOrder::Unset>
 ALWI void topk_local_sort(
     uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
+    static_assert(
+        !stable_sort || tie_order != TopkTieOrder::Unset,
+        "comparator-stable topk requires an explicit tie_order");
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_bitonic_topk_phases_steps,
-        (true /* APPROXIMATE */, is_fp32_dest_acc_en, stable_sort, fused, rank_stamped),
+        (true /* APPROXIMATE */, is_fp32_dest_acc_en, stable_sort, fused, rank_stamped, static_cast<ckernel::sfpu::TopkTieOrder>(tie_order)),
         idst,
         VectorMode::RC_custom,
         idir,
@@ -116,13 +123,17 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool fused = false,
     bool rank_stamped = false,
-    bool pre_tagged = false>
+    bool pre_tagged = false,
+    TopkTieOrder tie_order = TopkTieOrder::Unset>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
+    static_assert(
+        !stable_sort || tie_order != TopkTieOrder::Unset,
+        "comparator-stable topk requires an explicit tie_order");
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_bitonic_topk_merge,
-        (true /* APPROXIMATE */, is_fp32_dest_acc_en, idir, stable_sort, fused, rank_stamped, pre_tagged),
+        (true /* APPROXIMATE */, is_fp32_dest_acc_en, idir, stable_sort, fused, rank_stamped, pre_tagged, static_cast<ckernel::sfpu::TopkTieOrder>(tie_order)),
         idst,
         VectorMode::RC_custom,
         m_iter,
@@ -168,13 +179,17 @@ template <
     bool stable_sort = false,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool fused = false,
-    bool rank_stamped = false>
+    bool rank_stamped = false,
+    TopkTieOrder tie_order = TopkTieOrder::Unset>
 ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
+    static_assert(
+        !stable_sort || tie_order != TopkTieOrder::Unset,
+        "comparator-stable topk requires an explicit tie_order");
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_bitonic_topk_rebuild,
-        (true /* APPROXIMATE */, is_fp32_dest_acc_en, stable_sort, fused, rank_stamped),
+        (true /* APPROXIMATE */, is_fp32_dest_acc_en, stable_sort, fused, rank_stamped, static_cast<ckernel::sfpu::TopkTieOrder>(tie_order)),
         idst,
         VectorMode::RC_custom,
         idir,
@@ -327,24 +342,6 @@ ALWI void topk_strip_rank_tags(std::uint32_t idst) { MATH((ckernel::sfpu::_topk_
 
 // Before packing a uint16 index tile that lives in 32-bit DEST as a plain integer.
 ALWI void topk_finalize_uint16_indices(std::uint32_t idst) { MATH((ckernel::sfpu::_topk_finalize_hi16_index_tile_(idst))); }
-
-// clang-format off
-/**
- * Sets the tie-break polarity used by the stable TopK comparator. Required once per compute
- * kernel, after topk_tile_init, when any TopK call uses stable_sort=true. The polarity encodes
- * the requested GLOBAL sort order and must not follow the per-call sort direction (idir), which
- * may alternate to build bitonic sequences.
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | descending      | The requested global sort order (true = largest-first / descending)        | bool     | true, false                                           | True     |
- */
-// clang-format on
-ALWI void topk_set_stable_descending_mode(bool descending) {
-    MATH((ckernel::sfpu::set_topk_stable_descending_mode(descending)));
-}
 
 /**
  * UInt16 values in 32-bit DEST: move cleaned values into the packer-visible high half (SFPSTORE mode 9).

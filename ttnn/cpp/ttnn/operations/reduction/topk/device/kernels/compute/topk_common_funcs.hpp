@@ -21,7 +21,11 @@
 // disappears, and the packed intermediate CBs must be UInt32 (raw-bit transport — a float pack
 // would denormal-flush 0x0000xxxx keys). Requires 32-bit DEST. Mutually exclusive with stable_sort
 // (fused provides the same torch-stable tie order through the key itself).
-template <bool stable_sort = false, bool fused = false, bool fused_largest = false>
+template <
+    bool stable_sort = false,
+    bool fused = false,
+    bool fused_largest = false,
+    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset>
 void process_and_sort_tiles(
     std::uint32_t input_dfb_index,
     std::uint32_t index_dfb_index,
@@ -71,7 +75,7 @@ void process_and_sort_tiles(
         // llk_topk_sort -> inplace
         // (stable) tie-break polarity is set once per kernel from the global `largest`;
         // it must not follow `ascending`, which alternates for bitonic sequence building.
-        ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, fused>(0, (int)ascending, end_phase);
+        ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, fused, false, tie_order>(0, (int)ascending, end_phase);
         tile_regs_commit();
 
         input_dfb.pop_front(tiles_to_wait);
@@ -102,7 +106,10 @@ void process_and_sort_tiles(
     }
 }
 
-template <bool stable_sort = false, bool fused = false>
+template <
+    bool stable_sort = false,
+    bool fused = false,
+    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset>
 void process_tile_pair(
     std::uint32_t left_ind,
     std::uint32_t right_ind,
@@ -147,7 +154,7 @@ void process_tile_pair(
     // (stable) tie-break polarity is set once per kernel from the global `largest`; `ascending`
     // here may be flipped per core (direction_init) to alternate output direction for the final
     // cross-core bitonic merge, and the tie polarity must not flip with it.
-    ckernel::topk_rebuild<stable_sort, DST_ACCUM_MODE, fused>(
+    ckernel::topk_rebuild<stable_sort, DST_ACCUM_MODE, fused, false, tie_order>(
         0, (std::uint32_t)ascending, m_iter, K, logk, target_tiles_is_one);
 
     tile_regs_commit();
@@ -172,7 +179,10 @@ void process_tile_pair(
     tile_regs_release();
 }
 
-template <bool stable_sort = false, bool fused = false>
+template <
+    bool stable_sort = false,
+    bool fused = false,
+    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset>
 void process_tiles(
     std::uint32_t m_iter,
     std::uint32_t K,
@@ -222,9 +232,9 @@ void process_tiles(
 
             // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
             if (largest) {
-                ckernel::topk_merge<false, stable_sort, DST_ACCUM_MODE, fused>(0, m_iter, K);
+                ckernel::topk_merge<false, stable_sort, DST_ACCUM_MODE, fused, false, false, tie_order>(0, m_iter, K);
             } else {
-                ckernel::topk_merge<true, stable_sort, DST_ACCUM_MODE, fused>(0, m_iter, K);
+                ckernel::topk_merge<true, stable_sort, DST_ACCUM_MODE, fused, false, false, tie_order>(0, m_iter, K);
             }
 
             tile_regs_commit();
@@ -247,7 +257,10 @@ void process_tiles(
     }
 }
 
-template <bool stable_sort = false, bool fused = false>
+template <
+    bool stable_sort = false,
+    bool fused = false,
+    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset>
 void process_iteration(
     std::uint32_t m_iter,
     std::uint32_t K,
@@ -273,7 +286,7 @@ void process_iteration(
         index_transposed_dfb.wait_front(Wt);
     }
 
-    process_tiles<stable_sort, fused>(
+    process_tiles<stable_sort, fused, tie_order>(
         m_iter,
         K,
         Wt,
@@ -320,7 +333,7 @@ void process_iteration(
             sel_tile_id[sel_tile_id_ptr] = left_ind;
             sel_tile_id_ptr++;
             if (sel_tile_id_ptr == target_tiles) {
-                process_tile_pair<stable_sort, fused>(
+                process_tile_pair<stable_sort, fused, tie_order>(
                     sel_tile_id[0],
                     sel_tile_id[1],
                     input_transposed_dfb_index,

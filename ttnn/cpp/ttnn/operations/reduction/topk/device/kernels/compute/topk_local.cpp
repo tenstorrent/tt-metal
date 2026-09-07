@@ -132,14 +132,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup(input_dfb_index, index_dfb_index, input_transposed_dfb_index);
     ckernel::topk_tile_init<fused_keys>();
-    if constexpr (stable_sort && !fused_keys) {
-        // Tie-break polarity is a property of the GLOBAL sort order (largest vs smallest), set once.
-        // It must NOT follow direction_init/ascending: cores deliberately alternate their local sort
-        // direction (so the final core sees opposite-sorted neighbour sequences), but ties on a
-        // direction-flipped core must come out in the exact mirror order (index-descending) for the
-        // global bitonic merge to keep equal values stable.
-        ckernel::topk_set_stable_descending_mode(largest != 0);
-    }
+    // Tie order follows the GLOBAL sort order, never the per-call idir.
+    constexpr auto tie_order =
+        (largest != 0) ? ckernel::TopkTieOrder::Descending : ckernel::TopkTieOrder::Ascending;
 
     DataflowBuffer input_transposed_dfb(input_transposed_dfb_index);
     DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
@@ -154,7 +149,7 @@ void kernel_main() {
         bool ascending = !largest;  // Sort direction for bitonic sequence properties
 
         // Initial bitonic sort on local width chunk
-        process_and_sort_tiles<network_stable, fused_keys, largest != 0>(
+        process_and_sort_tiles<network_stable, fused_keys, largest != 0, tie_order>(
             input_dfb_index,             // Input values buffer (double-buffered)
             index_dfb_index,             // Input indices buffer (double-buffered)
             input_transposed_dfb_index,  // Transposed values staging buffer
@@ -173,7 +168,7 @@ void kernel_main() {
         // - Iteration n: Compare tiles with distance 2^n → groups of 64*(2^(n+1)) elements
         // Final iteration produces locally sorted TopK results for this width chunk.
         for (std::uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
-            process_iteration<network_stable, fused_keys>(
+            process_iteration<network_stable, fused_keys, tie_order>(
                 m_iter,                      // Current merge iteration (0 to logWt-1)
                 K,                           // TopK value (number of elements to find)
                 Wt,                          // Width tiles in local chunk

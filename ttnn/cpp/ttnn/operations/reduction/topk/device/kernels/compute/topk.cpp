@@ -155,13 +155,9 @@ void kernel_main() {
     // Initialize kernel components
     compute_kernel_hw_startup(input_val_dfb_index, input_ind_dfb_index, output_val_dfb_index);
     ckernel::topk_tile_init<false, rank_stamped>();
-    if constexpr (network_stable) {
-        // Tie-break polarity is a property of the GLOBAL sort order: for largest-first, equal values
-        // keep the lower original index next to the larger-value position (descending mode). Set once;
-        // it must never follow the per-call sort direction (idir), which alternates to build bitonic
-        // sequences.
-        ckernel::topk_set_stable_descending_mode(largest != 0);
-    }
+    // Tie order follows the GLOBAL sort order, never the per-call idir.
+    constexpr auto tie_order =
+        (largest != 0) ? ckernel::TopkTieOrder::Descending : ckernel::TopkTieOrder::Ascending;
 
     DataflowBuffer input_val_dfb(input_val_dfb_index);
     DataflowBuffer input_ind_dfb(input_ind_dfb_index);
@@ -401,7 +397,7 @@ void kernel_main() {
                         }
                     }
                 }
-                ckernel::topk_local_sort<network_stable, DST_ACCUM_MODE, false, rank_stamped>(
+                ckernel::topk_local_sort<network_stable, DST_ACCUM_MODE, false, rank_stamped, tie_order>(
                     0, (int)!largest, end_phase);
 
                 // Pack sorted results: dest reg 0 -> result buffer, dest reg 1 -> secondary buffer

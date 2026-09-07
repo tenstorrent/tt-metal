@@ -247,6 +247,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Fused-key stable mode packs [bf16|u16] keys and runs the plain UNSTABLE network on them.
     constexpr bool NETWORK_STABLE_SORT = TOPK_STABLE_SORT && !TOPK_FUSED_STABLE;
     constexpr bool TOPK_LARGEST        = (TOPK_SORT_DIRECTION == 0); // 0 = Descending / largest-first
+    constexpr auto TOPK_TIE_ORDER      = TOPK_LARGEST ? ckernel::sfpu::TopkTieOrder::Descending : ckernel::sfpu::TopkTieOrder::Ascending;
     static_assert(!(TOPK_FUSED_STABLE && TOPK_STABLE_SORT), "fused and comparator stable modes are mutually exclusive");
     static_assert(!TOPK_FUSED_STABLE || is_fp32_dest_acc_en, "fused stable topk requires 32-bit DEST (dest_acc)");
     static_assert(
@@ -288,15 +289,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     else
     {
         ckernel::sfpu::_init_topk();
-    }
-
-    if constexpr (TOPK_STABLE_SORT)
-    {
-        // Stable tie-break polarity is a global property of the sort order, set once per kernel
-        // (deliberately not reset by _init_topk). TOPK_SORT_DIRECTION binds to top_min/idir at
-        // the call sites below (0 = Descending / largest-first, 1 = Ascending), so descending
-        // mode is TOPK_SORT_DIRECTION == 0.
-        ckernel::sfpu::set_topk_stable_descending_mode(TOPK_SORT_DIRECTION == 0);
     }
 
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row) // Iterates over tile_rows.
@@ -380,7 +372,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_phases_steps,
-                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED),
+                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,
@@ -396,7 +388,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_rebuild,
-                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED),
+                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,
@@ -411,7 +403,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     dest_sync,
                     is_fp32_dest_acc_en,
                     calculate_bitonic_topk_merge,
-                    (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED),
+                    (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, false, TOPK_TIE_ORDER),
                     dst_index,
                     vector_mode,
                     current_iteration,
@@ -425,7 +417,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_rebuild,
-                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED),
+                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,

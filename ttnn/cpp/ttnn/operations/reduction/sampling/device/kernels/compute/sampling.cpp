@@ -225,11 +225,6 @@ void top_k() {
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
     ckernel::topk_tile_init();
-    if constexpr (stable_sort) {
-        // Tie-break polarity is a property of the GLOBAL sort order; sampling always sorts
-        // largest-first (descending). Set once, never per-call from the bitonic direction.
-        ckernel::topk_set_stable_descending_mode(true);
-    }
 
     DataflowBuffer input_dfb(input_dfb_index);
     DataflowBuffer index_dfb(index_dfb_index);
@@ -266,7 +261,9 @@ void top_k() {
             // llk_topk_sort -> inplace
             // stable_sort: equal values keep their original (lowest) position, so the candidate the
             // top-k keeps for a tie does not depend on how the bitonic network happens to swap.
-            ckernel::topk_local_sort<stable_sort>(0, (int)ascending, logk - 1);
+            ckernel::
+                topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
+                    0, (int)ascending, logk - 1);
 
             tile_regs_commit();
 
@@ -314,9 +311,18 @@ void top_k() {
                 copy_tile(index_transposed_dfb_index, right_ind, index_dest_end);
 
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-                ckernel::topk_merge<false, stable_sort>(0, m_iter, K);
+                ckernel::topk_merge<
+                    false,
+                    stable_sort,
+                    DST_ACCUM_MODE,
+                    false,
+                    false,
+                    false,
+                    ckernel::TopkTieOrder::Descending>(0, m_iter, K);
                 // sort within the larger 32 values
-                ckernel::topk_rebuild<stable_sort>(0, (uint32_t)a, m_iter, K, logk, true);
+                ckernel::
+                    topk_rebuild<stable_sort, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Descending>(
+                        0, (uint32_t)a, m_iter, K, logk, true);
 
                 tile_regs_commit();
                 tile_regs_wait();
