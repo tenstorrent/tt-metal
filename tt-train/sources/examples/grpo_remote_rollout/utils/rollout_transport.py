@@ -19,7 +19,7 @@ from threading import Condition
 from time import monotonic
 from typing import Generic, TypeVar
 
-from .rollout_engine import EngineFailed, PolicyVersion, PromptGroupLease, RolloutResult
+from .rollout_engine import EngineEvent, EngineFailed, PolicyVersion, PromptGroupLease, ResultReady, RolloutResult
 
 
 class RolloutTransportClosed(RuntimeError):
@@ -55,8 +55,12 @@ class TrainerRolloutTransport(ABC):
         """Submit a lease, applying backpressure when capacity is exhausted."""
 
     @abstractmethod
+    def receive_event(self, *, timeout: float | None = None) -> EngineEvent:
+        """Return the next ordered result, lifecycle acknowledgement, or failure."""
+
+    @abstractmethod
     def receive_result(self, *, timeout: float | None = None) -> RolloutResult:
-        """Return the next completed rollout."""
+        """Return the next completed rollout, skipping lifecycle acknowledgements."""
 
     @abstractmethod
     def quiesce(self, target_version: PolicyVersion, *, timeout: float | None = None) -> None:
@@ -79,8 +83,12 @@ class WorkerRolloutTransport(ABC):
         """Return the next lease or policy-lifecycle command."""
 
     @abstractmethod
+    def publish_event(self, event: EngineEvent, *, timeout: float | None = None) -> None:
+        """Publish an engine event on the ordered trainer-facing lane."""
+
+    @abstractmethod
     def publish(self, result: RolloutResult, *, timeout: float | None = None) -> None:
-        """Publish a completed rollout, applying result-side backpressure."""
+        """Backward-compatible shorthand for publishing ``ResultReady``."""
 
     @abstractmethod
     def publish_failure(self, failure: EngineFailed) -> None:
@@ -151,7 +159,7 @@ class _SharedQueues:
         if capacity <= 0:
             raise ValueError("capacity must be positive")
         self.requests = _ClosableQueue[RolloutCommand](capacity)
-        self.results = _ClosableQueue[RolloutResult | EngineFailed](capacity)
+        self.results = _ClosableQueue[EngineEvent](capacity)
 
     def close(self) -> None:
         self.requests.close()
@@ -161,15 +169,30 @@ class _SharedQueues:
 class _InMemoryTrainerTransport(TrainerRolloutTransport):
     def __init__(self, shared: _SharedQueues) -> None:
         self._shared = shared
+        self._deferred_events: deque[EngineEvent] = deque()
 
     def submit(self, lease: PromptGroupLease, *, timeout: float | None = None) -> None:
         self._shared.requests.put(lease, timeout=timeout)
 
+    def receive_event(self, *, timeout: float | None = None) -> EngineEvent:
+        if self._deferred_events:
+            return self._deferred_events.popleft()
+        return self._receive_raw_event(timeout)
+
     def receive_result(self, *, timeout: float | None = None) -> RolloutResult:
-        value = self._shared.results.get(timeout)
-        if isinstance(value, EngineFailed):
-            raise RemoteRolloutError(value)
-        return value
+        deadline = None if timeout is None else monotonic() + timeout
+        while True:
+            remaining = None if deadline is None else max(0.0, deadline - monotonic())
+            event = self._receive_raw_event(remaining)
+            if isinstance(event, ResultReady):
+                return event.result
+            self._deferred_events.append(event)
+
+    def _receive_raw_event(self, timeout: float | None) -> EngineEvent:
+        event = self._shared.results.get(timeout)
+        if isinstance(event, EngineFailed):
+            raise RemoteRolloutError(event)
+        return event
 
     def quiesce(self, target_version: PolicyVersion, *, timeout: float | None = None) -> None:
         self._shared.requests.put(QuiescePolicy(target_version), timeout)
@@ -188,11 +211,14 @@ class _InMemoryWorkerTransport(WorkerRolloutTransport):
     def receive(self, *, timeout: float | None = None) -> RolloutCommand:
         return self._shared.requests.get(timeout)
 
+    def publish_event(self, event: EngineEvent, *, timeout: float | None = None) -> None:
+        self._shared.results.put(event, timeout=timeout)
+
     def publish(self, result: RolloutResult, *, timeout: float | None = None) -> None:
-        self._shared.results.put(result, timeout=timeout)
+        self.publish_event(ResultReady(result), timeout=timeout)
 
     def publish_failure(self, failure: EngineFailed) -> None:
-        self._shared.results.put(failure, timeout=None)
+        self.publish_event(failure)
 
     def close(self) -> None:
         self._shared.close()

@@ -8,7 +8,15 @@ from __future__ import annotations
 from queue import Empty, Full
 from threading import Event, Thread
 
-from utils.rollout_engine import EngineFailed, PromptGroupLease, RolloutOutput, RolloutResult
+from utils.rollout_engine import (
+    EngineFailed,
+    PolicyActivated,
+    PromptGroupLease,
+    ResultReady,
+    RolloutOutput,
+    RolloutResult,
+    WeightsStaged,
+)
 from utils.rollout_transport import (
     QuiescePolicy,
     RemoteRolloutError,
@@ -48,6 +56,27 @@ def test_queue_preserves_lease_identity_policy_version_tokens_and_logprobs():
 
     assert received == _lease()
     assert transports.trainer.receive_result() == _result()
+
+
+def test_lifecycle_events_share_the_ordered_worker_event_lane():
+    transports = create_in_memory_rollout_transports(capacity=3)
+
+    events = [WeightsStaged("engine-0", 8), ResultReady(_result()), PolicyActivated("engine-0", 8)]
+    for event in events:
+        transports.worker.publish_event(event)
+
+    assert [transports.trainer.receive_event() for _ in events] == events
+
+
+def test_receive_result_defers_lifecycle_events_without_losing_them():
+    transports = create_in_memory_rollout_transports(capacity=3)
+    transports.worker.publish_event(WeightsStaged("engine-0", 8))
+    transports.worker.publish_event(ResultReady(_result()))
+    transports.worker.publish_event(PolicyActivated("engine-0", 8))
+
+    assert transports.trainer.receive_result() == _result()
+    assert transports.trainer.receive_event() == WeightsStaged("engine-0", 8)
+    assert transports.trainer.receive_event() == PolicyActivated("engine-0", 8)
 
 
 def test_bounded_request_and_result_queues_apply_backpressure(expect_error):

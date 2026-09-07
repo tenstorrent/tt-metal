@@ -16,11 +16,21 @@ from utils.mpi_rollout_transport import (
     MPIRolloutTrainerTransport,
     MPIRolloutWorkerTransport,
     _decode_failure,
+    _decode_lifecycle_event,
     _decode_result,
     _encode_failure,
+    _encode_lifecycle_event,
     _encode_result,
 )
-from utils.rollout_engine import EngineFailed, PromptGroupLease, RolloutOutput, RolloutResult
+from utils.rollout_engine import (
+    EngineFailed,
+    PolicyActivated,
+    PromptGroupLease,
+    RolloutOutput,
+    RolloutResult,
+    WeightsStaged,
+)
+from utils.rollout_coordinator import SingleWorkerRolloutCoordinator
 from utils.rollout_service import RolloutWorkerService
 from utils.ttt_rollout_engine import TttRolloutEngine
 
@@ -95,7 +105,12 @@ def test_failure_codec_preserves_remote_context():
     assert _decode_failure(_encode_failure(failure)) == failure
 
 
-def test_progress_threads_connect_transport_to_rollout_engine():
+@pytest.mark.parametrize("event", [WeightsStaged("engine-0", 4), PolicyActivated("engine-0", 4)])
+def test_lifecycle_codec_round_trips(event):
+    assert _decode_lifecycle_event(_encode_lifecycle_event(event)) == event
+
+
+def test_progress_threads_connect_coordinator_to_rollout_engine():
     trainer_channel, worker_channel = _channels()
     trainer = MPIRolloutTrainerTransport(peer_rank=1, capacity=2, channel=trainer_channel)
     worker_transport = MPIRolloutWorkerTransport(peer_rank=0, capacity=2, channel=worker_channel)
@@ -130,18 +145,27 @@ def test_progress_threads_connect_transport_to_rollout_engine():
     service.bind_engine(engine)
     worker_transport.start()
     trainer.start()
+    sender_bridge = Mock()
+    coordinator = SingleWorkerRolloutCoordinator(
+        engine_id="engine-0",
+        active_version=3,
+        transport=trainer,
+        weight_bridge=sender_bridge,
+    )
     service_thread = Thread(target=service.serve_forever)
     service_thread.start()
 
-    trainer.submit(_lease())
+    coordinator.submit(_lease())
     assert generation_started.wait(timeout=5)
-    trainer.quiesce(4)
-    trainer.request_weight_stage(4, timeout=5)
+    weights = {"weight": object()}
+    coordinator.begin_policy_cutover(4, weights, timeout=5)
     assert staging_started.wait(timeout=5)
     generation_worker.update_weights.assert_not_called()
     finish_generation.set()
 
-    assert trainer.receive_result(timeout=5) == _decode_result(_encode_result(_result()))
+    coordinator.await_policy_activation(4, timeout=5)
+    assert coordinator.receive_result(timeout=5) == _decode_result(_encode_result(_result()))
+    assert coordinator.active_version == 4
     generation_worker.generate.assert_called_once_with(
         [[11, 12], [13]],
         max_new_tokens=128,
@@ -149,10 +173,12 @@ def test_progress_threads_connect_transport_to_rollout_engine():
         stop_at_eos=True,
     )
 
-    trainer.close()
+    coordinator.close()
     service_thread.join(timeout=5)
     assert not service_thread.is_alive()
     weight_bridge.receive_weights.assert_called_once_with()
     weight_bridge.barrier.assert_called_once_with()
     generation_worker.update_weights.assert_called_once_with(received_weights)
+    sender_bridge.send_weights.assert_called_once_with(weights)
+    sender_bridge.barrier.assert_called_once_with()
     assert engine.snapshot().active_version == 4

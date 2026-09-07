@@ -16,12 +16,23 @@ from __future__ import annotations
 
 import json
 import struct
+from collections import deque
 from dataclasses import dataclass
 from threading import Event, Lock, Thread
 from time import monotonic
 from typing import Final, Protocol
 
-from .rollout_engine import EngineFailed, PolicyVersion, PromptGroupLease, RolloutOutput, RolloutResult
+from .rollout_engine import (
+    EngineEvent,
+    EngineFailed,
+    PolicyActivated,
+    PolicyVersion,
+    PromptGroupLease,
+    ResultReady,
+    RolloutOutput,
+    RolloutResult,
+    WeightsStaged,
+)
 from .rollout_transport import (
     QuiescePolicy,
     RemoteRolloutError,
@@ -53,6 +64,8 @@ _CLOSE_ACK: Final = 4
 _QUIESCE: Final = 5
 _STAGE_WEIGHTS: Final = 6
 _FAILURE: Final = 7
+_WEIGHTS_STAGED: Final = 8
+_POLICY_ACTIVATED: Final = 9
 
 
 class _ByteChannel(Protocol):
@@ -218,6 +231,31 @@ def _decode_failure(body: bytes) -> EngineFailed:
     )
 
 
+def _encode_lifecycle_event(event: WeightsStaged | PolicyActivated) -> bytes:
+    if isinstance(event, WeightsStaged):
+        kind = "weights_staged"
+    elif isinstance(event, PolicyActivated):
+        kind = "policy_activated"
+    else:
+        raise TypeError(f"unsupported rollout lifecycle event {type(event).__name__}")
+    return json.dumps(
+        {"kind": kind, "engine_id": event.engine_id, "version": event.version},
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _decode_lifecycle_event(body: bytes) -> WeightsStaged | PolicyActivated:
+    value = json.loads(body.decode("utf-8"))
+    kind = value["kind"]
+    if kind == "weights_staged":
+        event_type = WeightsStaged
+    elif kind == "policy_activated":
+        event_type = PolicyActivated
+    else:
+        raise RuntimeError(f"unexpected rollout lifecycle event kind {kind!r}")
+    return event_type(engine_id=str(value["engine_id"]), version=int(value["version"]))
+
+
 class _ProgressFailure:
     def __init__(self) -> None:
         self._error: BaseException | None = None
@@ -246,7 +284,8 @@ class MPIRolloutTrainerTransport(TrainerRolloutTransport):
         self._peer_rank = int(peer_rank)
         self._channel = channel or _TtnnByteChannel()
         self._outbound = _ClosableQueue[_PendingCommand](capacity)
-        self._results = _ClosableQueue[RolloutResult | EngineFailed](capacity)
+        self._results = _ClosableQueue[EngineEvent](capacity)
+        self._deferred_events: deque[EngineEvent] = deque()
         self._failure = _ProgressFailure()
         self._started = False
         self._sender = Thread(target=self._send_loop, name="rollout-mpi-request", daemon=True)
@@ -283,16 +322,30 @@ class MPIRolloutTrainerTransport(TrainerRolloutTransport):
         self._outbound.put(pending, timeout)
         return pending
 
-    def receive_result(self, *, timeout: float | None = None) -> RolloutResult:
+    def receive_event(self, *, timeout: float | None = None) -> EngineEvent:
+        if self._deferred_events:
+            return self._deferred_events.popleft()
+        return self._receive_raw_event(timeout)
+
+    def _receive_raw_event(self, timeout: float | None) -> EngineEvent:
         self._failure.raise_if_set()
         try:
-            value = self._results.get(timeout)
-            if isinstance(value, EngineFailed):
-                raise RemoteRolloutError(value)
-            return value
+            event = self._results.get(timeout)
+            if isinstance(event, EngineFailed):
+                raise RemoteRolloutError(event)
+            return event
         except RolloutTransportClosed:
             self._failure.raise_if_set()
             raise
+
+    def receive_result(self, *, timeout: float | None = None) -> RolloutResult:
+        deadline = None if timeout is None else monotonic() + timeout
+        while True:
+            remaining = None if deadline is None else max(0.0, deadline - monotonic())
+            event = self._receive_raw_event(remaining)
+            if isinstance(event, ResultReady):
+                return event.result
+            self._deferred_events.append(event)
 
     def close(self) -> None:
         if not self._started:
@@ -347,9 +400,14 @@ class MPIRolloutTrainerTransport(TrainerRolloutTransport):
                     self._results.close()
                     return
                 if frame.kind == _RESULT:
-                    value: RolloutResult | EngineFailed = _decode_result(frame.body)
+                    value: EngineEvent = ResultReady(_decode_result(frame.body))
                 elif frame.kind == _FAILURE:
                     value = _decode_failure(frame.body)
+                elif frame.kind in (_WEIGHTS_STAGED, _POLICY_ACTIVATED):
+                    value = _decode_lifecycle_event(frame.body)
+                    expected_type = WeightsStaged if frame.kind == _WEIGHTS_STAGED else PolicyActivated
+                    if not isinstance(value, expected_type):
+                        raise RuntimeError("rollout lifecycle frame kind does not match its body")
                 else:
                     raise RuntimeError(f"unexpected rollout result frame kind {frame.kind}")
                 self._results.put(value, None)
@@ -369,7 +427,7 @@ class MPIRolloutWorkerTransport(WorkerRolloutTransport):
         self._peer_rank = int(peer_rank)
         self._channel = channel or _TtnnByteChannel()
         self._requests = _ClosableQueue[RolloutCommand](capacity)
-        self._outbound = _ClosableQueue[RolloutResult | EngineFailed](capacity)
+        self._outbound = _ClosableQueue[EngineEvent](capacity)
         self._failure = _ProgressFailure()
         self._started = False
         self._receiver = Thread(target=self._receive_loop, name="rollout-mpi-request", daemon=True)
@@ -392,13 +450,15 @@ class MPIRolloutWorkerTransport(WorkerRolloutTransport):
             self._failure.raise_if_set()
             raise
 
-    def publish(self, result: RolloutResult, *, timeout: float | None = None) -> None:
+    def publish_event(self, event: EngineEvent, *, timeout: float | None = None) -> None:
         self._failure.raise_if_set()
-        self._outbound.put(result, timeout)
+        self._outbound.put(event, timeout)
+
+    def publish(self, result: RolloutResult, *, timeout: float | None = None) -> None:
+        self.publish_event(ResultReady(result), timeout=timeout)
 
     def publish_failure(self, failure: EngineFailed) -> None:
-        self._failure.raise_if_set()
-        self._outbound.put(failure, None)
+        self.publish_event(failure)
 
     def close(self) -> None:
         self._outbound.close()
@@ -435,11 +495,16 @@ class MPIRolloutWorkerTransport(WorkerRolloutTransport):
                     value = self._outbound.get(None)
                 except RolloutTransportClosed:
                     break
-                frame = (
-                    _Frame(_FAILURE, _encode_failure(value))
-                    if isinstance(value, EngineFailed)
-                    else _Frame(_RESULT, _encode_result(value))
-                )
+                if isinstance(value, EngineFailed):
+                    frame = _Frame(_FAILURE, _encode_failure(value))
+                elif isinstance(value, ResultReady):
+                    frame = _Frame(_RESULT, _encode_result(value.result))
+                elif isinstance(value, WeightsStaged):
+                    frame = _Frame(_WEIGHTS_STAGED, _encode_lifecycle_event(value))
+                elif isinstance(value, PolicyActivated):
+                    frame = _Frame(_POLICY_ACTIVATED, _encode_lifecycle_event(value))
+                else:
+                    raise TypeError(f"unsupported rollout event {type(value).__name__}")
                 _send_frame(
                     self._channel,
                     self._peer_rank,

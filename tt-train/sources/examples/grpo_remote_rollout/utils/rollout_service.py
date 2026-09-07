@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from threading import Lock, Thread
 
-from .rollout_engine import EngineEvent, EngineFailed, ResultReady, RolloutEngine
+from .rollout_engine import EngineEvent, EngineFailed, RolloutEngine
 from .rollout_transport import (
     QuiescePolicy,
     RolloutTransportClosed,
@@ -43,13 +43,11 @@ class RolloutWorkerService:
             self._engine = engine
 
     def handle_event(self, event: EngineEvent) -> None:
-        """Engine event sink: route completed rollouts to the result queue."""
-        if isinstance(event, ResultReady):
-            self._transport.publish(event.result)
-        elif isinstance(event, EngineFailed):
+        """Engine event sink: route all events to the trainer in emission order."""
+        if isinstance(event, EngineFailed):
             with self._lock:
                 self._failure = event
-            self._transport.publish_failure(event)
+        self._transport.publish_event(event)
 
     def serve_forever(self) -> None:
         engine = self._require_engine()
