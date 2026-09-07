@@ -62,6 +62,8 @@ std::vector<ttnn::Tensor> recurrent_chunk_scan(
     const ttnn::Tensor& final_decay,
     const ttnn::Tensor& t_inv,
     const ttnn::Tensor& initial_state,
+    uint32_t groups_per_head,
+    uint32_t wrap_chunk,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     using namespace ttnn::experimental::prim::kda_factory_detail;
@@ -81,6 +83,8 @@ std::vector<ttnn::Tensor> recurrent_chunk_scan(
         t_inv,
         initial_state,
         ttnn::experimental::prim::RecurrentChunkScanMode::RECURRENT,
+        groups_per_head,
+        wrap_chunk,
         output_memory_config,
         kernel_config);
 }
@@ -93,6 +97,8 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
     const ttnn::Tensor& k_dec_t,
     const ttnn::Tensor& final_decay,
     const ttnn::Tensor& t_inv,
+    uint32_t groups_per_head,
+    uint32_t wrap_chunk,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     constexpr std::string_view operation_name = "summarize_chunk_recurrence";
@@ -108,6 +114,8 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
         t_inv,
         std::nullopt,
         ttnn::experimental::prim::RecurrentChunkScanMode::SUMMARY,
+        groups_per_head,
+        wrap_chunk,
         output_memory_config,
         kernel_config);
 }
