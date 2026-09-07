@@ -395,14 +395,6 @@ class TtRoutedExpert(LightweightModule):
                 raise NotImplementedError("hybrid_token_threshold requires the Blackhole fused path")
             if hybrid_token_threshold < 0:
                 raise ValueError(f"hybrid_token_threshold must be >= 0, got {hybrid_token_threshold}")
-            # moe_fused_swiglu takes no bias tensors, so the experts in its band would compute
-            # without theirs while the composite's band applies them -- wrong numbers, no error.
-            if torch_biases is not None:
-                raise NotImplementedError(
-                    "hybrid_token_threshold cannot be combined with expert biases: moe_fused_swiglu "
-                    "has no bias inputs, so the experts in its band would silently drop them. Leave "
-                    "the threshold as None to keep every expert on the composite."
-                )
             # The fused op validates its activation on device, so an unsupported one reaches the
             # caller as a TT_FATAL mid-forward instead of a rejected configuration.
             if activation not in _FUSED_OP_ACTIVATIONS:
@@ -681,6 +673,9 @@ class TtRoutedExpert(LightweightModule):
                     expert_region_offsets=expert_region_offsets,
                     read_x_at_offset=True,
                     max_active_tokens=threshold,
+                    gate_biases=self.gate_biases,
+                    up_biases=self.up_biases,
+                    down_biases=self.down_biases,
                 )
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs
