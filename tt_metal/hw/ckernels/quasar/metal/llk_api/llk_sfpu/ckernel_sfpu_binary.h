@@ -129,7 +129,7 @@ inline void calculate_sfpu_binary(
  * @tparam APPROXIMATION_MODE: forwarded to the op-specific init
  * @tparam BINOP: selects which op's init to run
  */
-template <[[maybe_unused]] bool APPROXIMATION_MODE, BinaryOp BINOP>
+template <bool APPROXIMATION_MODE, BinaryOp BINOP>
 inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV) {
         _init_reciprocal_<APPROXIMATION_MODE>();

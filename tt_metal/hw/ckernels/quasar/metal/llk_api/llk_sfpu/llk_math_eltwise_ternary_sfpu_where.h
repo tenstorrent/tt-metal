@@ -39,7 +39,7 @@ inline void llk_math_eltwise_ternary_sfpu_where_init() {
  * @param odst        DEST tile index that receives the result.
  * @param vector_mode Must be @c VectorMode::RC; Quasar only supports full-tile mode.
  */
-template <bool APPROXIMATE, [[maybe_unused]] DataFormat data_format>
+template <bool APPROXIMATE, DataFormat data_format>
 inline void llk_math_eltwise_ternary_sfpu_where(
     std::uint32_t dst_index0,
     std::uint32_t dst_index1,

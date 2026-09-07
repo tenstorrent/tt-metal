@@ -118,7 +118,7 @@ inline void calculate_rsqrt() {
 
 // Signature mirrors Blackhole/Wormhole rsqrt_init (<APPROXIMATION_MODE, legacy_compat>); the init
 // itself does not depend on the Dest width, so no fp32 template arg is threaded here.
-template <bool APPROXIMATION_MODE, [[maybe_unused]] bool legacy_compat = false>
+template <bool APPROXIMATION_MODE, bool legacy_compat = false>
 void rsqrt_init() {
     static_assert(!legacy_compat, "Non-default legacy_compat (true) not supported in Quasar rsqrt");
     llk_math_eltwise_unary_sfpu_init<SfpuType::rsqrt>();

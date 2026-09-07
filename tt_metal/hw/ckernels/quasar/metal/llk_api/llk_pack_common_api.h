@@ -75,7 +75,7 @@ inline bool should_reconfig_pack_in_data_format(const std::uint32_t old_output, 
 /**
  * Reprograms packer THCON IN_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
  */
-template <[[maybe_unused]] bool EN_32BIT_DEST>
+template <bool EN_32BIT_DEST>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     _llk_pack_reconfig_data_format_<p_pacr::PACK0>(pack_src_format[output_id], pack_dst_format[output_id]);

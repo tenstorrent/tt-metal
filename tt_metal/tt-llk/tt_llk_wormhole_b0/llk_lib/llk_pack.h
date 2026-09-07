@@ -378,7 +378,7 @@ inline void _llk_pack_hw_configure_(
  *       (@ref _llk_pack_reconfig_data_format_), one of which must run before this init.
  * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
  */
-template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, [[maybe_unused]] bool skip_packer_strides = false>
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim = FACE_R_DIM,

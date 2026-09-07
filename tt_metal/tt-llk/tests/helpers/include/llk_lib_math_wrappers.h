@@ -47,7 +47,7 @@ inline void _llk_math_eltwise_unary_datacopy_wrapper_(
     _llk_math_eltwise_unary_datacopy_<type, Dst, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(dst_index, src_format, dst_format);
 }
 
-template <[[maybe_unused]] bool is_fp32_dest_acc_en, bool transpose_of_faces = true, bool is_32bit = false>
+template <bool is_fp32_dest_acc_en, bool transpose_of_faces = true, bool is_32bit = false>
 inline void _llk_math_transpose_dest_wrapper_(const std::uint32_t dst_index)
 {
     _llk_math_transpose_dest_<transpose_of_faces, is_32bit>(dst_index);
@@ -97,7 +97,7 @@ inline void _llk_math_reconfig_remap_wrapper_(const bool remap_enable)
     _llk_math_reconfig_remap_(remap_enable);
 }
 
-template <[[maybe_unused]] std::uint32_t block_ct_dim, [[maybe_unused]] bool is_fp32_dest_acc_en = false>
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_reinit_wrapper_([[maybe_unused]] const ckernel::TensorShape& tensor_shape)
 {
     reduce_max_row_configure_addrmod_reinit_minimal();

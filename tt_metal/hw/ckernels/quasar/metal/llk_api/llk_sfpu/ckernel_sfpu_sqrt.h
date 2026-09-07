@@ -21,7 +21,7 @@ inline void calculate_sqrt() {
     _calculate_sqrt_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
-template <[[maybe_unused]] bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE>
 void sqrt_init() {
     // Empty function kept for backwards compatibility
 }
