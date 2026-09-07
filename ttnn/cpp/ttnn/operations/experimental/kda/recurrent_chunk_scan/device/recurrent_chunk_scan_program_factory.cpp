@@ -185,7 +185,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"Vt_full", Vt_full},
              {"summary_pair", static_cast<uint32_t>(summary)}},
         .runtime_arg_schema =
-            {.runtime_arg_names = {"head", "value_block", "num_chunks", "active_chunks", "reset_chunk"}},
+            {.runtime_arg_names = {"head", "value_block", "num_chunks", "active_chunks", "reset_chunk", "chunk_start"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
     if (!summary) {
@@ -300,9 +300,13 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         // SUMMARY on a wrapped chip stops after the head chunks, so it publishes
         // T(head) -- the only transform the prefix chain consumes. RECURRENT runs
         // every chunk and reloads its carry from tail_state at the wrap.
-        const bool wrapped = attrs.wrap_chunk != 0;
-        const uint32_t reset_chunk = wrapped ? attrs.wrap_chunk : 0;
-        const uint32_t active_chunks = (summary && wrapped) ? attrs.wrap_chunk : NC;
+        // All three are uniform across the mesh. A per-device difference cannot be
+        // expressed here -- one program serves every chip and runtime args vary by
+        // core, not by device -- so the caller keeps chip-specific behaviour in
+        // tensor content instead, where a per-device mask works.
+        const uint32_t chunk_start = attrs.chunk_start;
+        const uint32_t reset_chunk = attrs.wrap_chunk;
+        const uint32_t active_chunks = attrs.chunk_count == 0 ? (NC - chunk_start) : attrs.chunk_count;
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
@@ -310,7 +314,8 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"value_block", value_block},
              {"num_chunks", NC},
              {"active_chunks", active_chunks},
-             {"reset_chunk", reset_chunk}});
+             {"reset_chunk", reset_chunk},
+             {"chunk_start", chunk_start}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,

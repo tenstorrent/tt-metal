@@ -36,6 +36,13 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 in FLOAT32.
 
         Keyword Args:
+            tail_state (ttnn.Tensor, optional): Carry to reload at ``wrap_chunk``,
+                ``[B*H, K, V]`` in FLOAT32. Required when ``wrap_chunk`` is nonzero
+                and ignored otherwise.
+            groups_per_head (int, optional): Groups folded into the leading
+                dimension. Defaults to 1.
+            wrap_chunk (int, optional): Local chunk at which the causal stream
+                restarts from ``tail_state``, 0 meaning it never does. Defaults to 0.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
@@ -101,6 +108,12 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 ``[B*H*G, N, 32, 32]`` in FLOAT32.
 
         Keyword Args:
+            groups_per_head (int, optional): Groups folded into the leading
+                dimension. Defaults to 1.
+            chunk_start (int, optional): First chunk of the half-open range each
+                group summarizes. Defaults to 0.
+            chunk_count (int, optional): Chunks in that range, 0 meaning to the
+                end. Defaults to 0.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                 Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
@@ -126,7 +139,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("t_inv").noconvert(),
         nb::kw_only(),
         nb::arg("groups_per_head") = 1,
-        nb::arg("wrap_chunk") = 0,
+        nb::arg("chunk_start") = 0,
+        nb::arg("chunk_count") = 0,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 }

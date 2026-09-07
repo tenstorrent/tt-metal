@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import torch
+
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_AFFINE_SUMMARY_DTYPE,
@@ -38,6 +40,133 @@ def _group_summary_memory_config(device: ttnn.Device, group_heads: int, key_dim:
         strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
+    )
+
+
+@dataclass(frozen=True)
+class _AffineTransform:
+    """State-space affine map ``state -> a @ state + b``."""
+
+    a: ttnn.Tensor
+    b: ttnn.Tensor
+
+
+@dataclass(frozen=True)
+class _BoundarySelector:
+    """Per-device scalars that pick between a wrapped-chip and an ordinary value.
+
+    The wrapped chip publishes a different affine transform and reloads a
+    different carry than every other chip. That difference cannot be control
+    flow: one program serves the whole mesh and its runtime args vary by core,
+    not by device. So it arrives as tensor content instead -- ``on`` is 1.0 on
+    the boundary chip and 0.0 elsewhere, ``off`` its complement -- broadcast into
+    the small affine tensors.
+    """
+
+    on: ttnn.Tensor
+    off: ttnn.Tensor
+
+    def select(self, boundary: ttnn.Tensor, elsewhere: ttnn.Tensor) -> ttnn.Tensor:
+        return ttnn.add(
+            ttnn.mul(boundary, self.on, memory_config=KDA_OUTPUT_MEMORY_CONFIG),
+            ttnn.mul(elsewhere, self.off, memory_config=KDA_OUTPUT_MEMORY_CONFIG),
+            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+        )
+
+    def select_transform(self, boundary: _AffineTransform, elsewhere: _AffineTransform) -> _AffineTransform:
+        return _AffineTransform(
+            a=self.select(boundary.a, elsewhere.a),
+            b=self.select(boundary.b, elsewhere.b),
+        )
+
+
+def _boundary_selectors(
+    device: ttnn.MeshDevice,
+    *,
+    sequence_parallel_axis: int,
+    sp_size: int,
+) -> tuple[_BoundarySelector, ...]:
+    """One selector per candidate boundary chip, indexed by SP rank.
+
+    The candidates are just the SP ranks, so the content is fixed at
+    construction; only which selector a forward picks depends on the offset.
+    """
+    mesh_dims: list[int | None] = [None, None]
+    mesh_dims[sequence_parallel_axis] = 0
+    mesh_shape = tuple(device.shape)
+    selectors = []
+    for chip in range(sp_size):
+        indicator = torch.zeros(sp_size, 1, 1)
+        indicator[chip] = 1.0
+        on, off = (
+            ttnn.from_torch(
+                rows,
+                dtype=KDA_RECURRENT_STATE_DTYPE,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=tuple(mesh_dims), mesh_shape=mesh_shape),
+            )
+            for rows in (indicator, 1.0 - indicator)
+        )
+        selectors.append(_BoundarySelector(on=on, off=off))
+    return tuple(selectors)
+
+
+def _interleaved(transform: _AffineTransform) -> _AffineTransform:
+    """Move a sharded summary pair to interleaved memory, where matmul runs."""
+    return _AffineTransform(
+        a=ttnn.to_memory_config(transform.a, KDA_OUTPUT_MEMORY_CONFIG),
+        b=ttnn.to_memory_config(transform.b, KDA_OUTPUT_MEMORY_CONFIG),
+    )
+
+
+def _compose_affine(
+    outer: _AffineTransform,
+    inner: _AffineTransform,
+    *,
+    compute_config: ttnn.DeviceComputeKernelConfig,
+) -> _AffineTransform:
+    """``outer`` after ``inner``: ``(A2 @ A1, A2 @ B1 + B2)``."""
+    return _AffineTransform(
+        a=ttnn.matmul(
+            outer.a,
+            inner.a,
+            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+            dtype=KDA_RECURRENT_STATE_DTYPE,
+            compute_kernel_config=compute_config,
+        ),
+        b=ttnn.add(
+            ttnn.matmul(
+                outer.a,
+                inner.b,
+                memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+                dtype=KDA_RECURRENT_STATE_DTYPE,
+                compute_kernel_config=compute_config,
+            ),
+            outer.b,
+            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+        ),
+    )
+
+
+def _apply_affine(
+    transform: _AffineTransform,
+    state: ttnn.Tensor,
+    *,
+    compute_config: ttnn.DeviceComputeKernelConfig,
+) -> ttnn.Tensor:
+    """``a @ state + b``."""
+    return ttnn.add(
+        ttnn.matmul(
+            transform.a,
+            state,
+            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+            dtype=KDA_RECURRENT_STATE_DTYPE,
+            compute_kernel_config=compute_config,
+        ),
+        transform.b,
+        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
     )
 
 
@@ -174,26 +303,28 @@ def _summarize_chunk_groups(
     grouped: _PreparedChunks,
     geometry: _RecurrenceGeometry,
     *,
+    summary_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
     groups_per_head: int = 1,
-    wrap_chunk: int = 0,
-) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    summary_memory_config = _group_summary_memory_config(
-        grouped.v_beta.device(), grouped.v_beta.shape[0], geometry.key_dim
-    )
+    chunk_start: int = 0,
+    chunk_count: int = 0,
+) -> _AffineTransform:
+    """Summarize a half-open chunk range of every group, in the op's own FP32.
+
+    ``chunk_count`` 0 runs to the end. A range lets a caller summarize a piece of
+    the partition without slicing the prepared terms.
+    """
     affine_a, affine_b = ttnn.experimental.kda.summarize_chunk_recurrence(
         *grouped.as_kernel_args(),
         groups_per_head=groups_per_head,
-        wrap_chunk=wrap_chunk,
+        chunk_start=chunk_start,
+        chunk_count=chunk_count,
         memory_config=summary_memory_config,
         # Summary generation is part of chunk preparation; the affine-prefix
         # fidelity knob applies only to composition of the emitted summaries.
         compute_kernel_config=compute_config.preparation,
     )
-    # Precision boundary: summary-pair math is FP32; summaries are stored and transported as BF16.
-    summary_a = ttnn.typecast(affine_a, KDA_AFFINE_SUMMARY_DTYPE, memory_config=summary_memory_config)
-    summary_b = ttnn.typecast(affine_b, KDA_AFFINE_SUMMARY_DTYPE, memory_config=summary_memory_config)
-    return summary_a, summary_b
+    return _AffineTransform(a=affine_a, b=affine_b)
 
 
 def _effective_summary_group_chunks(
@@ -367,6 +498,7 @@ def _scan_grouped_chunks(
     summary_group_chunks: int,
     sequence_parallel_axis: int | None,
     topology: OffsetTopology | None,
+    boundary_selectors: tuple[_BoundarySelector, ...],
     compute_config: _RecurrenceComputeConfig,
 ) -> _ScanResult:
     """Scan the local partition in one pass, wrap or no wrap.
@@ -377,10 +509,18 @@ def _scan_grouped_chunks(
     identically from the gathered summaries. The prefix chain consumes only the
     head transform, because nothing in the sequence follows the tail.
 
-    So the wrap is two runtime counts, and the single asymmetry left is the
-    replacement state, which exists only on the wrapped chip and is broadcast.
+    So the wrap is one runtime chunk count, and the two asymmetries left -- which
+    transform this chip publishes, and what it reloads at the wrap -- are values,
+    selected per device, not branches.
     """
     split = topology is not None and topology.is_split
+    if split and sequence_parallel_axis is None:
+        raise ValueError("a split topology only arises under sequence parallelism")
+    if split and topology.boundary_chip >= len(boundary_selectors):
+        raise ValueError(
+            f"boundary chip {topology.boundary_chip} has no selector; "
+            f"the executor was built for {len(boundary_selectors)} SP ranks"
+        )
     # A split pins the chip to one group. With several groups, the ones after the
     # wrap would each need an entry state from a second intra-chip chain, and the
     # cross-core prefix takes a single group count for the whole mesh.
@@ -402,13 +542,63 @@ def _scan_grouped_chunks(
         group_heads=geometry.batch_heads * groups_per_head,
         summary_group_chunks=group_chunks,
     )
-    summary_a, summary_b = _summarize_chunk_groups(
-        grouped,
-        geometry,
-        compute_config=compute_config,
-        groups_per_head=groups_per_head,
-        wrap_chunk=wrap_chunk,
+    summary_memory_config = _group_summary_memory_config(
+        prepared.v_beta.device(), geometry.batch_heads * groups_per_head, geometry.key_dim
     )
+
+    head_transform = None
+    if split:
+        selector = boundary_selectors[topology.boundary_chip]
+        # Two disjoint ranges cover every chunk exactly once, so the summary work
+        # is the same as one whole-partition pass. The split only makes each
+        # piece's transform separately available.
+        head_transform = _interleaved(
+            _summarize_chunk_groups(
+                grouped,
+                geometry,
+                summary_memory_config=summary_memory_config,
+                compute_config=compute_config,
+                groups_per_head=groups_per_head,
+                chunk_count=wrap_chunk,
+            )
+        )
+        tail_transform = _interleaved(
+            _summarize_chunk_groups(
+                grouped,
+                geometry,
+                summary_memory_config=summary_memory_config,
+                compute_config=compute_config,
+                groups_per_head=groups_per_head,
+                chunk_start=wrap_chunk,
+            )
+        )
+        # The wrapped chip's tail closes the sequence, so the prefix chain must
+        # see only its head transform. Every other chip's two pieces are adjacent,
+        # so the chain needs its whole partition.
+        published = selector.select_transform(
+            head_transform,
+            _compose_affine(tail_transform, head_transform, compute_config=compute_config.affine_prefix),
+        )
+        # Precision boundary: FP32 composition is transported as BF16, and moved
+        # back into the sharded placement the cross-core prefix ops require.
+        summary_a, summary_b = (
+            ttnn.to_memory_config(ttnn.typecast(component, KDA_AFFINE_SUMMARY_DTYPE), summary_memory_config)
+            for component in (published.a, published.b)
+        )
+    else:
+        summary = _summarize_chunk_groups(
+            grouped,
+            geometry,
+            summary_memory_config=summary_memory_config,
+            compute_config=compute_config,
+            groups_per_head=groups_per_head,
+        )
+        # Precision boundary: summary-pair math is FP32; summaries are stored and
+        # transported as BF16, in the placement they were produced in.
+        summary_a, summary_b = (
+            ttnn.typecast(component, KDA_AFFINE_SUMMARY_DTYPE, memory_config=summary_memory_config)
+            for component in (summary.a, summary.b)
+        )
 
     prefix_initial_state = initial_state
     tail_state = None
@@ -435,9 +625,17 @@ def _scan_grouped_chunks(
         )
         prefix_initial_state = entries[0]
         prefix_memory_config = KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG
-        # The prefix stops before the wrapped chip's tail, so its final carry is
-        # exactly that tail's entry state.
-        tail_state = distributed_final_state if split else None
+        if split:
+            # Every chip reloads its carry at the wrap, because the reload is one
+            # mesh-wide runtime count. On the wrapped chip the replacement is the
+            # prefix's final carry: the prefix stops before its tail, so that
+            # carry is exactly the tail's entry state. On every other chip it is
+            # that chip's own carry at the same chunk, which the head transform
+            # reproduces in FP32, leaving its scan unchanged.
+            tail_state = selector.select(
+                distributed_final_state,
+                _apply_affine(head_transform, prefix_initial_state, compute_config=compute_config.affine_prefix),
+            )
 
     group_initial_states = ttnn.experimental.kda.affine_exclusive_scan(
         summary_a,
@@ -461,12 +659,10 @@ def _scan_grouped_chunks(
     )
 
     if split:
-        # Only the wrapped chip's scan ran past the wrap, so only it holds the
-        # state that closes the interval. Mask and sum to replicate it.
-        # all_reduce deadlocks the fabric router under trace capture here, so use
-        # the gather this layer already runs inside its own trace. It costs the
-        # whole SP fan-in rather than one state, which is the price of a
-        # trace-safe primitive: a 1.57 MB broadcast needs one that does not hang.
+        # Only the wrapped chip's post-wrap fragment closes the interval, so only
+        # its final state is the layer's. Gather and slice: all_reduce deadlocks
+        # the fabric router under trace capture here, and a 1.57 MB broadcast
+        # needs a primitive that does not hang.
         gathered_states = ttnn.all_gather(
             scan.final_state,
             dim=0,
@@ -522,6 +718,16 @@ class KDARecurrence:
         )
         self._summary_group_chunks = program_config.summary_group_chunks
         self._sequence_parallel_axis = sequence_parallel_axis
+        sp_size = (
+            tuple(device.shape)[sequence_parallel_axis]
+            if sequence_parallel_axis is not None and isinstance(device, ttnn.MeshDevice)
+            else 1
+        )
+        self._boundary_selectors = (
+            _boundary_selectors(device, sequence_parallel_axis=sequence_parallel_axis, sp_size=sp_size)
+            if sp_size > 1
+            else ()
+        )
         self._use_grouped_scan = sequence_parallel_axis is not None or program_config.local_scan_strategy == "grouped"
 
     def __call__(
@@ -563,6 +769,7 @@ class KDARecurrence:
                 summary_group_chunks=self._summary_group_chunks,
                 sequence_parallel_axis=self._sequence_parallel_axis,
                 topology=topology,
+                boundary_selectors=self._boundary_selectors,
                 compute_config=self._compute_config,
             )
         else:

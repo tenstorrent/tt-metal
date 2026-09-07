@@ -39,6 +39,8 @@ std::vector<Tensor> recurrent_chunk_scan(
     RecurrentChunkScanMode,
     uint32_t groups_per_head,
     uint32_t wrap_chunk,
+    uint32_t chunk_start,
+    uint32_t chunk_count,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config);
 
