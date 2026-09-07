@@ -279,37 +279,83 @@ context length tile-aligned (32) before calling `dflash_verify`; the underlying 
 in `attention/prefill.py` itself is still unfixed and would be worth a separate bug report.
 
 **Multi-iteration generation, validated on real hardware**
-(`tt/dflash/generate.py::dflash_generate`, test in `tests/dflash/test_dflash_generate.py`):
-runs the full draft→verify→accept→commit loop across multiple blocks with NO static
-torch reference needed at runtime -- noise-block embeddings, RoPE cos/sin, and the
-drafter's sliding-window context are all built from whatever tokens the loop itself
-produces. This required discovering and validating a mechanism Step 6 never exercised:
-the drafter's "context" is a sliding window, not a growing accumulator -- after each
-verify call it is replaced by that call's own hidden-state taps for just the
-newly-committed positions (reference `dflash/dflash.py:305`). Confirmed exact match
-against a 2-iteration torch reference on real T3K hardware, including a verify call at a
-non-tile-aligned position inside an already-touched KV-cache tile.
+(`tt/dflash/generate.py::dflash_generate`, tests in `tests/dflash/test_dflash_generate.py`
+and `test_dflash_generate_traced.py`): runs the full draft→verify→accept→commit loop
+across multiple blocks with NO static torch reference needed at runtime -- noise-block
+embeddings, RoPE cos/sin, and the drafter's context are all built from whatever tokens
+the loop itself produces.
+
+CORRECTED (an earlier version of this section, and of `generate.py`'s own module
+docstring, claimed the drafter's "context" is a sliding window replaced each iteration,
+citing reference `dflash/dflash.py:305` -- that was a misread of the reference, caught
+via external review). The reference's drafter attends to the FULL history back to
+prefill: its `past_key_values_draft` cache is created once, outside the generation loop,
+and `past_key_values.update()` APPENDS every iteration's projected context-tap K/V onto
+everything from every prior iteration; `_crop_to(past_key_values_draft, start)` (using
+`start`'s pre-increment value) only strips that same call's transient noise-block K/V,
+never the context contribution. Line 305 is only the NEW delta fed into one call, not
+the full attended set. Losing this (as the TT port did) starves the drafter of context
+past the first iteration or two and tanks acceptance. Fixed by making `generate.py`'s
+context a FIXED-size (`max_seq_len`-wide) persistent buffer whose first `context_len`
+rows are real and grow every iteration (never sliding), with the remainder masked out
+via a dynamic (tensor-valued) valid-length -- see `generate.py`'s module docstring and
+`attention.py`'s `build_attention_mask_static_parts`/`combine_attention_mask_dynamic`.
+Confirmed exact match against the 2-iteration torch reference on real T3K hardware
+(both the eager and Metal-traced paths), including a verify call at a non-tile-aligned
+position inside an already-touched KV-cache tile, and a measured acceptance-rate
+improvement on a longer benchmark (0.29→0.55 mean accepted/15) consistent with the
+drafter now seeing real history instead of a truncated recent window.
+
+KNOWN GAP vs. the reference (not yet closed): the TT port recomputes each layer's
+context K/V projection over the FULL `max_seq_len`-wide buffer every iteration (mostly
+re-deriving unchanged historical rows), rather than caching already-projected K/V and
+only projecting the new delta like the reference's real incremental cache does. This is
+mathematically identical (confirmed) but computationally wasteful -- measured ~2.7x
+eager slowdown from widening context 16→128 rows. A true per-layer incremental KV cache
+(project+write only the new delta each iteration, read the rest straight from a
+persistent per-layer cache) would close most of this gap; scoped but not yet built.
+
+KNOWN LATENT LIMITATION (separate from the above, not yet fixed, currently unobservable
+at any tested scale): the attention mask's position grid is relative to each call's own
+[context, noise] layout, not true absolute sequence position. Causal-among-noise and the
+valid-length check are unaffected, but the sliding-window distance check for a noise
+query attending a context key is off by a constant that grows with generation length --
+benign while `sliding_window` (2048) comfortably exceeds `max_seq_len`, but would
+mis-mask context in a longer-context deployment where `max_seq_len` approaches or
+exceeds `sliding_window`. See `generate.py`'s module docstring for the fix shape.
 
 **Step 7 (demo) done**: `demo/dflash_demo.py`, toggled via `GEMMA4_USE_DFLASH` (1 = DFlash,
-0 = plain greedy decode baseline), both paths through the same real target model
-instantiation for a matched comparison. Real T3K run, prompt "The capital city of
-France..." (32 tokens, tile-aligned), 7 tokens generated (stopped at EOS):
+0 = plain greedy decode baseline) and `GEMMA4_USE_TRACE` (1 = Metal-traced steady state,
+0 = eager), both paths through the same real target model instantiation for a matched
+comparison. Real T3K run, 64 generated tokens (EOS-stopping disabled via
+`GEMMA4_DFLASH_STOP_AT_EOS=0` to force enough iterations to amortize trace capture --
+this depresses acceptance below what a natural-length generation would show, since it
+pushes past the model's actual stopping point into degenerate continuation):
 
 | | tokens | verify iters | mean accepted | ms/token | tok/s/user |
 |---|---|---|---|---|---|
-| DFlash | 7 | 3 | 1.00/15 | 995 | 1.01 |
-| Plain  | 7 | -- | -- | 290 | 3.45 |
+| Plain          | 64 | -- | -- | 298 | 3.35 |
+| DFlash, eager  | 64 | 42 | 0.55/15 | 1882 | 0.53 |
+| DFlash, traced | 64 | 42 | 0.55/15 | 256 | 3.90 |
 
-Both paths produced the **identical** token sequence (`Paris.<turn|>s<turn|>\n<eos>`) --
-expected, since greedy DFlash is token-identical to greedy decode by construction, and a
-useful independent correctness cross-check. DFlash is slower here, not faster: this is an
-eager/untraced implementation (every drafter/verify call pays full host-dispatch
-overhead, unlike production spec-decode's traced fused iteration), and this particular
-prompt's natural continuation is short and low-acceptance (mean 1/15 drafts accepted per
-block) -- not enough tokens or acceptance rate to amortize the drafter's extra compute.
-Getting a real speedup would need trace capture (removing per-iteration host dispatch,
-the same lever `_run_spec_decode`'s `GEMMA4_SPEC_TRACE` uses) and longer/higher-acceptance
-generations -- not yet built.
+DFlash eager is well below plain decode here -- expected, since eager pays the drafter's
+full (now correctly wider) per-iteration compute plus host-dispatch overhead every call,
+with only ~1.55 tokens/iteration to amortize it against. Metal trace capture (see below)
+removes the host-dispatch overhead and gets DFlash modestly ahead of plain decode
+(1.16x); closing the gap further needs either a genuinely incremental drafter KV cache
+(see above) or a higher-acceptance (non-degenerate) generation to amortize against.
+
+**Metal trace capture, validated on real hardware** (`generate.py`'s `use_trace` param /
+`_traced_steady_state`, mirroring `spec_decode.py`'s `_capture_fused_trace`/
+`_generate_fused_traced`): captures the steady-state draft→verify→tap iteration as ONE
+trace, replayed for every subsequent block. First attempt hit
+`TT_FATAL: Writes are not supported during trace capture` -- root cause: the attention
+mask was being rebuilt from scratch (`ttnn.arange`/`ones`/`zeros`/`full`, each of which
+does a host->device write internally) on every captured call. Fixed by splitting mask
+construction into a one-time static builder (run before capture) and a per-replay
+combiner using only elementwise ops on already-built tensors
+(`build_attention_mask_static_parts`/`combine_attention_mask_dynamic`). Confirmed exact
+match against the torch reference with no capture-time errors and no hang.
 
 `_tile_align_prompt` pads any non-tile-aligned prompt with repeated newline filler tokens
 as a documented, logged fallback -- found to bias generation toward repeating the filler

@@ -13,6 +13,7 @@ import ttnn
 from models.demos.gemma4.tt.dflash.attention import (
     build_attention_mask_additive_device,
     build_attention_mask_additive_device_dynamic,
+    combine_attention_mask_dynamic,
 )
 from models.demos.gemma4.tt.dflash.layer import dflash_layer_forward
 from models.demos.gemma4.tt.dflash.weights import Gemma4DFlashWeights
@@ -33,6 +34,7 @@ def dflash_drafter_forward(
     eps: float,
     layer_configs: list[tuple[bool, int | None]],  # (is_causal, sliding_window) per layer
     context_valid_len_tt: ttnn.Tensor | None = None,
+    mask_static_parts: dict[tuple[bool, int | None], "DynamicMaskStaticParts"] | None = None,
 ) -> ttnn.Tensor:
     """``context_valid_len_tt``: when given (a ``[1,1]`` int32 device tensor), ``context``
     is treated as a FIXED-size window (its own shape, e.g. the drafter's block_size) whose
@@ -42,7 +44,17 @@ def dflash_drafter_forward(
     since the REAL number of valid context rows varies iteration to iteration but a
     trace's tensor shapes cannot. When ``None`` (the default, used for the first
     iteration's real, variably-sized prefill context), the ordinary static mask is used
-    instead, exactly as before."""
+    instead, exactly as before.
+
+    ``mask_static_parts``: when given alongside ``context_valid_len_tt`` (one
+    ``DynamicMaskStaticParts`` per distinct ``(is_causal, sliding_window)`` pair in
+    ``layer_configs``, from ``attention.build_attention_mask_static_parts``), masks are
+    recombined via ``combine_attention_mask_dynamic`` -- pure elementwise ops on
+    already-built tensors, safe inside a captured Metal trace -- instead of being rebuilt
+    from scratch (``ttnn.arange``/``ones``/``zeros``/``full``, each a host->device write)
+    every call, which a trace capture rejects (``TT_FATAL: Writes are not supported during
+    trace capture``). Required for ``generate.py``'s ``_traced_steady_state``; ordinary
+    (non-traced) callers can omit it."""
     ctx_len = context.shape[-2]
     q_len = noise.shape[-2]
 
@@ -51,7 +63,9 @@ def dflash_drafter_forward(
     def mask_for(is_causal, sliding_window):
         key = (is_causal, sliding_window)
         if key not in mask_cache:
-            if context_valid_len_tt is not None:
+            if mask_static_parts is not None:
+                mask_cache[key] = combine_attention_mask_dynamic(mask_static_parts[key], context_valid_len_tt)
+            elif context_valid_len_tt is not None:
                 mask_cache[key] = build_attention_mask_additive_device_dynamic(
                     mesh_device, ctx_len, q_len, is_causal, sliding_window, context_valid_len_tt
                 )
