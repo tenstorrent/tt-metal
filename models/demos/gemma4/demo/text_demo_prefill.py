@@ -49,11 +49,11 @@ def _load_full_weights():
 # ── Weight loading from the tensor cache ──────────────────────────────────────
 
 
-def _cache_root(model_path):
-    """Absolute path of the tensor cache directory for this model + dtype."""
+def _cache_root(model_path, mesh_shape):
+    """Absolute path of the tensor cache directory for this model, dtype, and mesh."""
     args = Gemma4ModelArgs()
     args.model_cache_path = Gemma4ModelArgs.resolve_model_cache_path(model_path)
-    return str(args.weight_cache_path(MODEL_DTYPE))
+    return str(args.weight_cache_path(MODEL_DTYPE, mesh_shape=mesh_shape))
 
 
 def _require_cache(cache_root, tp, num_layers):
@@ -298,7 +298,7 @@ def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
         max_num_blocks=max(1, max_seq_len // PAGE_BLOCK_SIZE),
     )
 
-    cache_root = _cache_root(model_path)
+    cache_root = _cache_root(model_path, mesh_device.shape)
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)
     num_layers = Gemma4ModelArgs.from_hf_config(hf_config).num_hidden_layers
     _require_cache(cache_root, tp, num_layers)

@@ -81,10 +81,10 @@ def _load_full_weights() -> bool:
     return os.environ.get("GEMMA4_PREFILL_LOAD_FULL_WEIGHTS", "0").lower() in ("1", "true", "yes")
 
 
-def _cache_root(model_path: str) -> str:
+def _cache_root(model_path: str, mesh_shape) -> str:
     args = Gemma4ModelArgs()
     args.model_cache_path = Gemma4ModelArgs.resolve_model_cache_path(model_path)
-    return str(args.weight_cache_path(MODEL_DTYPE))
+    return str(args.weight_cache_path(MODEL_DTYPE, mesh_shape=mesh_shape))
 
 
 def _require_cache(cache_root: str, tp: int, num_layers: int) -> None:
@@ -276,7 +276,7 @@ class TracedPrefillRuntime:
         tp = self.mesh_device.shape[1]
         hf_config = Gemma4ModelArgs.load_hf_config(self.model_path)
         num_layers = Gemma4ModelArgs.from_hf_config(hf_config).num_hidden_layers
-        _require_cache(_cache_root(self.model_path), tp, num_layers)
+        _require_cache(_cache_root(self.model_path, self.mesh_device.shape), tp, num_layers)
         paged_config = PagedAttentionConfig(
             block_size=PAGE_BLOCK_SIZE,
             # Each logical slot owns a complete, disjoint max-context physical pool.
