@@ -86,7 +86,13 @@ FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary_pair>
-TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) {
+TT_KERNEL void reader(
+    uint32_t head,
+    uint32_t value_block,
+    uint32_t num_chunks,
+    uint32_t state_row,
+    uint32_t reset_chunk,
+    uint32_t reset_state_row) {
     const auto v_beta_accessor = TensorAccessor(tensor::v_beta);
     const auto kd_accessor = TensorAccessor(tensor::kd);
     const auto k_decay_transposed_accessor = TensorAccessor(tensor::k_decay_transposed);
@@ -117,8 +123,10 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
         seed_identity<Kt, Vt>(summary_seed, noc, value_block);
     } else {
         const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
+        // state_row, not head: a wrap gives the straddling group a second entry
+        // slot, so the seed row and the work row are no longer the same index.
         read_and_publish_value_slice<Vt, Vt_full>(
-            initial_state_accessor, state, noc, head * Kt * Vt_full, Kt, value_block);
+            initial_state_accessor, state, noc, state_row * Kt * Vt_full, Kt, value_block);
     }
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
