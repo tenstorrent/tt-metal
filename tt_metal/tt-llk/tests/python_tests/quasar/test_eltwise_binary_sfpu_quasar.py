@@ -2,10 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import struct
-from typing import List
 
 import pytest
 import torch
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    unpack_to_dest_modes,
+)
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BinarySFPUGolden,
@@ -15,6 +20,7 @@ from helpers.llk_params import (
     ApproximationMode,
     DataCopyType,
     DestAccumulation,
+    DestSync,
     DstRoundingMode,
     ImpliedMathFormat,
     MathOperation,
@@ -24,9 +30,9 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     InputOutputFormat,
-    generate_quasar_sfpu_format_variants,
     input_output_formats,
     parametrize,
+    resolve_quasar_sfpu_variant,
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -113,6 +119,8 @@ def _run_sfpu_binary_llk_golden(
     perf_report=None,
     dst_rounding_mode=DstRoundingMode.Default,
     format_variant=None,
+    dest_sync=DestSync.Half,
+    unpack_to_dest=None,
 ):
     """Shared driver for the unpack-to-dest, LLK-golden binary SFPU ops.
 
@@ -150,8 +158,18 @@ def _run_sfpu_binary_llk_golden(
         raise ValueError("perf_report must be provided when is_perf=True")
 
     unpack_to_dest = (
-        format_variant.unpack_to_dest if format_variant is not None else True
+        unpack_to_dest
+        if unpack_to_dest is not None
+        else (format_variant.unpack_to_dest if format_variant is not None else True)
     )
+    if format_variant is None:
+        format_variant = resolve_quasar_sfpu_variant(
+            mathop, formats, dest_acc, unpack_to_dest
+        )
+        if format_variant is None:
+            pytest.skip(
+                "No executable Quasar SFPU route for this dest-flag combination"
+            )
     test_config_kwargs = {
         "test_name": _CPP_SOURCE,
         "formats": formats,
@@ -163,7 +181,7 @@ def _run_sfpu_binary_llk_golden(
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync),
             # 2's-complement datapath (default); only the quant family reads this.
             SIGN_MAGNITUDE_FORMAT(False),
             SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
@@ -259,12 +277,19 @@ _INT_OPS = [
 @pytest.mark.parametrize(
     "binary_op, mathop, clamp_inputs", _INT_OPS, ids=[op for op, _, _ in _INT_OPS]
 )
-@pytest.mark.parametrize(
-    "data_format, dest_acc", [(DataFormat.Int32, DestAccumulation.Yes)]
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    dest_acc=dest_acc_modes,
+    dest_sync=lambda: dest_sync_modes(),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.Int32Dest
+    ),
 )
 def test_eltwise_binary_sfpu_int_quasar(
-    data_format,
+    formats,
     dest_acc,
+    dest_sync,
+    unpack_to_dest,
     binary_op,
     mathop,
     clamp_inputs,
@@ -276,7 +301,6 @@ def test_eltwise_binary_sfpu_int_quasar(
     perf_report=None,
 ):
     """Binary SFPU integer ops (add, mul, gt, lt, le, ge), Int32."""
-    formats = InputOutputFormat(input_format=data_format, output_format=data_format)
     _run_sfpu_binary_llk_golden(
         formats,
         dest_acc,
@@ -291,6 +315,8 @@ def test_eltwise_binary_sfpu_int_quasar(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
+        dest_sync=dest_sync,
+        unpack_to_dest=unpack_to_dest,
     )
 
 
@@ -309,12 +335,9 @@ _DIV_SPECIAL_CASE_LANES = [
 ]
 
 
-def _get_valid_float_formats_dest_acc():
-    """Resolve all executable float binary format and path variants."""
-    formats = input_output_formats(
-        [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
-    )
-    return generate_quasar_sfpu_format_variants(MathOperation.SfpuElwadd, formats)
+SFPU_BINARY_FLOAT_FORMATS = input_output_formats(
+    [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
+)
 
 
 def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
@@ -390,12 +413,20 @@ _FLOAT_OPS = [
     ids=[f"{op}_{approx.name}" for op, _, approx in _FLOAT_OPS],
 )
 @parametrize(
-    formats_dest_acc=_get_valid_float_formats_dest_acc(),
+    formats=SFPU_BINARY_FLOAT_FORMATS,
+    dest_acc=dest_acc_modes,
+    dest_sync=lambda: dest_sync_modes(),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.Sfpu
+    ),
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_float_quasar(
-    formats_dest_acc,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
     implied_math_format,
     tile_indices,
     binary_op,
@@ -408,9 +439,11 @@ def test_eltwise_binary_sfpu_float_quasar(
     perf_report=None,
 ):
     """Binary SFPU float ops (add, sub, mul, div, atan2)."""
-    format_variant = formats_dest_acc
-    formats = format_variant.formats
-    dest_acc = format_variant.dest_acc
+    format_variant = resolve_quasar_sfpu_variant(
+        mathop, formats, dest_acc, unpack_to_dest
+    )
+    if format_variant is None:
+        pytest.skip("No executable Quasar SFPU route for this dest-flag combination")
     post_check = (
         _check_div_special_cases if mathop == MathOperation.SfpuElwdiv else None
     )
@@ -429,6 +462,8 @@ def test_eltwise_binary_sfpu_float_quasar(
         is_perf=is_perf,
         perf_report=perf_report,
         format_variant=format_variant,
+        dest_sync=dest_sync,
+        unpack_to_dest=unpack_to_dest,
     )
 
 
@@ -522,30 +557,6 @@ def prepare_binary_max_min_inputs(src_A, src_B, input_format, output_format):
     return in0, in1
 
 
-def _generate_max_min_combinations(
-    formats_list: List[InputOutputFormat],
-    implied_math_formats=(ImpliedMathFormat.No, ImpliedMathFormat.Yes),
-    input_dimensions_list=([32, 32],),
-):
-    """Generate max/min resolved routes and the operation-specific axes."""
-    combinations = []
-    for format_variant in generate_quasar_sfpu_format_variants(
-        MathOperation.SfpuBinaryMax, formats_list
-    ):
-        for implied_math_format in implied_math_formats:
-            for is_max_op in [True, False]:
-                for input_dimensions in input_dimensions_list:
-                    combinations.append(
-                        (
-                            format_variant,
-                            implied_math_format,
-                            is_max_op,
-                            input_dimensions,
-                        )
-                    )
-    return combinations
-
-
 def _run_max_min(
     format_variant,
     implied_math_format,
@@ -559,6 +570,7 @@ def _run_max_min(
     loop_factor=1,
     is_perf=False,
     perf_report=None,
+    dest_sync=DestSync.Half,
 ):
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc
@@ -626,7 +638,7 @@ def _run_max_min(
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync),
             # 2's-complement datapath (default); only the quant family reads this.
             SIGN_MAGNITUDE_FORMAT(False),
             SFPU_DST_ROUNDING_MODE(),
@@ -681,13 +693,25 @@ def _run_max_min(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
-        SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
+    formats=SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
+    dest_acc=dest_acc_modes,
+    dest_sync=lambda: dest_sync_modes(),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.Sfpu
     ),
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    is_max_op=[True, False],
+    input_dimensions=[[32, 32]],
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_float_quasar(
-    formats_dest_acc_implied_math_is_max_input_dims,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    implied_math_format,
+    is_max_op,
+    input_dimensions,
     tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
@@ -696,9 +720,12 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
     perf_report=None,
 ):
     """Binary SFPU max/min for the non-redundant floating-point formats."""
-    format_variant, implied_math_format, is_max_op, input_dimensions = (
-        formats_dest_acc_implied_math_is_max_input_dims
+    mathop = MathOperation.SfpuBinaryMax if is_max_op else MathOperation.SfpuBinaryMin
+    format_variant = resolve_quasar_sfpu_variant(
+        mathop, formats, dest_acc, unpack_to_dest
     )
+    if format_variant is None:
+        pytest.skip("No executable Quasar SFPU route for this dest-flag combination")
     spec = StimuliSpec.uniform(low=-0.9, high=1.1)
     _run_max_min(
         format_variant,
@@ -712,19 +739,29 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
+        dest_sync=dest_sync,
     )
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
-        SFPU_BINARY_MAX_MIN_INT32_FORMATS,
-        implied_math_formats=(ImpliedMathFormat.No,),
+    formats=SFPU_BINARY_MAX_MIN_INT32_FORMATS,
+    dest_acc=dest_acc_modes,
+    dest_sync=lambda: dest_sync_modes(),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.Sfpu
     ),
+    is_max_op=[True, False],
+    input_dimensions=[[32, 32]],
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_int32_quasar(
-    formats_dest_acc_implied_math_is_max_input_dims,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    is_max_op,
+    input_dimensions,
     tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
@@ -733,10 +770,12 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
     perf_report=None,
 ):
     """Binary SFPU max/min (Int32)."""
-    format_variant, _implied_math_format, is_max_op, input_dimensions = (
-        formats_dest_acc_implied_math_is_max_input_dims
+    mathop = MathOperation.SfpuBinaryMax if is_max_op else MathOperation.SfpuBinaryMin
+    format_variant = resolve_quasar_sfpu_variant(
+        mathop, formats, dest_acc, unpack_to_dest
     )
-    formats = format_variant.formats
+    if format_variant is None:
+        pytest.skip("No executable Quasar SFPU route for this dest-flag combination")
     iinfo = torch.iinfo(format_dict[formats.input_format])
     spec = StimuliSpec.uniform(low=float(iinfo.min), high=float(iinfo.max - 1))
     _run_max_min(
@@ -751,6 +790,7 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
+        dest_sync=dest_sync,
     )
 
 
@@ -804,6 +844,7 @@ def _run_quant(
     loop_factor=1,
     is_perf=False,
     perf_report=None,
+    dest_sync=DestSync.Half,
 ):
     src0_idx, src1_idx, dst_idx = tile_indices
     dest_acc = DestAccumulation.Yes  # all quant endpoints are 32-bit
@@ -884,7 +925,7 @@ def _run_quant(
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync),
             SIGN_MAGNITUDE_FORMAT(sign_magnitude),
             SFPU_DST_ROUNDING_MODE(),
             TYPECAST_FORMATS(),

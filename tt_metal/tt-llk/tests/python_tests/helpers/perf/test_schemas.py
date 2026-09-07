@@ -41,9 +41,10 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_binary": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "dest_acc",
+            "dest_sync",
             "formats.input_A",
             "formats.input_B",
             "formats.output",
@@ -65,10 +66,11 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_binary_sfpu": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "approx_mode",
             "dest_acc",
+            "dest_sync",
             "formats.input_A",
             "formats.input_B",
             "formats.output",
@@ -92,11 +94,12 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_eltwise_binary_sfpu": "perf_eltwise_binary_sfpu"},
     },
     "perf_eltwise_unary_datacopy": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
             "dest_acc",
+            "dest_sync",
             "dst_index",
             "formats.input_A",
             "formats.input_B",
@@ -162,11 +165,12 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_unary_sfpu": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "approx_mode",
             "clamp_negative",
             "dest_acc",
+            "dest_sync",
             "fast_mode",
             "formats.input_A",
             "formats.input_B",
@@ -341,9 +345,10 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_math_matmul": "perf_math_matmul"},
     },
     "perf_transpose_dest": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "dest_acc",
+            "dest_sync",
             "formats.input_A",
             "formats.input_B",
             "formats.output",
@@ -460,11 +465,12 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_pack": "perf_pack"},
     },
     "perf_pack_untilize": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
             "dest_acc",
+            "dest_sync",
             "formats.input_A",
             "formats.input_B",
             "formats.output",
@@ -483,9 +489,10 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_pack_untilize": "perf_pack_untilize"},
     },
     "perf_reduce": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "dest_acc",
+            "dest_sync",
             "formats.input_A",
             "formats.input_B",
             "formats.output",
@@ -699,11 +706,12 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_unpack_tilize": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
             "dest_acc",
+            "dest_sync",
             "formats.input_A",
             "formats.input_B",
             "formats.output",

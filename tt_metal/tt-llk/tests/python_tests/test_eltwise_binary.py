@@ -3,6 +3,12 @@
 
 import pytest
 import torch
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    unpack_to_dest_modes,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -14,7 +20,6 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     BroadcastType,
     DestAccumulation,
-    DestSync,
     EltwiseBinaryReuseDestType,
     MathFidelity,
     MathOperation,
@@ -114,6 +119,10 @@ def _get_valid_tile_dimensions(transpose_srca, broadcast_type):
 
 @parametrize(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=lambda: dest_sync_modes(),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.FpuMath
+    ),
     formats=lambda dest_acc: _get_valid_formats(dest_acc),
     broadcast_type=[
         BroadcastType.None_,
@@ -131,6 +140,8 @@ def _get_valid_tile_dimensions(transpose_srca, broadcast_type):
 )
 def test_eltwise_binary(
     dest_acc,
+    dest_sync,
+    unpack_to_dest,
     formats,
     broadcast_type,
     math_op,
@@ -164,7 +175,7 @@ def test_eltwise_binary(
         else dest_acc
     )
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+        dest_sync,
         effective_dest_acc,
         formats,
         input_dimensions,
@@ -266,7 +277,7 @@ def test_eltwise_binary(
             MATH_FIDELITY(math_fidelity),
             BROADCAST_TYPE(broadcast_type),
             MATH_OP(mathop=math_op),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(transpose_srca),
@@ -292,7 +303,7 @@ def test_eltwise_binary(
             use_dense_tile_dimensions=True,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=False,
+        unpack_to_dest=unpack_to_dest,
     )
 
     res_from_L1 = configuration.run().result
@@ -311,6 +322,10 @@ def test_eltwise_binary(
 
 @parametrize(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=lambda: dest_sync_modes(),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.FpuMath
+    ),
     formats=[
         fmt
         for fmt in input_output_formats(
@@ -339,6 +354,8 @@ def test_eltwise_binary(
 )
 def test_eltwise_binary_bfp4_b(
     dest_acc,
+    dest_sync,
+    unpack_to_dest,
     formats,
     broadcast_type,
     math_fidelity,
@@ -371,7 +388,7 @@ def test_eltwise_binary_bfp4_b(
         else dest_acc
     )
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+        dest_sync,
         effective_dest_acc,
         formats,
         input_dimensions,
@@ -462,7 +479,7 @@ def test_eltwise_binary_bfp4_b(
             MATH_FIDELITY(math_fidelity),
             BROADCAST_TYPE(broadcast_type),
             MATH_OP(mathop=math_op),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(transpose_srca),
@@ -488,7 +505,7 @@ def test_eltwise_binary_bfp4_b(
             use_dense_tile_dimensions=True,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=False,
+        unpack_to_dest=unpack_to_dest,
     )
 
     res_from_L1 = configuration.run().result
@@ -506,7 +523,12 @@ def test_eltwise_binary_bfp4_b(
 
 
 def _prepare_dest_reuse_inputs(
-    formats, input_dimensions, output_dimensions, tile_dimensions
+    formats,
+    input_dimensions,
+    output_dimensions,
+    tile_dimensions,
+    dest_sync,
+    dest_acc,
 ):
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
@@ -537,10 +559,10 @@ def _prepare_dest_reuse_inputs(
     effective_dest_acc = (
         DestAccumulation.Yes
         if formats.output_format == DataFormat.Float32
-        else DestAccumulation.No
+        else dest_acc
     )
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+        dest_sync,
         effective_dest_acc,
         formats,
         output_dimensions,
@@ -671,6 +693,11 @@ def _compute_dest_reuse_golden(
         + ([] if math_op == MathOperation.Elwmul else [DataFormat.Bfp8_b]),
         same=True,
     ),
+    dest_acc=lambda formats: dest_acc_modes(formats, allowed=[DestAccumulation.No]),
+    dest_sync=lambda: dest_sync_modes(),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.FpuMath
+    ),
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
     tile_dimensions=[[32, 32], [16, 32], [8, 32]],
     input_dimensions=[[512, 32]],
@@ -685,13 +712,21 @@ def test_eltwise_binary_dest_reuse(
     reuse_dest_type,
     math_op,
     formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
     math_fidelity,
     tile_dimensions,
     input_dimensions,
     output_dimensions,
 ):
     prepared = _prepare_dest_reuse_inputs(
-        formats, input_dimensions, output_dimensions, tile_dimensions
+        formats,
+        input_dimensions,
+        output_dimensions,
+        tile_dimensions,
+        dest_sync=dest_sync,
+        dest_acc=dest_acc,
     )
     golden_tensor = _compute_dest_reuse_golden(
         math_op, reuse_dest_type, math_fidelity, formats, prepared
@@ -704,7 +739,7 @@ def test_eltwise_binary_dest_reuse(
             MATH_FIDELITY(math_fidelity),
             BROADCAST_TYPE(BroadcastType.None_),
             MATH_OP(mathop=math_op),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync),
             EN_DEST_REUSE(),
             REUSE_DEST_TYPE(reuse_dest_type=reuse_dest_type),
         ],
@@ -739,8 +774,8 @@ def test_eltwise_binary_dest_reuse(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        dest_acc=DestAccumulation.No,
-        unpack_to_dest=False,
+        dest_acc=dest_acc,
+        unpack_to_dest=unpack_to_dest,
     )
 
     res_from_L1 = configuration.run().result
@@ -756,6 +791,10 @@ def test_eltwise_binary_dest_reuse(
 
 @parametrize(
     dest_acc=[DestAccumulation.Yes],  # Dest accumulation is required for int8.
+    dest_sync=lambda: dest_sync_modes(),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.FpuMath
+    ),
     formats=InputOutputFormat(DataFormat.Int8, DataFormat.Int8),
     broadcast_type=[
         BroadcastType.None_,
@@ -770,6 +809,8 @@ def test_eltwise_binary_dest_reuse(
 )
 def test_eltwise_binary_int8_format(
     dest_acc,
+    dest_sync,
+    unpack_to_dest,
     formats,
     broadcast_type,
     math_fidelity,
@@ -805,7 +846,7 @@ def test_eltwise_binary_int8_format(
         else dest_acc
     )
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+        dest_sync,
         effective_dest_acc,
         formats,
         input_dimensions,
@@ -866,7 +907,7 @@ def test_eltwise_binary_int8_format(
             MATH_FIDELITY(math_fidelity),
             BROADCAST_TYPE(broadcast_type),
             MATH_OP(mathop=math_op),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(transpose_srca),
@@ -892,7 +933,7 @@ def test_eltwise_binary_int8_format(
             use_dense_tile_dimensions=True,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=False,
+        unpack_to_dest=unpack_to_dest,
     )
 
     res_from_L1 = configuration.run().result

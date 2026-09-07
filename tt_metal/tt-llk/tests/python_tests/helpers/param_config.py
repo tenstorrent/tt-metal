@@ -11,7 +11,6 @@ import pytest
 from helpers.tile_shape import construct_tile_shape
 from typing_extensions import deprecated
 
-from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .constraints import (
     _quasar_effective_sfpu_format,
     _quasar_fpu_source_format,
@@ -20,7 +19,12 @@ from .constraints import (
     is_valid_quasar_packer_conversion,
     is_valid_quasar_unpack_to_dest,
 )
-from .data_format_inference import is_format_combination_outlier
+from .dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_tile_capacity,
+    unpack_to_dest_modes,
+)
 from .format_config import (
     DataFormat,
     FormatConfig,
@@ -56,11 +60,6 @@ def runtime(value):
 
 
 checked_formats_and_dest_acc = {}
-
-DEST_SYNC_TILE_LIMITS = {
-    DestSync.Half: 8,
-    DestSync.Full: 16,
-}
 
 
 def format_combination_sweep(
@@ -173,10 +172,22 @@ class ResolutionError(Exception):
 
 
 def _param_dependencies(parameter: str, argument: any) -> List[str]:
-    """Extract parameter names from a callable using introspection."""
+    """Extract parametrize dependencies from a callable using introspection.
+
+    Only positional parameters are treated as other sweep axes. Keyword-only
+    arguments (``dest_acc_modes(..., allowed=)``, ``dest_sync_modes(*, is_perf=)``,
+    ``unpack_to_dest_modes(..., path=)``) are helper options, not dependencies.
+    """
     if callable(argument):
-        dependencies = inspect.signature(argument).parameters.keys()
-        return list(dependencies)
+        return [
+            name
+            for name, param in inspect.signature(argument).parameters.items()
+            if param.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        ]
     return []
 
 
@@ -541,8 +552,13 @@ def _make_quasar_sfpu_variant(
 
 
 def _resolve_quasar_typecast_variant(
-    formats: InputOutputFormat, dest_acc: DestAccumulation
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    unpack_to_dest: bool,
 ) -> Optional[QuasarSfpuVariant]:
+    if not unpack_to_dest:
+        return None
+
     input_format = formats.input_format
     output_format = formats.output_format
     requires_32bit_dest = input_format.is_32_bit() or output_format.is_32_bit()
@@ -625,10 +641,11 @@ def resolve_quasar_sfpu_variant(
     op: Optional[MathOperation],
     formats: InputOutputFormat,
     dest_acc: DestAccumulation,
+    unpack_to_dest: bool,
 ) -> Optional[QuasarSfpuVariant]:
-    """Resolve one exact requested external format and Dest configuration."""
+    """Resolve Dest-facing formats for an already chosen dest_acc / unpack_to_dest."""
     if op == MathOperation.Typecast:
-        return _resolve_quasar_typecast_variant(formats, dest_acc)
+        return _resolve_quasar_typecast_variant(formats, dest_acc, unpack_to_dest)
 
     # Only SFPU typecast may cross the integer/float boundary.
     if formats.input_format.is_integer() != formats.output_format.is_integer():
@@ -640,10 +657,12 @@ def resolve_quasar_sfpu_variant(
         else _quasar_narrow_dest_candidates(formats.input_format, formats.output_format)
     )
     for dest_format in dest_candidates:
-        variant = _resolve_quasar_direct_sfpu_variant(formats, dest_acc, dest_format)
-        if variant is not None:
-            return variant
-        variant = _resolve_quasar_fpu_sfpu_variant(formats, dest_acc, dest_format)
+        if unpack_to_dest:
+            variant = _resolve_quasar_direct_sfpu_variant(
+                formats, dest_acc, dest_format
+            )
+        else:
+            variant = _resolve_quasar_fpu_sfpu_variant(formats, dest_acc, dest_format)
         if variant is not None:
             return variant
     return None
@@ -710,10 +729,18 @@ def generate_quasar_sfpu_format_variants(
     """
     variants = []
     for formats in formats_list:
-        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
-            variant = resolve_quasar_sfpu_variant(op, formats, dest_acc)
-            if variant is not None:
-                variants.append(variant)
+        for dest_acc in dest_acc_modes(formats):
+            unpack_modes = (
+                [True]
+                if op == MathOperation.Typecast
+                else unpack_to_dest_modes(formats, dest_acc, path=UnpackPath.Sfpu)
+            )
+            for unpack_to_dest in unpack_modes:
+                variant = resolve_quasar_sfpu_variant(
+                    op, formats, dest_acc, unpack_to_dest
+                )
+                if variant is not None:
+                    variants.append(variant)
 
     if full_format_route_sweep:
         return variants
@@ -776,11 +803,8 @@ def calculate_edgecase_dest_indices(
 
     combinations = []
 
-    capacity_divisor = 2 if dest_acc else 1
-
     for dest_sync in dest_sync_modes:
-        base_tile_limit = DEST_SYNC_TILE_LIMITS[dest_sync]
-        max_tiles = base_tile_limit // capacity_divisor
+        max_tiles = dest_tile_capacity(dest_sync, dest_acc)
         max_index = max_tiles - result_tiles
 
         if max_index < 0:
@@ -798,9 +822,7 @@ def calculate_edgecase_dest_indices(
 
 
 def get_max_dst_index(dest_sync: DestSync, dest_acc: bool, result_tiles: int) -> int:
-    capacity_divisor = 2 if dest_acc else 1
-    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
-    return max(max_tiles - result_tiles, 0)
+    return max(dest_tile_capacity(dest_sync, dest_acc) - result_tiles, 0)
 
 
 def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shape=None):
@@ -820,8 +842,7 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shap
         List of input dimensions
     """
 
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles_in_dest = dest_tile_capacity(dest_sync, dest_acc)
 
     if tile_shape is None:
         tile_shape = construct_tile_shape()
@@ -912,8 +933,7 @@ def generate_perf_input_dimensions(
     if tile_shape is None:
         tile_shape = construct_tile_shape()
 
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles_in_dest = dest_tile_capacity(dest_sync, dest_acc)
     tile_rows = tile_shape.total_row_dim()
     tile_cols = tile_shape.total_col_dim()
 
@@ -977,23 +997,7 @@ def get_num_blocks_and_num_tiles_in_block(
     num_rows_tensor, num_cols_tensor = input_dimensions
     num_rows_tile, num_cols_tile = tile_dimensions
 
-    is_outlier = (
-        is_format_combination_outlier(
-            formats.input_format, formats.output_format, dest_acc
-        )
-        and get_chip_architecture() != ChipArchitecture.QUASAR
-    )
-
-    capacity_divisor = (
-        2
-        if (
-            dest_acc == DestAccumulation.Yes
-            or formats.input_format.is_32_bit()
-            or is_outlier
-        )
-        else 1
-    )
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles_in_dest = dest_tile_capacity(dest_sync, dest_acc)
 
     # Here we make an assumption that dense tiling is used,
     # meaning that the input matrix is fully covered by tiles without any padding or partial tiles.

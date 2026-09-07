@@ -4,7 +4,12 @@
 
 import pytest
 from conftest import skip_for_blackhole
-from helpers.constraints import distinct_dest_accumulation_modes
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    unpack_to_dest_modes,
+)
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -14,7 +19,11 @@ from helpers.llk_params import (
     StableSort,
     Transpose,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    generate_perf_input_dimensions,
+    input_output_formats,
+    parametrize,
+)
 from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.sfpu_domains import sfpu_unary_ops
 from helpers.stimuli_config import StimuliConfig
@@ -22,6 +31,7 @@ from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
+    DEST_SYNC,
     FAST_MODE,
     ITERATIONS,
     LOOP_FACTOR,
@@ -71,12 +81,8 @@ _OPS_WITH_STABLE_SORT = {
 
 def _get_dest_acc_modes(mathop, formats):
     if mathop in _OPS_WITHOUT_DEST_ACC:
-        return [DestAccumulation.No]
-    # TestConfig promotes dest_acc=No to Yes for outlier format combos, so asking
-    # for both would record two rows with an identical key (the same kernel twice).
-    return distinct_dest_accumulation_modes(
-        formats, [DestAccumulation.Yes, DestAccumulation.No]
-    )
+        return dest_acc_modes(formats, allowed=[DestAccumulation.No], distinct=True)
+    return dest_acc_modes(formats, distinct=True)
 
 
 def _get_fast_modes(mathop):
@@ -159,6 +165,10 @@ def _get_formats(mathop):
     ],
     mathop=PERF_SWEEP_OPS,
     dest_acc=lambda mathop, formats: _get_dest_acc_modes(mathop, formats),
+    dest_sync=lambda: dest_sync_modes(is_perf=True),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.Sfpu
+    ),
     loop_factor=[
         16,
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
@@ -167,9 +177,9 @@ def _get_formats(mathop):
     ],  # Number of SFPU iterations
     fast_mode=lambda mathop: _get_fast_modes(mathop),
     stable_sort=lambda mathop: _get_stable_sort_modes(mathop),
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],  # Specifying different input sizes to cover different tile counts
+    input_dimensions=lambda dest_acc, dest_sync: generate_perf_input_dimensions(
+        dest_acc, dest_sync
+    ),
 )
 def test_perf_eltwise_unary_sfpu(
     perf_report,
@@ -177,6 +187,8 @@ def test_perf_eltwise_unary_sfpu(
     mathop,
     approx_mode,
     dest_acc,
+    dest_sync,
+    unpack_to_dest,
     loop_factor,
     iterations,
     fast_mode,
@@ -186,13 +198,6 @@ def test_perf_eltwise_unary_sfpu(
     # Calculate tile count from input dimensions
     tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
-    )
-
-    # A 32-bit (fp32) input with dest_acc ON unpacks straight into the 32-bit Dest
-    # register. With dest_acc OFF it goes through the source registers (converted to 16-bit)
-    # and is copied into Dest for the SFPU op.
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
     configuration = PerfConfig(
@@ -206,6 +211,7 @@ def test_perf_eltwise_unary_sfpu(
             FAST_MODE(fast_mode),
             STABLE_SORT(stable_sort),
             CLAMP_NEGATIVE(False),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             TILE_COUNT(tile_count_A),
@@ -270,6 +276,7 @@ def _extra_slice_config(formats, mathop, dest_acc, unpack_to_dest, input_dimensi
             FAST_MODE(FastMode.No),
             STABLE_SORT(StableSort.No),
             CLAMP_NEGATIVE(False),
+            DEST_SYNC(),
         ],
         runtimes=[
             TILE_COUNT(tile_count_A),

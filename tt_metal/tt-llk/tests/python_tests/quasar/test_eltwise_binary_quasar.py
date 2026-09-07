@@ -3,6 +3,12 @@
 
 import pytest
 import torch
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    unpack_to_dest_modes,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -10,7 +16,6 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
-    DestSync,
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
@@ -45,22 +50,15 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 
-def _eltwise_dest_acc_sync(dest_acc_modes, *, is_perf=False):
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-    return [
-        (dest_sync, dest_acc)
-        for dest_sync in dest_sync_modes
-        for dest_acc in dest_acc_modes
-    ]
-
-
-def eltwise_binary_dest_sync_dest_acc(formats, *, is_perf=False):
-    dest_acc_modes = (
-        (DestAccumulation.Yes,)
-        if formats.input_format == DataFormat.Int8
-        else (DestAccumulation.No,)
+def eltwise_binary_dest_acc(formats):
+    return dest_acc_modes(
+        formats,
+        allowed=(
+            [DestAccumulation.Yes]
+            if formats.input_format == DataFormat.Int8
+            else [DestAccumulation.No]
+        ),
     )
-    return _eltwise_dest_acc_sync(dest_acc_modes, is_perf=is_perf)
 
 
 def eltwise_binary_implied_math_formats(formats, *, is_perf=False):
@@ -135,13 +133,13 @@ ELTWISE_FORMATS = input_output_formats(
     implied_math_format=lambda formats: eltwise_binary_implied_math_formats(
         formats, is_perf=False
     ),
-    dest_sync_dest_acc=lambda formats: eltwise_binary_dest_sync_dest_acc(
-        formats, is_perf=False
+    dest_acc=eltwise_binary_dest_acc,
+    dest_sync=lambda: dest_sync_modes(is_perf=False),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.FpuMath
     ),
     input_dimensions=runtime(
-        lambda dest_sync_dest_acc: generate_unary_input_dimensions(
-            dest_sync_dest_acc[1], dest_sync_dest_acc[0]
-        )
+        lambda dest_acc, dest_sync: generate_unary_input_dimensions(dest_acc, dest_sync)
     ),
     acc_to_dest=valid_acc_to_dest,
     num_faces=[4],
@@ -153,7 +151,9 @@ def test_eltwise_binary(
     mathop,
     math_fidelity,
     implied_math_format,
-    dest_sync_dest_acc,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
     input_dimensions,
     acc_to_dest,
     num_faces,
@@ -164,8 +164,6 @@ def test_eltwise_binary(
     is_perf=False,
     perf_report=None,
 ):
-    dest_sync_mode, dest_acc = dest_sync_dest_acc
-
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
 
     if formats.input_format == DataFormat.Int8:
@@ -209,7 +207,7 @@ def test_eltwise_binary(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
             IMPLIED_MATH_FORMAT(implied_math_format),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
             ACC_TO_DEST(acc_to_dest),
         ],
         "runtimes": [
@@ -232,9 +230,7 @@ def test_eltwise_binary(
             tile_count_res=tile_cnt_res,
             num_faces=num_faces,
         ),
-        "unpack_to_dest": (
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
         "disable_format_inference": formats.input_format.is_mx_format(),
     }

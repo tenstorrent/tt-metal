@@ -4,8 +4,11 @@
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.constraints import (
-    get_valid_dest_accumulation_modes,
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    unpack_to_dest_modes,
 )
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -15,14 +18,12 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
-    BlocksCalculationAlgorithm,
-    DestAccumulation,
-    DestSync,
     PerfRunType,
     Tilize,
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -32,6 +33,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
     DEST_INDEX,
+    DEST_SYNC,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
@@ -112,26 +114,45 @@ SUB_BYTE_DATACOPY_FORMATS = [
     or fmt.output_format in SUB_BYTE_BFP_FORMATS
 ]
 
+
+def datacopy_unpack_to_dest(formats, dest_acc, tilize):
+    if tilize == Tilize.Yes and formats.input_format == DataFormat.Float32:
+        return unpack_to_dest_modes(formats, dest_acc, path=UnpackPath.ForceFalse)
+    return unpack_to_dest_modes(formats, dest_acc, path=UnpackPath.FpuMath)
+
+
+def datacopy_input_dimensions(dest_acc, dest_sync):
+    dest_fill = generate_perf_input_dimensions(dest_acc, dest_sync)
+    one_tile = [[32, 32]]
+    return one_tile + [dims for dims in dest_fill if dims != [32, 32]]
+
+
 # Shared with perf_eltwise_unary_datacopy.py so the two sweeps stay aligned.
 DATACOPY_SWEEP = dict(
     formats=DATACOPY_FORMATS,
-    dest_acc=get_valid_dest_accumulation_modes,
+    dest_acc=dest_acc_modes,
+    dest_sync=lambda: dest_sync_modes(),
     num_faces=get_valid_num_faces_datacopy,
     tilize=get_valid_tilize_datacopy,
-    input_dimensions=[[64, 64], [32, 256], [128, 256]],
+    unpack_to_dest=datacopy_unpack_to_dest,
+    input_dimensions=datacopy_input_dimensions,
 )
 DATACOPY_SUB_BYTE_SWEEP = dict(
     formats=SUB_BYTE_DATACOPY_FORMATS,
-    dest_acc=get_valid_dest_accumulation_modes,
+    dest_acc=dest_acc_modes,
+    dest_sync=lambda: dest_sync_modes(),
     num_faces=get_valid_num_faces_datacopy,
     tilize=Tilize.No,
-    input_dimensions=[[32, 32], [64, 64], [32, 256], [128, 256]],
+    unpack_to_dest=datacopy_unpack_to_dest,
+    input_dimensions=datacopy_input_dimensions,
 )
 
 
 def _run_unary_datacopy_test(
     formats,
     dest_acc,
+    dest_sync,
+    unpack_to_dest,
     num_faces,
     tilize,
     input_dimensions,
@@ -179,24 +200,12 @@ def _run_unary_datacopy_test(
         generate_golden = get_golden_generator(TilizeGolden)
         golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
 
-    unpack_to_dest = (
-        False
-        if tilize == Tilize.Yes and formats.input_format == DataFormat.Float32
-        else formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
-
-    blocks_calculation_algorithm = (
-        BlocksCalculationAlgorithm.Standard
-        if tilize == Tilize.No
-        else BlocksCalculationAlgorithm.Tilize
-    )
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
-        blocks_calculation_algorithm,
     )
 
     if is_perf and perf_report is None:
@@ -211,6 +220,7 @@ def _run_unary_datacopy_test(
         "templates": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(tilize),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
             DEST_INDEX(0),
@@ -258,24 +268,38 @@ def _run_unary_datacopy_test(
 def test_eltwise_unary_datacopy(
     formats,
     dest_acc,
+    dest_sync,
     num_faces,
     tilize,
+    unpack_to_dest,
     input_dimensions,
 ):
-    _run_unary_datacopy_test(formats, dest_acc, num_faces, tilize, input_dimensions)
+    _run_unary_datacopy_test(
+        formats,
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        num_faces,
+        tilize,
+        input_dimensions,
+    )
 
 
 @parametrize(**DATACOPY_SUB_BYTE_SWEEP)
 def test_eltwise_unary_datacopy_sub_byte_bfp(
     formats,
     dest_acc,
+    dest_sync,
     num_faces,
     tilize,
+    unpack_to_dest,
     input_dimensions,
 ):
     _run_unary_datacopy_test(
         formats,
         dest_acc,
+        dest_sync,
+        unpack_to_dest,
         num_faces,
         tilize,
         input_dimensions,

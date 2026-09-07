@@ -4,8 +4,12 @@
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.data_format_inference import infer_data_formats
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    unpack_to_dest_modes,
+)
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -47,11 +51,14 @@ from helpers.utils import passed_test
             DataFormat.Fp8_e4m3,
         ]  # Pack Untilize doesn't work for block float formats (Bfp8_b); we only include as input format in our test
     ),
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    dest_acc=lambda formats: dest_acc_modes(formats),
     input_dimensions=[[64, 64], [32, 128], [128, 128], [32, 64]],
     #  TODO add DestSync::Full tests when we have a solution for the static_assert in _llk_pack_untilize_init_ that requires block_ct_dim to be less or equal to 8,
     #  which is currently a limitation for testing DestSync::Full with the Untilize blocks calculation algorithm.
     dest_sync=[DestSync.Half],
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.Sfpu
+    ),
     tile_dst_ct_offset=[0],  # Non-zero offsets are tracked in #1449
 )
 def test_pack_untilize(
@@ -59,6 +66,7 @@ def test_pack_untilize(
     dest_acc,
     input_dimensions,
     dest_sync,
+    unpack_to_dest,
     tile_dst_ct_offset,
 ):
     if TestConfig.WITH_COVERAGE and input_dimensions == [64, 512]:
@@ -123,10 +131,6 @@ def test_pack_untilize(
     generate_golden = get_golden_generator(UntilizeGolden)
 
     golden_tensor = generate_golden(src_A, formats.output_format, input_dimensions)
-
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
 
     # _llk_pack_untilize_init_ has a static_assert that checks if block_ct_dim is less or equal to 8.
     # TODO: Update this logic to accept more than 8 tiles per block if the static_assert changes in the future.

@@ -1,11 +1,16 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
-
 import pytest
-from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
-from helpers.llk_params import DestAccumulation, MathFidelity, PerfRunType, Transpose
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    dest_tile_capacity,
+    unpack_to_dest_modes,
+)
+from helpers.format_config import DataFormat
+from helpers.llk_params import MathFidelity, PerfRunType, Transpose
 from helpers.matmul_sweep import (
     generate_matmul_dimension_combinations,
     generate_tile_dims,
@@ -28,43 +33,23 @@ from helpers.test_variant_parameters import (
 KT_DIMS = [1, 2, 3, 4, 8, 32]
 
 
-def matmul_combos(
-    formats: List[FormatConfig],
-    dest_acc: List[DestAccumulation],
-):
-    def _dest_bank_max_tiles(format: FormatConfig, dest_acc: DestAccumulation):
-        if is_dest_acc_needed(format) or dest_acc == DestAccumulation.Yes:
-            return 4
-        return 8
-
-    unique_max_tiles = set(
-        _dest_bank_max_tiles(fmt, acc) for fmt in formats for acc in dest_acc
-    )
-    dimensions = {
-        max_tiles: generate_matmul_dimension_combinations(max_tiles, kt_dims=KT_DIMS)
-        for max_tiles in unique_max_tiles
-    }
-
-    return [
-        (format, accumulation, dims)
-        for format in formats
-        for accumulation in dest_acc
-        for dims in dimensions[_dest_bank_max_tiles(format, accumulation)]
-    ]
-
-
 @pytest.mark.perf
 @parametrize(
-    combos=matmul_combos(
-        formats=input_output_formats(
-            [
-                DataFormat.Float16_b,
-                DataFormat.Float16,
-                DataFormat.Float32,
-                DataFormat.Bfp8_b,
-            ]
-        ),
-        dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            DataFormat.Float32,
+            DataFormat.Bfp8_b,
+        ]
+    ),
+    dest_acc=lambda formats: dest_acc_modes(formats, distinct=True),
+    dest_sync=lambda: dest_sync_modes(is_perf=True),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.FpuMath
+    ),
+    dimensions=lambda dest_acc, dest_sync: generate_matmul_dimension_combinations(
+        dest_tile_capacity(dest_sync, dest_acc), kt_dims=KT_DIMS
     ),
     math_fidelity=[
         MathFidelity.LoFi,
@@ -75,15 +60,13 @@ def matmul_combos(
 )
 def test_perf_matmul(
     perf_report,
-    combos,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    dimensions,
     math_fidelity,
 ):
-
-    formats, dest_acc, (matrix_a, matrix_b) = combos
-
-    if is_dest_acc_needed(formats) and dest_acc == DestAccumulation.No:
-        pytest.skip("Dest accumulation must be enabled for this format")
-
     run_types = [
         PerfRunType.L1_TO_L1,
         PerfRunType.UNPACK_ISOLATE,
@@ -92,8 +75,7 @@ def test_perf_matmul(
         PerfRunType.L1_CONGESTION,
     ]
 
-    # Calculate all matmul dimensions using helper function
-    dims = generate_tile_dims((matrix_a, matrix_b))
+    dims = generate_tile_dims(dimensions)
 
     variant_tile_count = dims.rt_dim * dims.ct_dim * dims.kt_dim
 
@@ -103,7 +85,7 @@ def test_perf_matmul(
         run_types,
         templates=[
             MATH_FIDELITY(math_fidelity),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
         ],
         runtimes=[
@@ -124,6 +106,7 @@ def test_perf_matmul(
             tile_count_res=variant_tile_count,
         ),
         dest_acc=dest_acc,
+        unpack_to_dest=unpack_to_dest,
     )
 
     configuration.run(perf_report)

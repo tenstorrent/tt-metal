@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.dest_params import dest_acc_modes, dest_sync_modes
 from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
 from quasar.test_pack_untilize_quasar import (
-    PERF_PACK_UNTILIZE_COMBINATIONS,
+    PACK_UNTILIZE_FORMATS,
+    pack_untilize_input_dimensions,
+    pack_untilize_tile_dimensions,
+    pack_untilize_unpack_to_dest,
 )
 from quasar.test_pack_untilize_quasar import (
     test_pack_untilize_quasar as run_pack_untilize,
@@ -15,20 +19,39 @@ from quasar.test_pack_untilize_quasar import (
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_dimensions=PERF_PACK_UNTILIZE_COMBINATIONS,
+    formats=PACK_UNTILIZE_FORMATS,
+    dest_acc=dest_acc_modes,
+    dest_sync=lambda: dest_sync_modes(is_perf=True),
+    unpack_to_dest=pack_untilize_unpack_to_dest,
+    tile_dimensions=lambda formats, dest_acc: pack_untilize_tile_dimensions(
+        formats, dest_acc, is_perf=True
+    ),
+    input_dimensions=lambda dest_acc, dest_sync, tile_dimensions: pack_untilize_input_dimensions(
+        dest_acc, dest_sync, tile_dimensions, is_perf=True
+    ),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_pack_untilize_quasar(
     perf_report,
-    formats_dest_acc_sync_dimensions,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    tile_dimensions,
+    input_dimensions,
     run_types,
     loop_factor,
     is_perf,
 ):
     run_pack_untilize(
-        formats_dest_acc_sync_dimensions,
+        formats,
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        tile_dimensions,
+        input_dimensions,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

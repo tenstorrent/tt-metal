@@ -14,10 +14,15 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import (
-    get_valid_dest_accumulation_modes,
     get_valid_dest_indices,
 )
 from helpers.data_format_inference import infer_data_formats
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    unpack_to_dest_modes,
+)
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     FACES_PER_TILE,
@@ -28,7 +33,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
-    DestSync,
     PackerReluType,
     PerfRunType,
     format_dict,
@@ -76,12 +80,15 @@ PACK_RELU_TYPES = [
 # is not a sweep axis and would fail dependency resolution if passed directly.
 PACK_SWEEP = dict(
     formats=PACK_FORMATS,
-    dest_acc=get_valid_dest_accumulation_modes,
+    dest_acc=dest_acc_modes,
     input_dimensions=[[32, 32], [64, 64], [32, 64], [64, 32]],
     relu_type=PACK_RELU_TYPES,
-    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_sync=lambda: dest_sync_modes(),
     dest_index=lambda dest_acc, dest_sync, formats, input_dimensions: get_valid_dest_indices(
         dest_sync, dest_acc, formats, input_dimensions
+    ),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.Sfpu
     ),
 )
 
@@ -94,6 +101,7 @@ def test_pack(
     relu_type,
     dest_sync,
     dest_index,
+    unpack_to_dest,
     *,
     is_perf: bool = False,
     perf_report=None,
@@ -122,9 +130,6 @@ def test_pack(
         input_dimensions=input_dimensions,
     )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
     # To come as close as possible to actual hardware behavior, we infer data formats here
     # and use the inferred pack_src format for ReLU operations.
     data_formats = infer_data_formats(

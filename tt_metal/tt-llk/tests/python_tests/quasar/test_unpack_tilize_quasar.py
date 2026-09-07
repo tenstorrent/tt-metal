@@ -1,11 +1,16 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
 
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    unpack_to_dest_modes,
+)
+from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TilizeGolden,
     get_golden_generator,
@@ -14,7 +19,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
-    DestSync,
     ImpliedMathFormat,
     PerfRunType,
     UnpackerEngine,
@@ -25,7 +29,6 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
-    runtime,
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -59,94 +62,54 @@ UNPACK_TILIZE_TILE_SIZES = [
 ]
 
 
-def generate_unpack_tilize_combinations(
-    formats_list: List[FormatConfig],
-    *,
-    is_perf=False,
+def unpack_tilize_dest_acc(formats):
+    in_fmt = formats.input_format
+    if in_fmt in (DataFormat.Float16, DataFormat.Int16):
+        return dest_acc_modes(formats, allowed=[DestAccumulation.No])
+    return dest_acc_modes(formats)
+
+
+def unpack_tilize_unpack_to_dest(formats, dest_acc):
+    return unpack_to_dest_modes(formats, dest_acc, path=UnpackPath.Int32Dest)
+
+
+def unpack_tilize_unpacker_sel(formats, dest_acc, unpack_to_dest):
+    if unpack_to_dest:
+        return [UnpackerEngine.UnpDest]
+    engines = [UnpackerEngine.UnpA, UnpackerEngine.UnpB]
+    if dest_acc == DestAccumulation.Yes:
+        engines = [UnpackerEngine.UnpA]
+    return engines
+
+
+def unpack_tilize_tile_dimensions(formats, dest_acc, *, is_perf=False):
+    in_fmt, out_fmt = formats.input_format, formats.output_format
+    tile_sizes = (
+        select_perf_tile_sizes(UNPACK_TILIZE_TILE_SIZES)
+        if is_perf
+        else UNPACK_TILIZE_TILE_SIZES
+    )
+    selected = []
+    for tile_dims in tile_sizes:
+        if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
+            continue
+        if (
+            in_fmt.is_32_bit()
+            and dest_acc == DestAccumulation.Yes
+            and tile_dims not in MX_SUPPORTED_TILE_SIZES
+        ):
+            continue
+        selected.append(list(tile_dims))
+    return selected
+
+
+def unpack_tilize_input_dimensions(
+    dest_acc, dest_sync, tile_dimensions, *, is_perf=False
 ):
-    """
-    Generate unpack_tilize combinations.
-
-    Rules:
-    1. 32-bit formats require DestAccumulation.Yes
-
-    Args: List of input-output format pairs
-
-    Returns: List of (format, dest_acc, dest_sync, unpacker_sel, input_dimensions,
-             tile_dimensions) tuples
-    """
-    combinations = []
-
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-
-    for fmt in formats_list:
-        in_fmt = fmt.input_format
-        out_fmt = fmt.output_format
-
-        dest_acc_modes = (
-            (DestAccumulation.Yes,)
-            if in_fmt.is_32_bit()
-            else (
-                (DestAccumulation.No,)
-                if in_fmt in [DataFormat.Float16, DataFormat.Int16]
-                else (DestAccumulation.No, DestAccumulation.Yes)
-            )
-        )
-        # 32-bit tilize uses unpack_to_dest (UNP_DEST)
-        unpacker_engines = (
-            (UnpackerEngine.UnpDest,)
-            if in_fmt.is_32_bit()
-            else (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
-        )
-        tile_sizes = (
-            select_perf_tile_sizes(UNPACK_TILIZE_TILE_SIZES)
-            if is_perf
-            else UNPACK_TILIZE_TILE_SIZES
-        )
-
-        for dest_acc in dest_acc_modes:
-            for dest_sync in dest_sync_modes:
-                for unpacker_sel in unpacker_engines:
-                    # Dest accumulation (32-bit dest) is only supported on SrcA
-                    # (UNP_A); see the static_assert in
-                    # _llk_unpack_tilize_strided_mop_config_small_faces_.
-                    if (
-                        dest_acc == DestAccumulation.Yes
-                        and unpacker_sel == UnpackerEngine.UnpB
-                    ):
-                        continue
-                    for tile_dims in tile_sizes:
-                        if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
-                            continue
-                        if (
-                            in_fmt.is_32_bit()
-                            and dest_acc == DestAccumulation.Yes
-                            and tile_dims not in MX_SUPPORTED_TILE_SIZES
-                        ):
-                            continue
-                        tile_shape = construct_tile_shape(tile_dims)
-                        dimensions_list = (
-                            generate_perf_input_dimensions(
-                                dest_acc, dest_sync, tile_shape
-                            )
-                            if is_perf
-                            else generate_unary_input_dimensions(
-                                dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-                            )
-                        )
-                        for dimensions in dimensions_list:
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    unpacker_sel,
-                                    dimensions,
-                                    runtime(tile_dims),
-                                )
-                            )
-
-    return combinations
+    tile_shape = construct_tile_shape(tile_dimensions)
+    if is_perf:
+        return generate_perf_input_dimensions(dest_acc, dest_sync, tile_shape)
+    return generate_unary_input_dimensions(dest_acc, dest_sync, tile_shape)
 
 
 UNPACK_TILIZE_FORMATS = input_output_formats(
@@ -160,25 +123,34 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
         DataFormat.MxInt4,
         DataFormat.MxInt2,
     ],
-    same=True,  # Input format and output format are the same
-)
-ALL_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
-    UNPACK_TILIZE_FORMATS
-)
-PERF_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
-    UNPACK_TILIZE_FORMATS,
-    is_perf=True,
+    same=True,
 )
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_unpack_sel_dimensions_tile_dims=ALL_UNPACK_TILIZE_COMBINATIONS,
+    formats=UNPACK_TILIZE_FORMATS,
+    dest_acc=unpack_tilize_dest_acc,
+    dest_sync=lambda: dest_sync_modes(is_perf=False),
+    unpack_to_dest=unpack_tilize_unpack_to_dest,
+    unpacker_sel=unpack_tilize_unpacker_sel,
+    tile_dimensions=lambda formats, dest_acc: unpack_tilize_tile_dimensions(
+        formats, dest_acc, is_perf=False
+    ),
+    input_dimensions=lambda dest_acc, dest_sync, tile_dimensions: unpack_tilize_input_dimensions(
+        dest_acc, dest_sync, tile_dimensions, is_perf=False
+    ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_unpack_tilize_quasar(
-    formats_dest_acc_sync_unpack_sel_dimensions_tile_dims,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    unpacker_sel,
+    tile_dimensions,
+    input_dimensions,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -186,17 +158,7 @@ def test_unpack_tilize_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    combination = formats_dest_acc_sync_unpack_sel_dimensions_tile_dims
-    if len(combination) == 1 and isinstance(combination[0], tuple):
-        combination = combination[0]
-    (
-        formats,
-        dest_acc,
-        dest_sync_mode,
-        unpacker_sel,
-        input_dimensions,
-        tile_dimensions,
-    ) = combination
+    dest_sync_mode = dest_sync
 
     tile_shape = construct_tile_shape(tile_dimensions)
 
@@ -266,9 +228,7 @@ def test_unpack_tilize_quasar(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        "unpack_to_dest": (
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
         "disable_format_inference": formats.input_format.is_mx_format(),
     }

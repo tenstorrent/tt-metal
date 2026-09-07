@@ -12,6 +12,12 @@ import torch
 from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import is_format_combination_outlier
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    unpack_to_dest_modes,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -23,6 +29,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import BroadcastType as LlkBroadcastType
 from helpers.llk_params import DestAccumulation, DestSync, MathOperation, format_dict
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -47,6 +54,7 @@ from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     BROADCAST_TYPE,
+    DEST_SYNC,
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
@@ -526,6 +534,8 @@ def sfpu_binary(
     twos_complement=False,
     input_dimensions=None,
     unspecified_nonfinite_sign=False,
+    dest_sync=DestSync.Half,
+    unpack_to_dest=None,
 ):
     """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
 
@@ -663,8 +673,13 @@ def sfpu_binary(
     bcast = broadcast_type if broadcast_type else LlkBroadcastType.None_
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+        dest_sync, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
     )
+
+    if unpack_to_dest is None:
+        unpack_to_dest = unpack_to_dest_modes(formats, dest_acc, path=UnpackPath.Sfpu)[
+            0
+        ]
 
     configuration = TestConfig(
         "sources/sfpu_binary_test.cpp",
@@ -674,6 +689,7 @@ def sfpu_binary(
             MATH_OP(mathop=mathop),
             APPROX_MODE(),
             BROADCAST_TYPE(bcast),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -692,7 +708,7 @@ def sfpu_binary(
             twos_complement=twos_complement,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit(),
+        unpack_to_dest=unpack_to_dest,
         compile_time_formats=True,
     )
     res_from_L1 = configuration.run().result
@@ -765,13 +781,23 @@ def sfpu_binary(
         # are covered with crafted paired stimuli by test_eltwise_binary_sfpu_eq_ne and
         # test_eltwise_binary_sfpu_float_comparison below.
     ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=dest_acc_modes,
+    dest_sync=lambda: dest_sync_modes(),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.Sfpu
+    ),
+    input_dimensions=lambda dest_acc, dest_sync: generate_perf_input_dimensions(
+        dest_acc, dest_sync
+    ),
 )
 def test_eltwise_binary_sfpu_float(
     formats,
     dest_acc,
+    dest_sync,
+    unpack_to_dest,
     mathop,
     bcast_dim,
+    input_dimensions,
 ):
     _skip_fp32_no_dest_acc(formats, dest_acc)
     _skip_bh_float16_no_dest_acc(formats, dest_acc)
@@ -800,6 +826,9 @@ def test_eltwise_binary_sfpu_float(
         dest_acc,
         mathop,
         broadcast_type=bcast_dim,
+        dest_sync=dest_sync,
+        unpack_to_dest=unpack_to_dest,
+        input_dimensions=input_dimensions,
     )
 
 
@@ -811,9 +840,22 @@ def test_eltwise_binary_sfpu_float(
             DataFormat.Float16_b,
         ]
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=dest_acc_modes,
+    dest_sync=lambda: dest_sync_modes(),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.Sfpu
+    ),
+    input_dimensions=lambda dest_acc, dest_sync: generate_perf_input_dimensions(
+        dest_acc, dest_sync
+    ),
 )
-def test_eltwise_binary_sfpu_div(formats, dest_acc):
+def test_eltwise_binary_sfpu_div(
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    input_dimensions,
+):
     # DIV routes through the dedicated production kernel (calculate_sfpu_binary_div);
     # split out from the float sweep since the reciprocal path is precision-sensitive.
     _skip_fp32_no_dest_acc(formats, dest_acc)
@@ -824,6 +866,9 @@ def test_eltwise_binary_sfpu_div(formats, dest_acc):
         dest_acc,
         MathOperation.SfpuElwdiv,
         broadcast_type=LlkBroadcastType.None_,
+        dest_sync=dest_sync,
+        unpack_to_dest=unpack_to_dest,
+        input_dimensions=input_dimensions,
     )
 
 
@@ -1852,6 +1897,7 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
             MATH_OP(mathop=mathop),
             APPROX_MODE(),
             BROADCAST_TYPE(LlkBroadcastType.None_),
+            DEST_SYNC(),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

@@ -7,6 +7,12 @@ from typing import List
 
 import pytest
 import torch
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    unpack_to_dest_modes,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TilizeGolden,
@@ -26,12 +32,11 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
-    QuasarSfpuVariant,
-    generate_quasar_sfpu_format_variants,
+    generate_perf_input_dimensions,
     input_output_formats,
     parametrize,
+    resolve_quasar_sfpu_variant,
     runtime,
-    select_perf_input_dimensions,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -718,73 +723,64 @@ def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
     return SFPU_UNARY_FORMATS
 
 
-def generate_sfpu_unary_combinations(*, is_perf=False):
-    """
-    Build the unary-SFPU sweep across all operations and their format matrices.
+def sfpu_unary_approx_modes(mathop):
+    if mathop in (
+        MathOperation.Exp,
+        MathOperation.Gelu,
+        MathOperation.Reciprocal,
+        MathOperation.Rsqrt,
+    ):
+        return [ApproximationMode.No, ApproximationMode.Yes]
+    return [ApproximationMode.No]
 
-    Functional mode sweeps dest-sync, implied-math, and both [32, 32]/[64, 64]
-    dimensions. Performance mode intentionally keeps the complete op, format,
-    dest_acc, and approximation coverage while pinning those three axes to
-    DestSync.Half, ImpliedMathFormat.Yes, and the largest functional matrix
-    because none of the preferred perf matrices are supported.
 
-    Returns: list of (mathop, resolved format variant, dest_sync,
-    implied_math_format, approx_mode, input_dimensions) tuples.
-    """
-    combinations = []
-    for cfg in OP_CONFIGS:
-        # Ops that expose both a non-approximate and an approximate kernel are swept over both
-        # ApproximationMode values; every other op has a single implementation (ApproximationMode.No).
-        approx_modes = (
-            (ApproximationMode.No, ApproximationMode.Yes)
-            if cfg.mathop
-            in (
-                MathOperation.Exp,
-                MathOperation.Gelu,
-                MathOperation.Reciprocal,
-                MathOperation.Rsqrt,
-            )
-            else (ApproximationMode.No,)
-        )
-        format_variants = generate_quasar_sfpu_format_variants(
-            cfg.mathop, formats_for_op(cfg)
-        )
-        for variant in format_variants:
-            dest_sync_modes = (DestSync.Half,) if is_perf else cfg.dest_sync_modes
-            implied_math_formats = (
-                (ImpliedMathFormat.Yes,)
-                if is_perf
-                else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
-            )
-            input_dims = (
-                select_perf_input_dimensions(cfg.input_dims)
-                if is_perf
-                else cfg.input_dims
-            )
-            for dest_sync in dest_sync_modes:
-                for implied_math_format in implied_math_formats:
-                    for approx_mode in approx_modes:
-                        for input_dimensions in input_dims:
-                            combinations.append(
-                                (
-                                    cfg.mathop,
-                                    variant,
-                                    dest_sync,
-                                    implied_math_format,
-                                    approx_mode,
-                                    runtime(input_dimensions),
-                                )
-                            )
+def sfpu_unary_unpack_to_dest(formats, dest_acc, mathop):
+    path = UnpackPath.ForceTrue if mathop == MathOperation.Typecast else UnpackPath.Sfpu
+    return unpack_to_dest_modes(formats, dest_acc, path=path)
 
-    return combinations
+
+def sfpu_unary_implied_math_formats(*, is_perf=False):
+    if is_perf:
+        return [ImpliedMathFormat.Yes]
+    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+
+
+def sfpu_unary_input_dimensions(dest_acc, dest_sync, *, is_perf=False):
+    dest_fill = generate_perf_input_dimensions(dest_acc, dest_sync)
+    if is_perf:
+        return dest_fill
+    one_tile = [[32, 32]]
+    return one_tile + [dims for dims in dest_fill if dims != [32, 32]]
+
+
+def sfpu_unary_formats(mathop):
+    return formats_for_op(OP_CONFIG_BY_MATHOP[mathop])
 
 
 @pytest.mark.quasar
 @parametrize(
-    mathop_formats_dest_acc_sync_implied_math_input_dims=generate_sfpu_unary_combinations(),
+    mathop=[cfg.mathop for cfg in OP_CONFIGS],
+    formats=sfpu_unary_formats,
+    dest_acc=dest_acc_modes,
+    dest_sync=lambda: dest_sync_modes(),
+    unpack_to_dest=sfpu_unary_unpack_to_dest,
+    implied_math_format=lambda: sfpu_unary_implied_math_formats(is_perf=False),
+    approx_mode=sfpu_unary_approx_modes,
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync: sfpu_unary_input_dimensions(
+            dest_acc, dest_sync, is_perf=False
+        )
+    ),
 )
 def test_eltwise_unary_sfpu_quasar(
-    mathop_formats_dest_acc_sync_implied_math_input_dims,
+    mathop,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    implied_math_format,
+    approx_mode,
+    input_dimensions,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -798,18 +794,11 @@ def test_eltwise_unary_sfpu_quasar(
     the UnarySFPUGolden reference. Typecast sweeps explicit (src, dst) format pairs;
     every other op sweeps the shared format matrix.
     """
-    (
-        mathop,
-        format_variant,
-        dest_sync,
-        implied_math_format,
-        approx_mode,
-        input_dimensions,
-    ) = mathop_formats_dest_acc_sync_implied_math_input_dims[0]
-
-    assert isinstance(format_variant, QuasarSfpuVariant)
-    formats = format_variant.formats
-    dest_acc = format_variant.dest_acc
+    format_variant = resolve_quasar_sfpu_variant(
+        mathop, formats, dest_acc, unpack_to_dest
+    )
+    if format_variant is None:
+        pytest.skip("No executable Quasar SFPU route for this dest-flag combination")
     is_typecast = mathop == MathOperation.Typecast
 
     cfg = OP_CONFIG_BY_MATHOP[mathop]
@@ -875,7 +864,6 @@ def test_eltwise_unary_sfpu_quasar(
         else src_A
     )
 
-    unpack_to_dest = format_variant.unpack_to_dest
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 

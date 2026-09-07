@@ -66,7 +66,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     constexpr bool is32 = is_fp32_dest_acc_en;
 
-    _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
     // Process the input one DEST bank (block) at a time so inputs with more
@@ -75,7 +75,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // packer via the wait/section_done pair.
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
-        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+        _llk_math_wait_for_dest_available_<dest_sync>();
 
         // A2D datacopy and transpose_dest need different ALU data-format state,
         // so (re)configure datacopy at the start of each block's copy phase.
@@ -88,9 +88,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
         {
             LLK_ASSERT(
-                (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                "Block tile index exceeds maximum destination tiles");
-            _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
+            _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 tile, formats.math, formats.math);
         }
 
@@ -100,7 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_transpose_dest_wrapper_<is_fp32_dest_acc_en, MATH_TRANSPOSE_FACES, is32>(tile);
         }
 
-        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 }
 
@@ -119,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces);
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
 
     // Pack one DEST bank (block) at a time, mirroring the MATH thread's bank
     // switching; the block-local DEST tile index maps to the global result tile.
@@ -129,12 +128,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
         {
             LLK_ASSERT(
-                (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                "Block tile index exceeds maximum destination tiles");
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
+            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                 tile, L1_ADDRESS(params.buffer_Res[block * params.NUM_TILES_IN_BLOCK + tile]));
         }
-        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 }
 #endif

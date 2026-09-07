@@ -4,7 +4,12 @@
 
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.constraints import distinct_dest_accumulation_modes
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    unpack_to_dest_modes,
+)
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -12,12 +17,17 @@ from helpers.llk_params import (
     MathOperation,
     Transpose,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    generate_perf_input_dimensions,
+    input_output_formats,
+    parametrize,
+)
 from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    DEST_SYNC,
     ITERATIONS,
     LOOP_FACTOR,
     MATH_OP,
@@ -29,13 +39,7 @@ from helpers.test_variant_parameters import (
 
 
 def get_dest_accum_modes(formats):
-    if formats.input_format.is_32_bit() and formats.input_format.is_integer():
-        return [DestAccumulation.No]
-    # TestConfig promotes dest_acc=No to Yes for outlier format combos, so asking
-    # for both would record two rows with an identical key (the same kernel twice).
-    return distinct_dest_accumulation_modes(
-        formats, [DestAccumulation.Yes, DestAccumulation.No]
-    )
+    return dest_acc_modes(formats, distinct=True)
 
 
 @pytest.mark.perf
@@ -61,15 +65,19 @@ def get_dest_accum_modes(formats):
         MathOperation.SfpuElwpow,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
+    dest_sync=lambda: dest_sync_modes(is_perf=True),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.Sfpu
+    ),
     loop_factor=[
         16,
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
     iterations=[
         32,
     ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],  # Specifying different input sizes to cover different tile counts
+    input_dimensions=lambda dest_acc, dest_sync: generate_perf_input_dimensions(
+        dest_acc, dest_sync
+    ),
 )
 def test_perf_eltwise_binary_sfpu_float(
     perf_report,
@@ -77,13 +85,12 @@ def test_perf_eltwise_binary_sfpu_float(
     mathop,
     approx_mode,
     dest_acc,
+    dest_sync,
+    unpack_to_dest,
     loop_factor,
     iterations,
     input_dimensions,
 ):
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
 
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
@@ -97,6 +104,7 @@ def test_perf_eltwise_binary_sfpu_float(
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             TILE_COUNT(tile_count),
@@ -142,15 +150,19 @@ def test_perf_eltwise_binary_sfpu_float(
         MathOperation.SfpuElwsub,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
+    dest_sync=lambda: dest_sync_modes(is_perf=True),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.Sfpu
+    ),
     loop_factor=[
         16,
     ],
     iterations=[
         32,
     ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],
+    input_dimensions=lambda dest_acc, dest_sync: generate_perf_input_dimensions(
+        dest_acc, dest_sync
+    ),
 )
 def test_perf_eltwise_binary_sfpu_int(
     perf_report,
@@ -158,13 +170,12 @@ def test_perf_eltwise_binary_sfpu_int(
     mathop,
     approx_mode,
     dest_acc,
+    dest_sync,
+    unpack_to_dest,
     loop_factor,
     iterations,
     input_dimensions,
 ):
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
 
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
@@ -178,6 +189,7 @@ def test_perf_eltwise_binary_sfpu_int(
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             TILE_COUNT(tile_count),
@@ -253,9 +265,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.Yes:
         pytest.skip("SfpuAddTopRow does not support Float32 with DestAccumulation.Yes")
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
+    unpack_to_dest = unpack_to_dest_modes(formats, dest_acc, path=UnpackPath.Sfpu)[0]
 
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
@@ -269,6 +279,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
+            DEST_SYNC(),
         ],
         runtimes=[
             TILE_COUNT(tile_count),

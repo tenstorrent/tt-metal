@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.dest_params import (
+    UnpackPath,
+    dest_sync_modes,
+    unpack_to_dest_modes,
+)
 from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR, Transpose
 from helpers.param_config import parametrize
 from quasar.test_matmul_quasar import (
     MATMUL_FORMAT,
     matmul_dest_acc_modes,
-    matmul_dest_sync_modes,
     matmul_dimensions,
     matmul_enable_direct_indexing,
     matmul_implied_math_formats,
@@ -22,11 +26,14 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
 @parametrize(
     format=MATMUL_FORMAT,
     math_fidelity=lambda format: matmul_math_fidelities(format, is_perf=True),
-    dest_sync_mode=lambda: matmul_dest_sync_modes(is_perf=True),
+    dest_sync=lambda: dest_sync_modes(is_perf=True),
     dest_acc=matmul_dest_acc_modes,
-    dimensions=lambda dest_acc, dest_sync_mode: matmul_dimensions(
+    unpack_to_dest=lambda format, dest_acc: unpack_to_dest_modes(
+        format, dest_acc, path=UnpackPath.FpuMath
+    ),
+    dimensions=lambda dest_acc, dest_sync: matmul_dimensions(
         dest_acc,
-        dest_sync_mode,
+        dest_sync,
         exact_dest_fill=True,
         is_perf=True,
     ),
@@ -43,8 +50,9 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
 def test_perf_matmul_quasar(
     perf_report,
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
     dest_acc,
+    unpack_to_dest,
     dimensions,
     format,
     implied_math_format,
@@ -57,8 +65,9 @@ def test_perf_matmul_quasar(
 ):
     run_matmul(
         math_fidelity,
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
+        unpack_to_dest,
         dimensions,
         format,
         implied_math_format,

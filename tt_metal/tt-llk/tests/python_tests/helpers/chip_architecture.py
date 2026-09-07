@@ -56,3 +56,13 @@ def get_chip_architecture():
     # environment is what produces "invalid choice: 'wormhole_b0'".
     os.environ["CHIP_ARCH"] = _cached_chip_architecture.value
     return _cached_chip_architecture
+
+
+def clear_chip_architecture_cache():
+    """Forget the process-wide architecture so the next lookup rereads CHIP_ARCH.
+
+    Needed when a diagnostic imports modules for more than one architecture in
+    the same process (for example wormhole perf vs quasar perf).
+    """
+    global _cached_chip_architecture
+    _cached_chip_architecture = None

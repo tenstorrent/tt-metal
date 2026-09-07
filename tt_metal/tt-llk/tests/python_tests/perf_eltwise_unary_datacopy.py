@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.dest_params import dest_sync_modes
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_eltwise_unary_datacopy import (
@@ -13,7 +14,7 @@ from test_eltwise_unary_datacopy import (
 
 @pytest.mark.perf
 @parametrize(
-    **DATACOPY_SWEEP,
+    **{**DATACOPY_SWEEP, "dest_sync": lambda: dest_sync_modes(is_perf=True)},
     run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[32],
     is_perf=[True],
@@ -22,8 +23,10 @@ def test_perf_eltwise_unary_datacopy(
     perf_report,
     formats,
     dest_acc,
+    dest_sync,
     num_faces,
     tilize,
+    unpack_to_dest,
     input_dimensions,
     run_types,
     loop_factor,
@@ -32,6 +35,8 @@ def test_perf_eltwise_unary_datacopy(
     _run_unary_datacopy_test(
         formats,
         dest_acc,
+        dest_sync,
+        unpack_to_dest,
         num_faces,
         tilize,
         input_dimensions,
@@ -44,7 +49,7 @@ def test_perf_eltwise_unary_datacopy(
 
 @pytest.mark.perf
 @parametrize(
-    **DATACOPY_SUB_BYTE_SWEEP,
+    **{**DATACOPY_SUB_BYTE_SWEEP, "dest_sync": lambda: dest_sync_modes(is_perf=True)},
     run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[32],
     is_perf=[True],
@@ -53,8 +58,10 @@ def test_perf_eltwise_unary_datacopy_sub_byte_bfp(
     perf_report,
     formats,
     dest_acc,
+    dest_sync,
     num_faces,
     tilize,
+    unpack_to_dest,
     input_dimensions,
     run_types,
     loop_factor,
@@ -63,6 +70,8 @@ def test_perf_eltwise_unary_datacopy_sub_byte_bfp(
     _run_unary_datacopy_test(
         formats,
         dest_acc,
+        dest_sync,
+        unpack_to_dest,
         num_faces,
         tilize,
         input_dimensions,

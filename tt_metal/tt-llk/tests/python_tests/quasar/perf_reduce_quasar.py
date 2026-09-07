@@ -2,6 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.dest_params import (
+    UnpackPath,
+    dest_sync_modes,
+    unpack_to_dest_modes,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
@@ -14,7 +19,6 @@ from quasar.test_reduce_quasar import (
     MATH_FIDELITY_MODES,
     REDUCE_FORMATS,
     reduce_dest_acc_modes,
-    reduce_dest_sync_modes,
     reduce_implied_math_formats,
     reduce_pool_type_and_math_fidelity_combinations,
     reduce_tile_dimensions,
@@ -31,12 +35,15 @@ from quasar.test_reduce_quasar import (
 @parametrize(
     formats=REDUCE_FORMATS,
     tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=True),
-    dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
+    dest_acc=lambda formats: reduce_dest_acc_modes(formats, is_perf=True),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=lambda: reduce_pool_type_and_math_fidelity_combinations(
         is_perf=True
     ),
-    dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=True),
+    dest_sync=lambda: dest_sync_modes(is_perf=True),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.ForceFalse
+    ),
     implied_math_format=lambda formats: reduce_implied_math_formats(
         formats, is_perf=True
     ),
@@ -51,7 +58,8 @@ def test_perf_reduce_quasar(
     dest_acc,
     reduce_dim,
     pool_type_and_math_fidelity,
-    dest_sync_mode,
+    dest_sync,
+    unpack_to_dest,
     implied_math_format,
     run_types,
     loop_factor,
@@ -63,7 +71,8 @@ def test_perf_reduce_quasar(
         dest_acc,
         reduce_dim,
         pool_type_and_math_fidelity,
-        dest_sync_mode,
+        dest_sync,
+        unpack_to_dest,
         implied_math_format,
         run_types=run_types,
         loop_factor=loop_factor,
@@ -88,11 +97,14 @@ def test_perf_reduce_quasar(
             register_format_hint=register_format_hint,
         ),
     ],
-    dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
+    dest_acc=lambda formats: reduce_dest_acc_modes(formats, is_perf=True),
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=MATH_FIDELITY_MODES,
-    dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=True),
+    dest_sync=lambda: dest_sync_modes(is_perf=True),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.ForceFalse
+    ),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
@@ -105,7 +117,8 @@ def test_perf_reduce_quasar_mxfp4_2x_gapool(
     reduce_dim,
     pool_type,
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
+    unpack_to_dest,
     run_types,
     loop_factor,
     is_perf,
@@ -117,7 +130,8 @@ def test_perf_reduce_quasar_mxfp4_2x_gapool(
         reduce_dim,
         pool_type,
         math_fidelity,
-        dest_sync_mode,
+        dest_sync,
+        unpack_to_dest,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

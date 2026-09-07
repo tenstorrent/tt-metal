@@ -7,6 +7,12 @@ from itertools import product
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    unpack_to_dest_modes,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ReduceGapoolGolden,
@@ -78,15 +84,10 @@ REDUCE_FORMATS = input_output_formats(
 )
 
 
-def reduce_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
-
-
-def reduce_dest_acc_modes(*, is_perf=False):
-    return (
-        [DestAccumulation.No]
-        if is_perf
-        else [DestAccumulation.No, DestAccumulation.Yes]
+def reduce_dest_acc_modes(formats, *, is_perf=False):
+    return dest_acc_modes(
+        formats,
+        allowed=[DestAccumulation.No] if is_perf else None,
     )
 
 
@@ -147,12 +148,15 @@ def reduce_pool_type_and_math_fidelity_combinations(*, is_perf=False):
 @parametrize(
     formats=REDUCE_FORMATS,
     tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=False),
-    dest_acc=lambda: reduce_dest_acc_modes(is_perf=False),
+    dest_acc=lambda formats: reduce_dest_acc_modes(formats, is_perf=False),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=lambda: reduce_pool_type_and_math_fidelity_combinations(
         is_perf=False
     ),
-    dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: dest_sync_modes(is_perf=False),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.ForceFalse
+    ),
     implied_math_format=lambda formats: reduce_implied_math_formats(
         formats, is_perf=False
     ),
@@ -165,7 +169,8 @@ def test_reduce_quasar(
     dest_acc,
     reduce_dim,
     pool_type_and_math_fidelity,
-    dest_sync_mode,
+    dest_sync,
+    unpack_to_dest,
     implied_math_format,
     run_types,
     loop_factor,
@@ -184,7 +189,7 @@ def test_reduce_quasar(
         and reduce_dim == ReduceDimension.Column
         and pool_type == ReducePool.Sum
         and math_fidelity == MathFidelity.HiFi2
-        and dest_sync_mode == DestSync.Full
+        and dest_sync == DestSync.Full
         and implied_math_format == ImpliedMathFormat.Yes
     ):
         pytest.skip(
@@ -266,7 +271,7 @@ def test_reduce_quasar(
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
             IMPLIED_MATH_FORMAT(implied_math_format),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
             generate_input_dim(
@@ -295,9 +300,7 @@ def test_reduce_quasar(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        "unpack_to_dest": (
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
         "disable_format_inference": (
             implied_math_format == ImpliedMathFormat.Yes
@@ -370,7 +373,10 @@ _ARCH = get_chip_architecture()
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=MATH_FIDELITY_MODES,
-    dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: dest_sync_modes(is_perf=False),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.ForceFalse
+    ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
@@ -381,7 +387,8 @@ def test_reduce_quasar_mxfp4_2x_gapool(
     reduce_dim,
     pool_type,
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
+    unpack_to_dest,
     run_types,
     loop_factor,
     *,
@@ -430,7 +437,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
@@ -455,7 +462,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
             tile_dimensions=(32, 32),
             use_dense_tile_dimensions=True,
         ),
-        "unpack_to_dest": False,
+        "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
         "disable_format_inference": False,
     }

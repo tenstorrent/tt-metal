@@ -3,8 +3,14 @@
 
 import pytest
 from helpers.constraints import (
-    get_valid_dest_accumulation_modes,
     get_valid_math_fidelities,
+)
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    dest_tile_capacity,
+    unpack_to_dest_modes,
 )
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
@@ -16,6 +22,7 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -29,19 +36,25 @@ from helpers.test_variant_parameters import (
         [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
     ),
     mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
-    tile_count=16,
     math_fidelity=lambda formats, mathop: get_valid_math_fidelities(
         formats, mathop, PERF_RUN=True
     ),
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    dest_acc=lambda formats: dest_acc_modes(formats, distinct=True),
+    dest_sync=lambda: dest_sync_modes(is_perf=True),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.FpuMath
+    ),
+    tile_count=lambda dest_acc, dest_sync: dest_tile_capacity(dest_sync, dest_acc),
 )
 def test_perf_eltwise_binary(
     perf_report,
     formats,
     mathop,
-    tile_count,
     math_fidelity,
     dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    tile_count,
 ):
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
@@ -56,7 +69,11 @@ def test_perf_eltwise_binary(
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ],
-        templates=[MATH_FIDELITY(math_fidelity), MATH_OP(mathop=mathop)],
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            MATH_OP(mathop=mathop),
+            DEST_SYNC(dest_sync),
+        ],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(8)],
         variant_stimuli=StimuliConfig(
             None,
@@ -69,6 +86,7 @@ def test_perf_eltwise_binary(
             tile_count_res=tile_count,
         ),
         dest_acc=dest_acc,
+        unpack_to_dest=unpack_to_dest,
     )
 
     configuration.run(perf_report)

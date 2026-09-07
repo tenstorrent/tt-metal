@@ -6,6 +6,13 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import data_formats
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    dest_tile_capacity,
+    unpack_to_dest_modes,
+)
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -17,7 +24,6 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
-    DestSync,
     ImpliedMathFormat,
     MathFidelity,
     PerfRunType,
@@ -26,7 +32,6 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
     input_output_formats,
     parametrize,
     runtime,
@@ -68,22 +73,17 @@ def matmul_math_fidelities(format, *, is_perf=False):
     ]
 
 
-def matmul_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
-
-
 def matmul_dest_acc_modes(format):
-    return (
-        [DestAccumulation.Yes]
-        if format.input_format == DataFormat.Int8
-        else [DestAccumulation.Yes, DestAccumulation.No]
+    return dest_acc_modes(
+        format,
+        allowed=(
+            [DestAccumulation.Yes] if format.input_format == DataFormat.Int8 else None
+        ),
     )
 
 
 def matmul_dimensions(dest_acc, dest_sync, *, exact_dest_fill=False, is_perf=False):
-    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // (
-        2 if dest_acc == DestAccumulation.Yes else 1
-    )
+    max_tiles = dest_tile_capacity(dest_sync, dest_acc)
     # Perf keeps dest-full tall (max_tiles, 1) and wide (1, max_tiles) so both
     # ct>=rt and ct<rt MOP addr_mod branches are covered, and kt=1 vs kt=4.
     mt_dims = (1, max_tiles) if is_perf else range(1, max_tiles + 1)
@@ -145,12 +145,15 @@ _ARCH = get_chip_architecture()
 @parametrize(
     format=MATMUL_FORMAT,
     math_fidelity=lambda format: matmul_math_fidelities(format, is_perf=False),
-    dest_sync_mode=lambda: matmul_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: dest_sync_modes(is_perf=False),
     dest_acc=matmul_dest_acc_modes,
+    unpack_to_dest=lambda format, dest_acc: unpack_to_dest_modes(
+        format, dest_acc, path=UnpackPath.FpuMath
+    ),
     dimensions=runtime(
-        lambda dest_acc, dest_sync_mode: matmul_dimensions(
+        lambda dest_acc, dest_sync: matmul_dimensions(
             dest_acc,
-            dest_sync_mode,
+            dest_sync,
         )
     ),
     implied_math_format=lambda format: matmul_implied_math_formats(format),
@@ -163,8 +166,9 @@ _ARCH = get_chip_architecture()
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
 def test_matmul(
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
     dest_acc,
+    unpack_to_dest,
     dimensions,
     format,
     implied_math_format,
@@ -295,7 +299,7 @@ def test_matmul(
             in (DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B)
         ),
         ENABLE_DIRECT_INDEXING(enable_direct_indexing),
-        DEST_SYNC(dest_sync_mode),
+        DEST_SYNC(dest_sync),
         UNPACK_TRANS_FACES(transpose),
     ]
     runtimes = [
@@ -329,7 +333,7 @@ def test_matmul(
         "templates": templates,
         "runtimes": runtimes,
         "variant_stimuli": variant_stimuli,
-        "unpack_to_dest": False,
+        "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
         "disable_format_inference": disable_format_inference,
     }

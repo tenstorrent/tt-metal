@@ -54,18 +54,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool is_int_fpu_en         = false;
     constexpr DataCopyType copy_type = (BROADCAST_TYPE == BroadcastType::NONE || unpack_to_dest) ? DataCopyType::A2D : DataCopyType::B2D;
 
-    _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
-        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+        _llk_math_wait_for_dest_available_<dest_sync>();
         _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en, PackMode::Default>(
             4 /* num_faces */, formats.math);
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
         {
-            _llk_math_eltwise_unary_datacopy_<copy_type, DstSync::SyncHalf, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
-                tile, formats.math, formats.math);
+            _llk_math_eltwise_unary_datacopy_<copy_type, dest_sync, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(tile, formats.math, formats.math);
         }
         _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, unpack_to_dest>();
 
@@ -73,11 +72,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; tile += 2)
         {
-            test_utils::
-                call_binary_sfpu_operation<DstSync::SyncHalf, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>(
-                    tile, tile + 1, tile);
+            test_utils::call_binary_sfpu_operation<dest_sync, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>(
+                tile, tile + 1, tile);
         }
-        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 }
 
@@ -95,7 +93,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
 
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
+    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
 
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
@@ -103,9 +101,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
         {
             const std::uint32_t result_tile = block * params.NUM_TILES_IN_BLOCK + tile;
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[result_tile]));
+            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[result_tile]));
         }
-        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 }
 

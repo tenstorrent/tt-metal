@@ -27,9 +27,19 @@ the whole parameter/value table, split and plain axes alike, per function pair.
 By default it sweeps a folder (its own folder, i.e. ``python_tests``): it
 collects every ``test_*.py`` and ``perf_*.py`` module, pairs them by the part of
 the name after the prefix (so ``test_matmul.py`` pairs with ``perf_matmul.py``),
-and runs the comparison over each matched pair. Use ``--dir`` to sweep another
-folder that contains matched files, or pass two explicit paths for one pair.
-Quasar pairs live in the ``quasar`` subfolder, which is a separate sweep.
+and runs the comparison over each matched pair. Functions that do not pair by
+name still have their sweeps printed (functional-only or perf-only), and files
+with no counterpart get the same one-sided dump in a trailing section, so the
+report is not only the functions that happened to share a name. Use ``--dir``
+to sweep another folder that contains matched files, or pass two explicit paths
+for one pair. Quasar pairs live in the ``quasar`` subfolder, which is a
+separate sweep. ``--perf-dirs LEFT RIGHT`` compares ``perf_*.py`` modules in
+two folders instead of functional vs perf: ``perf_matmul.py`` pairs with
+``perf_matmul_quasar.py``. Each side is imported with its own ``CHIP_ARCH``
+(``--arch`` / ``--left-arch`` for the left folder, ``--right-arch`` or the
+right folder's name for the right). Value lists are truncated unless
+``--full`` is passed. ``--matches-only`` reports the paired modules and skips
+the unpaired dumps.
 
 This is a standalone diagnostic script, not a pytest test: it introspects the
 ``parametrize`` mark left on each function by the custom ``@parametrize``
@@ -46,6 +56,9 @@ Usage (run from the python_tests folder):
     python compare_test_and_perf.py --dir quasar            # sweep the Quasar pairs
     python compare_test_and_perf.py --csv reports/          # export parameter tables
     python compare_test_and_perf.py <functional.py> <perf.py>   # single explicit pair
+    python compare_test_and_perf.py --perf-dirs . quasar --arch wormhole
+    python compare_test_and_perf.py --perf-dirs . quasar --arch blackhole
+    python compare_test_and_perf.py --perf-dirs . quasar --arch blackhole --full --matches-only
 """
 from __future__ import annotations
 
@@ -68,6 +81,8 @@ _HERE = _SELF.parent
 _BANNER_WIDTH = 88
 _VALUE_PREVIEW_LIMIT = 8
 _ARCH_CHOICES = ("wormhole", "blackhole", "quasar")
+_ARCH_FILE_SUFFIXES = ("_quasar", "_wormhole", "_blackhole")
+_ARCH_TAGS = {"wormhole": "[W]", "blackhole": "[B]", "quasar": "[Q]"}
 
 # `pytest.param(...)` returns a ParameterSet, which is itself a 3-tuple of
 # (values, marks, id) and so is indistinguishable from a 3-axis parameter row.
@@ -94,8 +109,22 @@ def import_test_module(path: Path, root: Path, arch: str) -> ModuleType:
     os.environ.setdefault("LLK_HOME", str(root.parent.parent))
     # Importing a test module runs get_chip_architecture() at module load. Without
     # CHIP_ARCH it probes for a physical device (or simulator context) and fails on a
-    # plain host. The explicit CLI selection must override the caller's environment.
+    # plain host. The explicit CLI selection must override the caller's environment
+    # and any architecture cached by an earlier import in this process.
     os.environ["CHIP_ARCH"] = arch
+    try:
+        from helpers.chip_architecture import clear_chip_architecture_cache
+
+        clear_chip_architecture_cache()
+    except ImportError:
+        pass
+    try:
+        from helpers.test_config import TestConfig
+
+        if "CHIP_ARCH" in vars(TestConfig):
+            TestConfig.setup_arch()
+    except ImportError:
+        pass
     dotted = ".".join(path.resolve().relative_to(root).with_suffix("").parts)
     return importlib.import_module(dotted)
 
@@ -306,7 +335,7 @@ def normalize(name: str) -> str:
         if normalized.startswith(pre):
             normalized = normalized[len(pre) :]
             break
-    for suffix in ("_perf", "_test"):
+    for suffix in (*_ARCH_FILE_SUFFIXES, "_perf", "_test"):
         if normalized.endswith(suffix):
             normalized = normalized[: -len(suffix)]
             break
@@ -337,6 +366,40 @@ def pair_functions(
 MEASUREMENT_AXES = frozenset({"iterations", "loop_factor", "run_types", "is_perf"})
 
 
+@dataclass(frozen=True)
+class SideLabels:
+    """Display names and tags for the two sides of a comparison."""
+
+    left: str
+    right: str
+    left_tag: str
+    right_tag: str
+
+    @property
+    def width(self) -> int:
+        return max(len(self.left), len(self.right))
+
+    @property
+    def left_padded(self) -> str:
+        return self.left.ljust(self.width)
+
+    @property
+    def right_padded(self) -> str:
+        return self.right.ljust(self.width)
+
+    @classmethod
+    def for_arches(cls, left_arch: str, right_arch: str) -> "SideLabels":
+        return cls(
+            left_arch,
+            right_arch,
+            _ARCH_TAGS.get(left_arch, "[L]"),
+            _ARCH_TAGS.get(right_arch, "[R]"),
+        )
+
+
+FUNCTIONAL_PERF = SideLabels("functional", "perf", "[T]", "[P]")
+
+
 def fmt_values(values: list[str], full: bool) -> str:
     if full or len(values) <= _VALUE_PREVIEW_LIMIT:
         return ", ".join(values) if values else "-"
@@ -363,13 +426,19 @@ def axis_value_relation(test_values: list[str], perf_values: list[str]) -> str:
 
 
 def verdict(
-    name: str, t: list[str], p: list[str], in_t: bool, in_p: bool, kind: str
+    name: str,
+    t: list[str],
+    p: list[str],
+    in_t: bool,
+    in_p: bool,
+    kind: str,
+    labels: SideLabels,
 ) -> tuple[str, str]:
     """Classify one axis or parameter and render its headline."""
     if not in_t:
-        return "diff", f"[P] {name}: PERF-ONLY {kind}"
+        return "diff", f"{labels.right_tag} {name}: {labels.right.upper()}-ONLY {kind}"
     if not in_p:
-        return "diff", f"[T] {name}: FUNCTIONAL-ONLY {kind}"
+        return "diff", f"{labels.left_tag} {name}: {labels.left.upper()}-ONLY {kind}"
     relation = axis_value_relation(t, p)
     if relation == "identical":
         return "same", f"[=] {name}: identical ({len(t)} value(s))"
@@ -377,17 +446,19 @@ def verdict(
         return (
             "unreadable",
             f"[!] {name}: UNREADABLE - no values parsed "
-            f"(functional={len(t)}, perf={len(p)})",
+            f"({labels.left}={len(t)}, {labels.right}={len(p)})",
         )
     if relation == "perf_subset":
         return (
             "diff",
-            f"[~] {name}: perf subset of functional ({len(p)}/{len(t)} value(s))",
+            f"[~] {name}: {labels.right} subset of {labels.left} "
+            f"({len(p)}/{len(t)} value(s))",
         )
     if relation == "functional_subset":
         return (
             "diff",
-            f"[~] {name}: functional subset of perf ({len(t)}/{len(p)} value(s))",
+            f"[~] {name}: {labels.left} subset of {labels.right} "
+            f"({len(t)}/{len(p)} value(s))",
         )
     return "diff", f"[x] {name}: DIFFERENT"
 
@@ -398,10 +469,12 @@ def compare(
     ignored_axes: frozenset[str],
     composite_axes: set[str],
     full: bool,
+    labels: SideLabels = FUNCTIONAL_PERF,
 ) -> None:
     """Report identical vs differing axes; for differing ones print both sweeps."""
     same, diff, ignored, unreadable = [], [], [], []
     buckets = {"same": same, "diff": diff, "unreadable": unreadable}
+    left, right = labels.left_padded, labels.right_padded
     for axis in dict.fromkeys([*test_axes, *perf_axes]):
         in_t, in_p = axis in test_axes, axis in perf_axes
         t, p = test_axes.get(axis, []), perf_axes.get(axis, [])
@@ -410,11 +483,11 @@ def compare(
             ignored.append(axis)
             print(f"  [i] {axis}: ignored measurement axis")
             if in_t:
-                print(f"        functional : {fmt_values(t, full)}")
-            print(f"        perf       : {fmt_values(p, full)}")
+                print(f"        {left} : {fmt_values(t, full)}")
+            print(f"        {right} : {fmt_values(p, full)}")
             continue
 
-        bucket, headline = verdict(axis, t, p, in_t, in_p, "axis")
+        bucket, headline = verdict(axis, t, p, in_t, in_p, "axis", labels)
         buckets[bucket].append(axis)
         print(f"  {headline}")
         if bucket == "same":
@@ -425,8 +498,8 @@ def compare(
             # carries the same information one parameter at a time.
             print("        values : split per parameter below (--full for tuples)")
         else:
-            print(f"        functional : {fmt_values(t, full)}")
-            print(f"        perf       : {fmt_values(p, full)}")
+            print(f"        {left} : {fmt_values(t, full)}")
+            print(f"        {right} : {fmt_values(p, full)}")
     print(f"\n  Summary: {len(same)} identical axis/axes, {len(diff)} differing.")
     if same:
         print(f"    identical : {', '.join(same)}")
@@ -438,7 +511,12 @@ def compare(
         print(f"    UNREADABLE: {', '.join(unreadable)} (verdict withheld)")
 
 
-def compare_parameters(functional: Parameters, perf: Parameters, full: bool) -> None:
+def compare_parameters(
+    functional: Parameters,
+    perf: Parameters,
+    full: bool,
+    labels: SideLabels = FUNCTIONAL_PERF,
+) -> None:
     """Report the parameters that composite axes were built from, one at a time.
 
     Parameters carry the name of the component they came from rather than the name
@@ -451,16 +529,17 @@ def compare_parameters(functional: Parameters, perf: Parameters, full: bool) -> 
     names = [n for n in dict.fromkeys([*test_params, *perf_params]) if n in split]
     same, diff, unreadable = [], [], []
     buckets = {"same": same, "diff": diff, "unreadable": unreadable}
+    left, right = labels.left_padded, labels.right_padded
     print(f"\n  Composite axes split into {len(names)} parameter(s):")
     for name in names:
         in_t, in_p = name in test_params, name in perf_params
         t, p = test_params.get(name, []), perf_params.get(name, [])
-        bucket, headline = verdict(name, t, p, in_t, in_p, "parameter")
+        bucket, headline = verdict(name, t, p, in_t, in_p, "parameter", labels)
         buckets[bucket].append(name)
         print(f"    {headline}")
         if bucket != "same" or full:
-            print(f"          functional : {fmt_values(t, full)}")
-            print(f"          perf       : {fmt_values(p, full)}")
+            print(f"          {left} : {fmt_values(t, full)}")
+            print(f"          {right} : {fmt_values(p, full)}")
     print(
         f"\n  Parameter summary: {len(same)} identical parameter(s), "
         f"{len(diff)} differing."
@@ -471,16 +550,60 @@ def compare_parameters(functional: Parameters, perf: Parameters, full: bool) -> 
         print(f"    UNREADABLE: {', '.join(unreadable)} (verdict withheld)")
 
 
+def print_onesided_sweep(
+    sweep: Sweep, side: str, tag: str, padded: str, full: bool
+) -> None:
+    """Print every axis of a sweep that has no counterpart on the other side."""
+    ignored_axes = frozenset(axis for axis in MEASUREMENT_AXES if axis in sweep.axes)
+    n = projected_variant_count(sweep.rows, ignored_axes)
+    print(f"  variants: {side}={n}\n")
+    for axis, values in sweep.axes.items():
+        if axis in ignored_axes:
+            print(f"  [i] {axis}: ignored measurement axis")
+            print(f"        {padded} : {fmt_values(values, full)}")
+            continue
+        print(f"  {tag} {axis}: {side.upper()}-ONLY axis")
+        print(f"        {padded} : {fmt_values(values, full)}")
+    params = parameter_values(sweep, ignored_axes)
+    names = [n for n in params.values if n in params.from_composite]
+    if not names:
+        return
+    print(f"\n  Composite axes split into {len(names)} parameter(s):")
+    for name in names:
+        print(f"    {tag} {name}: {side.upper()}-ONLY parameter")
+        print(f"          {padded} : {fmt_values(params.values[name], full)}")
+
+
+def emit_onesided_function(
+    pmarks: list, side: str, tag: str, padded: str, full: bool
+) -> None:
+    """Read and print one unmatched function's sweep, or why it could not be read."""
+    try:
+        sweep = axis_value_sets(pmarks)
+    except Exception as exc:  # one odd sweep must not abort the whole run
+        print(
+            "  ! skipped: cannot read parametrize marks "
+            f"({type(exc).__name__}: {exc})\n"
+        )
+        return
+    if not sweep.rows:
+        print(f"  ! empty sweep: {side}=0 row(s)\n")
+        return
+    print_onesided_sweep(sweep, side, tag, padded, full)
+    print()
+
+
 def write_parameter_csv(
     path: Path,
     test_params: dict[str, list[str]],
     perf_params: dict[str, list[str]],
+    labels: SideLabels = FUNCTIONAL_PERF,
 ) -> None:
     """Write the full, untruncated parameter/value table for one function pair."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["parameter", "value", "functional", "perf"])
+        writer.writerow(["parameter", "value", labels.left, labels.right])
         for name in dict.fromkeys([*test_params, *perf_params]):
             t, p = test_params.get(name, []), perf_params.get(name, [])
             for value in dict.fromkeys([*t, *p]):
@@ -513,24 +636,98 @@ def discover_pairs(
     return matched, tests_without_perf, perfs_without_test
 
 
-def compare_pair(
-    functional: Path,
-    perf: Path,
+def perf_stem_key(stem: str) -> str:
+    """Map ``perf_matmul_quasar`` / ``perf_matmul`` to the shared key ``matmul``."""
+    name = stem[len("perf_") :] if stem.startswith("perf_") else stem
+    for suffix in _ARCH_FILE_SUFFIXES:
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    return name
+
+
+def discover_perf_modules(directory: Path) -> dict[str, Path]:
+    """Return ``perf_*.py`` in ``directory``, keyed by :func:`perf_stem_key`."""
+    found: dict[str, Path] = {}
+    for path in sorted(directory.glob("*.py")):
+        if path.resolve() == _SELF or not path.stem.startswith("perf_"):
+            continue
+        found[perf_stem_key(path.stem)] = path
+    return found
+
+
+def infer_arch_from_dir(directory: Path) -> str | None:
+    name = directory.resolve().name.lower()
+    return name if name in _ARCH_CHOICES else None
+
+
+def discover_perf_dir_pairs(
+    left_dir: Path, right_dir: Path
+) -> tuple[list[tuple[str, Path, Path]], list[Path], list[Path]]:
+    """Pair perf_*.py modules in two folders by the name after ``perf_`` / arch suffix."""
+    left = discover_perf_modules(left_dir)
+    right = discover_perf_modules(right_dir)
+    matched = [(key, left[key], right[key]) for key in left if key in right]
+    matched.sort(key=lambda item: item[0])
+    left_only = [left[key] for key in sorted(left) if key not in right]
+    right_only = [right[key] for key in sorted(right) if key not in left]
+    return matched, left_only, right_only
+
+
+def report_unpaired_module(
+    path: Path,
     root: Path,
     arch: str,
     full: bool,
-    csv_dir: Path | None = None,
+    side: str,
+    tag: str,
+    padded: str,
+    reason: str,
 ) -> bool:
-    """Import a functional/perf module pair and print their axis comparison.
-
-    Returns True if at least one function pair was compared, False otherwise.
-    """
+    """Import one unpaired module and print each parametrized function's sweep."""
     print("#" * _BANNER_WIDTH)
-    print(f"# {functional.name}  vs  {perf.name}")
+    print(f"# {path.name}  ({reason})")
     print("#" * _BANNER_WIDTH)
     try:
-        test_mod = import_test_module(functional, root, arch)
-        perf_mod = import_test_module(perf, root, arch)
+        mod = import_test_module(path, root, arch)
+    except KeyboardInterrupt:
+        raise
+    except BaseException as exc:
+        print(f"  ! skipped: failed to import ({type(exc).__name__}: {exc})\n")
+        return False
+    funcs = parametrized_functions(mod)
+    if not funcs:
+        print(f"  ! no parametrized functions found in {path.name}\n")
+        return False
+    for name, pmarks in funcs.items():
+        print("=" * _BANNER_WIDTH)
+        print(f"{side}: {mod.__name__}.{name}")
+        print("=" * _BANNER_WIDTH)
+        emit_onesided_function(pmarks, side, tag, padded, full)
+    sys.stdout.flush()
+    return True
+
+
+def compare_pair(
+    left: Path,
+    right: Path,
+    root: Path,
+    left_arch: str,
+    right_arch: str,
+    full: bool,
+    csv_dir: Path | None = None,
+    labels: SideLabels = FUNCTIONAL_PERF,
+) -> bool:
+    """Import a module pair and print their axis comparison.
+
+    Returns True if at least one function was reported (matched or one-sided).
+    """
+    print("#" * _BANNER_WIDTH)
+    print(f"# {left.name}  vs  {right.name}")
+    print("#" * _BANNER_WIDTH)
+    try:
+        left_mod = import_test_module(left, root, left_arch)
+        right_mod = import_test_module(right, root, right_arch)
     except KeyboardInterrupt:
         raise
     except BaseException as exc:  # keep sweeping even if a module aborts on import
@@ -539,29 +736,47 @@ def compare_pair(
         print(f"  ! skipped: failed to import ({type(exc).__name__}: {exc})\n")
         return False
 
-    test_funcs = parametrized_functions(test_mod)
-    perf_funcs = parametrized_functions(perf_mod)
-    if not test_funcs:
-        print(f"  ! no parametrized functions found in {functional.name}\n")
+    left_funcs = parametrized_functions(left_mod)
+    right_funcs = parametrized_functions(right_mod)
+    if not left_funcs:
+        print(f"  ! no parametrized functions found in {left.name}\n")
         return False
-    if not perf_funcs:
-        print(f"  ! no parametrized functions found in {perf.name}\n")
+    if not right_funcs:
+        print(f"  ! no parametrized functions found in {right.name}\n")
         return False
 
-    compared = False
-    for tname, pname, match_method in pair_functions(test_funcs, perf_funcs):
+    reported = False
+    left_l, right_l = labels.left_padded, labels.right_padded
+    for tname, pname, match_method in pair_functions(left_funcs, right_funcs):
         print("=" * _BANNER_WIDTH)
-        print(f"functional: {test_mod.__name__}.{tname or '<none>'}")
-        print(f"perf      : {perf_mod.__name__}.{pname or '<none>'}")
+        print(f"{left_l}: {left_mod.__name__}.{tname or '<none>'}")
+        print(f"{right_l}: {right_mod.__name__}.{pname or '<none>'}")
         print("=" * _BANNER_WIDTH)
         if tname is None or pname is None:
-            print("  (unmatched - no counterpart found)\n")
+            print("  (unmatched - no counterpart found)")
+            if tname is not None:
+                emit_onesided_function(
+                    left_funcs[tname],
+                    labels.left,
+                    labels.left_tag,
+                    labels.left_padded,
+                    full,
+                )
+            else:
+                emit_onesided_function(
+                    right_funcs[pname],
+                    labels.right,
+                    labels.right_tag,
+                    labels.right_padded,
+                    full,
+                )
+            reported = True
             continue
         if match_method == "position":
             print("  ! paired by position because normalized function names differ")
         try:
-            t_sweep = axis_value_sets(test_funcs[tname])
-            p_sweep = axis_value_sets(perf_funcs[pname])
+            t_sweep = axis_value_sets(left_funcs[tname])
+            p_sweep = axis_value_sets(right_funcs[pname])
         except Exception as exc:  # one odd sweep must not abort the whole run
             print(
                 "  ! skipped: cannot read parametrize marks "
@@ -571,8 +786,8 @@ def compare_pair(
         if not t_sweep.rows or not p_sweep.rows:
             print(
                 "  ! empty sweep: "
-                f"functional={len(t_sweep.rows)} row(s), "
-                f"perf={len(p_sweep.rows)} row(s)\n"
+                f"{labels.left}={len(t_sweep.rows)} row(s), "
+                f"{labels.right}={len(p_sweep.rows)} row(s)\n"
             )
             continue
         ignored_axes = frozenset(
@@ -582,21 +797,91 @@ def compare_pair(
         )
         t_n = projected_variant_count(t_sweep.rows, ignored_axes)
         p_n = projected_variant_count(p_sweep.rows, ignored_axes)
-        print(f"  variants: functional={t_n}, perf={p_n}\n")
+        print(f"  variants: {labels.left}={t_n}, {labels.right}={p_n}\n")
 
         t_params = parameter_values(t_sweep, ignored_axes)
         p_params = parameter_values(p_sweep, ignored_axes)
         composite_axes = t_params.composite_axes | p_params.composite_axes
-        compare(t_sweep.axes, p_sweep.axes, ignored_axes, composite_axes, full)
+        compare(t_sweep.axes, p_sweep.axes, ignored_axes, composite_axes, full, labels)
         if composite_axes:
-            compare_parameters(t_params, p_params, full)
+            compare_parameters(t_params, p_params, full, labels)
         if csv_dir is not None:
-            target = csv_dir / f"{functional.stem}.{tname}.csv"
-            write_parameter_csv(target, t_params.values, p_params.values)
+            target = csv_dir / f"{left.stem}.{tname}.csv"
+            write_parameter_csv(target, t_params.values, p_params.values, labels)
             print(f"\n  parameter table written to {target}")
         print()
-        compared = True
-    return compared
+        reported = True
+    sys.stdout.flush()
+    return reported
+
+
+def _truncation_note(full: bool) -> None:
+    if not full:
+        print(
+            f"Value lists truncated to {_VALUE_PREVIEW_LIMIT} entries; "
+            "pass --full to print every value."
+        )
+
+
+def dump_unpaired_modules(
+    paths: list[Path],
+    root: Path,
+    arch: str,
+    full: bool,
+    labels: SideLabels,
+    which: str,
+    reason: str,
+) -> int:
+    if which == "left":
+        side, tag, padded = labels.left, labels.left_tag, labels.left_padded
+    else:
+        side, tag, padded = labels.right, labels.right_tag, labels.right_padded
+    dumped = 0
+    for path in paths:
+        dumped += int(
+            report_unpaired_module(path, root, arch, full, side, tag, padded, reason)
+        )
+    return dumped
+
+
+def sweep_and_report(
+    matched: list[tuple[str, Path, Path]],
+    left_only: list[Path],
+    right_only: list[Path],
+    root: Path,
+    left_arch: str,
+    right_arch: str,
+    full: bool,
+    csv_dir: Path | None,
+    labels: SideLabels,
+    left_only_reason: str,
+    right_only_reason: str,
+    matches_only: bool = False,
+) -> int:
+    results = [
+        compare_pair(left, right, root, left_arch, right_arch, full, csv_dir, labels)
+        for _key, left, right in matched
+    ]
+    n_pairs = len(results)
+    n_pair_ok = sum(results)
+    if matches_only:
+        print("#" * _BANNER_WIDTH)
+        print(f"Sweep complete: {n_pair_ok}/{n_pairs} file pair(s) produced a report.")
+    else:
+        unpaired_ok = dump_unpaired_modules(
+            left_only, root, left_arch, full, labels, "left", left_only_reason
+        )
+        unpaired_ok += dump_unpaired_modules(
+            right_only, root, right_arch, full, labels, "right", right_only_reason
+        )
+        n_unpaired = len(left_only) + len(right_only)
+        print("#" * _BANNER_WIDTH)
+        print(
+            f"Sweep complete: {n_pair_ok}/{n_pairs} file pair(s) produced a report, "
+            f"{unpaired_ok}/{n_unpaired} unpaired module(s) dumped."
+        )
+    _truncation_note(full)
+    return 0 if (not matched or all(results)) else 1
 
 
 def main() -> int:
@@ -620,7 +905,19 @@ def main() -> int:
         help="folder to sweep for test_*/perf_* pairs (default: this script's folder)",
     )
     ap.add_argument(
+        "--perf-dirs",
+        nargs=2,
+        metavar=("LEFT", "RIGHT"),
+        type=Path,
+        help="compare perf_*.py in two folders (e.g. . quasar for WH/BH vs Quasar)",
+    )
+    ap.add_argument(
         "--full", action="store_true", help="print full value lists (no truncation)"
+    )
+    ap.add_argument(
+        "--matches-only",
+        action="store_true",
+        help="report matched pairs only; skip unpaired module dumps",
     )
     ap.add_argument(
         "--csv",
@@ -635,9 +932,83 @@ def main() -> int:
         "--arch",
         choices=_ARCH_CHOICES,
         default=env_arch if env_arch in _ARCH_CHOICES else "wormhole",
-        help="CHIP_ARCH used to resolve the sweeps (default: $CHIP_ARCH or wormhole)",
+        help="CHIP_ARCH for functional/perf sweeps, and the left --perf-dirs folder",
+    )
+    ap.add_argument(
+        "--left-arch",
+        choices=_ARCH_CHOICES,
+        default=None,
+        help="CHIP_ARCH for the left --perf-dirs folder (default: --arch)",
+    )
+    ap.add_argument(
+        "--right-arch",
+        choices=_ARCH_CHOICES,
+        default=None,
+        help="CHIP_ARCH for the right --perf-dirs folder "
+        "(default: the folder name if it is wormhole/blackhole/quasar)",
     )
     args = ap.parse_args()
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+
+    if args.perf_dirs and (args.functional or args.perf):
+        ap.error("--perf-dirs cannot be combined with explicit functional/perf paths")
+
+    # Perf-vs-perf: two folders of perf_*.py, each with its own architecture.
+    if args.perf_dirs:
+        left_dir, right_dir = (p.resolve() for p in args.perf_dirs)
+        left_arch = args.left_arch or args.arch
+        right_arch = args.right_arch or infer_arch_from_dir(right_dir)
+        if right_arch is None:
+            ap.error(
+                "pass --right-arch, or name the right folder wormhole/blackhole/quasar"
+            )
+        matched, left_only, right_only = discover_perf_dir_pairs(left_dir, right_dir)
+        labels = SideLabels.for_arches(left_arch, right_arch)
+        print(
+            f"Comparing perf_*.py in {left_dir} ({left_arch}) vs "
+            f"{right_dir} ({right_arch})"
+        )
+        print(
+            f"Matched {len(matched)} perf pair(s): "
+            f"{', '.join(k for k, _, _ in matched) or '-'}"
+        )
+        if not args.matches_only:
+            if left_only:
+                print(
+                    f"{left_arch} without a {right_arch} counterpart: "
+                    f"{', '.join(p.name for p in left_only)}"
+                )
+            if right_only:
+                print(
+                    f"{right_arch} without a {left_arch} counterpart: "
+                    f"{', '.join(p.name for p in right_only)}"
+                )
+        _truncation_note(args.full)
+        print()
+        if matched:
+            sample = matched[0][1]
+        elif left_only:
+            sample = left_only[0]
+        elif right_only:
+            sample = right_only[0]
+        else:
+            return 1
+        root = find_python_tests_root(sample)
+        return sweep_and_report(
+            matched,
+            left_only,
+            right_only,
+            root,
+            left_arch,
+            right_arch,
+            args.full,
+            args.csv,
+            labels,
+            f"no {right_arch} counterpart",
+            f"no {left_arch} counterpart",
+            args.matches_only,
+        )
 
     if bool(args.functional) ^ bool(args.perf):
         ap.error(
@@ -651,7 +1022,13 @@ def main() -> int:
         return (
             0
             if compare_pair(
-                args.functional, args.perf, root, args.arch, args.full, args.csv
+                args.functional,
+                args.perf,
+                root,
+                args.arch,
+                args.arch,
+                args.full,
+                args.csv,
             )
             else 1
         )
@@ -665,26 +1042,41 @@ def main() -> int:
         f"Matched {len(matched)} test_/perf_ pair(s): "
         f"{', '.join(k for k, _, _ in matched) or '-'}"
     )
-    if tests_only:
-        print(
-            f"test_* without a perf_* counterpart: {', '.join(p.name for p in tests_only)}"
-        )
-    if perfs_only:
-        print(
-            f"perf_* without a test_* counterpart: {', '.join(p.name for p in perfs_only)}"
-        )
+    if not args.matches_only:
+        if tests_only:
+            print(
+                f"test_* without a perf_* counterpart: {', '.join(p.name for p in tests_only)}"
+            )
+        if perfs_only:
+            print(
+                f"perf_* without a test_* counterpart: {', '.join(p.name for p in perfs_only)}"
+            )
+    _truncation_note(args.full)
     print()
 
-    if not matched:
+    if matched:
+        sample = matched[0][1]
+    elif tests_only:
+        sample = tests_only[0]
+    elif perfs_only:
+        sample = perfs_only[0]
+    else:
         return 1
-
-    root = find_python_tests_root(matched[0][1])
-    results = []
-    for _key, functional, perf in matched:
-        results.append(
-            compare_pair(functional, perf, root, args.arch, args.full, args.csv)
-        )
-    return 0 if all(results) else 1
+    root = find_python_tests_root(sample)
+    return sweep_and_report(
+        matched,
+        tests_only,
+        perfs_only,
+        root,
+        args.arch,
+        args.arch,
+        args.full,
+        args.csv,
+        FUNCTIONAL_PERF,
+        "no perf counterpart",
+        "no test counterpart",
+        args.matches_only,
+    )
 
 
 if __name__ == "__main__":

@@ -1,11 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
 
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    unpack_to_dest_modes,
+)
+from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     DataCopyGolden,
     TransposeGolden,
@@ -54,136 +59,90 @@ from helpers.utils import passed_test
 
 TILE_DIMENSIONS = [32, 32]
 
+# Curated dimensions: some fit in one bank (no switching), some require
+# multiple blocks (triggering dest bank switches with DstSync.Half).
+TRANSPOSE_DEST_DIMENSIONS = {
+    (DestAccumulation.No, DestSync.Half): [
+        [32, 32],
+        [32, 128],
+        [32, 256],
+        [32, 512],
+        [64, 384],
+    ],
+    (DestAccumulation.No, DestSync.Full): [
+        [32, 32],
+        [32, 512],
+        [64, 512],
+    ],
+    (DestAccumulation.Yes, DestSync.Half): [
+        [32, 32],
+        [32, 128],
+        [32, 256],
+        [64, 192],
+    ],
+    (DestAccumulation.Yes, DestSync.Full): [
+        [32, 32],
+        [32, 256],
+        [32, 512],
+    ],
+}
 
-def generate_qsr_transpose_dest_combinations(
-    formats_list: List[FormatConfig],
-    *,
-    is_perf=False,
-):
-    """
-    Generate transpose dest combinations for Quasar tests.
 
-    Args:
-        formats_list: List of input/output format pairs
+def _transpose_dest_supported(formats):
+    return not (formats.input_format.is_integer() ^ formats.output_format.is_integer())
 
-    Returns:
-        List of (format, dest_acc, dest_sync, math_transpose_faces) tuples
-    """
 
-    def is_supported_format_conversion(in_fmt, out_fmt):
-        """Check if the format conversion is supported by packer. These format conversions are NOT dependent on the dest register mode."""
-        # Skip if mixing integer and non-integer formats
-        if in_fmt.is_integer() ^ out_fmt.is_integer():
-            return False
-        return True
+TRANSPOSE_DEST_FORMATS = [
+    fmt
+    for fmt in input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            DataFormat.Float32,
+            DataFormat.Int32,
+            DataFormat.Int8,
+            DataFormat.UInt8,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
+        ]
+    )
+    if _transpose_dest_supported(fmt)
+]
 
-    def get_dest_acc_modes(in_fmt):
-        """Determine valid dest register modes depending on the input format."""
-        # Int32, Float32 (unpack_to_dest) requires 32bit mode dest register
-        if in_fmt.is_32_bit():
-            return (DestAccumulation.Yes,)
-        # Int8/UInt8 in Src regs and Int32 in dest reg is unsupported for MOVB2D
-        # Float16/Float16_b in Src regs and Float32 in dest reg is unsupported for MOVB2D
-        return (DestAccumulation.No,)
 
-    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-        """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
-        # Upcasting to Float32/Int32 requires dest_acc enabled
-        if (
-            out_fmt.is_32_bit()
-            and not in_fmt.is_32_bit()
-            and dest_acc == DestAccumulation.No
-        ):
-            return False
-        # Int8<->UInt8 conversion requires dest_acc enabled
-        if (
-            dest_acc == DestAccumulation.No
-            and in_fmt in (DataFormat.Int8, DataFormat.UInt8)
-            and in_fmt != out_fmt
-        ):
-            return False
-        return True
+def transpose_dest_dest_acc(formats):
+    allowed = (
+        [DestAccumulation.Yes]
+        if formats.input_format.is_32_bit()
+        else [DestAccumulation.No]
+    )
+    return dest_acc_modes(formats, allowed=allowed)
 
-    # Curated dimensions: some fit in one bank (no switching), some require
-    # multiple blocks (triggering dest bank switches with DstSync.Half).
-    # DstSync.Half capacity: 8 tiles (16-bit dest) / 4 tiles (32-bit dest)
-    # DstSync.Full capacity: 16 tiles (16-bit dest) / 8 tiles (32-bit dest)
-    dimensions_by_mode = {
-        (DestAccumulation.No, DestSync.Half): [
-            [32, 32],  # 1 tile  → 1 block (no switch)
-            [32, 128],  # 4 tiles → 1 block (no switch)
-            [32, 256],  # 8 tiles → 1 block (fills half-dest exactly)
-            [32, 512],  # 16 tiles → 2 blocks (1 bank switch)
-            [64, 384],  # 24 tiles → 3 blocks (2 bank switches)
-        ],
-        (DestAccumulation.No, DestSync.Full): [
-            [32, 32],  # 1 tile  → 1 block
-            [32, 512],  # 16 tiles → 1 block (fills full-dest exactly)
-            [64, 512],  # 32 tiles → 2 blocks
-        ],
-        (DestAccumulation.Yes, DestSync.Half): [
-            [32, 32],  # 1 tile  → 1 block (no switch)
-            [32, 128],  # 4 tiles → 1 block (fills half-dest exactly)
-            [32, 256],  # 8 tiles → 2 blocks (1 bank switch)
-            [64, 192],  # 12 tiles → 3 blocks (2 bank switches)
-        ],
-        (DestAccumulation.Yes, DestSync.Full): [
-            [32, 32],  # 1 tile  → 1 block
-            [32, 256],  # 8 tiles → 1 block (fills full-dest exactly)
-            [32, 512],  # 16 tiles → 2 blocks
-        ],
-    }
 
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-    transpose_faces_modes = (Transpose.No, Transpose.Yes)
-    combinations = []
-    for fmt in formats_list:
-        in_fmt, out_fmt = fmt.input_format, fmt.output_format
+def transpose_dest_unpack_to_dest(formats, dest_acc):
+    return unpack_to_dest_modes(
+        formats,
+        dest_acc,
+        path=(
+            UnpackPath.ForceTrue
+            if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+            else UnpackPath.ForceFalse
+        ),
+    )
 
-        if not is_supported_format_conversion(in_fmt, out_fmt):
-            continue
 
-        for dest_acc in get_dest_acc_modes(in_fmt):
-            if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-                for dest_sync in dest_sync_modes:
-                    for math_transpose_faces in transpose_faces_modes:
-                        if is_perf:
-                            mode_dimensions = dimensions_by_mode[(dest_acc, dest_sync)]
-                            perf_dimensions = select_perf_input_dimensions(
-                                mode_dimensions,
-                                use_largest_fallback=False,
-                            )
-                            # Dest-full vs 2-block is selected via PERF_INPUT_DIMENSIONS.
-                            # Keep the 3-block / 2-switch case when the mode defines it.
-                            three_block = [64, 384]
-                            if (
-                                three_block in mode_dimensions
-                                and three_block not in perf_dimensions
-                            ):
-                                perf_dimensions.append(three_block)
-                            for dimensions in perf_dimensions:
-                                combinations.append(
-                                    (
-                                        fmt,
-                                        dest_acc,
-                                        dest_sync,
-                                        math_transpose_faces,
-                                        dimensions,
-                                    )
-                                )
-                            continue
-                        for dimensions in dimensions_by_mode[(dest_acc, dest_sync)]:
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    math_transpose_faces,
-                                    dimensions,
-                                )
-                            )
-
-    return combinations
+def transpose_dest_input_dimensions(dest_acc, dest_sync, *, is_perf=False):
+    mode_dimensions = TRANSPOSE_DEST_DIMENSIONS[(dest_acc, dest_sync)]
+    if not is_perf:
+        return mode_dimensions
+    perf_dimensions = select_perf_input_dimensions(
+        mode_dimensions, use_largest_fallback=False
+    )
+    three_block = [64, 384]
+    if three_block in mode_dimensions and three_block not in perf_dimensions:
+        perf_dimensions.append(three_block)
+    return perf_dimensions
 
 
 def transpose_dest_implied_math_formats(*, is_perf=False):
@@ -194,36 +153,27 @@ def transpose_dest_implied_math_formats(*, is_perf=False):
     )
 
 
-TRANSPOSE_DEST_FORMATS = input_output_formats(
-    [
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        DataFormat.Int32,
-        DataFormat.Int8,
-        DataFormat.UInt8,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    ],
-)
-PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
-    TRANSPOSE_DEST_FORMATS,
-    is_perf=True,
-)
-
-
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
-        TRANSPOSE_DEST_FORMATS
+    formats=TRANSPOSE_DEST_FORMATS,
+    dest_acc=transpose_dest_dest_acc,
+    dest_sync=lambda: dest_sync_modes(is_perf=False),
+    unpack_to_dest=transpose_dest_unpack_to_dest,
+    math_transpose_faces=[Transpose.No, Transpose.Yes],
+    input_dimensions=lambda dest_acc, dest_sync: transpose_dest_input_dimensions(
+        dest_acc, dest_sync, is_perf=False
     ),
     implied_math_format=lambda: transpose_dest_implied_math_formats(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_transpose_dest_quasar(
-    formats_dest_acc_sync_transpose_dims,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    math_transpose_faces,
+    input_dimensions,
     implied_math_format,
     run_types,
     loop_factor,
@@ -231,10 +181,6 @@ def test_transpose_dest_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (formats, dest_acc, dest_sync, math_transpose_faces, input_dimensions) = (
-        formats_dest_acc_sync_transpose_dims
-    )
-
     data_copy_type = DataCopyType.A2D
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
@@ -322,10 +268,6 @@ def test_transpose_dest_quasar(
         golden_tensor = quantize_mx_tensor_chunked(
             golden_tensor.to(torch.bfloat16), formats.output_format
         )
-
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")

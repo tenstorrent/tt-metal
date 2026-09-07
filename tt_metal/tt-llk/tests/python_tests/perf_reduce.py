@@ -2,6 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    dest_tile_capacity,
+    unpack_to_dest_modes,
+)
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestAccumulation,
@@ -17,6 +24,7 @@ from helpers.param_config import (
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    DEST_SYNC,
     LOOP_FACTOR,
     MATH_OP,
     REDUCE_POOL_TYPE,
@@ -40,19 +48,25 @@ REDUCE_MATHOP = {
             DataFormat.Bfp8_b,
         ]
     ),
-    dest_acc=[DestAccumulation.No],
+    dest_acc=lambda formats: dest_acc_modes(formats, allowed=[DestAccumulation.No]),
+    dest_sync=lambda: dest_sync_modes(is_perf=True),
+    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
+        formats, dest_acc, path=UnpackPath.ForceFalse
+    ),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
+    tile_count=lambda dest_acc, dest_sync: dest_tile_capacity(dest_sync, dest_acc),
 )
 def test_perf_reduce(
     perf_report,
     formats,
     dest_acc,
+    dest_sync,
+    unpack_to_dest,
     reduce_dim,
     pool_type,
+    tile_count,
 ):
-
-    tile_count = 16
     configuration = PerfConfig(
         "sources/reduce_perf.cpp",
         formats,
@@ -66,6 +80,7 @@ def test_perf_reduce(
         templates=[
             MATH_OP(mathop=REDUCE_MATHOP[reduce_dim]),
             REDUCE_POOL_TYPE(pool_type),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(64)],
         variant_stimuli=StimuliConfig(
@@ -78,7 +93,7 @@ def test_perf_reduce(
             tile_count_B=tile_count,
             tile_count_res=tile_count,
         ),
-        unpack_to_dest=False,
+        unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
     )
 

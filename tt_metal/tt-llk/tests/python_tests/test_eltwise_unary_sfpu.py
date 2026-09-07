@@ -2,11 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from itertools import chain, product
+from itertools import product
 
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
+from helpers.dest_params import (
+    UnpackPath,
+    dest_acc_modes,
+    dest_sync_modes,
+    unpack_to_dest_modes,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -23,6 +29,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     build_param_id,
+    generate_perf_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -46,6 +53,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
+    DEST_SYNC,
     FAST_MODE,
     MATH_OP,
     NUM_BLOCKS,
@@ -147,9 +155,6 @@ BROAD_FORMATS = input_output_formats(
 # and fp32 for full precision.
 STANDARD_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
-BROAD_DIMENSIONS = [[64, 64], [128, 256]]
-STANDARD_DIMENSIONS = [[64, 64]]
-
 # Bfp4_b is only exercised as an input format, so the input is pinned to Bfp4_b here
 # rather than building the full matrix and skipping the 12 non-Bfp4_b-input combos.
 FORMATS_BFP4_B = [
@@ -220,35 +225,46 @@ def _skip_coverage_unsupported(mathop):
         )
 
 
-def _sweep_params(formats, mathops, approx_modes, input_dimensions):
-    """Build (formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions) tuples.
+def _sweep_params(formats, mathops, approx_modes):
+    """Build dest-flag and occupancy tuples for the unary SFPU sweep.
 
     Fast-mode-capable ops are swept with FastMode.No and FastMode.Yes; every other op
-    runs with FastMode.No only. dest_acc always sweeps both values.
+    runs with FastMode.No only. dest_acc, dest_sync, and unpack_to_dest are independent
+    axes; input_dimensions dest-fills Dest for that dest_acc × dest_sync.
     """
-    dest_accs = [DestAccumulation.No, DestAccumulation.Yes]
+    dest_syncs = dest_sync_modes()
     fast_ops = [op for op in mathops if op in SUPPORTED_FAST_MODE_OPS]
     non_fast_ops = [op for op in mathops if op not in SUPPORTED_FAST_MODE_OPS]
-    return list(
-        chain(
-            product(
-                formats,
-                approx_modes,
-                fast_ops,
-                [FastMode.No, FastMode.Yes],
-                dest_accs,
-                input_dimensions,
-            ),
-            product(
-                formats,
-                approx_modes,
-                non_fast_ops,
-                [FastMode.No],
-                dest_accs,
-                input_dimensions,
-            ),
-        )
-    )
+    combinations = []
+    for mathops_group, fast_modes in (
+        (fast_ops, [FastMode.No, FastMode.Yes]),
+        (non_fast_ops, [FastMode.No]),
+    ):
+        for fmt, approx_mode, mathop, fast_mode, dest_sync in product(
+            formats,
+            approx_modes,
+            mathops_group,
+            fast_modes,
+            dest_syncs,
+        ):
+            for dest_acc in dest_acc_modes(fmt):
+                unpacks = unpack_to_dest_modes(fmt, dest_acc, path=UnpackPath.Sfpu)
+                for unpack_to_dest, input_dimensions in product(
+                    unpacks, generate_perf_input_dimensions(dest_acc, dest_sync)
+                ):
+                    combinations.append(
+                        (
+                            fmt,
+                            approx_mode,
+                            mathop,
+                            fast_mode,
+                            dest_acc,
+                            dest_sync,
+                            unpack_to_dest,
+                            input_dimensions,
+                        )
+                    )
+    return combinations
 
 
 def _assert_broad_profile_valid():
@@ -293,19 +309,16 @@ UNARY_SWEEP_PARAMS = (
         BROAD_FORMATS,
         BROAD_SWEEP_OPS,
         [ApproximationMode.No, ApproximationMode.Yes],
-        BROAD_DIMENSIONS,
     )
     + _sweep_params(
         FORMATS_BFP4_B,
         BROAD_SWEEP_OPS,
         [ApproximationMode.No, ApproximationMode.Yes],
-        BROAD_DIMENSIONS,
     )
     + _sweep_params(
         STANDARD_FORMATS,
         STANDARD_SWEEP_OPS,
         [ApproximationMode.No],
-        STANDARD_DIMENSIONS,
     )
 )
 
@@ -359,6 +372,8 @@ _UNARY_SWEEP_ARGNAMES = (
     "mathop",
     "fast_mode",
     "dest_acc",
+    "dest_sync",
+    "unpack_to_dest",
     "input_dimensions",
 )
 
@@ -403,6 +418,8 @@ def test_eltwise_unary_sfpu(
     mathop: MathOperation,
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
+    dest_sync: DestSync,
+    unpack_to_dest: bool,
     input_dimensions: list[int],
 ):
     """Every float unary SFPU op, over its registered domain.
@@ -475,6 +492,8 @@ def test_eltwise_unary_sfpu(
         input_dimensions,
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
+        dest_sync=dest_sync,
+        unpack_to_dest=unpack_to_dest,
     )
 
 
@@ -1245,6 +1264,8 @@ def eltwise_unary_sfpu(
     custom_atol=None,
     custom_rtol=None,
     shift_amount=None,
+    dest_sync=DestSync.Half,
+    unpack_to_dest=None,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1288,8 +1309,13 @@ def eltwise_unary_sfpu(
         **({} if shift_amount is None else {"shift_amount": shift_amount}),
     )
 
+    if unpack_to_dest is None:
+        unpack_to_dest = unpack_to_dest_modes(formats, dest_acc, path=UnpackPath.Sfpu)[
+            0
+        ]
+
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -1306,6 +1332,7 @@ def eltwise_unary_sfpu(
             FAST_MODE(fast_mode),
             CLAMP_NEGATIVE(True),
             MATH_OP(mathop=mathop),
+            DEST_SYNC(dest_sync),
             # Only emitted when swept: sfpu_operations.h keys off #ifdef, and every other
             # unary test has to keep compiling without the macro.
             *([] if shift_amount is None else [SFPU_SHIFT_AMOUNT(shift_amount)]),
@@ -1326,10 +1353,7 @@ def eltwise_unary_sfpu(
             tile_count_res=tile_cnt_A,
         ),
         dest_acc=dest_acc,
-        # dest_acc off: Float32 unpacks to 16-bit in src regs (later copied to dest for SFPU op)
-        unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        unpack_to_dest=unpack_to_dest,
     )
 
     res_from_L1 = configuration.run().result
