@@ -77,7 +77,7 @@ inline void _llk_math_reconfig_remap_(const bool remap_enable)
     tensix_sync();
     while (semaphore_read(semaphore::MATH_PACK) > 0)
     {
-    }; // Wait for previous packs to finish before claiming all dest
+    } // Wait for previous packs to finish before claiming all dest
 
     // Untilize mode needs dest read access with a stride of 16
     // Following bits are needed for enabling stride of 16
@@ -133,7 +133,7 @@ inline void _llk_math_pack_sync_init_()
     tensix_sync();
     while (semaphore_read(semaphore::MATH_PACK) > 0)
     {
-    }; // Wait for previous packs to finish before claiming all dest
+    } // Wait for previous packs to finish before claiming all dest
     if constexpr (Dst == DstSync::SyncFull)
     {
         TTI_SEMINIT(1, 0, p_stall::SEMAPHORE_1);
