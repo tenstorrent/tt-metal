@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Program-cache keying tests for ttnn.batch_norm(training=True).
+Program-cache tests driven through ttnn.batch_norm.
 
-In training mode batch_norm drives the RunningStatistics device op, which updates
-running_mean/running_var in place. These tests pin two invariants the suite must uphold:
+The training-mode tests pin two invariants of the RunningStatistics device op, which
+batch_norm(training=True) drives and which updates running_mean/running_var in place:
 
   * Cache-key granularity of RunningStatistics. Runs that share its program key (same
     per-channel tensor specs, momentum, and optional-stat presence) must reuse a cached
@@ -20,6 +20,9 @@ running_mean/running_var in place. These tests pin two invariants the suite must
 
 The RunningStatistics device op has no direct Python binding, so it is exercised through
 ttnn.batch_norm(training=True), which is its only public entry point.
+
+The eval-mode test at the end pins a framework invariant instead: a cache hit must rebind every
+tensor parameter to the tensor the current call passed, even if an earlier call aliased two of them.
 """
 
 import pytest
@@ -198,3 +201,75 @@ def test_bn_cache_optional_stat_presence(device, isolate_program_cache):
     assert n_neither == n_var_only  # no running_statistics dispatch -> no new entry
     _run_bn_training(device, BASE_SHAPE, momentum=0.1, with_mean=False, with_var=False, seed=7)
     assert device.cache_entries_counter.total == n_neither  # still no growth
+
+
+def test_bn_cache_aliased_then_distinct_tensor_args(device, isolate_program_cache):
+    """Two tensor parameters aliased on one call must not collapse the cached bindings for a later
+    call that passes distinct tensors.
+
+    Eval-mode batch_norm computes (input - mean) / sqrt(var + eps), so with input=5, mean=1, var=4
+    the correct result is 2.0 and a collapsed binding gives (5 - 1) / sqrt(1) = 4.0.
+    """
+    channels = BASE_SHAPE[1]
+    eps = 0.0
+    input_tt = ttnn.from_torch(
+        torch.full(BASE_SHAPE, 5.0, dtype=torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT
+    )
+    mean_tt = _stat_tensor(1.0, channels, device)
+    var_tt = _stat_tensor(4.0, channels, device)
+
+    # mean and var are genuinely equal here, so 4.0 is correct for this call; the binding it leaves
+    # in the cache is what matters.
+    with device.cache_entries_counter.measure():
+        aliased = ttnn.batch_norm(input_tt, running_mean=mean_tt, running_var=mean_tt, training=False, eps=eps)
+    aliased_out = ttnn.to_torch(aliased)[0, 0, 0, 0].item()
+    assert aliased_out == pytest.approx(4.0, abs=0.05), f"aliased call is itself wrong: {aliased_out}"
+    entries_after_aliased = device.cache_entries_counter.total
+
+    # Distinct tensors, identical specs -> must reuse the entry above.
+    with device.cache_entries_counter.measure():
+        distinct = ttnn.batch_norm(input_tt, running_mean=mean_tt, running_var=var_tt, training=False, eps=eps)
+    assert (
+        device.cache_entries_counter.total == entries_after_aliased
+    ), "call 2 compiled a new program; the invariant is only exercised on a cache hit"
+
+    distinct_out = ttnn.to_torch(distinct)[0, 0, 0, 0].item()
+    assert distinct_out == pytest.approx(
+        2.0, abs=0.05
+    ), f"got {distinct_out}; 4.0 means running_var was rebound to the mean tensor"
+
+
+def test_bn_cache_alias_pattern_flips_both_ways(device, isolate_program_cache):
+    """One cache entry must serve alternating aliased and distinct stats, in both directions.
+
+    A hit whose io aliasing differs from the miss re-derives its tensor bindings from the factory;
+    a hit that aliases the same way replays the cached index map. Alternating exercises both, and
+    no repeat may compile a new program.
+    """
+    channels = BASE_SHAPE[1]
+    eps = 0.0
+    input_tt = ttnn.from_torch(
+        torch.full(BASE_SHAPE, 5.0, dtype=torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT
+    )
+    mean_tt = _stat_tensor(1.0, channels, device)
+    var_tt = _stat_tensor(4.0, channels, device)
+
+    def run(var):
+        with device.cache_entries_counter.measure():
+            out = ttnn.batch_norm(input_tt, running_mean=mean_tt, running_var=var, training=False, eps=eps)
+        return ttnn.to_torch(out)[0, 0, 0, 0].item()
+
+    # (running_var tensor, expected result): aliased pairs mean with itself -> sqrt(1); distinct
+    # pairs it with var=4 -> sqrt(4).
+    sequence = [(mean_tt, 4.0), (var_tt, 2.0), (mean_tt, 4.0), (var_tt, 2.0), (var_tt, 2.0)]
+
+    entries_after_first = None
+    for step, (var, expected) in enumerate(sequence):
+        got = run(var)
+        assert got == pytest.approx(expected, abs=0.05), f"step {step}: got {got}, expected {expected}"
+        if entries_after_first is None:
+            entries_after_first = device.cache_entries_counter.total
+        else:
+            assert (
+                device.cache_entries_counter.total == entries_after_first
+            ), f"step {step} compiled a new program instead of reusing the cached one"

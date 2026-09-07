@@ -790,7 +790,9 @@ public:
     // stored indices, and applies via experimental::UpdateTensorArgs — no Program
     // rebuild. Op-owned tensors are re-patched even though their address is
     // unchanged, because UpdateTensorArgs is currently all-or-nothing; this
-    // stepping-stone concept accepts that redundancy.
+    // stepping-stone concept accepts that redundancy. A hit whose io aliasing
+    // differs from the miss re-derives tensor args from the factory instead,
+    // since the stored indices cannot place aliased parameters.
     //
     // Contract: every TensorArgument returned by the factory must reference a
     // MeshTensor reachable from tensor_args / tensor_return_value, or one of the
@@ -817,6 +819,8 @@ public:
             // outlive the cache miss and every program on the occupied ranges can reference them.
             // Shared ownership keeps the device allocation alive for the life of the cache entry.
             std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors;
+            // The io aliasing the bindings above were resolved under; see io_alias_signature.
+            std::vector<std::size_t> io_alias_signature;
         };
 
         // Cache-hit tensor refresh, shared so the two adapters' hit paths cannot drift apart.
@@ -882,6 +886,11 @@ public:
         // Match each TensorArgument's MeshTensor reference back to its index in the combined
         // enumeration (io tensors followed by op-owned tensors). Cache-miss path only.
         //
+        // Two TensorArguments referencing the same MeshTensor both resolve to its first
+        // occurrence, which loses which io tensor each one meant. Pointer identity cannot recover
+        // it, so the index map is only replayed on a hit whose io aliasing matches the miss (see
+        // io_alias_signature); otherwise the caller re-derives from the factory.
+        //
         // NOTE on host perf: the index-based binding scheme is what makes a fast cache-hit path
         // possible, but the current straightforward implementation isn't there yet -- the
         // enumeration returns a heap std::vector, and apply_descriptor builds a fresh
@@ -907,6 +916,40 @@ public:
                     {tensor_parameter_name, static_cast<std::size_t>(std::distance(mesh_tensors.begin(), it))});
             }
             return bindings;
+        }
+
+        // Which io slots hold the same MeshTensor: entry i is the index of the first slot holding
+        // slot i's tensor, so a slot with a tensor of its own maps to itself. Two calls with equal
+        // signatures bind identically under a shared index map, even where that map collapsed
+        // aliased parameters onto one slot; unequal signatures make the stored map unusable.
+        // Only io tensors are tracked, since op-owned aliasing is the factory's own and is
+        // reproduced identically on every call.
+        static std::vector<std::size_t> io_alias_signature(
+            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors) {
+            std::vector<std::size_t> signature(io_mesh_tensors.size());
+            for (std::size_t i = 0; i < io_mesh_tensors.size(); ++i) {
+                signature[i] = i;
+                for (std::size_t j = 0; j < i; ++j) {
+                    if (&io_mesh_tensors[j].get() == &io_mesh_tensors[i].get()) {
+                        signature[i] = j;
+                        break;
+                    }
+                }
+            }
+            return signature;
+        }
+
+        // True when every cached entry was resolved under this call's io aliasing, so the stored
+        // index maps can be replayed.
+        template <typename CachedWorkload>
+        static bool bindings_replayable(
+            const CachedWorkload& cached_workload,
+            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors) {
+            const auto signature = io_alias_signature(io_mesh_tensors);
+            return std::all_of(
+                cached_workload.shared_variables.begin(),
+                cached_workload.shared_variables.end(),
+                [&signature](const auto& entry) { return entry.second.io_alias_signature == signature; });
         }
     };
 
@@ -946,7 +989,8 @@ public:
             return shared_variables_t{
                 .bindings = SpecBindingSupport::resolve_bindings(artifacts.run_params.tensor_args, mesh_tensors),
                 .op_owned_tensors =
-                    std::make_shared<std::vector<tt::tt_metal::MeshTensor>>(std::move(artifacts.op_owned_tensors))};
+                    std::make_shared<std::vector<tt::tt_metal::MeshTensor>>(std::move(artifacts.op_owned_tensors)),
+                .io_alias_signature = SpecBindingSupport::io_alias_signature(io_mesh_tensors)};
         }
 
         static auto create_mesh_workload(
@@ -993,10 +1037,33 @@ public:
         // dispatcher's historical naming, not a reference to ProgramDescriptor.
         static void apply_descriptor(
             cached_mesh_workload_t& cached_workload,
-            const operation_attributes_t& /*attrs*/,
+            const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
+            const auto io_mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
+            if (SpecBindingSupport::bindings_replayable(cached_workload, io_mesh_tensors)) {
+                SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
+                return;
+            }
+
+            // This call aliases its io tensors differently than the cached entry was built with
+            // (e.g. batch_norm(x, mean=t, var=t) cached, now called with distinct stats), so the
+            // stored index map cannot say which tensor each parameter wants. Re-derive from the
+            // factory, whose TensorArguments name this call's tensors directly -- the slow path the
+            // legacy ProgramDescriptor lane takes for the same case. Only the tensor bindings are
+            // applied; the rebuilt spec is discarded, since the cached programs already match it.
+            auto artifacts = SpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
+            // A vector move preserves element addresses, so the run_params references stay valid.
+            // Parking replaces the previously cached op-owned tensors, whose device allocation the
+            // rebuilt bindings no longer point at.
+            auto op_owned_tensors =
+                std::make_shared<std::vector<tt::tt_metal::MeshTensor>>(std::move(artifacts.op_owned_tensors));
+            const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
+            for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+                tt::tt_metal::experimental::UpdateTensorArgs(
+                    program, artifacts.run_params.tensor_args, skip_validation);
+                cached_workload.shared_variables.at(coordinate_range).op_owned_tensors = op_owned_tensors;
+            }
         }
     };
 
@@ -1104,7 +1171,8 @@ public:
                     per_coord.range,
                     shared_variables_t{
                         .bindings =
-                            SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors)});
+                            SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
+                        .io_alias_signature = SpecBindingSupport::io_alias_signature(mesh_tensors)});
                 run_params.emplace(per_coord.range, std::move(per_coord.run_params));
             }
 
@@ -1128,6 +1196,15 @@ public:
                     tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, skip_validation);
                 }
             } else {
+                const auto io_mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
+                // Unlike the SPMD adapter, this one cannot re-derive on a mismatch: rebuilding
+                // needs the tensor_coords that only the miss path receives. Refuse loudly rather
+                // than replay an index map that cannot place this call's aliased tensors.
+                TT_FATAL(
+                    SpecBindingSupport::bindings_replayable(cached_workload, io_mesh_tensors),
+                    "This call aliases its io tensors differently than the cached programs were built with. A "
+                    "MeshWorkloadSpecFactory cannot rebind that on a cache hit; declare "
+                    "override_runtime_arguments so the factory supplies this call's tensor arguments");
                 SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
             }
         }
