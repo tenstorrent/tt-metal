@@ -1,0 +1,284 @@
+name: "LLK perf time budget"
+# What a non-speed-of-light LLK perf gate would cost, measured in CI rather than
+# on a reserved lab machine, so the run itself is the evidence: one URL, a
+# summary table, and the per-job artefacts behind it.
+#
+# One job = one architecture x one run-type selection x one card. The perf suite
+# runs in a single group, so each job measures the whole sweep, and the producer
+# (compile) and consumer (device measure) phases are timed separately by
+# tt_metal/tt-llk/tests/run_llk_perf_budget.sh.
+#
+# Dispatch only. It shares no code path with the nightly llk-perf.yaml beyond
+# the docker image and the matrix helpers, so a change here cannot affect the
+# nightly, and it publishes nothing to the perf warehouse.
+
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: "Architecture to measure"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - wormhole
+          - blackhole
+      configs:
+        description: "Run-type selections to measure, comma separated: full, isolates, l1, isolates_l1"
+        required: false
+        default: "full,isolates,l1,isolates_l1"
+        type: string
+      cards:
+        description: "Which card replicas to run, comma separated (1,2). One entry measures one card per configuration."
+        required: false
+        default: "1,2"
+        type: string
+      speed-of-light:
+        description: "Measure with --speed-of-light instead (the nightly's mode)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.architecture }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  build-images:
+    name: "Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    needs: [build-images]
+    outputs:
+      matrix: ${{ steps.trim.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_perf_budget_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "perf"
+      - name: Build test matrix
+        id: build-matrix
+        env:
+          ARCHITECTURE: ${{ inputs.architecture }}
+        run: |
+          case "$ARCHITECTURE" in
+            all)       ENABLED_SKUS="ALL_SKUS_IN_TESTS" ;;
+            wormhole)  ENABLED_SKUS="wh_n150_civ2" ;;
+            blackhole) ENABLED_SKUS="bh_p150b_civ2" ;;
+            *)
+              echo "::error::Unsupported architecture '$ARCHITECTURE'"
+              exit 1
+              ;;
+          esac
+
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "$ENABLED_SKUS" \
+            ./.github/sku_config.yaml
+      - name: Keep only the requested configurations and cards
+        id: trim
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          CONFIGS: ${{ inputs.configs }}
+          CARDS: ${{ inputs.cards }}
+        run: |
+          FILTER='import json, os, sys
+          rows = json.loads(os.environ["MATRIX"])
+          configs = [c.strip() for c in os.environ["CONFIGS"].split(",") if c.strip()]
+          cards = [c.strip() for c in os.environ["CARDS"].split(",") if c.strip()]
+          known = {r["perf_config"] for r in rows}
+          unknown = [c for c in configs if c not in known]
+          if unknown:
+              sys.exit("unknown config(s) %s; the matrix declares %s"
+                       % (unknown, sorted(known)))
+          keep = [r for r in rows
+                  if r["perf_config"] in configs and str(r["card"]) in cards]
+          if not keep:
+              sys.exit("no matrix row left for configs=%s cards=%s" % (configs, cards))
+          print("%d job(s):" % len(keep), file=sys.stderr)
+          for r in keep:
+              print("  " + r["name"], file=sys.stderr)
+          print("matrix=" + json.dumps(keep))'
+          python3 -c "$FILTER" >> "$GITHUB_OUTPUT"
+
+  llk-perf-budget-exec:
+    needs: [load-test-matrix, build-images]
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          cd tests
+          ./setup_testing_env.sh
+          cd ..
+      - name: Set CHIP_ARCH and the run tag
+        shell: bash
+        env:
+          RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
+        run: |
+          RUN_LABEL="${RUN_ON_LABELS%% *}"
+          if [[ "$RUN_LABEL" =~ N150 ]]; then
+            CHIP_ARCH=wormhole
+          elif [[ "$RUN_LABEL" =~ P150 ]]; then
+            CHIP_ARCH=blackhole
+          else
+            CHIP_ARCH=unknown
+          fi
+          echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
+          echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
+          echo "SLUG=$CHIP_ARCH-${{ matrix.test-group.perf_config }}-card${{ matrix.test-group.card }}" >> "$GITHUB_ENV"
+      - name: Record which machine and card this landed on
+        shell: bash
+        run: |
+          echo "runner: ${RUNNER_NAME:-unknown}"
+          echo "host:   $(hostname)"
+          echo "devices: $(ls /dev/tenstorrent 2>/dev/null | tr '\n' ' ')"
+          tt-smi -ls 2>/dev/null || echo "tt-smi not available in this image"
+      - name: Measure the budget
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          BUDGET_CARD: ${{ matrix.test-group.card }}
+        run: |
+          ${{ matrix.test-group.cmd }}
+
+      - name: Upload the budget summary
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: budget-summary-${{ env.SLUG }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_budget/summary.json
+          if-no-files-found: warn
+
+      - name: Upload performance data
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always() && hashFiles('tt_metal/tt-llk/perf_data/runs/**') != ''
+        with:
+          name: budget-perf-data-${{ env.SLUG }}
+          path: ${{ env.LLK_PATH }}/perf_data/runs/
+
+      - name: Upload JUnit reports
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: budget-junit-${{ env.SLUG }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*.xml
+          if-no-files-found: warn
+
+      - name: Upload test logs on failure
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: failure()
+        with:
+          name: budget-logs-${{ env.SLUG }}
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
+            ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
+          if-no-files-found: warn
+
+  llk-perf-budget-summary:
+    name: "Budget summary"
+    needs: [llk-perf-budget-exec]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download every job's summary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: budget-summary-*
+          path: summaries
+        continue-on-error: true
+      - name: Build the table
+        shell: bash
+        run: |
+          python3 - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import glob, json, os
+
+          rows = []
+          for path in sorted(glob.glob("summaries/**/summary.json", recursive=True)):
+              with open(path) as f:
+                  rows.append(json.load(f))
+
+          print("# LLK perf time budget\n")
+          if not rows:
+              print("No job produced a summary. Check the job logs.")
+              raise SystemExit(0)
+
+          sol = "on" if rows[0].get("speed_of_light") else "off"
+          print(f"Speed of light **{sol}**, cold build, whole suite in one group, "
+                f"producer `-n 10`, consumer `-n 15`.\n")
+          print("| arch | config | run types | card | producer | consumer | total | rc c/m | runner |")
+          print("| --- | --- | --- | --: | --: | --: | --: | --: | --- |")
+          order = {"full": 0, "isolates": 1, "isolates_l1": 2, "l1": 3}
+          for r in sorted(rows, key=lambda r: (r["arch"], order.get(r["config"], 9), str(r["card"]))):
+              print("| {arch} | {config} | `{run_types}` | {card} | {producer} | {consumer} "
+                    "| **{total}** | {producer_rc}/{consumer_rc} | {runner} |".format(**r))
+
+          # Per (arch, config), what the two cards disagree by. A gate's budget has
+          # to hold on the slower card, so the spread is part of the answer.
+          print("\n## Card-to-card spread\n")
+          print("| arch | config | slower total | faster total | spread |")
+          print("| --- | --- | --: | --: | --: |")
+          groups = {}
+          for r in rows:
+              groups.setdefault((r["arch"], r["config"]), []).append(r)
+          def hms(s):
+              return "%d:%02d:%02d" % (s // 3600, (s % 3600) // 60, s % 60)
+          for (arch, config), got in sorted(groups.items(), key=lambda kv: (kv[0][0], order.get(kv[0][1], 9))):
+              if len(got) < 2:
+                  continue
+              totals = sorted(r["total_s"] for r in got)
+              lo, hi = totals[0], totals[-1]
+              pct = (hi - lo) / lo * 100 if lo else 0
+              print(f"| {arch} | {config} | {hms(hi)} | {hms(lo)} | {hms(hi - lo)} ({pct:.1f}%) |")
+
+          missing = [r for r in rows if r["producer_rc"] or r["consumer_rc"]]
+          if missing:
+              print("\n> Jobs with a non-zero pytest exit code are listed above. "
+                    "The durations are still real, but a failure can shorten a phase.")
+          PY
+      - name: Check job results
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
