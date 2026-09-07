@@ -5,6 +5,12 @@ whether a small activation exchange or a segment-aware scan gives the better
 latency -- with device evidence rather than argument. Implementation detail is
 in [`kda_prefill_offset_dev_spec.md`](kda_prefill_offset_dev_spec.md).
 
+> **Superseded in part.** The comparison below measures the prototypes as they
+> stood. B's second code path is gone -- it now handles every 32-aligned offset
+> on one path -- so the "B's fast path covers only 3 of 19 offsets" argument no
+> longer holds. See
+> [`kda_prefill_offset_single_scan_report.md`](kda_prefill_offset_single_scan_report.md).
+
 **Recommendation: it depends on the offset, and the production offset favours B.**
 
 Neither prototype dominates. Their cost shapes are complementary, and the split
