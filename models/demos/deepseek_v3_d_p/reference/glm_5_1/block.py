@@ -50,6 +50,11 @@ def glm_decoder_layer_reference(
     *,
     ffn_weights: dict | None = None,
     moe_weights: dict | None = None,
+    indexer_topk: torch.Tensor | None = None,
+    return_indexer_topk: bool = False,
+    mla_ref=None,
+    actual_start: int = 0,
+    actual_end: int | None = None,
 ):
     """One GLM decoder layer on CPU (DSA-MLA + norm/residual + FFN), matching TtPrefillBlock.forward.
 
@@ -63,9 +68,23 @@ def glm_decoder_layer_reference(
         moe_weights: MoE-layer weights {"gate_weights","routed_expert_weights","shared_expert_weights"}.
             Exactly one must be given. The MoE uses GLM's own routing config (GLM51Config: 256 routed
             experts, single-group top-k n_group=topk_group=1, top-8, route_scale=2.5) — not DeepSeek's.
+        indexer_topk: override the indexer's top-k selection with indices computed by another layer,
+            the CPU dual of ttMLA's ``indexer_indices``. GLM-5.2's ``index_share_for_mtp_iteration``
+            and its ``indexer_types`` "shared" layers both need it; see ``SparseMLAReference.forward``.
+        return_indexer_topk: also return this layer's top-k [1, seq, index_topk], so a caller running
+            a stack can feed it to the sharing layers that follow.
+        mla_ref: a caller-owned ``SparseMLAReference`` to attend through instead of a fresh one.
+            Required for chunked prefill: the KV/index caches and the fill watermark live on the
+            instance, so a layer that is called once per chunk must be handed the SAME object every
+            time or each chunk attends only over itself. ``None`` builds a fresh single-shot
+            instance, which is what an unchunked caller wants.
+        actual_start / actual_end: this call's cache write window, forwarded to
+            ``SparseMLAReference.forward``. The defaults (0 / ``start + seq``) reproduce a
+            single-shot pass exactly, so existing callers are unaffected.
 
     Returns:
-        (output [1, seq, hidden], kvpe_cache) — kvpe in the device layout for KVPE-PCC checks.
+        (output [1, seq, hidden], kvpe_cache) — kvpe in the device layout for KVPE-PCC checks; with
+        ``return_indexer_topk`` a third element, the layer's top-k indices.
     """
     if (ffn_weights is None) == (moe_weights is None):
         raise ValueError("provide exactly one of ffn_weights (dense) or moe_weights (MoE)")
@@ -73,8 +92,10 @@ def glm_decoder_layer_reference(
     x = hidden_states
     attn_norm_out = rms_norm(x, attn_norm_weight, config.rms_norm_eps)
 
-    ref = SparseMLAReference(config, mla_weights, seq_len=seq_len)
-    mla_out = ref.forward(attn_norm_out)  # [1, seq, hidden]
+    ref = SparseMLAReference(config, mla_weights, seq_len=seq_len) if mla_ref is None else mla_ref
+    mla_out = ref.forward(
+        attn_norm_out, actual_start=actual_start, actual_end=actual_end, indexer_topk=indexer_topk
+    )  # [1, seq, hidden]
     x = x + mla_out
 
     ffn_norm_out = rms_norm(x, ffn_norm_weight, config.rms_norm_eps)
@@ -93,4 +114,6 @@ def glm_decoder_layer_reference(
             routed_scaling_factor=GLM51Config.ROUTE_SCALE,
         )
 
+    if return_indexer_topk:
+        return x + ffn_out, ref.kvpe_cache, ref.indexer_topk
     return x + ffn_out, ref.kvpe_cache

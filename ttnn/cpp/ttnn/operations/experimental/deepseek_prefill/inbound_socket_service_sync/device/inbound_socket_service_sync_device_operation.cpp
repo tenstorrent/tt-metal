@@ -38,13 +38,65 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             "inbound_socket_service_sync: metadata_size_bytes must be a multiple of 4 (uint32-aligned), got {}",
             args.metadata_size_bytes);
     }
+    if (args.overhang_size_bytes > 0) {
+        TT_FATAL(
+            args.overhang_size_bytes < args.page_size,
+            "inbound_socket_service_sync: overhang_size_bytes ({}) must be smaller than the page size ({}); the "
+            "overhang is the TAIL of each page, not the whole page",
+            args.overhang_size_bytes,
+            args.page_size);
+        // The split is expressed on the LAST dim of the backing spec, so it is only equivalent to a byte
+        // split of each page when a page IS one row. That is what the H2D service does (it sets
+        // max_socket_page_size_bytes to the per-chip row width), but nothing in the op enforces it, so say so.
+        const uint32_t elem_size = backing.element_size();
+        const auto& logical = backing.tensor_spec().logical_shape();
+        TT_FATAL(
+            args.page_size == logical[-1] * elem_size,
+            "inbound_socket_service_sync: the overhang split needs one page per row, but page_size={} while the "
+            "last dim is {} x {}B = {}B",
+            args.page_size,
+            logical[-1],
+            elem_size,
+            logical[-1] * elem_size);
+        TT_FATAL(
+            args.overhang_size_bytes % elem_size == 0,
+            "inbound_socket_service_sync: overhang_size_bytes ({}) must be a whole number of {}B elements",
+            args.overhang_size_bytes,
+            elem_size);
+        // Both halves become the page size of their own DRAM tensor and the source offset of a NOC write
+        // out of L1, so both must clear the widest alignment in play (64B on Blackhole DRAM/PCIe).
+        constexpr uint32_t kSplitAlignmentBytes = 64;
+        const uint32_t trunk_size_bytes = args.page_size - args.overhang_size_bytes;
+        TT_FATAL(
+            trunk_size_bytes % kSplitAlignmentBytes == 0 && args.overhang_size_bytes % kSplitAlignmentBytes == 0,
+            "inbound_socket_service_sync: both halves of the overhang split must be {}B-aligned, got trunk={}B "
+            "overhang={}B (page_size={}B)",
+            kSplitAlignmentBytes,
+            trunk_size_bytes,
+            args.overhang_size_bytes,
+            args.page_size);
+    }
 }
 
 InboundSocketServiceSyncOperation::spec_return_value_t InboundSocketServiceSyncOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     std::vector<tt::tt_metal::TensorSpec> specs;
-    // tokens: identical per-shard spec to the backing tensor.
-    specs.push_back(tensor_args.backing.tensor_spec());
+    const auto& backing_spec = tensor_args.backing.tensor_spec();
+    if (args.overhang_size_bytes == 0) {
+        // tokens: identical per-shard spec to the backing tensor.
+        specs.push_back(backing_spec);
+    } else {
+        // tokens + overhang: the backing spec with its last dim cut in two. Same dtype, layout and
+        // memory config, so each half is byte-for-byte the corresponding slice of what the plain path
+        // would have returned.
+        const uint32_t overhang_elems = args.overhang_size_bytes / tensor_args.backing.element_size();
+        auto trunk_shape = backing_spec.logical_shape();
+        auto overhang_shape = backing_spec.logical_shape();
+        trunk_shape[-1] = trunk_shape[-1] - overhang_elems;
+        overhang_shape[-1] = overhang_elems;
+        specs.emplace_back(trunk_shape, backing_spec.tensor_layout());
+        specs.emplace_back(overhang_shape, backing_spec.tensor_layout());
+    }
     // metadata: [1,1,1, metadata_size_bytes/4] uint32 ROW_MAJOR DRAM, replicated.
     if (args.metadata_size_bytes > 0) {
         const ttnn::Shape meta_shape({1u, 1u, 1u, args.metadata_size_bytes / 4u});
@@ -81,7 +133,8 @@ namespace {
 // receiver-side getters (only the address return width differs, absorbed by the
 // static_casts below).
 template <typename ServiceT>
-std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(const ServiceT& service, uint32_t metadata_size_bytes) {
+std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(
+    const ServiceT& service, uint32_t metadata_size_bytes, uint32_t overhang_size_bytes) {
     using OperationType = ttnn::experimental::prim::InboundSocketServiceSyncOperation;
 
     const auto& backing = service.get_backing_tensor();
@@ -98,6 +151,7 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(const ServiceT& servi
     attrs.scratch_cb_index = 0;
     attrs.metadata_size_bytes = metadata_size_bytes;
     attrs.metadata_l1_addr = metadata_size_bytes > 0 ? static_cast<uint32_t>(service.get_metadata_addr()) : 0;
+    attrs.overhang_size_bytes = overhang_size_bytes;
     attrs.worker_cores = service.get_worker_cores();
     attrs.mesh_num_cols = num_cols;
 
@@ -120,13 +174,13 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(const ServiceT& servi
 }  // namespace
 
 std::vector<ttnn::Tensor> inbound_socket_service_sync(
-    const tt::tt_metal::H2DStreamService& service, uint32_t metadata_size_bytes) {
-    return inbound_socket_service_sync_impl(service, metadata_size_bytes);
+    const tt::tt_metal::H2DStreamService& service, uint32_t metadata_size_bytes, uint32_t overhang_size_bytes) {
+    return inbound_socket_service_sync_impl(service, metadata_size_bytes, overhang_size_bytes);
 }
 
 std::vector<ttnn::Tensor> inbound_socket_service_sync(
-    const ttnn::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes) {
-    return inbound_socket_service_sync_impl(service, metadata_size_bytes);
+    const ttnn::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes, uint32_t overhang_size_bytes) {
+    return inbound_socket_service_sync_impl(service, metadata_size_bytes, overhang_size_bytes);
 }
 
 }  // namespace ttnn::prim

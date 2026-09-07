@@ -87,44 +87,143 @@ def open_mesh_device(
     )
 
 
-def make_global_spec(mesh_shape: tuple, chunk_size: int) -> ttnn.TensorSpec:
-    """Per-push input spec used by `build_h2d_service` to set the service's
-    global tensor shape (the producer matches it on the host side). One push carries one
-    chunk_size-token chunk. Shape `(sp_factor, 1, chunk_size // sp_factor)` uint32 ROW_MAJOR DRAM."""
-    sp_factor = mesh_shape[0]
-    isl_per_chip = chunk_size // sp_factor
+H2D_PAGE_ALIGNMENT_BYTES = 64
+"""PCIe alignment the H2D socket requires of its per-chip page size (``H2DSocket::set_page_size``:
+``page_size % pcie_alignment_ == 0``, tt_metal/distributed/h2d_socket.cpp:799).
+
+Hardcoded because ttnn exposes ``get_dram_alignment`` / ``get_l1_alignment`` to python but not the
+HOST/PCIe one. 64 is Blackhole's ``PCIE_ALIGNMENT``; Wormhole's is 32, so 64 satisfies both -- this
+only ever rounds a row UP, and the extra ids are never read.
+"""
+
+_H2D_ID_BYTES = 4  # uint32 token ids
+
+
+def h2d_row_len(chunk_size: int, sp_factor: int) -> int:
+    """Per-chip TRUNK row length: this chip's ``chunk_size // sp_factor`` shard of the chunk.
+
+    Deliberately NOT rounded to the PCIe page -- every caller gets exactly the width it always got,
+    and a ``chunk_size / sp_factor`` that is not already page-aligned is a pre-existing condition of
+    that configuration. MTP widens the SOCKET row past this (:func:`mtp_union_rows`) but not this
+    number: it is where the runner cuts the arriving row, so an MTP run and a plain run hand the
+    model byte-identical trunk ids.
+    """
+    assert chunk_size % sp_factor == 0, f"chunk_size={chunk_size} must be divisible by sp_factor={sp_factor}"
+    return chunk_size // sp_factor
+
+
+# ---------------------------------------------------------------------------
+# MTP transport (GLM-5.2, issue #53533)
+# ---------------------------------------------------------------------------
+
+TILE_HEIGHT = 32
+
+MTP_TOKEN_ALIGN = TILE_HEIGHT
+"""Granularity of the MTP token block, in ids. Three constraints meet here, and 32 is the smallest
+number satisfying all of them:
+
+* the H2D socket's page must be ``H2D_PAGE_ALIGNMENT_BYTES``-aligned, so ``L + num_mtp_tokens`` is a
+  multiple of 16 ids (16 * 4 B = 64 B);
+* the runner cuts the arriving row at ``L`` into the trunk ids and the MTP ids, and both cuts must
+  land on a page boundary too;
+* the first rank embeds the two halves separately and stacks them, and a TILE row-concat needs BOTH
+  operands to be a whole number of 32-row tiles -- so ``num_mtp_tokens`` itself must be tile-aligned,
+  not just the sum.
+
+With the production ``L = 640``: the trunk is 40 pages / 20 tiles, the MTP block is 2 pages / 1 tile,
+the socket row is 672 ids = 42 pages, and the union embedding is 21 tiles. No pad anywhere.
+
+That third constraint is what one widened row alone would not have given: 644 ids satisfies the page
+rules once rounded but leaves a 4-row MTP block that cannot be tile-concatenated onto the trunk
+embedding without a pad. Rounding the block to a tile is what lets the union be built as two
+gathers stacked rather than one gather over a re-joined id row -- see
+:meth:`~models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows.MTPUnionEmbedding.from_ids`.
+"""
+
+
+def num_mtp_tokens(mtp_levels: int) -> int:
+    """MTP lookahead ids the H2D row carries past this chip's trunk shard: ``mtp_levels`` rounded up
+    to ``MTP_TOKEN_ALIGN``. 0 when MTP is off.
+
+    THE number every side of the MTP transport builds to -- the producer's rows, the H2D socket's
+    spec, the runner's cut point, the union embedding's height and the D2D activation's height. Chip
+    ``c``'s MTP ids are ``stream[(c+1)*L : (c+1)*L + num_mtp_tokens]`` -- they hang past the end of
+    ``c``'s own shard into ``c+1``'s territory, so ``chunk_row ++ mtp_row`` is exactly the contiguous
+    ``stream[c*L : c*L + L + num_mtp_tokens]`` and MTP level ``k``'s window is the SAME local slice
+    ``[k, k+L)`` on every chip -- one uniform slice, no cross-chip rotation.
+
+    Note they are PER CHIP: only the last chip's ids reach into the next chunk, the other ``sp-1``
+    take theirs from inside this one. That is what makes the windows uniform.
+    """
+    assert mtp_levels >= 0, f"mtp_levels must be non-negative, got {mtp_levels}"
+    if not mtp_levels:
+        return 0
+    return -(-mtp_levels // MTP_TOKEN_ALIGN) * MTP_TOKEN_ALIGN
+
+
+def mtp_union_rows(chunk_size: int, sp_factor: int, mtp_levels: int) -> int:
+    """Rows of ONE chip's union embedding: its ``L`` chunk rows plus the ``num_mtp_tokens`` lookahead
+    rows.
+
+    Level ``k`` (1..K) reads rows ``[k, k+L)`` of it, so the deepest level touches row ``K + L - 1``
+    and the rest of the lookahead is transport padding no level reads.
+    """
+    rows = h2d_row_len(chunk_size, sp_factor) + num_mtp_tokens(mtp_levels)
+    assert rows % TILE_HEIGHT == 0, (
+        f"union embedding is {rows} rows, not a whole number of {TILE_HEIGHT}-row tiles; "
+        f"chunk_size/sp_factor = {chunk_size // sp_factor} must itself be tile-aligned"
+    )
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# H2D token sockets
+# ---------------------------------------------------------------------------
+
+
+def make_token_spec(mesh_shape: tuple, row_len: int) -> ttnn.TensorSpec:
+    """``[sp_factor, 1, row_len]`` uint32 ROW_MAJOR DRAM -- the shape of any per-chip token push.
+    The mapper shards axis 0 across the SP rows, so each chip receives ``[1, 1, row_len]``."""
     return ttnn.TensorSpec(
-        shape=ttnn.Shape([sp_factor, 1, isl_per_chip]),
+        shape=ttnn.Shape([mesh_shape[0], 1, row_len]),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         buffer_type=ttnn.BufferType.DRAM,
     )
 
 
+def make_h2d_spec(mesh_shape: tuple, chunk_size: int, mtp_levels: int = 0) -> ttnn.TensorSpec:
+    """Per-push spec of THE H2D token socket -- there is exactly one, MTP or not.
+
+    Plain: ``chunk_size // sp`` ids per chip. MTP: those plus ``num_mtp_tokens(mtp_levels)``
+    lookahead ids, so chip ``c``'s row is the contiguous ``stream[c*L : c*L + L + num_mtp_tokens]``.
+    The runner cuts the row back at ``L`` on arrival (``prefill_runner._socket_next``), and hands the model the same
+    ``[1, 1, chunk_size // sp]`` trunk it gets with MTP off.
+    """
+    if mtp_levels:
+        return make_token_spec(mesh_shape, mtp_union_rows(chunk_size, mesh_shape[0], mtp_levels))
+    return make_token_spec(mesh_shape, h2d_row_len(chunk_size, mesh_shape[0]))
+
+
 def build_h2d_service(
     mesh_device: ttnn.MeshDevice,
     *,
-    mesh_shape: tuple,
-    chunk_size: int,
+    global_spec: ttnn.TensorSpec,
     mapper_config: ttnn.MeshMapperConfig,
     worker_cores: ttnn.CoreRange,
     metadata_size_bytes: int,
 ) -> ttnn.H2DStreamService:
-    """Construct an H2DStreamService whose per-shard backing tensor matches
-    what `prepare_prefill_input_tensor` would have produced. Each push carries one chunk_size-token
-    chunk (chunked prefill streams one chunk per push), not the full sequence.
+    """Construct an H2DStreamService delivering `global_spec` once per push.
 
-    Per-shard target: `(1, 1, chunk_size // sp_factor)` uint32 ROW_MAJOR DRAM.
-    Achieved by setting global_spec.shape = `(sp_factor, 1, chunk_size // sp_factor)` and
-    mapping `[Shard(0), Replicate]` on a `(sp, tp)` mesh — first axis of the
-    tensor is sharded across mesh rows (sp), nothing else is split.
+    Build the spec with :func:`make_h2d_spec`, which maps ``[Shard(0), Replicate]`` on a
+    ``(sp, tp)`` mesh: the first tensor axis splits across the mesh rows and nothing else is split.
     """
-    sp_factor, tp_factor = mesh_shape
-    assert chunk_size % sp_factor == 0, f"chunk_size={chunk_size} must be divisible by sp_factor={sp_factor}"
-    isl_per_chip = chunk_size // sp_factor
-    per_chip_bytes = isl_per_chip * 4  # uint32
-
-    global_spec = make_global_spec(mesh_shape, chunk_size)
+    row_len = int(global_spec.shape[-1])
+    per_chip_bytes = row_len * _H2D_ID_BYTES
+    assert per_chip_bytes % H2D_PAGE_ALIGNMENT_BYTES == 0, (
+        f"per-chip page is {per_chip_bytes}B for a {row_len}-id row, not a multiple of "
+        f"{H2D_PAGE_ALIGNMENT_BYTES}B; the socket rejects a non-PCIe-aligned page size outright"
+    )
     mapper = ttnn.create_mesh_mapper(mesh_device, mapper_config)
     # worker_cores set so the service-core kernel multicasts a data-ready inc
     # after each transfer; inbound_socket_service_sync() waits on that on-device, which
@@ -141,22 +240,53 @@ def build_h2d_service(
         metadata_size_bytes=metadata_size_bytes,
     )
     logger.info(
-        f"[h2d] H2DStreamService built: global_shape=({sp_factor},1,{isl_per_chip}) "
+        f"[h2d] H2DStreamService built: global_shape=({mesh_device.shape[0]},1,{row_len}) "
         f"uint32 ROW_MAJOR DRAM, per_chip_bytes={per_chip_bytes}, worker_cores={worker_cores}"
     )
     return service
 
 
-def activation_global_spec(chunk_size: int, hidden_size: int) -> ttnn.TensorSpec:
-    """Global spec of the inter-rank hidden state carried over the D2D pipeline socket:
-    [1, 1, chunk_size, hidden_size] bf16 TILE DRAM. The caller's mesh mapper shards it (seq across SP
-    rows, emb across TP cols) to match the embedding output layout the downstream model consumes."""
+# ---------------------------------------------------------------------------
+# D2D pipeline activation
+# ---------------------------------------------------------------------------
+
+
+def activation_global_spec(rows: int, hidden_size: int) -> ttnn.TensorSpec:
+    """Global spec of the inter-rank activation carried over the D2D pipeline socket:
+    ``[1, 1, rows, hidden_size]`` bf16 TILE DRAM. The caller's mesh mapper shards it (rows across SP,
+    emb across TP) to match the embedding output layout the downstream model consumes.
+
+    Size it with :func:`d2d_activation_rows` and :func:`d2d_activation_width`, never with
+    ``chunk_size`` directly -- MTP makes the two differ."""
     return ttnn.TensorSpec(
-        shape=ttnn.Shape([1, 1, chunk_size, hidden_size]),
+        shape=ttnn.Shape([1, 1, rows, hidden_size]),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         buffer_type=ttnn.BufferType.DRAM,
     )
+
+
+def d2d_activation_rows(chunk_size: int, *, sp_factor: int, mtp_levels: int = 0) -> int:
+    """GLOBAL row count of the D2D pipeline activation for this configuration.
+
+    Plain prefill and DFlash ship one row per token: ``chunk_size``. MTP stacks the chunk's union
+    EMBEDDING under the hidden, so each chip sends its ``L`` hidden rows followed by its
+    ``L + num_mtp_tokens`` embedding rows. Both are multiples of 32, so the receiver's split is a
+    tile-aligned row slice.
+
+    Sending the embedding rather than the ids is what lets the LAST rank run its levels without an
+    embedding table: it slices windows out of what arrived instead of gathering them itself.
+    """
+    if not mtp_levels:
+        return chunk_size
+    return chunk_size + sp_factor * mtp_union_rows(chunk_size, sp_factor, mtp_levels)
+
+
+def d2d_activation_width(hidden_size: int, *, dflash: bool = False) -> int:
+    """GLOBAL width of the D2D pipeline activation. Plain hidden is ``hidden_size``; DFlash packs the
+    drafter FC partial beside it (2H). MTP adds ROWS, not columns -- see :func:`d2d_activation_rows`.
+    """
+    return hidden_size * (2 if dflash else 1)
 
 
 def resolve_trace_dir(path) -> Path:
@@ -214,14 +344,24 @@ def _snap_counts_to_starts(counts, valid_starts, num_layers):
     return out
 
 
-def compute_layer_split(num_layers: int, num_ranks: int, valid_starts=None) -> list[tuple[int, int]]:
+def compute_layer_split(
+    num_layers: int, num_ranks: int, valid_starts=None, mtp_levels: int = 0
+) -> list[tuple[int, int]]:
     """Contiguous (first_layer_idx, count) per rank. PREFILL_PP_LAYER_COUNTS, a
     comma-separated count list summing to num_layers, overrides the default even
     split (remainder handed to the earlier ranks).
 
     ``valid_starts`` (from the adapter's ``layer_split_boundaries``): layer indices at which a rank may
     begin. None => unconstrained. When set, the default even split is auto-snapped onto valid
-    boundaries, and any split (explicit or snapped) whose rank starts fall off them is rejected early."""
+    boundaries, and any split (explicit or snapped) whose rank starts fall off them is rejected early.
+
+    ``mtp_levels`` (K): the LAST rank also runs K MTP levels after its trunk layers, so an even split
+    of the trunk alone leaves it K blocks late with every other rank idle behind it. Balance
+    num_layers + K layer-EQUIVALENTS and hand the tail back its K: GLM-5.2 on 4 ranks goes 18/20/20/20
+    to trunk 22/20/20/16 (equivalents 22/20/20/20), the #53533 re-split; K=0 is identical to the old
+    split. One level == one layer is a MODEL, not a measurement -- a level is a full MoE block plus
+    eh_proj and two norms, so it under-counts slightly; PREFILL_PP_LAYER_COUNTS (TRUNK counts only)
+    stays the hand-tuning escape hatch."""
     override = os.environ.get("PREFILL_PP_LAYER_COUNTS")
     if override:
         counts = [int(x) for x in override.split(",")]
@@ -231,8 +371,15 @@ def compute_layer_split(num_layers: int, num_ranks: int, valid_starts=None) -> l
                 f"{num_layers} (got {len(counts)} counts summing to {sum(counts)})"
             )
     else:
-        base, rem = divmod(num_layers, num_ranks)
+        base, rem = divmod(num_layers + mtp_levels, num_ranks)
         counts = [base + (1 if r < rem else 0) for r in range(num_ranks)]
+        counts[-1] -= mtp_levels
+        if counts[-1] < 1:
+            raise ValueError(
+                f"{mtp_levels} MTP levels leave the last of {num_ranks} ranks {counts[-1]} trunk layers "
+                f"out of {num_layers}: the tail would hold no trunk stage. Use fewer ranks, or set "
+                f"PREFILL_PP_LAYER_COUNTS (TRUNK counts, summing to {num_layers})."
+            )
         if valid_starts is not None:
             counts = _snap_counts_to_starts(counts, valid_starts, num_layers)
 

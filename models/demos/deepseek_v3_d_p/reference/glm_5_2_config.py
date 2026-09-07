@@ -119,6 +119,14 @@ def glm_5_2_hf_config(max_seq: int = 8192):
         index_skip_topk_offset=GLM52Config.INDEX_SKIP_TOPK_OFFSET,
         first_k_dense_replace=GLM52Config.NUM_DENSE_LAYERS,
         n_routed_experts=GLM52Config.NUM_ROUTED_EXPERTS,
+        num_hidden_layers=GLM52Config.NUM_LAYERS,
+        # MTP (issue #53533). `num_nextn_predict_layers` counts MTP weight *modules* (1), NOT
+        # prediction *levels*: GLM-5.2 replays the single module at K levels (MTP4 -> 4), the
+        # DeepSeek-V3 paper scheme. Its weights live on layer NUM_LAYERS (78), one past the trunk.
+        # `index_share_for_mtp_iteration` makes that layer's indexer top-k computed once and reused
+        # across levels. Both are read by `tt/mtp_prefill/mtp_config.py::MTPConfig.from_hf_config`.
+        num_nextn_predict_layers=1,
+        index_share_for_mtp_iteration=True,
         quantization_config={
             "quant_method": "fp8",
             "fmt": "e4m3",

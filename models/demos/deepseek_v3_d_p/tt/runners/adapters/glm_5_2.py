@@ -43,6 +43,10 @@ class GLM52Adapter(MLAPrefillAdapter):
     l1_small_size = 1152
     routing_use_l1_small_for_semaphores = True
 
+    # GLM-5.2 is the only model here that carries MTP weights (layer 78's eh_proj + norms), so it is
+    # the only one PREFILL_MTP_LEVELS may be set for. Issue #53533.
+    supports_mtp = True
+
     def load_hf_config(self):
         """GLM's ``glm_moe_dsa`` isn't AutoConfig-loadable, so return the hand-built HF-attribute config
         (dims + the DSA ``index_*`` attrs + the ``indexer_types`` full/shared reuse map the sparse path
@@ -70,11 +74,22 @@ class GLM52Adapter(MLAPrefillAdapter):
         The engine owns both, exactly like the dense KVPE cache."""
         import ttnn
         from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
+        from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import enable_mtp_indexer_slot
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
             MlaKvCacheFormat,
             init_kvpe_cache,
             init_mla_kv_cache,
         )
+
+        # MTP (#53533) adds K KV slots per user on the rank that runs the levels — level k writes
+        # slot num_layers + k — and one indexer slot for the shared MTP layer. Both are LAST-RANK
+        # only: the predictor is built there, so no other rank's cache changes shape. The extra
+        # indexer slot has to be declared on hf_config BEFORE full_indexer_rank is consulted, and it
+        # is idempotent, so calling it here as well as in the runtime removes the ordering
+        # dependency between build_runtime and allocate_kv_cache rather than relying on it.
+        mtp_levels = params.mtp_levels if params.is_last_rank else 0
+        if mtp_levels:
+            enable_mtp_indexer_slot(hf_config)
 
         kvpe_cache = init_mla_kv_cache(
             cache_format=MlaKvCacheFormat.BF16_RM,
@@ -83,11 +98,13 @@ class GLM52Adapter(MLAPrefillAdapter):
             seq_len=params.max_seq_len,
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
-            num_kvpe_cache_layers=params.num_layers,
+            num_kvpe_cache_layers=params.num_layers + mtp_levels,
             num_users=params.num_users,
         )
         first_full = full_indexer_rank(hf_config, params.first_layer_idx)
-        num_index_layers = full_indexer_rank(hf_config, params.first_layer_idx + params.num_layers) - first_full
+        num_index_layers = (
+            full_indexer_rank(hf_config, params.first_layer_idx + params.num_layers + mtp_levels) - first_full
+        )
         index_cache = init_kvpe_cache(
             kvpe_cache_head_dim=hf_config.index_head_dim,
             mesh_device=mesh_device,
