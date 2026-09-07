@@ -36,32 +36,22 @@ namespace ckernel::sfpu {
 // Wormhole n300 silicon produced bit-identical results -- same worst-case
 // x, same output, same reference, to the last digit -- so the WH/BH source
 // identity this file maintains is measured equivalence, not an inference
-// from it. Identical to the pre-trim kernel's FP32 figure and marginally
-// better on BF16 -- trimming both regions did not measurably change
-// accuracy, confirming the analysis below. See tests/.../test_unary_i0.py's
-// _MAX_ULP for the test budget (12 / 2), which already carried headroom
-// over these numbers.
+// from it. See tests/.../test_unary_i0.py's _MAX_ULP for the test budget
+// (12 / 2), which carries headroom over these numbers.
 //
-// Both regions were originally 3 terms longer (12-term Maclaurin, one
-// shared 6-term Q for both dtypes). The trim follows a silicon+analysis
-// review (tenstorrent/tt-metal#52126, comment 5265986150): compiling
-// standalone against the pinned sfpi build and counting the disassembly,
-// plus bit-exact FP32/BF16 Horner simulation against mpmath, showed the
-// extra terms cost real instructions (dominated by SFPLOADI coefficient
-// materialization) without measurable accuracy — because accuracy near
-// the region-1 boundary is bounded by FP32 rounding of t = fl(x*x), not
-// by truncation, and the region-2 rsqrt Newton step alone already costs
-// ~1.7 FP32 ULP, both floors well above what the trimmed terms bought.
-// This kernel's own independent Remez fit and FP32/BF16 simulation (see
-// tt-bounty/tt-metal/04/review-52126 for the scripts) reproduced those findings.
+// Region-1 accuracy near the |x| = 6 boundary is bounded by FP32 rounding
+// of t = fl(x*x) rather than by the polynomial's degree, and the region-2
+// rsqrt Newton step alone costs ~1.7 FP32 ULP -- both floors already
+// exceed what a longer fit would buy, which is why each region uses only
+// as many terms as its own arithmetic can resolve.
 //
 // Code shape (chosen to relieve SFPI LRA budget), mirroring i1:
 //   1. Compute polynomial result unconditionally and store to DST.
 //      Polynomial-path intermediates die at the store, freeing LRegs.
 //   2. v_if (|x|>6): overwrite DST with asymptotic result.
 //
-// No input clamp: unlike the previous version, abs_x here is never
-// clamped to 88.5 before use. Every lane a clamp would change is a lane
+// No input clamp: abs_x is never clamped to 88.5 before use. Every lane
+// a clamp would change is a lane
 // with |x| > 88.5, and every one of those is unconditionally overwritten
 // below by the overflow branch — so a clamp only ever protects a value
 // that is then discarded. The unclamped polynomial/asymptotic paths can
@@ -69,13 +59,15 @@ namespace ckernel::sfpu {
 // lanes; since SFPU lanes are independent and the garbage never reaches
 // the store, this is safe and costs nothing.
 //
-// Overflow, +/-inf and NaN all resolve in one branch: multiplying by
-// infinity rather than assigning it handles all three cases from a
-// single predicate. Finite |x| > 88.5 gives +inf (FP32 exp() saturates
-// at 88.7228, matching torch's identical limitation — cf. the note on
-// torch.sinh in test_unary_fp32.py); +/-inf gives +inf; NaN stays NaN,
-// relying on SFPMUL propagating a NaN operand the same way
-// _sfpu_exp_fp32_accurate_ relies on 0*inf = NaN for the same purpose.
+// Overflow and +/-inf both resolve to +inf here: multiplying by infinity
+// rather than assigning it lets one predicate cover both. Finite
+// |x| > 88.5 gives +inf (FP32 exp() saturates at 88.7228, matching torch's
+// identical limitation — cf. the note on torch.sinh in test_unary_fp32.py);
+// +/-inf gives +inf. NaN survives regardless of which branch it takes:
+// lanes the compare excludes propagate NaN through ordinary arithmetic in
+// region 1, lanes it includes propagate NaN through this SFPMUL the same
+// way _sfpu_exp_fp32_accurate_ relies on 0*inf = NaN -- so correctness
+// does not depend on how SFPSETCC orders NaN against the threshold.
 // The true I0 stays representable to x = 91.9008 (I0 = 3.4028e+38), but
 // no exp()-first formulation can reach it without the intermediate
 // overflowing.
@@ -107,17 +99,14 @@ inline sfpi::vFloat calculate_i0_asymptotic_(const sfpi::vFloat abs_x) {
     // Computed first so that 1/|x| can be derived as rsqrt_y^2 without a
     // separate sfpu_reciprocal call.
     //
-    // Kept unconditional (not dtype-split): the Newton step is load-bearing
-    // for FP32 (dropping it costs ~343 FP32 ULP against a budget in the
-    // teens) and only marginal for BF16 (~0.2% of outputs move by 1 ULP,
-    // comfortably inside the existing 2-ULP BF16 test budget either way).
-    // Splitting it to save 4 instructions on the BF16 path was left alone: it
-    // would add a third dtype branch inside the kernel's most precision-
-    // sensitive block for the smallest of the four savings on the table.
+    // Kept unconditional (not dtype-split): dropping the Newton step costs
+    // ~343 FP32 ULP against a budget in the teens, but only moves ~0.2% of
+    // BF16 outputs by 1 ULP -- not worth a third dtype branch in the
+    // kernel's most precision-sensitive block to save 4 BF16 instructions.
     const sfpi::vInt rsqrt_i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(abs_x) >> 1);
     sfpi::vFloat rsqrt_y = sfpi::as<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - rsqrt_i);
     sfpi::vFloat c0 = (-rsqrt_y) * (abs_x * rsqrt_y);
-    rsqrt_y = rsqrt_y * (sfpi::vFloat(2.2825186f) + c0 * (sfpi::vFloat(2.2533049f) + c0));
+    rsqrt_y = rsqrt_y * (2.2825186f + c0 * (2.2533049f + c0));
     c0 = 1.0f + (-rsqrt_y) * (abs_x * rsqrt_y);
     rsqrt_y = c0 * sfpi::addexp(rsqrt_y, -1) + rsqrt_y;
 
@@ -155,17 +144,16 @@ inline sfpi::vFloat calculate_i0_asymptotic_(const sfpi::vFloat abs_x) {
 
 inline void i0_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_i0() {
     constexpr float I0_MAX_INPUT = 88.5f;
     constexpr float I0_THRESHOLD = 6.0f;
 
     // Decorative but intentional: unroll 0, unroll 1, and no pragma at all
-    // produce byte-identical codegen here (-funroll-loops included), since
-    // sfpi lowers this loop's body through the 32-entry Tensix replay buffer
-    // regardless — dynamic work per datum stays flat all the way to unroll
-    // 8, while code size grows ~5.7x. Kept as documentation of that, not as
-    // a knob that does anything.
+    // produce byte-identical codegen here (-funroll-loops included) --
+    // dynamic work per datum stays flat all the way to unroll 8, while code
+    // size grows ~5.7x. Kept as documentation of that, not as a knob that
+    // does anything.
 #pragma GCC unroll 1
     for (int d = 0; d < ITERATIONS; d++) {
         // i0 is even, so the sign is never needed: take |x| up front with a
@@ -209,9 +197,16 @@ inline void calculate_i0() {
         // (overflow-assign + bit-pattern NaN-restore) with one.
         v_if(abs_x > I0_MAX_INPUT) { val = abs_x * std::numeric_limits<float>::infinity(); }
         v_endif;
-#ifndef INP_FLOAT32
-        val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);
-#endif
+
+        // Gated on the true DEST width, not INP_FLOAT32: a bf16-in/float32-out
+        // call (ttnn.i0(bf16_tensor, output_tensor=<float32 tensor>), a
+        // supported mixed-dtype combination) runs DEST in 32-bit mode with
+        // INP_FLOAT32 undefined, so this convert must key off
+        // is_fp32_dest_acc_en to avoid rounding a genuine FP32 output down
+        // to BF16 precision.
+        if constexpr (!is_fp32_dest_acc_en) {
+            val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);
+        }
         sfpi::dst_reg[0] = val;
         sfpi::dst_reg++;
     }

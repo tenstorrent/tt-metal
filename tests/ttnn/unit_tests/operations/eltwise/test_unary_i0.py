@@ -20,19 +20,10 @@ from tests.ttnn.utils_for_testing import (
 # point where FP32 exp() saturates -- see ckernel_sfpu_i0.h for the full rationale.
 I0_MAX_INPUT = 88.5
 
-# Worst-case ULP error measured on silicon (Blackhole p150b) over the kernel's full
-# input domain, including the exhaustive bfloat16 sweep below: 6.0 ULP for float32 and
-# 1.0 ULP for bfloat16. The budgets carry ~2x headroom over those measurements.
-#
-# Re-measured after the tenstorrent/tt-metal#52126 review trim (region-1 12->9 terms,
-# region-2 BF16-specific 5-term Q, unified overflow/NaN branch): 6.0 FP32 ULP again
-# (unchanged) and 0.91 BF16 ULP (a small improvement). Trimming both regions did not
-# measurably change accuracy -- consistent with the review's finding that region-1
-# accuracy is bounded by FP32 rounding of t = fl(x*x), not by the polynomial's degree.
-# Budgets left unchanged; they already carried headroom over the re-measured numbers.
-#
-# Confirmed on both architectures with the same seed: Blackhole p150b and Wormhole
-# n300 produced bit-identical results (same worst-case x, same output, same reference).
+# Worst-case ULP error measured on silicon over the kernel's full input domain,
+# including the exhaustive bfloat16 sweep below: 6.0 ULP for float32 and 0.91 ULP
+# for bfloat16, confirmed bit-identical on Blackhole p150b and Wormhole n300 with
+# the same seed. Budgets below carry ~2x headroom over those measurements.
 #
 # Units are the true spacing of the output dtype (what comp_ulp/assert_with_ulp use),
 # not a relative-mantissa proxy -- the two differ by up to 2x within a binade and
@@ -42,6 +33,15 @@ _MAX_ULP = {
     ttnn.float32: 12,
     ttnn.bfloat16: 2,
 }
+
+# test_unary_category1_bfloat16.py::test_bessel_ops gates ttnn.i0 separately, at
+# assert_with_ulp(..., 1) over an exhaustive bfloat16 sweep of [-10, 10] -- a
+# stricter, pre-existing 1-ULP budget this file does not share. Measured on
+# Blackhole p150b at this head: Max ULP Delta = 1.0, i.e. it still passes but with
+# no headroom left. The two budgets disagree because they build the golden
+# differently -- that test calls torch.i0 directly on a bfloat16-dtype tensor,
+# while _quantise below rounds to bfloat16 then calls torch.special.i0 in float32
+# -- not because the device output differs between the two runs.
 
 
 def _quantise(x, dtype):
@@ -224,16 +224,11 @@ def test_i0_overflow(device, dtype):
 
 
 def test_i0_nan(device):
-    """NaN propagates instead of being swallowed by the overflow branch.
+    """Test ensures i0 on NaN inputs (including -NaN) gives NaN outputs.
 
-    The SFPU compare is not IEEE-ordered -- NaN carries the maximal exponent and
-    passes ``> 88.5`` -- so the kernel detects it by bit pattern and restores it.
-    Before this change the input clamp mapped NaN to the finite 1.15e+37.
-
-    float32 only: on the bfloat16 path NaN still emerges as +inf. A DRAM round-trip
-    with no op returns NaN intact, so the payload is lost unpacking bfloat16 into DST,
-    upstream of the kernel. Asserting it here would pin a defect this change does not
-    own; +inf is still an improvement on the previous finite 1.15e+37.
+    float32 only: on the bfloat16 path, NaN becomes +inf before the kernel ever
+    sees it (lost unpacking bfloat16 into DST) -- a separate, pre-existing gap
+    this test does not cover.
     """
     padded = torch.zeros((1, 1, 32, 32), dtype=torch.float32)
     padded[0, 0, 0, :2] = torch.tensor([float("nan"), -float("nan")], dtype=torch.float32)
@@ -242,3 +237,38 @@ def test_i0_nan(device):
 
     got = output_tensor.float()[0, 0, 0, :2]
     assert torch.isnan(got).all(), f"i0(NaN) must be NaN, got {got.tolist()}"
+
+
+def test_i0_mixed_dtype_output(device):
+    """A bfloat16 input with a preallocated float32 output_tensor keeps float32 precision.
+
+    ttnn.i0(bf16_tensor, output_tensor=<float32 tensor>) is a supported mixed-dtype
+    call (unary.cpp's is_supported_mixed_float_dtype). It runs DEST in 32-bit mode
+    because the *output* is float32, independent of the bfloat16 input -- so the
+    kernel must store at float32 precision here rather than truncating to bfloat16
+    just because the input dtype happens to be bfloat16.
+    """
+    torch.manual_seed(0)
+    shape = [1, 1, 32, 32]
+    torch_input = torch.rand(shape, dtype=torch.float32) * 20 - 10
+    torch_output = torch.special.i0(_quantise(torch_input, ttnn.bfloat16))
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.float32),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.float32,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn.i0(input_tensor, output_tensor=output_tensor)
+    result = ttnn.to_torch(output_tensor)
+
+    assert result.dtype == torch.float32
+    assert_with_ulp(torch_output, result, _MAX_ULP[ttnn.float32])
