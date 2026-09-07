@@ -18,7 +18,9 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
     ACTIVATION_SILU,
     ACTIVATION_SITU,
@@ -53,8 +55,28 @@ _ISL_ALLOCATED_TOKENS = 5120
 # Deliberately not tile-aligned and not powers of two: these drive the ragged tail of the token
 # axis, which the aligned sweep below never reaches.
 _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
+# Token counts whose LAST M-block is SHORT, i.e. m_eff < M_BLOCK. Every count in the sweep above
+# lands on a full 8-tile block, and the exhaustive sweep below reaches m_eff 4 on ONE model, so
+# without these no other shape ever runs a reduced m_eff. That is not hypothetical: a cb_h capacity
+# bug that only misfired at m_t 3-4 reached two production shapes through this exact hole.
+# `m_eff_min` is pow2_ceil(OUT_SUBBLOCK_H_GU) and so shape-dependent, which is why these are token
+# counts rather than target m_eff values -- each shape rounds them to whatever its geometry allows.
+#   67  -> m_t 3: one short block, and m_t < m_eff so the padded tile-rows are live too.
+#   289 -> m_t 10: a FULL block then a 2-tile tail, a different path from a lone short block
+#          because the tail reuses CB slots the full block already cycled.
+_ISL_SHORT_BLOCK_SWEEP = [67, 289]
 _ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 1024, 2048, 4096, 5120]
 _ISL_EXHAUSTIVE_MODELS = ("kimi_k26", "glm_51")
+
+# SwiGLU-OAI's production shapes. Neither is reachable through SINGLE_EXPERT_MODELS at its real
+# dims (minimax_m3 is absent; gptoss is there but only ever runs SiLU), so the activation had no
+# coverage at all until the case below.
+_SWIGLUOAI_MODELS = [
+    pytest.param(GptOss120BConfig.EMB_SIZE, GptOss120BConfig.MOE_INTERMEDIATE_SIZE, id="gptoss_120b"),
+    pytest.param(MiniMaxM3Config.EMB_SIZE, MiniMaxM3Config.MOE_INTERMEDIATE_SIZE, id="minimax_m3"),
+]
+# 67 and 128 are the reduced-m_eff band, 768 a multi-block count. 128 is where the cb_h bug showed.
+_SWIGLUOAI_SWEEP = [67, 128, 256, 768]
 
 
 def run_moe_fused_swiglu(
@@ -247,13 +269,16 @@ def _isl_params(active_sweep, only_models=None):
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
-@pytest.mark.parametrize("allocated_tokens, active_tokens, emb_dim, hidden_dim", _isl_params(_ISL_FUNCTIONAL_SWEEP))
+@pytest.mark.parametrize(
+    "allocated_tokens, active_tokens, emb_dim, hidden_dim",
+    _isl_params(_ISL_FUNCTIONAL_SWEEP + _ISL_SHORT_BLOCK_SWEEP),
+)
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
 def test_moe_fused_swiglu_functional(
     device, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int, x_row_major: bool
 ):
-    """Per-model dims on the ragged token counts, over both x layouts."""
+    """Per-model dims on the ragged token counts and the short-last-block counts, both x layouts."""
     _skip_if_grid_too_small(device)
     run_moe_fused_swiglu(
         device, allocated_tokens, emb_dim, hidden_dim, active_tokens=active_tokens, x_row_major=x_row_major
@@ -286,4 +311,63 @@ def test_moe_fused_swiglu_k3_situ(device, active_tokens: int, x_row_major: bool)
         active_tokens=active_tokens,
         x_row_major=x_row_major,
         activation=ttnn.RoutedExpertActivation.SituGlu,
+    )
+
+
+def _bias_tensor(device, width: int, live: bool):
+    """A bias row for one projection. bf16 TILE is the only layout the op accepts, and a zero row
+    must reproduce the bias-free result exactly, which is what makes `live` a bisector."""
+    values = torch.randn(1, width, dtype=torch.float32) * 0.05 if live else torch.zeros(1, width, dtype=torch.float32)
+    return ttnn.from_torch(values, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("live", ["none", "gate", "up", "down", "all"])
+@pytest.mark.parametrize(
+    "activation",
+    [
+        # The op rejects Silu + bias outright: SiLU applies on the packer thread of the gate reduce,
+        # where there is no spare pass to fold a bias into. These two are the whole bias-capable set.
+        pytest.param(ttnn.RoutedExpertActivation.SituGlu, id="situglu"),
+        pytest.param(ttnn.RoutedExpertActivation.SwiGluOai, id="swigluoai"),
+    ],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
+def test_moe_fused_swiglu_bias(device, activation, live: str):
+    """Per-expert biases, one projection live at a time so a failure names its own culprit.
+
+    Graded against the bias-AWARE reference in run_moe_fused_swiglu: a bias-free reference merely
+    moves when a bias is wrong, which reads as success. The gptoss shape because that is the model
+    that ships biases, and a short-last-block count because `fuse_bias` turns wd_mrow_rounds off and
+    so takes a different h path than the aligned counts.
+    """
+    _skip_if_grid_too_small(device)
+    emb_dim, hidden_dim = GptOss120BConfig.EMB_SIZE, GptOss120BConfig.MOE_INTERMEDIATE_SIZE
+    run_moe_fused_swiglu(
+        device,
+        _ISL_ALLOCATED_TOKENS,
+        emb_dim,
+        hidden_dim,
+        active_tokens=67,
+        x_row_major=True,
+        activation=activation,
+        gate_bias=_bias_tensor(device, hidden_dim, live in ("gate", "all")),
+        up_bias=_bias_tensor(device, hidden_dim, live in ("up", "all")),
+        down_bias=_bias_tensor(device, emb_dim, live in ("down", "all")),
+    )
+
+
+@pytest.mark.parametrize("active_tokens", _SWIGLUOAI_SWEEP, ids=[f"t{t}" for t in _SWIGLUOAI_SWEEP])
+@pytest.mark.parametrize("emb_dim, hidden_dim", _SWIGLUOAI_MODELS)
+@pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
+def test_moe_fused_swiglu_swigluoai(device, emb_dim: int, hidden_dim: int, active_tokens: int):
+    """SwiGLU-OAI at its production dims, across the reduced-m_eff band it had no coverage in."""
+    _skip_if_grid_too_small(device)
+    run_moe_fused_swiglu(
+        device,
+        _ISL_ALLOCATED_TOKENS,
+        emb_dim,
+        hidden_dim,
+        active_tokens=active_tokens,
+        x_row_major=True,
+        activation=ttnn.RoutedExpertActivation.SwiGluOai,
     )
