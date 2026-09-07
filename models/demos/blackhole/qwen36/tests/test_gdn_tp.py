@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TP validation for Qwen3.5/3.6 Gated DeltaNet on a Blackhole mesh.
+"""TP validation for Qwen3.5/3.6 Gated DeltaNet on a Blackhole or Wormhole TP mesh.
 
 One file per component (decode / chunk-prefill), sharing the loaders and mesh
 parametrization from ``test_factory``:
@@ -16,6 +16,7 @@ parametrization from ``test_factory``:
 Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
+    # Wormhole: MESH_DEVICE=T3K with the 27B, or MESH_DEVICE=N300 with the 9B.
 """
 
 import gc

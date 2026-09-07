@@ -490,7 +490,7 @@
 
 - name: Qwen3.5-9B e2e tests
   # Wormhole N300 sibling of the Qwen3.6-27B/P150x4 entry above -- different checkpoint, mesh
-  # (1,2), and code path (TP=2 + Wormhole gates). Tier 3, not tier 1, matching the unit-test leg.
+  # (1,2), and code path (TP=2 + Wormhole gates). Tier 3, not tier 1.
   # Same -k filters as the 27B leg: single ISL + determinism + one vision case, not the full
   # 4k-256k ISL ladder or vision demo matrix (out of CI budget on both device targets).
   cmd: |
@@ -561,6 +561,7 @@
 - name: Qwen3.6-27B T3K e2e tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=T3K
+    HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
   model: qwen3.6-27b
   model_family: Qwen
