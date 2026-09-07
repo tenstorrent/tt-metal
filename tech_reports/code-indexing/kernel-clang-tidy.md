@@ -323,6 +323,7 @@ this domain:
 | `bugprone-easily-swappable-parameters` | Every device API parameter is `uint32_t`, so it fires on nearly every function (`llk_unpack_AB`, `tilizeA_B_reduce_init`). 1,410 findings whose only fix is strong-typedef wrappers across the whole ABI. |
 | `clang-diagnostic-unsafe-buffer-usage` | The C++ Safe Buffers profile, 1,315 findings carrying just two distinct messages, both "unsafe buffer access" with no specifics. It wants `std::span` for all pointer arithmetic, but kernels address L1 at fixed hardware addresses through raw pointers, which a span cannot represent. |
 | `clang-diagnostic-unused-parameter` | Redundant: 846 of its 907 findings share an exact file, line *and* column with `misc-unused-parameters`, which is kept because it also carries an auto-fix. Costs 61 unique positions. |
+| `prefix:cert` | Every one of the 41 `cert-*` checks is an alias, so the prefix removes no capability; 461 of the 463 findings it drops are reported at an identical position under the aliased original. See the note on alias duplication for the two it does cost. |
 
 Two more are muted on volume. `modernize-use-trailing-return-type` (1,182
 findings) is pure style and tt-umd mutes it too.
@@ -501,6 +502,31 @@ named, and 65 findings do not justify a rule. `performance-no-int-to-ptr` (694) 
 five files hold 13–29% of their findings, so any path glob would be arbitrary.
 `readability-uppercase-literal-suffix` (3,766) failed it too, but turned out to be
 addressable through a check option instead; see below.
+
+**Alias duplication** is a side effect of `--enable-all` worth knowing about,
+because it inflates the report without adding problems. Aliased checkers report
+the same diagnostic under a second name, and reserved identifiers were the worst
+case: `bugprone-reserved-identifier`, `cert-dcl37-c`, `cert-dcl51-cpp` and
+`clang-diagnostic-reserved-identifier` between them contributed 886 findings for
+228 distinct problems, the two cert names being aliases of the same check.
+Report-wide, 461 of the 464 findings from alias-prefixed checkers shared an
+exact file, line and column with a non-alias checker.
+
+All 41 `cert-*` checks clang-tidy offers are aliases — checked against the
+upstream checks list, none is standalone — so `prefix:cert` cannot disable a
+capability. It does cost exactly two findings, and the reason is worth recording
+because it is not obvious: some cert aliases ship *stricter defaults* than the
+check they alias. `cert-oop54-cpp` is `bugprone-unhandled-self-assignment` with
+its "only if the class has a suspicious field" guard off, and `cert-dcl59-cpp`
+relates similarly to `misc-anonymous-namespace-in-header`; both originals report
+nothing at default options, so both findings disappear with the prefix. That was
+accepted for a one-line config against two findings in ~24,000. If either
+construct ever matters, the fix is to configure the original checker rather than
+to re-enable `cert-*` and take the 461 duplicates back.
+
+`clang-diagnostic-reserved-identifier` (202) is deliberately left enabled: it is
+not a clean subset, with 199 of its positions shared with
+`bugprone-reserved-identifier`, 3 unique to it and 29 unique to the other.
 
 **Check options are the quietest suppressor here**, so they are worth reading as
 carefully as the `--disable` list. Nothing readability- or complexity-related is
