@@ -3707,9 +3707,35 @@ def create_program_descriptor(
                 brmax = min(1, _resident_fit(depth, compact=False)[0])
             if brmax >= 1:
                 top = min(max_rows, brmax)
-                if plan.native_in:
-                    # The exception: a resident shard keeps its coarsest block, and
-                    # only levels it out at the same block count.
+                # TWO exceptions keep their coarsest block, and both are the same
+                # principle: a finer block is only worth the per-block fixed cost it
+                # multiplies, so it pays exactly where a block boundary is what OVERLAPS
+                # a DRAM read of TILES and nothing else.  Both may still LEVEL OUT their
+                # blocks at the SAME block count, on an exact divisor.
+                #
+                #   `native_in`   -- a zero-copy resident shard has NO read to overlap, so
+                #                    every extra block is pure overhead: br 16 -> 1 is
+                #                    0.50x on the (1,1,8192,1024) BLOCK shard and 0.42x on
+                #                    (1,1,7168,1024) gbr.
+                #   `not is_tile` -- a ROW_MAJOR activation is TILIZED by compute out of a
+                #                    stick ring, ONE `ckl::tilize<WT_CHUNK>(rows)` call per
+                #                    block, and that call's fixed cost dwarfs the overlap a
+                #                    finer block buys.  A ROW_MAJOR plan is also pinned to
+                #                    depth 1 (`depth_candidates` above), so it has no ring
+                #                    to pipeline the finer blocks against either.  MEASURED
+                #                    at BLOCK_ROWS 8 -> 1: `(1,1,256,512)` ROW_MAJOR
+                #                    WIDTH-sharded 22,330 -> 31,398 ns (**0.711x**) and
+                #                    `(1,1,512,1024)` 39,028 -> 60,321 (**0.647x**), both
+                #                    reproduced in two alternated sessions.
+                #
+                # THE GUARD SET COULD NOT SEE THIS ONE.  It was surfaced by
+                # `test_rms_norm_ttnn_perf.py::test_program_is_structurally_the_seeds`,
+                # whose seed-diff flagged three dropped staging CBs on that plan -- the
+                # inherited guard set's ROW_MAJOR row was a pinned 64x1 grid that no longer
+                # fits the live grid, so it had been substituted with a HEIGHT shard that
+                # this rule does not reach.  A structural pin caught a perf regression the
+                # perf harness missed.
+                if plan.native_in or not is_tile:
                     blocks0 = -(-max_rows // top)
                     br0 = -(-max_rows // blocks0)
                     br = br0 if br0 * blocks0 == max_rows else top
