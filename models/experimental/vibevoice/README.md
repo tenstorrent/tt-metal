@@ -747,10 +747,10 @@ end-to-end accuracy check and PCC for the most critical modules — no perf targ
 device-perf, no PR/merge gate. Two nightly pipelines run it, both single-P150 (`bh_p150b_civ2`,
 `MESH_DEVICE=P150`):
 
-| Pipeline | Workflow | Registry entry | Schedule |
-|---|---|---|---|
-| (Tier 3) Models E2E | [`models-t3-e2e-tests.yaml`](../../../.github/workflows/models-t3-e2e-tests.yaml) | [`models_e2e_tests.yaml`](../../../tests/pipeline_reorg/models_e2e_tests.yaml) | 05:00 UTC |
-| (Tier 3) Models Unit | [`models-t3-unit-tests.yaml`](../../../.github/workflows/models-t3-unit-tests.yaml) | [`models_unit_tests.yaml`](../../../tests/pipeline_reorg/models_unit_tests.yaml) | 06:00 UTC |
+| Pipeline | Workflow | Registry entry |
+|---|---|---|
+| (Tier 3) Models E2E | [`models-t3-e2e-tests.yaml`](../../../.github/workflows/models-t3-e2e-tests.yaml) | [`models_e2e_tests.yaml`](../../../tests/pipeline_reorg/models_e2e_tests.yaml) |
+| (Tier 3) Models Unit | [`models-t3-unit-tests.yaml`](../../../.github/workflows/models-t3-unit-tests.yaml) | [`models_unit_tests.yaml`](../../../tests/pipeline_reorg/models_unit_tests.yaml) |
 
 Each pipeline runs **one job** for VibeVoice. The e2e job runs three steps in sequence, each guarded
 with `|| exit_code=$?` so one failure does not mask the others:
