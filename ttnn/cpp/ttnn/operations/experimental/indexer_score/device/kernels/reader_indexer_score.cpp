@@ -74,15 +74,19 @@ constexpr auto snake_orientation =
 constexpr uint32_t rank_mapping_mesh_rows = get_compile_time_arg_val(bc_ct_base + 7);
 constexpr uint32_t rank_mapping_mesh_cols = get_compile_time_arg_val(bc_ct_base + 8);
 constexpr bool partial_readiness_enabled = get_compile_time_arg_val(bc_ct_base + 9) != 0;
+constexpr uint32_t fused_physical_sp = get_compile_time_arg_val(bc_ct_base + 10);
 
 FORCE_INLINE constexpr uint32_t tensor_rank_from_transport_rank(uint32_t transport_rank) {
     return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
         transport_rank, rank_mapping_mesh_rows, rank_mapping_mesh_cols, snake_orientation);
 }
 
-// +10, not +9: main's partial_readiness_enabled took bc_ct_base + 9. Both factories push that flag
-// before this block, so the two cannot overlap.
-constexpr uint32_t meta_ct_base = bc_ct_base + 10;
+// +11, not +10 or +9: main's partial_readiness_enabled took bc_ct_base + 9 and #55617's
+// fused_physical_sp took bc_ct_base + 10. Both factories push both of those before this block, so this
+// base must clear them. A collision here does NOT produce a merge conflict -- the declarations sit in
+// different hunks -- and reads an unrelated word as the metadata flag, so re-check it whenever main
+// grows the block-cyclic block.
+constexpr uint32_t meta_ct_base = bc_ct_base + 11;
 constexpr bool chunk_start_from_metadata = get_compile_time_arg_val(meta_ct_base) != 0;
 constexpr uint32_t meta_rt_base = get_compile_time_arg_val(meta_ct_base + 1);
 constexpr uint32_t cb_meta_derived = get_compile_time_arg_val(meta_ct_base + 2);
@@ -564,7 +568,7 @@ void kernel_main() {
 
         WorkUnitSpan span;
         span.set_valid_k_len_tiles(kv_len_tiles);
-        ShardMajorWorkUnitSpan<block_cyclic, bc_chunk_local, bc_sp> shard_span;
+        ShardMajorWorkUnitSpan<block_cyclic, bc_chunk_local, bc_sp, fused_physical_sp> shard_span;
         shard_span.set_valid_k_len_tiles(kv_len_tiles);
         const uint32_t band_iters = stream_heads ? max_bands : num_bands;
         for (uint32_t phase = 0; phase < num_groups; ++phase) {
@@ -586,23 +590,29 @@ void kernel_main() {
                 if constexpr (fused_ring_enabled) {
                     const uint32_t physical_start = gate->physical_start(band_i);
                     shard_span.set(group, physical_start, gate->tiles_per_shard);
+                    const uint32_t k_tiles_in_unit = shard_span.k_tiles();
                     // q/w were multicasted before this loop. Every row of this K-mcast column has
                     // the same work list, so skipping an empty runtime-prefix unit preserves both
                     // the fabric gate and the local CB protocol.
-                    if (shard_span.k_tiles() == 0) {
+                    if (k_tiles_in_unit == 0) {
                         continue;
                     }
                     uint32_t gathered_shard_tiles = gate->tiles_per_shard;
                     if constexpr (block_cyclic) {
-                        const uint32_t global_slab_tiles = bc_chunk_local * bc_sp;
-                        const uint32_t valid_slabs = (kv_len_tiles + global_slab_tiles - 1) / global_slab_tiles;
-                        gathered_shard_tiles = std::min(valid_slabs * bc_chunk_local, gate->tiles_per_shard);
+                        // Partial-height gathers are enabled only for the ordinary SP-only layout. A
+                        // TP-inner reconstructed cache (bc_sp > ring_size) gathers the full physical
+                        // shard, so its midpoint must stay at half that shard as well.
+                        if (bc_sp == gate->ring_size) {
+                            const uint32_t global_slab_tiles = bc_chunk_local * bc_sp;
+                            const uint32_t valid_slabs = (kv_len_tiles + global_slab_tiles - 1) / global_slab_tiles;
+                            gathered_shard_tiles = std::min(valid_slabs * bc_chunk_local, gate->tiles_per_shard);
+                        }
                     }
                     // KEEP IN SYNC with the AG writer's row-aligned midpoint_prefix_pages() and the host's
                     // gather_valid_height_tiles(). Units crossing this boundary wait for completion.
                     const uint32_t midpoint_tiles = (gathered_shard_tiles + 1) / 2;
                     gate->read_k(
-                        noc, k_acc, physical_start, shard_span.k_tiles(), midpoint_tiles, k_dir, k_batch_page_offset);
+                        noc, k_acc, physical_start, k_tiles_in_unit, midpoint_tiles, k_dir, k_batch_page_offset);
                 } else {
                     const uint32_t band = band_i;
                     const bool real_band = band < num_bands;

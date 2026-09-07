@@ -12,9 +12,7 @@ MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests
 MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/ci"
 
 CHUNK_SIZE=5120
-MAX_SEQ_LEN=256000
 GOLDEN_LEN=56320
-REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 RUNNER_ENV=""
@@ -26,14 +24,23 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MGD="${MGD_DIR}/kimi27_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1;"
+    MAX_SEQ_LEN=256000
+    # Users are bounded by per-bank KV capacity, and that bound has to be bisected, not computed --
+    # the arithmetic bound overshoots ~20% once weights and transients are counted. The OOM edge sits
+    # just above this and wanders between ranks, so re-bisect before raising it.
+    NUM_USERS_DEFAULT=86
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1; export PREFILL_LAYER_ACK_D2H=1;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
     ;;
   glm52)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
     MGD="${MGD_DIR}/glm52_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/glm52.json"
-    # main's KV-dedup default for this leg (#51968 / #55458); kept as-is.
+    MAX_SEQ_LEN=1049600
+    # Same per-bank capacity bound, relaxed by the TP KV dedup below. The sparse KV format moves it
+    # a long way (SP x TP fits 34 at bf16, 56 at fp8), so this sits well under the edge, not on it.
+    NUM_USERS_DEFAULT=28
+    # KV-dedup default for this leg (#51968 / #55458); main's value, kept as-is.
     TP_SHARD_KV_DEFAULT=1
     # Traced prefill, as the kimi27 leg above runs it. The sparse/DSA indexer ops read their per-chunk
     # scalars (chunk start, cache slot, top-k bound, gather extent) on-device from the metadata tensors,
@@ -44,8 +51,9 @@ case "${MODEL}" in
     # TRACE ONLY. PREFILL_LAYER_ACK_D2H=1 (which main sets here) is NOT combined with it:
     # capture_trace()'s D2H warm pass fires warmup_ack_count() real records that prefill_runner then
     # drains, and that drain spins forever on a traced GLM run -- verified locally, the runner sits in
-    # read_metadata() at 100% CPU after a clean capture. No leg on main runs both flags together, so the
-    # combination is untested; keep them apart until the warm-pass drain is fixed.
+    # read_metadata() at 100% CPU after a clean capture. The kimi27 leg above DOES run both flags and
+    # passes, so this is specific to the GLM path rather than to the combination as such; keep them
+    # apart here until the warm-pass drain is fixed.
     RUNNER_ENV="export PREFILL_USE_TRACE=1;"
     # Sparse DSA: TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over the
     # 21 `full` layers), both PCC'd. The trace must be the indexer-K dump -- the adapter's default golden
@@ -58,6 +66,8 @@ case "${MODEL}" in
     exit 2
     ;;
 esac
+
+REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 
 mkdir -p "${PIPELINE_DIR}"
 TTRUN_DIR="${TTRUN_DIR:-/etc/ttop}"
@@ -124,6 +134,7 @@ python3 "${TTRUN_PY}" \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_FABRIC_MODE=2d; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
+    export PREFILL_NUM_USERS=${PREFILL_NUM_USERS:-${NUM_USERS_DEFAULT}}; \
     export PREFILL_TP_SHARD_KV=${PREFILL_TP_SHARD_KV:-${TP_SHARD_KV_DEFAULT}}; \
     export PREFILL_SYNC_PER_CHUNK=1; \
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \

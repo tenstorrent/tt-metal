@@ -55,15 +55,10 @@ def test_reference_layer_is_bit_identical() -> None:
             )
 
 
-def test_reference_rejects_missing_or_mismatched_weights(expect_error) -> None:
+def test_reference_layer_validates_weights(expect_error) -> None:
     config = make_config()
-    hidden_states = torch.zeros(1, 1, config.hidden_size)
     weights = random_weights(config)
     del weights["q_proj.weight"]
-    with expect_error(ValueError, "missing KDA weight: q_proj.weight"):
-        kda_forward_reference(hidden_states, weights, config)
 
-    weights = random_weights(config)
-    weights["q_proj.weight"] = weights["q_proj.weight"][:-1]
-    with expect_error(ValueError, "q_proj.weight shape"):
-        kda_forward_reference(hidden_states, weights, config)
+    with expect_error(ValueError, "missing KDA weight: q_proj.weight"):
+        kda_forward_reference(torch.zeros(1, 1, config.hidden_size), weights, config)

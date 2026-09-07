@@ -425,9 +425,11 @@ ProgramDescriptor build_ring_program_descriptor(
         return ct;
     }();
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
-    // Full-mesh rank mapping first, then the metadata blocks: the reader reads them in exactly this
-    // order (bc_ct_base + 5..8, then meta_ct_base = bc_ct_base + 9), and every entry is fixed-width so
-    // one kernel binary serves both forms.
+    // Full-mesh rank mapping first, then partial readiness (+9), then #55617's physical SP size (+10),
+    // then the metadata blocks at meta_ct_base = bc_ct_base + 11. The reader reads them in exactly this
+    // order and every entry is fixed-width, so one kernel binary serves both forms. Keep this comment in
+    // step with the reader: a stale offset here is how the metadata block last collided with a new
+    // block-cyclic arg, and that collision does not surface as a merge conflict.
     const RingAttentionRankMapping rank_mapping{
         .full_mesh = fused.full_mesh,
         .orientation = fused.snake_orientation,
@@ -438,6 +440,7 @@ ProgramDescriptor build_ring_program_descriptor(
     reader_ct.push_back(rank_mapping.mesh_rows);
     reader_ct.push_back(rank_mapping.mesh_cols);
     reader_ct.push_back(static_cast<uint32_t>(partial_readiness_enabled));
+    reader_ct.push_back(ring_size);  // physical SP shard count for shard-major specialization
 
     // Fixed-width metadata block. sp / chunk_local already arrived via block_cyclic_ct above.
     reader_ct.push_back(has_meta ? 1u : 0u);
@@ -469,7 +472,8 @@ ProgramDescriptor build_ring_program_descriptor(
     writer_ct.push_back(T * out_elem_bytes);  // row-major page = one output row (no pooling)
     writer_ct.push_back(block_cyclic_ct[0]);  // shard-major physical -> logical output mapping
     writer_ct.push_back(block_cyclic_ct[1]);
-    writer_ct.push_back(ring_size);  // physical shard count (also block-cyclic SP when enabled)
+    writer_ct.push_back(block_cyclic_ct[2]);  // logical key stripe count (SP * TP for TP-sharded KV)
+    writer_ct.push_back(ring_size);           // physical SP shard count
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
     // Metadata flag and reader-to-writer mailbox.
     writer_ct.push_back(has_meta ? 1u : 0u);
@@ -485,8 +489,10 @@ ProgramDescriptor build_ring_program_descriptor(
     compute_ct.push_back(1u);                  // fused_ring on
     compute_ct.push_back(block_cyclic_ct[0]);  // shard-major physical -> logical causal mapping
     compute_ct.push_back(block_cyclic_ct[1]);
-    compute_ct.push_back(ring_size);  // physical shard count (also block-cyclic SP when enabled)
-    // Metadata flag and reader-to-compute mailbox, after main's shard block (compute reads +10/+11).
+    compute_ct.push_back(block_cyclic_ct[2]);  // logical key stripe count (SP * TP for TP-sharded KV)
+    compute_ct.push_back(ring_size);           // physical SP shard count
+    // Metadata flag and reader-to-compute mailbox, after main's shard block. #55617 added the logical
+    // stripe count ahead of the physical SP size, so compute reads these at +11/+12 (was +10/+11).
     compute_ct.push_back(has_meta ? 1u : 0u);
     compute_ct.push_back(has_meta ? cb_meta_derived : 0u);
 
