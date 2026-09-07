@@ -433,6 +433,9 @@ Unpacker1 Write Eff = SRCB_WRITE_ACTUAL / UNPACK1_BUSY_THREAD0 * 100
 
 #### 28. Fidelity Stall Rate
 
+> **Dead counter:** `MATH_FIDELITY_STALL` is tied to zero in the RTL of both Wormhole and Blackhole (`fidelity_phases_ongoing` is a constant `1'b0`), so this metric always reads 0. It is kept here only to document the formula; the tracy tooling removes it.
+
+
 Fraction of math-valid cycles spent in a fidelity phase (multi-HF-cycle math instruction).
 
 *Counter group: TDMA_UNPACK. Computed, exported as `fidelity_stall_pct`.*
