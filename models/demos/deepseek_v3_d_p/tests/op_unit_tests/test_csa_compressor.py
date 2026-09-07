@@ -1,20 +1,27 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device tests for the fused Blaze-compatible CSA compressor."""
+"""Device tests for the fused Blaze-compatible CSA compressor, plus the host-side slab-alignment
+contract that decides the shapes those tests (and prefill) run at."""
 
 import pytest
 import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tt.mla.compressor import (
+    CSA_STATE_ROWS,
+    csa_slab_align,
+    csa_state_predecessor_ca,
+    csa_state_rows,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 _BATCH = 1
 _COMPRESS_RATE = 4
 _HEAD_DIM = 512
 _INDEX_HEAD_DIM = 128
-_STATE_ROWS = 64
+_STATE_ROWS = CSA_STATE_ROWS
 _LOCAL_SEQ_LEN = 128
 _PCC = 0.999
 
@@ -25,9 +32,7 @@ def _update_state(kv_state, score_state, kv, gate, position_bias, start_position
     for local_position in range(kv.shape[2]):
         position = start_position + local_position
         slot = position % _COMPRESS_RATE
-        parity = (position // _COMPRESS_RATE) & 1
-        ca_row = (parity ^ 1) * 32 + slot
-        cb_row = parity * 32 + _COMPRESS_RATE + slot
+        ca_row, cb_row = csa_state_rows(position, _COMPRESS_RATE)
         biased_gate = gate[:, :, local_position] + position_bias[:, :, slot]
         kv_state[:, :, ca_row] = kv[:, :, local_position, :head_dim]
         kv_state[:, :, cb_row] = kv[:, :, local_position, head_dim:]
@@ -47,8 +52,7 @@ def _compress_local(kv, gate, position_bias, predecessor_kv, predecessor_score, 
         current_gate = gate[:, :, current_start:current_end] + position_bias
 
         if window == 0:
-            parity = (absolute_start // _COMPRESS_RATE) & 1
-            state_start = parity * 32
+            state_start = csa_state_predecessor_ca(absolute_start, _COMPRESS_RATE)
             previous_ca_kv = predecessor_kv[:, :, state_start : state_start + _COMPRESS_RATE]
             previous_ca_score = predecessor_score[:, :, state_start : state_start + _COMPRESS_RATE]
         else:
@@ -269,3 +273,30 @@ def test_csa_compressor_mesh_empty_tail(mesh_device, device_params, remainder, f
     the state those ranks emit is what the NEXT chunk starts from, so it has to be their predecessor's
     rather than the base state they were handed."""
     _run_csa_compressor(mesh_device, _LOCAL_SEQ_LEN, remainder, first_token_position, _HEAD_DIM, empty_ranks=1)
+
+
+# Every (sp, tp) the V4 tests and the demo run at. tp < compress_rate is the interesting half: that is
+# where the per-chip entry-tiling term binds, and where an 8x4-only reading of the alignment is wrong.
+@pytest.mark.parametrize("sp_factor, tp_factor", [(1, 1), (2, 1), (2, 2), (4, 2), (2, 4), (8, 4)])
+def test_csa_slab_align_tile_aligns_each_chip_share_of_the_entries(sp_factor, tp_factor):
+    """A slab has to leave every chip a whole number of entry TILES, not just whole entries.
+
+    The block-cyclic indexer score op is handed the local slab in tokens as block_cyclic_chunk_local,
+    divides it by key_compression_ratio to get its per-shard chunk in compressed rows, and TT_FATALs
+    unless that is tile-aligned. Missing this term costs nothing on an 8x4 mesh -- where the TP-gather
+    term happens to be exactly equal -- and fails at the shortest legal prompt on 2x2 and 4x2."""
+    align = csa_slab_align(_COMPRESS_RATE, sp_factor, tp_factor)
+
+    entries_per_chip = align // sp_factor // _COMPRESS_RATE
+    assert align % (sp_factor * _COMPRESS_RATE) == 0, (
+        f"a {align}-token slab does not split into whole compression windows per chip "
+        f"(sp={sp_factor}, rate={_COMPRESS_RATE})"
+    )
+    assert entries_per_chip > 0 and entries_per_chip % ttnn.TILE_SIZE == 0, (
+        f"a {align}-token slab leaves each chip {entries_per_chip} compressed rows, which the "
+        f"block-cyclic score op rejects as not tile-aligned (sp={sp_factor}, tp={tp_factor})"
+    )
+    assert align // sp_factor // tp_factor % ttnn.TILE_SIZE == 0, (
+        f"a {align}-token slab leaves each chip a non-tile-aligned token share "
+        f"(sp={sp_factor}, tp={tp_factor}), which the indexer's TP gathers need"
+    )
