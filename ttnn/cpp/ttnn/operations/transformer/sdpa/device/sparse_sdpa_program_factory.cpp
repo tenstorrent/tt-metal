@@ -8,7 +8,7 @@
 #include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>  // GetRuntimeArgs (cache-hit in-place patch)
+#include <tt-metalium/host_api.hpp>  // GetCommonRuntimeArgs (cache-hit in-place patch)
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <array>
@@ -266,7 +266,6 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = core_grid;
     reader_desc.compile_time_args = reader_ct;
-    reader_desc.common_runtime_args = reader_crt;  // kv runtime tensor-shape metadata (same on every core)
     reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
 
     tt::tt_metal::KernelDescriptor writer_desc;
@@ -274,7 +273,6 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     writer_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = writer_ct;
-    writer_desc.common_runtime_args = writer_crt;  // kv runtime tensor-shape metadata (same on every core)
     writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     // Order matches get_compute_kernel_config_args: (fidelity, approx_mode, fp32_dest_acc, packer_l1_acc,
@@ -328,16 +326,25 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     auto* idx_buf = t.indices.buffer();
     auto* out_buf = output.buffer();
     // Indexed KV cache: the gather page ids are offset by cache_batch_idx * T to select the cache's batch
-    // slot. Re-derived here from the current attrs/tensor T on every dispatch (this factory is the single
-    // source of truth run by override_runtime_arguments on a hit). 0 when not indexed (single [1,1,T,K_DIM]).
+    // slot. The cache-hit override re-derives this from the current attrs/tensor T on every dispatch.
+    // 0 when not indexed (single [1,1,T,K_DIM]).
     const uint32_t kv_T = t.kv.logical_shape()[2];
     const uint32_t kv_batch_page_offset = attrs.cache_batch_idx.value_or(0) * kv_T;
+    reader_desc.emplace_common_runtime_args({q_buf, kv_buf, idx_buf, kv_batch_page_offset});
+    writer_desc.emplace_common_runtime_args({out_buf, kv_buf, kv_batch_page_offset});
+    TT_FATAL(
+        reader_desc.common_runtime_args.size() == ::sparse_sdpa::reader_common_arg::END &&
+            writer_desc.common_runtime_args.size() == ::sparse_sdpa::writer_common_arg::END,
+        "sparse_sdpa common runtime argument layout is out of sync");
+    reader_desc.common_runtime_args.insert(reader_desc.common_runtime_args.end(), reader_crt.begin(), reader_crt.end());
+    writer_desc.common_runtime_args.insert(writer_desc.common_runtime_args.end(), writer_crt.begin(), writer_crt.end());
+
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
-        reader_desc.emplace_runtime_args(core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset});
-        writer_desc.emplace_runtime_args(core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset});
+        reader_desc.emplace_runtime_args(core, {tok_start, tok_count});
+        writer_desc.emplace_runtime_args(core, {tok_start, tok_count});
         compute_desc.emplace_runtime_args(core, {tok_start, tok_count});
     }
 
@@ -353,25 +360,20 @@ void SparseSDPAOperation::SparseSDPAProgramFactory::override_runtime_arguments(
     const SparseSDPAInputs& tensor_args,
     Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Only the buffer addresses and kv_batch_page_offset vary per dispatch (tok_start/tok_count are pinned by
-    // the hashed q shape); patch those slots in place instead of rebuilding the whole descriptor on every hit.
-    const SparseSDPAInputs& t = tensor_args;
-    const tt::tt_metal::CoreCoord grid = t.q.device()->compute_with_storage_grid_size();
+    // Token assignments are fixed by the hashed q shape. Refresh only the uniform dispatch values;
+    // tensor-accessor metadata follows these slots and remains unchanged under the cache key.
+    const auto& t = tensor_args;
     const uint32_t offset = operation_attributes.cache_batch_idx.value_or(0) * t.kv.logical_shape()[2];
-    const uint32_t q = t.q.buffer()->address(), kv = t.kv.buffer()->address(), idx = t.indices.buffer()->address(),
-                   out = tensor_return_value.buffer()->address();
-    for (uint32_t i = 0; i < grid.x * grid.y; ++i) {
-        const tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
-        auto& r = tt::tt_metal::GetRuntimeArgs(program, 0, core);  // {q, kv, idx, tok_start, tok_count, offset}
-        auto& w = tt::tt_metal::GetRuntimeArgs(program, 1, core);  // {out, tok_start, tok_count, kv, offset}
-        r[0] = q;
-        r[1] = kv;
-        r[2] = idx;
-        r[5] = offset;
-        w[0] = out;
-        w[3] = kv;
-        w[4] = offset;
-    }
+    const uint32_t kv = t.kv.buffer()->address();
+    auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, 0);
+    auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, 1);
+    reader_args[::sparse_sdpa::reader_common_arg::Q_ADDRESS] = t.q.buffer()->address();
+    reader_args[::sparse_sdpa::reader_common_arg::KV_ADDRESS] = kv;
+    reader_args[::sparse_sdpa::reader_common_arg::INDICES_ADDRESS] = t.indices.buffer()->address();
+    reader_args[::sparse_sdpa::reader_common_arg::KV_BATCH_PAGE_OFFSET] = offset;
+    writer_args[::sparse_sdpa::writer_common_arg::OUTPUT_ADDRESS] = tensor_return_value.buffer()->address();
+    writer_args[::sparse_sdpa::writer_common_arg::KV_ADDRESS] = kv;
+    writer_args[::sparse_sdpa::writer_common_arg::KV_BATCH_PAGE_OFFSET] = offset;
 }
 
 }  // namespace ttnn::prim
