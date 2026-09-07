@@ -614,6 +614,15 @@ class MiniMaxH3Pipeline:
         # The trace-bucket ladder and the arena capacities: both are admission limits (a request
         # beyond the top rung or any cap raises), both default to the task's envelope, both validated
         # now that the SP alignment is known.
+        # MINIMAX_H3_BUCKET_LADDER="22528,31744,..." overrides the task default when no kwarg is given.
+        # The rungs decide the padding every traced request pays: with the default ladder a 15 s
+        # request (109101 rows) runs at 119808 -- 9.6 % more rows in every op, and on the SP=32
+        # exp-ring SDPA a worse chunking (~30 % more attention work) -- where a 110592 rung would do;
+        # 5 s (37749) runs at 44032 (+16 %) where 38912 would do. Rungs must keep the SP alignment
+        # (`validate_bucket_ladder`), and each rung costs one trace capture at warmup.
+        env_ladder = os.environ.get("MINIMAX_H3_BUCKET_LADDER")
+        if bucket_ladder is None and env_ladder:
+            bucket_ladder = tuple(int(v) for v in env_ladder.split(",") if v.strip())
         self.bucket_ladder = tuple(bucket_ladder if bucket_ladder is not None else default_bucket_ladder(task))
         validate_bucket_ladder(self.bucket_ladder, self.sp_factor * ttnn.TILE_SIZE)
         self.arena_caps = arena_caps or MiniMaxH3ArenaCaps.for_task(task)
