@@ -88,12 +88,9 @@ void kernel_main() {
     ckernel::topk_tile_init();
     transpose_init(dfb::input_tensor);
 
-    if constexpr (stable) {
-        // Tie-break polarity is a property of the GLOBAL sort order and is programmed exactly
-        // once: it must never follow the per-core bitonic build direction (dir below, which
-        // alternates with core_id) nor the per-block merge direction.
-        ckernel::topk_set_stable_descending_mode(!ascending);
-    }
+    // Tie order follows the GLOBAL sort order, never the per-call idir.
+    constexpr auto tie_order =
+        (!ascending) ? ckernel::TopkTieOrder::Descending : ckernel::TopkTieOrder::Ascending;
 
     for (uint32_t h = 0; h < Ht; h++) {
 #ifdef IS_ROW_MAJOR
@@ -112,7 +109,7 @@ void kernel_main() {
         bool dir = ascending ^ ((core_id & 1) == 1);
 
         // Read input value data
-        sort_Wt_tiles_row_to_bitonic_sequence<stable>(
+        sort_Wt_tiles_row_to_bitonic_sequence<stable, tie_order>(
             input_tensor_dfb,
             index_tensor_dfb,
             input_tensor_transposed_dfb,
@@ -176,9 +173,12 @@ void kernel_main() {
 
                             if (sub == 1) {
                                 // Use sort LLK only the last stage to sort the last pair of tiles - speed up
-                                ckernel::topk_local_sort<stable>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                                ckernel::topk_local_sort<stable, DST_ACCUM_MODE, false, false, tie_order>(
+                                    /*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                             } else {
-                                ckernel::topk_merge</*idir=*/false, stable>(/*idst=*/0, m_iter, /*k=*/32);
+                                ckernel::
+                                    topk_merge</*idir=*/false, stable, DST_ACCUM_MODE, false, false, false, tie_order>(
+                                        /*idst=*/0, m_iter, /*k=*/32);
 
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                                 // We swap their indices when using descending order
@@ -290,7 +290,8 @@ void kernel_main() {
 
                         value_tensor_peer_dfb.pop_front(one_tile);
 
-                        ckernel::topk_merge</*idir=*/false, stable>(0, m_iter, 32);
+                        ckernel::topk_merge</*idir=*/false, stable, DST_ACCUM_MODE, false, false, false, tie_order>(
+                            0, m_iter, 32);
 
                         // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                         // If core must keep smallest values, then keep DEST[1] instead of DEST[0]

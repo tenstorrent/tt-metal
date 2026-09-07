@@ -46,11 +46,11 @@ void prepare_uint16_fp32_dest_value_tiles_for_pack(uint32_t dst_tile_a, uint32_t
  *
  * @tparam stable_sort Run the index-aware comparator-stable network: on exact value
  * ties the paired index tiles are compare-exchanged so ties resolve in the original
- * (ascending-index) order. Requires topk_set_stable_descending_mode() to have been
- * programmed once with the GLOBAL sort order (never the per-pair local direction,
- * which this helper deliberately alternates to build the bitonic sequence).
+ * (ascending-index) order.
+ * @tparam tie_order The GLOBAL sort order, never the per-pair local direction, which
+ * this helper deliberately alternates to build the bitonic sequence.
  */
-template <bool stable_sort = false>
+template <bool stable_sort = false, ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset>
 FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
     DataflowBuffer& input_dfb,
     DataflowBuffer& index_dfb,
@@ -82,7 +82,8 @@ FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
         transpose_tile(index_dfb.get_id(), 1, 3);
 
         // llk_topk_sort -> inplace
-        ckernel::topk_local_sort<stable_sort>(0, (int)ascending_local, end_phase);
+        ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, false, false, tie_order>(
+            0, (int)ascending_local, end_phase);
 
         // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).
         prepare_uint16_fp32_dest_value_tiles_for_pack(0, 1);

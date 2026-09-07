@@ -20,14 +20,15 @@ template <
     bool is_fp32_dest_acc_en,
     bool STABLE_SORT = false,
     bool FUSED = false,
-    bool RANK_STAMPED = false>
+    bool RANK_STAMPED = false,
+    ckernel::sfpu::TopkTieOrder TIE_ORDER = ckernel::sfpu::TopkTieOrder::Unset>
 inline void calculate_bitonic_topk_phases_steps(
     std::uint32_t idir,
     std::uint32_t i_end_phase,
     std::uint32_t i_start_phase,
     std::uint32_t i_end_step,
     std::uint32_t i_start_step) {
-    _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED>(
+    _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>(
         idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
 }
 
@@ -38,10 +39,18 @@ template <
     bool STABLE_SORT = false,
     bool FUSED = false,
     bool RANK_STAMPED = false,
-    bool PRE_TAGGED = false>
+    bool PRE_TAGGED = false,
+    ckernel::sfpu::TopkTieOrder TIE_ORDER = ckernel::sfpu::TopkTieOrder::Unset>
 inline void calculate_bitonic_topk_merge(std::uint32_t m_iter, std::uint32_t k) {
-    _bitonic_topk_merge<APPROXIMATION_MODE, is_fp32_dest_acc_en, idir, STABLE_SORT, FUSED, RANK_STAMPED, PRE_TAGGED>(
-        m_iter, k);
+    _bitonic_topk_merge<
+        APPROXIMATION_MODE,
+        is_fp32_dest_acc_en,
+        idir,
+        STABLE_SORT,
+        FUSED,
+        RANK_STAMPED,
+        PRE_TAGGED,
+        TIE_ORDER>(m_iter, k);
 }
 
 template <
@@ -49,10 +58,11 @@ template <
     bool is_fp32_dest_acc_en,
     bool STABLE_SORT = false,
     bool FUSED = false,
-    bool RANK_STAMPED = false>
+    bool RANK_STAMPED = false,
+    ckernel::sfpu::TopkTieOrder TIE_ORDER = ckernel::sfpu::TopkTieOrder::Unset>
 inline void calculate_bitonic_topk_rebuild(
     std::uint32_t idir, std::uint32_t m_iter, std::uint32_t k, std::uint32_t logk, std::uint32_t skip_second) {
-    _bitonic_topk_rebuild<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED>(
+    _bitonic_topk_rebuild<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>(
         idir, m_iter, k, logk, skip_second);
 }
 

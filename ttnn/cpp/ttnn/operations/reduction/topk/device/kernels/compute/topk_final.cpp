@@ -82,11 +82,9 @@ void kernel_main() {
     compute_kernel_hw_startup(input_dfb_index, values_dfb_index);
     copy_init(input_dfb_index);
     ckernel::topk_tile_init<fused_keys>();
-    if constexpr (stable_sort && !fused_keys) {
-        // Tie-break polarity is a property of the GLOBAL sort order (largest vs smallest); set once,
-        // never per-call from the local bitonic direction.
-        ckernel::topk_set_stable_descending_mode(largest != 0);
-    }
+    // Tie order follows the GLOBAL sort order, never the per-call idir.
+    constexpr auto tie_order =
+        (largest != 0) ? ckernel::TopkTieOrder::Descending : ckernel::TopkTieOrder::Ascending;
 
     DataflowBuffer input_dfb(input_dfb_index);
     DataflowBuffer index_dfb(index_dfb_index);
@@ -164,7 +162,7 @@ void kernel_main() {
         // - Iteration 1: Merge (0,2), (4,6), (8,10), ... across core boundaries
         // - Final iteration: Global TopK across all cores' contributions
         for (std::uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
-            process_iteration<network_stable, fused_keys>(
+            process_iteration<network_stable, fused_keys, tie_order>(
                 m_iter,                      // Current merge iteration
                 K,                           // TopK value
                 Wt,                          // Total width tiles (from all cores)

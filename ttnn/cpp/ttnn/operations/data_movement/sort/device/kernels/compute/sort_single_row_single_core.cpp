@@ -129,12 +129,9 @@ void kernel_main() {
     transpose_init(dfb::input_tensor);
 #endif
 
-    if constexpr (stable) {
-        // Tie-break polarity is a property of the GLOBAL sort order and is programmed exactly
-        // once: it must never follow the per-call sort direction (dir), which alternates below
-        // to build bitonic sequences. Survives the mid-kernel topk_tile_init re-inits.
-        ckernel::topk_set_stable_descending_mode(descending);
-    }
+    // Tie order follows the GLOBAL sort order, never the per-call idir.
+    constexpr auto tie_order =
+        (descending) ? ckernel::TopkTieOrder::Descending : ckernel::TopkTieOrder::Ascending;
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         const bool ascending = !descending;
@@ -184,7 +181,7 @@ void kernel_main() {
         }
 #endif
 
-        sort_Wt_tiles_row_to_bitonic_sequence<stable>(
+        sort_Wt_tiles_row_to_bitonic_sequence<stable, tie_order>(
             input_tensor_dfb,
             index_tensor_dfb,
             input_tensor_transposed_dfb,
@@ -245,9 +242,11 @@ void kernel_main() {
 
                         if (sub == 1) {
                             // Use sort LLK only the last stage to sort the last pair of tiles - speed up
-                            ckernel::topk_local_sort<stable>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                            ckernel::topk_local_sort<stable, DST_ACCUM_MODE, false, false, tie_order>(
+                                /*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                         } else {
-                            ckernel::topk_merge</*idir=*/false, stable>(/*idst=*/0, m_iter, /*k=*/64);
+                            ckernel::topk_merge</*idir=*/false, stable, DST_ACCUM_MODE, false, false, false, tie_order>(
+                                /*idst=*/0, m_iter, /*k=*/64);
 
                             if (dir) {
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]

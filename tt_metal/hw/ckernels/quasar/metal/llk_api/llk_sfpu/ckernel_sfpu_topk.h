@@ -29,9 +29,11 @@ enum SortDir : bool {
     ArgMin = true,
 };
 
-// No-op: stable sort is static_asserted off on Quasar; the stub keeps the arch-independent
-// compute API (topk_set_stable_descending_mode) compiling.
-inline void set_topk_stable_descending_mode(bool) {}
+enum class TopkTieOrder : std::uint8_t {
+    Unset,
+    Ascending,
+    Descending,
+};
 
 // Set the per-TRISC dest section base register for the math TRISC.
 // Quasar has separate SEC0..SEC3 registers (one per TRISC); this implementation
@@ -382,7 +384,8 @@ template <
     bool is_fp32_dest_acc_en,
     bool STABLE_SORT = false,
     bool FUSED = false,
-    bool RANK_STAMPED = false>
+    bool RANK_STAMPED = false,
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
 inline void calculate_bitonic_topk_phases_steps(
     const int initial_sort_dir,
     const int i_end_phase,
@@ -537,7 +540,8 @@ template <
     bool STABLE_SORT = false,
     bool FUSED = false,
     bool RANK_STAMPED = false,
-    bool PRE_TAGGED = false>
+    bool PRE_TAGGED = false,
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
 inline void calculate_bitonic_topk_merge(const int m_iter, const int k) {
     static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
     static_assert(!FUSED, "Fused-key TopK is not supported by the Quasar bitonic TopK path");
@@ -609,7 +613,8 @@ template <
     bool is_fp32_dest_acc_en,
     bool STABLE_SORT = false,
     bool FUSED = false,
-    bool RANK_STAMPED = false>
+    bool RANK_STAMPED = false,
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
 inline void calculate_bitonic_topk_rebuild(
     const bool initial_sort_dir, const int m_iter, const int k, const int logk, const int skip_second) {
     static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
