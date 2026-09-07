@@ -13,6 +13,20 @@
 #include "dataflow_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_loop_geometry.hpp"
 
+// Causal GQA K/V multicast (host: sdpa_program_factory.cpp, TT_SDPA_GQA_MCAST=1): the q-heads sharing a kv head
+// and the same q_chunk sit on one core rectangle; the injector reads each paged K/V chunk and multicasts it.
+#ifdef SDPA_GQA_KV_MCAST
+constexpr bool gqa_kv_mcast = true;
+#else
+constexpr bool gqa_kv_mcast = false;
+#endif
+// In GQA mode K and V come from different injector cores, so V arrival uses its own semaphore.
+#ifdef SDPA_GQA_RECV_SEM_V
+constexpr uint32_t gqa_recv_sem_v_id = SDPA_GQA_RECV_SEM_V;
+#else
+constexpr uint32_t gqa_recv_sem_v_id = 0;
+#endif
+
 // Fetch a KV chunk into L1 for forwarding. No CB lifecycle — caller manages
 // cb_reserve_back / cb_push_back. Single read barrier at end for lower latency.
 template <uint32_t tile_bytes, bool transpose, typename ReaderType>
@@ -149,11 +163,15 @@ void kernel_main() {
     uint32_t next_core_q_chunks = 0;
     uint32_t mcast_num_dests = 0;
     uint32_t mcast_sender_wait = 0;
+    // GQA mcast extras: V injector role, K/V injector NoC coords, multicast rectangle (both injectors).
+    uint32_t gqa_is_v_injector = 0;
+    uint32_t gqa_k_inj_x = 0, gqa_k_inj_y = 0, gqa_v_inj_x = 0, gqa_v_inj_y = 0;
+    uint32_t gqa_rect_sx = 0, gqa_rect_sy = 0, gqa_rect_ex = 0, gqa_rect_ey = 0;
 
     // Initialize NOC/semaphore state for chain forwarding
     uint32_t sender_wait_count = 1;
 
-    if constexpr (!is_causal) {
+    if constexpr (!is_causal || gqa_kv_mcast) {
         is_chain_participant = get_arg_val<uint32_t>(argidx++);
         is_injector = get_arg_val<uint32_t>(argidx++);
         is_sink = get_arg_val<uint32_t>(argidx++);
@@ -167,12 +185,23 @@ void kernel_main() {
         next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
         mcast_num_dests = get_arg_val<uint32_t>(argidx++);
         mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
+        if constexpr (gqa_kv_mcast) {
+            gqa_is_v_injector = get_arg_val<uint32_t>(argidx++);
+            gqa_k_inj_x = get_arg_val<uint32_t>(argidx++);
+            gqa_k_inj_y = get_arg_val<uint32_t>(argidx++);
+            gqa_v_inj_x = get_arg_val<uint32_t>(argidx++);
+            gqa_v_inj_y = get_arg_val<uint32_t>(argidx++);
+            gqa_rect_sx = get_arg_val<uint32_t>(argidx++);
+            gqa_rect_sy = get_arg_val<uint32_t>(argidx++);
+            gqa_rect_ex = get_arg_val<uint32_t>(argidx++);
+            gqa_rect_ey = get_arg_val<uint32_t>(argidx++);
+        }
 
         if (is_chain_participant) {
             Semaphore<>(valid_semaphore_id).set(VALID);
 
             if constexpr (mcast_enabled) {
-                if (is_injector) {
+                if (is_injector || (gqa_kv_mcast && gqa_is_v_injector)) {
                     sender_wait_count = mcast_sender_wait;
                 }
             }
@@ -230,7 +259,11 @@ void kernel_main() {
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / qk_subblock_h;
     constexpr bool use_q_subblock_push = (q_num_subblocks > 1);
 
+#ifdef SDPA_BARRIER_THRESHOLD
+    constexpr uint32_t barrier_threshold = SDPA_BARRIER_THRESHOLD;
+#else
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
+#endif
 
     const auto q_reader = TensorAccessor(q_args, q_addr);
     const auto k_reader = TensorAccessor(k_args, k_addr);
@@ -474,6 +507,33 @@ void kernel_main() {
                 should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
                                  (q_iter < next_core_q_chunks);
                 should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+            } else if constexpr (gqa_kv_mcast) {
+                // Causal GQA groups: the host gives every group core exactly one (head, q_chunk) unit with an
+                // identical K loop, so the group relationship holds for the whole kernel.
+                should_forward = is_chain_participant && is_injector;
+                should_receive = is_chain_participant && !is_injector;
+            }
+            // Per-tensor roles and NoC targets. Default: K and V share one injector/chain (existing behaviour).
+            // GQA mode: K is injected by `is_injector`, V by `gqa_is_v_injector`; both multicast to the same rect.
+            bool fwd_k = should_forward, rcv_k = should_receive, fwd_v = should_forward, rcv_v = should_receive;
+            uint32_t k_src_x = prev_physical_x, k_src_y = prev_physical_y;  // K receivers signal readiness here
+            uint32_t v_src_x = prev_physical_x, v_src_y = prev_physical_y;  // V receivers signal readiness here
+            uint32_t k_rect_sx = prev_physical_x, k_rect_sy = prev_physical_y;
+            uint32_t k_rect_ex = next_physical_x, k_rect_ey = next_physical_y;
+            uint32_t v_rect_sx = k_rect_sx, v_rect_sy = k_rect_sy, v_rect_ex = k_rect_ex, v_rect_ey = k_rect_ey;
+            uint32_t recv_sem_k = receiver_semaphore_id, recv_sem_v = receiver_semaphore_id;
+            if constexpr (gqa_kv_mcast) {
+                fwd_v = is_chain_participant && gqa_is_v_injector;
+                rcv_v = is_chain_participant && !gqa_is_v_injector;
+                k_src_x = gqa_k_inj_x;
+                k_src_y = gqa_k_inj_y;
+                v_src_x = gqa_v_inj_x;
+                v_src_y = gqa_v_inj_y;
+                k_rect_sx = v_rect_sx = gqa_rect_sx;
+                k_rect_sy = v_rect_sy = gqa_rect_sy;
+                k_rect_ex = v_rect_ex = gqa_rect_ex;
+                k_rect_ey = v_rect_ey = gqa_rect_ey;
+                recv_sem_v = gqa_recv_sem_v_id;
             }
 
             // loop while k_low < q_high
@@ -487,36 +547,58 @@ void kernel_main() {
                 // K: either read locally (injector or not participant) or receive from previous core
                 uint32_t cb_k_start_address = 0;
 
-                if (should_receive) {
+                if (rcv_k) {
                     // Receive forwarded K chunk from previous core
                     cb_k.reserve_back(k_chunk_tiles);
                     cb_k_start_address = cb_k.get_write_ptr();
-                    Semaphore<> receiver_sem(receiver_semaphore_id);
+                    Semaphore<> receiver_sem(recv_sem_k);
                     receiver_sem.set(INVALID);
-                    Semaphore<>(sender_semaphore_id).up(noc, prev_physical_x, prev_physical_y, 1);
+                    Semaphore<>(sender_semaphore_id).up(noc, k_src_x, k_src_y, 1);
                     receiver_sem.wait(VALID);
                     cb_k.push_back(k_chunk_tiles);
                 } else {
                     // Read K chunk from DRAM
                     if constexpr (is_chunked) {
-                        // Use page table to read K chunk (forwarding not supported for paged mode)
                         const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                        read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
-                            k_reader,
-                            cb_k_in,
-                            k_head,
-                            k_chunk_start_row_num,
-                            kv_row_tile_count,
-                            DHt,
-                            Sk_chunk_t,
-                            DHt,
-                            k_tile_bytes,
-                            barrier_threshold,
-                            page_table_ptr,
-                            true  // transpose=true for K reads
-                        );
+                        if (gqa_kv_mcast && fwd_k) {
+                            // Injector: read the paged chunk into the reserved slot; the mcast block below
+                            // forwards it and pushes.
+                            cb_k.reserve_back(k_chunk_tiles);
+                            cb_k_start_address = cb_k.get_write_ptr();
+                            read_paged_chunk_for_forwarding<NKH, block_size_t, DHt>(
+                                k_reader,
+                                cb_k_in,
+                                cb_k_start_address,
+                                k_head,
+                                k_chunk_start_row_num,
+                                kv_row_tile_count,
+                                DHt,
+                                Sk_chunk_t,
+                                DHt,
+                                k_tile_bytes,
+                                barrier_threshold,
+                                page_table_ptr,
+                                true  // transpose=true for K reads
+                            );
+                        } else {
+                            // Use page table to read K chunk (non-GQA chains do not forward paged K/V)
+                            read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
+                                k_reader,
+                                cb_k_in,
+                                k_head,
+                                k_chunk_start_row_num,
+                                kv_row_tile_count,
+                                DHt,
+                                Sk_chunk_t,
+                                DHt,
+                                k_tile_bytes,
+                                barrier_threshold,
+                                page_table_ptr,
+                                true  // transpose=true for K reads
+                            );
+                        }
                     } else {
-                        if (should_forward) {
+                        if (fwd_k) {
                             cb_k.reserve_back(k_chunk_tiles);
                             cb_k_start_address = cb_k.get_write_ptr();
                             read_chunk_for_forwarding<k_tile_bytes, true>(
@@ -549,7 +631,7 @@ void kernel_main() {
                 // The companion must be issued immediately after the linked write —
                 // any NOC read barrier between them deadlocks (the read barrier
                 // blocks while a linked write awaits its companion).
-                if (should_forward) {
+                if (fwd_k) {
                     Semaphore<> sender_sem(sender_semaphore_id);
                     sender_sem.wait(sender_wait_count);
                     sender_sem.set(0);
@@ -560,10 +642,10 @@ void kernel_main() {
                             k_chunk_tiles * k_tile_bytes,
                             mcast_num_dests,
                             {},
-                            {.noc_x_start = prev_physical_x,
-                             .noc_y_start = prev_physical_y,
-                             .noc_x_end = next_physical_x,
-                             .noc_y_end = next_physical_y,
+                            {.noc_x_start = k_rect_sx,
+                             .noc_y_start = k_rect_sy,
+                             .noc_x_end = k_rect_ex,
+                             .noc_y_end = k_rect_ey,
                              .addr = cb_k_start_address},
                             true /* linked: semaphore mcast follows */);
                         // Companion semaphore mcast: write the local valid_semaphore value into the
@@ -573,15 +655,15 @@ void kernel_main() {
                         Semaphore<>(valid_semaphore_id)
                             .relay_multicast(
                                 noc,
-                                Semaphore<>(receiver_semaphore_id),
-                                prev_physical_x,
-                                prev_physical_y,
-                                next_physical_x,
-                                next_physical_y,
+                                Semaphore<>(recv_sem_k),
+                                k_rect_sx,
+                                k_rect_sy,
+                                k_rect_ex,
+                                k_rect_ey,
                                 mcast_num_dests,
                                 /*linked=*/false);
                         noc.async_writes_flushed();
-                        if (!should_receive) {
+                        if (!rcv_k) {
                             cb_k.push_back(k_chunk_tiles);
                         }
                     } else {
@@ -641,14 +723,14 @@ void kernel_main() {
 
                 // Complete K forward: flush write and signal receiver(s)
                 // (mcast path already completed above — companion sent with linked write)
-                if (should_forward) {
+                if (fwd_k) {
                     if constexpr (!mcast_enabled) {
                         noc.async_writes_flushed();
-                        if (!should_receive) {
+                        if (!rcv_k) {
                             cb_k.push_back(k_chunk_tiles);
                         }
                         Semaphore<>(valid_semaphore_id)
-                            .relay_unicast(noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
+                            .relay_unicast(noc, Semaphore<>(recv_sem_k), next_physical_x, next_physical_y);
                     }
                 }
 
@@ -679,37 +761,58 @@ void kernel_main() {
                 // V: either read locally (injector or not participant) or receive from previous core
                 uint32_t cb_v_start_address = 0;
 
-                if (should_receive) {
+                if (rcv_v) {
                     // Receive forwarded V chunk from previous core
                     cb_v.reserve_back(v_chunk_tiles);
                     cb_v_start_address = cb_v.get_write_ptr();
-                    Semaphore<> receiver_sem(receiver_semaphore_id);
+                    Semaphore<> receiver_sem(recv_sem_v);
                     receiver_sem.set(INVALID);
-                    Semaphore<>(sender_semaphore_id).up(noc, prev_physical_x, prev_physical_y, 1);
+                    Semaphore<>(sender_semaphore_id).up(noc, v_src_x, v_src_y, 1);
                     receiver_sem.wait(VALID);
                     cb_v.push_back(v_chunk_tiles);
                 } else {
                     // Read V chunk from DRAM
                     if constexpr (is_chunked) {
-                        // Use page table to read V chunk (forwarding not supported for paged mode)
                         const uint32_t kv_chunk_start_row_num = k_chunk * Sk_chunk_t;
                         constexpr uint32_t head_dim = (use_mla && !mla_kv_overlap) ? vDHt : DHt;
-                        read_paged_chunk_with_padding<NVH, block_size_t, head_dim>(
-                            v_reader,
-                            cb_v_in,
-                            v_head,
-                            kv_chunk_start_row_num,
-                            kv_row_tile_count,
-                            vDHt,
-                            Sk_chunk_t,
-                            vDHt,
-                            v_tile_bytes,
-                            barrier_threshold,
-                            page_table_ptr,
-                            false,
-                            skip_src_cols);
+                        if (gqa_kv_mcast && fwd_v) {
+                            // Injector: read into the reserved slot; the mcast block below forwards and pushes.
+                            cb_v.reserve_back(v_chunk_tiles);
+                            cb_v_start_address = cb_v.get_write_ptr();
+                            read_paged_chunk_for_forwarding<NVH, block_size_t, head_dim>(
+                                v_reader,
+                                cb_v_in,
+                                cb_v_start_address,
+                                v_head,
+                                kv_chunk_start_row_num,
+                                kv_row_tile_count,
+                                vDHt,
+                                Sk_chunk_t,
+                                vDHt,
+                                v_tile_bytes,
+                                barrier_threshold,
+                                page_table_ptr,
+                                false,
+                                skip_src_cols);
+                        } else {
+                            // Use page table to read V chunk (non-GQA chains do not forward paged K/V)
+                            read_paged_chunk_with_padding<NVH, block_size_t, head_dim>(
+                                v_reader,
+                                cb_v_in,
+                                v_head,
+                                kv_chunk_start_row_num,
+                                kv_row_tile_count,
+                                vDHt,
+                                Sk_chunk_t,
+                                vDHt,
+                                v_tile_bytes,
+                                barrier_threshold,
+                                page_table_ptr,
+                                false,
+                                skip_src_cols);
+                        }
                     } else {
-                        if (should_forward) {
+                        if (fwd_v) {
                             cb_v.reserve_back(v_chunk_tiles);
                             cb_v_start_address = cb_v.get_write_ptr();
                             read_chunk_for_forwarding<v_tile_bytes, false>(
@@ -740,7 +843,7 @@ void kernel_main() {
 
                 // Forward V chunk to next core(s) before push_back — prevents compute from
                 // popping the buffer while the mcast is still reading from it.
-                if (should_forward) {
+                if (fwd_v) {
                     Semaphore<> sender_sem(sender_semaphore_id);
                     sender_sem.wait(sender_wait_count);
                     sender_sem.set(0);
@@ -751,21 +854,21 @@ void kernel_main() {
                             v_chunk_tiles * v_tile_bytes,
                             mcast_num_dests,
                             {},
-                            {.noc_x_start = prev_physical_x,
-                             .noc_y_start = prev_physical_y,
-                             .noc_x_end = next_physical_x,
-                             .noc_y_end = next_physical_y,
+                            {.noc_x_start = v_rect_sx,
+                             .noc_y_start = v_rect_sy,
+                             .noc_x_end = v_rect_ex,
+                             .noc_y_end = v_rect_ey,
                              .addr = cb_v_start_address},
                             true /* linked: semaphore mcast follows */);
                         // Companion semaphore mcast — see K path above for rationale.
                         Semaphore<>(valid_semaphore_id)
                             .relay_multicast(
                                 noc,
-                                Semaphore<>(receiver_semaphore_id),
-                                prev_physical_x,
-                                prev_physical_y,
-                                next_physical_x,
-                                next_physical_y,
+                                Semaphore<>(recv_sem_v),
+                                v_rect_sx,
+                                v_rect_sy,
+                                v_rect_ex,
+                                v_rect_ey,
                                 mcast_num_dests,
                                 /*linked=*/false);
                     } else {
@@ -779,9 +882,9 @@ void kernel_main() {
                     noc.async_writes_flushed();
                     if constexpr (!mcast_enabled) {
                         Semaphore<>(valid_semaphore_id)
-                            .relay_unicast(noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
+                            .relay_unicast(noc, Semaphore<>(recv_sem_v), next_physical_x, next_physical_y);
                     }
-                    if (!should_receive) {
+                    if (!rcv_v) {
                         cb_v.push_back(v_chunk_tiles);
                     }
                 }

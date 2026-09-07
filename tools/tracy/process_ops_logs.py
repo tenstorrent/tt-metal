@@ -680,10 +680,14 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                # Local tweak: a host op without device rows (e.g. captured inside a trace whose replay rows were not
+                # attributed) used to abort the whole report; skip it instead so the remaining ops are still reported.
+                logger.warning(
+                    f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
+                    f"for device {device_id} (trace_id={host_trace_id}); skipping"
+                )
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
