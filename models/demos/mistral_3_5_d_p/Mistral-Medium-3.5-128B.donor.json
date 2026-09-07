@@ -1,0 +1,124 @@
+{
+  "_comment": "Donor map for prefill model bring-up: for each part, which existing file to copy from. ADVISORY - these are pointers that guide and advise the implementation. The prefill spec is binding and takes priority over anything here; where a donor conflicts with the spec, the donor is wrong.",
+  "_resolution": {
+    "all_entries": "Every entry here must be filled by the donor for that entry. Usage of a donor is for agent to look into implementation and copy/adapt the donor's file into the new package. The donor is a template, not a reference.",
+    "kv_cache": "Coupled cluster: set donor_package, then fill every path in sub_entry_paths from THAT package. Never source the seven roles from different packages."
+  },
+  "_generated": {
+    "by": "models/tooling/arch_donor (HF-config similarity) + manual resolution of TT-side file roles",
+    "target_config": "models/demos/mistral_3_5_d_p/configs/Mistral-Medium-3.5-128B/config.json",
+    "hf_repo": "mistralai/Mistral-Medium-3.5-128B",
+    "donor_paths_verified_against": "branch dgolubovic/prefil-bringup-recipe",
+    "date": "2026-09-07",
+    "arch_donor_verdict": "closest overall = Llama-3.3-70B-Instruct (5/5 blocks, proven, models/demos/llama3_70b_galaxy) - attention compatible (llama3->yarn rope scaling, host-side), mlp identical shapeDelta 0.00. NOT used as the donor here: llama3_70b_galaxy is not a common/prefill engine package. See DONOR_RATIONALE_Mistral-Medium-3.5-128B.md, judgment call #1.",
+    "target_facts_used": {
+      "family": "mistral3 / ministral3 text_config (Mistral3ForConditionalGeneration wrapper - text backbone only, vision tower out of scope)",
+      "attention": "dense GQA, 96 q heads / 8 kv heads / head_dim 128, full rotary, no QK-norm, no sinks, no sliding window, no qkv bias",
+      "mlp": "dense SwiGLU (silu), intermediate 28672, no MoE on any layer",
+      "rope": "yarn, theta 1e6, factor 64, original_max_position 4096, beta_fast 4.0, beta_slow 1.0, mscale 1.0, mscale_all_dim 0.0",
+      "norm": "RMSNorm, eps 1e-5",
+      "layers": 88,
+      "hidden": 12288,
+      "vocab": 131072,
+      "checkpoint_quant": "fp8, activation_scheme static, weight_block_size null (=> PER-TENSOR weight_scale, not DeepSeek-style blockwise weight_scale_inv); modules_to_not_convert = vision_tower, multi_modal_projector, lm_head"
+    },
+    "confidence": {
+      "high": ["compute.attention", "compute.rope", "kv_cache", "serving.runtime", "weights.loading"],
+      "medium": ["compute.mlp_dense", "migration.hooks"],
+      "low": ["weights.dequant_and_permute"]
+    },
+    "open_gaps": [
+      "migration.hooks: the gpt_oss_d_p runtime does NOT implement kv_migration_stages (it migrates via kv_migration_base_address + build_kv_chunk_table). Write it fresh, patterned on models/demos/minimax_m3/tt/tt_prefill_runtime.py:429, emitting TWO KvCacheStage entries (k, v) - M3's third stage is index_k, which a dense GQA model does not have.",
+      "weights.dequant_and_permute: no donor in the repo dequantizes PER-TENSOR fp8. Every fp8 donor is DeepSeek blockwise (weight_scale_inv + weight_block_size); the only other quant donor is Kimi K2.6 packed INT4. Expect to write the scale application itself.",
+      "compute.mlp_dense: the only dense-MLP donor in a prefill package is MiniMax-M3's, whose activation is clamped SwiGLU-OAI, not plain silu SwiGLU."
+    ]
+  },
+  "model": {
+    "name": "Mistral-Medium-3.5-128B",
+    "_note": "Label only, so a filled map says which model it belongs to. The model's own facts (attention family, dims, checkpoint) live in the recipe's fact sheet, not here."
+  },
+  "weights": {
+    "loading": {
+      "donor": "models/demos/gpt_oss_d_p/tt/model_config.py",
+      "_delta": "Plays exactly this role: ModelArgs.load_state_dict -> _load_safetensors (dequantize-on-load) -> convert_hf_qkv_to_meta_format for the on-device RoPE, plus weight_cache_path. Adapt: (a) strip the Mistral3ForConditionalGeneration wrapper prefix - keys are language_model.*/model.language_model.*, unlike gpt-oss which is already model.*/lm_head.*; (b) drop every MoE expert key path (no experts); (c) drop vision_tower / multi_modal_projector keys (text backbone only); (d) head_dim 128 in the Meta-format permute; (e) replace the MXFP4 dequant with fp8 (see weights.dequant_and_permute).",
+      "notes": "Depends on checkpoint format. safetensors iteration, prefix filtering, dtype conversion."
+    },
+    "dequant_and_permute": {
+      "donor": "models/demos/deepseek_v3/utils/hf_model_utils.py",
+      "required": true,
+      "_delta": "WEAKEST ENTRY IN THIS MAP. dequantize_state_dict / dequantize_weight_tensor are the closest fp8 dequant in the repo, but they assume DeepSeek BLOCKWISE fp8: a '<name>_scale_inv' sibling plus get_weight_block_shape(hf_config) from config.quantization_config.weight_block_size. Mistral ships weight_block_size: null with activation_scheme static, i.e. compressed-tensors/vLLM PER-TENSOR fp8: '<name>.weight' (float8_e4m3fn) + '<name>.weight_scale' (scalar) + '<name>.input_scale'. Reuse the structure - the sorted key walk, the 'fp8 tensor with no matching scale' hard failure, the .to(bfloat16).contiguous() exit - and replace the block-broadcast reshape with a scalar multiply. Also honour modules_to_not_convert (vision_tower, multi_modal_projector, lm_head are NOT quantized) and drop input_scale keys. The permute half of this entry is not here: it is convert_hf_qkv_to_meta_format, reached via the weights.loading donor. Cross-check against models/demos/blackhole/qwen36/tt/tp_common.py:657 (dequant_fp8_block) for a second reading of fp8 scale application.",
+      "notes": "Only if the checkpoint is quantized or packed. qkv fusion/swizzle, tile-alignment padding, bias handling."
+    }
+  },
+  "compute": {
+    "mlp_dense": {
+      "donor": "models/demos/minimax_m3/tt/dense_mlp.py",
+      "_delta": "Chosen because gpt_oss_d_p has NO dense MLP - every GPT-OSS layer is MoE, so models/demos/gpt_oss_d_p/tt/mlp.py is a router+EP wrapper and the wrong shape entirely. What transfers is what this entry is for: gate/up column-parallel over TP, down row-parallel followed by a TP all-reduce, and the sharded-residual discipline. Adapt: activation clamped SwiGLU-OAI (moe/activation.swiglu) -> plain silu SwiGLU (ttnn.silu * up), intermediate 12288 -> 28672, and every layer is dense (M3 gates this file to layers 0-2 on moe_layer_freq). Weight keys mlp.{gate,up,down}_proj match. Note this donor pulls minimax_m3 utils (general_utils.get_cache_file_name, profiler_utils, substate, residual) while the rest of this map is gpt_oss_d_p - port the file's structure onto the gpt_oss_d_p equivalents rather than importing across packages.",
+      "notes": "Column/row-parallel split and where the CCL lands."
+    },
+    "moe_wrapper": {
+      "donor": "",
+      "required": false,
+      "_delta": "N/A - Mistral Medium 3.5 is dense (128B dense, no experts anywhere in the config). Leave empty; do not import the DeepSeek EP substrate.",
+      "notes": "Thin per-model wrapper over the imported substrate: router, activation variant, shared-expert presence."
+    },
+    "attention": {
+      "donor": "models/demos/gpt_oss_d_p/tt/attention/prefill.py",
+      "_delta": "PARTIAL donor, and the strongest structural match available: GQA (not MLA), full rotary with YaRN baked into cos/sin, no QK-norm, no MSA/sparse branch, cache-backed RingJointSDPA from chunk 0 with the one-shot all-gather/SDPA/reduce-scatter fallback - which is Mistral's shape minus three features. Remove: attention sinks (weights.sinks / attention_sink), per-layer sliding-window masking (config.sliding_window is null for every Mistral layer, so every layer is full-causal - this also collapses gpt-oss's dual gather-buffer sizing in dense_sp._gather_seq_len to the full-sequence branch), and the q/k/v/o projection biases (attention_bias false). Reshape: head_dim 64 -> 128, n_q 64 -> 96, n_kv 8 -> 8 (UNCHANGED - the 1-KV-head-per-TP-column layout at TP=8 carries over exactly, which is why this package fits). The whole tt/attention/ directory travels with the kv_cache cluster below; the attention math itself is the model and does not transfer.",
+      "notes": "PARTIAL donor. Head split, projection sharding, program configs, output-proj CCL tail transfer. The attention math does not."
+    },
+    "rope": {
+      "donor": "models/demos/gpt_oss_d_p/tt/rope.py",
+      "required": true,
+      "_delta": "Near-exact match: this file is already YaRN + FULL rotary + the whole-cache block-cyclic SP-sharded indexed rope built once, in the Meta interleaved convention that rotary_embedding_indexed and get_rot_transformation_mat expect. Adapt the YaRN constants only: theta 150000 -> 1000000, factor 32 -> 64, beta_fast 32 -> 4.0, beta_slow 1.0 -> 1.0, original_max_position 4096 -> 4096 (unchanged), head_dim 64 -> 128. Read the constants from config.text_config.rope_parameters rather than module defaults. Two traps: (1) keep the no-floor/no-ceil correction dims - the inline comment explains why truncating collapses long-context K PCC, and Mistral has no 'truncate' key so HF's float path applies; (2) Mistral's rope_parameters carries DeepSeek-style mscale/mscale_all_dim keys (1.0 / 0.0) alongside beta_fast/beta_slow - confirm against the transformers _compute_yarn_parameters branch that ministral3 actually takes before trusting gpt-oss's attention_factor computation. Shares its tile-alignment constraint with the KV cache (max_seq_len % (TILE_SIZE * sp) == 0).",
+      "notes": "Variant plumbing plus the whole-cache indexed rope built once. Shares its alignment constraint with the KV cache."
+    }
+  },
+  "kv_cache": {
+    "_comment": "COUPLED CLUSTER. All seven roles must come from the SAME donor package. Sourcing them from different packages produces silent PCC loss or wrong migration addresses, never a crash.",
+    "_how_to_fill": "1) Set donor_package. 2) For each role below, find the file that plays it inside that package and record the path RELATIVE to the package root. Package layouts differ - locate the files, do not assume a path. Use sub_entry_roles to know what to look for.",
+    "donor_package": "models/demos/gpt_oss_d_p",
+    "_delta": "gpt_oss_d_p is the only GQA (two-cache k/v) prefill package. minimax_m3 allocates three caches (k, v, index_k for MSA) and deepseek_v3_d_p allocates one MLA latent (init_kvpe_cache) - both wrong cache counts for dense GQA. Also preferred per DONOR_RATIONALE: gpt_oss calls get_num_dram_banks(mesh_device) where M3 hardcodes BH_NUM_DRAM_BANKS = 8. Adapt across all seven files: head_dim 64 -> 128, num_layers 36 -> 88, and drop the sinks / sliding-window threading. num_kv_heads stays 8, so the slot formula, the 32-token DRAM bank walk, ROUND_ROBIN_1D, and the one-KV-head-per-TP-column mapping all carry over unchanged. Verify mechanically after copying: grep the six files for the per-chip shape, slot = user_id * num_layers + layer_idx, 32 contiguous tokens per bank, ROUND_ROBIN_1D, SP block-cyclic, and max_seq_len % (TILE_SIZE * sp) == 0, and assert they agree. Do NOT call init_kvpe_cache (MLA-specific, one latent cache); reuse its NdShard spec only. Host-only check before touching a mesh: tests/test_kv_cache_table.py.",
+    "sub_entry_paths": {
+      "layout_and_allocation": "tt/attention/kv_cache.py",
+      "write_op": "tt/attention/kv_cache.py",
+      "attention_read_path": "tt/attention/dense_sp.py",
+      "sdpa_path_selection": "tt/attention/prefill.py",
+      "kvcaches_handle": "tt/runners/adapters/gpt_oss.py",
+      "runtime_offsets": "tt/tt_prefill_runtime.py",
+      "address_table": "tt/runners/kv_chunk_table.py"
+    },
+    "_sub_entry_notes": {
+      "layout_and_allocation": "GptOssKVCache dataclass + allocate_kv_cache. Two caches (k, v), per-chip [num_users*num_layers, 1, seq_local, head_dim], NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32, cache_dtype bfloat8_b. Change head_dim default 64 -> 128.",
+      "write_op": "write_kv_chunk (kv_cache.py:138) + its _write_one helper - the update_padded_kv_cache call with the slot/layer range asserts and the kv_actual tile-alignment assert. Same file as the layout by design in this package. dense_sp.py also issues update_padded_kv_cache under write_chunk=True (the fused per-chunk write inside the ring path); both call sites must stay consistent.",
+      "attention_read_path": "dense_sp_attention - ring_joint_scaled_dot_product_attention over the block-cyclic SP cache, is_balanced=False. Drop attention_sink and sliding_window_size, which also removes the compact-halo branch of _gather_seq_len.",
+      "sdpa_path_selection": "attention_forward + _run_sdpa: chooses cache-backed ring vs the one-shot all-gather/SDPA/reduce-scatter fallback (equal-size Q and K/V slabs are unsupported by RingJointSDPA sliding). The bf8-cache assertion in dense_sp is the fail-loud guard - keep it.",
+      "kvcaches_handle": "GptOssKvCaches (adapters/gpt_oss.py:31), the indexable list the engine holds opaquely and the runtime's _resolve_kv unwraps via [0]. NOTE this package has two KvCaches subclasses - GptOssKVCache in tt/attention/kv_cache.py is the tensor struct; GptOssKvCaches here is the engine handle. Copy both, keep the distinction.",
+      "runtime_offsets": "_resolve_kv + prefill_chunk's actual_start/actual_end -> kv_actual mapping and its chunk-range assertions.",
+      "address_table": "build_and_serialize_kv_chunk_table - config 0..N-1 = k head 0..N-1, config N..2N-1 = v head 0..N-1, N == num_kv_heads == TP columns == 8. Keep the zero-padded config names: protobuf import rebuilds through a std::map, so '10' sorts before '2' and unpadded names break producer lookups for N > 10. Imports NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK from the allocator - keep that import rather than re-declaring the constant."
+    },
+    "sub_entry_roles": {
+      "layout_and_allocation": "Defines the cache tensors: per-chip shape, DRAM NdShard spec, slot packing. The source of truth for the layout.",
+      "write_op": "The update_padded_kv_cache call: slot/layer indexing, dtype match, tile-aligned chunk boundary.",
+      "attention_read_path": "The SDPA that reads the block-cyclic cache back (ring / sparse). This op is why the layout is canonical.",
+      "sdpa_path_selection": "Chooses one-shot vs cache-backed per chunk, and fails loud on unimplemented cases.",
+      "kvcaches_handle": "The KvCaches subclass the engine holds as an opaque handle.",
+      "runtime_offsets": "Maps actual_start/actual_end onto cache writes, plus the range assertions.",
+      "address_table": "DRAM bank walk for migration: turns (slot, layer, token range) into an address."
+    }
+  },
+  "serving": {
+    "runtime": {
+      "donor": "models/demos/gpt_oss_d_p/tt/tt_prefill_runtime.py",
+      "_delta": "Pairs with the kv_cache cluster above, as required. Already the GQA shape: compile / make_chunk_input / _resolve_kv / prefill_chunk / read_slot_kv / gather_layer, SP-sharded uint32 H2D token delivery, and layer acks via set_layer_ack_channel rather than the D2H path. Adapt: 36 -> 88 layers, head_dim 128, drop the sinks/sliding-window plumbing, and drop the MoE gate-mode config (default_gate_mode DEVICE_FP32 is MoE-only). gather_layer's 'no index_k (GQA)' comment already describes Mistral.",
+      "notes": "compile / make_chunk_input / _resolve_kv / prefill_chunk. Pairs with the kv_cache cluster."
+    }
+  },
+  "migration": {
+    "hooks": {
+      "donor": "models/demos/gpt_oss_d_p/tt/tt_prefill_runtime.py",
+      "_delta": "INCOMPLETE DONOR - the one gap in this map. Kept in gpt_oss_d_p to preserve the kv_cache cluster pairing (migration addresses must match the allocator that produced them). Present here: kv_migration_base_address (returns K's buffer_address), set_layer_ack_channel (per-layer inject(1)), build_kv_chunk_table, read_slot_kv. MISSING here: kv_migration_stages - gpt_oss_d_p is single-rank and migrates via base_address + the multi-config table, and rejects PREFILL_ENABLE_MIGRATION=1 for num_ranks > 1. Write kv_migration_stages fresh, patterned on models/demos/minimax_m3/tt/tt_prefill_runtime.py:429, emitting TWO KvCacheStage(buffer_address, first_layer_idx, num_my_layers) entries for (k, v) - M3 emits three because of index_k. Take the pattern only; the addresses must come from the gpt_oss_d_p-derived allocator. Interface contract: models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md:158. Shared helpers stay imported from models/demos/common/prefill/runners/migration.py (KvCacheStage, get_num_dram_banks) - do not copy them.",
+      "notes": "kv_migration_base_address / kv_migration_stages / set_layer_ack_channel. Pairs with the kv_cache cluster."
+    }
+  }
+}

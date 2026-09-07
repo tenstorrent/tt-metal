@@ -1,0 +1,42 @@
+{
+  "_comment": "BINDING prefill spec. Only carries what the HF config and the checkpoint CANNOT tell you, plus the few targets the bring-up is graded against. Anything readable from config.json - dims, layer count, attention family, rope, vocab, norm eps, expert counts, checkpoint quantization - is NOT here; read it from the config. Where a donor conflicts with this file, this file wins.",
+
+  "model_name": "Mistral-Medium-3.5-128B",
+
+  "target_hw": "bh_galaxy",
+  "_target_hw_options": ["bh_galaxy", "wh_galaxy", "bh_loudbox", "bh_quietbox", "single_bh"],
+
+  "parallelism": {
+    "tp": 8,
+    "sp": 4
+  },
+
+  "shapes": {
+    "_note": "max_seq_len is the prefill sequence length to bring up (the model's max context). Both values must satisfy % (32 * sp) == 0 - chunk_size is the block-cyclic addressing period of the KV table, so a misaligned value corrupts addresses silently rather than failing.",
+    "max_seq_len": 262144,
+    "chunk_size": 5120
+  },
+
+  "dataformats": {
+    "_note": "ttnn dtype spellings: bfloat16 | bfloat8_b | bfloat4_b | float32. Three independent groups, each with its own default. An empty or absent override inherits that group's default.",
+    "activations": {
+      "default": "bfloat16"
+    },
+    "kv_cache": {
+      "default": "bfloat8_b"
+    },
+    "weights": {
+      "default": "bfloat8_b",
+      "attention": "",
+      "mlp": {
+        "up": "",
+        "gate": "",
+        "down": ""
+      }
+    }
+  },
+
+  "acceptance": {
+    "pcc": 0.99
+  }
+}
