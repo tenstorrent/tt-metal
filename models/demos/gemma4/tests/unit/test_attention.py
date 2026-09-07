@@ -34,6 +34,22 @@ from ...tests.test_factory import (
 )
 
 
+def _attn_weight_dtype(mesh_device):
+    """Weight dtype for the TT attention module under test — same source as the demo.
+
+    These tests construct ``Gemma4Attention`` directly, so they never pass through
+    ``tt/common.py:create_tt_model``, the only place ``Gemma4Precision.load`` reads
+    ``precision_overrides.json``. Left to the constructor default they would PCC
+    bf16 weights while the demo runs bfp8, so a precision regression in the shipped
+    config could not fail this test. Resolve the same table instead.
+    """
+    from models.demos.gemma4.tt.precision import Gemma4Precision
+
+    mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    precision = Gemma4Precision.load(_get_model_path(), mesh_shape)
+    return precision.get("attention", ttnn.bfloat16)
+
+
 def _skip_if_l1_overflow(config, mesh_device):
     """Skip if global attention head_dim overflows L1 on this mesh config."""
     tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
@@ -91,6 +107,20 @@ def _from_device(tensor, mesh_device):
     if is_mesh:
         return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
     return ttnn.to_torch(tensor)
+
+
+def _slice_rope(cos_tt, sin_tt, start, length):
+    """Slice 4D RoPE caches to ``[start, start+length)``.
+
+    ``Gemma4Attention`` applies ``rotary_embedding`` from position 0 of the
+    cos/sin it is given. The model (``_get_rope_mats(..., start_pos=)``) is
+    what offsets generator chunks; unit tests that call attention directly
+    must slice the same way or continuation tokens restart RoPE at 0.
+    """
+    return (
+        cos_tt[:, :, start : start + length, :],
+        sin_tt[:, :, start : start + length, :],
+    )
 
 
 # ── Prefill PCC Test ──────────────────────────────────────────────────────
@@ -258,7 +288,14 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
     max_seq_len = max_num_blocks * block_size
     paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
 
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=1))
+    # Match ``init_kv_cache`` / weight sharding: local KV heads come from mesh
+    # TP, not a hard-coded tp=1. On 1x8 GQA (4 KV heads < 8 devices) the cache
+    # is 1 head/device; a full [1, 4, ...] fill then fails paged_fill_cache.
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
+    is_mesh = num_devices > 1
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
     kv_cache = init_kv_cache(
         mesh_device=mesh_device, config=config, paged_attention_config=paged_attention_config, cache_dtype=ttnn.bfloat16
     )
@@ -267,7 +304,7 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
         mesh_device=mesh_device,
         config=config,
         state_dict=state_dict,
-        ccl_manager=None,
+        ccl_manager=ccl_manager,
         mesh_config=mesh_config,
         program_config=None,
         layer_idx=layer_idx,
@@ -282,15 +319,31 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
     hf_cache = DynamicCache()
     hf_cache.update(k_data.clone(), v_data.clone(), layer_idx=layer_idx)
 
-    # TT paged cache fill
+    # TT paged cache fill — GQA-replicated when num_kv_heads < tp (same as batched).
     page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(1, max_num_blocks)
-    page_table_tt = ttnn.from_torch(page_table, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
-    k_cache_tt, v_cache_tt = kv_cache
-    k_fill = ttnn.from_torch(
-        k_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    page_table_tt = ttnn.from_torch(
+        page_table,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
-    v_fill = ttnn.from_torch(
-        v_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    k_cache_tt, v_cache_tt = kv_cache
+    k_fill = _kv_fill_to_tt(
+        k_data,
+        mesh_device,
+        num_kv_heads=config.num_key_value_heads,
+        num_attention_heads=config.num_attention_heads,
+        tp=tp,
+        num_devices=num_devices,
+    )
+    v_fill = _kv_fill_to_tt(
+        v_data,
+        mesh_device,
+        num_kv_heads=config.num_key_value_heads,
+        num_attention_heads=config.num_attention_heads,
+        tp=tp,
+        num_devices=num_devices,
     )
     ttnn.experimental.paged_fill_cache(k_cache_tt, k_fill, page_table_tt, batch_idx=0)
     ttnn.experimental.paged_fill_cache(v_cache_tt, v_fill, page_table_tt, batch_idx=0)
@@ -315,14 +368,13 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
 
     # TT decode with paged attention
     cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max_seq_len, layer_idx)
-    x_tt = ttnn.from_torch(
-        x_torch.unsqueeze(0).to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-    )
+    x_tt = _to_device(x_torch.unsqueeze(0).to(torch.bfloat16), mesh_device)
     position_idx_tt = ttnn.from_torch(
         torch.tensor([[cache_len]], dtype=torch.int32),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.int32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
     tt_output = tt_attn(
         x_tt,
@@ -332,7 +384,7 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
         token_index=cache_len,
         page_table=page_table_tt,
     )
-    tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).float()
+    tt_output_torch = _from_device(tt_output, mesh_device).squeeze(0).float()
 
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, (
@@ -720,7 +772,12 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
 
     Reproduces the shield failure mode where chunk_start=384 arrives on the
     continuation without sliding_tail_in because the prior short chunk skipped
-    the post-SDPA stash (kseq < hist).
+    the post-SDPA stash (kseq < hist). Also PCC's the 1024-token continuation
+    and the following 128-token remnant against one unchunked prefill of the
+    same tokens. Each chunk's RoPE cache is sliced to
+    ``[chunk_start, chunk_start+len)`` — the same offset the model applies
+    before calling attention; without it continuation tokens restart at
+    position 0 and the unchunked compare is meaningless.
     """
     from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
     from models.tt_transformers.tt.common import PagedAttentionConfig
@@ -770,7 +827,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     x1 = torch.randn(1, 1, short_len, config.hidden_size, dtype=torch.bfloat16)
     out1 = tt_attn(
         _to_device(x1, mesh_device),
-        rope_mats=(cos_tt, sin_tt),
+        rope_mats=_slice_rope(cos_tt, sin_tt, 0, short_len),
         is_decode=False,
         page_table=page_table_tt,
         kv_cache=kv_cache,
@@ -789,7 +846,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     chunk2_pt_tt = ttnn.from_torch(chunk2_pt, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
     out2 = tt_attn(
         _to_device(x2, mesh_device),
-        rope_mats=(cos_tt, sin_tt),
+        rope_mats=_slice_rope(cos_tt, sin_tt, short_len, cont_len),
         is_decode=False,
         page_table=page_table_tt,
         kv_cache=kv_cache,
@@ -806,7 +863,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     chunk3_pt_tt = ttnn.from_torch(chunk3_pt, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
     out3 = tt_attn(
         _to_device(x3, mesh_device),
-        rope_mats=(cos_tt, sin_tt),
+        rope_mats=_slice_rope(cos_tt, sin_tt, total_seq, short_cont),
         is_decode=False,
         page_table=page_table_tt,
         kv_cache=kv_cache,
@@ -815,3 +872,42 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     )
     out3_torch = _from_device(out3, mesh_device)
     assert out3_torch.shape[-2] == short_cont, "short continuation with seq < hist failed"
+    # Codex: short-first + consecutive-short vs one unchunked prefill of the
+    # same tokens (not just stash shapes).
+    x_full = torch.cat([x1, x2, x3], dim=2)
+    kv_ref = init_kv_cache(
+        mesh_device=mesh_device,
+        config=config,
+        paged_attention_config=paged_attention_config,
+        cache_dtype=ttnn.bfloat16,
+    )
+    tt_ref = Gemma4Attention(
+        mesh_device=mesh_device,
+        config=config,
+        state_dict=state_dict,
+        ccl_manager=None,
+        mesh_config=mesh_config,
+        program_config=None,
+        layer_idx=layer_idx,
+        weight_dtype=_attn_weight_dtype(mesh_device),
+    )
+    tt_ref.kv_cache = kv_ref
+    out_full = tt_ref(
+        _to_device(x_full, mesh_device),
+        rope_mats=_slice_rope(cos_tt, sin_tt, 0, final_seq),
+        is_decode=False,
+        page_table=page_table_tt,
+        kv_cache=kv_ref,
+        chunk_start_idx=0,
+        valid_seq_len=final_seq,
+    )
+    full_torch = _from_device(out_full, mesh_device).float()
+    out_full.deallocate(True)
+    # Cross-path: hist-concat SDPA vs one unchunked prefill. Same tokens /
+    # RoPE, different program configs — measured 0.98974 on 31B WH 1x1.
+    # Unmeasured models use 0.98 (not the 0.99 same-path default).
+    pcc = get_pcc_threshold(request, default=0.98)
+    passing2, msg2 = compare_tensors(out2_torch.float(), full_torch[:, :, short_len:total_seq, :], pcc_threshold=pcc)
+    assert passing2, f"short-first continuation vs unchunked PCC too low: {msg2}"
+    passing3, msg3 = compare_tensors(out3_torch.float(), full_torch[:, :, total_seq:final_seq, :], pcc_threshold=pcc)
+    assert passing3, f"consecutive-short continuation vs unchunked PCC too low: {msg3}"
