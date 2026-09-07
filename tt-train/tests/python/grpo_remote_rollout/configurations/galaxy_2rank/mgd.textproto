@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-# Two adjacent [1, 8] rows from the native 32-device Blackhole Galaxy graph.
+# One directly connected device from each of two adjacent rows in the native
+# 32-device Blackhole Galaxy graph.
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology { dims: [ 1, 8 ] }
+  device_topology { dims: [ 1, 1 ] }
   host_topology { dims: [ 1, 1 ] }
   channels {
     count: 2
@@ -22,7 +23,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    channels { count: 8 }
+    channels { count: 1 }
     directional: false
   }
 }
