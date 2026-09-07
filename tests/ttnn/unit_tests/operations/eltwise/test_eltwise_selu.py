@@ -159,4 +159,4 @@ def test_selu_canonical_constants_precision(device):
     )
     tt_result = ttnn.selu(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert_with_pcc(golden, result, 0.999)
+    assert_with_ulp(golden, result)
