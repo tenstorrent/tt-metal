@@ -609,13 +609,24 @@ class GLM47FlashForCausalLM:
         **kwargs: Any,
     ) -> torch.Tensor:
         self._check_cache(kv_cache)
-        if start_pos is not None and any(int(p) != 0 for p in start_pos):
-            raise ValueError(
-                "GLM-4.7-Flash's paged-latent prefill always starts a fresh request at position 0 "
-                "(no resumed/chunked-prefill continuation), matching the DeepSeek-V3 TT adapter's "
-                "identical MLA-family limitation; got non-zero start_pos in a prefill call. Launch "
-                "the server without chunked prefill for this model."
-            )
+        # ``start_pos`` is the absolute position each row's tokens begin at: all
+        # zeros for whole prompts, and the running total of earlier chunks when
+        # the scheduler splits one prompt across steps. The paged-latent prefill
+        # resumes correctly at any block boundary (see
+        # ``FusedDecoder.prefill_forward`` and ``tests/test_prefill_resume.py``),
+        # so a continuation is passed straight through rather than refused.
+        chunk_starts = [0] * len(prompt_lens) if start_pos is None else [int(p) for p in start_pos]
+        resuming = any(p != 0 for p in chunk_starts)
+        if resuming:
+            block = self.generator.model.paged_config.block_size
+            misaligned = [p for p in chunk_starts if p % block]
+            if misaligned:
+                raise ValueError(
+                    f"chunked prefill resumed at {misaligned[:4]}, which is not a multiple of the "
+                    f"paged block size {block}. The page table addresses whole blocks, so an "
+                    "unaligned resume would write a chunk's keys into the previous block. Set the "
+                    f"scheduler's prefill chunk size to a multiple of {block}."
+                )
         num_rows = len(prompt_lens)
         slots = list(empty_slots) if empty_slots is not None else list(range(num_rows))
         if len(slots) != num_rows:
@@ -644,7 +655,28 @@ class GLM47FlashForCausalLM:
                 kv_cache=kv_cache,
                 prompt_lens=prompt_lens,
                 user_ids=slots,
+                chunk_starts=chunk_starts,
                 return_all_logits=False,
+            )
+
+        if resuming:
+            # The device-sampling path samples the chunk's last position and calls
+            # set_decode_tokens with the result. On a NON-final chunk that seeds
+            # decode from a position in the middle of the prompt, which is wrong
+            # and silent. The adapter cannot tell final from intermediate: vLLM
+            # hands it this chunk's start and length, never the total prompt
+            # length, so the distinction the plugin makes internally
+            # (``intermediate_mask``, model_runner.py) is not visible here.
+            #
+            # Refusing loudly beats sampling from the wrong position. The
+            # host-sampling path above has no such problem because it returns
+            # logits and touches no decode state, so chunked prefill works today
+            # with device sampling off.
+            raise ValueError(
+                "chunked prefill with on-device sampling is not supported yet: the adapter is not "
+                "told whether a chunk is the final one, so it cannot know when sampling the last "
+                "position is meaningful. Chunked prefill works with host sampling; to enable it "
+                "here the plugin has to pass its intermediate/final flag through to prefill_forward."
             )
 
         out_tokens = torch.zeros(num_rows, dtype=torch.int64)

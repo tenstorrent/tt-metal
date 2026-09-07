@@ -683,9 +683,42 @@ class FusedDecoder(FunctionalDecoder):
 
     # ------------------------------------------------------------------ public forwards
 
-    def prefill_forward(self, x, *, kv_cache, page_table, user_id=0, seq_len=None, progress_cb=None):
+    def prefill_forward(self, x, *, kv_cache, page_table, user_id=0, seq_len=None, chunk_start=0, progress_cb=None):
+        """Prefill ``x`` into the paged cache, optionally resuming mid-prompt.
+
+        ``chunk_start`` is the ABSOLUTE position at which ``x`` begins: 0 for a
+        fresh request, which was the only case this accepted before, and the
+        running total of every earlier call when a scheduler splits one prompt
+        across steps (vLLM's chunked prefill).
+
+        Nothing about the per-chunk work changes. ``_attn_prefill_chunk`` already
+        derives its rotary matrices and its page-table slice from the absolute
+        position it is handed, so resuming is a matter of handing it the right
+        one. The loop below therefore walks LOCAL offsets into ``x`` and adds
+        ``chunk_start`` only where an absolute position is required; the output
+        accumulator stays local, because it holds this call's rows alone.
+
+        ``chunk_start`` must be a multiple of the paged block size. The page table
+        addresses whole blocks, so an unaligned resume cannot be expressed by it
+        and would write this chunk's keys into the previous block. A caller that
+        splits a prompt should also keep every non-final piece block-aligned in
+        length, so the next call resumes where this one stopped rather than inside
+        padding this one wrote.
+        """
         S = seq_len if seq_len is not None else x.shape[2]
         block = self.paged_config.block_size
+        if chunk_start % block:
+            raise ValueError(
+                f"chunk_start={chunk_start} is not a multiple of the paged block size {block}; "
+                "the page table addresses whole blocks, so an unaligned resume would write this "
+                "chunk's keys into the previous block"
+            )
+        blocks_per_user = int(page_table.shape[1])
+        if -(-(chunk_start + S) // block) > blocks_per_user:
+            raise ValueError(
+                f"resumed prefill would reach position {chunk_start + S}, past the "
+                f"{blocks_per_user * block} tokens this page table can address"
+            )
         S_pad = -(-S // block) * block
         if x.shape[2] < S_pad:
             x = ttnn.pad(x, [(0, 0), (0, 0), (0, S_pad - x.shape[2]), (0, 0)], 0.0)
@@ -704,14 +737,19 @@ class FusedDecoder(FunctionalDecoder):
                 self.device,
                 ttnn.DRAM_MEMORY_CONFIG,
             )
+        # ``start``/``end`` index THIS call's rows; ``abs_start`` is the position in
+        # the whole prompt. They differ only when resuming, and conflating them is
+        # the bug this split exists to prevent: the rotary matrices and the page
+        # table need the absolute position, the slices need the local one.
         for chunk_idx, start in enumerate(range(0, S_pad, chunk)):
             if progress_cb is not None:
                 progress_cb(chunk_idx, n_chunks)
             end = min(start + chunk, S_pad)
+            abs_start = chunk_start + start
             x_c = ttnn.slice(x, [0, 0, start, 0], [1, 1, end, self.hidden]) if not single_chunk else x
 
             h = self._rms(x_c, self.input_norm_w, self.rms_eps)
-            attn = self._attn_prefill_chunk(h, kv_cache, page_table, user_id, start)
+            attn = self._attn_prefill_chunk(h, kv_cache, page_table, user_id, abs_start)
             ttnn.deallocate(h)
             res = ttnn.add(x_c, attn)
             ttnn.deallocate(attn)

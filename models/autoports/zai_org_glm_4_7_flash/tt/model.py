@@ -710,13 +710,20 @@ class GLM47FlashModel:
         """Largest prefill length the allocated cache can hold."""
         return self.blocks_per_user * self.paged_config.block_size
 
-    def run_layer_stack_prefill(self, input_ids, *, kv_cache, page_table, user_id=0, seq_len=None, progress_cb=None):
+    def run_layer_stack_prefill(
+        self, input_ids, *, kv_cache, page_table, user_id=0, seq_len=None, chunk_start=0, progress_cb=None
+    ):
         """Embed + 47 decoder layers for one user. Returns hidden ``[1, 1, S, hidden]``.
 
         ``input_ids``: torch/list token ids (``[S]`` or ``[1, S]``) or a device
         uint32 tensor. ``seq_len`` is the *logical* prompt length; padding to
         the paged block size, per-chunk cache fill, position handling and
         output slicing are internal to the decoder layers.
+
+        ``chunk_start`` is the absolute position at which these tokens begin, and
+        is non-zero only when a scheduler splits one prompt across calls. Every
+        layer gets it unchanged: each keeps its own cache and has to place this
+        chunk at the same absolute offset as its neighbours.
         """
         import torch
 
@@ -751,7 +758,14 @@ class GLM47FlashModel:
         for i, layer in enumerate(self.layers):
             if progress_cb is not None:
                 progress_cb(i, len(self.layers))
-            nxt = layer.prefill_forward(x, kv_cache=caches[i], page_table=page_table, user_id=user_id, seq_len=phys)
+            nxt = layer.prefill_forward(
+                x,
+                kv_cache=caches[i],
+                page_table=page_table,
+                user_id=user_id,
+                seq_len=phys,
+                chunk_start=chunk_start,
+            )
             ttnn.deallocate(x)
             x = nxt
         return x, seq
@@ -764,6 +778,7 @@ class GLM47FlashModel:
         page_table,
         user_id: int = 0,
         seq_len: int | None = None,
+        chunk_start: int = 0,
         return_all_logits: bool = False,
         logits_chunk: int = 320,
         progress_cb=None,
@@ -772,6 +787,11 @@ class GLM47FlashModel:
 
         Returns a torch float32 tensor ``[1, R, vocab]``: ``R = seq_len`` when
         ``return_all_logits`` else 1 (the final prompt position).
+
+        ``chunk_start`` resumes a prompt mid-way; see
+        ``FusedDecoder.prefill_forward``. The logits returned are for THIS call's
+        rows, so on a non-final chunk they describe positions the caller should
+        discard rather than sample.
         """
         hidden, seq = self.run_layer_stack_prefill(
             input_ids,
@@ -779,6 +799,7 @@ class GLM47FlashModel:
             page_table=page_table,
             user_id=user_id,
             seq_len=seq_len,
+            chunk_start=chunk_start,
             progress_cb=progress_cb,
         )
         try:
@@ -790,7 +811,15 @@ class GLM47FlashModel:
             ttnn.deallocate(hidden)
 
     def prefill_forward_last_logits_device(
-        self, input_ids, *, kv_cache, page_table, user_id: int = 0, seq_len: int | None = None, progress_cb=None
+        self,
+        input_ids,
+        *,
+        kv_cache,
+        page_table,
+        user_id: int = 0,
+        seq_len: int | None = None,
+        chunk_start: int = 0,
+        progress_cb=None,
     ):
         """Prefill one user and keep the final-position logits on device.
 
@@ -815,6 +844,7 @@ class GLM47FlashModel:
             page_table=page_table,
             user_id=user_id,
             seq_len=seq_len,
+            chunk_start=chunk_start,
             progress_cb=progress_cb,
         )
         try:

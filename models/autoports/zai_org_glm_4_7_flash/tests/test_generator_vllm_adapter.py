@@ -831,3 +831,126 @@ def test_every_shipped_bucket_has_bitwise_equivalence_evidence():
         result = payload["results"][f"rows{rows}_compactbucket_vs_union"]
         assert result["bitwise_identical"], f"{rows} live rows: compact bucket differs from the union path"
         assert result["argmax_identical"]
+
+
+# ------------------------------------------------------------------ chunked prefill
+
+
+def test_resumed_prefill_matches_a_whole_prompt(adapter, device):
+    """A prompt fed as two chunks must leave the cache the whole prompt would.
+
+    The adapter used to refuse any non-zero ``start_pos``, citing an MLA-family
+    limitation. The limitation was the driver loop always starting at position 0,
+    not the paged-latent attention, so a continuation now passes through. This is
+    the adapter-level counterpart of ``tests/test_prefill_resume.py``: same claim,
+    exercised through the surface vLLM actually calls.
+
+    Host sampling (``sampling_params=None``) because that path returns logits and
+    touches no decode state, which is what makes an intermediate chunk safe.
+    """
+    model, kv_cache = adapter
+    plen = 256
+    split = 128  # a multiple of BLOCK_SIZE
+    tokens = torch.arange(1, plen + 1, dtype=torch.int32).reshape(1, plen) % 1000 + 1
+
+    whole_slot, chunked_slot = 3, 9
+    model.prefill_forward(
+        tokens=tokens,
+        prompt_lens=[plen],
+        page_table=_block_table_for(whole_slot),
+        kv_cache=kv_cache,
+        start_pos=[0],
+        sampling_params=None,
+        empty_slots=[whole_slot],
+    )
+    # vLLM's contract, not a tail-only one: ``tokens`` carries the whole prefix
+    # from position 0 every step, and ``prompt_lens`` is the END position of the
+    # chunk scheduled this step. The generator slices ``tokens[start_pos:end]``.
+    model.prefill_forward(
+        tokens=tokens,
+        prompt_lens=[split],  # end of chunk 1, not its length
+        page_table=_block_table_for(chunked_slot),
+        kv_cache=kv_cache,
+        start_pos=[0],
+        sampling_params=None,
+        empty_slots=[chunked_slot],
+    )
+    model.prefill_forward(
+        tokens=tokens,  # still the whole prefix
+        prompt_lens=[plen],  # end of chunk 2 == end of prompt
+        page_table=_block_table_for(chunked_slot),
+        kv_cache=kv_cache,
+        start_pos=[split],
+        sampling_params=None,
+        empty_slots=[chunked_slot],
+    )
+    ttnn.synchronize_device(device)
+
+    # Compare the two slots' cache blocks directly. Each slot owns
+    # BLOCKS_PER_USER contiguous blocks starting at slot * BLOCKS_PER_USER.
+    n_blocks = -(-plen // BLOCK_SIZE)
+    cache = model.generator._kv_cache[0]
+
+    def _rows(slot):
+        base = slot * BLOCKS_PER_USER
+        sl = ttnn.slice(
+            cache,
+            [base, 0, 0, 0],
+            [base + n_blocks, int(cache.shape[1]), int(cache.shape[2]), int(cache.shape[3])],
+            [1, 1, 1, 1],
+        )
+        host = ttnn.to_torch(sl).to(torch.float32)
+        ttnn.deallocate(sl)
+        return host
+
+    whole, chunked = _rows(whole_slot), _rows(chunked_slot)
+    x = whole.flatten().double() - whole.mean().double()
+    y = chunked.flatten().double() - chunked.mean().double()
+    pcc = float((x @ y) / (x.norm() * y.norm()))
+    assert pcc > 0.9999, f"resumed prefill wrote a different cache through the adapter: pcc={pcc:.8f}"
+
+
+def test_resume_must_be_block_aligned(adapter, expect_error):
+    """An unaligned resume is refused with the block size, not left to corrupt.
+
+    The page table addresses whole blocks, so a start position inside one cannot
+    be expressed and would write this chunk's keys into the previous block. The
+    message names the multiple the scheduler has to use.
+    """
+    model, kv_cache = adapter
+    plen = 64
+    tokens = torch.arange(1, plen + 1, dtype=torch.int32).reshape(1, plen) % 1000 + 1
+    with expect_error(ValueError, "not a multiple of the paged block size"):
+        model.prefill_forward(
+            tokens=tokens,
+            prompt_lens=[plen],
+            page_table=_block_table_for(4),
+            kv_cache=kv_cache,
+            start_pos=[BLOCK_SIZE + 1],  # inside a block
+            sampling_params=None,
+            empty_slots=[4],
+        )
+
+
+def test_resume_with_device_sampling_is_refused_not_silently_wrong(adapter, expect_error):
+    """Device sampling on a resumed chunk must fail loudly.
+
+    That path samples the chunk's last position and seeds decode state with the
+    result. On a non-final chunk that is a token from the middle of the prompt,
+    and the adapter cannot tell final from intermediate because vLLM passes this
+    chunk's start and length but never the total prompt length. Until the plugin
+    forwards its own intermediate/final flag, refusing is the honest behaviour.
+    """
+    model, kv_cache = adapter
+    plen = 64
+    tokens = torch.arange(1, plen + 1, dtype=torch.int32).reshape(1, plen) % 1000 + 1
+    with expect_error(ValueError, "chunked prefill with on-device sampling is not supported"):
+        model.prefill_forward(
+            tokens=tokens,
+            prompt_lens=[plen],
+            page_table=_block_table_for(6),
+            kv_cache=kv_cache,
+            start_pos=[BLOCK_SIZE],
+            sampling_params=_greedy(1),
+            empty_slots=[6],
+        )

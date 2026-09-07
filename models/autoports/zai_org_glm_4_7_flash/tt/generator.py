@@ -1204,6 +1204,7 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         prompt_lens: List[int],
         return_all_logits: bool = False,
         user_ids: Optional[List[int]] = None,
+        chunk_starts: Optional[List[int]] = None,
         **kwargs: Any,
     ):
         """Low-level prefill over caller-owned cache/page table.
@@ -1233,16 +1234,36 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         bad = [v for v in slots if not 0 <= v < self.max_batch_size]
         if bad:
             raise ValueError(f"user_ids must be in [0, {self.max_batch_size}); out of range: {bad[:8]}")
+        # Absolute position each row's tokens begin at. All zeros for whole
+        # prompts, which is every caller that predates chunked prefill.
+        #
+        # With a non-zero start, ``prompt_lens`` is the END position of the chunk,
+        # not its length, and ``tokens`` carries the whole prefix from 0. That is
+        # the vLLM plugin's stated contract ("the generator slices
+        # tokens[start_pos:prompt_lens]"), and it holds for a full prefill
+        # (0..prompt_len), a prefix-cache hit, a resume after preemption, and a
+        # chunked continuation alike. Slicing here is what makes all four one path.
+        starts = [0] * batch if chunk_starts is None else [int(v) for v in chunk_starts]
+        if len(starts) != batch:
+            raise ValueError(f"chunk_starts has {len(starts)} entries for a batch of {batch}")
+        bad_span = [(s, int(prompt_lens[i])) for i, s in enumerate(starts) if s >= int(prompt_lens[i])]
+        if bad_span:
+            raise ValueError(
+                f"chunk_starts must be before the chunk end given by prompt_lens; got {bad_span[:4]} "
+                "as (start, end) pairs. prompt_lens is an END position, not a length."
+            )
         pt_dev = page_table if isinstance(page_table, ttnn.Tensor) else self.model.page_table_to_device(page_table)
         outs = []
         for user in range(batch):
-            plen = int(prompt_lens[user])
+            end = int(prompt_lens[user])
+            start = starts[user]
             logits = self.model.prefill_forward(
-                toks[user, :plen],
+                toks[user, start:end],
                 kv_cache=kv_cache,
                 page_table=pt_dev,
                 user_id=slots[user],
-                seq_len=plen,
+                seq_len=end - start,
+                chunk_start=start,
                 return_all_logits=return_all_logits,
             )
             self.counters["full_logits_readbacks"] += 1
