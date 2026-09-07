@@ -278,17 +278,6 @@ inline void llk_math_welfords_sfpu_store_mean_var_to_dst_raw(
         ckernel::sfpu::_store_mean_var_to_dst_raw_<reciprocal_size>, mean_dst_idx, scale_idx, reciprocal_lut);
 }
 
-// ----------------------------------------------------------------------------
-// The below functions are flavors of above 3 to use with group_id argument
-// ----------------------------------------------------------------------------
-inline void llk_math_welfords_sfpu_store_mean_m2_to_dst(std::uint32_t mean_dst_idx, std::uint32_t group_id) {
-    _llk_math_welfords_sfpu_params_(ckernel::sfpu::_store_mean_m2_to_dst_group_, mean_dst_idx, group_id);
-}
-
-inline void llk_math_welfords_sfpu_load_mean_m2_from_dst(std::uint32_t mean_dst_idx, std::uint32_t group_id) {
-    _llk_math_welfords_sfpu_params_(ckernel::sfpu::_load_mean_m2_from_dst_group_, mean_dst_idx, group_id);
-}
-
 /**
  * @brief Save one compact group state and restore another.
  *
@@ -302,6 +291,17 @@ inline void llk_math_two_pass_sfpu_switch_group(
     std::uint32_t mean_dst_idx, std::uint32_t save_group_id, std::uint32_t restore_group_id) {
     _llk_math_welfords_sfpu_params_(
         ckernel::sfpu::_two_pass_switch_group_<dual_accumulator>, mean_dst_idx, save_group_id, restore_group_id);
+}
+
+// ----------------------------------------------------------------------------
+// Group-indexed overloads for saving, restoring and finalising Welford state.
+// ----------------------------------------------------------------------------
+inline void llk_math_welfords_sfpu_store_mean_m2_to_dst(std::uint32_t mean_dst_idx, std::uint32_t group_id) {
+    _llk_math_welfords_sfpu_params_(ckernel::sfpu::_store_mean_m2_to_dst_group_, mean_dst_idx, group_id);
+}
+
+inline void llk_math_welfords_sfpu_load_mean_m2_from_dst(std::uint32_t mean_dst_idx, std::uint32_t group_id) {
+    _llk_math_welfords_sfpu_params_(ckernel::sfpu::_load_mean_m2_from_dst_group_, mean_dst_idx, group_id);
 }
 
 template <std::size_t reciprocal_size>

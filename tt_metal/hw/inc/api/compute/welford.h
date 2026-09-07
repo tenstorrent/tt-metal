@@ -387,20 +387,6 @@ ALWI void welford_finalize_to_face(
     MATH((llk_math_welfords_sfpu_store_mean_var_to_dst_raw<reciprocal_size>(mean_dst_idx, scale_idx, reciprocal_lut)));
 }
 
-/* -------------------------------------------------------------------------------------------------
- * The below functions are flavors of above 3 to use with group_id argument
- * Refer to the docstring of the above 3 functions for more details.
- * @param group_id The group id to store the data for.
- * -------------------------------------------------------------------------------------------------
- */
-ALWI void welford_save_state(std::uint32_t mean_dst_idx, std::uint32_t group_id) {
-    MATH((llk_math_welfords_sfpu_store_mean_m2_to_dst(mean_dst_idx, group_id)));
-}
-
-ALWI void welford_restore_state(std::uint32_t mean_dst_idx, std::uint32_t group_id) {
-    MATH((llk_math_welfords_sfpu_load_mean_m2_from_dst(mean_dst_idx, group_id)));
-}
-
 /**
  * @brief Saves the active group state and restores another group state.
  * @param mean_dst_idx Index of the mean state tile; M2 is stored in the following tile.
@@ -412,6 +398,20 @@ template <bool dual_accumulator>
 ALWI void two_pass_stats_switch_group(
     std::uint32_t mean_dst_idx, std::uint32_t save_group_id, std::uint32_t restore_group_id) {
     MATH((llk_math_two_pass_sfpu_switch_group<dual_accumulator>(mean_dst_idx, save_group_id, restore_group_id)));
+}
+
+/* -------------------------------------------------------------------------------------------------
+ * Group-indexed overloads of welford_save_state, welford_restore_state and welford_finalize_to_face.
+ * Refer to the corresponding non-group overloads for their state layout and scaling contracts.
+ * @param group_id The group id to store the data for.
+ * -------------------------------------------------------------------------------------------------
+ */
+ALWI void welford_save_state(std::uint32_t mean_dst_idx, std::uint32_t group_id) {
+    MATH((llk_math_welfords_sfpu_store_mean_m2_to_dst(mean_dst_idx, group_id)));
+}
+
+ALWI void welford_restore_state(std::uint32_t mean_dst_idx, std::uint32_t group_id) {
+    MATH((llk_math_welfords_sfpu_load_mean_m2_from_dst(mean_dst_idx, group_id)));
 }
 
 template <std::size_t reciprocal_size>
