@@ -1,6 +1,6 @@
 {
-  "last_run": "2026-09-08T00:00:00Z",
-  "run_id": "34092468512",
+  "last_run": "2026-09-07T12:40:00Z",
+  "run_id": "34122745559",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -148,7 +148,8 @@
     "55114:feature-request",
     "55393:bug",
     "55392:bug",
-    "55599:bug"
+    "55599:bug",
+    "55622:bug"
   ],
   "covered_no_duplicate": {
     "52131": "PR #52136 already closes it",
@@ -250,7 +251,9 @@
     "55576": "PR #55575 (repeat_interleave DRAM-sharded fix) - reconfirmed",
     "55588": "PR #55589 (multi-batch GPT-OSS decode/prefill)",
     "55571": "PR #55554 (H3 audio encoder)",
-    "55502": "3 open community PRs: #55506, #55515, #55522 (bounty INT_MIN)"
+    "55502": "3 open community PRs: #55506, #55515, #55522 (bounty INT_MIN)",
+    "55616": "fix in open PR #55613 (quasar outer memory_config)",
+    "55605": "fix in open PR #55606 (metal 2.0 program cache aliased tensor mis-bind)"
   },
   "dropped_fix_targets": {
     "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
@@ -346,7 +349,8 @@
       "note": "Gemma4/Wormhole garbled long-context output; complex HW/model-dependent bug, needs device access; no label/comment applied"
     },
     "55332_55334_55323_55378": "bounty-program batch / bot-filed, already labeled, no repo-assist action 2026-09-03",
-    "55414": "architectural: binary_ng program-cache key missing Alignment/Tile, blocks Metal2.0 port; assigned bbradelTT/dchenTT, P1; maintainer-owned, confirmed 2026-09-04"
+    "55414": "architectural: binary_ng program-cache key missing Alignment/Tile, blocks Metal2.0 port; assigned bbradelTT/dchenTT, P1; maintainer-owned, confirmed 2026-09-04",
+    "55609": "LLK/BH tilize-init comment ISA-semantics inaccuracy, well-researched, needs LLK-team review, not a repo-assist fix (2026-09-07)"
   },
   "stale_pr_nudges": {
     "34933": {
@@ -935,6 +939,11 @@
     }
   },
   "run_history": [
+    {
+      "run_id": "34122745559",
+      "date": "2026-09-07T12:40:00Z",
+      "summary": "Task1: labeled #55622 bug (Quasar paged_update_cache/typecast writes 0/512 expected cells). Task2/3: confirmed #55616->PR#55613 and #55605->PR#55606 already cover those issues, no dup; reviewed #55609 (LLK/BH tilize doc issue), too specialized, no fix, left for owning team. Task5: re-verified PR check runs 55435(still RTL Sim CI failure)/55591(green)/55293/55424(unchanged, pre-checks green). Task8: updated monthly summary #55015."
+    },
     {
       "run_id": "34051637320",
       "date": "2026-09-06T18:27:00Z",
