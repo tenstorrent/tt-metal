@@ -4,18 +4,21 @@
 
 """Three 5120-token chunks of GLM-5.2 MTP4 through the real ``TtPrefillTransformer`` (#53533).
 
-The MTP token contract: per chunk the transformer is handed ``C + K`` ids (5120 + 4), level ``k``
-consumes the slice ``[k+1 : k+1+C]``, and that slice -- embedded, not a hidden state -- is level
-``k``'s input. Three things in it can be wrong, none of them a shape error:
+The MTP token contract: per chunk the socket delivers ``C + n_mtp`` ids (5120 + 32), cut into each
+chip's trunk row and the lookahead row that abuts it; level ``k`` then reads the local slice
+``[k+1 : k+1+L)`` of the on-device union those two are gathered into, and that slice -- embedded,
+not a hidden state -- is level ``k``'s input. Three things in it can be wrong, none of them a shape
+error:
 
-1. **Stream formation.** An interior chunk borrows the next chunk's first ``K`` prompt ids; the LAST
-   chunk has no next chunk and must fill ``K`` slots from its own LM head, one per level, in order.
-2. **Slicing / upload.** The window is sharded row -> position by exactly the permutation the trunk
-   input took, so ``t_{p+k+1}`` lands on the row whose hidden sits at ``p``. Shift the ids before
-   the shard and it is free; shift after and it is wrong by a whole chip. Prefill itself never
-   shifts on host -- the runner's ids arrive over the H2D socket and every window is a row slice of
-   one on-device union (``mtp_prefill/device_windows.py``) -- so the host driver that feeds this
-   test lives HERE, at the bottom of the imports, and nowhere in the model.
+1. **Stream / socket formation.** Chip ``c``'s two rows must join into the contiguous
+   ``stream[c*L : c*L + L + n_mtp]``, which is what makes level ``k``'s window the SAME local slice
+   on every chip. The last chunk's lookahead is pad, because the ids it wants do not exist yet: the
+   DEVICE generates them, one per level, out of each level's own LM head.
+2. **Slicing / upload.** ``t_{p+k+1}`` must land on the row whose hidden sits at ``p``. This runs
+   the production path for it: the same ``MTPUnionEmbedding.from_ids`` the runtime calls, the same
+   per-level ``union.window(k+1)``, and on the last chunk the same ``MTPDeviceGeneration`` -- so
+   ``mtp_prefill/device_windows.py`` is under test here rather than bypassed. Nothing in this file
+   slices a window; it only builds the two id tensors the H2D socket would have delivered.
 3. **Numerics, chunked.** ``test_mtp.py::test_mtp_predictor_pcc`` gates ``TtMTPPredictor``
    single-shot; nothing gated it *chunked*, where each level's KV cache is written three times and
    every chunk after the first attends over keys the earlier ones left behind. The reference is
@@ -24,10 +27,16 @@ consumes the slice ``[k+1 : k+1+C]``, and that slice -- embedded, not a hidden s
    have asked for: bit-identical to the device's when the window is right, unrelated to it when it
    is not, so a wrong window and wrong math fail the same assertion.
 
-**Placement is not this test's subject.** :func:`_embed_window` hands the trunk's own uploader a
-host ``list[int]``, so the packing under it is byte-identical for every level and shift. What this
-test owns is everything upstream of that list: which ids each level asks for, across three chunks,
-through the real predictor and the real LM head.
+Two axes on top of that. ``num_layers`` picks the trunk depth -- 78 (GLM-5.2's own) or 1, a shallow
+variant for iterating on the MTP path without paying for the trunk. ``skip_pcc`` picks the numerics
+-- ``pcc`` is the real test, ``nopcc`` keeps the device path and claim 1 and drops the rest. Neither
+is a cheaper way to VALIDATE: the shallow trunk still runs the full CPU reference, and ``nopcc``
+runs none of it. ``layers1-nopcc`` is the fast iteration leg and the one that proves least.
+
+What the test keeps for itself is the EXPECTATION, never the input. :func:`_expected_window` derives
+the ids each level should have read from the definition of MTP, and the reference is driven by a HOST
+gather of those. Feed the reference the device's own windows instead and a level that read the wrong
+rows would agree with it perfectly -- which is why there is no recorder anywhere in here.
 
 The prompt id at absolute position ``p`` is ``p + 1`` (0 stays reserved for pad), so a failure reads
 as "row j is carrying position q".
@@ -36,10 +45,16 @@ What it deliberately does NOT claim
 -----------------------------------
 * **A legible diagnosis of a wrong window.** Claim 2 detects one decisively, but reports it as a
   collapsed PCC rather than as "level 2 asked for id X, expected Y":
-  ``glm_mtp_predictor_reference`` takes *embeddings* and never sees a token id. The alternative --
-  a test-only recorder wrapped round :func:`_embed_window` -- has no counterpart in production and
-  made the numerics blind to the mapping, since the reference was then fed the device's own
-  embeddings. Assertion order recovers most of the localisation: fused projection first, at 0.999.
+  ``glm_mtp_predictor_reference`` takes *embeddings* and never sees a token id, and the device's
+  windows never become ids at all -- they are row slices of an embedding. Recording what the device
+  asked for is not an option either: it has no counterpart in production, and feeding the reference
+  the device's own rows makes the numerics blind to the mapping outright. Assertion order recovers
+  most of the localisation: fused projection first, at 0.999.
+* **The D2D half of the union.** ``MTPUnionEmbedding.from_ids`` and every window slice are covered;
+  ``from_embedding``, ``.parts`` and ``_mtp_pack_activation`` are not, because they exist for a
+  downstream rank and this test is single-galaxy. The branch's own argument is that the two
+  constructions agree by construction -- ``slice(embed(ids)) == embed(slice(ids))`` row for row --
+  which is sound for the rows and says nothing about a mis-sized socket.
 * **The KVPE cache contents.** Level outputs are compared; the slots they wrote are not
   (``test_mtp.py::test_mtp_predictor_pcc`` does that single-shot). A slot *collision* still shows up
   from chunk 1 on -- two levels sharing a slot read each other's keys -- but a consistent off-by-N
@@ -49,9 +64,10 @@ What it deliberately does NOT claim
   placement question, and nothing covers it today.
 * **Multi-rank.** ``TtPrefillTransformer`` asserts MTP needs an embedding table on the rank that
   runs the tail, which today means single-galaxy (``is_first_rank == is_last_rank``).
-* **A checkpoint-free run.** Every weight is a real GLM-5.2 one: the 78-layer trunk, the embedding
-  table and the LM head come out of the TTNN weight cache, layer 78 out of the checkpoint. There is
-  no random leg left, so the test skips on a box with neither rather than degrading into one.
+* **A checkpoint-free run.** Every weight is a real GLM-5.2 one: the trunk, the embedding table and
+  the LM head come out of the TTNN weight cache, layer 78 out of the checkpoint. There is no random
+  leg left, so the test skips on a box with neither rather than degrading into one. This holds at
+  the shallow depth too -- ``layers1`` shortens the trunk, it does not synthesize it.
 * **Real text.** The prompt is still ``p + 1`` at absolute position ``p``, the property claims 1, 3
   and 4 read their failures through. Real token ids would make ``h^0`` a realistic hidden state;
   they would also make every window assertion illegible.
@@ -64,7 +80,7 @@ import gc
 import os
 import time
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Sequence
 
 import pytest
 import torch
@@ -72,15 +88,17 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.common.prefill.runners.runner_utils import num_mtp_tokens
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLAReference
 from models.demos.deepseek_v3_d_p.reference.glm_5_2.mtp import glm_mtp_predictor_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import CHAIN_FROM_NORM, TtMTPPredictor
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import MTP_CACHE_ENV, MTP_CACHE_PREFIX, enable_mtp_indexer_slot
-from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
+from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor, prepare_prefill_mtp_tokens
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
@@ -89,6 +107,7 @@ from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filter
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 SP_AXIS, TP_AXIS = 0, 1
+
 
 # Restated from tests/mtp_prefill/test_mtp.py, not imported: importing a test module from a test
 # module is how one file ends up collected twice under two names. Same claims -- two RMSNorms and a
@@ -138,8 +157,35 @@ DISPATCH_BUFFER_CAPACITY_FACTOR = 8
 
 CHUNK = 5 * 1024  # 5120 -- the "5k chunk" of #53533, and TtPrefillTransformer.seq_len
 NUM_CHUNKS = 3
-NUM_LEVELS = 4  # MTP4
 TOTAL = CHUNK * NUM_CHUNKS  # 15360 prompt tokens
+
+PAD_TOKEN = 0
+"""Id written into pad positions. 0 is reserved for it -- the prompt's id at position p is p + 1."""
+
+MTP_LEVEL_AXIS = (4, 7)
+"""The level counts this test runs: MTP4 and MTP7.
+
+Both ship, so both are gated. K = 1 is deliberately NOT here -- it is the debugging configuration,
+and ``test_mtp.py::test_mtp_predictor_pcc`` keeps it as its regression leg, single-shot and cheap.
+
+MTP7 needs no transport change at all, which is the point worth knowing: ``num_mtp_tokens`` rounds K
+up to a whole tile, and 4 and 7 both round to **32**, so the socket row, the H2D page and the union's
+height are byte-identical between them. What actually differs is the KVPE cache depth
+(``num_layers + K``), the number of levels replayed, and the CPU reference's cost -- 7 levels is
+~1.75x the host torch of 4."""
+
+# The two depths turn out to COMPLEMENT each other on claim (4), which is worth knowing before
+# dropping either. Claim (4) can only catch a patch SWAP when the generated ids differ, and which ids
+# come out depends on h^0, i.e. on the trunk: at depth 78 the draft chain collapses onto repeats
+# ([198, 659, 659, 154842] -- 659 twice, adjacently), at depth 1 it does not ([89467, 55969, 635,
+# 429]). So the shallow leg is the one that actually gates the permutation, and the deep leg says so
+# in a warning rather than pretending otherwise (see seam_is_decisive in the body).
+
+# What a level count has to satisfy: the union must be tall enough for the deepest window
+# (``window(K)`` ends at row ``K + L``) and for the K generated positions past ``actual_end``.
+# ``num_mtp_tokens`` is what guarantees both, so assert it rather than trust the axis.
+for _k in MTP_LEVEL_AXIS:
+    assert num_mtp_tokens(_k) >= _k, f"num_mtp_tokens({_k}) = {num_mtp_tokens(_k)} cannot cover {_k} levels"
 
 
 def _shard_dims():
@@ -164,270 +210,176 @@ def _from_device(t: ttnn.Tensor, mesh_device) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
-# The host MTP driver
+# The MTP input: the production device path
 # ---------------------------------------------------------------------------
-# Prefill builds its windows on device (``mtp_prefill/device_windows.py``): the ids arrive over the
-# H2D socket and every level's window is a row slice of one already-gathered union. This test drives
-# the same transformer from the OTHER end -- host lists it slices itself -- because that is what
-# makes the ids visible: a window here is a python list this file can print, compare and feed to the
-# CPU reference. `TtPrefillTransformer.forward` takes it through `mtp_embed_source`, which exists
-# for exactly this and has no production caller.
-
-
-GEN_SLOT = -1
-"""Sentinel for a last-chunk position whose token has not been generated yet.
-
-It never reaches the device: :meth:`MTPEmbedSource.window` resolves every slot below the last real
-token from the generated list and rewrites any still-unresolved slot (always a pad row) to
-``pad_token``. A sentinel reaching ``TtParallelEmbedding`` would index the vocab table at -1.
-"""
-
-
-def mtp_extended_stream(
-    chunk_tokens: Sequence[int],
-    num_levels: int,
-    *,
-    real_len: Optional[int] = None,
-    lookahead: Optional[Sequence[int]] = None,
-    pad_token: int = 0,
-) -> list[int]:
-    """One chunk's ``C`` ids -> its ``C + K`` stream, indexed by chunk-local position.
-
-    Interior chunk: pass the next chunk's first ``K`` ids as ``lookahead``.
-    Last chunk:     pass ``lookahead=None``; the ``K`` positions after the last real token become
-    :data:`GEN_SLOT`, filled in by :class:`MTPEmbedSource` from each level's own lm_head.
-
-    Args:
-        chunk_tokens: this chunk's ``C`` ids for ``[s, s+C)``. Entries at or after ``real_len`` are
-            the chunk's own padding and are replaced by ``pad_token``.
-        num_levels: ``K``.
-        real_len: this chunk's real-token count (``actual_end - actual_start``). Defaults to ``C``.
-        lookahead: positions ``[s+C, s+C+K)``, or ``None`` for the last chunk of a request.
-        pad_token: id written into pad positions. Any in-vocab id works -- pad rows sit past
-            ``actual_end``, where the trunk's own hidden and KV are already garbage.
-
-    Returns:
-        ``C + K`` ids, indexed by chunk-local position.
-    """
-    c = len(chunk_tokens)
-    k = int(num_levels)
-    assert k >= 1, f"num_levels must be >= 1, got {k}"
-    real = c if real_len is None else int(real_len)
-    assert 0 <= real <= c, f"real_len {real} out of range for a chunk of {c}"
-
-    if lookahead is None:
-        # Last chunk: [ prompt | K generation slots | pad ]. Length is C + K for any real_len,
-        # including real_len == C (a prompt that is an exact multiple of the chunk size).
-        stream = list(chunk_tokens[:real]) + [GEN_SLOT] * k + [pad_token] * (c - real)
-    else:
-        la = list(lookahead)
-        assert real == c, (
-            f"an interior chunk is fully real, got real_len={real} for a chunk of {c}; "
-            "pass lookahead=None for the last chunk of a request"
-        )
-        assert len(la) >= k, f"lookahead must supply at least {k} ids, got {len(la)}"
-        stream = list(chunk_tokens) + la[:k]
-
-    assert len(stream) == c + k, f"extended stream is {len(stream)}, expected {c + k}"
-    return stream
+# The windows are built ON DEVICE, by the same code serving uses: one ``MTPUnionEmbedding`` per
+# chunk, from which every level slices its own rows, and on the last chunk an ``MTPDeviceGeneration``
+# that fills the positions the prompt does not reach out of each level's own lm_head. This file
+# builds the two id tensors the H2D socket would have delivered and hands them to the same
+# ``from_ids`` the runtime calls (``tt_prefill_runtime._mtp_prepare_input``); everything after that
+# is production code.
+#
+# What the test keeps for itself is the EXPECTATION, not the input: :func:`_expected_window` derives
+# the ids each level should have read straight from the definition of MTP, and the CPU reference is
+# driven by a HOST gather of those. That is what keeps the numerics sensitive to the mapping -- feed
+# the reference the device's own windows and a level that read the wrong rows would agree with it
+# perfectly.
 
 
 def mtp_chunk_stream(
     all_tokens: Sequence[int],
     chunk_idx: int,
     chunk_size: int,
-    num_levels: int,
+    n_mtp: int,
     *,
     pad_token: int = 0,
 ) -> tuple[list[int], int]:
     """A whole prompt + a chunk index -> that chunk's ``(stream, real_len)``.
 
-    Interior/last is the one choice a caller must not get wrong, and it is invisible in every
-    per-chunk check -- the stream is still ``C+K`` long and every window still ``C`` wide. It shows
-    up only as level ``k`` reading the wrong token on a chunk's last ``k`` rows.
+    ``stream`` is ``chunk_size + n_mtp`` ids: this chunk's own ``C`` positions followed by the
+    ``n_mtp`` that come after them, right-padded once the prompt runs out. One slice covers both
+    kinds of chunk -- an interior one finds its lookahead in the prompt, the last one finds pad --
+    because the last chunk's missing ids are not this function's job: the DEVICE generates them
+    (``MTPDeviceGeneration``), and the only thing that has to know which chunk is last is the
+    ``is_last_chunk`` flag on ``forward``.
+
+    ``n_mtp`` is ``num_mtp_tokens(K)`` -- a whole tile, so 32 at MTP4, not 4. It is the socket row's
+    width, and :func:`~models.demos.deepseek_v3_d_p.tt.runners.input_prep.prepare_prefill_mtp_tokens`
+    slices chip ``c``'s row out of exactly this list.
 
     Args:
         all_tokens: the request's REAL prompt ids, unpadded. ``len(all_tokens)`` is ``P``.
         chunk_idx: which ``chunk_size``-sized chunk of them to build.
         chunk_size: ``C``, the padded chunk length.
-        num_levels: ``K``.
-        pad_token: id written into pad positions.
+        n_mtp: lookahead ids the socket row carries past each chip's shard.
+        pad_token: id written into pad positions. Any in-vocab id works -- pad rows sit past
+            ``actual_end``, where the trunk's own hidden and KV are already garbage, and on the last
+            chunk the generation keep-mask zeroes the rows it is about to write.
 
     Returns:
-        ``(stream, real_len)`` -- ``C + K`` ids indexed by chunk-local position, and this chunk's
+        ``(stream, real_len)`` -- ``C + n_mtp`` ids indexed by chunk-local position, and this chunk's
         real-token count, which is its ``actual_isl``.
     """
     total = len(all_tokens)
-    k = int(num_levels)
-    c = int(chunk_size)
+    c, n = int(chunk_size), int(n_mtp)
     s = int(chunk_idx) * c
     assert 0 <= s < total, f"chunk {chunk_idx} starts at {s}, past the {total} real tokens"
+    assert n > 0, f"n_mtp must be positive, got {n}"
 
     real = min(c, total - s)
-    chunk = list(all_tokens[s : s + real]) + [pad_token] * (c - real)
-
-    if s + c >= total:
-        return mtp_extended_stream(chunk, k, real_len=real, lookahead=None, pad_token=pad_token), real
-
-    tail = total - (s + c)
-    assert tail >= k, (
-        f"chunk {chunk_idx} is interior but only {tail} real token(s) follow it, fewer than K={k}: "
-        f"its level-{k} window reaches position {s + c + k - 1}, past the prompt end {total}, so "
-        f"those rows want tokens generated from a hidden that chunk {chunk_idx + 1} has not produced "
-        "yet -- chunks run in order, so this is a causality problem, not bookkeeping. Rebalance the "
-        f"last two chunks so the final one carries at least K={k} real tokens."
-    )
-    return mtp_extended_stream(chunk, k, lookahead=list(all_tokens[s + c : s + c + k]), pad_token=pad_token), real
+    stream = list(all_tokens[s : s + c + n])
+    stream += [pad_token] * (c + n - len(stream))
+    assert len(stream) == c + n, f"stream is {len(stream)}, expected {c} + {n}"
+    return stream, real
 
 
-class MTPEmbedSource:
-    """``TtMTPPredictor.forward``'s ``embeds`` callable: level ``k`` -> its embedded window.
+def assert_socket_rows(stream: Sequence[int], sp_factor: int, chunk_size: int, n_mtp: int) -> None:
+    """Claim (1): each chip's row is the CONTIGUOUS slice of the stream at its own offset.
 
-    Call it once per level, in order. Each call does three things:
-
-      1. SLICE  window ``k+1`` out of the C+K stream: ``ext[k+1 : k+1+C]``.
-      2. FILL   on the LAST chunk only, resolve the :data:`GEN_SLOT`s -- generating ``t_{P+k}`` by
-                running ``next_token_fn`` on the hidden it was just handed.
-      3. EMBED  hand the resulting ``C`` ids to ``embed_fn``.
-
-    On an interior chunk step 2 is skipped entirely: every window is a pure prompt slice,
-    ``next_token_fn`` is never called, and no host round trip happens.
-
-    **Why a callable and not a list of K tensors.** On the last chunk level ``k``'s INPUT depends on
-    level ``k-1``'s OUTPUT: ``t_{P+k} = argmax lm_head(H^k)`` at the last real row. Nothing can be
-    materialized before the loop runs.
-
-    **Which rows are generated.** Window ``shift`` row ``j`` holds global position ``s + shift + j``.
-    Real prompt covers ``j < real_len - shift``; rows ``[real_len - shift, real_len)`` -- exactly
-    ``shift`` of them -- are the generated tokens ``t_P .. t_{P+shift-1}``; rows ``>= real_len`` are
-    pad, as they are for the trunk.
-
-    Args:
-        extended: this chunk's stream from :func:`mtp_extended_stream`.
-        chunk_size: ``C``.
-        num_levels: ``K``.
-        embed_fn: ``list[int] -> ttnn.Tensor``. Shards, uploads and embeds one window, and on the
-            chunk starting at absolute position 0 zeroes row 0 -- see :func:`_embed_window`.
-        next_token_fn: ``H^k -> int``, the greedy token at the last real row. Required whenever the
-            stream carries generation slots -- see :func:`_next_token_fn`.
-        real_len: this chunk's real-token count; where the generation slots start. Defaults to ``C``.
-        pad_token: id substituted for any generation slot still unresolved when a window is built.
-            Such a slot is always a pad row.
+    ``prepare_prefill_input_tensor`` gives chip ``c`` ``stream[c*L : (c+1)*L]`` and
+    ``prepare_prefill_mtp_tokens`` gives it ``stream[(c+1)*L : (c+1)*L + n_mtp]``; joined, that is
+    ``stream[c*L : c*L + L + n_mtp]``, and it is the reason level ``k`` reads the SAME local slice
+    ``[k, k+L)`` on every chip with no SP ring-shift. Restated here over the host lists, because on
+    device the two tensors are separate blocks and nothing else says they abut.
     """
-
-    def __init__(
-        self,
-        extended: Sequence[int],
-        chunk_size: int,
-        num_levels: int,
-        *,
-        embed_fn: Callable[[list[int]], object],
-        next_token_fn: Optional[Callable[[object], int]] = None,
-        real_len: Optional[int] = None,
-        pad_token: int = 0,
-    ):
-        self.chunk_size = int(chunk_size)
-        self.num_levels = int(num_levels)
-        assert self.num_levels >= 1, f"num_levels must be >= 1, got {self.num_levels}"
-        assert len(extended) == self.chunk_size + self.num_levels, (
-            f"extended stream is {len(extended)}, expected {self.chunk_size} + {self.num_levels}; "
-            "build it with mtp_extended_stream()"
+    isl = chunk_size // sp_factor
+    for c in range(sp_factor):
+        trunk = list(stream[c * isl : (c + 1) * isl])
+        mtp = list(stream[(c + 1) * isl : (c + 1) * isl + n_mtp])
+        assert len(trunk) == isl and len(mtp) == n_mtp, (
+            f"chip {c}: trunk {len(trunk)} + mtp {len(mtp)} ids, expected {isl} + {n_mtp}; the stream "
+            f"is {len(stream)} long"
         )
-        self._ext = list(extended)
-        self.real_len = self.chunk_size if real_len is None else int(real_len)
-        assert 0 <= self.real_len <= self.chunk_size
-        self.embed_fn = embed_fn
-        self.next_token_fn = next_token_fn
-        self.pad_token = int(pad_token)
-        self._gen: list[int] = []
-
-        self.generating = GEN_SLOT in self._ext
-        if self.generating:
-            slots = self._ext[self.real_len : self.real_len + self.num_levels]
-            assert slots == [GEN_SLOT] * self.num_levels, (
-                f"generation slots must be the {self.num_levels} positions right after the last real "
-                f"token ({self.real_len}); got {slots}"
-            )
-            assert next_token_fn is not None, (
-                "the last chunk needs next_token_fn to produce t_P..t_{P+K-1}: level k's window "
-                "requires t_{P+k-1} = argmax lm_head(H^{k-1}) at the last real row"
-            )
-
-    @property
-    def generated_tokens(self) -> list[int]:
-        """``[t_P, t_{P+1}, ...]`` produced so far. Always empty on an interior chunk."""
-        return list(self._gen)
-
-    def window(self, shift: int) -> list[int]:
-        """Window ``shift`` as ``C`` in-vocab ids, generation slots resolved."""
-        assert 0 <= shift <= self.num_levels, f"shift {shift} out of range [0, {self.num_levels}]"
-        ext = self._ext
-        if self.generating:
-            assert len(self._gen) >= shift, (
-                f"window {shift} needs {shift} generated token(s) for rows "
-                f"[{self.real_len - shift}, {self.real_len}), have {len(self._gen)}"
-            )
-            ext = list(ext)
-            for i, tok in enumerate(self._gen):
-                ext[self.real_len + i] = int(tok)
-            ext = [self.pad_token if t == GEN_SLOT else t for t in ext]
-        return ext[shift : shift + self.chunk_size]
-
-    def __call__(self, k: int, prev_normed):
-        """``TtMTPPredictor``'s hook: level ``k`` (0-based) wants the shift-``k+1`` embedding.
-
-        ``prev_normed`` is ``H^k`` -- the trunk output after ``model.norm`` at ``k=0``, and level
-        ``k``'s ``shared_head.norm`` output after that. On the last chunk it is exactly the tensor
-        whose lm_head yields ``t_{P+k}``, the one token this level's window is still missing.
-        """
-        assert 0 <= k < self.num_levels, f"level {k} out of range [0, {self.num_levels})"
-        if self.generating:
-            assert len(self._gen) == k, (
-                f"level {k} called with {len(self._gen)} generated token(s); MTPEmbedSource must be "
-                "driven in level order, once each -- it is stateful across the recurrence"
-            )
-            self._gen.append(int(self.next_token_fn(prev_normed)))
-        return self.embed_fn(self.window(k + 1))
+        assert trunk + mtp == list(stream[c * isl : c * isl + isl + n_mtp]), (
+            f"chip {c}'s trunk row and MTP row do not abut: joined they must be the contiguous "
+            f"stream[{c * isl}:{c * isl + isl + n_mtp}]"
+        )
 
 
-def _embed_window(transformer: TtPrefillTransformer, window_ids: list[int], zero_position_0: bool) -> ttnn.Tensor:
-    """Shard, upload and embed ONE window -> ``[1, 1, L, H/tp]`` TILE_LAYOUT, through the model.
+def _mtp_union(transformer: TtPrefillTransformer, stream: Sequence[int], n_mtp: int, num_levels: int):
+    """Build this chunk's :class:`MTPUnionEmbedding` the way the runtime does.
 
-    ``prepare_prefill_input_tensor`` is the trunk's own uploader, called with the transformer's own
-    ``is_balanced``, and that is what makes the shift correct: sharding is a fixed row -> position
-    permutation applied to the window's *contents*, so applying the trunk's permutation to a window
-    shifted by ``k`` lands ``t_{p+k}`` on the row whose hidden sits at ``p``. Shifting ids rather
-    than embeddings is also what keeps it free -- the token tensor is ROW_MAJOR uint32, so a row
-    offset costs nothing, while the embedding is TILE_LAYOUT and ``k`` in 1..4 is never 32-row
-    aligned.
+    Mirrors ``tt_prefill_runtime._mtp_prepare_input``'s first-rank branch: upload the two id tensors
+    the H2D row is cut into, gather each with the model's OWN embedding
+    (``transformer.mtp_embed_ids``), and hand both blocks to ``from_ids``. The union's leading block
+    is then this chunk's model input (``union.trunk``), which is why ``forward`` is called with
+    ``input_is_embedded=True`` -- gathering the trunk twice is the one cost this arrangement exists
+    to avoid.
 
-    The gather and the position-0 mask are the model's own, so what this returns is what the device
-    path would have produced for the same ids; only the slicing is done here.
+    The id tensors are consumed here, as in the runtime. The union owns ``trunk`` and frees it in
+    :meth:`~...MTPUnionEmbedding.deallocate`, so the caller must not free the model input.
     """
-    assert (
-        len(window_ids) == transformer.seq_len
-    ), f"MTP window is {len(window_ids)} ids, expected the padded chunk length {transformer.seq_len}"
-    tt_ids = prepare_prefill_input_tensor(
-        window_ids,
+    chunk_ids = prepare_prefill_input_tensor(
+        list(stream[: transformer.seq_len]),
         transformer.mesh_device,
         transformer.sp_factor,
         transformer.is_balanced,
         transformer.mesh_shape,
         transformer.sp_axis,
     )
-    emb = transformer.mtp_embed_ids(tt_ids)
-    ttnn.deallocate(tt_ids)
-    return transformer._mtp_mask_position_zero(emb, zero_position_0)
+    mtp_ids = prepare_prefill_mtp_tokens(
+        list(stream),
+        transformer.mesh_device,
+        transformer.sp_factor,
+        transformer.mesh_shape,
+        transformer.sp_axis,
+        num_mtp_tokens=n_mtp,
+    )
+    union = MTPUnionEmbedding.from_ids(chunk_ids, mtp_ids, transformer.mtp_embed_ids, num_levels=num_levels)
+    ttnn.deallocate(chunk_ids)
+    ttnn.deallocate(mtp_ids)
+    return union
+
+
+def _mtp_cache_dir(preferred: Path, fallback_root: Path) -> Path:
+    """``preferred`` if this run can use it, else the same leaf under ``fallback_root``.
+
+    The shared MTP cache tree belongs to whoever built it -- mode 775 with no group everyone shares
+    -- so it is READABLE by other users and writable by none of them. That is fine for the depth the
+    tree already holds: a complete cache is only ever read. It is not fine for a depth nobody has
+    built, whose directory does not exist yet, and ``mkdir`` there raises ``PermissionError`` before
+    a single weight is touched.
+
+    So: use ``preferred`` when it can be created, or when it already holds weights (read-only reuse
+    needs no write permission). Otherwise relocate under ``fallback_root`` and say so loudly -- the
+    relocated leg pays a full cache build, which is the fp8 dequant plus ~5.5 GiB written.
+
+    ``TT_GLM52_MTP_TTNN_CACHE`` overrides the root outright and skips all of this.
+    """
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        if os.access(preferred, os.W_OK) or any(preferred.glob("*.tensorbin")):
+            return preferred
+        reason = "exists, holds no weights, and is not writable by this user"
+    except PermissionError as exc:
+        reason = f"cannot be created ({exc.strerror})"
+
+    fallback = fallback_root / preferred.parent.name / preferred.name
+    fallback.mkdir(parents=True, exist_ok=True)
+    logger.warning(
+        f"[mtp chunks] MTP weight cache {preferred} {reason}; falling back to {fallback}. "
+        f"That directory starts empty, so this run BUILDS the MTP layer's cache (~5.5 GiB) instead "
+        f"of loading it. Set {MTP_CACHE_ENV} to a writable root to choose the location yourself."
+    )
+    return fallback
 
 
 def _next_token_fn(transformer: TtPrefillTransformer, actual_isl: int):
     """``H^k -> int``: the greedy token at the last real row, through the trunk's own LM head.
 
-    Greedy (argmax), not the transformer's sampler: the MTP chain is a draft and the reference is
-    argmax, and sampling here would make level ``k+1``'s *input* depend on the temperature. Costs one
-    32-row LM head call per level -- ``TtLMHead.forward`` narrows to the single tile containing the
-    target row before the vocab matmul. The device path does the same chain on device
-    (``TtPrefillTransformer.mtp_generate_embedding``), so what differs is the round trip, not the id.
+    This does NOT feed the device -- ``mtp_generate_embedding`` runs the identical chain on device
+    and the id never comes back. It is how the TEST learns which id the device must have generated,
+    so :func:`_expected_window` can place it and the reference can embed it. Costs one 32-row LM head
+    call per level: ``TtLMHead.forward`` narrows to the single tile holding the target row before the
+    vocab matmul.
+
+    Greedy (argmax), not the transformer's sampler, because that is what the device does: sampling
+    would make level ``k+1``'s *input* depend on the trunk's temperature.
+
+    It is not circular. Both sides argmax the same ``H^k``, so a device that generated the WRONG id
+    -- or wrote the right one into the wrong union row -- still disagrees with a window built from
+    this one, on exactly the seam rows claim (4) checks. What it does not re-derive is the LM head
+    itself, which is the trunk's and is covered by the trunk's own tests.
     """
 
     def next_token(h_normed):
@@ -468,9 +420,11 @@ def _host_window_embedding(embed_table: torch.Tensor, window_ids: list[int]) -> 
     reference. Driving the reference from the EXPECTED ids rather than the ones
     the device actually asked for is what makes the numerics sensitive to the token->window mapping.
 
-    Bit-identical because :func:`_embed_window` is a token upload, ``ttnn.embedding``'s row gather
-    and an optional multiply by a 0/1 mask -- no arithmetic anywhere -- and ``TtParallelEmbedding``
-    stores the table as ``ttnn.bfloat16``.
+    Bit-identical because the device path from ids to window is arithmetic-free: an id upload,
+    ``ttnn.embedding``'s row gather (``transformer.mtp_embed_ids``, the model's own), a row slice out
+    of the union, and an optional multiply by a 0/1 mask. ``TtParallelEmbedding`` stores the table as
+    ``ttnn.bfloat16``, which is what this gathers from. Slicing after the gather rather than before
+    changes nothing -- ``slice(embed(ids)) == embed(slice(ids))`` row for row.
 
     The position-0 mask is deliberately NOT applied here: ``fused_mtp_reference`` zeroes row 0 itself
     from the ``positions`` this test passes, and leaving it out is what lets the row-0 check below
@@ -496,24 +450,57 @@ _MESH_PARAMS = [
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-# Trunk depth: GLM-5.2's real one. It fits on ONE mesh because the trunk is loaded from the TTNN
-# weight cache -- ``state_dict={}``, every module reads its own .tensorbin straight to device -- so
-# there is no host-side peak at all, and the routed experts are stored bfloat4_b: 401 GB of cache
-# over 32 chips is 12.5 GiB/chip against 32 GB. Only layer 78 costs host memory (~19 GiB of fp8
-# dequant), because it is the one layer the cache has no entry for.
+# Trunk depth. 78 is GLM-5.2's real one; 1 is a shallow variant for iterating on the MTP path
+# without paying for the trunk.
 #
-# 78 is also the ONLY depth this test can run at, which is why the axis has one value. Every block
-# cache key is ``f"layer_{layer_idx}"`` (tt_prefill_block.py, tt/moe/tt_moe.py), so a shorter trunk
-# would put the MTP block at an index the trunk already owns and write MTP weights into a trunk
-# layer's slot of the SHARED 401 GB cache. And the index-K stride the trunk derives
-# (``full_indexer_rank(first_layer_idx + i)``) equals the one TtMTPModule derives
-# (``num_full_indexer_layers``) only against the model's own 78-entry map -- both are 22 here.
-@pytest.mark.parametrize("num_layers", [78], ids=["layers78"])
+# Full depth fits on ONE mesh because the trunk is loaded from the TTNN weight cache --
+# ``state_dict={}``, every module reads its own .tensorbin straight to device -- so there is no
+# host-side peak at all, and the routed experts are stored bfloat4_b: 401 GB of cache over 32 chips
+# is 12.5 GiB/chip against 32 GB. Only the MTP layer costs host memory (~19 GiB of fp8 dequant),
+# because it is the one layer the cache has no entry for -- and that cost is the SAME at both
+# depths, as is the CPU reference. What a shallow trunk saves is device weight load, the trunk
+# forward, and the KVPE/index caches (depth ``num_layers + K``, so 5 instead of 82).
+#
+# Two things made 78 the only workable depth before, and the config block in the test body is where
+# each is now handled explicitly rather than by the coincidence that full depth satisfies both:
+#
+#   * ``TtPrefillBlock`` derives ``is_moe = layer_idx >= NUM_DENSE_LAYERS`` (3), and every block
+#     cache key is ``f"layer_{layer_idx}"``. Deriving the MTP block's index as ``num_layers`` would
+#     therefore build layer 78's MoE weights into a DENSE block at depths 1 and 2. The index is
+#     ``max(num_layers, NUM_DENSE_LAYERS)`` instead -- past the trunk's range, still on the MoE
+#     path -- and the shallow cache gets its own directory so its ``layer_3`` files never mix with
+#     full depth's ``layer_78``.
+#   * The index-K stride the trunk derives (``full_indexer_rank(first_layer_idx + layer_num)``) must
+#     equal the one TtMTPModule derives (``num_full_indexer_layers``); they share one cache. At 78
+#     both are 22 against the model's own 78-entry map. A shallow trunk gets a map TRUNCATED to its
+#     own depth, which brings them back into agreement (both 4 at depth 1) -- and the assert below
+#     is what checks that rather than assuming it.
+@pytest.mark.parametrize("num_layers", [1, 78], ids=["layers1", "layers78"])
+# Numerics axis. ``pcc`` is the real test; ``nopcc`` runs every device op and claim (1) but skips the
+# CPU reference and every PCC comparison -- claim (2) and the two slice claims (3) and (4) all need
+# ``glm_mtp_predictor_reference``, which is 45-140s of host torch per chunk and this test's dominant
+# cost. It also drops the three things only the reference needs: the host embedding table (~1.8 GiB
+# off the checkpoint shards), the four persistent ``SparseMLAReference`` instances, and every device
+# readback.
+#
+# What survives is worth having on its own -- the full device path, all K levels through the real
+# predictor and the real LM head, the C+K stream, the per-level windows ``_expected_window`` derives
+# independently, the interior/last split, and that the last chunk generated exactly K tokens. So it
+# catches a crash, a hang, a shape, a cache path or a stream-formation bug.
+#
+# What it CANNOT tell you is whether any number is right, so it is not a way to sign off a change:
+# the run logs a warning per chunk saying the chunk is not validated. An axis rather than a CLI flag
+# so the two legs are separate node ids and ``nopcc`` can never be mistaken for a green ``pcc``.
+@pytest.mark.parametrize("skip_pcc", [False, True], ids=["pcc", "nopcc"])
+# Prediction levels: both shipping configurations. See :data:`MTP_LEVEL_AXIS` for why MTP7 costs
+# nothing on the wire and why K = 1 lives in test_mtp.py instead.
+@pytest.mark.parametrize("mtp_levels", MTP_LEVEL_AXIS, ids=[f"mtp{k}" for k in MTP_LEVEL_AXIS])
 @pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
-# Weight axis: pretrained only. Everything is real -- the 78-layer trunk, the embedding table and
-# the LM head out of the TTNN cache, layer 78's MLA + indexer + 256-expert MoE and the four MTP
-# tensors out of the checkpoint. There is no random leg because there is no random 78-layer trunk:
-# the cache is the only reason full depth fits, and it holds one particular model's weights.
+# Weight axis: pretrained only. Everything is real -- the trunk, the embedding table and the LM head
+# out of the TTNN cache, layer 78's MLA + indexer + 256-expert MoE and the four MTP tensors out of
+# the checkpoint. There is no random leg because there is no random 78-layer trunk: the cache is the
+# only reason full depth fits, and it holds one particular model's weights. The shallow depth reads
+# the SAME cache -- it just stops after layer 0 -- so it has no random leg either.
 # ``test_mtp.py`` keeps the checkpoint-free coverage of the same modules at depth 1.
 #
 # What the four MTP tensors look like, measured off the checkpoint at layer 78:
@@ -538,10 +525,12 @@ def test_mtp_transformer_chunks(
     device_params,
     num_links,
     num_layers,
+    mtp_levels,
     use_pretrained,
     mtp_cfg,
     mtp_state_dict,
     mtp_layer_state_dict,
+    skip_pcc,
     monkeypatch,
 ):
     """3 x 5120 tokens of GLM-5.2 MTP4 end to end: every window, every level, exact ids.
@@ -570,6 +559,10 @@ def test_mtp_transformer_chunks(
     start because that is how much cache each level attends over. It is not in any CI yaml.
     """
     torch.manual_seed(42)
+    # Bound here rather than threaded through every reference below: K and the socket row's width are
+    # fixed for the whole test once the axis picks them, and the body reads them ~20 times.
+    NUM_LEVELS = mtp_levels
+    N_MTP = num_mtp_tokens(NUM_LEVELS)
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
 
@@ -581,9 +574,16 @@ def test_mtp_transformer_chunks(
     # otherwise follow every other GLM-5.2 test. They rebind attributes, so shallow is enough.
     config = copy.copy(config_only)
     config.max_seq_len = TOTAL
-    assert (
-        config.num_hidden_layers == num_layers
-    ), f"this test runs the checkpoint's own depth; config says {config.num_hidden_layers}, not {num_layers}"
+    full_depth = int(config_only.num_hidden_layers)
+    assert 1 <= num_layers <= full_depth, f"trunk depth {num_layers} outside [1, {full_depth}]"
+    shallow = num_layers < full_depth
+
+    # A shallow trunk gets an indexer map truncated to its OWN depth, so that the stride both sides
+    # derive from it agrees again (see the axis comment). ``copy.copy`` is shallow, so rebind the
+    # attribute rather than slicing in place -- ``config_only`` is lru_cached and every other
+    # GLM-5.2 test reads the same list object.
+    if shallow:
+        config.indexer_types = list(config_only.indexer_types)[:num_layers]
 
     # One index-K cache is shared by the trunk and the MTP block, and its per-user slot stride is
     # derived TWICE: the trunk from ``full_indexer_rank(first_layer_idx + layer_num)``, the MTP block
@@ -591,13 +591,29 @@ def test_mtp_transformer_chunks(
     # whole-model count). update_padded_kv_cache TT_FATALs if the cache's batch dim is not a multiple
     # of it, before any assertion below is reached -- so they are asserted equal here.
     #
-    # Against the model's OWN 78-entry map they agree by construction: appending one "full" slot at
-    # 78 makes both 22. That is the whole reason this test only runs at full depth; a truncated map
-    # would need the MTP slot pinned somewhere it does not belong.
-    layer_idx = enable_mtp_indexer_slot(config)
-    assert (
-        layer_idx == mtp_cfg.mtp_layer_idx == num_layers
-    ), f"MTP slot {layer_idx} should be the checkpoint's layer {mtp_cfg.mtp_layer_idx} == depth {num_layers}"
+    # At full depth they agree against the model's OWN 78-entry map: appending one "full" slot at 78
+    # makes both 22. A shallow trunk agrees against the TRUNCATED map instead -- at depth 1 the map
+    # is [full] extended to the MTP index, so both are 4 -- which is why the truncation above and
+    # the MTP index below are chosen together, not independently.
+
+    # The index the MTP BLOCK is built at -- which is not necessarily the index its WEIGHTS come
+    # from. ``mtp_cfg.mtp_layer_idx`` (78) always sources the weights; this is where the block sits
+    # for ``is_moe``, its cache key and its indexer slot. At full depth the two coincide.
+    mtp_block_idx = max(num_layers, variant.model_config.NUM_DENSE_LAYERS)
+    layer_idx = enable_mtp_indexer_slot(config, mtp_block_idx)
+    assert layer_idx == mtp_block_idx >= num_layers, (
+        f"the MTP block must sit past the trunk's layers [0, {num_layers}) so it cannot claim one of "
+        f"their cache keys; got {layer_idx}"
+    )
+    assert layer_idx >= variant.model_config.NUM_DENSE_LAYERS, (
+        f"TtPrefillBlock derives is_moe = layer_idx >= {variant.model_config.NUM_DENSE_LAYERS}, so an "
+        f"MTP block at {layer_idx} would be built DENSE while its weights (checkpoint layer "
+        f"{mtp_cfg.mtp_layer_idx}) are a 256-expert MoE"
+    )
+    if not shallow:
+        assert (
+            layer_idx == mtp_cfg.mtp_layer_idx == num_layers
+        ), f"at full depth the MTP block sits on the checkpoint's own layer {mtp_cfg.mtp_layer_idx}, got {layer_idx}"
     trunk_stride = full_indexer_rank(config, num_layers + NUM_LEVELS)
     mtp_stride = num_full_indexer_layers(config)
     assert trunk_stride == mtp_stride, (
@@ -616,6 +632,8 @@ def test_mtp_transformer_chunks(
 
     # --- Prompt: id at absolute position p is p + 1, so a decoded id names its own position -------
     prompt = list(range(1, TOTAL + 1))
+    logger.info(f"Prompt size is: {len(prompt)}")
+    logger.info(f"Prompt is: {prompt}")
     assert max(prompt) < config.vocab_size
 
     # --- Weights ---------------------------------------------------------------------------------
@@ -640,8 +658,14 @@ def test_mtp_transformer_chunks(
     # is the directory holding the trunk cache and the sibling lands beside it. See MTP_CACHE_ENV.
     mtp_cache_root = Path(os.getenv(MTP_CACHE_ENV) or weight_cache_path.parent.parent / "glm52_mtp_ttnn_cache")
     mtp_cache_path = mtp_cache_root / f"{variant.name}_{'bh' if is_blackhole() else 'wh'}_{ttnn.get_num_devices()}dev"
-    mtp_cache_path = mtp_cache_path / f"{sp_factor}x{tp_factor}"
-    mtp_cache_path.mkdir(parents=True, exist_ok=True)
+    # A shallow run builds the MTP block at a DIFFERENT index (layer_3, not layer_78), so its
+    # .tensorbin names differ and it needs its own directory -- otherwise one depth's partial set
+    # sits beside the other's and only ``check_cache_complete`` can tell them apart. Full depth
+    # keeps the unsuffixed path it has always used, so its prebuilt cache still hits.
+    mtp_cache_path = mtp_cache_path / (f"{sp_factor}x{tp_factor}" + (f"_L{num_layers}" if shallow else ""))
+    # Not a bare mkdir: the shared tree is another user's, so a depth it has no directory for cannot
+    # be created there. See :func:`_mtp_cache_dir`.
+    mtp_cache_path = _mtp_cache_dir(mtp_cache_path, Path(ttnn.CONFIG.cache_path) / "glm52_mtp_ttnn_cache")
 
     # check_cache_complete resolves every pattern against the PROCESS-GLOBAL checker directory that
     # init_checker last set -- tt_distributed_rms_norm.check_cache_complete takes a cache_path and
@@ -667,13 +691,17 @@ def test_mtp_transformer_chunks(
     # The embedding table, host side, for the MTP window embeddings claim 2 is teacher-forced from.
     # bf16 is the dtype TtParallelEmbedding stores it in, so the gather matches the device row for
     # row. Pulled from the checkpoint rather than the cache because the cache holds it sharded.
-    embed_table = load_hf_state_dict_filtered(str(model_path), ["model.embed_tokens."])["model.embed_tokens.weight"].to(
-        torch.bfloat16
-    )
-    assert list(embed_table.shape) == [
-        config.vocab_size,
-        config.hidden_size,
-    ], f"embedding table {list(embed_table.shape)} != [{config.vocab_size}, {config.hidden_size}]"
+    # Reference-only, so the ``nopcc`` leg does not pay for it: 154880 x 6144 bf16 is ~1.8 GiB off the
+    # checkpoint's shards, and the DEVICE reads its own copy out of the TTNN cache either way.
+    embed_table = None
+    if not skip_pcc:
+        embed_table = load_hf_state_dict_filtered(str(model_path), ["model.embed_tokens."])[
+            "model.embed_tokens.weight"
+        ].to(torch.bfloat16)
+        assert list(embed_table.shape) == [
+            config.vocab_size,
+            config.hidden_size,
+        ], f"embedding table {list(embed_table.shape)} != [{config.vocab_size}, {config.hidden_size}]"
 
     # Layer 78's own decoder weights, kept: claim 2's CPU reference needs the SAME tensors the device
     # got, so the dict must outlive construction. ~19 GiB resident (256 x 3 x [2048, 6144] bf16 plus
@@ -752,7 +780,7 @@ def test_mtp_transformer_chunks(
     # keys. Persistent because the caches and the fill watermark live on the instance, so a fresh one
     # per chunk would make every chunk attend over itself alone: exactly the bug this test exists to
     # catch, baked into its reference instead.
-    ref_mla = [SparseMLAReference(config, mla_weights, seq_len=TOTAL) for _ in range(NUM_LEVELS)]
+    ref_mla = None if skip_pcc else [SparseMLAReference(config, mla_weights, seq_len=TOTAL) for _ in range(NUM_LEVELS)]
 
     # --- Caches ------------------------------------------------------------------------------------
     kvpe_cache = init_mla_kv_cache(
@@ -788,9 +816,16 @@ def test_mtp_transformer_chunks(
     # ``self.run_mtp(...)``, so an instance attribute wins at call time.
     h0_host: dict = {}
     real_run_mtp = transformer.run_mtp
+    # Per-chunk switch for the hook below. ``t0`` -- the id the device's level 1 must have generated
+    # -- can only be taken here: it comes off h^0, which forward does not hand back and may free.
+    derive_gen: dict = {"on": False, "isl": 0}
 
     def _capture_h0(h_normed, *args, **kwargs):
-        h0_host["h"] = _from_device(h_normed, mesh_device)
+        # None on the ``nopcc`` leg: the key still records that run_mtp fired (asserted below), but the
+        # readback exists only to seed the reference's level 0.
+        h0_host["h"] = None if skip_pcc else _from_device(h_normed, mesh_device)
+        if derive_gen["on"]:
+            h0_host["t0"] = _next_token_fn(transformer, derive_gen["isl"])(h_normed)
         return real_run_mtp(h_normed, *args, **kwargs)
 
     monkeypatch.setattr(transformer, "run_mtp", _capture_h0)
@@ -801,6 +836,8 @@ def test_mtp_transformer_chunks(
         captured["out"] = mtp_out
         captured["generated"] = list(mtp_generated)
 
+    # Both exist only to build the reference's input, so both stay empty on the ``nopcc`` leg --
+    # which is why the skip below sits BEFORE they are filled, not after.
     windows: list[list[list[int]]] = []  # [chunk][level] -> ids in POSITION order
     generated: list[int] = []
 
@@ -808,67 +845,104 @@ def test_mtp_transformer_chunks(
         start = chunk_idx * CHUNK
         is_last = chunk_idx == NUM_CHUNKS - 1
 
-        stream, real_len = mtp_chunk_stream(prompt, chunk_idx, CHUNK, NUM_LEVELS)
+        stream, real_len = mtp_chunk_stream(prompt, chunk_idx, CHUNK, N_MTP)
+        logger.info(f"Processing chunk {chunk_idx}")
+        logger.info(f"Len(stream) is {len(stream)}")
+        # Head and tail, not the whole thing: the stream is C + n_mtp = 5152 ids at the production
+        # shape, and the tail is the interesting half -- it is where an interior chunk's borrowed
+        # lookahead ends and the last chunk's pad (which the device generates over) begins.
+        logger.info(f"Stream is : {stream[:8]} ... {stream[CHUNK - 4:CHUNK]} | mtp tail {stream[CHUNK:CHUNK + 8]} ...")
 
-        # (1) what the transformer is handed: C + K ids, K of them lookahead.
-        assert len(stream) == CHUNK + NUM_LEVELS, f"chunk {chunk_idx} stream is {len(stream)}, expected 5124"
+        # (1) what the socket delivers: C + n_mtp ids, cut into a per-chip trunk row and a per-chip
+        # lookahead row that abut. One slice covers both kinds of chunk -- an interior one finds its
+        # lookahead in the prompt, the last one finds pad and the DEVICE generates over it -- so the
+        # interior/last split lives only in the `is_last_chunk` flag below, as it does in production.
+        assert len(stream) == CHUNK + N_MTP, f"chunk {chunk_idx} stream is {len(stream)}, expected {CHUNK + N_MTP}"
         assert real_len == CHUNK, f"chunk {chunk_idx} real_len {real_len}; all three chunks are full"
         assert stream[:CHUNK] == prompt[start : start + CHUNK]
-        if is_last:
-            assert stream[CHUNK:] == [GEN_SLOT] * NUM_LEVELS, (
-                "the last chunk has no next chunk, so its K lookahead ids must be generation "
-                f"sentinels; got {stream[CHUNK:]}"
-            )
-        else:
-            assert stream == prompt[start : start + CHUNK + NUM_LEVELS], (
-                f"chunk {chunk_idx} is interior, so its extended stream is exactly the plain prompt "
-                "slice -- the K lookahead ids are the NEXT chunk's first K tokens"
-            )
+        expected_tail = (prompt[start + CHUNK : start + CHUNK + N_MTP] + [PAD_TOKEN] * N_MTP)[:N_MTP]
+        assert stream[CHUNK:] == expected_tail, (
+            f"chunk {chunk_idx}'s lookahead must be the {N_MTP} stream positions after it, padded "
+            f"where the prompt has ended; got {stream[CHUNK:][:8]}... expected {expected_tail[:8]}..."
+        )
+        assert_socket_rows(stream, sp_factor, CHUNK, N_MTP)
 
-        tt_tokens = prepare_prefill_input_tensor(
-            stream[:CHUNK], mesh_device, sp_factor, False, tuple(mesh_shape), SP_AXIS
-        )
-        # The host driver for this chunk's K windows. The transformer takes it through
-        # `mtp_embed_source`; prefill itself passes an on-device union instead.
-        source = MTPEmbedSource(
-            stream,
-            CHUNK,
-            NUM_LEVELS,
-            embed_fn=lambda window: _embed_window(transformer, window, zero_position_0=(start == 0)),
-            next_token_fn=_next_token_fn(transformer, real_len),
-            real_len=real_len,
-        )
+        # The production input: two id tensors -> one on-device union, whose leading block is the
+        # model input. Exactly what tt_prefill_runtime._mtp_prepare_input builds on a first rank.
+        union = _mtp_union(transformer, stream, N_MTP, NUM_LEVELS)
         h0_host.clear()
         captured.clear()
+        derive_gen.update(on=(is_last and not skip_pcc), isl=real_len)
 
         logger.info(f"[mtp chunks] chunk {chunk_idx}: start={start} real_len={real_len} last={is_last}")
         transformer.forward(
-            tt_tokens,
+            union.trunk,
             kvpe_cache,
             actual_isl=real_len,
             actual_start=start,
             actual_end=start + real_len,
             cache_user_id=0,
             index_kv_cache=index_kv_cache,
-            mtp_embed_source=source,
+            mtp_union=union,
+            is_last_chunk=is_last,
+            # union.trunk IS this chunk's embedding, so the first rank must not gather it again.
+            input_is_embedded=True,
             on_mtp_complete=_on_mtp_complete,
         )
         ttnn.synchronize_device(mesh_device)
-        ttnn.deallocate(tt_tokens)
+        # Nothing below reads the union -- the level outputs are their own tensors -- so free it here,
+        # as the runtime's last rank does. It owns the model input, which is why that is not freed.
+        union.deallocate()
 
         assert "generated" in captured, "on_mtp_complete never fired -- the MTP branch did not run"
-        assert len(captured["out"].x) == NUM_LEVELS
-        chunk_generated = captured["generated"]
-        if is_last:
-            assert (
-                len(chunk_generated) == NUM_LEVELS
-            ), f"the last chunk must generate one token per level to fill its K slots; got {len(chunk_generated)}"
-            generated = chunk_generated
-        else:
-            assert chunk_generated == [], (
-                f"chunk {chunk_idx} is interior: every window is a pure prompt slice, so no LM-head "
-                f"round trip should have happened, but it generated {chunk_generated}"
+        res = captured["out"]
+        assert len(res.x) == NUM_LEVELS
+        assert captured["generated"] == [], (
+            f"chunk {chunk_idx}: the device path argmaxes, embeds and consumes its generated ids on "
+            f"device, so generated_tokens must come back empty on every chunk; got {captured['generated']}"
+        )
+
+        assert "h" in h0_host, "run_mtp never ran, so h^0 was never captured"
+
+        if skip_pcc:
+            logger.warning(
+                f"[mtp chunks] chunk {chunk_idx}: PCC comparison SKIPPED (skip_pcc) -- "
+                f"the device ran all {NUM_LEVELS} levels and claim (1) passed, but claims (2)/(3)/(4) "
+                "did NOT run. This is not a validated chunk."
             )
+            del res
+            continue
+
+        # The K ids the device MUST have generated, derived rather than observed: level k's window
+        # needs t_{P+k} = argmax lm_head(H^{k-1}) at the last real row, and H^{k-1} is h^0 for k=1
+        # (taken in the hook, where it is still live) and the device's own level k-2 output after.
+        # See _next_token_fn for why running the same head here is not circular.
+        seam_is_decisive = True
+        if derive_gen["on"]:
+            next_token = _next_token_fn(transformer, real_len)
+            generated = [h0_host["t0"]] + [next_token(res.out_head_normed[k]) for k in range(NUM_LEVELS - 1)]
+            assert len(generated) == NUM_LEVELS
+            logger.info(f"[mtp chunks] chunk {chunk_idx}: device must have generated {generated}")
+
+            # Claim (4) can only localise a mis-placed patch when the ids it places are telling
+            # apart. Two levels that generated the SAME id sit in adjacent union rows, so swapping
+            # their patches is invisible to a PCC over those rows -- the reference would embed the
+            # same vector either way. On this prompt that happens: the ids are synthetic (p+1), the
+            # draft chain has no signal, and the LM head collapses onto a handful of tokens.
+            #
+            # So say so rather than let the seam look stronger than it is. The claim still runs --
+            # a patch in the wrong PLACE entirely, or a wrong id, still fails it -- but the
+            # permutation-within-duplicates case is not covered, and the geometry evidence for that
+            # is the host-side simulation with distinct ids, not this assertion.
+            dupes = len(generated) - len(set(generated))
+            if dupes:
+                seam_is_decisive = False
+                logger.warning(
+                    f"[mtp chunks] chunk {chunk_idx}: generated ids {generated} contain {dupes} "
+                    "duplicate(s), so the generation seam below CANNOT distinguish a patch swap "
+                    "between the levels that share an id. It still catches a wrong id and a patch "
+                    "written outside the generated rows."
+                )
 
         # Complete only once the last chunk has generated; interior chunks never index past TOTAL.
         full_seq = prompt + generated
@@ -882,11 +956,8 @@ def test_mtp_transformer_chunks(
             f"chunk {chunk_idx}: a window came out short -- full_seq is {len(full_seq)} ids, which "
             f"does not cover this chunk's shift-{NUM_LEVELS} lookahead"
         )
-        host_embeds = [_host_window_embedding(embed_table, w) for w in windows[chunk_idx]]
-
         # --- (2) numerics, teacher-forced ---------------------------------------------------------
-        res = captured["out"]
-        assert "h" in h0_host, "run_mtp never ran, so h^0 was never captured"
+        host_embeds = [_host_window_embedding(embed_table, w) for w in windows[chunk_idx]]
 
         # H^{k-1} for the reference is the DEVICE's, never the reference's own previous output:
         # level 0 gets h^0 off the trunk, level k>0 gets level k-1's device output.
@@ -949,11 +1020,15 @@ def test_mtp_transformer_chunks(
             if is_last:
                 # (4) the generation seam: the last level+1 rows carry ids only the LM head can
                 # produce, and the reference got them from _expected_window, not from the device.
+                # See seam_is_decisive above for what a duplicate id costs this claim.
                 seam = CHUNK - level - 1
                 _, msg = assert_with_pcc(
                     ref_xs[level].unsqueeze(0)[:, :, seam:], dev_x[level][:, :, seam:], FUSED_MTP_PCC
                 )
-                logger.info(f"[mtp chunks] chunk {chunk_idx} L{level}: generation seam PCC {msg}")
+                logger.info(
+                    f"[mtp chunks] chunk {chunk_idx} L{level}: generation seam PCC {msg}"
+                    f"{'' if seam_is_decisive else ' (duplicate ids -- swap-blind, see warning above)'}"
+                )
 
         del dev_x, dev_out, dev_normed, ref_hiddens, ref_xs, ref_outs, ref_normeds
 

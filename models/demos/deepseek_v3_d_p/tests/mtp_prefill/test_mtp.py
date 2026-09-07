@@ -424,7 +424,11 @@ def test_mtp_module_pcc(
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-@pytest.mark.parametrize("num_levels", [1, 4], ids=["levels1", "levels4"])
+# K = 1 is the regression leg and the debugging configuration; 4 and 7 are the two that ship. One
+# shared weight module is replayed at every level, so a higher K costs levels and KV slots, not
+# weights -- and num_mtp_tokens rounds both 4 and 7 to the same 32-id socket row, so nothing about
+# the transport changes between them (see test_mtp_transformer_chunks.MTP_LEVEL_AXIS).
+@pytest.mark.parametrize("num_levels", [1, 4, 7], ids=["levels1", "levels4", "levels7"])
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 @pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
 @pytest.mark.parametrize("use_pretrained", [False], ids=["random"], indirect=True)
