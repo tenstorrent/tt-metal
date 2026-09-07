@@ -487,7 +487,6 @@ def _perf_signposts(layer_type, chunk_idx):
 @pytest.mark.timeout(7200)
 @parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
 @pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
-@pytest.mark.parametrize("warmup_iters", [5], ids=lambda n: f"warm{n}")
 @pytest.mark.parametrize("context_len", [262144], ids=lambda c: f"ctx_{c // 1024}k")
 @pytest.mark.parametrize("chunk_size", [8192], ids=lambda c: f"sz{c}")
 @pytest.mark.parametrize(
@@ -495,11 +494,11 @@ def _perf_signposts(layer_type, chunk_idx):
 )
 @pytest.mark.parametrize("chunk_idx", [*range(262144 // 8192), "all"], ids=lambda c: f"chunk{c}")
 def test_prefill_layer_perf_chunk_n(
-    mesh_device, chunk_idx, layer_type, chunk_size, context_len, warmup_iters, token_source, reset_seeds, request
+    mesh_device, chunk_idx, layer_type, chunk_size, context_len, token_source, reset_seeds, request
 ):
     """Measure selected layer/chunk pairs with one trace per layer type.
 
-    Each measurement follows warmup replays and has its own profiler signposts.
+    Each layer is compiled and captured once, then each selected chunk is measured once.
     GEMMA4_PERF_KV_FILL selects random, replay-filled, or zeroed cache contents.
     Inputs are token embeddings, so this is an isolated-layer benchmark.
     """
@@ -541,7 +540,7 @@ def test_prefill_layer_perf_chunk_n(
     logger.info(
         f"[layer_perf_chunk] ctx={context_len} chunk={chunk} n_chunks={n_chunks} cp={cp} | "
         f"cells={len(chunk_idxs) * len(layer_types)} chunks={chunk_idxs[0]}..{chunk_idxs[-1]} "
-        f"types=({type_desc}) warmup_replays={warmup_iters}"
+        f"types=({type_desc})"
     )
 
     host_input = _host_tensor(
@@ -706,14 +705,6 @@ def test_prefill_layer_perf_chunk_n(
                 tag = _perf_layer_tag(lt)
                 sp_start, sp_stop = _perf_signposts(lt, idx)
 
-                warm = []
-                for _ in range(warmup_iters):
-                    _stage(idx)
-                    t_i = time.time()
-                    ttnn.execute_trace(mesh_device, traces[lt], cq_id=0, blocking=False)
-                    ttnn.synchronize_device(mesh_device)
-                    warm.append(time.time() - t_i)
-
                 chunk_start = _stage(idx)
                 signpost(sp_start)
                 t_i = time.time()
@@ -722,8 +713,6 @@ def test_prefill_layer_perf_chunk_n(
                 measured_s = time.time() - t_i
                 signpost(sp_stop)
 
-                best_warm = min(warm) if warm else measured_s
-                noisy = bool(warm) and not (min(warm) * 0.8 <= measured_s <= max(warm) * 1.25)
                 results.append(
                     {
                         "chunk_idx": idx,
@@ -732,9 +721,6 @@ def test_prefill_layer_perf_chunk_n(
                         "layer_idx": layer_idxs[lt],
                         "chunk_start": chunk_start,
                         "measured_ms": measured_s * 1000,
-                        "warm_best_ms": best_warm * 1000,
-                        "warm_worst_ms": (max(warm) if warm else measured_s) * 1000,
-                        "noisy": noisy,
                         "start_signpost": sp_start,
                         "stop_signpost": sp_stop,
                     }
@@ -742,15 +728,8 @@ def test_prefill_layer_perf_chunk_n(
                 logger.info(
                     f"[layer_perf_chunk] RESULT type={tag} chunk={idx} ring_depth={idx} "
                     f"kv_actual_global={chunk_start} measured_ms={measured_s * 1000:.2f} "
-                    f"tok_s={chunk / measured_s:.0f} warm_best_ms={best_warm * 1000:.2f} "
-                    f"warm_worst_ms={(max(warm) if warm else measured_s) * 1000:.2f} "
-                    f"noisy={int(noisy)} signposts={sp_start},{sp_stop}"
+                    f"tok_s={chunk / measured_s:.0f} signposts={sp_start},{sp_stop}"
                 )
-                if noisy:
-                    logger.warning(
-                        f"[layer_perf_chunk] {tag} chunk={idx} measured {measured_s * 1000:.2f}ms is outside "
-                        f"the warm spread [{min(warm) * 1000:.2f}, {max(warm) * 1000:.2f}]ms — treat as noisy"
-                    )
 
         hidden = _cp_gather_torch(outs[layer_types[-1]], mesh_device, mesh_config)
     finally:
