@@ -329,6 +329,8 @@ inline void _topk_stamp_tile_rank_range_(std::uint32_t dst_tile_index, std::uint
     sfpi::vConstIntPrgm0 = 0x0000FFFF; // LREG12: tag complement operand
 
     LLK_ASSERT(dst_tile_index <= 1, "stamp_tile_rank_range expects dst tile 0 or 1");
+    LLK_ASSERT((rank_base & 31u) == 0u, "stamp_tile_rank_range expects rank_base to be a multiple of 32");
+    LLK_ASSERT(rank_base <= 0xFFFFu - 31u, "stamp_tile_rank_range expects rank_base + 31 to fit in 16 bits");
     set_dst_write_addr(dst_tile_index * 64); // one 32-bit tile = 64 SFPLOAD address units
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
