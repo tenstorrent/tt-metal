@@ -130,6 +130,17 @@ Blocking::Blocking(
         }
     }
     wd_mrow_rounds = WD_MROW_ROUNDS && kgroups == M_BLOCK;
+    // The mrow path sizes cb_h as DEPTH_H * hid_t so that its per-row slot addressing closes, but
+    // every block with m_eff < M_BLOCK walks that same CB in m_eff * hn_pad chunks, and a chunk
+    // that does not divide the capacity straddles the FIFO end and overruns the next CB. The
+    // largest such chunk is (M_BLOCK / 2) * hn_pad; where it does not divide the mrow capacity,
+    // give up the mrow path rather than the alignment -- without it the capacity is DEPTH_H *
+    // M_BLOCK * hn_pad, which every power-of-two m_eff divides by construction. Evaluated at
+    // DEPTH_H rather than the tuned depth_h because depth_h only shrinks from here, and a smaller
+    // one cannot make an indivisible capacity divisible for every m_eff.
+    if (wd_mrow_rounds && (DEPTH_H * hid_t) % ((M_BLOCK / 2) * hn_pad) != 0) {
+        wd_mrow_rounds = false;
+    }
 
     std::tie(ec_sizes, ec_starts) = split(emb_t, num_cores);
     ec_max = *std::max_element(ec_sizes.begin(), ec_sizes.end());
