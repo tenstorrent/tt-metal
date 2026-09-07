@@ -234,6 +234,84 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | L1 Contention Index (%) | `l1_contention_index_pct` | `mean of (1 - grant/request) over the five primary request/grant pairs` | One number for L1 bank-0 contention. The grant counter is the L1 arbiter accept for the port, so grant <= request by construction; clamped to 0..100 only as a guard. |
 | NOC vs Compute Balance (%) | `noc_vs_compute_balance_pct` | `ring0 traffic / (ring0 traffic + FPU_COUNTER)` | Above 50% = NoC-bound, below = compute-bound. |
 
+### Quasar only
+
+Quasar NEOs expose counters the tt-1xx cores do not: a fourth thread, the XSEARCH and INSTISSUE instruction classes, fifteen stall reasons OR-reduced across the threads, a third unpacker and per-thread unpacker and source-write splits. The same engine computes these and reports N/A for them on Wormhole and Blackhole.
+
+| Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
+|---|---|---|---|
+| Thread 3 Stall Rate (%) | `thread3_stall_pct` | `THREAD_STALLS_3 / instrn cycles` | Fraction of cycles thread 3 was stalled. Quasar only (fourth thread). |
+| T3 Instrn Issue Rate (%) | `thread3_ipc_pct` | `THREAD_INSTRUCTIONS_3 / instrn cycles` | Instructions issued per cycle on thread 3, as a percentage. Quasar only. |
+| CFG Instrn Avail Rate T1 (%) | `cfg_instrn_avail_t1_pct` | `CFG_INSTRN_AVAILABLE_1 / instrn cycles` | CFG instructions pending on thread 1. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| CFG Instrn Avail Rate T2 (%) | `cfg_instrn_avail_t2_pct` | `CFG_INSTRN_AVAILABLE_2 / instrn cycles` | CFG instructions pending on thread 2. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| CFG Instrn Avail Rate T3 (%) | `cfg_instrn_avail_t3_pct` | `CFG_INSTRN_AVAILABLE_3 / instrn cycles` | CFG instructions pending on thread 3. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| SYNC Instrn Avail Rate T1 (%) | `sync_instrn_avail_t1_pct` | `SYNC_INSTRN_AVAILABLE_1 / instrn cycles` | SYNC instructions pending on thread 1. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| SYNC Instrn Avail Rate T2 (%) | `sync_instrn_avail_t2_pct` | `SYNC_INSTRN_AVAILABLE_2 / instrn cycles` | SYNC instructions pending on thread 2. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| SYNC Instrn Avail Rate T3 (%) | `sync_instrn_avail_t3_pct` | `SYNC_INSTRN_AVAILABLE_3 / instrn cycles` | SYNC instructions pending on thread 3. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| THCON Instrn Avail Rate T1 (%) | `thcon_instrn_avail_t1_pct` | `THCON_INSTRN_AVAILABLE_1 / instrn cycles` | THCON instructions pending on thread 1. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| THCON Instrn Avail Rate T2 (%) | `thcon_instrn_avail_t2_pct` | `THCON_INSTRN_AVAILABLE_2 / instrn cycles` | THCON instructions pending on thread 2. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| THCON Instrn Avail Rate T3 (%) | `thcon_instrn_avail_t3_pct` | `THCON_INSTRN_AVAILABLE_3 / instrn cycles` | THCON instructions pending on thread 3. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| XSEARCH Instrn Avail Rate T0 (%) | `xsearch_instrn_avail_t0_pct` | `XSEARCH_INSTRN_AVAILABLE_0 / instrn cycles` | XSEARCH instructions pending on thread 0. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| XSEARCH Instrn Avail Rate T1 (%) | `xsearch_instrn_avail_t1_pct` | `XSEARCH_INSTRN_AVAILABLE_1 / instrn cycles` | XSEARCH instructions pending on thread 1. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| XSEARCH Instrn Avail Rate T2 (%) | `xsearch_instrn_avail_t2_pct` | `XSEARCH_INSTRN_AVAILABLE_2 / instrn cycles` | XSEARCH instructions pending on thread 2. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| XSEARCH Instrn Avail Rate T3 (%) | `xsearch_instrn_avail_t3_pct` | `XSEARCH_INSTRN_AVAILABLE_3 / instrn cycles` | XSEARCH instructions pending on thread 3. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| INSTISSUE Instrn Avail Rate T0 (%) | `instissue_instrn_avail_t0_pct` | `INSTISSUE_INSTRN_AVAILABLE_0 / instrn cycles` | INSTISSUE instructions pending on thread 0. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| INSTISSUE Instrn Avail Rate T1 (%) | `instissue_instrn_avail_t1_pct` | `INSTISSUE_INSTRN_AVAILABLE_1 / instrn cycles` | INSTISSUE instructions pending on thread 1. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| INSTISSUE Instrn Avail Rate T2 (%) | `instissue_instrn_avail_t2_pct` | `INSTISSUE_INSTRN_AVAILABLE_2 / instrn cycles` | INSTISSUE instructions pending on thread 2. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| INSTISSUE Instrn Avail Rate T3 (%) | `instissue_instrn_avail_t3_pct` | `INSTISSUE_INSTRN_AVAILABLE_3 / instrn cycles` | INSTISSUE instructions pending on thread 3. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| MATH Instrn Avail Rate T0 (%) | `math_instrn_avail_t0_pct` | `MATH_INSTRN_AVAILABLE_0 / instrn cycles` | MATH instructions pending on thread 0. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| MATH Instrn Avail Rate T2 (%) | `math_instrn_avail_t2_pct` | `MATH_INSTRN_AVAILABLE_2 / instrn cycles` | MATH instructions pending on thread 2. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| MATH Instrn Avail Rate T3 (%) | `math_instrn_avail_t3_pct` | `MATH_INSTRN_AVAILABLE_3 / instrn cycles` | MATH instructions pending on thread 3. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| UNPACK Instrn Avail Rate T1 (%) | `unpack_instrn_avail_t1_pct` | `UNPACK_INSTRN_AVAILABLE_1 / instrn cycles` | UNPACK instructions pending on thread 1. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| UNPACK Instrn Avail Rate T2 (%) | `unpack_instrn_avail_t2_pct` | `UNPACK_INSTRN_AVAILABLE_2 / instrn cycles` | UNPACK instructions pending on thread 2. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| UNPACK Instrn Avail Rate T3 (%) | `unpack_instrn_avail_t3_pct` | `UNPACK_INSTRN_AVAILABLE_3 / instrn cycles` | UNPACK instructions pending on thread 3. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| PACK Instrn Avail Rate T0 (%) | `pack_instrn_avail_t0_pct` | `PACK_INSTRN_AVAILABLE_0 / instrn cycles` | PACK instructions pending on thread 0. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| PACK Instrn Avail Rate T1 (%) | `pack_instrn_avail_t1_pct` | `PACK_INSTRN_AVAILABLE_1 / instrn cycles` | PACK instructions pending on thread 1. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| PACK Instrn Avail Rate T3 (%) | `pack_instrn_avail_t3_pct` | `PACK_INSTRN_AVAILABLE_3 / instrn cycles` | PACK instructions pending on thread 3. Quasar only (four threads; the MATH class also counts instissue instructions). |
+| Tile Counter Stall Pack Rate (%) | `tile_counter_stall_pack_pct` | `TILE_COUNTER_STALL_PACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Tile Counter Stall Unpack Rate (%) | `tile_counter_stall_unpack_pct` | `TILE_COUNTER_STALL_UNPACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Srcs Stall Pack Rate (%) | `srcs_stall_pack_pct` | `SRCS_STALL_PACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Srcs Stall SFPU Rate (%) | `srcs_stall_sfpu_pct` | `SRCS_STALL_SFPU / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Srcs Stall Unpack Rate (%) | `srcs_stall_unpack_pct` | `SRCS_STALL_UNPACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Dest Stall Pack Rate (%) | `dest_stall_pack_pct` | `DEST_STALL_PACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Dest Stall SFPU Rate (%) | `dest_stall_sfpu_pct` | `DEST_STALL_SFPU / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Dest Stall Math Rate (%) | `dest_stall_math_pct` | `DEST_STALL_MATH / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Dest Stall Unpack Rate (%) | `dest_stall_unpack_pct` | `DEST_STALL_UNPACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| SFPU Data Hazard Stall Rate (%) | `sfpu_data_hazard_stall_pct` | `SFPU_DATA_HAZARD_STALL / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| FPU Data Hazard Stall Rate (%) | `fpu_data_hazard_stall_pct` | `FPU_DATA_HAZARD_STALL / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| SrcB Stall Unpack Rate (%) | `srcb_stall_unpack_pct` | `SRCB_STALL_UNPACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| SrcA Stall Unpack Rate (%) | `srca_stall_unpack_pct` | `SRCA_STALL_UNPACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| DValid Stall Math Rate (%) | `dvalid_stall_math_pct` | `DVALID_STALL_MATH / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| SrcA Stall Math Rate (%) | `srca_stall_math_pct` | `SRCA_STALL_MATH / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Tile Counter Stall Pack Share (%) | `tile_counter_stall_pack_share_pct` | `TILE_COUNTER_STALL_PACK / sum of the captured stall reasons` | Share of tile counter stall pack among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| Tile Counter Stall Unpack Share (%) | `tile_counter_stall_unpack_share_pct` | `TILE_COUNTER_STALL_UNPACK / sum of the captured stall reasons` | Share of tile counter stall unpack among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| Srcs Stall Pack Share (%) | `srcs_stall_pack_share_pct` | `SRCS_STALL_PACK / sum of the captured stall reasons` | Share of srcs stall pack among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| Srcs Stall SFPU Share (%) | `srcs_stall_sfpu_share_pct` | `SRCS_STALL_SFPU / sum of the captured stall reasons` | Share of srcs stall sfpu among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| Srcs Stall Unpack Share (%) | `srcs_stall_unpack_share_pct` | `SRCS_STALL_UNPACK / sum of the captured stall reasons` | Share of srcs stall unpack among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| Dest Stall Pack Share (%) | `dest_stall_pack_share_pct` | `DEST_STALL_PACK / sum of the captured stall reasons` | Share of dest stall pack among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| Dest Stall SFPU Share (%) | `dest_stall_sfpu_share_pct` | `DEST_STALL_SFPU / sum of the captured stall reasons` | Share of dest stall sfpu among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| Dest Stall Math Share (%) | `dest_stall_math_share_pct` | `DEST_STALL_MATH / sum of the captured stall reasons` | Share of dest stall math among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| Dest Stall Unpack Share (%) | `dest_stall_unpack_share_pct` | `DEST_STALL_UNPACK / sum of the captured stall reasons` | Share of dest stall unpack among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| SFPU Data Hazard Stall Share (%) | `sfpu_data_hazard_stall_share_pct` | `SFPU_DATA_HAZARD_STALL / sum of the captured stall reasons` | Share of sfpu data hazard stall among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| FPU Data Hazard Stall Share (%) | `fpu_data_hazard_stall_share_pct` | `FPU_DATA_HAZARD_STALL / sum of the captured stall reasons` | Share of fpu data hazard stall among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| SrcB Stall Unpack Share (%) | `srcb_stall_unpack_share_pct` | `SRCB_STALL_UNPACK / sum of the captured stall reasons` | Share of srcb stall unpack among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| SrcA Stall Unpack Share (%) | `srca_stall_unpack_share_pct` | `SRCA_STALL_UNPACK / sum of the captured stall reasons` | Share of srca stall unpack among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| DValid Stall Math Share (%) | `dvalid_stall_math_share_pct` | `DVALID_STALL_MATH / sum of the captured stall reasons` | Share of dvalid stall math among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| SrcA Stall Math Share (%) | `srca_stall_math_share_pct` | `SRCA_STALL_MATH / sum of the captured stall reasons` | Share of srca stall math among the 15 OR-reduced stall reasons; N/A with fewer than two reasons captured. Quasar only. |
+| Unpacker0 Busy T0 Util (%) | `unpack0_busy_t0_pct` | `UNPACK0_BUSY_THREAD0 / unpack cycles` | Unpacker 0 busy on behalf of thread 0. Quasar only. |
+| Unpacker1 Busy T0 Util (%) | `unpack1_busy_t0_pct` | `UNPACK1_BUSY_THREAD0 / unpack cycles` | Unpacker 1 busy on behalf of thread 0. Quasar only. |
+| Unpacker2 Busy T0 Util (%) | `unpack2_busy_t0_pct` | `UNPACK2_BUSY_THREAD0 / unpack cycles` | Unpacker 2 busy on behalf of thread 0. Quasar only. |
+| Unpacker0 Busy T1 Util (%) | `unpack0_busy_t1_pct` | `UNPACK0_BUSY_THREAD1 / unpack cycles` | Unpacker 0 busy on behalf of thread 1. Quasar only. |
+| Unpacker1 Busy T1 Util (%) | `unpack1_busy_t1_pct` | `UNPACK1_BUSY_THREAD1 / unpack cycles` | Unpacker 1 busy on behalf of thread 1. Quasar only. |
+| SrcA Write T1 Share (%) | `srca_write_thread1_share_pct` | `SRCA_WRITE_THREAD1 / (SRCA_WRITE_THREAD0 + SRCA_WRITE_THREAD1)` | Share of srcA writes driven by thread 1. Quasar only. |
+| SrcB Write T1 Share (%) | `srcb_write_thread1_share_pct` | `SRCB_WRITE_THREAD1 / (SRCB_WRITE_THREAD0 + SRCB_WRITE_THREAD1)` | Share of srcB writes driven by thread 1. Quasar only. |
+| Math Src Data Ready Rate (%) | `math_src_data_ready_pct` | `MATH_SRC_DATA_READY / unpack cycles` | Cycles a math ALU instruction was valid with both source registers ready. Quasar only. |
+| FPU SFPU Overlap (%) | `fpu_sfpu_overlap_pct` | `max(0, FPU_COUNTER + SFPU_COUNTER - MATH_COUNTER) / fpu cycles` | Cycles the FPU and SFPU were both active. Quasar only. |
+| T0 Instrn Per Issue-Ready Cycle (ratio) | `thread0_instrn_per_ready_cycle_ratio` | `THREAD_INSTRUCTIONS_0 / max(1, instrn cycles - THREAD_STALLS_0)` | UNBOUNDED ratio: instructions issued per cycle thread 0 was not stalled. Quasar only. |
+| T1 Instrn Per Issue-Ready Cycle (ratio) | `thread1_instrn_per_ready_cycle_ratio` | `THREAD_INSTRUCTIONS_1 / max(1, instrn cycles - THREAD_STALLS_1)` | UNBOUNDED ratio: instructions issued per cycle thread 1 was not stalled. Quasar only. |
+| T2 Instrn Per Issue-Ready Cycle (ratio) | `thread2_instrn_per_ready_cycle_ratio` | `THREAD_INSTRUCTIONS_2 / max(1, instrn cycles - THREAD_STALLS_2)` | UNBOUNDED ratio: instructions issued per cycle thread 2 was not stalled. Quasar only. |
+| T3 Instrn Per Issue-Ready Cycle (ratio) | `thread3_instrn_per_ready_cycle_ratio` | `THREAD_INSTRUCTIONS_3 / max(1, instrn cycles - THREAD_STALLS_3)` | UNBOUNDED ratio: instructions issued per cycle thread 3 was not stalled. Quasar only. |
+
 ## Hardware Register Reference
 
 Each counter bank `<X>` (`FPU`, `TDMA_PACK`, `TDMA_UNPACK`, `L1`, `INSTRN_THREAD`) is programmed via three RISC-V debug registers. The programming sequence in `start_perf_counter()` / `stop_perf_counter()` follows this map.
