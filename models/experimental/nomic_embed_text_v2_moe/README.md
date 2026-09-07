@@ -26,6 +26,8 @@ marker.
 ```
 reference/
   ARCHITECTURE.md            verified architecture and operator mapping
+  MODEL_ANALYSIS.md          generated: graph, operators, shapes, params, hierarchy
+  analysis.py                regenerates MODEL_ANALYSIS.md
   IMPLEMENTATION_PLAN.md     approved multi-phase plan
   modeling_nomic_moe.py      golden PyTorch reference
   configuration_nomic_moe.py config that validates every baked-in assumption

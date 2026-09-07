@@ -144,12 +144,19 @@ Module types in use:
 
 ## 3. Operator inventory
 
-36 distinct aten operators, captured with `TorchDispatchMode` on a real
-forward pass. Counts are for the sample input above; shapes are one representative call.
+42 distinct aten operators, captured with `TorchDispatchMode` on a real forward pass. Counts are
+for the sample input above; shapes are one representative call.
 
-`torch.fx.symbolic_trace` cannot produce this: it raises
-`TypeError: torch.finfo() requires a floating point input type` on the Proxy dtype in
-`build_extended_attention_mask`, and the MoE expert loop branches on tensor values.
+The SDPA backend is pinned to `SDPBackend.MATH` for the capture. Backend selection changes the
+inventory, so leaving it to auto-selection would make this list a property of the host rather
+than of the model. MATH also decomposes attention into the matmul, scale, softmax and matmul the
+port has to implement, instead of one fused kernel; on CPU the default would instead collapse it
+to `aten._scaled_dot_product_flash_attention_for_cpu`. The TTNN port maps this back to a single
+fused `ttnn.transformer.scaled_dot_product_attention`.
+
+`torch.fx.symbolic_trace` cannot produce this list: it raises `TypeError: torch.finfo() requires
+a floating point input type` on the Proxy dtype in `build_extended_attention_mask`, and the MoE
+expert loop branches on tensor values.
 
 | operator | calls | input shapes (representative) | output shape |
 |---|---|---|---|
@@ -160,25 +167,31 @@ forward pass. Counts are for the sample input above; shapes are one representati
 | `aten.unsqueeze.default` | 91 | `[2, 16]` | `[2, 1, 16]` |
 | `aten.t.default` | 77 | `[2304, 768]` | `[768, 2304]` |
 | `aten.mm.default` | 76 | `[32, 768], [768, 8]` | `[32, 8]` |
-| `aten.cat.default` | 72 | `-` | `[16, 64]` |
-| `aten.index.Tensor` | 70 | `[32, 768]` | `[16, 768]` |
-| `aten.add.Tensor` | 55 | `[2, 16, 768], [16, 768]` | `[2, 16, 768]` |
+| `aten._unsafe_view.default` | 72 | `[2, 12, 16, 64]` | `[24, 16, 64]` |
+| `aten.cat.default` | 72 | `[16, 32], [16, 32]` | `[16, 64]` |
+| `aten.index.Tensor` | 70 | `[32, 768], [16]` | `[16, 768]` |
+| `aten.add.Tensor` | 67 | `[2, 16, 768], [16, 768]` | `[2, 16, 768]` |
 | `aten.permute.default` | 54 | `[2, 16, 12, 64]` | `[2, 12, 16, 64]` |
 | `aten.alias.default` | 48 | `[2, 16, 12, 64]` | `[2, 16, 12, 64]` |
+| `aten.clone.default` | 48 | `[2, 12, 16, 64]` | `[2, 12, 16, 64]` |
+| `aten.expand.default` | 48 | `[2, 12, 16, 64]` | `[2, 12, 16, 64]` |
 | `aten.nonzero.default` | 48 | `[2, 32]` | `[16, 2]` |
 | `aten.unbind.int` | 48 | `[16, 2]` | `[16]` |
 | `aten.gelu.default` | 41 | `[2, 16, 3072]` | `[2, 16, 3072]` |
 | `aten.addmm.default` | 36 | `[2304], [32, 768], [768, 2304]` | `[32, 2304]` |
 | `aten.index_add_.default` | 35 | `[32, 768], [16], [16, 768]` | `[32, 768]` |
 | `aten.native_layer_norm.default` | 25 | `[2, 16, 768], [768], [768]` | `[2, 16, 768]` |
+| `aten.bmm.default` | 24 | `[24, 16, 64], [24, 64, 16]` | `[24, 16, 16]` |
+| `aten.mul.Scalar` | 24 | `[2, 12, 16, 64]` | `[2, 12, 16, 64]` |
 | `aten.neg.default` | 24 | `[2, 16, 12, 32]` | `[2, 16, 12, 32]` |
 | `aten.split.Tensor` | 24 | `[2, 16, 12, 64]` | `[2, 16, 12, 32]` |
 | `aten._local_scalar_dense.default` | 12 | `[]` | `-` |
-| `aten._scaled_dot_product_flash_attention_for_cpu.default` | 12 | `[2, 12, 16, 64], [2, 12, 16, 64], [2, 12, 16, 64]` | `[2, 12, 16, 64]` |
+| `aten._safe_softmax.default` | 12 | `[2, 12, 16, 16]` | `[2, 12, 16, 16]` |
 | `aten.arange.default` | 12 | `-` | `[16]` |
 | `aten.cos.default` | 12 | `[16, 32]` | `[16, 32]` |
 | `aten.sin.default` | 12 | `[16, 32]` | `[16, 32]` |
-| `aten.stack.default` | 12 | `-` | `[2, 16, 3, 12, 64]` |
+| `aten.stack.default` | 12 | `[2, 16, 12, 64], [2, 16, 12, 64], [2, 16, 12, 64]` | `[2, 16, 3, 12, 64]` |
+| `aten.transpose.int` | 12 | `[2, 12, 16, 64]` | `[2, 12, 64, 16]` |
 | `aten.zeros.default` | 7 | `-` | `[16]` |
 | `aten._softmax.default` | 6 | `[32, 8]` | `[32, 8]` |
 | `aten.max.default` | 6 | `[32, 2]` | `[]` |
@@ -201,9 +214,14 @@ broadcast-batch matmuls, a multiply and a reduce, and is asserted equal to the l
 
 ## 4. Per-module tensor shapes
 
-One row per module invocation, in execution order, for the sample input. Sequence-length
-axes scale with S; here S = 16. Encoder layers 2 to 11 repeat the layer 0 and layer 1 rows verbatim and are
-elided.
+One row per module invocation, in execution order, for the sample input. Sequence-length axes
+scale with S; here S = 16.
+
+Encoder layers 2 to 11 share the module structure of layers 0 and 1 and are elided, but they are
+not identical at runtime. Inside a MoE layer the expert MLP is invoked once per expert that
+received tokens, and both that count and the token counts are routing-dependent. The next table
+gives the real variation, since an elision implying otherwise would hide the worst-case per-
+expert token count the port has to size for.
 
 | module | type | input shapes | output shape |
 |---|---|---|---|
@@ -214,18 +232,18 @@ elided.
 | `encoder.layers.0.attn.Wqkv` | Linear | `[2, 16, 768]` | `[2, 16, 2304]` |
 | `encoder.layers.0.attn.rotary_emb` | NomicBertRotaryEmbedding | `[2, 16, 3, 12, 64]` | `[2, 16, 3, 12, 64]` |
 | `encoder.layers.0.attn.out_proj` | Linear | `[2, 16, 768]` | `[2, 16, 768]` |
-| `encoder.layers.0.attn` | NomicBertAttention | `[2, 16, 768]` | `[2, 16, 768]` |
+| `encoder.layers.0.attn` | NomicBertAttention | `[2, 16, 768], [2, 1, 1, 16]` | `[2, 16, 768]` |
 | `encoder.layers.0.norm1` | LayerNorm | `[2, 16, 768]` | `[2, 16, 768]` |
 | `encoder.layers.0.mlp.fc1` | Linear | `[2, 16, 768]` | `[2, 16, 3072]` |
 | `encoder.layers.0.mlp.activation` | GELU | `[2, 16, 3072]` | `[2, 16, 3072]` |
 | `encoder.layers.0.mlp.fc2` | Linear | `[2, 16, 3072]` | `[2, 16, 768]` |
 | `encoder.layers.0.mlp` | NomicBertMLP | `[2, 16, 768]` | `[2, 16, 768]` |
 | `encoder.layers.0.norm2` | LayerNorm | `[2, 16, 768]` | `[2, 16, 768]` |
-| `encoder.layers.0` | NomicBertBlock | `[2, 16, 768]` | `[2, 16, 768]` |
+| `encoder.layers.0` | NomicBertBlock | `[2, 16, 768], [2, 1, 1, 16]` | `[2, 16, 768]` |
 | `encoder.layers.1.attn.Wqkv` | Linear | `[2, 16, 768]` | `[2, 16, 2304]` |
 | `encoder.layers.1.attn.rotary_emb` | NomicBertRotaryEmbedding | `[2, 16, 3, 12, 64]` | `[2, 16, 3, 12, 64]` |
 | `encoder.layers.1.attn.out_proj` | Linear | `[2, 16, 768]` | `[2, 16, 768]` |
-| `encoder.layers.1.attn` | NomicBertAttention | `[2, 16, 768]` | `[2, 16, 768]` |
+| `encoder.layers.1.attn` | NomicBertAttention | `[2, 16, 768], [2, 1, 1, 16]` | `[2, 16, 768]` |
 | `encoder.layers.1.norm1` | LayerNorm | `[2, 16, 768]` | `[2, 16, 768]` |
 | `encoder.layers.1.mlp.router.layer` | Linear | `[32, 768]` | `[32, 8]` |
 | `encoder.layers.1.mlp.router` | NomicRouter | `[2, 16, 768]` | `[32, 8]` |
@@ -246,16 +264,32 @@ elided.
 | `encoder.layers.1.mlp.experts` | NomicExperts | `[2, 16, 768], [32, 2], [32, 2]` | `[2, 16, 768]` |
 | `encoder.layers.1.mlp` | NomicMoELayer | `[2, 16, 768]` | `[2, 16, 768]` |
 | `encoder.layers.1.norm2` | LayerNorm | `[2, 16, 768]` | `[2, 16, 768]` |
-| `encoder.layers.1` | NomicBertBlock | `[2, 16, 768]` | `[2, 16, 768]` |
-| `encoder` | NomicBertEncoder | `[2, 16, 768]` | `[2, 16, 768]` |
+| `encoder.layers.1` | NomicBertBlock | `[2, 16, 768], [2, 1, 1, 16]` | `[2, 16, 768]` |
+| `encoder` | NomicBertEncoder | `[2, 16, 768], [2, 1, 1, 16]` | `[2, 16, 768]` |
+
+### Routing variation across MoE layers
+
+Same input, all 6 MoE layers. Experts engaged is how many of the 8 received at least one token;
+max tokens is the largest single expert workload, which is what bounds the ragged path. The
+dense all-experts formulation the port uses removes this variation by giving every expert every
+token.
+
+| MoE layer | experts engaged | max tokens in one expert |
+|---|---|---|
+| `encoder.layers.1` | 7 | 27 |
+| `encoder.layers.3` | 6 | 32 |
+| `encoder.layers.5` | 5 | 32 |
+| `encoder.layers.7` | 5 | 22 |
+| `encoder.layers.9` | 6 | 18 |
+| `encoder.layers.11` | 6 | 32 |
 
 ## 5. Parameters and memory
 
 | group | parameters | fp32 (MB) | bf16 (MB) |
 |---|---|---|---|
-| `encoder.layers.* (MoE block)` | 240,726,528 | 962.9 | 481.5 |
+| `encoder.layers, all 6 MoE blocks` | 240,726,528 | 962.9 | 481.5 |
 | `embeddings.word_embeddings` | 192,036,864 | 768.1 | 384.1 |
-| `encoder.layers.* (dense block)` | 42,527,232 | 170.1 | 85.1 |
+| `encoder.layers, all 6 dense blocks` | 42,527,232 | 170.1 | 85.1 |
 | `emb_ln` | 1,536 | 0.0 | 0.0 |
 | `embeddings.token_type_embeddings` | 768 | 0.0 | 0.0 |
 | **total** | 475,292,928 | 1901.2 | 950.6 |
@@ -264,7 +298,19 @@ Resident weights dominate: 475,292,928 parameters, 1901 MB at fp32 and 951 MB at
 Activations are small by comparison: one hidden-state tensor at the sample shape is 0.10 MB at
 fp32.
 
-The MoE layers are the exception. The dense all-experts formulation materialises `(num_experts,
-tokens, ffn_hidden)` intermediates, which at B*S = 32 is 1.57 MB at bf16 and scales linearly
-with token count. At the 512-token maximum sequence length it is 25 MB per MoE layer, which is
-what the Phase 1 memory budget has to account for.
+One MoE block is 40,121,088 parameters (80 MB at bf16) and one dense block is 7,087,872 (14 MB);
+the table rows above are the sums over all blocks of each kind.
+
+The MoE transients are what the Phase 1 budget has to size. The dense all-experts formulation
+materialises `(num_experts, tokens, ffn_hidden)` per MoE layer, where tokens is batch times
+sequence length, not sequence length alone:
+
+| batch | seq len | tokens | one intermediate, bf16 (MB) |
+|---|---|---|---|
+| 2 | 16 | 32 | 1.6 |
+| 1 | 512 | 512 | 25.2 |
+| 8 | 512 | 4096 | 201.3 |
+| 32 | 512 | 16384 | 805.3 |
+
+It scales linearly with token count, so batch is as load-bearing as sequence length here. The
+Phase 1 plan budgets against batch 1 at the 512-token maximum.

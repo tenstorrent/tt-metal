@@ -29,6 +29,7 @@ import textwrap
 from pathlib import Path
 
 import torch
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.utils._python_dispatch import TorchDispatchMode
 
 from models.experimental.nomic_embed_text_v2_moe.common import build_synthetic_model, random_input_ids
@@ -44,6 +45,10 @@ OUTPUT_PATH = Path(__file__).parent / "MODEL_ANALYSIS.md"
 SAMPLE_BATCH = 2
 SAMPLE_SEQLEN = 16
 SAMPLE_PAD_LENGTHS = [0, 5]
+
+# Fixes both the synthetic weights and the input tokens. Operator counts in the MoE path
+# depend on routing, so this seed is part of the committed document's contract.
+SAMPLE_SEED = 0
 
 # The model's trained maximum, from sentence_bert_config.json via pipeline.MAX_SEQ_LENGTH.
 MAX_SEQLEN = 512
@@ -69,7 +74,20 @@ class OperatorLog(TorchDispatchMode):
 
 
 def _tensor_shapes(args, limit: int = 3) -> list[tuple[int, ...]]:
-    return [tuple(a.shape) for a in args if isinstance(a, torch.Tensor)][:limit]
+    """Shapes of the tensor arguments, descending one level into sequences.
+
+    aten.cat, aten.stack and aten.index take their tensors inside a list, so a flat scan
+    reports nothing for exactly the ops whose input layout matters most.
+    """
+    shapes: list[tuple[int, ...]] = []
+    for arg in args:
+        if isinstance(arg, torch.Tensor):
+            shapes.append(tuple(arg.shape))
+        elif isinstance(arg, (list, tuple)):
+            shapes.extend(tuple(a.shape) for a in arg if isinstance(a, torch.Tensor))
+        if len(shapes) >= limit:
+            break
+    return shapes[:limit]
 
 
 def _first_output_shape(out):
@@ -81,8 +99,18 @@ def _first_output_shape(out):
 
 
 def capture_operators(model, input_ids, attention_mask) -> OperatorLog:
+    """Dispatched operators for one forward, with the SDPA backend pinned.
+
+    Pinned because backend auto-selection changes the inventory: this model yields 33 ops
+    under FLASH_ATTENTION and 39 under MATH, so an unpinned capture makes the committed
+    document a function of the host and the torch build rather than of the model.
+
+    MATH is the choice because it decomposes attention into the matmul / scale / softmax /
+    matmul the port actually has to implement, instead of hiding it behind one fused kernel.
+    It is also the one backend guaranteed to be available everywhere.
+    """
     log = OperatorLog()
-    with torch.no_grad(), log:
+    with torch.no_grad(), sdpa_kernel(SDPBackend.MATH), log:
         model(input_ids, attention_mask=attention_mask)
     return log
 
@@ -105,8 +133,11 @@ def capture_module_shapes(model, input_ids, attention_mask, keep_layers_up_to: i
     handles = []
 
     def make_hook(name: str, kind: str):
-        def hook(_module, inputs, output):
-            rows.append((name, kind, _fmt_shapes(_tensor_shapes(inputs)), _fmt_shape(_first_output_shape(output))))
+        # with_kwargs, because attention_mask reaches every attention module as a keyword and
+        # would otherwise be absent from the table despite being an input the port must feed.
+        def hook(_module, inputs, kwargs, output):
+            shapes = _tensor_shapes(inputs) + _tensor_shapes(tuple(kwargs.values()))
+            rows.append((name, kind, _fmt_shapes(shapes), _fmt_shape(_first_output_shape(output))))
 
         return hook
 
@@ -115,7 +146,7 @@ def capture_module_shapes(model, input_ids, attention_mask, keep_layers_up_to: i
             continue
         if _is_elided_repeat(name, keep_layers_up_to):
             continue
-        handles.append(module.register_forward_hook(make_hook(name, type(module).__name__)))
+        handles.append(module.register_forward_hook(make_hook(name, type(module).__name__), with_kwargs=True))
 
     try:
         with torch.no_grad():
@@ -139,26 +170,34 @@ def module_hierarchy(model, skip_repeats_above: int = 1) -> list[str]:
     """Indented module tree. Encoder layers above the index cutoff are elided as a repeat."""
     lines: list[str] = []
 
-    def walk(module, prefix=""):
+    def walk(module, prefix="", path=""):
         for name, child in module.named_children():
-            if name.isdigit() and int(name) > skip_repeats_above:
+            child_path = f"{path}.{name}" if path else name
+            if _is_elided_repeat(child_path, skip_repeats_above):
                 continue
             lines.append(f"{prefix}{name}: {type(child).__name__}")
-            walk(child, prefix + "  ")
+            walk(child, prefix + "  ", child_path)
 
     walk(model)
     return lines
 
 
 def parameter_table(model) -> list[tuple[str, int, float, float]]:
-    """Per-top-level-group parameter counts and memory, plus a total row."""
+    """Parameter counts and memory per group, plus a total row.
+
+    Block groups are sums over every layer of that kind, and the group name says how many, so
+    the figure cannot be misread as one block. This table is the input to the Phase 1 memory
+    budget, where the difference between one block and six matters.
+    """
+    config = model.config
     groups: collections.Counter = collections.Counter()
     for name, param in model.named_parameters():
         if name.startswith("encoder.layers."):
             layer_idx = int(name.split(".")[2])
-            config = model.config
-            kind = "MoE block" if config.is_moe_layer(layer_idx) else "dense block"
-            groups[f"encoder.layers.* ({kind})"] += param.numel()
+            if config.is_moe_layer(layer_idx):
+                groups[f"encoder.layers, all {len(config.moe_layers)} MoE blocks"] += param.numel()
+            else:
+                groups[f"encoder.layers, all {len(config.dense_layers)} dense blocks"] += param.numel()
         else:
             groups[name.rsplit(".", 1)[0] or name] += param.numel()
 
@@ -166,6 +205,51 @@ def parameter_table(model) -> list[tuple[str, int, float, float]]:
     total = sum(p.numel() for p in model.parameters())
     rows.append(("total", total, total * BYTES_PER_FP32 / 1e6, total * BYTES_PER_BF16 / 1e6))
     return rows
+
+
+def per_block_parameters(model) -> tuple[int, int]:
+    """(one MoE block, one dense block) parameter counts, for the memory budget."""
+    config = model.config
+    counts = {"moe": 0, "dense": 0}
+    for name, param in model.named_parameters():
+        if not name.startswith("encoder.layers."):
+            continue
+        layer_idx = int(name.split(".")[2])
+        if layer_idx == config.moe_layers[0]:
+            counts["moe"] += param.numel()
+        elif layer_idx == config.dense_layers[0]:
+            counts["dense"] += param.numel()
+    return counts["moe"], counts["dense"]
+
+
+def capture_expert_routing(model, config, input_ids, attention_mask) -> list[tuple[int, int, int]]:
+    """Per MoE layer: (expert invocations, max tokens in one expert, total routed tokens).
+
+    Routing is data-dependent, so these vary layer to layer for the same input. That variation
+    is why the per-module shape table cannot simply claim the MoE layers repeat each other.
+    """
+    seen: dict[int, list[int]] = {i: [] for i in config.moe_layers}
+    handles = []
+
+    def make_hook(layer_idx: int):
+        def hook(_module, inputs, output):
+            if inputs and isinstance(inputs[0], torch.Tensor):
+                seen[layer_idx].append(inputs[0].shape[0])
+
+        return hook
+
+    for layer_idx in config.moe_layers:
+        target = model.encoder.layers[layer_idx].mlp.experts.mlp
+        handles.append(target.register_forward_hook(make_hook(layer_idx)))
+
+    try:
+        with torch.no_grad():
+            model(input_ids, attention_mask=attention_mask)
+    finally:
+        for handle in handles:
+            handle.remove()
+
+    return [(layer_idx, len(v), max(v) if v else 0) for layer_idx, v in sorted(seen.items())]
 
 
 def mermaid_graph(config: NomicMoEConfig) -> list[str]:
@@ -261,8 +345,8 @@ def dot_graph(config: NomicMoEConfig) -> str:
         "  rankdir=TB;",
         '  node [shape=box, fontname="Helvetica", fontsize=10];',
         '  ids [label="input_ids [B, S]", shape=ellipse];',
-        '  we [label="word_embeddings\\n[250048, 768]"];',
-        '  tte [label="token_type_embeddings\\n[1, 768]"];',
+        f'  we [label="word_embeddings\\n({config.vocab_size}, {config.hidden_size})"];',
+        f'  tte [label="token_type_embeddings\\n({config.type_vocab_size}, {config.hidden_size})"];',
         '  embln [label="emb_ln (LayerNorm)"];',
         "  ids -> we; we -> embln; tte -> embln;",
     ]
@@ -297,7 +381,7 @@ def _md_table(header: list[str], rows: list[tuple]) -> list[str]:
     return out
 
 
-def build_markdown(config: NomicMoEConfig, model, log: OperatorLog, module_rows, param_rows) -> str:
+def build_markdown(config: NomicMoEConfig, model, log: OperatorLog, module_rows, param_rows, routing_rows) -> str:
     total_params = sum(p.numel() for p in model.parameters())
     activation_bytes = SAMPLE_BATCH * SAMPLE_SEQLEN * config.hidden_size * BYTES_PER_FP32
 
@@ -350,12 +434,28 @@ def build_markdown(config: NomicMoEConfig, model, log: OperatorLog, module_rows,
         "",
         "## 3. Operator inventory",
         "",
-        f"{len(log.counts)} distinct aten operators, captured with `TorchDispatchMode` on a real",
-        "forward pass. Counts are for the sample input above; shapes are one representative call.",
-        "",
-        "`torch.fx.symbolic_trace` cannot produce this: it raises",
-        "`TypeError: torch.finfo() requires a floating point input type` on the Proxy dtype in",
-        "`build_extended_attention_mask`, and the MoE expert loop branches on tensor values.",
+    ]
+    lines += _para(
+        f"{len(log.counts)} distinct aten operators, captured with `TorchDispatchMode` on a real "
+        "forward pass. Counts are for the sample input above; shapes are one representative call."
+    )
+    lines += [""]
+    lines += _para(
+        "The SDPA backend is pinned to `SDPBackend.MATH` for the capture. Backend selection "
+        "changes the inventory, so leaving it to auto-selection would make this list a property "
+        "of the host rather than of the model. MATH also decomposes attention into the matmul, "
+        "scale, softmax and matmul the port has to implement, instead of one fused kernel; on "
+        "CPU the default would instead collapse it to "
+        "`aten._scaled_dot_product_flash_attention_for_cpu`. The TTNN port maps this back to a "
+        "single fused `ttnn.transformer.scaled_dot_product_attention`."
+    )
+    lines += [""]
+    lines += _para(
+        "`torch.fx.symbolic_trace` cannot produce this list: it raises "
+        "`TypeError: torch.finfo() requires a floating point input type` on the Proxy dtype in "
+        "`build_extended_attention_mask`, and the MoE expert loop branches on tensor values."
+    )
+    lines += [
         "",
     ]
     op_rows = [
@@ -376,15 +476,40 @@ def build_markdown(config: NomicMoEConfig, model, log: OperatorLog, module_rows,
         "",
         "## 4. Per-module tensor shapes",
         "",
-        "One row per module invocation, in execution order, for the sample input. Sequence-length",
-        f"axes scale with S; here S = {SAMPLE_SEQLEN}. Encoder layers 2 to"
-        f" {config.num_hidden_layers - 1} repeat the layer 0 and layer 1 rows verbatim and are",
-        "elided.",
-        "",
     ]
+    lines += _para(
+        "One row per module invocation, in execution order, for the sample input. "
+        f"Sequence-length axes scale with S; here S = {SAMPLE_SEQLEN}."
+    )
+    lines += [""]
+    lines += _para(
+        f"Encoder layers {config.dense_layers[1]} to {config.num_hidden_layers - 1} share the "
+        "module structure of layers 0 and 1 and are elided, but they are not identical at "
+        "runtime. Inside a MoE layer the expert MLP is invoked once per expert that received "
+        "tokens, and both that count and the token counts are routing-dependent. The next "
+        "table gives the real variation, since an elision implying otherwise would hide the "
+        "worst-case per-expert token count the port has to size for."
+    )
+    lines += [""]
     lines += _md_table(
         ["module", "type", "input shapes", "output shape"],
         [(f"`{n}`", t, f"`{i}`", f"`{o}`") for n, t, i, o in module_rows],
+    )
+    lines += [
+        "",
+        "### Routing variation across MoE layers",
+        "",
+    ]
+    lines += _para(
+        f"Same input, all {len(config.moe_layers)} MoE layers. Experts engaged is how many of "
+        f"the {config.num_experts} received at least one token; max tokens is the largest single "
+        "expert workload, which is what bounds the ragged path. The dense all-experts "
+        "formulation the port uses removes this variation by giving every expert every token."
+    )
+    lines += [""]
+    lines += _md_table(
+        ["MoE layer", "experts engaged", "max tokens in one expert"],
+        [(f"`encoder.layers.{i}`", n, mx) for i, n, mx in routing_rows],
     )
     lines += [
         "",
@@ -407,14 +532,31 @@ def build_markdown(config: NomicMoEConfig, model, log: OperatorLog, module_rows,
         f"{activation_bytes / 1e6:.2f} MB at fp32."
     )
     lines += [""]
+    moe_block_params, dense_block_params = per_block_parameters(model)
     lines += _para(
-        "The MoE layers are the exception. The dense all-experts formulation materialises "
-        "`(num_experts, tokens, ffn_hidden)` intermediates, which at "
-        f"B*S = {SAMPLE_BATCH * SAMPLE_SEQLEN} is "
-        f"{_moe_intermediate_mb(config, SAMPLE_BATCH * SAMPLE_SEQLEN):.2f} MB at bf16 and scales "
-        f"linearly with token count. At the {MAX_SEQLEN}-token maximum sequence length it is "
-        f"{_moe_intermediate_mb(config, MAX_SEQLEN):.0f} MB per MoE layer, which is what the "
-        "Phase 1 memory budget has to account for."
+        f"One MoE block is {moe_block_params:,} parameters "
+        f"({moe_block_params * BYTES_PER_BF16 / 1e6:.0f} MB at bf16) and one dense block is "
+        f"{dense_block_params:,} ({dense_block_params * BYTES_PER_BF16 / 1e6:.0f} MB); the table "
+        "rows above are the sums over all blocks of each kind."
+    )
+    lines += [""]
+    lines += _para(
+        "The MoE transients are what the Phase 1 budget has to size. The dense all-experts "
+        "formulation materialises `(num_experts, tokens, ffn_hidden)` per MoE layer, where "
+        "tokens is batch times sequence length, not sequence length alone:"
+    )
+    lines += [""]
+    lines += _md_table(
+        ["batch", "seq len", "tokens", "one intermediate, bf16 (MB)"],
+        [
+            (b, sq, b * sq, f"{_moe_intermediate_mb(config, b * sq):.1f}")
+            for b, sq in ((SAMPLE_BATCH, SAMPLE_SEQLEN), (1, MAX_SEQLEN), (8, MAX_SEQLEN), (32, MAX_SEQLEN))
+        ],
+    )
+    lines += [""]
+    lines += _para(
+        "It scales linearly with token count, so batch is as load-bearing as sequence length "
+        "here. The Phase 1 plan budgets against batch 1 at the 512-token maximum."
     )
     lines += [""]
     return "\n".join(lines)
@@ -425,27 +567,39 @@ def _moe_intermediate_mb(config: NomicMoEConfig, tokens: int) -> float:
     return config.num_experts * tokens * config.intermediate_size * BYTES_PER_BF16 / 1e6
 
 
+def generate_markdown() -> str:
+    """Run the whole analysis and return the markdown.
+
+    Single source of truth for both `main()` and the staleness test. The test must not build
+    its own sample: the MoE operator counts depend on which experts the router picks, which
+    depends on the synthetic seed, so a second sample construction could drift and the test
+    would then assert against the wrong input.
+    """
+    config = load_vendored_config()
+    model = build_synthetic_model(config, seed=SAMPLE_SEED)
+    input_ids, attention_mask = random_input_ids(
+        SAMPLE_BATCH, SAMPLE_SEQLEN, config, seed=SAMPLE_SEED, pad_lengths=SAMPLE_PAD_LENGTHS
+    )
+
+    log = capture_operators(model, input_ids, attention_mask)
+    module_rows = capture_module_shapes(model, input_ids, attention_mask)
+    param_rows = parameter_table(model)
+    routing_rows = capture_expert_routing(model, config, input_ids, attention_mask)
+
+    return build_markdown(config, model, log, module_rows, param_rows, routing_rows)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, default=OUTPUT_PATH, help="markdown output path")
     parser.add_argument("--dot", type=Path, default=None, help="also write the module graph as DOT")
     args = parser.parse_args()
 
-    config = load_vendored_config()
-    model = build_synthetic_model(config, seed=0)
-    input_ids, attention_mask = random_input_ids(
-        SAMPLE_BATCH, SAMPLE_SEQLEN, config, seed=0, pad_lengths=SAMPLE_PAD_LENGTHS
-    )
-
-    log = capture_operators(model, input_ids, attention_mask)
-    module_rows = capture_module_shapes(model, input_ids, attention_mask)
-    param_rows = parameter_table(model)
-
-    args.out.write_text(build_markdown(config, model, log, module_rows, param_rows))
-    print(f"wrote {args.out} ({len(log.counts)} operators, {len(module_rows)} module invocations)")
+    args.out.write_text(generate_markdown())
+    print(f"wrote {args.out}")
 
     if args.dot:
-        args.dot.write_text(dot_graph(config))
+        args.dot.write_text(dot_graph(load_vendored_config()))
         print(f"wrote {args.dot}; render with: dot -Tpdf {args.dot} -o model_graph.pdf")
 
 
