@@ -43,13 +43,12 @@ RealOp::operation_attributes_t to_real_attributes(const MatmulDecodeParams& p) {
         p.output_core_grid,
         p.output_mcast_two_hub,
         p.rms_norm,
-        p.rms_norm_gamma,
         p.rms_norm_epsilon,
     };
 }
 
 RealOp::tensor_args_t to_real_tensor_args(const MatmulDecodeInputs& t) {
-    return RealOp::tensor_args_t{t.input_tensor_a, t.input_tensor_b};
+    return RealOp::tensor_args_t{t.input_tensor_a, t.input_tensor_b, t.rms_norm_gamma};
 }
 
 // Each program factory's create_descriptor() embeds a raw

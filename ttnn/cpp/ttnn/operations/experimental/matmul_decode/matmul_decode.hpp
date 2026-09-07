@@ -20,7 +20,8 @@ using PackedWeightSpec = ttnn::operations::experimental::matmul_decode::PackedWe
 
 // Decode-optimized matmul C = A @ B for L1 width-sharded operands (full, partial, or batched B layout).
 // Full-width hub mode also accepts ROW_MAJOR HEIGHT_SHARDED A on B's grid: A is replicated on every
-// core, M is the shard height, and compute treats A as 1x32 tiles.
+// core, M is the shard height, and compute treats A as 1x32 tiles. The output is ROW_MAJOR so a
+// following decode can consume it as A.
 // `global_cb`: optional DRAM-sender GlobalCircularBuffer supplying in1 from the tensor prefetcher
 // (full width-sharded factory only; the weight must then be a DRAM ND-sharded tensor).
 // `global_cb_k_blocks`: how many GCB pages carry one receiver's weight slab. 1 (the default) is one
@@ -53,7 +54,7 @@ Tensor matmul_decode(
     const std::optional<tt::tt_metal::CoreRangeSet>& output_core_grid = std::nullopt,
     bool output_mcast_two_hub = false,
     bool rms_norm = false,
-    std::optional<float> rms_norm_gamma = std::nullopt,
+    const std::optional<Tensor>& rms_norm_gamma = std::nullopt,
     float rms_norm_epsilon = 1.0e-6F);
 
 }  // namespace ttnn::experimental

@@ -23,7 +23,7 @@ Tensor matmul_decode(
     const std::optional<tt::tt_metal::CoreRangeSet>& output_core_grid,
     bool output_mcast_two_hub,
     bool rms_norm,
-    std::optional<float> rms_norm_gamma,
+    const std::optional<Tensor>& rms_norm_gamma,
     float rms_norm_epsilon) {
     return ttnn::prim::matmul_decode(
         input_tensor_a,
