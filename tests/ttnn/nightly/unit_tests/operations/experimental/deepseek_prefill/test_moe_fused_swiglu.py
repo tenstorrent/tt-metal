@@ -19,7 +19,12 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU, TorchExpert
+from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
+    ACTIVATION_SILU,
+    ACTIVATION_SITU,
+    ACTIVATION_SWIGLUOAI,
+    TorchExpert,
+)
 from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
@@ -31,6 +36,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test
 _TORCH_ACTIVATION = {
     ttnn.RoutedExpertActivation.Silu: ACTIVATION_SILU,
     ttnn.RoutedExpertActivation.SituGlu: ACTIVATION_SITU,
+    ttnn.RoutedExpertActivation.SwiGluOai: ACTIVATION_SWIGLUOAI,
 }
 
 # The device kernel bakes SituGluConfigKimi; these must match it or the reference silently grades

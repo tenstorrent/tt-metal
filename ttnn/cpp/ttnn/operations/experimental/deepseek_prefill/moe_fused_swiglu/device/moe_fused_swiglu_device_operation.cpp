@@ -225,9 +225,10 @@ void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
         available_grid.y);
     TT_FATAL(
         operation_arguments.activation == RoutedExpertActivation::Silu ||
-            operation_arguments.activation == RoutedExpertActivation::SituGlu,
-        "moe_fused_swiglu: activation must be RoutedExpertActivation::Silu or "
-        "RoutedExpertActivation::SituGlu");
+            operation_arguments.activation == RoutedExpertActivation::SituGlu ||
+            operation_arguments.activation == RoutedExpertActivation::SwiGluOai,
+        "moe_fused_swiglu: activation must be RoutedExpertActivation::Silu, "
+        "RoutedExpertActivation::SituGlu or RoutedExpertActivation::SwiGluOai");
 
     TT_FATAL(
         operation_arguments.output_dtype == tt::tt_metal::DataType::BFLOAT8_B ||

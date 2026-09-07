@@ -57,11 +57,12 @@ _BIAS_CAPABLE_ACTIVATIONS = (
     ttnn.RoutedExpertActivation.SituGlu,
 )
 
-# Activations moe_fused_swiglu implements; its own validation rejects the rest. The composite
-# covers all three, so this only constrains which experts a hybrid split may hand to the fused op.
+# Activations moe_fused_swiglu implements; its own validation rejects the rest. Both ops now cover
+# all three, so this only constrains which experts a hybrid split may hand to the fused op.
 _FUSED_OP_ACTIVATIONS = (
     ttnn.RoutedExpertActivation.Silu,
     ttnn.RoutedExpertActivation.SituGlu,
+    ttnn.RoutedExpertActivation.SwiGluOai,
 )
 
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
