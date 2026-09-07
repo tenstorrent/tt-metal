@@ -27,51 +27,16 @@ create_matmul_attributes = ttnn._ttnn.operations.matmul.create_matmul_attributes
 matmul_select_program_factory = ttnn._ttnn.operations.matmul.matmul_select_program_factory
 
 
-def _golden_function(
+def _matmul_reference(
     input_tensor_a,
     input_tensor_b,
-    transpose_a=False,
-    transpose_b=False,
     *,
     bias=None,
-    activation=None,
-    program_config=None,
-    **kwargs,
-):
-    import torch
-
-    if transpose_a:
-        input_tensor_a = input_tensor_a.transpose(-1, -2)
-    if transpose_b:
-        input_tensor_b = input_tensor_b.transpose(-1, -2)
-    output_tensor = input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
-
-    output_tensor = golden_apply_fused_activations(output_tensor, activation, program_config=program_config)
-
-    while len(output_tensor.shape) > len(input_tensor_a.shape):
-        output_tensor = output_tensor.squeeze(0)
-    return output_tensor
-
-
-ttnn.attach_golden_function(
-    ttnn.matmul,
-    golden_function=_golden_function,
-)
-
-
-def _golden_function(
-    input_tensor_a,
-    input_tensor_b,
     transpose_a=False,
     transpose_b=False,
-    *,
-    bias=None,
-    program_config=None,
     activation=None,
-    **kwargs,
+    program_config=None,
 ):
-    import torch
-
     if transpose_a:
         input_tensor_a = input_tensor_a.transpose(-1, -2)
     if transpose_b:
@@ -79,11 +44,7 @@ def _golden_function(
     output_tensor = input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
     if bias is not None:
-        if len(bias) == 2:
-            if bias.shape[0] != 1:
-                raise RuntimeError(f"bias must be a 1D tensor")
-            bias = bias[0]
-        output_tensor += bias
+        output_tensor = output_tensor + bias.to(output_tensor.dtype)
 
     output_tensor = golden_apply_fused_activations(output_tensor, activation, program_config=program_config)
 
@@ -92,9 +53,84 @@ def _golden_function(
     return output_tensor
 
 
+def _golden_function_matmul(
+    input_tensor_a,
+    input_tensor_b,
+    transpose_a=False,
+    transpose_b=False,
+    *,
+    activation=None,
+    program_config=None,
+    **kwargs,
+):
+    return _matmul_reference(
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a=transpose_a,
+        transpose_b=transpose_b,
+        activation=activation,
+        program_config=program_config,
+    )
+
+
+ttnn.attach_golden_function(
+    ttnn.matmul,
+    golden_function=_golden_function_matmul,
+)
+
+
+def _golden_function_linear(
+    input_tensor_a,
+    input_tensor_b,
+    transpose_a=False,
+    transpose_b=False,
+    *,
+    bias=None,
+    program_config=None,
+    activation=None,
+    **kwargs,
+):
+    return _matmul_reference(
+        input_tensor_a,
+        input_tensor_b,
+        bias=bias,
+        transpose_a=transpose_a,
+        transpose_b=transpose_b,
+        activation=activation,
+        program_config=program_config,
+    )
+
+
 ttnn.attach_golden_function(
     ttnn.linear,
-    golden_function=_golden_function,
+    golden_function=_golden_function_linear,
+)
+
+
+def _golden_function_matmul_batched_weights(
+    input_tensor_a,
+    input_tensors_b,
+    transpose_a=False,
+    transpose_b=False,
+    *,
+    program_config=None,
+    **kwargs,
+):
+    return [
+        _matmul_reference(
+            input_tensor_a,
+            input_tensor_b,
+            transpose_a=transpose_a,
+            transpose_b=transpose_b,
+            program_config=program_config,
+        )
+        for input_tensor_b in input_tensors_b
+    ]
+
+
+ttnn.attach_golden_function(
+    ttnn.matmul_batched_weights,
+    golden_function=_golden_function_matmul_batched_weights,
 )
 
 

@@ -8,7 +8,7 @@ from typing import Tuple, Union, Dict, Optional
 import warnings
 import math
 import ttnn
-from ttnn.operations.golden_common import golden_apply_fused_activations
+from ttnn.operations.golden_common import golden_apply_fused_activations, golden_assemble_conditional_result
 
 SlidingWindowParallelConfig = ttnn._ttnn.operations.sliding_window.ParallelConfig
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
@@ -168,7 +168,72 @@ def prepare_conv_bias(*args, **kwargs):
     return ttnn._ttnn.operations.conv.prepare_conv_bias(*args, **kwargs)
 
 
-def _golden_function(
+def _normalize_pair(value):
+    if hasattr(value, "__len__"):
+        if len(value) != 2:
+            raise ValueError("Expected a scalar or a sequence of 2 elements")
+        return tuple(value)
+    return (value, value)
+
+
+def _normalize_conv_padding(padding):
+    if not hasattr(padding, "__len__"):
+        return (padding, padding, padding, padding)
+    if len(padding) == 2:
+        return (padding[0], padding[0], padding[1], padding[1])
+    if len(padding) == 4:
+        return tuple(padding)
+    raise ValueError("Padding should be a scalar or a sequence of 2 or 4 elements")
+
+
+def _reshape_conv_input_to_nchw(input_tensor, batch_size, input_height, input_width, in_channels):
+    return input_tensor.reshape(batch_size, input_height, input_width, -1)[..., :in_channels].permute(0, 3, 1, 2)
+
+
+def _flatten_conv_output_to_ttnn_layout(output_tensor):
+    batch_size, out_channels, output_height, output_width = output_tensor.shape
+    return output_tensor.permute(0, 2, 3, 1).reshape(1, 1, batch_size * output_height * output_width, out_channels)
+
+
+def _flatten_conv_bias(bias_tensor):
+    return None if bias_tensor is None else bias_tensor.reshape(-1).float()
+
+
+def _conv_activation(conv_config):
+    return None if conv_config is None else conv_config.activation
+
+
+def _processed_weights_and_bias_reference(weight_tensor, bias_tensor):
+    weight_reference = weight_tensor.clone()
+    ttnn.decorators.set_golden_comparison_config(weight_reference, method="skip", scope="all")
+    if bias_tensor is None:
+        bias_reference = None
+    else:
+        bias_reference = bias_tensor.clone()
+        ttnn.decorators.set_golden_comparison_config(bias_reference, method="skip", scope="all")
+    return weight_reference, bias_reference
+
+
+def _assemble_conv_result(
+    output_tensor,
+    *,
+    output_dim,
+    weight_tensor,
+    bias_tensor,
+    return_output_dim,
+    return_weights_and_bias,
+):
+    weights_and_bias = (
+        _processed_weights_and_bias_reference(weight_tensor, bias_tensor) if return_weights_and_bias else None
+    )
+    return golden_assemble_conditional_result(
+        output_tensor,
+        (return_output_dim, output_dim),
+        (return_weights_and_bias, weights_and_bias),
+    )
+
+
+def _golden_function_conv2d(
     input_tensor,
     weight_tensor,
     in_channels: int,
@@ -177,8 +242,8 @@ def _golden_function(
     input_height: int,
     input_width: int,
     kernel_size: Union[int, Tuple[int, int]],
-    stride: Union[int, Tuple[int, int]],
-    padding: Union[int, Tuple[int, int], Tuple[int, int, int, int]],
+    stride: Union[int, Tuple[int, int]] = (1, 1),
+    padding: Union[int, Tuple[int, int], Tuple[int, int, int, int]] = (0, 0),
     dilation: Union[int, Tuple[int, int]] = (1, 1),
     groups: int = 1,
     bias_tensor=None,
@@ -189,30 +254,15 @@ def _golden_function(
 ):
     import torch
 
-    input_tensor = input_tensor.reshape(batch_size, input_height, input_width, -1)[:, :, :, :in_channels].permute(
-        0, 3, 1, 2
-    )  # 1, 1, NHW, C -> N, C, H, W
+    input_tensor = _reshape_conv_input_to_nchw(
+        input_tensor,
+        batch_size,
+        input_height,
+        input_width,
+        in_channels,
+    )
 
-    bias_tensor = bias_tensor.reshape(-1)  # torch expected 1D bias
-
-    if hasattr(padding, "__len__"):
-        if len(padding) == 2:
-            pad_top = padding[0]
-            pad_bottom = padding[0]
-            pad_left = padding[1]
-            pad_right = padding[1]
-        elif len(padding) == 4:
-            pad_top = padding[0]
-            pad_bottom = padding[1]
-            pad_left = padding[2]
-            pad_right = padding[3]
-        else:
-            raise ValueError("Padding should be a scalar or a list of 2 or 4 elements")
-    else:
-        pad_top = padding
-        pad_bottom = padding
-        pad_left = padding
-        pad_right = padding
+    pad_top, pad_bottom, pad_left, pad_right = _normalize_conv_padding(padding)
 
     # this is done because torch doesn't support different padding for height and width (e.g. padding = (1, 2, 3, 4))
     torch_padded_input = torch.nn.functional.pad(
@@ -226,32 +276,160 @@ def _golden_function(
     output_tensor = torch.nn.functional.conv2d(
         torch_padded_input,
         weight_tensor.float(),
-        bias=bias_tensor.float(),
+        bias=_flatten_conv_bias(bias_tensor),
         stride=stride,
         padding=(0, 0),
         dilation=dilation,
         groups=groups,
     )
 
-    # Get activation from conv_config
-    activation = None
-    if conv_config is not None:
-        activation = conv_config.activation
-
-    output_tensor = golden_apply_fused_activations(output_tensor, activation)
-
-    N, C, H, W = output_tensor.shape
-    output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
-
-    if return_output_dim or return_weights_and_bias:
-        return [output_tensor]
-
-    return output_tensor
+    output_tensor = golden_apply_fused_activations(output_tensor, _conv_activation(conv_config))
+    output_height, output_width = output_tensor.shape[-2:]
+    output_tensor = _flatten_conv_output_to_ttnn_layout(output_tensor)
+    return _assemble_conv_result(
+        output_tensor,
+        output_dim=(output_height, output_width),
+        weight_tensor=weight_tensor,
+        bias_tensor=bias_tensor,
+        return_output_dim=return_output_dim,
+        return_weights_and_bias=return_weights_and_bias,
+    )
 
 
 ttnn.attach_golden_function(
     ttnn.conv2d,
-    golden_function=_golden_function,
+    golden_function=_golden_function_conv2d,
+)
+
+
+def _golden_function_conv1d(
+    input_tensor,
+    weight_tensor,
+    in_channels: int,
+    out_channels: int,
+    batch_size: int,
+    input_length: int,
+    kernel_size: int,
+    stride: int = 1,
+    padding=0,
+    dilation: int = 1,
+    groups: int = 1,
+    bias_tensor=None,
+    conv_config: Conv2dConfig = None,
+    return_output_dim=False,
+    return_weights_and_bias=False,
+    **_,
+):
+    import torch
+
+    input_tensor = input_tensor.reshape(batch_size, input_length, -1)[..., :in_channels].permute(0, 2, 1)
+    if weight_tensor.ndim == 4:
+        if weight_tensor.shape[-2] != 1:
+            raise ValueError("Conv1d 4D weights must have a singleton kernel-height dimension")
+        torch_weight = weight_tensor.squeeze(-2)
+    else:
+        torch_weight = weight_tensor
+
+    if hasattr(padding, "__len__"):
+        if len(padding) != 2:
+            raise ValueError("Conv1d padding should be a scalar or a sequence of 2 elements")
+        pad_left, pad_right = padding
+    else:
+        pad_left = pad_right = padding
+    padded_input = torch.nn.functional.pad(input_tensor.float(), (pad_left, pad_right))
+    output_tensor = torch.nn.functional.conv1d(
+        padded_input,
+        torch_weight.float(),
+        bias=_flatten_conv_bias(bias_tensor),
+        stride=stride,
+        padding=0,
+        dilation=dilation,
+        groups=groups,
+    )
+    output_tensor = golden_apply_fused_activations(output_tensor, _conv_activation(conv_config))
+    output_length = output_tensor.shape[-1]
+    output_tensor = output_tensor.permute(0, 2, 1).reshape(1, 1, batch_size * output_length, out_channels)
+    return _assemble_conv_result(
+        output_tensor,
+        output_dim=output_length,
+        weight_tensor=weight_tensor,
+        bias_tensor=bias_tensor,
+        return_output_dim=return_output_dim,
+        return_weights_and_bias=return_weights_and_bias,
+    )
+
+
+ttnn.attach_golden_function(
+    ttnn.conv1d,
+    golden_function=_golden_function_conv1d,
+)
+
+
+def _crop_transposed_convolution_output(output_tensor, padding):
+    pad_top, pad_bottom, pad_left, pad_right = padding
+    height_end = output_tensor.shape[-2] - pad_bottom if pad_bottom else None
+    width_end = output_tensor.shape[-1] - pad_right if pad_right else None
+    return output_tensor[..., pad_top:height_end, pad_left:width_end]
+
+
+def _golden_function_conv_transpose2d(
+    input_tensor,
+    weight_tensor,
+    in_channels: int,
+    out_channels: int,
+    batch_size: int,
+    input_height: int,
+    input_width: int,
+    kernel_size,
+    stride=(1, 1),
+    padding=(0, 0),
+    output_padding=(0, 0),
+    dilation=(1, 1),
+    groups: int = 1,
+    bias_tensor=None,
+    conv_config: Conv2dConfig = None,
+    mirror_kernel=True,
+    return_output_dim=False,
+    return_weights_and_bias=False,
+    **_,
+):
+    import torch
+
+    input_tensor = _reshape_conv_input_to_nchw(
+        input_tensor,
+        batch_size,
+        input_height,
+        input_width,
+        in_channels,
+    )
+    torch_weight = weight_tensor if mirror_kernel else torch.flip(weight_tensor, dims=(-2, -1))
+    output_tensor = torch.nn.functional.conv_transpose2d(
+        input_tensor.float(),
+        torch_weight.float(),
+        bias=_flatten_conv_bias(bias_tensor),
+        stride=_normalize_pair(stride),
+        padding=0,
+        output_padding=_normalize_pair(output_padding),
+        groups=groups,
+        dilation=_normalize_pair(dilation),
+    )
+    output_tensor = _crop_transposed_convolution_output(output_tensor, _normalize_conv_padding(padding))
+    output_tensor = golden_apply_fused_activations(output_tensor, _conv_activation(conv_config))
+    output_height, output_width = output_tensor.shape[-2:]
+    output_tensor = _flatten_conv_output_to_ttnn_layout(output_tensor)
+    return _assemble_conv_result(
+        output_tensor,
+        output_dim=(output_height, output_width),
+        weight_tensor=weight_tensor,
+        bias_tensor=bias_tensor,
+        return_output_dim=return_output_dim,
+        return_weights_and_bias=return_weights_and_bias,
+    )
+
+
+ttnn.attach_golden_function(
+    ttnn.conv_transpose2d,
+    golden_function=_golden_function_conv_transpose2d,
 )
 
 __all__ = []
