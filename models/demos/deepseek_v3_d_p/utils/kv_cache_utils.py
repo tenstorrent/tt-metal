@@ -266,7 +266,7 @@ def merged_num_layers(stage_layout):
     return total
 
 
-def create_kv_chunk_address_table_kimi(
+def create_kv_chunk_address_table_block_cyclic(
     config,
     mesh_device,
     mesh_shape,
@@ -323,7 +323,7 @@ def create_kv_chunk_address_table_kimi(
     # The merged table spans ALL layers (not just this rank's), so size the table to the global total.
     config.num_layers = merged_num_layers(stage_layout)
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
-    return populate_kv_chunk_address_table_kimi(
+    return populate_kv_chunk_address_table_block_cyclic(
         lookup_table=lookup_table,
         config=config,
         mesh_device=mesh_device,
@@ -338,7 +338,7 @@ def create_kv_chunk_address_table_kimi(
     )
 
 
-def populate_kv_chunk_address_table_kimi(
+def populate_kv_chunk_address_table_block_cyclic(
     lookup_table,
     config,
     mesh_device,
@@ -356,7 +356,7 @@ def populate_kv_chunk_address_table_kimi(
     """
     Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a device cache tensor.
 
-    Factored out of create_kv_chunk_address_table_kimi so a single multi-config table can hold several
+    Factored out of create_kv_chunk_address_table_block_cyclic so a single multi-config table can hold several
     caches at once (the serving convention is config 0 = the MLA KVPE cache, config 1 = the block-cyclic
     index-key cache); each config carries its own grid + chunk_size_bytes and is addressed by config_id.
     The device-group
@@ -372,7 +372,7 @@ def populate_kv_chunk_address_table_kimi(
         tp_axis: None (default) = TP-REPLICATED, one device group per row. When set (KV dedup), each
             (row, col) device holds a distinct sub-slice, so the table uses per-device singleton groups:
             linear chip row*tp + col owns tokens [seq_chunk*5120 + row*640 + col*(640/tp), +640/tp).
-        (remaining args as in create_kv_chunk_address_table_kimi)
+        (remaining args as in create_kv_chunk_address_table_block_cyclic)
 
     Returns:
         lookup_table: the same table, with config_id populated.
@@ -583,7 +583,7 @@ def populate_kv_chunk_address_table_dflash(
     Populate ONE config (``config_id``) of an existing KvChunkAddressTable from ONE HEAD of the DFlash
     drafter's K or V cache (see ``allocate_dflash_kv_cache`` for the layout being described).
 
-    The drafter analog of ``populate_kv_chunk_address_table_kimi``, differing in the two ways the
+    The drafter analog of ``populate_kv_chunk_address_table_block_cyclic``, differing in the two ways the
     drafter's cache differs from MLA's KVPE cache:
 
       * **TP carries heads, not replicas.** The MLA latent cache is one head (``shape[1] == 1``)
@@ -632,7 +632,7 @@ def populate_kv_chunk_address_table_dflash(
         chunk_size_global: the block-cyclic period, i.e. the runtime's prefill chunk size. Explicit
             rather than read from the module constant because a cache written at one period and
             addressed at another yields plausible-looking, wholly wrong addresses.
-        (remaining args as in populate_kv_chunk_address_table_kimi)
+        (remaining args as in populate_kv_chunk_address_table_block_cyclic)
 
     Returns:
         lookup_table: the same table, with config_id populated.
@@ -705,7 +705,7 @@ def populate_kv_chunk_address_table_dflash(
                 for seq_chunk in range(num_chunks_per_seq_len):
                     chunk_token_start = seq_chunk * chunk_size_global + row * tokens_per_chunk_local
                     chunk_token_end = chunk_token_start + tokens_per_chunk_local
-                    # Same loop shape as populate_kv_chunk_address_table_kimi — position IS the table key
+                    # Same loop shape as populate_kv_chunk_address_table_block_cyclic — position IS the table key
                     # rather than a value derived after the fact. enumerate recovers the block index the
                     # shard walk needs; the tokens_per_chunk_local assert above makes block_in_chunk
                     # exactly 0..blocks_per_chunk_local-1.
@@ -953,7 +953,7 @@ def allocate_dflash_kv_cache(
 
     ND-DRAM-sharded with the same spec ``init_kvpe_cache`` uses — ``[1, 1,
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim]``, round-robin over the DRAM-bank grid — because the
-    migration address table REQUIRES it: ``populate_kv_chunk_address_table_kimi`` emits one address per
+    migration address table REQUIRES it: ``populate_kv_chunk_address_table_block_cyclic`` emits one address per
     (bank, 32-token chunk) off ``dram_bank_base_addr``, which describes the buffer only if each 32-token
     chunk is contiguous within a single bank. Under interleaved DRAM that chunk is ``head_dim/32`` bfp8
     tiles striped across as many banks, so every table entry would point at the wrong bytes. The write op

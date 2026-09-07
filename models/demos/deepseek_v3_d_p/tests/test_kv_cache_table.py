@@ -24,16 +24,15 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_TOKENS,
     MlaKvCacheFormat,
-    create_kv_chunk_address_table_kimi,
+    create_kv_chunk_address_table_block_cyclic,
     init_kvpe_cache,
     init_mla_kv_cache,
+    populate_kv_chunk_address_table_block_cyclic,
     populate_kv_chunk_address_table_dflash,
-    populate_kv_chunk_address_table_kimi,
 )
 from tests.ttnn.utils_for_testing import assert_equal
 
 
-# sp x tp
 # sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
@@ -64,7 +63,7 @@ def test_kimi_kv_cache_table(
     Readback test for the Kimi (non-balanced / sequential) KV chunk address table.
 
     Runs Kimi MLA (variant kimi_k2_7) to fill a sequentially laid-out KVPE cache,
-    builds the table with create_kv_chunk_address_table_kimi, then reads every chunk
+    builds the table with create_kv_chunk_address_table_block_cyclic, then reads every chunk
     back through the table and checks it against the gathered cache. The sequential
     gather is already position-continuous, so no chunk reorder is needed.
     """
@@ -115,7 +114,7 @@ def test_kimi_kv_cache_table(
     lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
 
-    lookup_table = create_kv_chunk_address_table_kimi(
+    lookup_table = create_kv_chunk_address_table_block_cyclic(
         config=lookup_table_config,
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -239,7 +238,7 @@ def test_kimi_kv_cache_mock(
     lookup_table_config.num_slots = num_users
     lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
-    lookup_table = create_kv_chunk_address_table_kimi(
+    lookup_table = create_kv_chunk_address_table_block_cyclic(
         config=lookup_table_config,
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -460,7 +459,7 @@ def test_glm_kv_cache_table(
     random weights, runs one forward at seq_len=5k to fill the indexer's block-cyclic key cache
     (tt_index_cache: [1, 1, S/sp, index_head_dim] bfp8, 1 layer / 1 user — caller-allocated and passed
     into forward(index_kv_cache=...), the same ownership as the MLA KVPE cache), then builds a KV
-    chunk address table over THAT cache with create_kv_chunk_address_table_kimi and reads every 32-token
+    chunk address table over THAT cache with create_kv_chunk_address_table_block_cyclic and reads every 32-token
     chunk back, comparing to the gathered cache. The index cache row is index_head_dim(128) wide, so a
     32-token DRAM-bank chunk is [1, 1, 32, 128] bfp8 = 4 tiles. For a single full-seq chunk the
     block-cyclic layout coincides with the sequential (Kimi) layout, so no chunk reorder is needed.
@@ -558,7 +557,7 @@ def test_glm_kv_cache_table(
     # device-group / fabric-host side table but each carries its own grid + chunk_size_bytes and is
     # addressed by config_id on every accessor (set / read_device_chunk). Both caches are
     # [num_users*num_layers, 1, S/sp, head_dim], ND-sharded 32-tokens-per-bank (round-robin over the DRAM
-    # banks) — the layout populate_kv_chunk_address_table_kimi addresses.
+    # banks) — the layout populate_kv_chunk_address_table_block_cyclic addresses.
     index_kbuf = tt_index_cache
     index_head_dim = mla_tt._indexer.index_args.index_head_dim  # 128
     kvpe_head_dim = config.kv_lora_rank + config.qk_rope_head_dim  # 576
@@ -585,7 +584,7 @@ def test_glm_kv_cache_table(
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable([kvpe_config, index_config])
     assert lookup_table.num_configs() == 2, f"expected 2 configs, got {lookup_table.num_configs()}"
 
-    populate_kv_chunk_address_table_kimi(
+    populate_kv_chunk_address_table_block_cyclic(
         lookup_table=lookup_table,
         config=index_config,
         mesh_device=mesh_device,
@@ -597,7 +596,7 @@ def test_glm_kv_cache_table(
         num_users=1,
         config_id=INDEX_CONFIG_ID,
     )
-    populate_kv_chunk_address_table_kimi(
+    populate_kv_chunk_address_table_block_cyclic(
         lookup_table=lookup_table,
         config=kvpe_config,
         mesh_device=mesh_device,
@@ -746,7 +745,7 @@ def test_glm52_tp_sharded_kv_cache_mock(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
 
-    # create_kv_chunk_address_table_kimi has no tp_axis (and always builds a stage_layout, which the
+    # create_kv_chunk_address_table_block_cyclic has no tp_axis (and always builds a stage_layout, which the
     # TP-sharded path rejects), so build the table and populate it directly.
     CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8
     # Compacted: publish on a GLOBAL layer axis strictly wider than the cache's dense rows, mapped
@@ -761,7 +760,7 @@ def test_glm52_tp_sharded_kv_cache_mock(
     lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(lookup_table_config)
-    populate_kv_chunk_address_table_kimi(
+    populate_kv_chunk_address_table_block_cyclic(
         lookup_table=lookup_table,
         config=lookup_table_config,
         mesh_device=mesh_device,
@@ -933,7 +932,7 @@ def test_glm52_kv_cache_table(
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable([kvpe_config, index_config])
     assert lookup_table.num_configs() == 2, f"expected 2 configs, got {lookup_table.num_configs()}"
 
-    populate_kv_chunk_address_table_kimi(
+    populate_kv_chunk_address_table_block_cyclic(
         lookup_table=lookup_table,
         config=index_config,
         mesh_device=mesh_device,
@@ -945,7 +944,7 @@ def test_glm52_kv_cache_table(
         num_users=1,
         config_id=INDEX_CONFIG_ID,
     )
-    populate_kv_chunk_address_table_kimi(
+    populate_kv_chunk_address_table_block_cyclic(
         lookup_table=lookup_table,
         config=kvpe_config,
         mesh_device=mesh_device,
@@ -988,7 +987,7 @@ def test_glm52_kv_cache_table(
 
 
 class _RecordingKvChunkAddressTable:
-    """Host-only stand-in for KvChunkAddressTable: records what populate_kv_chunk_address_table_kimi
+    """Host-only stand-in for KvChunkAddressTable: records what populate_kv_chunk_address_table_block_cyclic
     would write, resolving each entry's device group back to its fabric nodes so two tables built from
     different stage layouts stay comparable (group INDICES are assignment order, not identity)."""
 
@@ -1048,7 +1047,7 @@ def test_glm52_index_cache_pipeline_stage_addresses():
         config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
         config.num_layers = num_full
         table = _RecordingKvChunkAddressTable()
-        populate_kv_chunk_address_table_kimi(
+        populate_kv_chunk_address_table_block_cyclic(
             lookup_table=table,
             config=config,
             mesh_device=None,  # unused on the stage_layout path (base addr / bank count come per stage)
@@ -1103,7 +1102,7 @@ def test_glm52_tp_sharded_pipeline_stage_addresses():
         config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
         config.num_layers = num_layers
         table = _RecordingKvChunkAddressTable()
-        populate_kv_chunk_address_table_kimi(
+        populate_kv_chunk_address_table_block_cyclic(
             lookup_table=table,
             config=config,
             mesh_device=None,
