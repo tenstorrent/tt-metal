@@ -69,6 +69,19 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     check_compute_config(attrs.compute_kernel_config, operation_name);
     TT_FATAL(attrs.batch_heads > 0, "{}: batch_heads must be positive", operation_name);
     TT_FATAL(attrs.num_chunks > 0, "{}: num_chunks must be positive", operation_name);
+    TT_FATAL(attrs.groups_per_head > 0, "{}: groups_per_head must be positive", operation_name);
+    TT_FATAL(
+        attrs.batch_heads % attrs.groups_per_head == 0,
+        "{}: groups_per_head {} must divide the folded leading dimension {}",
+        operation_name,
+        attrs.groups_per_head,
+        attrs.batch_heads);
+    TT_FATAL(
+        attrs.wrap_chunk < attrs.groups_per_head * attrs.num_chunks,
+        "{}: wrap_chunk {} must be inside the local chunk count {}",
+        operation_name,
+        attrs.wrap_chunk,
+        attrs.groups_per_head * attrs.num_chunks);
     TT_FATAL(
         attrs.key_dim > 0 && attrs.value_dim > 0 && attrs.key_dim % tt::constants::TILE_WIDTH == 0 &&
             attrs.value_dim % tt::constants::TILE_WIDTH == 0,
@@ -92,7 +105,11 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         TT_FATAL(in.initial_state.has_value(), "{}: initial_state is required", operation_name);
         check_protocol_tensor(*in.initial_state, "initial_state", false, operation_name);
         check_same_device(in.v_beta, *in.initial_state, operation_name, "initial_state");
-        check_shape(*in.initial_state, Shape({BH, K, V}), "initial_state", operation_name);
+        // A wrap adds one entry-state slot: the straddling group needs both a
+        // chunk-0 seed and a mid-group reload seed.
+        const auto layout = wrap_layout(attrs);
+        check_shape(
+            *in.initial_state, Shape({layout.real_heads * layout.slots, K, V}), "initial_state", operation_name);
     } else {
         TT_FATAL(!in.initial_state.has_value(), "{}: initial_state is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);
@@ -105,12 +122,17 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
     const auto output_dtype = summary ? DataType::FLOAT32 : DataType::BFLOAT16;
     const auto output_layout = TensorLayout(output_dtype, PageConfig(Layout::TILE), attrs.output_mem_config);
     const auto state_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
+    // Summary emits one affine pair per SLOT, so a wrap adds one: the straddling
+    // group contributes its pre-wrap and post-wrap halves separately.
+    const auto layout = wrap_layout(attrs);
+    const uint32_t summary_rows = layout.real_heads * layout.slots;
     const auto first_shape =
-        summary ? Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim})
+        summary ? Shape({summary_rows, attrs.key_dim, attrs.value_dim})
                 : Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim});
+    const auto state_rows = summary ? summary_rows : attrs.batch_heads;
     return {
         TensorSpec(first_shape, output_layout),
-        TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout)};
+        TensorSpec(Shape({state_rows, attrs.key_dim, attrs.value_dim}), state_layout)};
 }
 
 RecurrentChunkScanOperation::tensor_return_value_t RecurrentChunkScanOperation::create_output_tensors(
@@ -165,6 +187,8 @@ std::vector<Tensor> recurrent_chunk_scan(
     const Tensor& t_inv,
     const std::optional<Tensor>& initial_state,
     RecurrentChunkScanMode mode,
+    uint32_t groups_per_head,
+    uint32_t wrap_chunk,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     const auto& value_shape = v_beta.logical_shape();
@@ -178,6 +202,8 @@ std::vector<Tensor> recurrent_chunk_scan(
             .num_chunks = value_shape[1],
             .key_dim = key_shape[3],
             .value_dim = value_shape[3],
+            .groups_per_head = groups_per_head,
+            .wrap_chunk = wrap_chunk,
             .mode = mode,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
