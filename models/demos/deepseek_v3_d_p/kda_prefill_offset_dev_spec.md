@@ -128,6 +128,25 @@ Each rung answers one question and is deleted once answered:
 The 14x napkin estimate holds only at A2/A3. A1 recovers only 2x at `o = C/2`
 (it improves as `C/o`, so 20x at `o=32`) but is the low-risk correctness vehicle.
 
+**Implementation finding — the boundary chip needs a per-device select.**
+Every chip holds *top-`o` of one chunk* plus *bottom-`h` of the next*, but only the
+boundary chip holds them in the opposite row order. So it sends `rows[h:C]` while
+every other chip sends `rows[0:o]`, and it keeps `rows[0:h]` while the others keep
+`rows[o:C]`. Slice indices are host-side constants shared by the whole mesh, so
+this cannot be a plain slice.
+
+The *send* side is free: the gather carries both candidate slices (`2o` rows) and
+the per-destination pick is a host-side slice list resolved by `mesh_partition` --
+the same solution shape as `exchange_convolution_carry`. The *keep* side needs a
+real per-device select, implemented as `ttnn.where` against a boundary mask built
+once per possible boundary chip at layer construction (a device constant indexed
+host-side, so trace capture sees no host transfer). Cost is roughly one extra
+buffer copy per direction, and it belongs in the A-vs-B comparison rather than
+being hidden.
+
+The reverse shift is cheaper: its send slice *is* uniform (`rows[h:C]` everywhere),
+so it gathers `o` rows rather than `2o`; only the destination row range differs.
+
 **Sequencing decision:** A1 first for correctness bring-up, then A2 to measure
 whether the byte win survives 32 launches. Escalate to A3 **only if** A2 shows the
 bandwidth win is real but launch overhead eats it — that is the one condition under
