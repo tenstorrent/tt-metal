@@ -11,7 +11,7 @@
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);  // per-core; buffers arrive as Buffer* -> addresses
+    const uint32_t src_addr = get_common_arg_val<uint32_t>(8);  // shared input Buffer* binding
     const uint32_t num_pages = get_arg_val<uint32_t>(1);
     const uint32_t core_blocks_written = get_arg_val<uint32_t>(2);
 

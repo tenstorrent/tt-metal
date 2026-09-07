@@ -34,8 +34,8 @@
 // `HasValid` is a template param so the no-clamp program keeps the original loop.
 template <bool HasMeta, bool HasValid>
 static void run_writer() {
-    // Per-core runtime args (buffers arrive as Buffer* bindings -> addresses).
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    // Cache base is common; per-core slot0 is reserved to preserve work-slot indices1/2.
+    const uint32_t dst_addr = get_common_arg_val<uint32_t>(11);
     const uint32_t num_pages = get_arg_val<uint32_t>(1);
     const uint32_t core_blocks_written = get_arg_val<uint32_t>(2);
 
