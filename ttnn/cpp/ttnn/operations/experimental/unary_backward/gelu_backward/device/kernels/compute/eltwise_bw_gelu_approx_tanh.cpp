@@ -102,7 +102,7 @@ ALWI void gelu_tanh_six_slot_chain(uint32_t num_tiles) {
         ckl::FillScalar<D::D3>{kBeta},
         ckl::MulBinary<D::D1, D::D3, D::D1>{},
         ckl::Tanh<D::D1>{},
-        ckl::CopyDest<D::D1, TanhSlot>{},
+        ckl::CopyDest<D::D1, TanhSlot, DataFormat::Float16_b>{},
         // cdf_term = 0.5 * (1 + tanh(z)) -> D1
         ckl::FillScalar<D::D3>{1.0f},
         ckl::AddBinary<D::D1, D::D3, D::D1>{},
@@ -112,7 +112,7 @@ ALWI void gelu_tanh_six_slot_chain(uint32_t num_tiles) {
         ckl::Square<TanhSlot>{},
         ckl::FillScalar<D::D3>{1.0f},
         ckl::SubBinary<D::D3, TanhSlot, D::D3>{},
-        ckl::CopyDest<D::D3, TanhSlot>{},
+        ckl::CopyDest<D::D3, TanhSlot, DataFormat::Float16_b>{},
         // D2 = 1 + 3*kappa*x^2
         ckl::FillScalar<D::D3>{kKappa * 3.0f},
         ckl::Square<D::D2>{},
@@ -123,7 +123,7 @@ ALWI void gelu_tanh_six_slot_chain(uint32_t num_tiles) {
         ckl::MulBinary<D::D2, TanhSlot, D::D2>{},
         ckl::FillScalar<D::D3>{kBeta / 2.0f},
         ckl::MulBinary<D::D2, D::D3, D::D2>{},
-        ckl::CopyDest<InputSlot, D::D3>{},
+        ckl::CopyDest<InputSlot, D::D3, DataFormat::Float16_b>{},
         ckl::MulBinary<D::D2, D::D3, D::D2>{},
         // D1 = cdf_term + x * pdf_term ; D0 = grad * D1
         ckl::AddBinary<D::D1, D::D2, D::D1>{},
