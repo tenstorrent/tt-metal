@@ -63,7 +63,9 @@ def test_per_engine_packers_gate_on_wormhole_only_counters():
     assert out["packer0_util_pct"] is None
     assert out["packer1_util_pct"] is None
     assert out["packer2_util_pct"] is None
-    assert out["packer3_util_pct"] == 40.0
+    # Engine 3 is a WH-only signal too; BH's single PACKER_BUSY is reported as pack_utilization_pct.
+    assert out["packer3_util_pct"] is None
+    assert out["pack_utilization_pct"] == 40.0
 
 
 def test_mean_port_util_averages_only_present_ports():
@@ -91,12 +93,12 @@ def test_formulas_with_distinct_values():
         {
             "FPU_COUNTER": 500.0,
             "MATH_COUNTER": 800.0,
-            "SRCA_WRITE_ACTUAL": 300.0,
+            "SRCA_WRITE_NOT_BLOCKED_PORT": 300.0,
             "UNPACK0_BUSY_THREAD0": 600.0,
             "UNPACK1_BUSY_THREAD0": 400.0,
             "PACKER_BUSY": 1000.0,
             "PACKER_DEST_READ_AVAILABLE": 250.0,
-            "FPU_INSTRN_AVAILABLE_1": 1000.0,
+            "MATH_INSTRN_AVAILABLE_1": 1000.0,
         },
         cycles=2000.0,
     )
@@ -111,7 +113,7 @@ def test_formulas_with_distinct_values():
 
 def test_partial_captures_read_none_not_zero():
     # INSTRN-only capture: the FPU numerator was never captured.
-    out = mc.compute_metrics(_View({"FPU_INSTRN_AVAILABLE_1": 900.0, "THREAD_STALLS_0": 10.0}))
+    out = mc.compute_metrics(_View({"MATH_INSTRN_AVAILABLE_1": 900.0, "THREAD_STALLS_0": 10.0}))
     assert out["fpu_exec_eff_pct"] is None
     # UNPACK-only capture: no FPU bank behind the compute-to-unpack ratio.
     out = mc.compute_metrics(_View({"UNPACK0_BUSY_THREAD0": 500.0, "UNPACK1_BUSY_THREAD0": 500.0}))
@@ -156,3 +158,14 @@ def test_shipped_counter_type_table_matches_the_header():
 
     shipped = json.loads((Path(mc.__file__).with_name("perf_counter_type_names.json")).read_text())
     assert {int(k): v for k, v in shipped.items()} == mc.perf_counter_type_names()
+
+
+def test_l1_grant_ratios_stay_bounded_when_ready_exceeds_requests():
+    # The tt-1xx L1 grant counter is the interface ready line, so it can exceed the request count.
+    out = mc.compute_metrics(
+        _View({"L1_0_UNPACKER_0": 100.0, "L1_0_UNPACKER_0_GRANT": 900.0, "L1_0_NOC_RING0_OUTGOING_0": 10.0, "L1_0_NOC_RING0_OUTGOING_0_GRANT": 500.0})
+    )
+    assert out["l1_unpacker_backpressure_pct"] == 0.0
+    assert out["noc_ring0_grant_eff_pct"] == 100.0
+    assert out["noc_ring0_out_backpressure_pct"] == 0.0
+    assert out["l1_contention_index_pct"] == 0.0

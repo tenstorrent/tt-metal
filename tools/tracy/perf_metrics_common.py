@@ -60,6 +60,12 @@ def pct(value: "float | None") -> "float | None":
     return (value * 100.0) if value is not None else None
 
 
+def bounded(value: "float | None") -> "float | None":
+    """Clamp a fraction to [0, 1]. The tt-1xx L1 grant counters are the interface ready line, not qualified
+    by a request, so grant/request can exceed 1 when the interface sits ready with nothing to do."""
+    return None if value is None else min(1.0, max(0.0, value))
+
+
 def one_minus(value: "float | None") -> "float | None":
     """Compute 1.0 - value, for inverting 'not stalled' into 'stalled'."""
     return (1.0 - value) if value is not None else None
@@ -150,8 +156,8 @@ def compute_metrics(v: CounterView) -> dict:
     pack_sem_wait = safe_div(sem_wait_2, instrn_cycles)
 
     # ── Unpacker Write Efficiency (TDMA_UNPACK bank) ──
-    srca_write = v.count("TDMA_UNPACK", "SRCA_WRITE_ACTUAL")
-    srcb_write = v.count("TDMA_UNPACK", "SRCB_WRITE_ACTUAL")
+    srca_write = v.count("TDMA_UNPACK", "SRCA_WRITE_NOT_BLOCKED_PORT")
+    srcb_write = v.count("TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_OVR")
     unpack0_busy = v.count("TDMA_UNPACK", "UNPACK0_BUSY_THREAD0")
     unpack1_busy = v.count("TDMA_UNPACK", "UNPACK1_BUSY_THREAD0")
     unpack0_eff = safe_div(srca_write, unpack0_busy)
@@ -173,7 +179,6 @@ def compute_metrics(v: CounterView) -> dict:
 
     # ── Math Pipeline Stalls (TDMA_UNPACK bank only — same bank, reliable) ──
     math_available = v.count("TDMA_UNPACK", "MATH_INSTRN_AVAILABLE")
-    fidelity_stall = safe_div(v.count("TDMA_UNPACK", "MATH_FIDELITY_STALL"), math_available)
     # No src-data stall metric: MATH_SRC_DATA_READY is gated on dec_instr_alu while
     # MATH_INSTRN_AVAILABLE counts the whole math pipe, so their ratio is not a stall fraction.
 
@@ -186,10 +191,11 @@ def compute_metrics(v: CounterView) -> dict:
     tag_search_l1_util = mean_port_util(v, "L1", L1_TAG_SEARCH, l1_cycles)
     tdma_bundle_l1_util = mean_port_util(v, "L1", L1_TDMA_BUNDLE, l1_cycles)
     l1_mean_client_util = mean_port_util(v, "L1", L1_ALL, l1_cycles)
-    # NoC ring0 grant efficiency: fraction of requests served (grant <= req, already bounded 0-100%).
+    # NoC ring0 grant efficiency: ready cycles per request cycle. The L1 grant counter is the interface
+    # ready line, unqualified by the request, so this is clamped to [0, 1] (see bounded()).
     _ring0_req = sum(v.count("L1", c) for c in L1_RING0 if v.has(c))
     _ring0_grant = sum(v.count("L1", c + "_GRANT") for c in L1_RING0 if v.has(c + "_GRANT"))
-    noc_ring0_grant_eff = safe_div(_ring0_grant, _ring0_req)
+    noc_ring0_grant_eff = bounded(safe_div(_ring0_grant, _ring0_req))
 
     # ── Per-thread instruction throughput (INSTRN bank) ──
     thread0_ipc = safe_div(v.count("INSTRN_THREAD", "THREAD_INSTRUCTIONS_0"), instrn_cycles)
@@ -217,7 +223,9 @@ def compute_metrics(v: CounterView) -> dict:
     packer0_util = safe_div(pb[0], pack_cycles) if v.has("PACKER_BUSY_0") else None
     packer1_util = safe_div(pb[1], pack_cycles) if v.has("PACKER_BUSY_1") else None
     packer2_util = safe_div(pb[2], pack_cycles) if v.has("PACKER_BUSY_2") else None
-    packer3_util = safe_div(pb[3], pack_cycles)
+    # Engine 3 only exists as a separate signal on WH; on BH PACKER_BUSY is |tdma_pack_busy (the single
+    # packer), which pack_utilization_pct already reports.
+    packer3_util = safe_div(pb[3], pack_cycles) if v.has("PACKER_BUSY_0") else None
     # Idle engines count as zero (100% imbalance), so gate on presence of all four, not on activity.
     _engines = ("PACKER_BUSY_0", "PACKER_BUSY_1", "PACKER_BUSY_2", "PACKER_BUSY")
     packer_imbalance = safe_div(max(pb) - min(pb), max(pb)) if all(v.has(n) for n in _engines) else None
@@ -230,7 +238,7 @@ def compute_metrics(v: CounterView) -> dict:
 
     # Stall rates are complements of "not stalled" counters. The two cross-bank ones (numerator in
     # TDMA_PACK) must be has()-gated: an absent counter reads 0, and one_minus(0) is a bogus 100%.
-    data_hazard_stall = one_minus(safe_div(v.count("TDMA_UNPACK", "DATA_HAZARD_STALLS_MOVD2A"), math_available))
+    data_hazard_stall = one_minus(safe_div(v.count("TDMA_UNPACK", "MATH_NOT_D2S_STALLED"), math_available))
     # A window where the not-stalled counter never ticks is the known signal-mismatch case, not a 100% stall.
     _not_stalled_wr = v.count("TDMA_PACK", "MATH_NOT_STALLED_DEST_WR_PORT")
     math_dest_wr_port_stall = (
@@ -239,7 +247,7 @@ def compute_metrics(v: CounterView) -> dict:
         else None
     )
     math_scoreboard_stall = (
-        one_minus(safe_div(v.count("TDMA_PACK", "AVAILABLE_MATH"), math_available)) if v.has("AVAILABLE_MATH") else None
+        one_minus(safe_div(v.count("TDMA_PACK", "MATH_NOT_SCOREBOARD_STALLED"), math_available)) if v.has("MATH_NOT_SCOREBOARD_STALLED") else None
     )
     math_pipeline_util = safe_div(v.count("TDMA_UNPACK", "MATH_INSTRN_STARTED"), math_available)
 
@@ -248,11 +256,11 @@ def compute_metrics(v: CounterView) -> dict:
     # ── Compute (extra) ──
     sfpu_util = safe_div(v.count("FPU", "SFPU_COUNTER"), fpu_cycles)
     fpu_exec_eff = (
-        safe_div(fpu_instruction, v.count("INSTRN_THREAD", "FPU_INSTRN_AVAILABLE_1")) if v.has("FPU_COUNTER") else None
+        safe_div(fpu_instruction, v.count("INSTRN_THREAD", "MATH_INSTRN_AVAILABLE_1")) if v.has("FPU_COUNTER") else None
     )
     # UNBOUNDED ratio: available-math per busy packer (bank cycles when idle); >1 means the packer
     # is the handoff bottleneck.
-    available_math = v.count("TDMA_PACK", "AVAILABLE_MATH")
+    available_math = v.count("TDMA_PACK", "MATH_NOT_SCOREBOARD_STALLED")
     math_to_pack_handoff = (
         safe_div(available_math, packer_busy) if packer_busy > 0 else safe_div(available_math, pack_cycles)
     )
@@ -270,14 +278,14 @@ def compute_metrics(v: CounterView) -> dict:
     sem_full_wait_t0 = _instrn_rate("WAITING_FOR_NONFULL_SEM_0")
     sem_full_wait_t1 = _instrn_rate("WAITING_FOR_NONFULL_SEM_1")
     sem_full_wait_t2 = _instrn_rate("WAITING_FOR_NONFULL_SEM_2")
-    mmio_idle_wait_t0 = _instrn_rate("WAITING_FOR_MMIO_IDLE_0")
+    cfg_idle_wait_t0 = _instrn_rate("WAITING_FOR_CFG_IDLE_0")
     thcon_idle_wait_t0 = _instrn_rate("WAITING_FOR_THCON_IDLE_0")
     move_idle_wait_t0 = _instrn_rate("WAITING_FOR_MOVE_IDLE_0")
     cfg_instrn_avail_t0 = _instrn_rate("CFG_INSTRN_AVAILABLE_0")
     sync_instrn_avail_t0 = _instrn_rate("SYNC_INSTRN_AVAILABLE_0")
     thcon_instrn_avail_t0 = _instrn_rate("THCON_INSTRN_AVAILABLE_0")
     move_instrn_avail_t0 = _instrn_rate("MOVE_INSTRN_AVAILABLE_0")
-    math_instrn_avail_t1 = _instrn_rate("FPU_INSTRN_AVAILABLE_1")
+    math_instrn_avail_t1 = _instrn_rate("MATH_INSTRN_AVAILABLE_1")
     unpack_instrn_avail_t0 = _instrn_rate("UNPACK_INSTRN_AVAILABLE_0")
     pack_instrn_avail_t2 = _instrn_rate("PACK_INSTRN_AVAILABLE_2")
 
@@ -308,21 +316,24 @@ def compute_metrics(v: CounterView) -> dict:
     )
     packer_l1_eff = (
         safe_div(v.count("L1", "L1_0_PORT1_GRANT"), packer_busy)
-        if v.has("L1_0_PORT1_GRANT") and v.has("PACKER_BUSY")
+        if v.has("L1_0_PORT1_GRANT") and v.has("PACKER_BUSY") and not v.is_blackhole()
         else None
     )
-    l1_unpacker_backpressure = one_minus(
-        safe_div(v.count("L1", "L1_0_UNPACKER_0_GRANT"), v.count("L1", "L1_0_UNPACKER_0"))
+    # Back-pressure = 1 - ready/request, clamped: the L1 grant counter is the ready line, see bounded().
+    l1_unpacker_backpressure = bounded(
+        one_minus(safe_div(v.count("L1", "L1_0_UNPACKER_0_GRANT"), v.count("L1", "L1_0_UNPACKER_0")))
     )
     l1_port1_backpressure = (
-        one_minus(safe_div(v.count("L1", "L1_0_PORT1_GRANT"), v.count("L1", L1_PORT1))) if port1_present else None
+        bounded(one_minus(safe_div(v.count("L1", "L1_0_PORT1_GRANT"), v.count("L1", L1_PORT1))))
+        if port1_present
+        else None
     )
 
     # ── NoC ring back-pressure (mean (req-grant)/req over the ring's outgoing/incoming ports) ──
     def _bp(names):
         req = sum(v.count("L1", n) for n in names if v.has(n))
         grant = sum(v.count("L1", n + "_GRANT") for n in names if v.has(n + "_GRANT"))
-        return one_minus(safe_div(grant, req))
+        return bounded(one_minus(safe_div(grant, req)))
 
     _R0_OUT = ("L1_0_NOC_RING0_OUTGOING_0", "L1_0_NOC_RING0_OUTGOING_1")
     _R0_IN = ("L1_0_NOC_RING0_INCOMING_0", "L1_0_NOC_RING0_INCOMING_1")
@@ -359,7 +370,7 @@ def compute_metrics(v: CounterView) -> dict:
     # Contention index: mean back-pressure over the 5 primary request/grant port pairs.
     _CONTENTION = ("L1_0_UNPACKER_0",) + _R0_OUT + _R0_IN
     _c_bps = [
-        one_minus(safe_div(v.count("L1", n + "_GRANT"), v.count("L1", n)))
+        bounded(one_minus(safe_div(v.count("L1", n + "_GRANT"), v.count("L1", n))))
         for n in _CONTENTION
         if v.has(n) and v.has(n + "_GRANT")
     ]
@@ -382,7 +393,7 @@ def compute_metrics(v: CounterView) -> dict:
             f"WAITING_FOR_NONZERO_SEM_{t}",
             f"WAITING_FOR_NONFULL_SEM_{t}",
             f"WAITING_FOR_MOVE_IDLE_{t}",
-            f"WAITING_FOR_MMIO_IDLE_{t}",
+            f"WAITING_FOR_CFG_IDLE_{t}",
             f"WAITING_FOR_SFPU_IDLE_{t}",
         ]
         return safe_div(sum(v.count("INSTRN_THREAD", r) for r in reasons), instrn_cycles)
@@ -400,7 +411,7 @@ def compute_metrics(v: CounterView) -> dict:
 
     _ring1_req = sum(v.count("L1", c) for c in L1_RING1 if v.has(c))
     _ring1_grant = sum(v.count("L1", c + "_GRANT") for c in L1_RING1 if v.has(c + "_GRANT"))
-    noc_ring1_grant_eff = safe_div(_ring1_grant, _ring1_req)
+    noc_ring1_grant_eff = bounded(safe_div(_ring1_grant, _ring1_req))
 
     any_thread_stall = _instrn_rate("ANY_THREAD_STALL")
 
@@ -445,7 +456,6 @@ def compute_metrics(v: CounterView) -> dict:
         "pack_utilization_pct": pct(pack_utilization),
         "pack_dest_eff_pct": pct(pack_dest_eff),
         # Math pipeline stalls
-        "fidelity_stall_pct": pct(fidelity_stall),
         "data_hazard_stall_pct": pct(data_hazard_stall),
         "math_dest_wr_port_stall_pct": pct(math_dest_wr_port_stall),
         "math_scoreboard_stall_pct": pct(math_scoreboard_stall),
@@ -497,7 +507,7 @@ def compute_metrics(v: CounterView) -> dict:
         "sem_full_wait_t0_pct": pct(sem_full_wait_t0),
         "sem_full_wait_t1_pct": pct(sem_full_wait_t1),
         "sem_full_wait_t2_pct": pct(sem_full_wait_t2),
-        "mmio_idle_wait_t0_pct": pct(mmio_idle_wait_t0),
+        "cfg_idle_wait_t0_pct": pct(cfg_idle_wait_t0),
         "thcon_idle_wait_t0_pct": pct(thcon_idle_wait_t0),
         "move_idle_wait_t0_pct": pct(move_idle_wait_t0),
         # Per-type instruction availability
@@ -574,7 +584,6 @@ METRIC_LABELS = {
     "unpack_to_math_flow_pct": "Unpacker-to-Math Data Flow",
     "unpack_to_math_flow0_pct": "Unpacker-to-Math Data Flow (srcA)",
     "unpack_to_math_flow1_pct": "Unpacker-to-Math Data Flow (srcB)",
-    "fidelity_stall_pct": "Fidelity Stall Rate",
     "unpack_thread_stall_pct": "Thread 0 Stall Rate",
     "math_thread_stall_pct": "Thread 1 Stall Rate",
     "pack_thread_stall_pct": "Thread 2 Stall Rate",
@@ -589,7 +598,7 @@ METRIC_LABELS = {
     "pack_wait_math_pct": "Pack Waiting on Math (T2)",
     "unpack_wait_pack_pct": "Unpack Waiting on Pack (T0)",
     "math_wait_sfpu_pct": "SFPU Idle Wait T1",
-    "mmio_idle_wait_t0_pct": "MMIO Idle Wait T0",
+    "cfg_idle_wait_t0_pct": "CFG Idle Wait T0",
     "thcon_idle_wait_t0_pct": "THCON Idle Wait T0",
     "move_idle_wait_t0_pct": "MOVE Idle Wait T0",
     "math_sem_wait_pct": "Semaphore Zero Wait T1",
