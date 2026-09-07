@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -189,11 +190,17 @@ class MiniMaxH3Attention(Module):
         self.exp_ring_max_passes = 3  # kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
         self.exp_ring_num_passes = math.ceil(self.n_local_heads / full_grid.y)
         self.exp_ring_max_k_chunk = 512  # largest k worth trying; `_exp_sdpa_l1_bytes` picks down from here
+        # Production rule: the exp ring op serves the quad (SP=32), where PR #54481 measured it 21 %
+        # faster than the normal ring joint SDPA. MINIMAX_H3_EXP_RING_SDPA=1/0 forces it on/off for
+        # screening other meshes -- at SP=8 the config search admits (q 224, k 256) at 5 s and
+        # (q 384, k 128) at 10 s, and nothing at 15 s (falls back to the normal ring path).
+        exp_env = os.environ.get("MINIMAX_H3_EXP_RING_SDPA")
+        exp_mesh_ok = parallel_config.sequence_parallel.factor == 32 if exp_env is None else exp_env == "1"
         self.use_exp_ring_sdpa = (
             self.use_ring
             and is_blackhole()
             and tp_factor == 4
-            and parallel_config.sequence_parallel.factor == 32
+            and exp_mesh_ok
             and self.exp_ring_num_passes <= self.exp_ring_max_passes
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
