@@ -1161,6 +1161,13 @@ void py_module(nb::module_& mod) {
         )doc");
 
     // Blocking point-to-point: send raw bytes to dest rank.
+    //
+    // GIL release: the underlying MPI call blocks arbitrarily long. Without releasing the GIL,
+    // a main-thread ``send_bytes`` / ``recv_bytes`` on the world context starves every other
+    // Python thread on the same rank -- concretely, a background thread that has completed its
+    // own MPI op on a duplicated context (e.g. ThreadedWeightBridge / RolloutQueue) cannot
+    // re-acquire the GIL to advance, and the whole rank deadlocks even though the peer already
+    // matched the messages.
     mod.def(
         "send_bytes",
         [](const nb::bytes& data, int dest, int tag) {
@@ -1175,6 +1182,7 @@ void py_module(nb::module_& mod) {
         nb::arg("data"),
         nb::arg("dest"),
         nb::arg("tag") = 0,
+        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
             Blocking MPI send of raw bytes to rank ``dest``.
 
@@ -1188,6 +1196,7 @@ void py_module(nb::module_& mod) {
         )doc");
 
     // Blocking point-to-point: receive ``size`` bytes from source rank; returns bytes.
+    // GIL release: see the note on ``send_bytes`` above.
     mod.def(
         "recv_bytes",
         [](std::size_t size, int source, int tag) -> nb::bytes {
@@ -1203,6 +1212,7 @@ void py_module(nb::module_& mod) {
         nb::arg("size"),
         nb::arg("source"),
         nb::arg("tag") = 0,
+        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
             Blocking MPI receive of ``size`` bytes from rank ``source``; returns the bytes.
 
@@ -1219,7 +1229,9 @@ void py_module(nb::module_& mod) {
         )doc");
 
     // Non-blocking probe: return the size in bytes of a pending message from ``source`` with
-    // ``tag``, or ``None`` if none is currently available. Never blocks.
+    // ``tag``, or ``None`` if none is currently available. Never blocks -- but we still
+    // release the GIL for symmetry with ``send_bytes`` / ``recv_bytes`` and to keep the
+    // MPI progress engine hot when the main thread polls in a tight loop.
     mod.def(
         "iprobe_bytes",
         [](int source, int tag) -> nb::object {
@@ -1234,6 +1246,7 @@ void py_module(nb::module_& mod) {
         },
         nb::arg("source"),
         nb::arg("tag") = 0,
+        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
             Non-blocking probe for an incoming message.
 
