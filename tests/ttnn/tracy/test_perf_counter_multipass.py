@@ -81,4 +81,5 @@ def test_merge_keeps_pass0_whole_and_appends_only_counter_rows(tmp_path):
 
 def test_arch_l1_groups():
     assert arch_l1_groups(True) == ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"]
+    assert arch_l1_groups(False, is_quasar=True) == []
     assert arch_l1_groups(False) == ["l1_0", "l1_1"]

@@ -51,8 +51,11 @@ def schedule_perf_counter_passes(requested_groups, max_groups_per_pass=PERF_COUN
     return [p for p in passes if p]
 
 
-def arch_l1_groups(is_blackhole):
-    """L1 counter groups an architecture has: Blackhole's 2-NOC L1 exposes banks 2-5 as well."""
+def arch_l1_groups(is_blackhole, is_quasar=False):
+    """L1 counter groups an architecture has: Blackhole's 2-NOC L1 exposes banks 2-5 as well. Quasar has no
+    tt_perf_cnt bank on its L1 (its l1_client event counter is selected with TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL)."""
+    if is_quasar:
+        return []
     return ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"] if is_blackhole else ["l1_0", "l1_1"]
 
 
@@ -361,6 +364,7 @@ def main():
             except Exception:
                 logger.debug("Failed to detect device arch via ttnn")
         is_blackhole = declared_arch is not None and declared_arch.strip().lower() == "blackhole"
+        is_quasar = declared_arch is not None and declared_arch.strip().lower() == "quasar"
         if declared_arch is None and any(g.lower() == "all" for g in options.perf_counter_groups):
             raise ValueError(
                 "Cannot resolve counter group 'all' without the device architecture (detection failed); "
@@ -368,7 +372,7 @@ def main():
             )
 
         # Resolve requested group names; "all" expands to the arch's full set.
-        arch_l1 = arch_l1_groups(is_blackhole)
+        arch_l1 = arch_l1_groups(is_blackhole, is_quasar)
         resolved = []
         for group in options.perf_counter_groups:
             g = group.lower()
@@ -383,7 +387,12 @@ def main():
                 )
         resolved = list(dict.fromkeys(resolved))
 
-        # Reject BH-only groups on non-BH architectures.
+        # Reject L1 groups on Quasar (no L1 tt_perf_cnt bank there) and BH-only groups elsewhere.
+        if is_quasar and (set(resolved) & PERF_COUNTER_L1_GROUPS):
+            raise ValueError(
+                "Quasar has no L1 performance counter bank; drop the l1_* groups and use "
+                "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL for the l1_client event counter."
+            )
         bh_only = sorted(set(resolved) & {"l1_2", "l1_3", "l1_4", "l1_5"})
         if bh_only and not is_blackhole:
             raise ValueError(
