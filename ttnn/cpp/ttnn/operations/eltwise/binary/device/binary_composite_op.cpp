@@ -53,7 +53,7 @@ Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::option
 Tensor minimum(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -63,7 +63,7 @@ Tensor minimum(
         input_tensor_a,
         input_tensor_b,
         binary::BinaryOpType::MINIMUM,
-        std::nullopt,
+        output_dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
@@ -74,27 +74,32 @@ Tensor minimum(
 Tensor minimum(
     const Tensor& input_a,
     unary::ScalarVariant value,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/) {
-    return std::visit(
+    // binary_ng has no tensor-scalar MINIMUM kernel, so this stays on the unary path, which packs
+    // its result in the input dtype. A requested output dtype is applied after the compare.
+    const bool retype = output_dtype.has_value() && *output_dtype != input_a.dtype();
+    const std::optional<Tensor> compare_output = retype ? std::optional<Tensor>{} : optional_output_tensor;
+    Tensor result = std::visit(
         [&](auto input_b) {
             return ttnn::operations::unary::detail::unary_impl(
                 input_a,
                 {unary::EltwiseUnaryWithParam{unary::UnaryOpType::MINIMUM, (input_b)}},
                 memory_config,
-                optional_output_tensor);
+                compare_output);
         },
         value);
+    return retype ? ttnn::typecast(result, *output_dtype, memory_config, optional_output_tensor) : result;
 }
 
 Tensor maximum(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -104,7 +109,7 @@ Tensor maximum(
         input_tensor_a,
         input_tensor_b,
         binary::BinaryOpType::MAXIMUM,
-        std::nullopt,
+        output_dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
@@ -115,21 +120,26 @@ Tensor maximum(
 Tensor maximum(
     const Tensor& input_a,
     unary::ScalarVariant value,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/) {
-    return std::visit(
+    // binary_ng has no tensor-scalar MAXIMUM kernel, so this stays on the unary path, which packs
+    // its result in the input dtype. A requested output dtype is applied after the compare.
+    const bool retype = output_dtype.has_value() && *output_dtype != input_a.dtype();
+    const std::optional<Tensor> compare_output = retype ? std::optional<Tensor>{} : optional_output_tensor;
+    Tensor result = std::visit(
         [&](auto input_b) {
             return ttnn::operations::unary::detail::unary_impl(
                 input_a,
                 {unary::EltwiseUnaryWithParam{unary::UnaryOpType::MAXIMUM, (input_b)}},
                 memory_config,
-                optional_output_tensor);
+                compare_output);
         },
         value);
+    return retype ? ttnn::typecast(result, *output_dtype, memory_config, optional_output_tensor) : result;
 }
 
 Tensor atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
@@ -726,7 +736,7 @@ Tensor polyval(
 Tensor gcd(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -736,7 +746,7 @@ Tensor gcd(
         input_tensor_a,
         input_tensor_b,
         binary::BinaryOpType::GCD,
-        std::nullopt,
+        output_dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
@@ -747,7 +757,7 @@ Tensor gcd(
 Tensor lcm(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -757,7 +767,7 @@ Tensor lcm(
         input_tensor_a,
         input_tensor_b,
         binary::BinaryOpType::LCM,
-        std::nullopt,
+        output_dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
@@ -797,7 +807,7 @@ Tensor pow(
 Tensor pow(
     const Tensor& input,
     const Tensor& exponent,
-    const std::optional<const DataType>& /*dtype*/,
+    const std::optional<const DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -807,7 +817,7 @@ Tensor pow(
         input,
         exponent,
         binary::BinaryOpType::POWER,
-        std::nullopt,
+        dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
@@ -819,7 +829,7 @@ Tensor pow(
 Tensor pow(
     float input_a,
     const Tensor& exponent,
-    const std::optional<const DataType>& /*dtype*/,
+    const std::optional<const DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -832,7 +842,7 @@ Tensor pow(
     return pow(
         input,
         exponent,
-        std::nullopt,
+        dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
@@ -915,7 +925,7 @@ Tensor bias_gelu(
 Tensor bias_gelu(
     const Tensor& input_tensor_a,
     unary::ScalarVariant bias,
-    const std::optional<const DataType>& /*dtype*/,
+    const std::optional<const DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
@@ -931,11 +941,13 @@ Tensor bias_gelu(
         resolved_sub_core_grids =
             device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
     }
+    // gelu preserves its input dtype, so the requested output dtype is applied by the add. This
+    // matches the tensor-tensor overload, where binary_ng packs the fused add+gelu to that dtype.
     return ttnn::gelu(
         ttnn::add(
             input_tensor_a,
             bias,
-            std::nullopt,
+            dtype,
             memory_config,
             optional_output_tensor,
             {},

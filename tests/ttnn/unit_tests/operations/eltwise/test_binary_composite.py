@@ -1104,3 +1104,96 @@ def test_situ_glu_zero_beta_guard(device, expect_error):
     for beta1, beta2 in [(0.0, SITU_GLU_BETA2), (SITU_GLU_BETA1, 0.0)]:
         with expect_error(RuntimeError, "beta1 and beta2 must be non-zero"):
             ttnn.situ_glu(gate, gate, beta1, beta2)
+
+
+def _to_device(torch_tensor, dtype, device):
+    return ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.float32])
+def test_binary_composite_output_dtype_float(device, input_dtype, output_dtype):
+    torch_a = torch.tensor([[2.0, -3.0, 5.0, 0.5]])
+    torch_b = torch.tensor([[3.0, 1.0, -2.0, 4.0]])
+    a = _to_device(torch_a, input_dtype, device)
+    b = _to_device(torch_b, input_dtype, device)
+
+    cases = [
+        (ttnn.maximum(a, b, dtype=output_dtype), torch.maximum(torch_a, torch_b)),
+        (ttnn.maximum(a, 1.0, dtype=output_dtype), torch.clamp(torch_a, min=1.0)),
+        (ttnn.minimum(a, b, dtype=output_dtype), torch.minimum(torch_a, torch_b)),
+        (ttnn.minimum(a, 1.0, dtype=output_dtype), torch.clamp(torch_a, max=1.0)),
+        (ttnn.bias_gelu(a, b, dtype=output_dtype), torch.nn.functional.gelu(torch_a + torch_b, approximate="tanh")),
+        (ttnn.bias_gelu(a, 1.0, dtype=output_dtype), torch.nn.functional.gelu(torch_a + 1.0, approximate="tanh")),
+    ]
+    for output, torch_golden in cases:
+        assert output.dtype == output_dtype
+        assert_with_pcc(torch_golden, ttnn.to_torch(output).float(), 0.999)
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_binary_composite_pow_output_dtype(device, output_dtype):
+    torch_base = torch.tensor([[2.0, 3.0, 2.0, 4.0]])
+    torch_exponent = torch.tensor([[2.0, 2.0, 3.0, 0.5]])
+    base = _to_device(torch_base, ttnn.bfloat16, device)
+    exponent = _to_device(torch_exponent, ttnn.bfloat16, device)
+
+    tensor_tensor = ttnn.pow(base, exponent, dtype=output_dtype)
+    assert tensor_tensor.dtype == output_dtype
+    assert_with_pcc(torch.pow(torch_base, torch_exponent), ttnn.to_torch(tensor_tensor).float(), 0.999)
+
+    # scalar base reaches the same dispatch through a full_like, so it must carry the dtype too
+    scalar_tensor = ttnn.pow(2.0, exponent, dtype=output_dtype)
+    assert scalar_tensor.dtype == output_dtype
+    assert_with_pcc(torch.pow(torch.tensor(2.0), torch_exponent), ttnn.to_torch(scalar_tensor).float(), 0.999)
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.uint32, ttnn.float32, ttnn.int32])
+def test_binary_composite_gcd_lcm_output_dtype(device, output_dtype):
+    torch_a = torch.tensor([[12, -18, 7, 100]], dtype=torch.int32)
+    torch_b = torch.tensor([[18, 24, 3, 75]], dtype=torch.int32)
+    a = _to_device(torch_a, ttnn.int32, device)
+    b = _to_device(torch_b, ttnn.int32, device)
+
+    for output, torch_golden in [
+        (ttnn.gcd(a, b, dtype=output_dtype), torch.gcd(torch_a, torch_b)),
+        (ttnn.lcm(a, b, dtype=output_dtype), torch.lcm(torch_a, torch_b)),
+    ]:
+        assert output.dtype == output_dtype
+        assert torch.equal(ttnn.to_torch(output).float(), torch_golden.float())
+
+
+def test_bias_gelu_overloads_agree_on_output_dtype(device):
+    # The tensor-scalar overload used to drop dtype while the tensor-tensor one honoured it, so the
+    # same request answered differently depending on how the bias was passed.
+    torch_a = torch.tensor([[2.0, -3.0, 5.0, 0.5]], dtype=torch.bfloat16)
+    a = _to_device(torch_a, ttnn.bfloat16, device)
+    bias = _to_device(torch.full_like(torch_a, 3.0), ttnn.bfloat16, device)
+
+    from_scalar = ttnn.bias_gelu(a, 3.0, dtype=ttnn.float32)
+    from_tensor = ttnn.bias_gelu(a, bias, dtype=ttnn.float32)
+
+    assert from_scalar.dtype == ttnn.float32
+    assert from_tensor.dtype == ttnn.float32
+    assert torch.equal(ttnn.to_torch(from_scalar), ttnn.to_torch(from_tensor))
+
+
+def test_binary_composite_output_dtype_defaults_to_input(device):
+    # Requesting nothing must keep the pre-existing dtype, including on the unary fast path that
+    # minimum/maximum with a scalar still take.
+    torch_a = torch.tensor([[2.0, -3.0, 5.0, 0.5]], dtype=torch.bfloat16)
+    torch_b = torch.tensor([[3.0, 1.0, -2.0, 4.0]], dtype=torch.bfloat16)
+    a = _to_device(torch_a, ttnn.bfloat16, device)
+    b = _to_device(torch_b, ttnn.bfloat16, device)
+    int_a = _to_device(torch.tensor([[12, -18, 7, 100]], dtype=torch.int32), ttnn.int32, device)
+    int_b = _to_device(torch.tensor([[18, 24, 3, 75]], dtype=torch.int32), ttnn.int32, device)
+
+    assert ttnn.maximum(a, b).dtype == ttnn.bfloat16
+    assert ttnn.maximum(a, 1.0).dtype == ttnn.bfloat16
+    assert ttnn.minimum(a, b).dtype == ttnn.bfloat16
+    assert ttnn.minimum(a, 1.0).dtype == ttnn.bfloat16
+    assert ttnn.pow(a, b).dtype == ttnn.bfloat16
+    assert ttnn.bias_gelu(a, b).dtype == ttnn.bfloat16
+    assert ttnn.bias_gelu(a, 1.0).dtype == ttnn.bfloat16
+    assert ttnn.gcd(int_a, int_b).dtype == ttnn.int32
+    assert ttnn.lcm(int_a, int_b).dtype == ttnn.int32
