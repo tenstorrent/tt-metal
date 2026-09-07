@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -193,13 +195,11 @@ def _oracle(
     k = k * torch.rsqrt(k.square().sum(dim=-1, keepdim=True) + 1e-6)
     cumulative_g = torch.cumsum(g, dim=2)
     decay = torch.exp(cumulative_g)
-    inverse_decay = torch.exp(-cumulative_g)
     final_g = cumulative_g[:, :, -1]
 
     v_beta = beta * v
     kd = beta * k * decay
     q_decay = q * decay
-    intra = torch.matmul(q_decay, (k * inverse_decay).transpose(-1, -2)).tril()
     k_dec_t = (k * torch.exp(final_g.unsqueeze(2) - cumulative_g)).transpose(-1, -2)
     final_decay = torch.exp(final_g).unsqueeze(-1)
     k_fp64 = k.double()
@@ -208,6 +208,16 @@ def _oracle(
     akk = torch.matmul(
         beta.double() * k_fp64 * torch.exp(cumulative_g_fp64 - anchor_g),
         (k_fp64 * torch.exp(anchor_g - cumulative_g_fp64)).transpose(-1, -2),
+    )
+    # The unused upper triangle can exceed FP32 range for real gates near -5.
+    # Mask in FP64 before converting the causal reference to the output dtype.
+    intra = (
+        torch.matmul(
+            q.double() * torch.exp(cumulative_g_fp64 - anchor_g),
+            (k_fp64 * torch.exp(anchor_g - cumulative_g_fp64)).transpose(-1, -2),
+        )
+        .tril()
+        .float()
     )
     identity = torch.eye(CHUNK_SIZE, dtype=torch.float64).reshape(1, 1, CHUNK_SIZE, CHUNK_SIZE)
     t_inv = torch.linalg.inv(identity + torch.tril(akk, diagonal=-1)).float()
@@ -494,7 +504,18 @@ def test_prepare_chunk_recurrence_production_performance(device: ttnn.Device) ->
             compute_kernel_config=_production_compute_config(device),
         )
 
-    outputs, perf_record = profile_realtime_program(device, run)
+    samples = int(os.getenv("KDA_PREP_PERF_SAMPLES", "1"))
+    assert samples > 0
+    if samples > 1:
+        warmup = run()
+        ttnn.synchronize_device(device)
+        del warmup
+    records = []
+    for _ in range(samples):
+        outputs, perf_record = profile_realtime_program(device, run)
+        records.append(perf_record)
+    print("KDA_PREP_TIMINGS_NS=" + json.dumps([record["duration_ns"] for record in records]))
+    perf_record = sorted(records, key=lambda record: record["duration_ns"])[samples // 2]
     duration_ns = perf_record["duration_ns"]
     assert len(outputs) == 7
     assert tuple(outputs[0].shape) == (case.num_heads, case.num_chunks, CHUNK_SIZE, case.value_dim)
@@ -620,11 +641,104 @@ def test_prepare_chunk_recurrence_rejects_invalid_options(device: ttnn.Device, e
         _run(inputs, 2, memory_config=sharded)
 
 
+@pytest.mark.skipif(
+    not os.getenv("KDA_REAL_TRACE_ROOT"), reason="set KDA_REAL_TRACE_ROOT for captured KDA input replay"
+)
+@pytest.mark.parametrize(
+    "layer_idx", [None, 5, 13, 20], ids=["captured-layer0", "derived-layer5", "derived-layer13", "derived-layer20"]
+)
+def test_prepare_chunk_recurrence_captured_inputs(device: ttnn.Device, layer_idx: int | None) -> None:
+    """Replay captured recurrence inputs; never substitute synthetic rows or weights."""
+    from models.demos.deepseek_v3_d_p.tests.kda.trace_utils import load_trace_rows
+
+    root = Path(os.environ["KDA_REAL_TRACE_ROOT"])
+    start = int(os.getenv("KDA_REAL_TRACE_START", "0"))
+    sequence = int(os.getenv("KDA_REAL_TRACE_SEQUENCE", "1024"))
+    assert start >= 0 and sequence > 0 and sequence % CHUNK_SIZE == 0
+    num_heads, key_dim = 96, 128
+    if layer_idx is not None:
+        from models.demos.deepseek_v3_d_p.tests.kda.trace_utils import (
+            decoder_probe_recurrence_inputs,
+            load_decoder_stream_probe,
+        )
+
+        assert start == 0, "derived probes start with zero convolution history at token zero"
+        hidden, weights, config = load_decoder_stream_probe(
+            Path(os.environ["KIMI_K3_CKPT"]), Path(os.environ["KDA_REAL_DECODER_TRACE_ROOT"]), layer_idx, sequence
+        )
+        inputs = decoder_probe_recurrence_inputs(hidden, weights, config)
+        del hidden, weights
+    else:
+        host = []
+        for name in ("q", "k", "v", "gate", "beta"):
+            key = f"kda_{name}_layer_0"
+            value = load_trace_rows(root / "kda" / f"{key}.safetensors", start, sequence)
+            width = num_heads if name == "beta" else num_heads * key_dim
+            assert tuple(value.shape) == (sequence, width), (key, value.shape, sequence, width)
+            if name == "beta":
+                value = value.T.reshape(num_heads, sequence // CHUNK_SIZE, CHUNK_SIZE, 1).float().contiguous()
+            else:
+                value = value.to(torch.bfloat16).float().unsqueeze(0)
+            host.append(value)
+        inputs = tuple(host)
+    output_mask = int(os.getenv("KDA_REAL_OUTPUT_BF16_MASK", str(_PRODUCTION_OUTPUT_BF16_MASK)), 0)
+    expected = _oracle(inputs, num_heads, output_mask)
+    device_inputs = _device_inputs(inputs, device)
+    outputs = _run(
+        device_inputs, num_heads, output_bf16_mask=output_mask, compute_kernel_config=_production_compute_config(device)
+    )
+    actual = [ttnn.to_torch(output).float() for output in outputs]
+    metrics = {}
+    for name, want, got in zip(OUTPUT_NAMES, expected, actual, strict=True):
+        error = (want.float() - got).abs()
+        metrics[name] = {
+            "nonfinite": int((~torch.isfinite(got)).sum()),
+            "max_abs_error": float(error.max()),
+            "worst_index": list(torch.unravel_index(error.flatten().argmax(), error.shape)),
+        }
+        metrics[name]["worst_index"] = [int(index) for index in metrics[name]["worst_index"]]
+    print(
+        "KDA_CAPTURED_INPUT_METRICS="
+        + json.dumps(
+            {
+                "layer_idx": layer_idx,
+                "start": start,
+                "sequence": sequence,
+                "output_bf16_mask": output_mask,
+                "outputs": metrics,
+            }
+        )
+    )
+    artifact = os.getenv("KDA_REAL_TRACE_ARTIFACT")
+    if artifact:
+        torch.save({"start": start, "inputs": inputs, "expected": expected, "actual": actual}, artifact)
+    for name, want, got in zip(OUTPUT_NAMES, expected, actual, strict=True):
+        assert torch.isfinite(got).all(), f"{name} contains nonfinite values"
+        assert_accurate(want.float(), got, name=f"captured {name}", pcc_threshold=0.999)
+    # Real traces exercise the existing numerical-stress contract. The first
+    # subdiagonal also includes preparation error upstream of the inverse;
+    # keep every maximum error in the report rather than relying on PCC alone.
+    _assert_t_inv_strict_lower_accurate(
+        expected[-1], actual[-1], context="captured inputs", max_abs_threshold=_NUMERICAL_STRESS_T_INV_MAX_ABS
+    )
+
+
 def _real_chunk_inputs() -> tuple[torch.Tensor, ...]:
     from safetensors.torch import load_file
 
     tensors = load_file(str(Path(__file__).with_name("fixtures") / "layer13_head50_chunk6.safetensors"))
     return tuple(tensors[name].float() for name in ("q", "k", "v", "g", "beta"))
+
+
+def test_prepare_chunk_recurrence_real_chunk_inverse(device: ttnn.Device) -> None:
+    """A single real chunk exposes cancellation missed by random-key tests."""
+    inputs = _real_chunk_inputs()
+    expected = _oracle(inputs, 1, 0)
+    outputs = _run(_device_inputs(inputs, device), 1, compute_kernel_config=_production_compute_config(device))
+    actual = ttnn.to_torch(outputs[-1]).float()
+    _assert_t_inv_strict_lower_accurate(
+        expected[-1], actual, context="real layer13/head50/chunk6", max_abs_threshold=0.01
+    )
 
 
 @pytest.mark.parametrize("output_bf16_mask", [0x00, 0x20, 0x26], ids=["all-fp32", "decay-bf16", "production"])

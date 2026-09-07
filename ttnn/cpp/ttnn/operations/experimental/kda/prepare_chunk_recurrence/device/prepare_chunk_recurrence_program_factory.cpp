@@ -141,9 +141,9 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         // Row workspaces publish whole Kt-tile rows. Keep one-tile reductions and
         // inverse intermediates separate so no transaction can cross a ring end.
         make_dfb(tile_workspace_3_dfb, 1, fp32),
-        make_dfb(tile_workspace_0_dfb, 2, fp32),
-        make_dfb(tile_workspace_1_dfb, 2, fp32),
-        make_dfb(tile_workspace_2_dfb, 2, fp32),
+        make_dfb(tile_workspace_0_dfb, 1, fp32),
+        make_dfb(tile_workspace_1_dfb, 1, fp32),
+        make_dfb(tile_workspace_2_dfb, 1, fp32),
 
         make_dfb(workspace_3_dfb, scratch, fp32),
         make_dfb(workspace_2_dfb, ck, fp32),

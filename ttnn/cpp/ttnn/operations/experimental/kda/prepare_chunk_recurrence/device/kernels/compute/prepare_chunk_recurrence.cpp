@@ -69,30 +69,6 @@ inline void matmul_blocks(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& 
     o.push_back(Mt * Nt);
 }
 
-// The product contributes only the bottom-left face, so accumulate it directly into a copied diagonal inverse.
-inline void assemble_block_inverse(
-    DataflowBuffer& bottom_left_factor, DataflowBuffer& diagonal_inverse, DataflowBuffer& inverse) {
-    const uint32_t bottom_left_factor_id = bottom_left_factor.get_id();
-    const uint32_t diagonal_inverse_id = diagonal_inverse.get_id();
-    const uint32_t inverse_id = inverse.get_id();
-
-    inverse.reserve_back(1);
-    reconfig_data_format_srca(diagonal_inverse_id);
-    copy_init(diagonal_inverse_id);
-    tile_regs_acquire();
-    copy_tile(diagonal_inverse_id, 0, 0);
-
-    // Matmul maps bottom_left_factor->srcB and diagonal_inverse->srcA and accumulates into the copied DST tile.
-    reconfig_data_format(diagonal_inverse_id, bottom_left_factor_id);
-    matmul_block_init(bottom_left_factor_id, diagonal_inverse_id, false, 1, 1, 1);
-    matmul_block(bottom_left_factor_id, diagonal_inverse_id, 0, 0, 0, false, 1, 1, 1);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, inverse_id);
-    tile_regs_release();
-    inverse.push_back(1);
-}
-
 // Apply a typed binary operation tilewise, batching each destination-register synchronization.
 template <ElementwiseBinaryOp Op>
 inline void elementwise_binary(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o, uint32_t n) {
@@ -283,73 +259,58 @@ inline void multiply_by_column(DataflowBuffer& a, DataflowBuffer& col, DataflowB
     o.push_back(Mt * Nt);
 }
 
-// Invert both 16x16 diagonal blocks of (I-N) with the degree-four Paterson-Stockmeyer factorization
-// sum(N^i, i=0..15) = (I+N+N^2+N^3)(I+N^4+N^8+N^12), then form the bottom-left block
-// D^-1 N_21 A^-1. Here N is the negated strictly-lower Akk, so (I-N)^-1 is the requested T_inv.
-// The diagonal blocks share every full-tile operation, for eight matmuls total.
-inline void invert_block_ps4(
+// Invert four 8-row diagonal blocks without the large cancelling powers of PS4. Use
+// S <- I + N*S (six shared matmuls). For D=blockdiag(I-N), L=N_off,
+// M=D^-1 L is strictly block-lower with M^4=0. Thus
+// (I-N)^-1 = (I+M)(I+M^2)D^-1, requiring four more matmuls.
+inline void invert_block_horner8(
     DataflowBuffer& negative_strict_lower_akk,
     DataflowBuffer& inverse,
     DataflowBuffer& identity,
     DataflowBuffer& block_masks,
+    DataflowBuffer& matrix,
+    DataflowBuffer& total_a,
+    DataflowBuffer& total_b,
+    DataflowBuffer& product) {
+    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 0, matrix);
+    matrix.wait_front(1);
+    DataflowBuffer* total = &total_a;
+    DataflowBuffer* next_total = &total_b;
+    elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, *total, 1);
+    total->wait_front(1);
+    for (uint32_t step = 0; step < 6; ++step) {
+        matmul_blocks<1, 1, 1, false>(matrix, *total, product);
+        product.wait_front(1);
+        elementwise_binary<ElementwiseBinaryOp::Add>(identity, product, *next_total, 1);
+        next_total->wait_front(1);
+        total->pop_front(1);
+        product.pop_front(1);
+        DataflowBuffer* consumed = total;
+        total = next_total;
+        next_total = consumed;
+    }
+    matrix.pop_front(1);
 
-    // intermediate
-    DataflowBuffer& inner_sum,
-    DataflowBuffer& n2,
-    DataflowBuffer& n3,
-    DataflowBuffer& outer_sum) {
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 0, inner_sum);
-    inner_sum.wait_front(1);
-    matmul_blocks<1, 1, 1, false>(inner_sum, inner_sum, n2);
-    n2.wait_front(1);
-    matmul_blocks<1, 1, 1, false>(n2, inner_sum, n3);
-    n3.wait_front(1);
-    matmul_blocks<1, 1, 1, false>(n2, n2, outer_sum);
-    outer_sum.wait_front(1);  // N^4
-
-    // Build I+N+N^2+N^3 in the depth-two inner_sum ring.
-    elementwise_binary<ElementwiseBinaryOp::Add>(identity, inner_sum, inner_sum, 1);
-    inner_sum.wait_front(2);
-    inner_sum.pop_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(inner_sum, n2, inner_sum, 1);
-    inner_sum.wait_front(2);
-    inner_sum.pop_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(inner_sum, n3, inner_sum, 1);
-    inner_sum.wait_front(2);
-    inner_sum.pop_front(1);
-    n3.pop_front(1);
-
-    // Build I+N^4+N^8+N^12 in the depth-two outer_sum ring.
-    matmul_blocks<1, 1, 1, false>(outer_sum, outer_sum, n3);
-    n3.wait_front(1);  // N^8
-    matmul_blocks<1, 1, 1, false>(n3, outer_sum, n2);
-    n2.wait_front(2);  // N^2 remains at the front; N^12 is at the back.
-    n2.pop_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(identity, outer_sum, outer_sum, 1);
-    outer_sum.wait_front(2);
-    outer_sum.pop_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(outer_sum, n3, outer_sum, 1);
-    outer_sum.wait_front(2);
-    outer_sum.pop_front(1);
-    n3.pop_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(outer_sum, n2, outer_sum, 1);
-    outer_sum.wait_front(2);
-    outer_sum.pop_front(1);
-    n2.pop_front(1);
-
-    // The two diagonal inverses share one physical tile; assemble the inverse bottom-left block.
-    matmul_blocks<1, 1, 1, false>(inner_sum, outer_sum, n3);
-    n3.wait_front(1);
-    inner_sum.pop_front(1);
-    outer_sum.pop_front(1);
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 1, n2);
-    n2.wait_front(1);
-    matmul_blocks<1, 1, 1, false>(n3, n2, inner_sum);
-    inner_sum.wait_front(1);
-    n2.pop_front(1);
-    assemble_block_inverse(inner_sum, n3, inverse);
-    inner_sum.pop_front(1);
-    n3.pop_front(1);
+    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 1, *next_total);
+    next_total->wait_front(1);
+    matmul_blocks<1, 1, 1, false>(*total, *next_total, matrix);  // M = D^-1 L
+    matrix.wait_front(1);
+    next_total->pop_front(1);
+    matmul_blocks<1, 1, 1, false>(matrix, matrix, product);  // M^2
+    product.wait_front(1);
+    elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, *next_total, 1);
+    next_total->wait_front(1);
+    matrix.pop_front(1);
+    elementwise_binary<ElementwiseBinaryOp::Add>(identity, product, matrix, 1);
+    matrix.wait_front(1);
+    product.pop_front(1);
+    matmul_blocks<1, 1, 1, false>(*next_total, matrix, product);  // (I+M)(I+M^2)
+    product.wait_front(1);
+    next_total->pop_front(1);
+    matrix.pop_front(1);
+    matmul_blocks<1, 1, 1, false>(product, *total, inverse);
+    product.pop_front(1);
+    total->pop_front(1);
     negative_strict_lower_akk.pop_front(1);
 }
 
@@ -599,15 +560,15 @@ inline void prepare_t_inv(
         lower_akk.pop_front(chunk_matrix_tiles);
     }
 
-    invert_block_ps4(
+    invert_block_horner8(
         akk,
         t_inv,
         identity,
         block_masks,
-        /*inner_sum=*/scratch_0,
-        /*n2=*/scratch_1,
-        /*n3=*/scratch_2,
-        /*outer_sum=*/product);
+        /*matrix=*/scratch_0,
+        /*total_a=*/scratch_1,
+        /*total_b=*/scratch_2,
+        /*product=*/product);
 }
 
 template <uint32_t Ct, uint32_t Kt>
