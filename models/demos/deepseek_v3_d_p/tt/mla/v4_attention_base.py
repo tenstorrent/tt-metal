@@ -17,9 +17,9 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCompressorUtils, resolve_per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCompressorUtils
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 
 
 class TtV4AttentionBase(LightweightModule):

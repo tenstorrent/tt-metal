@@ -413,6 +413,29 @@ def per_axis_topology(
     return (ttnn.Topology.Linear, ttnn.Topology.Linear)
 
 
+def resolve_per_axis_topology(topology, sp_axis: int, tp_axis: int):
+    """Split a caller-supplied ``topology`` argument into ``(sp_topology, tp_topology)``.
+
+    The companion to ``per_axis_topology`` above: that one derives both axes from a fabric config, this
+    one normalizes whatever a caller passed down. Ring is valid only on an axis the fabric physically
+    wraps, so the two axes can legitimately differ -- under ``FABRIC_2D_TORUS_X`` the TP axis rings and
+    the SP axis has no wrap. Handing one axis's topology to a collective on the other makes it wait
+    forever on a wrap link the fabric does not service, so a ``(dim0, dim1)`` tuple is unpacked per axis.
+    A scalar applies to both, which preserves non-torus and 1D-ring behavior.
+
+    Shared by ttMLA and the V4 attention blocks and compressors, which all take the same ``topology``
+    argument and all own collectives on both axes.
+    """
+    if isinstance(topology, tuple):
+        assert len(topology) == 2, f"a per-axis topology tuple must be (dim0, dim1), got {topology}"
+        # Unpacking the (dim0, dim1) tuple as (sp, tp) is only correct at sp_axis=0/tp_axis=1. Guard it so
+        # a future axis swap fails loudly here instead of cross-wiring Ring onto the wrong axis, which
+        # deadlocks at runtime rather than returning a wrong answer.
+        assert sp_axis == 0 and tp_axis == 1, "per-axis topology tuple assumes sp_axis=0, tp_axis=1"
+        return topology
+    return topology, topology
+
+
 # =============================================================================
 # Device name / link count helpers (copied from TTTv1 ccl.py + model_config.py
 # to avoid importing from tt_transformers)
