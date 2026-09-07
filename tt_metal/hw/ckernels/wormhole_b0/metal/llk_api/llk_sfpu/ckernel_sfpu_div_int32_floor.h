@@ -99,19 +99,19 @@ sfpi_inline void calculate_div_int32_body(
 
     sfpi::vFloat MANTISSA_ALIGNMENT_OFFSET = 8388608.0f;
     // Interleave independent products and bias additions to avoid multiply-use NOPs.
+    // Fresh stage values avoid inactive-lane dependencies from SFPI assignment
+    // when the loop wrapper is inlined into a full LTO-compiled kernel.
     sfpi::vFloat hi = q2 * b0;
     sfpi::vFloat lo = q1 * b0;
-    hi += MANTISSA_ALIGNMENT_OFFSET;
-    lo += MANTISSA_ALIGNMENT_OFFSET;
-    hi = q1 * b1 + hi;
+    sfpi::vFloat hi_biased = hi + MANTISSA_ALIGNMENT_OFFSET;
+    sfpi::vFloat lo_biased = lo + MANTISSA_ALIGNMENT_OFFSET;
+    sfpi::vFloat hi_sum = q1 * b1 + hi_biased;
 
-    sfpi::vInt qb = sfpi::vInt(sfpi::exman(lo)) << 11;
-    qb += sfpi::vInt(sfpi::exman(hi)) << 22;
+    sfpi::vInt qb = (sfpi::vInt(sfpi::exman(lo_biased)) << 11) + (sfpi::vInt(sfpi::exman(hi_sum)) << 22);
 
     // Compute remainder.
-    a_s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
-    a_s = sfpi::abs(a_s);
-    sfpi::vInt r = a_s - qb;
+    sfpi::vInt a_reloaded = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    sfpi::vInt r = sfpi::abs(a_reloaded) - qb;
     // Shift before conversion so the valid magnitude 2**31 is representable as
     // a positive sign-magnitude integer. Dropping the low bit adds at most 1/|b|
     // to the correction error, on top of reciprocal and FP rounding error.
@@ -128,23 +128,23 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vFloat correction_f = r_f * inv_b_f;
     sfpi::vFloat b2 = sfpi::convert<sfpi::vFloat>(b >> 22, sfpi::RoundMode::Nearest);
     auto correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::Nearest);
-    correction_f = sfpi::convert<sfpi::vFloat>(correction, sfpi::RoundMode::Nearest);
+    sfpi::vFloat correction_rounded = sfpi::convert<sfpi::vFloat>(correction, sfpi::RoundMode::Nearest);
 
     // correction should fit into 11 bits, thus:
     // tmp = correction * (b2<<22 + b1<<11 + b0)
 
     // Issue the independent products before consuming them in the bias additions.
-    sfpi::vFloat low = correction_f * b0;
-    sfpi::vFloat mid = correction_f * b1;
-    sfpi::vFloat top = correction_f * b2;
-    low += MANTISSA_ALIGNMENT_OFFSET;
-    mid += MANTISSA_ALIGNMENT_OFFSET;
-    top += MANTISSA_ALIGNMENT_OFFSET;
+    sfpi::vFloat low = correction_rounded * b0;
+    sfpi::vFloat mid = correction_rounded * b1;
+    sfpi::vFloat top = correction_rounded * b2;
+    sfpi::vFloat low_biased = low + MANTISSA_ALIGNMENT_OFFSET;
+    sfpi::vFloat mid_biased = mid + MANTISSA_ALIGNMENT_OFFSET;
+    sfpi::vFloat top_biased = top + MANTISSA_ALIGNMENT_OFFSET;
 
     // Keep this sum order together with q += cor below: current SFPI register
     // allocation avoids extra moves with this combination. Recheck assembly for
     // both rounding modes before commuting these integer additions.
-    sfpi::vInt tmp{(sfpi::exman(mid) << 11) + sfpi::exman(low) + (sfpi::exman(top) << 22)};
+    sfpi::vInt tmp{(sfpi::exman(mid_biased) << 11) + sfpi::exman(low_biased) + (sfpi::exman(top_biased) << 22)};
     sfpi::vUInt cor = correction;
     // When q is zero, qb is also zero, so r=INT_MIN represents the valid
     // positive magnitude 2**31 rather than a negative remainder.
@@ -173,12 +173,13 @@ sfpi_inline void calculate_div_int32_body(
 
     auto result = sfpi::vInt(q);
 
-    // If a_s ^ b_s >= 0, then the result will be positive, otherwise negative.
-    // Reload signed values here due to register pressure.
-    a_s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
-    b_s = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    // If a_signed ^ b_signed >= 0, then the result will be positive, otherwise negative.
+    // Initialize fresh values for reloads: SFPI assignment preserves inactive
+    // lanes, keeping the old signed inputs live and spilling in full LTO builds.
+    sfpi::vInt a_signed = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    sfpi::vInt b_signed = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
     // Finally, if we expect a negative result, negate the value (two's complement).
-    v_if((a_s ^ b_s) < 0) {
+    v_if((a_signed ^ b_signed) < 0) {
         result = -result;
 
         // Optionally, if we want "floor" rounding, check for a remainder
