@@ -23,6 +23,38 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_p
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config, get_gate_outputs
 
 
+def _reference_dispatch(indices, table, offs, x, capacity, G, H, seq, topk, emb):
+    """What `dispatch` would place, per destination chip, from every source chip.
+
+    Replays the same per-expert allocator the production op uses, including the rule that a token past
+    capacity is dropped while its counter still advances -- every later token's page depends on it.
+
+    Returns payload[g][dst_row], metadata[g][dst_row] and, per (g, dst_row, page), the source row that
+    wrote it, so a caller can compare only the pages a given source contributed.
+    """
+    payload = torch.zeros(G, H, capacity, emb, dtype=torch.bfloat16)
+    meta = torch.full((G, H, capacity, 3), -1, dtype=torch.int32)
+    src_of = torch.full((G, H, capacity), -1, dtype=torch.int32)
+    for g in range(G):
+        for s in range(H):
+            alloc = offs[g, s].clone().to(torch.int64)
+            for t in range(seq):
+                for k in range(topk):
+                    e = int(indices[g, s, t, k])
+                    row = int(table[g, e])
+                    if row == -1:
+                        continue
+                    if alloc[e] >= capacity:
+                        alloc[e] += 1
+                        continue
+                    page = int(alloc[e])
+                    alloc[e] += 1
+                    payload[g, row, page] = x[s, g, t]
+                    meta[g, row, page] = torch.tensor([s * G + g, t, k], dtype=torch.int32)
+                    src_of[g, row, page] = s
+    return payload, meta, src_of
+
+
 def _expert_dispatch_table(num_routed_experts: int, dispatch_group_size: int, num_dispatch_groups: int):
     """expert -> chip within its own dispatch group, -1 for experts of other groups.
 
@@ -136,7 +168,40 @@ def test_dispatch_fabric2d(mesh_device, device_params, num_links, seq_len_per_ch
 
     assert tuple(payload.shape)[-2:] == (max_dispatch_buffer_token_size, emb_dim), payload.shape
     assert tuple(metadata.shape)[-2:] == (max_dispatch_buffer_token_size, 3), metadata.shape
-    # Under watcher the reader's own checks are live: the control region fits under the semaphores,
-    # every chip hosts exactly experts_per_chip experts, and each (destination, expert) bucket equals
-    # the offsets-table delta -- i.e. the page allocation matches what `dispatch` would have assigned.
-    logger.info("dispatch_fabric2d ran and the reader's prologue checks held")
+
+    ref_payload, ref_meta, src_of = _reference_dispatch(
+        indices, table, offs, x, max_dispatch_buffer_token_size, G, H, seq_len_per_chip, num_experts_per_tok, emb_dim
+    )
+
+    # Only the pages a NEIGHBOUR sourced are written yet: a destination further round the ring needs the
+    # forwarding region, which arrives with the relay. Comparing just those makes this a real gate now
+    # rather than one that waits for the whole protocol.
+    got_payload = ttnn.get_device_tensors(payload)
+    got_meta = ttnn.get_device_tensors(metadata)
+    mesh_cols = tuple(mesh_device.shape)[1]
+
+    checked = 0
+    bad = 0
+    for dev in range(H * G):
+        r, g = dev // mesh_cols, dev % mesh_cols
+        neighbours = {(r - 1) % H, (r + 1) % H}
+        pages = [p for p in range(max_dispatch_buffer_token_size) if int(src_of[g, r, p]) in neighbours]
+        if not pages:
+            continue
+        pay = ttnn.to_torch(got_payload[dev]).reshape(max_dispatch_buffer_token_size, emb_dim)
+        met = ttnn.to_torch(got_meta[dev]).to(torch.int32).reshape(max_dispatch_buffer_token_size, 3)
+        idx = torch.tensor(pages)
+        checked += len(pages)
+        if not torch.equal(pay[idx], ref_payload[g, r][idx]):
+            n = (pay[idx] != ref_payload[g, r][idx]).any(-1).sum().item()
+            logger.error(f"device {dev} (row {r}, group {g}): {n}/{len(pages)} payload pages differ")
+            bad += 1
+        if not torch.equal(met[idx], ref_meta[g, r][idx]):
+            n = (met[idx] != ref_meta[g, r][idx]).any(-1).sum().item()
+            logger.error(f"device {dev} (row {r}, group {g}): {n}/{len(pages)} metadata pages differ")
+            logger.error(f"  first got={met[idx][0].tolist()} want={ref_meta[g, r][idx][0].tolist()}")
+            bad += 1
+
+    logger.info(f"neighbour-sourced pages compared byte-exact: {checked} across {H * G} devices")
+    assert checked > 0, "no neighbour-sourced pages found; the reference or the routing is wrong"
+    assert bad == 0, f"{bad} device/tensor comparisons differ from the dispatch reference"
