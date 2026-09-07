@@ -8,12 +8,13 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tt.mla.compressor import CSA_STATE_ROWS, csa_state_rows
 
 _BATCH = 1
 _COMPRESS_RATE = 4
 _HEAD_DIM = 512
 _INDEX_HEAD_DIM = 128
-_STATE_ROWS = 64
+_STATE_ROWS = CSA_STATE_ROWS
 _LOCAL_SEQ_LEN = 128
 
 
@@ -24,10 +25,7 @@ def _pack_blaze_state(kv, score, head_dim, start_position=0):
 
     for local_position in range(kv.shape[2]):
         position = start_position + local_position
-        slot = position % _COMPRESS_RATE
-        parity = (position // _COMPRESS_RATE) & 1
-        ca_row = (parity ^ 1) * 32 + slot
-        cb_row = parity * 32 + _COMPRESS_RATE + slot
+        ca_row, cb_row = csa_state_rows(position, _COMPRESS_RATE)
         kv_state[:, :, ca_row] = kv[:, :, local_position, :head_dim]
         kv_state[:, :, cb_row] = kv[:, :, local_position, head_dim:]
         score_state[:, :, ca_row] = score[:, :, local_position, :head_dim]
