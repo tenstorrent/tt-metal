@@ -23,7 +23,13 @@ import pytest
 # Prefill ms varies a lot run-to-run with trace-cache state and bucket warmth
 # (observed 15-25 ms swing on otherwise-identical runs), so we only enforce an
 # upper bound — catches regressions, ignores favorable variance.
-EXPECTED_STEADY_MS_PER_FRAME = 43.3
+# Re-measured when QWEN3_TTS_BF8_WEIGHTS was promoted to default ON: bfp8 weights
+# take the steady frame from ~43.3 ms to 40.01 / 40.26 / 40.09 / 40.05 ms over four
+# N300 runs (median 40.07, spread 0.25 ms). The old 43.3 golden failed from BELOW —
+# the band is bidirectional, so making the model faster breaks it too.
+# N150 measures ~39.9 ms with the same flag, so one golden at 40.1 +/-5%
+# ([38.10, 42.11]) covers both SKUs.
+EXPECTED_STEADY_MS_PER_FRAME = 40.1
 STEADY_MARGIN = 0.05
 PREFILL_MS_UPPER_BOUND = 22.0
 
