@@ -3,10 +3,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import random
+import sysconfig
 
 import seaborn as sns
 
 import ttnn
+
+# Frames from the standard library or installed packages are never what a profiling run wants to
+# see -- pytest's own collection alone touches 40K+ distinct (file, line) locations before a model
+# is even built, blowing past tracy's 32K static-source-location ceiling and, on a real decode loop,
+# accumulating hundreds of millions of zones (measured: 241M zones, ~185GB host RSS, OOM-killed) for
+# instrumentation of code nobody asked to profile. Filtered by path rather than by package name so it
+# needs no maintenance as dependencies change; the model's own code (never under either prefix) keeps
+# its full per-function zones exactly as before.
+_STDLIB_PREFIX = sysconfig.get_paths()["stdlib"]
+_SITE_PACKAGES_PREFIX = sysconfig.get_paths()["purelib"]
+
+
+def _is_library_frame(filename: str) -> bool:
+    return filename.startswith(_STDLIB_PREFIX) or filename.startswith(_SITE_PACKAGES_PREFIX)
 
 
 def hex_to_int(color):
@@ -62,6 +77,12 @@ def tracy_marker_line(frame, event, args):
 
 
 def tracy_marker_func(frame, event, args):
+    # Same filename check on both branches: a given frame's co_filename cannot change between its
+    # own call and return, so start/stop stay paired -- skipping one side but not the other would
+    # leave stop_tracy_zone popping a zone a filtered-out call never pushed (the orphan-marker bug
+    # profiler.cpp already has to tolerate elsewhere, worth not adding a Python-side source of it).
+    if _is_library_frame(frame.f_code.co_filename):
+        return
     if event in ["call", "c_call"]:
         ttnn.start_tracy_zone(f"{frame.f_code.co_filename}", f"PY_FUNC_{frame.f_code.co_name}", frame.f_lineno)
     elif event in ["return", "c_return", "c_exception"]:
