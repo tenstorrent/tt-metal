@@ -26,7 +26,7 @@ namespace ttnvtop {
 //       axis (chip-level, so it lives in the header, not PerCoreView). Ported
 //       from the tt_coremon lineage; the struct stays 72 bytes, so a v2 reader
 //       sees the same layout it always did for every field it knows about.
-constexpr uint16_t kShmVersion = 3;
+constexpr uint16_t kShmVersion = 4;
 
 constexpr char kShmMagic[4] = {'T', 'T', 'U', 'T'};
 
@@ -83,9 +83,29 @@ struct UtilShmHeader {
     uint32_t dram_rd_mbps;
     uint32_t dram_wr_mbps;
     uint32_t dram_peak_mbps;  // 0 = unknown, so readers can hide %-of-peak
+    // Per-die ARC telemetry (smbus_telemetry[] ids 24..35), carried in the frame by the die
+    // that PRODUCED it. That is what puts the REMOTE die's thermals on the host with no
+    // Ethernet and no M3 mirror -- the relayed frame brings its own.
+    //
+    // 0 means not sampled, the same convention as aiclk_mhz: the SHM collector does not
+    // fill these, so a reader must hide a zero rather than render 0 C / 0 W as a reading.
+    //
+    // SCALING IS PER FIELD, NOT PER SOURCE. The ASIC temperature arrives in sixteenths of
+    // a degree with the max-seen in the dword's high half; VREG and board arrive in whole
+    // degrees from the same telemetry block. Applying one scale to all three is the exact
+    // mistake tt_hwmon_read() avoids by taking scaling from the attribute, never the tag.
+    uint16_t asic_temp_c16;  // sixteenths of a degree C
+    uint16_t asic_max_c16;   // max seen, sixteenths of a degree C
+    uint16_t vreg_temp_c;    // whole degrees C -- NOT sixteenths
+    uint16_t board_temp_c;   // whole degrees C
+    uint16_t vcore_mv;
+    uint16_t tdp_w;
+    uint16_t tdc_a;
+    uint16_t reserved0;
+    uint32_t throttler;  // ARC throttler bitmask; 0 = not throttling
     uint32_t reserved[1];
 };
-static_assert(sizeof(UtilShmHeader) == 72, "UtilShmHeader must be 72 bytes");
+static_assert(sizeof(UtilShmHeader) == 96, "UtilShmHeader must be 96 bytes");
 
 // One per worker core, appended after the header.
 // Rates are encoded as per-mille (0..1000) so the struct stays u16-sized and

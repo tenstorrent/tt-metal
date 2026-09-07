@@ -231,6 +231,8 @@ constexpr const char* kMetricFpuCol = "\x1b[38;5;82m";    // green   F
 constexpr const char* kMetricSfpuCol = "\x1b[38;5;51m";   // cyan    S
 constexpr const char* kMetricDispCol = "\x1b[38;5;213m";  // magenta D
 constexpr const char* kMetricDramCol = "\x1b[38;5;214m";  // orange  DRAM
+constexpr const char* kMetricThermCol = "\x1b[38;5;180m";  // tan     thermals
+constexpr const char* kMetricThrotCol = "\x1b[38;5;196m";  // red     throttling
 
 // DRAM bandwidth for a chip header row. Measured at the DRAM NOC endpoints,
 // validated against exact byte counts to 0.07% (BH) / 0.80% (WH).
@@ -252,6 +254,50 @@ std::string render_dram(const ttnvtop::UtilShmHeader* h) {
         o << " " << std::setprecision(0) << pct << "% of " << (h->dram_peak_mbps / 1000) << "G";
     }
     o << kAnsiReset;
+    return o.str();
+}
+
+// Thermals and power for a chip header row, from the ARC telemetry the frame carries.
+//
+// For a relayed frame these are the REMOTE die's own values, which is the point: the
+// remote die of an n300 has no PCIe and no BAR, and this reaches the host without
+// Ethernet and without an M3 mirror.
+//
+// Hidden entirely when nothing was sampled, for the same reason render_dram hides a zero:
+// the SHM collector never fills these, so 0 means "this producer does not publish
+// thermals", not "this chip is at 0 C". Each field is also hidden individually, because a
+// firmware can sample temperature and not power.
+//
+// Scaling is per field. ASIC temperature is sixteenths of a degree; VREG and board are
+// whole degrees from the same block. See UtilShmHeader.
+std::string render_thermals(const ttnvtop::UtilShmHeader* h) {
+    if (h == nullptr) {
+        return "";
+    }
+    const bool any = h->asic_temp_c16 || h->tdp_w || h->tdc_a || h->vcore_mv || h->throttler;
+    if (!any) {
+        return "";
+    }
+    std::ostringstream o;
+    o << std::fixed << kMetricThermCol;
+    if (h->asic_temp_c16 > 0) {
+        o << "  " << std::setprecision(1) << (static_cast<double>(h->asic_temp_c16) / 16.0) << "C";
+    }
+    if (h->tdp_w > 0) {
+        o << "  " << std::setprecision(0) << h->tdp_w << "W";
+    }
+    if (h->tdc_a > 0) {
+        o << "  " << std::setprecision(0) << h->tdc_a << "A";
+    }
+    if (h->vcore_mv > 0) {
+        o << "  " << std::setprecision(2) << (static_cast<double>(h->vcore_mv) / 1000.0) << "V";
+    }
+    o << kAnsiReset;
+    // A non-zero throttler is the difference between "this chip is slow" and "this chip is
+    // being held back", so it is called out rather than folded into the clock reading.
+    if (h->throttler != 0) {
+        o << kMetricThrotCol << "  THR 0x" << std::hex << h->throttler << std::dec << kAnsiReset;
+    }
     return o.str();
 }
 
@@ -890,7 +936,7 @@ int main(int argc, char* argv[]) {
                     out << "n/a";
                 }
                 out << kAnsiReset << "  " << kMetricDispCol << third_metric_short(h->signal_sources) << " " << ad << "%"
-                    << kAnsiReset << render_dram(h);
+                    << kAnsiReset << render_dram(h) << render_thermals(h);
                 if (chip_stale) {
                     const double age = static_cast<double>(monotonic_us() - h->last_update_us) / 1e6;
                     out << kAnsiBold << "   (STALE " << std::fixed << std::setprecision(0) << age
@@ -1020,7 +1066,7 @@ int main(int argc, char* argv[]) {
                 out << "  (STALE)";
             }
             out << "   F=" << std::setw(2) << f_avg << "%  S=" << std::setw(2) << s_avg << "%  D=" << std::setw(2)
-                << d_avg << "%" << render_dram(h);
+                << d_avg << "%" << render_dram(h) << render_thermals(h);
             if (h->aiclk_mhz > 0 && n > 0) {
                 const double peak_greq = static_cast<double>(n) * static_cast<double>(h->aiclk_mhz) / 1000.0;
                 const double f_frac = static_cast<double>(sum_f) / (static_cast<double>(n) * 1000.0);

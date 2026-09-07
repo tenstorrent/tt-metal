@@ -56,6 +56,22 @@ constexpr uint32_t kOffAiclk8 = 13;
 constexpr uint32_t kOffFlags = 14;
 constexpr uint32_t kOffDramRd = 4;
 constexpr uint32_t kOffDramWr = 6;
+// telem[] begins right after the original 16 B header; 12 dwords, mirroring
+// percore_frame.py's TELEM_OFF/NTELEM and src/arc/tensix_percore.h.
+constexpr uint32_t kOffTelem = 16;
+constexpr uint32_t kTelemThrottler = 3;
+constexpr uint32_t kTelemVcore = 4;
+constexpr uint32_t kTelemAsicTemp = 5;
+constexpr uint32_t kTelemVregTemp = 6;
+constexpr uint32_t kTelemBoardTemp = 7;
+constexpr uint32_t kTelemTdp = 8;
+constexpr uint32_t kTelemTdc = 9;
+
+inline uint32_t telem_dword(const uint8_t* f, uint32_t i) {
+    uint32_t v = 0;
+    std::memcpy(&v, f + kOffTelem + i * 4u, sizeof(v));
+    return v;
+}
 constexpr uint32_t kMinHeaderBytes = 16;
 constexpr uint16_t kP1000Invalid = 0xFFFF;
 constexpr uint8_t kFlagSfpu = 1u << 4;
@@ -261,6 +277,19 @@ private:
         h.num_cores = o.cores;
         h.collector_pid = static_cast<uint32_t>(::getpid());
         h.aiclk_mhz = static_cast<uint32_t>(f[kOffAiclk8]) * 8u;
+        // Per-die thermals and power, straight out of this frame. For a relayed frame
+        // these are the REMOTE die's own values -- see UtilShmHeader for why the scaling
+        // differs field by field.
+        const uint32_t t_asic = telem_dword(f, kTelemAsicTemp);
+        h.asic_temp_c16 = static_cast<uint16_t>(t_asic & 0xFFFFu);
+        h.asic_max_c16 = static_cast<uint16_t>(t_asic >> 16);
+        h.vreg_temp_c = static_cast<uint16_t>(telem_dword(f, kTelemVregTemp) & 0xFFFFu);
+        h.board_temp_c = static_cast<uint16_t>(telem_dword(f, kTelemBoardTemp) & 0xFFFFu);
+        h.vcore_mv = static_cast<uint16_t>(telem_dword(f, kTelemVcore) & 0xFFFFu);
+        h.tdp_w = static_cast<uint16_t>(telem_dword(f, kTelemTdp) & 0xFFFFu);
+        h.tdc_a = static_cast<uint16_t>(telem_dword(f, kTelemTdc) & 0xFFFFu);
+        h.throttler = telem_dword(f, kTelemThrottler);
+
         h.last_update_us = now_us;
         if (h.epoch_us == 0) {
             h.epoch_us = now_us;
