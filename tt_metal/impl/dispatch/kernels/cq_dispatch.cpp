@@ -712,6 +712,10 @@ __attribute__((noinline)) void process_write_paged() {
     }
 
     cmd_ptr = data_ptr;
+    // Mirrors process_write_linear: the period baseline is per completed dispatch command, so every handler
+    // a benchmark drives has to commit a row or the report reads zero.
+    fd_copy_bench::dp_mark(fd_copy_bench::kDpCmdEnd, fd_copy_bench::bench_cycle_period());
+    fd_copy_bench::dp_commit_row();
 }
 
 // Packed write command

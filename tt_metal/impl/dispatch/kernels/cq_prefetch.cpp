@@ -37,6 +37,8 @@
 >>>>>>> 0219f39d96e (optimizations)
 //   - DispatchSRelayInlineState shares cmd buf 0 with DispatchRelayInlineState, so both inherit one
 //     DEST_COORD; valid only while dispatch_s is co-resident.
+//   - Sub-command copies pass first_line_invalidated=!cmddat_wrap_enable, which is only free because the
+//     _hd loop instantiates process_cmd with wrapping off. A _d build wraps and re-reads the full extent.
 #if defined(ARCH_QUASAR) && defined(FABRIC_RELAY)
 #error "Quasar FD supports the _hd prefetcher only; the split _h/_d variants are not supported yet."
 #endif
@@ -906,12 +908,14 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                     fence,
                     cmd_ptr);
 #endif
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-                // NoC reads land in TL1 without snooping the DM cache, so lines this ring region left
-                // cached from an earlier wrap are stale. Every command the prefetcher reads comes through
-                // here.
-                invalidate_l2_cache_range(inflight[idx].read_start, inflight[idx].reserved_size);
-#endif
+                // #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+                //                 // NoC reads land in TL1 without snooping the DM cache, so lines this ring region
+                //                 left
+                //                 // cached from an earlier wrap are stale. Every command the prefetcher reads comes
+                //                 through
+                //                 // here.
+                //                 invalidate_l2_cache_range(inflight[idx].read_start, inflight[idx].reserved_size);
+                // #endif
                 noc_async_read_barrier_with_trid(inflight[idx].trid);
 
 #if ENABLE_PREFETCH_DPRINTS
@@ -2151,11 +2155,11 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
                 pages_to_read--;
             }
         }
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-        // Same as fetch_q_get_cmds: the NoC read does not snoop. Safe ahead of the barrier because nothing
-        // reads the region until it returns.
-        invalidate_l2_cache_range(cmd_ptr, initial_read_length);
-#endif
+        // #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        //         // Same as fetch_q_get_cmds: the NoC read does not snoop. Safe ahead of the barrier because nothing
+        //         // reads the region until it returns.
+        //         invalidate_l2_cache_range(cmd_ptr, initial_read_length);
+        // #endif
         noc_async_read_barrier_with_trid(1);
         // update length always after barrier to make sure data in cmddat_q
         exec_buf_state.page_id = page_id;
@@ -2164,10 +2168,10 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
         exec_buf_state.read_ptr = read_ptr;
     } else {
         ASSERT(exec_buf_state.length == 0);
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-        // As above; prefetch_length is the extent the previous call issued.
-        invalidate_l2_cache_range(cmd_ptr, exec_buf_state.prefetch_length);
-#endif
+        // #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        //         // As above; prefetch_length is the extent the previous call issued.
+        //         invalidate_l2_cache_range(cmd_ptr, exec_buf_state.prefetch_length);
+        // #endif
         // add barrier to wait for prefetch noc read to complete
         noc_async_read_barrier_with_trid(1);
         // update always after barrier to make sure data in cmddat_q
