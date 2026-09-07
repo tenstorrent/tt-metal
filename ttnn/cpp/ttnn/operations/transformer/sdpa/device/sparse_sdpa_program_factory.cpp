@@ -360,10 +360,14 @@ void SparseSDPAOperation::SparseSDPAProgramFactory::override_runtime_arguments(
     const uint32_t offset = operation_attributes.cache_batch_idx.value_or(0) * t.kv.logical_shape()[2];
     const uint32_t q = t.q.buffer()->address(), kv = t.kv.buffer()->address(), idx = t.indices.buffer()->address(),
                    out = tensor_return_value.buffer()->address();
+    // Resolve the two kernels once, retaining only invocation-local references so dispatch buffer
+    // relocation is observed on the next update. All current tensor addresses and offsets still patch.
+    auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, 0);
+    auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, 1);
     for (uint32_t i = 0; i < grid.x * grid.y; ++i) {
         const tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
-        auto& r = tt::tt_metal::GetRuntimeArgs(program, 0, core);  // {q, kv, idx, tok_start, tok_count, offset}
-        auto& w = tt::tt_metal::GetRuntimeArgs(program, 1, core);  // {out, tok_start, tok_count, kv, offset}
+        auto& r = reader_args.at(core.x).at(core.y);  // {q, kv, idx, tok_start, tok_count, offset}
+        auto& w = writer_args.at(core.x).at(core.y);  // {out, tok_start, tok_count, kv, offset}
         r[0] = q;
         r[1] = kv;
         r[2] = idx;
