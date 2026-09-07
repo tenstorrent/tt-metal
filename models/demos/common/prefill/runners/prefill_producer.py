@@ -146,7 +146,7 @@ def _read_kv_chunk_table(timeout_s: int):
     return table
 
 
-def _read_device_map(timeout_s: int) -> dict:
+def _read_device_map(timeout_s: int, rank: int | None = None) -> dict:
     import glob as _glob
     import json
 
@@ -166,6 +166,13 @@ def _read_device_map(timeout_s: int) -> dict:
     stem, ext = os.path.splitext(path)
 
     def _matches():
+        # A KV read is UMD-local: read_dram_umd only reaches chips visible to THIS process. Under
+        # pipeline parallelism every rank exports its own map, and merging them all makes the caller
+        # believe it can resolve another galaxy's chips -- such a layer then clears the visibility
+        # guard and dies inside the read with "no visible chip with ASIC unique_id". So prefer this
+        # process's own rank-scoped map; the merge stays for the single-host layout.
+        if rank is not None and os.path.exists(f"{stem}_r{rank}{ext}"):
+            return [f"{stem}_r{rank}{ext}"]
         return ([path] if os.path.exists(path) else []) + sorted(_glob.glob(f"{stem}_r*{ext}"))
 
     deadline = time.perf_counter() + timeout_s
@@ -686,9 +693,15 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         _load_golden_index_k,
         _load_golden_kv_post,
         index_golden_present,
+        kvpe_golden_present,
     )
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs
     from tests.ttnn.utils_for_testing import comp_pcc
+
+    # The pe half needs re-basing only if the model rotates it. Absent (every other model here) means
+    # the usual rotated convention.
+    _KVPE_INTERLEAVE = not bool(getattr(ADAPTER.model_config, "USE_NOPE", False))
 
     KV_LORA = ADAPTER.model_config.KV_LORA_RANK
     HEAD_DIM = KV_LORA + ADAPTER.model_config.QK_ROPE_HEAD_DIM
@@ -697,7 +710,15 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
 
     min_pcc = 1.0
     checked = 0
+    unreferenced = []
     for layer in range(NUM_LAYERS):
+        # A hybrid attention stack writes a KV slab on only some layers, so the golden references only
+        # those and the table publishes rows for only those. Skip the rest explicitly: the loader
+        # would raise on the missing file, and reading an unpublished row would score whatever sits
+        # at the default location.
+        if not kvpe_golden_present(trace_dir, layer):
+            unreferenced.append(layer)
+            continue
         loc0 = table.lookup(layer, 0, slot_id)
         try:
             _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
@@ -713,12 +734,10 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         device_kv = torch.cat(decoded_rows, dim=0)[:real_len]
 
         golden = _load_golden_kv_post(trace_dir, layer, real_len)
-        _, pcc_nope = comp_pcc(golden[:, :KV_LORA], device_kv[:, :KV_LORA])
-
-        golden_pe = golden[:, KV_LORA:]
-        pe_dim = golden_pe.shape[-1]
-        golden_pe = torch.stack([golden_pe[:, : pe_dim // 2], golden_pe[:, pe_dim // 2 :]], dim=-1).reshape(-1, pe_dim)
-        _, pcc_pe = comp_pcc(golden_pe, device_kv[:, KV_LORA:])
+        # Re-base the pe half only if the model rotates it. Kimi-K3 is NoPE (`mla_use_nope`): its 64
+        # rope dims pass through unrotated, so applying the half-split re-interleave scores the
+        # transform instead of the cache -- 0.02 against a nope half of 0.998.
+        pcc_nope, pcc_pe = cache_half_pccs(golden, device_kv, KV_LORA, pe_interleave=_KVPE_INTERLEAVE)
 
         min_pcc = min(min_pcc, pcc_nope, pcc_pe)
         checked += 1
@@ -727,6 +746,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     logger.info(
         f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
         f"{min_pcc:.6f}"
+        + (f"; {len(unreferenced)} layers carry no KV golden (hybrid stack): {unreferenced}" if unreferenced else "")
     )
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
@@ -805,7 +825,7 @@ def _write_pcc_verdict(
 
 
 def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_traces: dict, rank: int = 0) -> bool:
-    device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
+    device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")), rank=rank)
     if not device_map:
         logger.error("[producer] no device map available; skipping KV read/PCC.")
         _write_pcc_verdict(rank, ok=False, min_pcc=0.0, checked=0, threshold=threshold, per_cache={})
