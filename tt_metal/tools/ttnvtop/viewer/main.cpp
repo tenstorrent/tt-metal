@@ -464,7 +464,9 @@ int main(int argc, char* argv[]) {
     // source a separate writer has stopped earning its place -- and the sweep is then armed
     // by THIS process's fd, so it stops when the TUI does.
     bool direct_mode = false;
-    ttnvtop::direct::Source direct;
+    // One Source per PCIe device. A quad-n300 host has /dev/tenstorrent/0..3 and eight
+    // dies; opening only device 0 would silently show two of them.
+    std::vector<std::unique_ptr<ttnvtop::direct::Source>> direct;
     for (int i = 1; i < argc; ++i) {
         const std::string_view a = argv[i];
         if (a == "--direct") {
@@ -501,9 +503,23 @@ int main(int argc, char* argv[]) {
         }
     }
     if (direct_mode) {
-        std::string why;
-        if (!direct.open("/dev/tenstorrent/0", why)) {
-            std::cerr << "ttnvtop --direct: " << why << "\n"
+        std::string first_why;
+        for (int dev = 0; dev < 32; ++dev) {
+            const std::string path = "/dev/tenstorrent/" + std::to_string(dev);
+            struct stat st;
+            if (::stat(path.c_str(), &st) != 0) {
+                continue;
+            }
+            auto src = std::make_unique<ttnvtop::direct::Source>();
+            std::string why;
+            if (src->open(path, why)) {
+                direct.push_back(std::move(src));
+            } else if (first_why.empty()) {
+                first_why = path + ": " + why;
+            }
+        }
+        if (direct.empty()) {
+            std::cerr << "ttnvtop --direct: " << (first_why.empty() ? "no Tenstorrent device found" : first_why) << "\n"
                       << "  The SHM path needs none of this: run ttnvtop-collector (or the\n"
                       << "  ARC bridge) and start ttnvtop without --direct.\n";
             return 1;
@@ -622,15 +638,23 @@ int main(int argc, char* argv[]) {
     // In direct mode `maps` is built once over buffers this process owns and refilled in
     // place; there is no file to discover, restart, or go stale.
     auto refresh_direct = [&]() {
-        direct.update(monotonic_us());
+        const uint64_t now = monotonic_us();
+        for (auto& src : direct) {
+            src->update(now);
+        }
         if (maps.empty()) {
-            for (uint32_t i = 0; i < direct.dies(); ++i) {
-                MappedShm m;
-                m.path = "driver:" + std::to_string(i);
-                m.header = &direct.view(i).header;
-                m.cores = direct.view(i).cores.data();
-                maps.push_back(std::move(m));
+            for (size_t d = 0; d < direct.size(); ++d) {
+                for (uint32_t i = 0; i < direct[d]->dies(); ++i) {
+                    MappedShm m;
+                    m.path = "driver:" + std::to_string(d) + ":" + std::to_string(i);
+                    m.header = &direct[d]->view(i).header;
+                    m.cores = direct[d]->view(i).cores.data();
+                    maps.push_back(std::move(m));
+                }
             }
+            std::sort(maps.begin(), maps.end(), [](const MappedShm& a, const MappedShm& b) {
+                return a.header->asic_id < b.header->asic_id;
+            });
         }
     };
 

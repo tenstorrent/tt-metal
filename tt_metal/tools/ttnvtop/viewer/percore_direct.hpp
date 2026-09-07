@@ -32,6 +32,8 @@
 #include <unistd.h>
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -141,6 +143,32 @@ class Source {
 public:
     ~Source() { close_fd(); }
 
+    // A GLOBALLY unique id, which "location" is not. The driver reports 0/1 per card, so on
+    // a multi-card host every card's local die would claim 0 -- and the viewer SORTS and
+    // filters (--chip N) on this field, so four n300s would collapse into two apparent
+    // chips. Not the UMD unique id (this path never talks to UMD), but unique and stable,
+    // which is all the field is used for here.
+    //
+    // The board serial comes from the driver's own sysfs, which is already exposed and
+    // already unique per card. Shifted left one so the die bit cannot collide with a
+    // neighbouring serial; Wormhole serials have a zero top byte, so nothing is lost.
+    static uint64_t serial_for(const std::string& dev_path) {
+        const size_t slash = dev_path.find_last_of('/');
+        const std::string n = (slash == std::string::npos) ? dev_path : dev_path.substr(slash + 1);
+        const std::string p = "/sys/class/tenstorrent/tenstorrent!" + n + "/tt_serial";
+        FILE* f = std::fopen(p.c_str(), "r");
+        if (f == nullptr) {
+            return 0;
+        }
+        char buf[64] = {0};
+        const size_t got = std::fread(buf, 1, sizeof(buf) - 1, f);
+        std::fclose(f);
+        if (got == 0) {
+            return 0;
+        }
+        return std::strtoull(buf, nullptr, 16);
+    }
+
     // Opens, learns geometry, and arms. Returns false with `why` set on any of: no such
     // device, a driver without the ioctls, or firmware that publishes no per-core tags.
     bool open(const std::string& path, std::string& why) {
@@ -175,6 +203,7 @@ public:
             close_fd();
             return false;
         }
+        serial_ = serial_for(path);
         views_.resize(geom_.dies);
         for (uint32_t i = 0; i < geom_.dies; ++i) {
             views_[i].cores.resize(geom_.cores);
@@ -222,7 +251,8 @@ private:
         std::memcpy(h.magic, kShmMagic, sizeof(h.magic));
         h.version = kShmVersion;
         h.struct_size = sizeof(PerCoreView);
-        h.asic_id = desc.location;  // stable and distinct; the driver exposes no UMD id here
+        // See serial_for(): unique across cards, which desc.location alone is not.
+        h.asic_id = (serial_ << 1) | desc.location;
         h.arch_id = 0;
         // Declare exactly what the ARC sweep samples -- the same contract the publisher
         // uses, so the viewer labels these columns identically whichever source it read.
@@ -288,6 +318,7 @@ private:
     }
 
     int fd_ = -1;
+    uint64_t serial_ = 0;
     ReadOut geom_{};
     std::vector<uint8_t> buf_;
     std::vector<DieView> views_;
