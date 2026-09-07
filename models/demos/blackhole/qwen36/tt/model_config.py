@@ -27,6 +27,7 @@ class Qwen36ModelArgs(ModelArgs):
         mesh_device=None,
         max_batch_size=1,
         max_seq_len=2048,
+        enable_mtp=None,
         **kwargs,
     ):
         # HF_MODEL is canonical (defaults to Qwen/Qwen3.6-27B). Snapshot hub ids unless
@@ -88,9 +89,14 @@ class Qwen36ModelArgs(ModelArgs):
         # MTP (multi-token prediction) head. Every Qwen3.5/3.6 checkpoint ships a single-layer
         # MTP head (mtp.*) that reuses the main embedding + LM head; it is the speculative-decode
         # drafter. mtp_use_dedicated_embeddings=False means it shares tok_embeddings.
+        # Loading the head is ON by default whenever the checkpoint has one (it is the production
+        # decode path). Opt out with enable_mtp=False or QWEN36_MTP=0 to skip its weights, KV cache
+        # and construction entirely (plain decode only).
         self.mtp_num_hidden_layers = getattr(text_config, "mtp_num_hidden_layers", 0)
         self.mtp_use_dedicated_embeddings = getattr(text_config, "mtp_use_dedicated_embeddings", False)
-        self.has_mtp = self.mtp_num_hidden_layers > 0
+        if enable_mtp is None:
+            enable_mtp = os.environ.get("QWEN36_MTP", "1") != "0"
+        self.has_mtp = self.mtp_num_hidden_layers > 0 and bool(enable_mtp)
         if self.has_mtp:
             assert (
                 self.mtp_num_hidden_layers == 1

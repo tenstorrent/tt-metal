@@ -549,6 +549,7 @@ class Qwen36Model:
         n_layers=None,
         layer_indices=None,
         hf_model=None,
+        enable_mtp=None,
     ):
         # HF_MODEL env var (hub or local path) is canonical; hf_model sets it for back-compat.
         if hf_model is not None:
@@ -556,10 +557,12 @@ class Qwen36Model:
 
             os.environ["HF_MODEL"] = hf_model
 
+        # enable_mtp: None -> QWEN36_MTP env (default on); False -> no MTP head/weights/KV.
         args = Qwen36ModelArgs(
             mesh_device=device,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
+            enable_mtp=enable_mtp,
         )
 
         # layer_indices: run only these checkpoint layers (e.g. [0,3,31]) for profiling.
