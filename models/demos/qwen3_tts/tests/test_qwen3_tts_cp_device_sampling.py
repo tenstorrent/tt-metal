@@ -137,15 +137,27 @@ def test_noise_tile_is_fresh_per_frame_and_per_slot(device):
 
 
 def test_noise_tile_follows_torch_seed(device):
-    """--seed must still make a run reproducible: the tile comes from the global RNG."""
-    sampler = _DeviceSampler(device, top_k=TOP_K, temperature=TEMP)
-    torch.manual_seed(1234)
-    sampler.refresh_noise()
-    a = _all_chips(device, sampler.noise_tt)[0].float().clone()
-    torch.manual_seed(1234)
-    sampler.refresh_noise()
-    b = _all_chips(device, sampler.noise_tt)[0].float()
-    assert torch.equal(a, b), "same torch seed produced a different noise tile"
+    """--seed must still make a run reproducible.
+
+    The draws come from a PRIVATE generator that is seeded once, off the global RNG,
+    when the sampler is constructed — so the tile sequence no longer depends on how
+    many times the AR loop happens to touch the global RNG. Reproducibility is
+    therefore a property of "same global seed at construction time", not of reseeding
+    the global RNG between draws: two refreshes on one sampler are consecutive draws
+    from its private stream and SHOULD differ (that is
+    test_noise_tile_is_fresh_per_frame_and_per_slot).
+    """
+    tiles = []
+    for _ in range(2):
+        torch.manual_seed(1234)
+        sampler = _DeviceSampler(device, top_k=TOP_K, temperature=TEMP)
+        seq = []
+        for _ in range(3):
+            sampler.refresh_noise()
+            seq.append(_all_chips(device, sampler.noise_tt)[0].float().clone())
+        tiles.append(seq)
+    for i, (a, b) in enumerate(zip(*tiles)):
+        assert torch.equal(a, b), f"same global seed produced a different tile at draw {i}"
 
 
 def test_noise_tile_is_identical_on_every_chip(device):
