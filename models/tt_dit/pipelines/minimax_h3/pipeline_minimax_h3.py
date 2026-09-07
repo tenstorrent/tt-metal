@@ -464,6 +464,8 @@ class MiniMaxH3Pipeline:
         # keyed by the rung when bucketing (or by 0 otherwise, where rebinding is harmless and one
         # slot avoids holding a set of tensors per distinct shape). See `_BucketState` and `_denoise`.
         self._buckets: dict[int, _BucketState] = {}
+        # Program-cache size when the last traced denoise replayed; see _denoise.
+        self._programs_at_last_replay: int = -1
         # Forces `_select_bucket` onto one rung regardless of the request's natural rung; `warmup`
         # uses it to walk the ladder with a single representative request.
         self._force_bucket: int | None = None
@@ -2531,6 +2533,21 @@ class MiniMaxH3Pipeline:
         )
 
         t_preamble = time.time() - t_preamble
+        if self.trace_denoise:
+            n_programs = self.mesh_device.num_program_cache_entries()
+            if n_programs != self._programs_at_last_replay:
+                # Something compiled since the last replay: this request's eager text encoder, vision tower,
+                # VAE/audio encode, or the preamble above. A program-cache entry can own a device buffer (the
+                # tiled ttnn.reshape page map behind the vision merger's row fold) that was allocated bottom-up
+                # into the hole the live captures' transients left -- the space every replay rewrites -- so
+                # the next request that hits that cache entry would run the kernel off stomped indices and
+                # wedge the device. Same rule as the cold-rung release: drop every capture; this rung
+                # re-captures at step 0 with the new buffers already placed.
+                self._log(
+                    f"program cache grew to {n_programs} entries since the last replay "
+                    f"(was {self._programs_at_last_replay}): releasing traces before this denoise"
+                )
+                self.release_traces()
         t_first = t_steady = 0.0
         if _is_host_rank():
             _tqdm_spacer()
@@ -2599,6 +2616,8 @@ class MiniMaxH3Pipeline:
         # This rung is now warm: any later request that pads to it may trace. Set only after the loop
         # completes, so an exception mid-loop leaves the rung cold rather than falsely warm.
         state.warm = True
+        if self.trace_denoise:
+            self._programs_at_last_replay = self.mesh_device.num_program_cache_entries()
         steady_steps = max(len(timesteps) - 1, 1)
         self._log(
             f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "
