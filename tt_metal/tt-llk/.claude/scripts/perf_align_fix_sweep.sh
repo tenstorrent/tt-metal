@@ -13,7 +13,12 @@ set -uo pipefail
 LLK=~/tt-metal/tt_metal/tt-llk; PT=$LLK/tests/python_tests; SRC=$LLK/tests/sources
 OUT="${OUT:-$HOME/alignfix}"
 RUNS="${RUNS:-20}"; LF="${LF:-1024}"
-# name:pad_nops_after_p2align   ("none" = no directive at all)
+# name:N   ("none" = unmodified). What N means depends on MODE:
+#   MODE=p2align  ".p2align 4" before the PACK loop, then N nops  (pins pack alignment)
+#   MODE=mathnop  N nops inside the MATH loop, after the wait for DEST
+# On config 5742 one math nop removed the bistability and ran 9% faster; the compiler
+# restructured the math loop (+24 bytes for the first nop). This sweeps all configs.
+MODE="${MODE:-p2align}"
 PASSES="${PASSES:-baseline:none align0:0 align12:3}"
 export RUNNER_TEMP="${RUNNER_TEMP:-$HOME/llk-wh-build}"
 
@@ -30,7 +35,7 @@ say "resetting card"; tt-smi -r 2>&1 | tail -2; sleep 10
 
 run_pass() {
     local NAME=${1%%:*} PAD=${1##*:}
-    say "pass $NAME  padding=$PAD"
+    say "pass $NAME  mode=$MODE  n=$PAD"
     restore
     sed -i "s/^    configuration\.run(perf_report)\$/    configuration.run(perf_report, run_count=$RUNS)/" perf_math_matmul.py
     grep -q "run_count=$RUNS" perf_math_matmul.py || { echo "FATAL: run_count sed"; exit 1; }
@@ -38,17 +43,22 @@ run_pass() {
         sed -i "s/^            LOOP_FACTOR(1024),\$/            LOOP_FACTOR($LF),/" perf_math_matmul.py
     fi
     if [ "$PAD" != "none" ]; then
-python3 - "$SRC/math_matmul_perf.cpp" "$PAD" <<'PY'
+python3 - "$SRC/math_matmul_perf.cpp" "$PAD" "$MODE" <<'PY'
 import sys
-kern, pad = sys.argv[1], int(sys.argv[2])
-OLD = """            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+kern, pad, mode = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+s = open(kern).read()
+if mode == "mathnop":
+    OLD = "                _llk_math_wait_for_dest_available_<dest_sync>();"
+    NEW = OLD + "\n" + "\n".join(['                asm volatile("nop");'] * pad)
+else:
+    OLD = """            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_packer_wait_for_math_done_();"""
-lines = ['            asm volatile(".p2align 4");']
-lines += ['            asm volatile("nop");'] * pad
-s = open(kern).read()
+    lines = ['            asm volatile(".p2align 4");']
+    lines += ['            asm volatile("nop");'] * pad
+    NEW = "\n".join(lines) + "\n" + OLD
 assert s.count(OLD) == 1, f"kernel anchor matched {s.count(OLD)} times"
-open(kern, "w").write(s.replace(OLD, "\n".join(lines) + "\n" + OLD))
+open(kern, "w").write(s.replace(OLD, NEW))
 PY
         [ $? -eq 0 ] || { echo "FATAL: patch failed"; exit 1; }
     fi
