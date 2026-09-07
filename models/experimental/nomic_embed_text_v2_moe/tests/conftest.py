@@ -14,7 +14,7 @@ import torch
 from models.experimental.nomic_embed_text_v2_moe.common import checkpoint_is_cached, resolve_checkpoint
 from models.experimental.nomic_embed_text_v2_moe.reference.configuration_nomic_moe import load_vendored_config
 from models.experimental.nomic_embed_text_v2_moe.reference.loader import (
-    load_reference_model,
+    load_pretrained_reference_model,
     load_state_dict_from_safetensors,
 )
 
@@ -41,8 +41,10 @@ def state_dict(checkpoint_path):
 
 
 @pytest.fixture(scope="session")
-def reference_model(config, state_dict):
-    return load_reference_model(config, state_dict)
+def reference_model(checkpoint_path):
+    # Depends on checkpoint_path only for its skip-when-uncached guard; the helper resolves the
+    # checkpoint itself.
+    return load_pretrained_reference_model(allow_download=False)
 
 
 @pytest.fixture(scope="session")

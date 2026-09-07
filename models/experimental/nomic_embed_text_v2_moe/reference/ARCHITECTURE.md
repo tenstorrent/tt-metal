@@ -222,8 +222,10 @@ Matryoshka ordering is a free choice. Truncate-then-normalize and normalize-then
 different norms (1.0 vs ~0.57 at d=256) but identical directions, and the declared similarity
 is cosine.
 
-Model card check: cosine similarity between passage-prefixed "Hello!" and "Hola!" reproduces
-at 0.911788 against the card's 0.9118.
+Model card check: cosine similarity between the passage-prefixed pair in
+`common.MODEL_CARD_SENTENCES` reproduces at 0.911788 against the card's 0.9118. The exact
+strings live in that constant rather than being repeated here, since one of them carries a
+non-ASCII character that the input must preserve to reproduce the number.
 
 ## 7. Operator mapping for the TTNN port
 

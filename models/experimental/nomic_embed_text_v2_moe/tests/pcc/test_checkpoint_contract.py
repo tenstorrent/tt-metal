@@ -28,8 +28,10 @@ from models.experimental.nomic_embed_text_v2_moe.reference.configuration_nomic_m
 from models.experimental.nomic_embed_text_v2_moe.reference.loader import (
     ABSENT_KEY_SUBSTRINGS,
     expected_checkpoint_keys,
+    load_pretrained_reference_model,
     load_reference_model,
 )
+from models.experimental.nomic_embed_text_v2_moe.reference.modeling_nomic_moe import NomicBertModel
 
 pytestmark = pytest.mark.needs_weights
 
@@ -109,6 +111,22 @@ def test_strict_load_is_clean(config, state_dict):
     assert model.config.num_hidden_layers == config.num_hidden_layers
 
 
+def test_load_pretrained_reference_model_helper(config, state_dict, checkpoint_path):
+    """The one-call helper must return the real weights, not a random init.
+
+    Comparing one parameter against the checkpoint is what separates the two: a randomly
+    initialised model of the same shape would pass every structural assertion here.
+    """
+    model = load_pretrained_reference_model(allow_download=False)
+
+    assert isinstance(model, NomicBertModel)
+    assert not model.training
+    assert len(model.encoder.layers) == config.num_hidden_layers
+
+    key = "encoder.layers.0.attn.Wqkv.weight"
+    torch.testing.assert_close(dict(model.named_parameters())[key], state_dict[key])
+
+
 def test_pad_embedding_row_is_not_zero(config, state_dict):
     """nn.Embedding(padding_idx=...) zeroes at init, but the trained row survives loading, so
     ttnn.embedding must not be given padding_idx."""
@@ -122,7 +140,9 @@ def test_vocab_size_is_padded_to_the_configured_multiple(config):
     assert config.vocab_size % config.pad_vocab_size_multiple == 0
 
 
-def test_vendored_config_matches_the_pinned_revision():
+def test_vendored_config_matches_the_pinned_revision(checkpoint_path):
+    # Depends on checkpoint_path for its skip-when-uncached guard: the config ships in the same
+    # snapshot, so without it this fails instead of skipping on a cold cache.
     live = json.load(open(resolve_config(revision=MODEL_REVISION, allow_download=False)))
     assert load_vendored_hf_config() == live
 
