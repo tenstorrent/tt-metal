@@ -179,11 +179,11 @@ Measures pipeline balance between math output and packer consumption.
 | **Counter group** | PACK |
 
 ```
-Primary:  Math-to-Pack Handoff = AVAILABLE_MATH / PACKER_BUSY * 100
-Fallback: Math-to-Pack Handoff = AVAILABLE_MATH / ref_cnt * 100
+Primary:  Math-to-Pack Handoff = MATH_NOT_SCOREBOARD_STALLED / PACKER_BUSY * 100
+Fallback: Math-to-Pack Handoff = MATH_NOT_SCOREBOARD_STALLED / ref_cnt * 100
 ```
 
-`AVAILABLE_MATH` counts cycles where the math instruction was valid AND not scoreboard-stalled. Dividing by `PACKER_BUSY` gives a ratio that can exceed 100% when math produces output faster than the packer consumes it. When `PACKER_BUSY = 0` (packer not used) the formula falls back to math availability as a fraction of total cycles.
+`MATH_NOT_SCOREBOARD_STALLED` counts cycles where the math instruction was valid AND not scoreboard-stalled. Dividing by `PACKER_BUSY` gives a ratio that can exceed 100% when math produces output faster than the packer consumes it. When `PACKER_BUSY = 0` (packer not used) the formula falls back to math availability as a fraction of total cycles.
 
 - **>100%**: Math produces output faster than packer consumes (packer is the consumer bottleneck).
 - **~100%**: Math and packer balanced.
@@ -362,11 +362,11 @@ Fraction of math-valid cycles stalled by destination-to-source data hazards (MOV
 | **Counter group** | UNPACK |
 
 ```
-Data Hazard Stall Rate = (MATH_INSTRN_AVAILABLE - DATA_HAZARD_STALLS_MOVD2A)
+Data Hazard Stall Rate = (MATH_INSTRN_AVAILABLE - MATH_NOT_D2S_STALLED)
                          / MATH_INSTRN_AVAILABLE * 100
 ```
 
-The RTL counter `DATA_HAZARD_STALLS_MOVD2A` is `math_instrn_valid & ~dest2src_post_stall` — cycles math was available AND *not* D2A-stalled. Subtracting from MATH_INSTRN_AVAILABLE gives the actual stall count.
+The RTL counter `MATH_NOT_D2S_STALLED` is `math_instrn_valid & ~dest2src_post_stall` — cycles math was available AND *not* D2A-stalled. Subtracting from MATH_INSTRN_AVAILABLE gives the actual stall count.
 
 - **High value (>20%)**: Significant dest-to-src data movement stalls. Expected for concat (22% max).
 - **Low value (~0%)**: No data hazard stalls. Expected for matmul and simple eltwise ops.
@@ -476,7 +476,7 @@ Fraction of math cycles stalled by FPU data hazard scoreboard.
 | **Counter group** | PACK |
 
 ```
-Math Scoreboard Stall = (MATH_INSTRN_AVAILABLE - AVAILABLE_MATH) /
+Math Scoreboard Stall = (MATH_INSTRN_AVAILABLE - MATH_NOT_SCOREBOARD_STALLED) /
                         MATH_INSTRN_AVAILABLE * 100
 ```
 
@@ -529,7 +529,7 @@ Fraction of srcA write attempts that actually succeeded.
 | **Counter group** | UNPACK |
 
 ```
-SrcA Write Actual Efficiency = SRCA_WRITE_ACTUAL / SRCA_WRITE_AVAILABLE * 100
+SrcA Write Actual Efficiency = SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_AVAILABLE * 100
 ```
 
 - **High value (100%)**: Every srcA write attempt succeeds. No write port blocking.
@@ -553,7 +553,7 @@ Fraction of total cycles each thread spent waiting for specific hardware units.
 | **Counter group** | INSTRN |
 
 ```
-MMIO Idle Wait T0 = WAITING_FOR_MMIO_IDLE_0 / ref_cnt * 100
+MMIO Idle Wait T0 = WAITING_FOR_CFG_IDLE_0 / ref_cnt * 100
 SFPU Idle Wait T1 = WAITING_FOR_SFPU_IDLE_1 / ref_cnt * 100
 THCON Idle Wait T0 = WAITING_FOR_THCON_IDLE_0 / ref_cnt * 100
 MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / ref_cnt * 100
@@ -1001,7 +1001,7 @@ Source register write throughput per unpacker — fraction of unpacker-busy cycl
 | **Counter group** | UNPACK |
 
 ```
-Unpacker0 Write Efficiency = SRCA_WRITE_ACTUAL / UNPACK0_BUSY_THREAD0 * 100
+Unpacker0 Write Efficiency = SRCA_WRITE_NOT_BLOCKED_PORT / UNPACK0_BUSY_THREAD0 * 100
 Unpacker1 Write Efficiency = SRCB_WRITE_NOT_BLOCKED_PORT / UNPACK1_BUSY_THREAD0 * 100
 ```
 
@@ -1022,7 +1022,7 @@ FPU active cycles as fraction of math instruction availability on the math threa
 | **Counter group** | FPU + INSTRN |
 
 ```
-FPU Execution Efficiency = FPU_COUNTER / FPU_INSTRN_AVAILABLE_1 * 100
+FPU Execution Efficiency = FPU_COUNTER / MATH_INSTRN_AVAILABLE_1 * 100
 ```
 
 - **High value (>80%)**: FPU executes whenever math work is available (compute-efficient).
@@ -1044,7 +1044,7 @@ Fraction of srcA/srcB DMA write attempts blocked by overwrite protection (previo
 ```
 SrcA Write Overwrite Blocked = (SRCA_WRITE_AVAILABLE - SRCA_WRITE_NOT_BLOCKED_OVR) /
                                SRCA_WRITE_AVAILABLE * 100
-SrcB Write Overwrite Blocked = (SRCB_WRITE_AVAILABLE - SRCB_WRITE_ACTUAL) /
+SrcB Write Overwrite Blocked = (SRCB_WRITE_AVAILABLE - SRCB_WRITE_NOT_BLOCKED_OVR) /
                                SRCB_WRITE_AVAILABLE * 100
 ```
 
