@@ -1046,3 +1046,301 @@ box's ~400 GB/s roofline, where `ttnn.clone` on the same tensors is no faster. T
 follow-ups, all measured this round: idea 6's STREAM variant (**+20.1% ablation ceiling**, the
 largest single number in the op), idea 6's integration overhead, the dual-NoC gather as a
 two-kernel shape, and idea 1's variant (d) for the interleaved prefill.
+
+---
+
+## Perf 2
+
+**All six ideas measured; 3 graduated, 1 superseded, 2 regressions. The op is 1.069x on the
+focus shape and 1.522x on the round's largest prize, with no regression on any supported
+cell. The worst `perf`-group ratio moves 0.908 -> 0.871.**
+
+Every number here is `DEVICE KERNEL DURATION [ns]` on **blackhole p150b, 11x10 = 110-core
+compute grid**, at the reference 1350 MHz, under the case's own fixed precision contract.
+No idea in this round touched `fp32_dest_acc_en`, `math_fidelity`, `math_approx_mode`,
+`dst_full_sync_en` or a dtype; every graduated path is pcc-identical to six decimals.
+
+### Focus shape
+
+No `LOOSE_CASES` entry carries an `attention:` note, so the fallback applies: measure every
+case in the `perf` group and divide by its own `achievable_ns`. Re-ranked at the start of
+this round (`perf_target_ranking.py`'s rule, run as `probes/bench_perf1_rank.py`):
+
+| rank | case | ns | ceiling | ratio |
+|---|---|---:|---:|---:|
+| **1** | **`(1,1,8192,2304)` INTERLEAVED, bf16 TILE, gamma (bf16 TILE weight), HiFi2, `fp32_dest_acc_en=False`** | 191,879 | 211,345 | **0.908** |
+| 2 | `(1,1,8192,1024)` INTERLEAVED, same config | 85,966 | 96,744 | 0.889 |
+| 3 | `(1,1,8192,7168)` INTERLEAVED `gamma_bias_residual`, `fp32_dest_acc_en=True` | 1,578,655 | 1,837,678 | 0.859 |
+| 4 | `(1,1,7168,1024)` BLOCK `[896,128]` (8,8) gbr | 29,024 | 34,569 | 0.840 |
+
+Perf 1's focus (`(1,1,32,7168)` WIDTH-sharded) has fallen from 0.997 to 0.692 and is now
+6th. Every axis of case #05 is in `SUPPORTED`, so it was optimized at its full config and
+never at a proxy.
+
+### Measured breakdown — focus shape
+
+The op's 41 `MaybeDeviceZoneScope` sites are permanent and opt-in (D34). This round added
+the four cumulative-peel switches, in the same shipped-commented form as D-era
+`RMS_ABLATE_RECONFIG`: `RMS_ABLATE_READ_X`, `RMS_ABLATE_PER_CHANNEL`, `RMS_ABLATE_WRITE`,
+`RMS_ABLATE_COMPUTE`. Each keeps the loop, the reserve/push, the barrier and the trip
+count and strips only the payload.
+
+**Per-stage zones** (`RMS_STAGE_ZONES=1`, ns per core, wall 193,687):
+
+| zone | RISC | ns/core | n/core |
+|---|---|---:|---:|
+| `writer_write` (occupancy) | BRISC | 103,159 | 2.3 |
+| `compute_square` (occupancy) | TRISC | 83,373 | 2.3 |
+| **`reader_read_gamma`** | NCRISC | **67,563** (max 158,451) | **1.0** |
+| `reader_read_x` (occupancy) | NCRISC | 18,552 | 2.3 |
+| `compute_scale` / `compute_gamma_mul` / `compute_reduce` / `compute_finalize` | TRISC | 6,348 / 5,614 / 2,740 / 2,100 | 2.3 |
+
+`writer_write`, `compute_square` and `reader_read_x` wrap their own `cb_wait_front` /
+`cb_reserve_back`, so those are **occupancy, not payload** — which is exactly why the
+ranking below is taken from the ablation and not from the zones.
+
+**Cumulative peel** (stages peeled together, never one at a time):
+
+| configuration | ns | stage |
+|---|---:|---|
+| full op | 190,593 | |
+| - per-channel NoC payload | 181,355 | per-channel = **9,238** |
+| - compute payload | 179,144 | compute = **2,211** |
+| - x read payload | 133,046 | x read = **46,098** |
+| - write payload too (all stubbed) | 26,201 | write = **106,845**; scaffolding floor **26,201** |
+| *write stubbed, read kept* (separate run) | 109,730 | x read ALONE = **83,529** |
+
+So on the focus shape: read alone 452 GB/s, write alone 353 GB/s, the two together
+494 GB/s, and the whole op stubbed at once is 26,201 ns (13.7%). Removing the operand
+*entirely* (rather than just its NoC payload) costs 16,138 ns — 8.4% of the op.
+
+**Two hypotheses tested and refuted before any idea was floated**, which is the reason the
+round did not spend itself on the payload bytes:
+
+* **Load imbalance is not the wall.** `Rt=256` over 110 cores is 36 cores x 3 tile-rows +
+  74 x 2 — a 0.776 balance factor. Sweeping `Rt` at W=2304: balance 0.670 -> 373 GB/s,
+  0.776 -> 392, 1.000 -> 392 (Rt=220) and 409 (Rt=330). **The wall tracks total BYTES, not
+  `rowmax`.** Aggregate-DRAM bound, not imbalance bound.
+* **The 1.35x "read/write overlap deficit" was an artefact of my own arithmetic, and idea 1
+  retired it.** An unsynchronized duplex probe — the op's exact split, page ranges and
+  transaction shape, with *no CB handshake at all between reader and writer* — puts the
+  focus payload floor at **178,079 ns / 423 GB/s**, flat at 421-434 GB/s across
+  `block in {8,24,72,144}` and `cores in {28,56,84,110}`. Reads and writes do **not** add.
+  The op's DM runs **1.3% above a program with zero synchronization**. Idea 2's independent
+  pure-copy instrument agrees: 166,086 ns / 452 GB/s best, 172,126 / 439 for the op's own
+  transfer pattern, i.e. within 3.1% of the best pattern found.
+
+**Ranked, roofline-gated:**
+
+| rank | stage | ns | gate |
+|---|---|---:|---|
+| 1 | per-channel operand staging | 16,138 (8.4%) | **NOT gated** — 1.0 MB of real traffic at ~63 GB/s effective, ~7x off the op's payload rate |
+| 2 | scaffolding / issue floor | 26,201 (13.7%) | partly irreducible (dispatch); the rest is per-transaction issue + CB handshake |
+| 3 | payload DM bytes | 152,943 (80%) | **ROOFLINE-GATED at 494 GB/s** |
+| 4 | read/write overlap | 0 | **ROOFLINE-GATED** — the deficit does not exist (above) |
+| 5 | compute payload | 2,211 (1.2%) | gated / irrelevant |
+
+### The portfolio, and every verdict
+
+Six ideas, deliberately overlapping: three at the payload DM, two at the per-channel read
+(transport vs granularity), one at the STREAM regime.
+
+| # | idea | verdict | measured |
+|---|---|---|---|
+| 1 | `rw_overlap` — close the read/write overlap deficit | **NULL on focus, side WIN** | Retired the target (above). CB depth 3/4, sub-tile-row writer drain, coarse/fine barriers, reader run-ahead: all 0.969-1.011x on focus, inside a +/-1.4% noise band. Found that `(1,1,8192,1024)` runs **one row-block per core** — graduated as **D41**. |
+| 2 | `dual_noc_write` — split the write across both DM RISCs / NoCs | **REGRESSION** | 1.031x in a pure-DM bench, **0.964x** in the real op (focus) and 0.933x on `(1,1,32,1024)`. With compute in the loop the writer waits on compute, NoC1 stops being the pole, and every byte moved to NoC0 is 1.75x more expensive plus an extra barrier. Not graduated. |
+| 3 | `bank_coalesced_txn` — bank-contiguous multi-page transfers | **REGRESSION** | `NB=8`; 72 txn/tile-row -> 8 of 18 kB. Bitwise exact at every run length, and **0.959x** at 2 pages/txn, **0.867x** at 9, monotone. Not graduated. |
+| 4 | `per_channel_mcast_v2` — broadcast the per-channel operand | **WIN — graduated as D40** | focus **192,455 -> 179,342 ns, 1.073x** |
+| 5 | `per_channel_boot_overlap` — hide the boot storm / re-sweep the read granularity | **WIN in isolation — SUPERSEDED** | `TRIM=3` (one 576-B tile-prefix instead of two 64-B face-rows) is 186,604 -> 181,343 ns, 1.029x. Not graduated; see below. |
+| 6 | `stream_regime` — cut STREAM's 5 tensor-crossings to 3 | **WIN — graduated as D39** | case #15 **1,578,655 -> 1,039,664 ns, 1.517x** |
+
+**Three findings from the nulls that are worth more than most wins:**
+
+* Idea 3 falsified the premise it was given. Halving the transaction count buys **exactly
+  zero** in isolation (read half 91,755 -> 91,826 ns; write half 122,750 -> 123,172) — per-
+  transaction issue cost is entirely hidden behind DRAM bandwidth. The 6% loss appears
+  **only when read and write run concurrently**: a multi-page burst holds one DRAM bank
+  longer, so the opposite-direction traffic to that bank can no longer interleave with it.
+  The op's page-per-transaction round-robin is what keeps the two directions overlapped.
+* Idea 2 established that **reader-NoC0 / writer-NoC1 is already the optimum of the four
+  pairings** — the reverse is 0.736x — and that swapping which *RISC-V* does what while
+  holding the NoCs fixed changes nothing (0.01% apart). The write's 1.28-1.35x premium over
+  the read is the NoC direction, not the RISC-V. It also recorded a hardware fact worth
+  keeping: **two DM RISC-Vs on the same NoC under `DM_DEDICATED_NOC` deadlock** (each
+  tracks its issued count locally against a NoC-global counter), so `DM_DYNAMIC_NOC` is
+  mandatory for that shape — and it is free (1.004x) on this op.
+* Idea 4 found the cause of **Perf 1's unattributed 4-5% same-build overhead**, the thing
+  that blocked its ancestor from graduating. It was never the idea:
+  `ttnn/ttnn/operations/__init__.py` `walk_packages()`-executes every package under
+  `operations/`, two `perf_experiments/` dirs set `RMS_STAGE_ZONES=1` at module scope, and
+  the shipped descriptor is imported *earlier* in that walk than a forked one — so the
+  baseline compiled clean kernels and the candidate compiled zone-instrumented ones. The
+  `__init__.py` files are deleted and `perf_experiments/README.md` records why.
+
+**Why idea 5 was not graduated, measured rather than assumed.** Its own decomposition on
+the focus shape is: no operand 176,000 ns; operand loop/reserve/barrier/push with the NoC
+payload stubbed **179,300**; `TRIM=2` (shipped) 189,100; `TRIM=3` 183,300. So 179,300 is
+the floor granularity cannot go below — it is handshake, not bytes. **D40 measures 179,342
+there**, i.e. at that floor, because the deferred wait hides the loop and the reserve too.
+On the axes where `TRIM=3` also won (`gamma+bias` 1.060x, STREAM 1.027x) D40 and D39 reach
+1.097x and 1.522x. And it carries two exceptions D40 does not: a measured **0.981x** on an
+fp32 TILE operand (its 1152-byte prefix outruns the halved request count) and a reproducible
+**0.990x** on `(1,1,8192,1024)`. A winning fusion supersedes its components; this is that
+case, and the component is recorded here rather than shipped.
+
+### What graduated, and how widely
+
+Three changes. Each is the op's **one unqualified path** for every plan it is correct on,
+and each replaced code is deleted — the compact hold replaced the tiled hold's monopoly on
+the ROW_RESIDENT price, the broadcast replaced the per-core read on engaged lines, and D41
+replaced the coarsest-block rule outright.
+
+| # | change | domain | carve-outs, and what earned each |
+|---|---|---|---|
+| **D39** | the **compact per-channel hold**: cache the two face-rows D23 already fetches (1/16 of the tiled bytes), re-materialize each chunk with a local L1 copy, and let `_row_resident_chunk` price its hold at that. STREAM shapes lift into ROW_RESIDENT; 5 tensor-crossings become 3 | every interleaved chunked plan | (a) **tried as a FALLBACK after the tiled hold**, so a shape that already fits tiled keeps its byte-identical program — taking compact there measured **0.84-0.94x**; (b) **grid-occupancy gate** — ROW_RESIDENT trades DRAM bytes for reader/compute overlap and that only pays when DRAM is the constraint: holding W, dtype, residual, rows-per-core *and* the solved chunk fixed and moving only the active-core count gives **32/110 0.66x, 64/110 0.97x, 96/110 1.09x, 110/110 1.11x**, monotone; (c) **feasibility** — block-float has no face-row form (272-byte face, not 64-byte aligned) and a ROW_MAJOR operand already arrives compact |
+| **D40** | the **per-channel broadcast** — one injector per grid ROW reads the block and multicasts it. Closes the Blocking Model's deferred `GAMMA_MCAST` row | every plan where a grid row is a real reuse group, **including ROW_MAJOR activations** | (a) **feasibility** — a ROW_MAJOR *operand* is tilized by compute from a stick ring, so there is no reader-side block to send; (b) **feasibility** — D39's compact hold stages by local L1 copy, so there is no DRAM read to broadcast (pinned by a `static_assert` in the reader and `not pc_compact` on the host); (c) **`PC_MCAST_MIN_GROUP = 3`**, earned by a MEASURED **0.932x** on a 2-core line — one receiver cannot pay a fixed handshake. Written as the narrow exception: a 3-core line is untested and therefore **included** |
+| **D41** | RESIDENT picks its block on **row-blocks per core**, and may buy a deeper ring to get one more | every RESIDENT plan | (a) **tie-break is the SHALLOWEST**, so where a deeper ring cannot raise the block count it is refused and the program is byte-identical — that is every one-tile-row-per-core plan and the BLOCK shard; (b) the deeper candidate is offered **only to the RESIDENT search**, earned by a measured regression: in ROW_RESIDENT / STREAM a deeper ring can only be bought with a finer width chunk, and that is **0.980x** on `(1,1,8192,5120)` gbr and **0.984x** on `(1,1,1024,16384)` gbr |
+
+**Not fenced off where it was merely untested.** D40 now covers ROW_MAJOR activations,
+which no measurement had reached when it was authored — the guard that excluded them was a
+**bug**, not a decision: it read `IS_TILE` (the *activation's* layout, CT arg 0) where it
+meant `PER_CHANNEL_IS_RM` (CT arg 7). The two disagreed exactly where they must not, and it
+cost all 48 of the golden suite's `1x1x64x128 layout=ROW_MAJOR gamma_layout=TILE` cells a
+**jit_build failure**. Fixing the flag both restored them and widened the domain: the large
+ROW_MAJOR plan `(1,1,8192,1024)` gains **1.052x**. This is the round's only op-attributed
+break, and it was created and closed inside it.
+
+### Whole-op result — all 19 `perf` cases
+
+Median of 3, in-process profiler, same harness and method as Perf 1's table.
+`ratio` = measured / clock-scaled ceiling.
+
+| # | case | before | after | x | ratio before -> after |
+|---|---|---:|---:|---:|---|
+| 15 | `(1,1,8192,7168)` INT gbr `fp32_dest=True` | 1,578,655 | **1,037,141** | **1.522** | 0.859 -> 0.564 |
+| 5 | **`(1,1,8192,2304)` INT gamma — FOCUS** | **191,879** | **179,515** | **1.069** | **0.908 -> 0.849** |
+| 14 | `(1,1,8192,5120)` INT gbr `fp32_dest=True` | 647,863 | 613,762 | 1.056 | 0.493 -> 0.467 |
+| 7 | `(1,1,8192,7168)` INT gamma | 584,534 | 562,696 | 1.039 | 0.566 -> 0.545 |
+| 10 | `(1,1,32,5120)` W `[32,160]` (8,4) 32c | 3,539 | 3,459 | 1.023 | 0.672 -> 0.657 |
+| 4 | `(1,1,8192,1024)` INT gamma | 85,966 | 84,275 | 1.020 | 0.889 -> 0.871 |
+| 9 | `(1,1,32,2304)` W `[32,256]` (9,1) 9c | 2,994 | 2,947 | 1.016 | 0.648 -> 0.638 |
+| 6 | `(1,1,8192,5120)` INT gamma | 412,498 | 408,983 | 1.009 | 0.559 -> 0.554 |
+| 8 | `(1,1,32,1024)` W `[32,128]` (8,1) 8c | 2,668 | 2,647 | 1.008 | 0.649 -> 0.644 |
+| 16 | `(1,1,32,5120)` W (8,4) gbr `fp32_dest=True` | 4,204 | 4,189 | 1.004 | 0.641 -> 0.639 |
+| 12 | `(1,1,8192,1024)` BLOCK `[1024,128]` (8,8) | 20,458 | 20,430 | 1.001 | 0.715 -> 0.714 |
+| 17 | `(1,1,7168,1024)` BLOCK `[896,128]` (8,8) gbr | 29,024 | 29,044 | 0.999 | 0.840 -> 0.840 |
+| 11 | `(1,1,32,7168)` W `[32,256]` (7,4) 28c | 3,794 | 3,805 | 0.997 | 0.692 -> 0.694 |
+| 2 | `(1,1,32,5120)` INT gamma | 7,047 | 7,084 | 0.995 | 0.093 -> 0.093 |
+| 0 | `(1,1,32,1024)` INT gamma | 4,329 | 4,361 | 0.993 | 0.473 -> 0.477 |
+| 18 | `(1,1,128,4096)` INT, ROW_MAJOR weight | 11,327 | 11,416 | 0.992 | 0.173 -> 0.175 |
+| 1 | `(1,1,32,2304)` INT gamma | 5,153 | 5,192 | 0.992 | 0.303 -> 0.305 |
+| 13 | `(1,1,32,5120)` INT gbr `fp32_dest=True` | 9,614 | 9,697 | 0.991 | 0.061 -> 0.062 |
+| 3 | `(1,1,32,7168)` INT gamma (>=7x cell) | 8,378 | 8,460 | 0.990 | 0.563 -> 0.568 |
+
+**Every case is under its ceiling and the worst ratio moves 0.908 -> 0.871.**
+
+The six cells at 0.990-0.999 are the small interleaved-decode shapes, and they are not
+regressions. Their programs are unchanged except for the extra compile-time args, and a
+dedicated 7-read A/B against a true pre-round build put the same cells at
+`(1,1,32,1024)` 1.003, `(1,1,32,5120)` 0.994, `(1,1,32,7168)` 1.000 and `(1,1,128,4096)`
+1.030 — inside the 2.3-6.1% spread those sub-12-us cells carry. Reported as measured rather
+than smoothed.
+
+### Guard set — one representative per distinct kernel path x layout x placement
+
+Both columns measured in the **same session** against a true pre-round-2 build of the op
+(`git checkout HEAD~4 -- <op files>`), 3 reads each, min reported.
+
+| path | before | after | x |
+|---|---:|---:|---:|
+| HEIGHT shard, native, no combine — `(1,1,2048,256)` 64c | 3,560 | 2,236 | **1.592** |
+| ROW_RESIDENT + D39 compact — `(1,1,8192,7168)` gbr `fp32_dest=True` | 1,584,119 | 1,052,683 | **1.505** |
+| interleaved RESIDENT, D40 engaged — `(1,1,8192,2304)` | 190,810 | 178,231 | **1.071** |
+| ROW_MAJOR activation, TILE weight — `(1,1,8192,1024)` | 89,523 | 85,127 | **1.052** |
+| interleaved RESIDENT, D41 engaged — `(1,1,8192,1024)` | 86,436 | 83,425 | **1.036** |
+| ROW_RESIDENT tiled, no compact — `(1,1,8192,5120)` gamma | 418,386 | 407,116 | 1.028 |
+| interleaved, TILE weight, `fp32_dest=True` — `(1,1,128,4096)` | 11,405 | 11,074 | 1.030 |
+| STREAM, gated out of D39 and D40 — `(1,1,1024,16384)` gbr | 500,713 | 493,809 | 1.014 |
+| WIDTH shard, native + flat combine — `(1,1,32,7168)` | 3,774 | 3,747 | 1.007 |
+| interleaved, ROW_MAJOR weight — `(1,1,128,4096)` `fp32_dest=True` | 10,996 | 10,964 | 1.003 |
+| BLOCK shard, native + slot tree — `(1,1,8192,1024)` | 20,420 | 20,375 | 1.002 |
+| ROW_MAJOR BAND, WIDTH-sharded — `(1,1,256,512)` 64c | 22,283 | 22,246 | 1.002 |
+| ragged-`Wt` interleaved — `(1,1,32,4064)` | 32,236 | 32,210 | 1.001 |
+| ROW_MAJOR activation, TILE weight, 2-core line — `(1,1,64,128)` | 5,164 | 5,211 | 0.991 (carve-out; 0.932 without it) |
+| W non-aligned (masked reduce) — `(1,1,224,1000)` | 6,595 | 6,487 | 1.017 |
+| H non-aligned — `(1,1,333,544)` | 7,798 | 7,922 | 0.984 |
+
+**No material regression anywhere.** `(1,1,333,544)` is the one cell that read below parity
+in two sessions (0.984 on 7 reads, 0.969 on 3), a 124-250 ns delta on a 7.8 us kernel and
+inside that cell's own 2.7-6.6% spread. It is **not** carved out, and deliberately so: two
+structurally identical cells — same regime, same "few cores each owning the full width",
+same engaged broadcast — gain instead (`(1,1,224,1000)` 1.017x, `(1,1,128,4096)` 1.030x),
+so the effect is not systematic and a predicate for it would fence off exactly the shapes
+that happened to be benchmarked. Recorded, not guarded.
+
+### Golden
+
+`scripts/run_safe_pytest.sh --run-all eval/golden_tests/rms_norm_ttnn/`, 10 `pytest-split`
+shards (2648 + 2352 + 2120 + 1840 + 2376 + 2532 + 2571 + 2000 + 2571 + 2338):
+
+> **PASSED = 23,348, FAILED = 19, ERRORS = 0, HANGS = 0.**
+
+Byte-identical to the Phase-0 / Refinement-1..4b / Perf-1 figure in **count and identity** —
+the same three harness defects Phase 0 reproduced outside the op (`CoreRange.end_coord` on
+a build exposing `.start`/`.end`; `torch.max()` on a zero-element readback in
+`eval/metrics.py`; `test_regression` calling `check_output` without `tolerance=`).
+**Zero op-attributed failures, zero hangs.** The op's own unit directory: 90 + 226 + 292 +
+146 + 168 + 32 + 6 passed.
+
+### Helper bypasses
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `dataflow_kernel_lib::read_sticks_for_tilize` | capability | It maps a **page to a tile ROW** and covers no sub-page tiled read at all, so there is no helper form for "fetch just the two 64-byte face-rows of tile `j` that carry row 0". D39's compact FILL is byte-for-byte the reads `stage_per_channel_chunk`'s existing `TRIM == 2` branch already issues — it only needs them to land compacted — and there is still no helper that can express either. | — (inexpressible) | fill is 57 kB/core in place of a 917 kB tiled hold; the regime change it buys is 1,578,655 -> 1,039,664 ns | `rms_norm_ttnn_reader.cpp`, `pc_compact_fill` (the D39 "COMPACT PER-CHANNEL CACHE" block) |
+| `ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp` | ergonomics | It carries `zero_tile` / `prepare_zero_tile` and nothing that writes an arbitrary VECTOR into row 0 of a tile-row, so D39's compact EXPAND is a hand-rolled L1 word copy scattering `2 * TILE_DIM * elem` bytes into face-row slots `0` and `tile/4` of each ring page. The mechanism is ordinary L1 addressing; what is missing is a named "vector -> row 0 of a tile-row" primitive. `noc_async_read`-to-self was rejected because it puts a NoC transaction plus a barrier on a 64-byte move the RISC-V does in ~20 cycles. **The two ns are equal by construction** — the cost being claimed is author and maintenance cost, not device time. | — | — | `rms_norm_ttnn_reader.cpp`, `pc_compact_expand` |
+| `dataflow_kernel_lib::stage_per_channel_chunk` (and `read_sticks_for_tilize` beneath its RM-flat form) | capability | **Re-confirmed from Perf 1, on this round's shape, and still unfixed.** Both own `reserve -> issue -> noc_async_read_barrier() -> cb_push_back` as one indivisible unit, with no parameter, overload or template knob that returns after the ISSUE and before the BARRIER — so an issue/finish split, the only way to drain a per-channel operand's DRAM latency under a later stage, is inexpressible through them. | 186,604 | 184,251 | **not graduated** — `perf_experiments/per_channel_boot_overlap/k_split_late/`. Reported honestly: worth 1.013x here, and its best PLACEMENT flips sign by shape (boot-issue is 1.011x on `(1,1,8192,1024)` and 0.990x on the focus shape; late-issue is the reverse), so there is no unified split path to graduate |
+| `noc_async_write_tile` / every write helper in `kernel_lib` | capability | Each binds the transaction to the kernel's own `noc_index`; "issue this page on the **other** NoC" cannot be expressed through them. Needed to test whether the write's 1.28-1.35x premium over the read is the NoC or the RISC-V. | — | — | **not graduated** — `perf_experiments/dual_noc_write/k_alt/`. The idea LOST in the real op (0.964x), so the gap costs nothing here; recorded because it is one, and because the experiment that needed it settled the roofline question for the whole round |
+| `TensorAccessor` / `noc_async_read_tile` / `noc_async_write_tile` | capability | All three are **page-at-a-time by construction**. There is no accessor API that answers "how many of the next pages of this tensor are contiguous in one bank, and where does that run start" — `pages()` / `PagesAddressIteratorInterleaved` iterates addresses, it does not expose the contiguous-run length. Idea 3 had to re-derive the run from `NUM_DRAM_BANKS` and take the first page's `get_noc_addr`. | 173,344 | 180,835 (2 pages/txn) … 199,899 (9) | **not graduated** — `perf_experiments/bank_coalesced_txn/bank_bench.py`. The raw path **LOSES**, monotonically in transaction size. Recorded as a gap, and with the explicit recommendation **not to close it on this evidence** |
+| `ttnn.Mcast1D` | ergonomics | It engages or refuses a **whole grid**, but the reuse structure here is **per line**: on the STREAM geometry 9 of 10 grid rows are valid reuse groups and one is not (it mixes 2-block and 3-block cores). Making that work meant building the helper over the full grid and then overriding the role to an out-of-band `OPT_OUT` sentinel for the lines that do not qualify. A `Mcast1D` that accepted a per-line predicate — or merely exposed `line_index_` / `line_members` — would remove the sentinel. The alternative the helper does support, refusing the whole grid, costs the other nine lines their broadcast: measured, `col` geometry engages **0 of 11** lines on that shape and gets 0%, against `row`'s 1.089x. | — | — | `rms_norm_ttnn_program_descriptor.py`, the `pc_role` / `PC_OPT_OUT` block in the D40 regime row. **No LLK bypass was written** — the helper is still used; the gap is that the op must carry a sentinel the helper's model has no name for |
+
+`SenderPipe`'s single-packet capability gap, logged in Perf 1, was **not** re-litigated: D40's
+winning geometry broadcasts a whole `WT_CHUNK` block, so `send_data_`'s hard-coded
+`max_page_size` never bites.
+
+### Issues encountered
+
+1. **A guard that reads the wrong compile-time arg is a domain bug, not a safety margin.**
+   D40's `static_assert(IS_TILE != 0, "TILE per-channel operands only")` named the right
+   rule and read the ACTIVATION's layout flag. Because the host predicate was right and the
+   kernel's was wrong, the two disagreed on exactly the plans neither had measured, and the
+   result was a **build failure** on 48 golden cells rather than a wrong answer. Two lessons
+   worth carrying: a kernel-side guard that duplicates a host predicate should be spelled
+   from the same quantity; and the golden suite is what caught it, not the guard set — no
+   perf case has a ROW_MAJOR activation.
+2. **An isolated bench cannot see a trap that another graduation opens.** D41's
+   `CB_DEPTH_CANDIDATES = (3, 2)` was a clean, byte-identical-elsewhere win in its own fork.
+   On the integrated tree D39 had freed the L1 that pays for depth 3, so two ROW_RESIDENT
+   shapes could suddenly reach it — and bought it with a finer width chunk, at 0.980x and
+   0.984x. The fix was to state what a deeper ring is actually worth (overlap it buys) and
+   refuse it where it buys none. **Every graduation after the first must be re-measured on
+   the integrated tree, not trusted from its own dir.**
+3. **The bash tool caps at a 10-minute timeout**, which the 10-shard golden run exceeds. Run
+   the shards one or two per invocation with an explicit `timeout 285`; a shorter budget
+   kills them inside the precompile warm pass and returns no summary at all.
+4. Perf 1's JIT-cache hazard (never selectively delete `.ii` / `*.o.log` under
+   `built/*/kernels/`; purge whole kernel build DIRECTORIES or nothing) was observed
+   throughout and did not recur.
+
+### Round 3 entry state
+
+Re-ranked, the worst `perf` cells are `(1,1,8192,1024)` INTERLEAVED at **0.871** and
+`(1,1,8192,2304)` at **0.849** — the same DRAM-saturated family, now with both of this
+round's per-channel wins already in. What is left there is small and well-bounded: the
+focus shape sits **1.9% above its own no-operand ablation** (176,013 ns) and **0.8% above
+the unsynchronized duplex floor** (178,079 ns). Third is `(1,1,7168,1024)` BLOCK `gbr` at
+**0.840**, which neither D39 nor D40 touches — its reuse runs along grid COLUMNS, and column
+geometry is this round's measured loser under the deferred wait. Live follow-ups, all
+measured this round: broadcasting D39's compact-cache **fill** (left on the table by
+construction, since D39 and D40 are mutually exclusive today); a column-geometry broadcast
+that survives the deferred wait, which is what would reach the BLOCK shards; and the
+`Mcast1D` per-line predicate in the bypass table above.
