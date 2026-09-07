@@ -15,18 +15,6 @@
 using namespace ckernel::math;
 
 /**
- * @brief Enable or disable FP32 accumulation in the destination register for both FPU and SFPU.
- *
- * @param enable: True to enable FP32 dest accumulation, false to disable.
- */
-inline void _llk_math_set_fp32_dest_acc_(bool enable)
-{
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(enable);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(enable);
-}
-
-/**
  * @brief Configure the math (FPU) thread's ALU control registers for the given source data formats.
  *
  * Programs the source A/B ALU formats, enables INT8 math when either source is Int8/Int32, and sets FP32 dest
