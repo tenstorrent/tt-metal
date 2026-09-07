@@ -28,6 +28,17 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
+#if defined(SWIGLU_OAI) && defined(SITU_GLU)
+#error "SWIGLU_OAI and SITU_GLU are mutually exclusive activation variants"
+#endif
+#if defined(SWIGLU_OAI) || defined(SITU_GLU)
+#define FUSED_BINARY_ACT 1
+#endif
+#ifdef SWIGLU_OAI
+// swiglu_sfpu.h lives under the gpt-oss moe_gpt op; the repo-root-relative include resolves on the
+// kernel include path, the same convention unified_routed_expert_ffn's compute kernel uses for it.
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
+#endif
 #ifdef SITU_GLU
 #include "api/compute/situ_glu.h"
 #endif
@@ -38,6 +49,29 @@
 #include "moe_fused_swiglu_ct_args.hpp"  // the ONE definition of the compile-time arg order
 
 using namespace moe_fused_swiglu::compute;
+
+#ifdef FUSED_BINARY_ACT
+// Dst-accumulator mode from the host ComputeConfig, passed via -DFP32_DEST_ACC_EN. Defaults to
+// bf16 dst if the host did not pass it.
+#ifndef FP32_DEST_ACC_EN
+#define FP32_DEST_ACC_EN 0
+#endif
+// Both variants share the (gate, up, out) dst-index signature and bake their constants into a
+// config struct, so only these lines differ. Each is named explicitly rather than left to an
+// #else, so adding a third one fails the build instead of silently compiling as whichever
+// variant owned the fallback.
+#if defined(SWIGLU_OAI)
+// Named rather than spelled `FP32_DEST_ACC_EN != 0` inside the template argument list, which
+// clang-format reads as a comparison and respaces into something unreadable.
+constexpr bool kFp32DestAccEn = FP32_DEST_ACC_EN != 0;
+#define BINARY_ACT_INIT() MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()))
+#define BINARY_ACT_TILE(g, u, o) MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu<kFp32DestAccEn>(g, u, o)))
+#elif defined(SITU_GLU)
+// situ_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
+#define BINARY_ACT_INIT() situ_glu_tile_init()
+#define BINARY_ACT_TILE(g, u, o) situ_glu_tile(g, u, o)
+#endif
+#endif
 
 #ifdef MOE_FUSED_SWIGLU_STAGE_PROFILE
 #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
@@ -214,11 +248,11 @@ ALWI void mul_blocked(uint32_t n) {
     cb_push_back(OUT, n);
 }
 
-#ifdef SITU_GLU
-// Reduce both halves and apply SiTU while their sums are still in DEST. Four gate and four up
-// outputs fill the eight-tile window, eliminating the old pack-to-L1 + reload boundary.
+#ifdef FUSED_BINARY_ACT
+// Reduce both halves and apply the binary activation while their sums are still in DEST. Four gate
+// and four up outputs fill the eight-tile window, eliminating the old pack-to-L1 + reload boundary.
 template <uint32_t GATE, uint32_t UP, uint32_t OUT>
-ALWI void fold_situ_glu_blocked(uint32_t num_contributors, uint32_t n) {
+ALWI void fold_binary_act_blocked(uint32_t num_contributors, uint32_t n) {
     constexpr uint32_t OUTPUTS_PER_WINDOW = DEST_LIMIT / 2;
     pack_reconfig_data_format(OUT);
     cb_wait_front(GATE, num_contributors * n);
@@ -276,7 +310,7 @@ ALWI void fold_situ_glu_blocked(uint32_t num_contributors, uint32_t n) {
         add_tiles_init(UP, UP, /*acc_to_dest=*/false);
 
         for (uint32_t i = 0; i < width; ++i) {
-            situ_glu_tile(i, width + i, i);
+            BINARY_ACT_TILE(i, width + i, i);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -327,8 +361,8 @@ void kernel_main() {
     const uint32_t my_row = get_arg_val<uint32_t>(6);  // row in the column == which scatter slice I own
 
     // The activation is compile-time selected and therefore gets its own cached program.
-#ifdef SITU_GLU
-    situ_glu_tile_init();
+#ifdef FUSED_BINARY_ACT
+    BINARY_ACT_INIT();
 #else
     // SiLU rides the packer thread of the root's final reduce add.
     silu_tile_init_pack();
@@ -593,8 +627,8 @@ void kernel_main() {
                 // PACK must be the ONLY pusher of the slice CBs: `cb_push_back` writes the shared
                 // `tiles_received` word from the pushing RISC-V's own count, so two pushers corrupt it.
                 if (slice_tiles) {
-#ifdef SITU_GLU
-                    // SiTU fuses both reductions with the binary SFPU pass below.
+#ifdef FUSED_BINARY_ACT
+                    // A binary activation fuses both reductions with the SFPU pass below.
 #else
                     // KGROUPS-1 contributors fold here; the last one rides the SiLU-fused add below.
                     fold_chain<cb_slice_gate, cb_gather_gate>(KGROUPS - 1, slice_tiles);
@@ -622,8 +656,8 @@ void kernel_main() {
                 // slices tile the ROOT's cb_h_local as they LAND, so the gather IS the assembly: no
                 // landing CB and no root-side copy.
                 if (slice_tiles) {
-#ifdef SITU_GLU
-                    fold_situ_glu_blocked<cb_gather_gate, cb_gather_up, cb_h_slice>(KGROUPS, slice_tiles);
+#ifdef FUSED_BINARY_ACT
+                    fold_binary_act_blocked<cb_gather_gate, cb_gather_up, cb_h_slice>(KGROUPS, slice_tiles);
 #else
                     // Inherits phase 1's hoisted cb_gate_acc pack format, which is correct exactly
                     // because cb_h_slice is bfp8 — the epilogue's single dtype boundary.
@@ -646,7 +680,7 @@ void kernel_main() {
                         const uint32_t pad = SLICE_FULL - slice_tiles;
                         h_slice_buf.reserve_back(pad);
                         h_slice_buf.push_back(pad);
-#ifndef SITU_GLU
+#ifndef FUSED_BINARY_ACT
                         sg_buf.reserve_back(pad);
                         sg_buf.push_back(pad);
                         sg_buf.wait_front(pad);

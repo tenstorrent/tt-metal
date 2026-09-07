@@ -24,8 +24,8 @@ void bind_moe_fused_swiglu(nb::module_& mod) {
         runs every expert in ONE device program: the reader, compute and writer
         kernels loop the experts, computing a gated activation over
         ``activations @ w_gate`` and ``activations @ w_up``, followed by
-        ``@ w_down``. ``activation`` selects plain SiLU SwiGLU (default) or
-        Kimi K3 SiTU-GLU. Each expert's valid token-row count is read on device
+        ``@ w_down``. ``activation`` selects plain SiLU SwiGLU (default),
+        Kimi K3 SiTU-GLU, or the clamped SwiGLU-OAI that MiniMax-M3 and GPT-OSS run. Each expert's valid token-row count is read on device
         from ``counts[global_expert_idx_table[e]]``; no host readback or host
         branch depends on the count, and no per-expert dispatch happens.
 
