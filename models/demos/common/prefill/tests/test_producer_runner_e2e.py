@@ -11,6 +11,7 @@ runner startup (full model load + kernel JIT) once PER scenario.
 """
 
 import contextlib
+import copy
 import glob
 import os
 import signal
@@ -210,6 +211,23 @@ SCENARIOS = {
         "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
     },
 }
+
+# 6. GLM-5.2 MTP7 -- the other shipping level count, derived from scenario 5 so the two cannot drift.
+#
+#    Nothing about the TRANSPORT differs: num_mtp_tokens rounds both 4 and 7 up to the same 32-id
+#    socket row, so the H2D page, the producer's overlapping rows and the union's height are
+#    byte-identical to MTP4's. What differs is what the last rank does with them -- 7 levels replayed
+#    off one weight module, into KVPE slots 78..84 instead of 78..81, still sharing ONE indexer slot
+#    (index_share_for_mtp_iteration).
+#
+#    So this scenario is not a second transport test. It is there for the two things only a serving
+#    run shows, at the level count the numerics tests cannot reach cheaply: that all 7 slots were
+#    written, and that no two levels share one. Same weight cache as MTP4 -- the module is replayed,
+#    not duplicated, so there is nothing extra to build.
+SCENARIOS["glm52_mtp7"] = copy.deepcopy(SCENARIOS["glm52_mtp4"])
+SCENARIOS["glm52_mtp7"]["env"]["PREFILL_MTP_LEVELS"] = "7"
+# 3 more blocks per chunk on the last rank and 3 more KVPE layers to read back than MTP4.
+SCENARIOS["glm52_mtp7"]["producer_timeout_s"] = 8400
 
 # Opt-in prompt-driven scenario: instead of a recorded golden trace, generate the reference KV from a
 # user prompt on the host (device-less pre-step) and validate device KV against it. Enabled by pointing

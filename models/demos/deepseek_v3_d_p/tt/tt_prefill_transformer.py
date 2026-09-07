@@ -472,7 +472,6 @@ class TtPrefillTransformer(LightweightModule):
         index_kv_cache: Optional[ttnn.Tensor] = None,
         metadata: Optional[ttnn.Tensor] = None,
         mtp_union=None,
-        mtp_embed_source=None,
         on_mtp_complete: Optional[Callable] = None,
         input_is_embedded: bool = False,
         is_last_chunk: bool = False,
@@ -517,10 +516,6 @@ class TtPrefillTransformer(LightweightModule):
                         socket, are embedded on the first rank and reach this rank inside the
                         activation. None disables MTP for this chunk. Requires an mtp_predictor; the K
                         levels run after the trunk tail, off model.norm's output.
-            mtp_embed_source: a caller-built embedding source used INSTEAD of `mtp_union` — see run_mtp
-                        for the contract. Nothing in production passes it; it is the seam a test uses
-                        to drive the levels from windows it sliced itself. Mutually exclusive with
-                        `mtp_union`.
             is_last_chunk: this chunk ends the request, so the K positions its MTP windows read past
                         `actual_end` have no ids in the prompt and are generated on device instead —
                         argmax of each level's own LM head, embedded straight back into the union.
@@ -558,12 +553,8 @@ class TtPrefillTransformer(LightweightModule):
         # Check the MTP contract HERE, before the trunk runs. The source is not consumed until the
         # very end of this forward, so a mis-wired call otherwise costs a whole trunk chunk -- one
         # that has already written KV -- before it raises. Pure host checks; they cost nothing.
-        assert (
-            mtp_union is None or mtp_embed_source is None
-        ), "mtp_union and mtp_embed_source are two spellings of the same input; pass exactly one"
-        if mtp_union is not None or mtp_embed_source is not None:
-            assert self.mtp_predictor is not None, "MTP input passed but this transformer has no mtp_predictor"
         if mtp_union is not None:
+            assert self.mtp_predictor is not None, "MTP input passed but this transformer has no mtp_predictor"
             assert mtp_union.num_levels == self.num_mtp_levels, (
                 f"union carries {mtp_union.num_levels} levels, predictor runs {self.num_mtp_levels}; "
                 "the runner and the runtime disagree on PREFILL_MTP_LEVELS"
@@ -698,7 +689,7 @@ class TtPrefillTransformer(LightweightModule):
         # --- MTP levels (GLM-5.2, #53533) ---------------------------------------------------
         # After the trunk tail, so the trunk path is byte-identical when MTP is off. `h` is h^0
         # (post-model.norm) and is still live: neither the LM head nor _sample frees it.
-        if mtp_union is not None or mtp_embed_source is not None:
+        if mtp_union is not None:
             assert actual_start is not None, (
                 "MTP needs actual_start on the host to know whether this chunk contains absolute "
                 "position 0, where vLLM zeroes the embedding on every level; the on-device metadata "
@@ -712,7 +703,6 @@ class TtPrefillTransformer(LightweightModule):
                 h,
                 kvpe_cache,
                 rope_tensors,
-                mtp_embed_source,
                 actual_isl,
                 zero_position_0=(actual_start == 0),
                 union=mtp_union,
@@ -885,11 +875,10 @@ class TtPrefillTransformer(LightweightModule):
         h_normed: ttnn.Tensor,
         kvpe_cache: MlaKvCache,
         rope_tensors: dict,
-        mtp_embed_source,
         actual_isl: int,
         *,
         zero_position_0: bool,
-        union=None,
+        union,
         is_last_chunk: bool = False,
         **fwd_kwargs,
     ):
@@ -897,11 +886,6 @@ class TtPrefillTransformer(LightweightModule):
 
         Args:
             h_normed: ``h^0`` -- the trunk output AFTER ``model.norm``.
-            mtp_embed_source: a caller-built embedding source, used INSTEAD of ``union``: a callable
-                ``(k, H^k) -> [1, 1, L, H/tp]`` giving level ``k``'s embedded window, carrying a
-                ``generated_tokens`` list. Nothing in production passes it -- prefill's ids arrive on
-                device -- so it exists only so a test can drive the levels from windows it sliced
-                itself and compare them against an independent reference.
             union: ``MTPUnionEmbedding`` — this chunk's ``L + num_mtp_tokens`` embedded rows per chip,
                 each level's window being a row slice of that one already-gathered tensor.
                 ``generated_tokens`` comes back empty even on the last chunk: the ids are argmaxed,
@@ -910,8 +894,7 @@ class TtPrefillTransformer(LightweightModule):
                 chunk's generation slots start.
             zero_position_0: True only on the chunk containing absolute position 0.
             is_last_chunk: True only on the chunk that ends the request, where the prompt has no ids
-                past ``actual_end`` and the ``K`` positions the windows read there must be generated
-                (``union`` path only; a caller-built source generates its own).
+                past ``actual_end`` and the ``K`` positions the windows read there must be generated.
             fwd_kwargs: passed to every level's block. The KV-cache slot is NOT among them -- the
                 predictor owns ``cache_layer_idx``, writing level ``k`` (0-based) to
                 ``first_cache_slot + k``, so the caller's cache must have ``num_layers + K`` slots
@@ -919,20 +902,17 @@ class TtPrefillTransformer(LightweightModule):
                 ``layer_num``, since the flat slot is ``cache_user_id * layer_num + cache_layer_idx``.
         """
         assert self.mtp_predictor is not None, "run_mtp called on a transformer built without an mtp_predictor"
-        assert (mtp_embed_source is None) != (union is None), "run_mtp takes exactly one of mtp_embed_source/union"
+        assert union is not None, "run_mtp needs this chunk's MTPUnionEmbedding"
         generation = None
-        if union is not None:
-            if is_last_chunk:
-                generation = self._mtp_build_generation(
-                    union, actual_isl, fwd_kwargs["actual_start"], fwd_kwargs["actual_end"]
-                )
-            source = MTPDeviceEmbedSource(
-                union,
-                mask_fn=lambda emb: self._mtp_mask_position_zero(emb, zero_position_0),
-                generation=generation,
+        if is_last_chunk:
+            generation = self._mtp_build_generation(
+                union, actual_isl, fwd_kwargs["actual_start"], fwd_kwargs["actual_end"]
             )
-        else:
-            source = mtp_embed_source
+        source = MTPDeviceEmbedSource(
+            union,
+            mask_fn=lambda emb: self._mtp_mask_position_zero(emb, zero_position_0),
+            generation=generation,
+        )
         # Forwarded here rather than by the caller: `actual_isl` is a named parameter of this
         # method AND something every level's block needs, so a caller that passed both would hit
         # "got multiple values for argument 'actual_isl'". It cannot already be in fwd_kwargs --
