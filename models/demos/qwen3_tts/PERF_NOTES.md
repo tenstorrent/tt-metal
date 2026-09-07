@@ -209,8 +209,7 @@ cannot supply the unscaled one.
 accepted:
 - decode RoPE transposed K back to `[1, n_kv, 1, dh]` and attention immediately transposed it
   to `[1, 1, n_kv, dh]` — the same tensor, and `_rope_decode_memcfg(dh)` is byte-identical to
-  `paged_k_input_mem_config`. Both transposes go (bit-exact; gated in
-  `test_qwen3_tts_rope_decode.py::test_k_keep_decode_layout`).
+  `paged_k_input_mem_config`. Both transposes go (bit-exact).
 - SDPA accepts a height-sharded output and `nlp_concat_heads`' input spec is exactly that.
 - `ttnn.slice` reads a width-sharded input and writes any layout (verified bit-exact), so the
   padded-N trim after a DRAM-sharded matmul needs no `ShardedToInterleaved` first —
@@ -619,8 +618,7 @@ prefill (the sharded RMSNorm reduces in a different order).
 > **Coverage caveat.** Only `attention_decode` exercises the decode RoPE path. `cp_step` is CP
 > prefill at seq=2, and `talker_chain` — despite its "seq_len=1" docstring — pads to 32 rows
 > and runs `mode="prefill"`, so both use the prefill kernel. This was confirmed by
-> instrumenting `rotary_embedding_llama` and counting which branch each test took. That gap is
-> why `test_qwen3_tts_rope_decode.py` exists.
+> instrumenting `rotary_embedding_llama` and counting which branch each test took.
 
 ### 3.2 Op-level — the reliable numbers
 
@@ -1699,11 +1697,8 @@ Prefill runs once per utterance, so this matters for time-to-first-audio, not st
 | `tt/code_predictor.py` | N300 fast path (`_n300_cp_opt`) + `apply_rope_qk` |
 | `tt/mesh_utils.py` | `is_n300`, `tp_all_reduce_2chip` |
 | `tt/speaker_encoder.py` | ECAPA host fusion (`_se_host_fuse`, `_res2net_cascade_torch`, `_conv1d_same_padding_torch_ncl`) |
-| `tests/test_qwen3_tts_rope_decode.py` | RoPE bit-exactness + routing guard + `k_keep_decode_layout` |
 | `tt/mlp.py`, `tt/dram_sharded_matmul.py` | `unpad_dram_sharded_out` (padded-N trim off the sharded output) |
 | `tests/test_qwen3_tts_profile_single_layer.py` | `-k talker_layer_decode_traced` — the deployed decode window |
-| `tests/test_qwen3_tts_cp_n300_opt.py` | CP fast path A/B + Metal-trace replay guard |
-| `tests/test_qwen3_tts_speaker_encoder_host_fuse.py` | ECAPA op-count spy + cascade equality vs reference |
 | `qwen3_tts_block_report.sh` (repo root) | regenerates the block report |
 | `tests/test_qwen3_tts_perf_report.py` | traced prefill / decode windows — the report for this optimisation |
 | `tests/qwen3_tts_perf_report.sh` | runs every window, one Tracy capture each, and assembles `summary.md` |
@@ -1716,9 +1711,6 @@ source python_env/bin/activate
 export TT_METAL_HOME=$(pwd) PYTHONPATH="$(pwd)" ARCH_NAME=wormhole_b0
 
 pytest -s models/demos/qwen3_tts/tests/test_qwen3_tts_pcc.py            # accuracy, real weights
-pytest -s models/demos/qwen3_tts/tests/test_qwen3_tts_rope_decode.py    # RoPE bit-exact + routing
-pytest -s models/demos/qwen3_tts/tests/test_qwen3_tts_cp_n300_opt.py    # CP A/B + trace (opens its own 1x2 mesh)
-pytest -s models/demos/qwen3_tts/tests/test_qwen3_tts_speaker_encoder_host_fuse.py  # ECAPA ops + PCC
 pytest    models/demos/qwen3_tts/tests/test_qwen3_tts_trace_perf.py     # full model under Metal trace
 MESH_DEVICE=N150 pytest models/demos/qwen3_tts/tests/test_qwen3_tts_profile_single_layer.py
 MESH_DEVICE=N300 pytest models/demos/qwen3_tts/tests/test_qwen3_tts_profile_single_layer.py

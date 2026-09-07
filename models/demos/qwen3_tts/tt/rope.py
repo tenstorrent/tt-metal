@@ -322,9 +322,9 @@ def apply_rope_qk(
     layout costs one transpose in and one out at ~2 us each, so a 16-head Q goes
     41 us -> 8 us and an 8-head Q 26 us -> 7 us. cos/sin are reshared once for Q and K.
 
-    The two kernels are bit-identical on the same input (max|diff| == 0; see
-    ``tests/test_qwen3_tts_rope_decode.py``), so this is a dispatch change with no
-    numerical effect, and it is a win on every wormhole SKU — hence no device gating.
+    The two kernels are bit-identical on the same input (max|diff| == 0), so this
+    is a dispatch change with no numerical effect, and it is a win on every
+    wormhole SKU — hence no device gating.
 
     Only ``seq == 1`` qualifies: decode mode applies one position to every row of the
     tile, whereas a real multi-token sequence needs a distinct cos/sin row per position.

@@ -179,8 +179,8 @@ class MLP(LightweightModule):
         # N300 override. The full-grid choice above is right on N150, where gate/up is
         # 2048x6144 and runs at 210 GB/s (73 % of DRAM peak). At TP=2 the same code sees
         # 2048x3072, where 64 cores gives per_core_N=1.5 worth of work and only 145 GB/s —
-        # 19-26 us/matmul slower than the auto-routing it replaced. Swept on N300
-        # (test_qwen3_tts_prefill_mm_sweep2_n300.py): 32 cores with in0_block_w=2 recovers
+        # 19-26 us/matmul slower than the auto-routing it replaced. Swept on N300:
+        # 32 cores with in0_block_w=2 recovers
         # 22-25 %, net of the in0 reshard, with fp32 accumulate kept so it is numerically
         # neutral. Keyed by exact (seq, K, N) so N150's shape cannot match.
         _N300_GATE_UP = {

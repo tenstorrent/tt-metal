@@ -639,7 +639,7 @@ _SAMPLING_PAD_W = 8192
 # sampling call, x15 calls/frame = -4.46 ms of a 32.9 ms CP frame.
 #
 # Numerics: the top-64 VALUES are bit-exact either way (verified with
-# torch.equal in tests/test_qwen3_tts_topk_sweep.py) — with 2048 real logits the
+# torch.equal) — with 2048 real logits the
 # -1e4 padding can never enter a top-64. The INDEX order differs only where
 # values are exactly EQUAL in bf16, and the Gumbel noise row is i.i.d. per rank,
 # so permuting which draw lands on which of two equal-logit candidates leaves
@@ -1092,8 +1092,7 @@ def capture_fused_cp_trace(
 ) -> FusedCpState:
     """Capture the entire CP frame as one trace. See :class:`FusedCpState`.
 
-    ``signpost_warmup`` (profiling only, see
-    ``tests/test_qwen3_tts_profile_cp_frame.py``) runs one extra **untraced** pass of
+    ``signpost_warmup`` (profiling only) runs one extra **untraced** pass of
     the frame body between tracy signposts and returns before capturing. Trace capture
     records exactly the programs ``_body`` enqueues, so that pass has the same op graph
     and the same kernel durations as a replay — and unlike a replay it is visible to
