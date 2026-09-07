@@ -811,7 +811,7 @@ class TtIndexer:
         # Causality is fused inside indexer_score (future columns -> -inf from chunk_start_idx), so no triu
         # mask here. All H_idx heads are resident on-chip (wq_b replicated), so head_group_size=0 reads the
         # key cache ONCE — but that needs L1 headroom, so k_chunk is bounded by resident head count
-        # (DSA_INDEXER_CONFIG, measured per model: DeepSeek@64h=64, GLM@32h=224; larger OOMs).
+        # (DSA_INDEXER_CONFIG, measured per model: DeepSeek@64h=64, GLM@32h=320).
         k_chunk = get_indexer_key_chunk(a.index_n_heads)
         # Keyed on end_pos, NOT valid_pos: the program config is hashed, so keying it on a per-chunk
         # runtime quantity would compile a second program. The valid extent travels in hash-excluded kv_len.
