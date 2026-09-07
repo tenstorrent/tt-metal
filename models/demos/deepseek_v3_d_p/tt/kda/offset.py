@@ -111,3 +111,27 @@ def segment_owners(topology: OffsetTopology) -> tuple[tuple[int, int, int], ...]
     middle = tuple((chip, 0, rows) for chip in order[1:])
     tail = (order[0], topology.head_rows, rows)
     return (head, *middle, tail)
+
+
+# Fragment indices for the uniform split every chip performs in the segment-aware
+# prototype: 0 is ``rows[0:head_rows]``, 1 is ``rows[head_rows:local_rows]``.
+HEAD_FRAGMENT = 0
+TAIL_FRAGMENT = 1
+
+
+def fragment_order(topology: OffsetTopology) -> tuple[tuple[int, int], ...]:
+    """Chronological ``(chip, fragment)`` order when every chip splits at ``head_rows``.
+
+    Splitting all chips keeps mesh shapes uniform even though only the boundary
+    chip's two pieces are causally non-adjacent. For every other chip the two
+    fragments are adjacent, so composing them in sequence is equivalent to one
+    whole-chip segment.
+
+    The boundary chip's head opens the stream and its tail closes it, giving
+    ``2 * sp_size`` fragments.
+    """
+    if not topology.is_split:
+        raise ValueError("fragment order is only defined for a split topology")
+    order = topology.chip_order
+    middle = [(chip, fragment) for chip in order[1:] for fragment in (HEAD_FRAGMENT, TAIL_FRAGMENT)]
+    return ((order[0], HEAD_FRAGMENT), *middle, (order[0], TAIL_FRAGMENT))
