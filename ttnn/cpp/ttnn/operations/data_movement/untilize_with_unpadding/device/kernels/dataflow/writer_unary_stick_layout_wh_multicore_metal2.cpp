@@ -1,11 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
-// writer_unary_stick_layout_wh_multicore_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file
-// serves the consumers still on the legacy API. Until the last of them migrates and this file is
-// retired, changes here likely belong in the fork too.
+// NOTE: This is the Metal 2.0 fork of writer_unary_stick_layout_wh_multicore.cpp, which lives beside
+// it. Ops ported to Metal 2.0 bind this file; the original serves the consumers still on the legacy
+// API — the file sits in untilize_with_unpadding's directory but is also bound by
+// data_movement/untilize's block factory, so it could not be converted in place. Until the last
+// consumer migrates and the original is retired, changes here likely belong there too.
+//
+// The binding names below (dfb::out, tensor::dst) and the named argument set are this fork's
+// interface: every later consumer inherits them, so they are taken from the kernel's own vocabulary
+// rather than any one op's locals, and are not renamed once a consumer exists.
 
 #include <stdint.h>
 #include <cstdint>
@@ -15,22 +20,19 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr std::uint32_t total_num_rows = get_compile_time_arg_val(0);
-    constexpr std::uint32_t third_dim = get_compile_time_arg_val(1);
-    constexpr std::uint32_t tile_height = get_compile_time_arg_val(2);
-    constexpr std::uint32_t unpadded_X_size = get_compile_time_arg_val(3);
-    // The block factories emit one writer instance per buffer set, so the output buffer index is a
-    // compile-time arg rather than a fixed c_16 -- see BlockBufferSet in data_movement/common.
-    constexpr std::uint32_t dfb_id_out0 = get_compile_time_arg_val(4);
-    constexpr auto dst_args = TensorAccessorArgs<5>();
+    constexpr auto total_num_rows = get_arg(args::total_num_rows);
+    constexpr auto third_dim = get_arg(args::third_dim);
+    constexpr auto tile_height = get_arg(args::tile_height);
+    constexpr auto unpadded_X_size = get_arg(args::unpadded_X_size);
 
-    const std::uint32_t dst_addr = get_arg_val<std::uint32_t>(0);
-
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
     Noc noc;
-    DataflowBuffer dfb_out0(dfb_id_out0);
+    // The block factories emit one writer instance per buffer set, so which buffer this instance
+    // drains is decided by the host binding rather than by a fixed index.
+    DataflowBuffer dfb_out0(dfb::out);
 
     auto write_block = [&](std::uint32_t num_rows,
                            std::uint32_t start_row_id,
@@ -64,16 +66,16 @@ void kernel_main() {
         dfb_out0.pop_front(single_block_size * has_rows);
     };
 
-    const std::uint32_t width_size = get_arg_val<std::uint32_t>(1);
+    const auto width_size = get_arg(args::width_size);
 
     std::uint32_t size_2d = 0;
     for (std::uint32_t dim3 = 0; dim3 < third_dim; dim3++) {
-        std::uint32_t start_row_id = get_arg_val<std::uint32_t>(2);
-        std::uint32_t start_column_id = get_arg_val<std::uint32_t>(3);
-        std::uint32_t single_block_size_row_arg = get_arg_val<std::uint32_t>(4);
-        std::uint32_t single_block_size_col_arg = get_arg_val<std::uint32_t>(5);
-        std::uint32_t sub_block_width_size = get_arg_val<std::uint32_t>(6);
-        std::uint32_t single_sub_block_size_row_arg = get_arg_val<std::uint32_t>(7);
+        std::uint32_t start_row_id = get_arg(args::start_row_id);
+        std::uint32_t start_column_id = get_arg(args::start_column_id);
+        std::uint32_t single_block_size_row_arg = get_arg(args::single_block_size_row_arg);
+        std::uint32_t single_block_size_col_arg = get_arg(args::single_block_size_col_arg);
+        std::uint32_t sub_block_width_size = get_arg(args::sub_block_width_size);
+        std::uint32_t single_sub_block_size_row_arg = get_arg(args::single_sub_block_size_row_arg);
 
         for (std::uint32_t b = 0; b < single_block_size_col_arg; b++) {
             std::uint32_t this_block_num_rows = tile_height;
