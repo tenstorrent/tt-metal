@@ -857,52 +857,6 @@ is priced in l1_ledger.md's "Deviations" table with its measurement:
       requires.  `>= 2` and not 1: block 1 measured 0.994x / 0.991x / 0.987x, so 1
       is a fallback for WT_CHUNK == 1 and never a choice.
 
-  D39 Perf 2 (perf) -- THE COMPACT PER-CHANNEL HOLD, AND THE STREAM SHAPES IT
-      LIFTS INTO ROW_RESIDENT.  A TILE per-channel operand is a (1,1,1,W) vector:
-      31 of every 32 tile rows are PADDING, and D23's `TRIM == 2` already fetches
-      only the two FACE-ROWS that carry row 0.  Those `2 * TILE_DIM * elem` bytes
-      per width tile are the WHOLE of the operand's information -- 1/16 of its
-      tiled size -- so the reader caches the entire row of every present operand
-      in L1 once (`cb_gamma_compact` / `cb_bias_compact`) and re-materializes each
-      chunk's tiles with a LOCAL L1 copy instead of a DRAM read.  Two consequences,
-      and the second is the whole win:
-        * STREAM stops re-reading the operands from DRAM per pass-B chunk of every
-          row-block (that re-read is 230,305 ns of the target case's 1,580,377 ns);
-        * `_row_resident_chunk` can price its per-channel HOLD at the compact size
-          -- at W=7168 with weight+bias, 57 kB instead of 917 kB -- which is
-          exactly the L1 that used to push a shape off the ROW_RESIDENT cliff into
-          STREAM.  Landing in ROW_RESIDENT deletes pass B's re-read of x AND of
-          the residual: 5 tensor-crossings become 3.
-      MEASURED, blackhole p150b, perf case #15 `(1,1,8192,7168)` interleaved
-      gamma_bias_residual fp32_dest_acc_en=True: `WT_CHUNK=56 x 4 X_RESIDENT=0`
-      becomes `WT_CHUNK=32 x 7 X_RESIDENT=1 PC_COMPACT=1`, **1,578,655 -> 1,039,664
-      ns, 1.517x**, pcc 0.999987.  Also 1.495x on `(1,1,8192,10240)` gbr and 1.110x
-      on `(1,1,3520,16384)` gbr.
-      THREE things scope it, each earned:
-        * The compact hold is tried as a FALLBACK, after the tiled hold, at every
-          depth -- coarsest-first on what each step costs, the same discipline the
-          BAND search uses.  A shape that already fits ROW_RESIDENT tiled keeps its
-          shipped program byte-identical, because taking the compact form there
-          measured 0.84-0.94x (the per-chunk local expand sits on pass B's
-          `Upfront` wait with no DRAM traffic to hide behind).
-        * `ROW_RESIDENT_COMPACT_MIN_GRID_FRACTION` -- ROW_RESIDENT trades DRAM
-          BYTES for reader/compute overlap, and that trade only pays when DRAM is
-          the constraint.  Holding W, dtype, residual, rows-per-core AND the solved
-          chunk fixed and moving only the active-core count: 32/110 cores 0.66x,
-          64/110 0.97x, 96/110 1.09x, 110/110 1.11x.  Monotone in grid occupancy,
-          so the gate is occupancy and the constant is no tighter than the
-          58%-loses / 87%-wins bracket it was measured in.
-        * `pc_compact_ok` requires the face-row form to be legal on EVERY present
-          operand.  A block-float operand's 272-byte face is not 64-byte DRAM
-          aligned (D23 already demotes it to the half page), so it has no compact
-          form at all; a ROW_MAJOR operand already arrives compact -- it IS a stick
-          -- and goes through `cb_*_sticks` + tilize.  Both keep the shipped path.
-      The cache fill is LAZY (chunk c filled the first time chunk c is staged), not
-      eager: an eager boot fill puts a device-wide burst of 110 x 896 tiny reads in
-      front of the first x read (profiled at 290,385 ns/core mean, 653,014 ns max --
-      pure arbitration spread) where the lazy fill issues the identical reads into
-      the hole where the reader is already blocked on pass B.  1,101,601 -> 1,048,060 ns.
-
 """
 
 from __future__ import annotations
@@ -967,7 +921,7 @@ TRIM_DERIVED = -1
 PER_CHANNEL_TRIM_GAMMA = TRIM_DERIVED
 PER_CHANNEL_TRIM_BIAS = TRIM_DERIVED
 
-# ---- D39 / perf_experiments/stream_regime: THE COMPACT PER-CHANNEL HOLD ------
+# ---- perf_experiments/stream_regime: THE COMPACT PER-CHANNEL HOLD -------------
 # A TILE per-channel operand is a (1,1,1,W) vector: 31 of every 32 tile rows are
 # PADDING, and D23's TRIM == 2 already fetches only the two FACE-ROWS that carry
 # row 0.  Those `2 * TILE_DIM * elem` bytes per width tile are the WHOLE of the
@@ -1840,7 +1794,7 @@ CB_RESIDUAL_TILES = 20  # residual tiles (reader for TILE / zero-copy shard, til
 CB_X_SUM = 21  # t = x + r.  Takes over cb_input_tiles' HELD role when a residual is present
 CB_BIAS_STICKS = 22  # ROW_MAJOR bias only
 CB_BIAS_TILES = 23  # bias tiles (row 0 valid)
-# --- D39: the reader-private COMPACT per-channel caches -----------------------
+# --- stream_regime: the reader-private COMPACT per-channel caches --------------
 # Producer AND consumer are the reader (it fills them at boot and copies out of
 # them per chunk), so they are scratch, never pushed and never popped.
 CB_GAMMA_COMPACT = 24  # gamma, 2 face-rows per width tile
@@ -3076,7 +3030,7 @@ def create_program_descriptor(
     gamma_trim = _trim_for(gt, has_gamma, PER_CHANNEL_TRIM_GAMMA)
     bias_trim = _trim_for(bit, has_bias, PER_CHANNEL_TRIM_BIAS)
 
-    # ---- D39: is the COMPACT per-channel hold expressible here? --------------
+    # ---- stream_regime: is the COMPACT per-channel hold expressible here? ----
     # It is exactly D23's TRIM == 2 question -- the face-row form has to be legal
     # for EVERY per-channel operand present, because the cache stores what the
     # trim fetches.  A ROW_MAJOR operand already arrives compact (it IS a stick),
@@ -3318,7 +3272,7 @@ def create_program_descriptor(
             # ragged candidate is re-priced against it below.
             def _fixed(hold_wt):
                 held = (1 if has_residual else depth_x) * hold_wt * bt
-                # D39: the COMPACT hold prices the per-channel operands at
+                # stream_regime: the COMPACT hold prices the per-channel operands at
                 # the 2 face-rows that carry row 0 instead of their whole tiles -- 1/16
                 # -- and pays for it with a per-chunk LOCAL expand.  It is a FALLBACK,
                 # tried only after the tiled hold has been refused (see the search).
@@ -3338,7 +3292,7 @@ def create_program_descriptor(
                 + (bt * (depth_x + _residual_depth(depth_x)) if has_residual else 0)
                 + _per_channel_bytes(0, 1)
                 + (rm_stage_rings * CB_RM_STAGE_DEPTH * bt if not is_tile else 0)
-                # D39: with a compact hold the per-channel TILE ring becomes
+                # stream_regime: with a compact hold the per-channel TILE ring becomes
                 # CHUNKED (one WT_CHUNK window, popped per chunk) instead of held.
                 + (PC_RING_CHUNKS * ((gt if has_gamma else 0) + (bit if has_bias else 0)) if compact else 0)
             )
@@ -3376,7 +3330,7 @@ def create_program_descriptor(
             return wtc, n
 
         stream_depth = depth_candidates[0]
-        # D39 -- ORDERED COARSEST-FIRST ON WHAT EACH STEP COSTS, the same
+        # stream_regime -- ORDERED COARSEST-FIRST ON WHAT EACH STEP COSTS, the same
         # discipline the BAND search above uses.  The TILED per-channel hold is tried
         # at every depth FIRST: it stages the operands once per core and pass B reads
         # them with no producer handshake at all.  Only when no depth admits it does
@@ -3480,7 +3434,7 @@ def create_program_descriptor(
     # Width tiles the HELD CBs span -- the PADDED row when the chunking is ragged,
     # because chunk c indexes them at c * WT_CHUNK and the last chunk runs to the pad.
     x_hold_wt = wt_chunk * num_w_chunks if x_resident else wt_chunk
-    # ---- D39: the compact hold's three derived facts -------------------------
+    # ---- stream_regime: the compact hold's three derived facts ---------------
     # `pc_hold_wt` is the CACHE's width -- always the core's whole (padded) row,
     # in every regime, because the cache's whole job is to be read once.
     # `pc_compact` comes back FROM the solve -- it is true exactly when the regime
@@ -3488,7 +3442,7 @@ def create_program_descriptor(
     # Every RESIDENT, every already-fitting ROW_RESIDENT and every STREAM build
     # therefore has it False and is BYTE-IDENTICAL to the op's.
     pc_hold_wt = wt_chunk * num_w_chunks
-    assert not pc_compact or (x_resident and num_w_chunks > 1), "D39: the compact hold is ROW_RESIDENT's"
+    assert not pc_compact or (x_resident and num_w_chunks > 1), "stream_regime: the compact hold is ROW_RESIDENT's"
     # The per-channel TILE ring is a CHUNKED window (WT_CHUNK pages, popped per
     # chunk) rather than a held row.  Already true in STREAM; the compact cache is
     # what makes it possible under ROW_RESIDENT.
@@ -3721,7 +3675,7 @@ def create_program_descriptor(
         # reader owns the pad's invariant -- those tiles are never read from the
         # tensor and are zeroed in L1, so they contribute exactly 0 to sum(t^2).
         wt_pad,
-        # ---- D39: the COMPACT per-channel hold, appended ------------------------
+        # ---- stream_regime: the COMPACT per-channel hold, appended --------------
         (0 if not pc_compact else (2 if PC_COMPACT_LAZY else 1)),  # 30 PC_COMPACT 0/1 eager/2 lazy
         pc_hold_wt,  # 31 width tiles the cache spans (the core's padded row)
         1 if pc_chunked else 0,  # 32 PC_CHUNKED: the per-channel TILE ring is one chunk
@@ -3810,7 +3764,7 @@ def create_program_descriptor(
         # ---- Refinement 3: the two pass-A knobs, appended (default 0 == the seed) ----
         PASS_A_SQ_BLOCK,  # 24 pass A's square takes pass B's DEST-lane block size
         RES_FUSE,  # 25 Lamp L-RES-FUSE: t = x + r and its square as ONE chain
-        # 26 D39: the per-channel TILE CB is a CHUNKED window (WT_CHUNK
+        # 26 stream_regime: the per-channel TILE CB is a CHUNKED window (WT_CHUNK
         # pages, popped after every chunk) rather than a held whole row.  Was
         # implicitly `!X_RESIDENT`; the compact hold decouples the two.
         1 if pc_chunked else 0,

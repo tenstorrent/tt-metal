@@ -1,0 +1,54 @@
+per_channel_boot_overlap -- PERF round 2 -- Blackhole p150b, 11x10 = 110 cores, AICLK 1350 MHz
+DEVICE KERNEL DURATION [ns].  Precision contract IDENTICAL in every row
+(HiFi2 / math_approx_mode=False / fp32_dest_acc_en as the case declares / dtypes fixed).
+Measured noise band, base variant, same process: +-1.5% (worst observed spread 2.7%).
+
+=== FOCUS SHAPE (1,1,8192,2304) DRAM INTERLEAVED bf16 TILE, gamma only ====
+3 reps x 3 trials, one process, variants interleaved.  min / mean over reps:
+  base              186604 / 188678      pcc 0.999985
+  split (boot issue, round 1 k_d placement)
+                    188573 / 190422      pcc 0.999985      0.990x  REGRESSION
+  split_late (issue behind x block 0)
+                    184251 / 184641      pcc 0.999985      1.013x
+  trim3 (one 576 B prefix read per tile)
+                    181343 / 182515      pcc 0.999985      1.029x  <-- BEST
+  split_trim3       187944 / 188893      pcc 0.999985      0.993x  (does NOT compound)
+
+=== FOCUS SHAPE structural decomposition (3 reps, means) ==================
+  no per-channel operand at all      176.0 us   <- ceiling
+  operand loop/reserve/barrier/push,
+    NoC PAYLOAD stubbed (k_ablate)   179.3 us   <- +3.3 us handshake, not hideable by granularity
+  operand, TRIM=2 (shipped)          189.1 us   <- +9.8 us DRAM payload
+  operand, TRIM=3                    183.3 us   <- payload cost 9.8 -> 4.0 us  (59% recovered)
+  operand, TRIM=2 + split_late       183.5 us   <- same floor, by hiding instead
+
+=== GRANULARITY MENU on the focus shape (single process, 1 rep) ==========
+  TRIM=2  144 x 64 B/tile   1.0 MB total    191861   1.000  (shipped)
+  TRIM=3   72 x 576 B/tile  4.5 MB total    183981   1.043
+  TRIM=1   72 x 1024 B/tile 8.1 MB total    190315   1.008
+  TRIM=0   72 x 2048 B/tile 16.2 MB total   213730   0.898  BIG REGRESSION
+  stagger (per-core rotation of the issue order, TRIM=2 bytes unchanged)
+                                            187641   ~1.00 -> 0.99 over 3 reps: NULL/slight regression
+
+=== DOMAIN SWEEP (2 reps x 3 trials, one process, min) ===================
+case                       base       trim3   split_late   trim3x  latex
+FOCUS_2304               186251      184061       183740    1.012   1.014
+FOCUS_2304_nog           175113      176553       175156    0.992   1.000  (control: no operand)
+I_1024_prefill            86473       87310        89495    0.990   0.966
+FOCUS_2304_gb            209976      198153       210870    1.060   0.996
+STREAM_7168_gbr         1571062     1529125      1575334    1.027   0.997
+R1_w7168_28c               3681        3731         3705    0.987   0.994
+RM_4096_f32               11024       11061        10948    0.997   1.007
+SMALL_1024                 4290        4259         3787    1.007   1.133
+F2304_gf32               188676      192247       186372    0.981   1.012
+F2304_gb8                182213      183276       183753    0.994   0.992
+All pcc >= 0.999983 in every cell; identical to base to 6 decimals in every cell.
+
+=== ALTERNATE PLACEMENTS of the split (3 reps, min) ======================
+case              base    split   split_late
+FOCUS_2304      186604   188573       184251
+I_1024_prefill   86186    85234        88828
+SMALL_1024        4313     3995         3801
+FOCUS_2304_gb   210441   210595       211018
+-> the split's best PLACEMENT is shape-dependent and the two placements have
+   OPPOSITE signs on FOCUS_2304 vs I_1024_prefill.  No single unified split.

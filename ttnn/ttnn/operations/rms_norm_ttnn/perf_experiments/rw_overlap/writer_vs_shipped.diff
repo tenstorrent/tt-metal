@@ -1,0 +1,52 @@
+--- kernels/rms_norm_ttnn_writer.cpp	2026-09-07 00:18:44.243125695 +0000
++++ perf_experiments/rw_overlap/kernels/rms_norm_ttnn_writer.cpp	2026-09-07 00:36:18.028796614 +0000
+@@ -379,6 +379,41 @@
+                 // R3 lever 3, the WRITER TWIN of the reader's grouped read: ONE wait,
+                 // one issue run, ONE barrier and one pop per TXN_ROWS tile-rows.  The
+                 // final group of a ragged block waits and pops the ACTUAL page count.
++                //
++                // rw_overlap CANDIDATE `wr_subrow`: RMS_WR_SUBROW splits that group into
++                // sub-tile-row runs of SUB pages, so the writer starts draining as soon
++                // as compute's pass B has pushed SUB tiles (pass B pushes at PASS_B_BLK,
++                // strictly finer than WT_CHUNK) instead of waiting for the whole
++                // tile-row.  SUB == 0 (the default) is the shipped whole-group spelling,
++                // byte-for-byte.
++#ifdef RMS_WR_SUBROW
++                // Clamp to the shipped whole-row group where the requested unit does not
++                // divide this build's WT_CHUNK, so ONE knob value sweeps every case.
++                constexpr uint32_t SUB = (WT_CHUNK % RMS_WR_SUBROW == 0) ? RMS_WR_SUBROW : WT_CHUNK;
++                for (uint32_t r = 0; r < rows; r += TXN_ROWS) {
++                    const uint32_t n = ((rows - r) < TXN_ROWS) ? (rows - r) : TXN_ROWS;
++                    const uint32_t total = n * WT_CHUNK;
++                    for (uint32_t q = 0; q < total; q += SUB) {
++                        cb_wait_front(cb_output_tiles, SUB);
++                        uint32_t l1_addr = get_read_ptr(cb_output_tiles);
++                        for (uint32_t k = 0; k < SUB; ++k) {
++                            const uint32_t idx = q + k;
++                            const uint32_t g = idx / WT_CHUNK;
++                            const uint32_t w = idx - g * WT_CHUNK;
++                            const uint32_t tile_base = (first_tile_row + r + g) * WT + w_start + c * WT_CHUNK;
++                            const uint32_t wt = w_start + c * WT_CHUNK + w;
++                            if (wt < WT) {  // a ragged width shard ends in pad tiles
++#ifndef RMS_ABLATE_WRITE
++                                noc_async_write_tile(tile_base + w, out_acc, l1_addr);
++#endif
++                            }
++                            l1_addr += out_tile_bytes;
++                        }
++                        noc_async_write_barrier();
++                        cb_pop_front(cb_output_tiles, SUB);
++                    }
++                }
++#else
+                 for (uint32_t r = 0; r < rows; r += TXN_ROWS) {
+                     const uint32_t n = ((rows - r) < TXN_ROWS) ? (rows - r) : TXN_ROWS;
+                     cb_wait_front(cb_output_tiles, n * WT_CHUNK);
+@@ -400,6 +435,7 @@
+                     noc_async_write_barrier();
+                     cb_pop_front(cb_output_tiles, n * WT_CHUNK);
+                 }
++#endif
+             }
+         }
+     };

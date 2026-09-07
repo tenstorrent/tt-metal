@@ -571,7 +571,7 @@ void kernel_main() {
     // cb_x_sum is STILL materialized (every RESIDENT regime's pass B reads it, and
     // STREAM's pass B rebuilds it with the unfused chain), so there is no L1 change.
     constexpr uint32_t RES_FUSE_CT = get_compile_time_arg_val(25);
-    // D39: the per-channel TILE CB is a CHUNKED window (WT_CHUNK pages,
+    // stream_regime: the per-channel TILE CB is a CHUNKED window (WT_CHUNK pages,
     // popped after every chunk) rather than a whole row held for the core's life.
     // This WAS `!X_RESIDENT`; the reader's compact per-channel cache decouples the
     // two, so a ROW_RESIDENT build can hold x while chunking gamma/bias.
@@ -1791,7 +1791,7 @@ void kernel_main() {
         // ================= pass B: scale ===================================
         for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
             const uint32_t hold_base = ROW_RESIDENT ? (c * WT_CHUNK) : 0;
-            // D39: gamma/bias index from 0 when their ring IS the chunk.
+            // stream_regime: gamma/bias index from 0 when their ring IS the chunk.
             const uint32_t pc_base = PC_CHUNKED ? 0u : hold_base;
             // ROW_RESIDENT never re-stages either held operand: pass A already put
             // the whole tile-row of x tiles (and of gamma) in L1.  This is the

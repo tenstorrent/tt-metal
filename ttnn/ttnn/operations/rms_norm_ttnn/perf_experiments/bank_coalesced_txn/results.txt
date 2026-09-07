@@ -1,0 +1,109 @@
+bank_coalesced_txn -- isolated DM bake-off, raw measurements
+Box: Blackhole p150b, 11x10 = 110-core compute grid, reference AICLK 1350 MHz.
+NB (DRAM banks) = 8, read from the device: dram_grid_size() = 8x1, and the kernel build
+defines NUM_DRAM_BANKS=8 / LOG_BASE_2_OF_NUM_DRAM_BANKS=3 (power of two).
+Metric: DEVICE KERNEL DURATION [ns].  bf16 TILE, DRAM interleaved in and out.
+Every payload-carrying variant is gated BITWISE EXACT (out == in) -- the coalesced
+reader's bank-major permutation and the coalesced writer's inverse compose to identity.
+
+Reproduce:
+  BC_ARGS="<group> <case> ..." [BC_REPS=3] scripts/tt-probe.sh rms_norm_ttnn < run_bank_bench.py
+  groups: sweep | halves | domain | stagger | stagger_halves
+
+VARIANTS
+  base            MODE 0: one noc_async_read_tile / noc_async_write_tile per tile.
+                  == the op's stage_tile_rows / write_block TILE branch.  WT_CHUNK txn/row.
+  coal<PPT>[_rot] MODE 1: bank-major.  Residue class j of the run is `cnt_j = Q + (j<REM)`
+                  CONSECUTIVE pages inside bank (tile_base+j)%NB; issued as ceil(cnt_j/PPT)
+                  transactions of <= PPT pages.  PPT=1 is the ORDER-ONLY control (same txn
+                  count as base, permuted L1).  PPT=0/8 = the whole run.  `_rot` rotates the
+                  start bank by (core index % NB).  txn/row = NB * ceil(Q/PPT).
+  stag            MODE 2: baseline transactions AND baseline (unpermuted) L1 -- only the
+                  ISSUE ORDER rotates by (core index % NB).  WT_CHUNK txn/row.
+  *_r / *_w       the same program with the WRITE / READ payload ablated (handshakes,
+                  barriers and trip counts all kept).  Perf only, never a candidate.
+  floor           both payloads ablated.
+
+================ FOCUS (1,1,8192,2304)  WT=72  WT_CHUNK=72  110 cores ================
+PPT ladder, read+write (single runs):
+  base_rw     72 txn/row   172546      1.000
+  coal1       72           171573      1.006
+  coal1_rot   72           170996      1.009
+  coal2       40           182396      0.946
+  coal2_rot   40           182150      0.947
+  coal3       24           191247      0.902
+  coal3_rot   24           188577      0.915
+  coal4       24           197119      0.875
+  coal4_rot   24           190407      0.906
+  coal6       16           203760      0.847
+  coal6_rot   16           193564      0.891
+  coal8       16           212468      0.812
+  coal8_rot   16           201612      0.856
+    -> monotone degradation with transaction size.  `_rot` recovers 4-5 points at the top
+       of the ladder (a real convoy: without it all 110 cores issue their bank-0 request
+       at t=0, because tile_base = row*WT and WT is a multiple of NB on every shape here),
+       but never gets back to baseline.
+
+Half attribution (single runs):
+  floor                    339      (CB handshakes only; the ablated loops are dead code)
+  base_r          72     91755      base_w      72    122750     base_rw     72   171573
+  coal1_rot_r     72     92768      coal1_rot_w 72    121992     coal1_rot   72   171924
+  coal2_rot_r     40     91826      coal2_rot_w 40    123172     coal2_rot   40   181823
+  coal8_rot_r     16     99495      coal8_rot_w 16    141641     coal8_rot   16   199899
+    -> at PPT=2 BOTH halves are flat in isolation (+0.1%, +0.3%) with HALF the
+       transactions, yet the two together lose 6.0%.  Transaction-count reduction buys
+       nothing; the loss is read/write interleaving at the bank.
+
+3-rep medians (run-to-run spread < 0.4%):
+  base_rw     72   173344   [173344 172916 173533]
+  stag        72   171482   [171424 171482 171522]   1.011
+  coal1_rot   72   172050   [172050 172076 171256]   1.008
+  coal2_rot   40   180835   [180835 182621 180521]   0.959
+
+Stagger half attribution, 3-rep medians:
+  base_r   91941   base_w  123710   base_rw  173413
+  stag_r   92407   stag_w  121276   stag     171499   (read +0.5% worse, write -2.0%, net 1.011)
+
+================ DOMAIN SWEEP (read+write, single runs unless noted) ================
+(1,1,8192,1024)   WT=32 WT_CHUNK=32, 110 cores
+  base_rw   32    77404 | coal1_rot 32 76750 1.009 | coal2_rot 16 82160 0.942
+                        | coal4_rot  8 87021 0.889 | coal8_rot  8 87134 0.888
+  3-rep halves: base_r 41287 base_w 56034 base_rw 77676 | stag_r 41010 stag_w 53353
+                stag 76457 (1.016)
+
+(1,1,8192,7168)   WT=224 WT_CHUNK=56 NUM_W_CHUNKS=4, 110 cores
+  base_rw   56   526413 | coal1_rot 56 528747 0.996 | coal2_rot 32 549545 0.958
+                        | coal4_rot 16 577430 0.912 | coal8_rot  8 612373 0.860
+  stag      56   521602 (1.007)
+
+(1,1,2304,2304)   WT=72 WT_CHUNK=72, 72 of 110 cores
+  base_rw   72    51294 | coal1_rot 72 49984 1.026 | coal2_rot 40 52001 0.986
+                        | coal4_rot 24 57166 0.897 | coal8_rot 16 58686 0.874
+
+(1,1,3520,1024)   WT=32, 110 cores, ONE tile-row each
+  base_rw   32    35687 | coal1_rot 32 34159 1.045 | coal2_rot 16 35808 0.997
+                        | coal4_rot  8 38570 0.928 | coal8_rot  8 37684 0.950
+  stag      32    34133 (1.046)
+
+(1,1,1024,1024)   WT=32, 32 of 110 cores, ONE tile-row each  [3-rep medians]
+  base_rw   32    12230 | stag 32 11430 1.070 | coal1_rot 32 11301 1.082
+                        | coal2_rot 16 11634 1.051
+
+(1,1,128,1024)    WT=32, 4 of 110 cores  [3-rep medians for stag]
+  base_rw   32     2936 | coal1_rot 32 2811 1.040 | coal2_rot 16 2589 1.129
+                        | coal4_rot  8 2686 1.093 | coal8_rot  8 2701 1.087
+  3-rep: base_r 1562 base_w 1590 base_rw 2938 | stag_r 1599 stag_w 1659 stag 3013 (0.975)
+
+(1,1,32,1024)     WT=32, ONE active core -- latency bound  [3-rep medians]
+  base_rw   32     2821 | stag 32 2996 0.942 | coal1_rot 32 2740 1.030
+                        | coal2_rot 16 2350 1.200 | coal4_rot 8 2359 1.206
+                        | coal8_rot 8 2353 1.209
+
+================ CONCLUSION ================
+The coalesce is a REGRESSION on every bandwidth-saturated shape (all the prefill shapes,
+including the focus shape) and a WIN only where a single core owns a long run of consecutive
+tile ids AND the DRAM is far from saturated (1,1,32,1024): 1.20x, saturating at PPT=2.
+Those two conditions are mutually exclusive in this op: a core only gets WT_CHUNK >> NB when
+the tensor is large enough for `scheme=rows` to hand it a whole tile-row, and that is exactly
+the regime where the DRAM is the constraint.  Coalescing needs WT_CHUNK > NB to exist at all
+(WT_CHUNK <= NB gives Q = 0, i.e. every "run" is one page and the transformation is a no-op).

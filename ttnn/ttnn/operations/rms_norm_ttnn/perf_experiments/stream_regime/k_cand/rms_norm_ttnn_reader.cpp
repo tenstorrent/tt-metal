@@ -114,7 +114,7 @@ constexpr uint32_t cb_residual_sticks = 19;
 constexpr uint32_t cb_residual_tiles = 20;
 constexpr uint32_t cb_bias_sticks = 22;
 constexpr uint32_t cb_bias_tiles = 23;
-// ---- D39 / perf_experiments/stream_regime: the COMPACT per-channel caches ---
+// ---- perf_experiments/stream_regime: the COMPACT per-channel caches ---------
 // Reader-private scratch: this kernel fills them once at boot and copies out of
 // them per chunk, so they are never pushed and never popped (get_write_ptr on a
 // CB that was never pushed IS its base).  See `reader_pc_compact_boot` below.
@@ -448,7 +448,7 @@ void kernel_main() {
     // zero.  Pass B's product for those columns lands in the writer's skipped
     // region and is never read back.
     constexpr uint32_t WT_PAD = get_compile_time_arg_val(29);
-    // ---- D39: THE COMPACT PER-CHANNEL HOLD ---------------------------------
+    // ---- stream_regime: THE COMPACT PER-CHANNEL HOLD -----------------------
     // PC_COMPACT: cache the two face-rows D23's TRIM == 2 already fetches -- the
     // WHOLE of a (1,1,1,W) operand's information, 1/16 of its tiled bytes -- for
     // the core's entire row, once, and re-materialize each chunk's tiles by a
@@ -698,7 +698,7 @@ void kernel_main() {
         bank_dfb.push_back(BANK_PAGES);
     }
 
-    // ---- D39: THE COMPACT PER-CHANNEL CACHE --------------------------------
+    // ---- stream_regime: THE COMPACT PER-CHANNEL CACHE ----------------------
     //
     // WHAT.  For each per-channel operand, ONE pass over the core's whole width
     // reading the same two face-rows D23's TRIM == 2 already reads, packed at a
@@ -874,7 +874,7 @@ void kernel_main() {
     // row is cut into (NUM_W_CHUNKS == 1 in the RESIDENT regime, so this is one
     // call there).  In STREAM they are re-staged per pass-B chunk of every
     // row-block instead -- which for a prefill profile is as many DRAM bytes as x.
-    // D39: `PC_CHUNKED` is what used to be `!X_RESIDENT`.  A resident
+    // stream_regime: `PC_CHUNKED` is what used to be `!X_RESIDENT`.  A resident
     // build whose per-channel ring is a CHUNK stages inside the row-block loop
     // below instead, because the ring only has room for one chunk at a time.
     if constexpr (X_RESIDENT && !PC_CHUNKED) {
@@ -1089,7 +1089,7 @@ void kernel_main() {
                 }
             }
         }
-        // D39, ROW_RESIDENT with a CHUNKED per-channel ring: the chunks
+        // stream_regime, ROW_RESIDENT with a CHUNKED per-channel ring: the chunks
         // are pushed in a SECOND loop, after every activation chunk of this block
         // is on its way.
         //

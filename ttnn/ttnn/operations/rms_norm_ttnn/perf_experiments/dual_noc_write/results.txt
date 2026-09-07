@@ -1,0 +1,96 @@
+dual_noc_write -- measured results
+Box: Blackhole p150b, 11x10 = 110-core compute grid, AICLK 1350 MHz, 8 DRAM banks.
+Metric: DEVICE KERNEL DURATION [ns], median of 3-5 fresh runs.
+Precision contract identical in every variant: HiFi2 / fp32_dest_acc_en=False /
+math_approx_mode=False / bf16 in-out.  Never a lever.
+
+===========================================================================
+PART 1 -- THE DM ROOFLINE INSTRUMENT  (dm_bench.py + kernels/dm_lane.cpp)
+===========================================================================
+Pure DRAM->L1->DRAM tile copy, NO Tensix compute kernel, reproducing the focus
+shape's transfer pattern exactly: 110 cores, ttnn.split_work_to_cores(full_grid,
+Rt=256, row_wise=True), WT=72 tiles/row, 2048 B interleaved pages, one
+noc_async_read_tile / noc_async_write_tile per tile, one barrier per row-block.
+Every run is bit-exact against the input (exact=True), so every number below is
+correctness-gated.
+
+--- the four NoC/direction assignments, 37.75 MB each way ------------------
+                        ns          GB/s
+  read  on NoC0      91,875         411      <-- what the op does
+  read  on NoC1     147,959         255
+  write on NoC1     124,280         304      <-- what the op does
+  write on NoC0     217,615         173
+The shipped reader-NoC0 / writer-NoC1 pairing is ALREADY the best of the four.
+NoC0 is the fast direction for DRAM reads and the slow one for DRAM writes;
+NoC1 is the mirror image.
+
+--- which RISC-V issues is IRRELEVANT; only the NoC matters ----------------
+  base       (NCRISC/NoC0 reads, BRISC/NoC1 writes)   172,964 ns
+  role_swap  (BRISC/NoC1 reads, NCRISC/NoC0 writes)   235,335 ns   0.736x
+  swap_noc   (NCRISC/NoC1 reads, BRISC/NoC0 writes)   235,346 ns   0.736x
+role_swap and swap_noc agree to 0.01 % -- the RISC-V identity contributes
+nothing, the NoC assignment is the whole effect.
+
+--- the full option menu on the focus payload (75.5 MB total) --------------
+  base                              171,338 - 172,964      439 GB/s   exact
+  base + noc_async_writes_flushed   172,423                437 GB/s   exact  NULL
+  base, CB depth 4                  174,113                434 GB/s   exact  NULL
+  base, CB depth 6                  173,859                434 GB/s   exact  NULL
+  bank-run coalesced (8 x 18 KB)    223,701                338 GB/s   exact  0.766x
+  split_rw_cross  (36r+36w each)    177,187                426 GB/s   exact  0.976x
+  split_rw_50     (36r+36w each)    182,771                413 GB/s   exact  0.946x
+  w_split_50      (50 % of W->NoC0) 183,916                411 GB/s   exact  0.940x
+  r_split_50      (50 % of R->NoC1) 193,159                391 GB/s   exact  0.895x
+  w_split_25      (25 % of W->NoC0) 168,514                448 GB/s   exact  1.023x
+  w_split_20      (20 % of W->NoC0) 167,017 - 167,844      450 GB/s   exact  1.027x
+  w_split_10      (10 % of W->NoC0) 166,873 - 167,002      452 GB/s   exact  1.031x  <-- BEST
+  base:alt7 (same RISC, both NoCs,  169,229                446 GB/s   exact  1.016x
+             DM_DYNAMIC_NOC)
+  base:dyn  (DM_DYNAMIC_NOC, no     173,955                434 GB/s   exact  0.989x
+             traffic moved)
+  both_noc0 / both_noc1             HANG -- inexpressible under DM_DEDICATED_NOC
+
+=====>  THE DM ROOFLINE for 75.5 MB read+write on 110 cores, interleaved
+=====>  2048 B pages:   166,086 ns best / 166,873 ns median  =  452 GB/s
+=====>  aggregate.  The op's own pattern reaches 439 GB/s, i.e. it is already
+=====>  within 3.1 % of the best pattern this instrument could find.
+
+--- the same instrument on the other sweep shapes --------------------------
+  shape             payload/way   base ns    best ns (variant)     agg GB/s
+  8192x1024           16.78 MB     77,496    75,984 (w_split_20)   433 -> 442
+  8192x2304           37.75 MB    172,126   166,873 (w_split_10)   439 -> 452
+  8192x7168          117.44 MB    535,409   520,851 (w_split_10)   439 -> 451
+  32x1024 (1 core)     0.07 MB      2,824     2,663 (w_split_20)    46 ->  49
+Read-alone 400-411 GB/s and write-alone 298-310 GB/s on every multi-core shape;
+the aggregate roofline is flat at ~439 GB/s (shipped pattern) / ~451 GB/s (best)
+across a 7x payload range.  This is a memory-system limit, not a shape artifact.
+
+===========================================================================
+PART 2 -- THE CANDIDATE IN THE REAL OP  (bench_op.py, k_base vs k_alt)
+===========================================================================
+Only two things vary: PD.KERNEL_DIR, and whether the two DM kernels are built
+DM_DEDICATED_NOC (shipped) or DM_DYNAMIC_NOC.  k_base is a byte-identical copy
+of the shipped kernels (the control).  k_alt differs from k_base by exactly one
+hunk in rms_norm_ttnn_writer.cpp: the last WT_CHUNK/10 tiles of every row-block
+are issued with noc_async_write_tile(..., alt_noc), plus a second barrier.
+
+  FOCUS (1,1,8192,2304) INTERLEAVED gamma, pcc 0.999985 for every variant
+    base   191,901
+    kbase  189,049 / 189,497 / 187,842      (spread 0.9 %)
+    dyn    188,375 / 192,273     1.004x     DM_DYNAMIC_NOC alone is FREE
+    alt    196,004 / 196,056     0.964x     REPRODUCIBLE 3.6 % REGRESSION
+
+  domain sweep, kbase vs alt (pcc >= 0.999985 everywhere)
+    (1,1,8192,1024)  INTERLEAVED    86,205 ->  85,879   1.004x  flat
+    (1,1,8192,2304)  INTERLEAVED   189,049 -> 196,056   0.964x  REGRESSION
+    (1,1,8192,7168)  INTERLEAVED   575,975 -> 580,294   0.993x  flat
+    (1,1,32,1024)    INTERLEAVED     4,364 ->   4,678   0.933x  REGRESSION
+    (1,1,32,7168)    W-SHARDED       3,778 ->   3,841   0.984x  (writer is a
+        no-op there -- NATIVE_OUT gates ALT_W off -- so this is the residual
+        DM_DYNAMIC_NOC cost on the sharded path, not the candidate)
+
+WHY the isolated 1.03x becomes a real-op 0.96x: in the pure copy the writer is
+saturated and NoC1 is the longer pole, so NoC0's 32 us of slack is worth buying
+even at NoC0's 1.75x-per-byte write penalty.  In the real op the writer waits on
+compute, NoC1 is NOT the pole, and every byte moved to NoC0 is simply 1.75x more
+expensive -- plus one extra per-block barrier.

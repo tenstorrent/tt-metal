@@ -571,11 +571,6 @@ void kernel_main() {
     // cb_x_sum is STILL materialized (every RESIDENT regime's pass B reads it, and
     // STREAM's pass B rebuilds it with the unfused chain), so there is no L1 change.
     constexpr uint32_t RES_FUSE_CT = get_compile_time_arg_val(25);
-    // D39: the per-channel TILE CB is a CHUNKED window (WT_CHUNK pages,
-    // popped after every chunk) rather than a whole row held for the core's life.
-    // This WAS `!X_RESIDENT`; the reader's compact per-channel cache decouples the
-    // two, so a ROW_RESIDENT build can hold x while chunking gamma/bias.
-    constexpr uint32_t PC_CHUNK_CT = get_compile_time_arg_val(26);
 
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // tile-rows owned by this core
     // Only the core holding the row's LAST width tile applies the partial-W
@@ -627,12 +622,6 @@ void kernel_main() {
     // WT_CHUNK, so each call indexes them at a TILE OFFSET (TileOffset::Set) and
     // neither is popped until the row-block is done.
     constexpr bool ROW_RESIDENT = X_RESIDENT && (NUM_W_CHUNKS > 1);
-    constexpr bool PC_CHUNKED = (PC_CHUNK_CT != 0);
-    static_assert(PC_CHUNKED || X_RESIDENT, "rms_norm_ttnn: a streamed per-channel ring is chunked by definition");
-    // The compact cache is a TILE-operand mechanism; a ROW_MAJOR operand is staged
-    // through cb_*_sticks and tilized, which the resident boot does once per core.
-    static_assert(
-        !PC_CHUNKED || !X_RESIDENT || !PC_RM, "rms_norm_ttnn: a chunked resident per-channel ring is TILE-only");
     static_assert(!ROW_RESIDENT || BLOCK_ROWS == 1, "rms_norm_ttnn: ROW_RESIDENT holds ONE tile-row of x");
     // Width tiles the HELD CBs (cb_input_tiles, cb_gamma_tiles) span.  Equals
     // WT_CHUNK in both Phase-0 regimes, so this is byte-identical off the L5 path.
@@ -1791,8 +1780,6 @@ void kernel_main() {
         // ================= pass B: scale ===================================
         for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
             const uint32_t hold_base = ROW_RESIDENT ? (c * WT_CHUNK) : 0;
-            // D39: gamma/bias index from 0 when their ring IS the chunk.
-            const uint32_t pc_base = PC_CHUNKED ? 0u : hold_base;
             // ROW_RESIDENT never re-stages either held operand: pass A already put
             // the whole tile-row of x tiles (and of gamma) in L1.  This is the
             // pass-B re-read that Lamp L5 exists to delete.
@@ -1882,7 +1869,7 @@ void kernel_main() {
                                 ckl::WaitPolicy::PerBlockSize,
                                 ckl::PopPolicy::PerBlockSize,
                                 ckl::OperandKind::Block),
-                            ckl::input(G_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
+                            ckl::input(G_IN, ckl::BroadcastDim::Row)>{0u, hold_base},
                         ckl::PackTile<ckl::output(
                             cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
                 } else {
@@ -1895,7 +1882,7 @@ void kernel_main() {
                                 ckl::WaitPolicy::Upfront,
                                 ckl::PopPolicy::AtEnd,
                                 ckl::OperandKind::Block),
-                            ckl::input(G_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
+                            ckl::input(G_IN, ckl::BroadcastDim::Row)>{0u, hold_base},
                         ckl::PackTile<PASS_B_OUT_GAMMA>{});
                 }
             }
@@ -1919,7 +1906,7 @@ void kernel_main() {
                         ckl::BinaryFpuOp::Add,
                         ckl::input(
                             cb_normalized, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                        ckl::input(B_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
+                        ckl::input(B_IN, ckl::BroadcastDim::Row)>{0u, hold_base},
                     ckl::PackTile<PASS_B_OUT_GAMMA>{});
             }
 
@@ -1928,10 +1915,10 @@ void kernel_main() {
                 ckl::untilize<WT_CHUNK, cb_output_tiles, cb_output_sticks>(rows);
             }
 
-            if constexpr (HAS_G && PC_CHUNKED) {
+            if constexpr (HAS_G && !X_RESIDENT) {
                 cb_pop_front(cb_gamma_tiles, WT_CHUNK);
             }
-            if constexpr (HAS_B && PC_CHUNKED) {
+            if constexpr (HAS_B && !X_RESIDENT) {
                 cb_pop_front(cb_bias_tiles, WT_CHUNK);
             }
         }
@@ -1949,10 +1936,10 @@ void kernel_main() {
     // SCALER_TILES is the descriptor's single source of truth for how many tiles
     // the reader pushed into cb_scaler (datapath- and PARTIAL_W-dependent).
     cb_pop_front(cb_scaler, SCALER_TILES);
-    if constexpr (HAS_G && !PC_CHUNKED) {
+    if constexpr (HAS_G && X_RESIDENT) {
         cb_pop_front(cb_gamma_tiles, X_HOLD_WT);
     }
-    if constexpr (HAS_B && !PC_CHUNKED) {
+    if constexpr (HAS_B && X_RESIDENT) {
         cb_pop_front(cb_bias_tiles, X_HOLD_WT);
     }
 }

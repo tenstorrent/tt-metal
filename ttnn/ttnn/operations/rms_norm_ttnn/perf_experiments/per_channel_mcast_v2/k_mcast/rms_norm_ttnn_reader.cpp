@@ -99,6 +99,22 @@
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+#ifdef RMS_PC_MCAST
+// ===========================================================================
+// PERF EXPERIMENT `per_channel_mcast_v2` -- EVERY line this experiment adds to the
+// reader lives inside an `#ifdef RMS_PC_MCAST` block, and the host emits that define
+// (plus the multicast's compile-time args, its runtime args and its semaphores) ONLY
+// on a plan that actually engages the multicast.
+//
+// That is the ROUND-2 ENTRY CONDITION, and it is structural rather than a promise:
+// with the define absent this translation unit PREPROCESSES to the shipped reader
+// token for token, so a non-engaged plan compiles the shipped binary from the shipped
+// argument list.  Round 1 shipped the switch as a compile-time ARG instead -- always
+// emitted, `if constexpr`-ed off -- and measured a 4-5% regression on plans that never
+// engage (focus 5363 -> 5577, BLOCK 22881 -> 23975).  `check_off_identity.py` in this
+// directory re-derives the shipped text from this file and diffs it against k_base.
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#endif
 
 namespace {
 constexpr uint32_t cb_input_sticks = 0;
@@ -114,12 +130,6 @@ constexpr uint32_t cb_residual_sticks = 19;
 constexpr uint32_t cb_residual_tiles = 20;
 constexpr uint32_t cb_bias_sticks = 22;
 constexpr uint32_t cb_bias_tiles = 23;
-// ---- D39 / perf_experiments/stream_regime: the COMPACT per-channel caches ---
-// Reader-private scratch: this kernel fills them once at boot and copies out of
-// them per chunk, so they are never pushed and never popped (get_write_ptr on a
-// CB that was never pushed IS its base).  See `reader_pc_compact_boot` below.
-constexpr uint32_t cb_gamma_compact = 24;
-constexpr uint32_t cb_bias_compact = 25;
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
 // bf16 1.0 == 0x3F80 (sign 0, exponent 127, mantissa 0) -- EXACT, so the permutation
@@ -310,6 +320,45 @@ FORCE_INLINE void stage_per_channel_chunk(const Acc& acc, uint32_t first_wt) {
 // identical treatment -- same geometry, same pad tiles, same invariant -- which is
 // the whole reason this is a function with the CB as a template parameter rather
 // than the seed's inline block.
+#ifdef RMS_PC_MCAST
+// ===========================================================================
+// `per_channel_mcast_v2` -- the injector's TILE read, for a SLICE of the chunk.
+// ===========================================================================
+// The read issue is DUPLICATED from stage_per_channel_chunk's TILE branch rather
+// than factored out of it, deliberately: factoring would edit shipped text and cost
+// the off build its token-for-token identity with k_base.  The duplicate differs in
+// exactly two ways -- it takes a runtime (first, count) SLICE instead of the whole
+// WT_CHUNK, and it takes the INJECTOR's own trim, which need not be D23's.
+//
+// Why the injector gets its own granularity: D23's trim (two 64-byte face-rows per
+// tile) is the right call when all 110 cores read the vector, because it is the
+// difference between 110 x 8 kB and 110 x 0.5 kB of DRAM.  Once ONE core reads for
+// the whole group, DRAM bytes stop being the constraint and the injector's
+// TRANSACTION COUNT starts being it -- the trim costs two issues per tile where a
+// whole-tile read costs one, and the whole-tile read also makes the broadcast
+// payload entirely live.  Both are measured (`colw` / `onew` / `split11w`).
+template <uint32_t WT, uint32_t ELEM_BYTES, uint32_t TRIM, typename Acc>
+FORCE_INLINE void pc_issue_slice_reads(
+    const Acc& acc, uint32_t first_wt, uint32_t count, uint32_t l1_base, uint32_t tile_bytes) {
+    uint32_t l1_addr = l1_base;
+    for (uint32_t w = 0; w < count; ++w) {
+        const uint32_t wt = first_wt + w;
+        const uint32_t tile_id = (wt < WT) ? wt : (WT - 1);
+        if constexpr (TRIM == 2) {
+            constexpr uint32_t ROW_BYTES = TILE_DIM * ELEM_BYTES;
+            const uint64_t base = get_noc_addr(tile_id, acc);
+            const uint32_t face = tile_bytes / 4;
+            noc_async_read(base, l1_addr, ROW_BYTES);
+            noc_async_read(base + face, l1_addr + face, ROW_BYTES);
+        } else if constexpr (TRIM == 1) {
+            noc_async_read(get_noc_addr(tile_id, acc), l1_addr, tile_bytes / 2);
+        } else {
+            noc_async_read_tile(tile_id, acc, l1_addr);
+        }
+        l1_addr += tile_bytes;
+    }
+}
+#endif
 template <uint32_t CB, uint32_t WT_CHUNK, uint32_t IN_SHARD_PAGES>
 FORCE_INLINE void publish_native_shard(uint32_t w_real, uint32_t tile_bytes) {
     if (w_real < WT_CHUNK) {
@@ -448,16 +497,6 @@ void kernel_main() {
     // zero.  Pass B's product for those columns lands in the writer's skipped
     // region and is never read back.
     constexpr uint32_t WT_PAD = get_compile_time_arg_val(29);
-    // ---- D39: THE COMPACT PER-CHANNEL HOLD ---------------------------------
-    // PC_COMPACT: cache the two face-rows D23's TRIM == 2 already fetches -- the
-    // WHOLE of a (1,1,1,W) operand's information, 1/16 of its tiled bytes -- for
-    // the core's entire row, once, and re-materialize each chunk's tiles by a
-    // LOCAL L1 copy.  PC_HOLD_WT is the cache's width in tiles.  PC_CHUNK says the
-    // per-channel TILE ring is a WT_CHUNK window popped per chunk rather than a
-    // held whole row (it was implicitly `!X_RESIDENT`; the cache decouples them).
-    constexpr uint32_t PC_COMPACT = get_compile_time_arg_val(30);
-    constexpr uint32_t PC_HOLD_WT = get_compile_time_arg_val(31);
-    constexpr uint32_t PC_CHUNK = get_compile_time_arg_val(32);
     constexpr bool HAS_WPAD = (WT_PAD != 0);
     constexpr uint32_t WT_REAL_TAIL = WT_CHUNK - WT_PAD;
     static_assert(WT_PAD < WT_CHUNK, "rms_norm_ttnn: a width chunk that is ALL pad is not a chunk");
@@ -469,10 +508,48 @@ void kernel_main() {
     // FOUR accessor arg blocks, chained at compile time and ALWAYS declared --
     // never inside an `if constexpr`, or an absent operand would shift every
     // later block's offset.  The descriptor emits the NULL form for an absent one.
-    constexpr auto x_args = TensorAccessorArgs<33>();
+    constexpr auto x_args = TensorAccessorArgs<30>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto residual_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+#ifdef RMS_PC_MCAST
+    // `per_channel_mcast_v2`: ONE packed word plus the six `McastArgs` decodes,
+    // appended AFTER the four accessor blocks so every offset above is untouched.
+    //   bits 0..7   PC_N  -- how many INJECTORS split the chunk (1 = one injector
+    //                        reads the whole chunk and broadcasts it)
+    //   bits 8..15  the injector's gamma read granularity (D23 trim, or 0 = whole tile)
+    //   bits 16..23 the injector's bias read granularity
+    constexpr uint32_t PC_CT = residual_args.next_compile_time_args_offset();
+    constexpr uint32_t PC_W = get_compile_time_arg_val(PC_CT);
+    constexpr uint32_t PC_N = PC_W & 0xFFu;
+    constexpr uint32_t PC_GTRIM = (PC_W >> 8) & 0xFFu;
+    constexpr uint32_t PC_BTRIM = (PC_W >> 16) & 0xFFu;
+    // bit 24: DEFER the receiver's wait past the first activation read.  The whole
+    // per-channel stage is a PROLOGUE with an empty pipeline behind it -- a receiver
+    // that blocks on the broadcast here is burning the only window in the op where its
+    // own x stream has nothing queued.  With the bit set the injector still reads and
+    // broadcasts FIRST (it is the group's critical path), but the receivers only
+    // reserve, then go read their first row-block of x, and collect the broadcast on
+    // the way back.  Host-gated to NUM_W_CHUNKS == 1, where "the first activation
+    // read" is unambiguous.
+    constexpr bool PC_LATE = ((PC_W >> 24) & 0x1u) != 0;
+    // RT 12's role encoding.  0 = receiver, 1..N = injector of slice i-1, and:
+    constexpr uint32_t PC_ROLE_OPT_OUT = 0xFFFFFFFFu;
+    // RT 12 = this core's ROLE (0 = pure receiver, 1 + i = injector of slice i);
+    // RT 13.. = the multicast wire.  The role word sits FIRST so `McastArgs`'
+    // runtime-arg count -- which is 4, or 4 + 2*PC_N when the senders rotate --
+    // does not have to be known to find it.
+    constexpr auto pc_args = dataflow_kernel_lib::McastArgs<PC_CT + 1, 13>();
+    static_assert(IS_TILE != 0, "per_channel_mcast_v2: TILE per-channel operands only");
+    static_assert(PC_N >= 1, "per_channel_mcast_v2: at least one injector");
+    // A DEFERRED receiver cannot reserve chunk c+1 before it has pushed chunk c, so the
+    // deferred arm is a ONE-CHUNK regime; the host clears the bit otherwise.  Written as
+    // an implication and hoisted out of the `if constexpr`: a static_assert inside a
+    // DISCARDED `if constexpr` branch of a non-template function is still evaluated, so
+    // the naked form failed to compile every multi-chunk build (measured: the
+    // gamma+bias 2304 plan, WT_CHUNK=36 NUM_W_CHUNKS=2).
+    static_assert(!PC_LATE || NUM_W_CHUNKS == 1, "per_channel_mcast_v2: PC_LATE is a one-chunk regime");
+#endif
 
     constexpr bool NATIVE_X = (NATIVE_IN != 0);
     constexpr bool NATIVE_R = (NATIVE_RESIDUAL != 0);
@@ -486,16 +563,6 @@ void kernel_main() {
     constexpr bool HAS_R = (HAS_RESIDUAL != 0);
     constexpr bool PC_RM = (PER_CHANNEL_IS_RM != 0);
     constexpr bool PC_NARROW = (NARROW_PC_STAGE != 0);
-    // 0 off / 1 EAGER (fill the whole cache at boot) / 2 LAZY (fill chunk c the
-    // first time chunk c is staged).  See the fill below for the measurement.
-    constexpr bool PC_COMPACT_HOLD = (PC_COMPACT != 0);
-    constexpr bool PC_LAZY = (PC_COMPACT == 2);
-    constexpr bool PC_CHUNKED = (PC_CHUNK != 0);
-    static_assert(!PC_COMPACT_HOLD || !PC_NARROW, "rms_norm_ttnn: the compact hold is the TILE form, not D30's");
-    // The cache stores exactly what TRIM == 2 fetches, so the descriptor may only
-    // turn it on where BOTH operands admit the face-row granularity.
-    static_assert(!PC_COMPACT_HOLD || HAS_GAMMA == 0 || GAMMA_TRIM == 2, "rms_norm_ttnn: compact hold needs TRIM 2");
-    static_assert(!PC_COMPACT_HOLD || HAS_BIAS == 0 || BIAS_TRIM == 2, "rms_norm_ttnn: compact hold needs TRIM 2");
     static_assert(!NATIVE_R || HAS_R, "rms_norm_ttnn: NATIVE_RESIDUAL without a residual");
     static_assert(!NATIVE_R || NATIVE_X, "rms_norm_ttnn: a zero-copy residual implies a zero-copy x");
     // A1: the residual carries the input's IDENTICAL shard spec by contract, so the
@@ -698,117 +765,6 @@ void kernel_main() {
         bank_dfb.push_back(BANK_PAGES);
     }
 
-    // ---- D39: THE COMPACT PER-CHANNEL CACHE --------------------------------
-    //
-    // WHAT.  For each per-channel operand, ONE pass over the core's whole width
-    // reading the same two face-rows D23's TRIM == 2 already reads, packed at a
-    // 2 * TILE_DIM * elem stride into a reader-private CB.  Then every later
-    // `stage_per_channel` is an L1 -> L1 copy instead of a DRAM read.
-    //
-    // WHY (measured, blackhole p150b, (1,1,8192,7168) bf16 gamma+bias+residual
-    // fp32_dest_acc_en=True, the op's perf case #15).  The shipped STREAM reader
-    // re-stages both operands per pass-B chunk of EVERY row-block -- per core
-    // 2.33 blocks x 4 chunks x 56 tiles x 2 reads x 2 operands = 2088 tiny DRAM
-    // reads, profiled at 115,916 ns (gamma) + 104,584 ns (bias) = 220,500 ns of a
-    // 892,618 ns reader span.  Deleting the read entirely (RMS_ABLATE_PER_CHANNEL)
-    // took the wall from 1,580,377 to 1,350,072 ns, so 230,305 ns is the whole
-    // prize and the cache collects it for 2 * 224 * 128 = 57 kB of L1.
-    //
-    // The SECOND, larger consequence is a HOST one: with the hold priced at the
-    // compact size instead of the tiled one, ROW_RESIDENT fits where it did not,
-    // and the regime change deletes pass B's re-read of x AND of the residual.
-    //
-    // RAW-API JUSTIFICATION.  The fill is TensorAccessor + noc_async_read at a
-    // face offset -- byte-for-byte the reads `stage_per_channel_chunk`'s TRIM == 2
-    // branch already issues, just landing compacted; no dataflow helper covers a
-    // sub-page tiled read (see this file's helper-usage note).  The expand is a
-    // plain L1 word copy: `noc_async_read` to one's own L1 would put a NoC
-    // transaction (and its barrier) on a 64-byte move that the RISC-V does in ~20
-    // cycles, and `l1_helpers.hpp` offers zero_tile / prepare_zero_tile only --
-    // nothing that scatters a compact vector into two face-row slots of a tile.
-    // Gap kind: ERGONOMICS (the mechanism is ordinary L1 addressing; what is
-    // missing is a named helper for "vector -> row 0 of a tile-row").
-    constexpr uint32_t PC_ROW_BYTES_G = TILE_DIM * GAMMA_ELEM_BYTES;
-    constexpr uint32_t PC_ROW_BYTES_B = TILE_DIM * BIAS_ELEM_BYTES;
-
-    // Copy `n` bytes L1 -> L1.  Both ends are 32-byte-aligned CB addresses and n is
-    // a multiple of 4 for every non-block-float dtype, so a word loop is exact.
-    auto l1_copy = [](uint32_t dst, uint32_t src, uint32_t n) {
-        volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
-        volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src);
-        for (uint32_t i = 0; i < n / 4; ++i) {
-            d[i] = s[i];
-        }
-    };
-
-    // Fill tiles [w0, w0 + n) of one operand's cache.
-    auto pc_compact_fill =
-        [&](uint32_t cb, uint32_t row_bytes, uint32_t tile_bytes, const auto& acc, uint32_t w0, uint32_t n) {
-            const uint32_t base = get_write_ptr(cb);
-            const uint32_t face = tile_bytes / 4;
-            for (uint32_t w = w0; w < w0 + n; ++w) {
-                const uint32_t wt = w_start + w;
-                const uint32_t tile_id = (wt < WT) ? wt : (WT - 1);
-                const uint64_t src = get_noc_addr(tile_id, acc);
-                const uint32_t dst = base + w * 2 * row_bytes;
-                noc_async_read(src, dst, row_bytes);
-                noc_async_read(src + face, dst + row_bytes, row_bytes);
-            }
-            noc_async_read_barrier();
-        };
-
-    auto pc_fill_chunk = [&](uint32_t c) {
-        const uint32_t w0 = c * WT_CHUNK;
-        if constexpr (HAS_G) {
-            const auto g_acc = TensorAccessor(gamma_args, gamma_addr);
-            pc_compact_fill(cb_gamma_compact, PC_ROW_BYTES_G, get_tile_size(cb_gamma_tiles), g_acc, w0, WT_CHUNK);
-        }
-        if constexpr (HAS_B) {
-            const auto b_acc = TensorAccessor(bias_args, bias_addr);
-            pc_compact_fill(cb_bias_compact, PC_ROW_BYTES_B, get_tile_size(cb_bias_tiles), b_acc, w0, WT_CHUNK);
-        }
-    };
-
-    // LAZY vs EAGER, and it is worth 1.16x on the target case (1,099,830 ->
-    // 949,000 ns) for a one-line change of WHEN.  Eager fills the whole cache at
-    // boot: every core issues 2 x PC_HOLD_WT tiny DRAM reads into the same few
-    // hundred kB of the weight tensor at t = 0, and the profiled zone comes back
-    // at 290,385 ns per core MEAN but 653,014 ns MAX -- pure arbitration spread,
-    // and it sits in front of the first x read so nothing overlaps it.  Lazy
-    // fetches chunk c the first time chunk c is staged, which for the resident
-    // regimes is inside the block-0 per-channel loop -- exactly where this thread
-    // is otherwise BLOCKED on the compute kernel's pass-B pops.  Same bytes, same
-    // transactions, issued into a hole instead of a burst.
-    uint32_t pc_filled = 0;
-    if constexpr (PC_COMPACT_HOLD && !PC_LAZY) {
-        MaybeDeviceZoneScope("reader_pc_compact_boot");
-        for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
-            pc_fill_chunk(c);
-        }
-        pc_filled = NUM_W_CHUNKS;
-    }
-
-    // Re-materialize chunk `c` of one operand out of its cache: WT_CHUNK tiles,
-    // each getting its two face-rows written where TRIM == 2 would have put them.
-    // Everything else in the page keeps whatever was there -- the same invariant
-    // the trimmed DRAM read already relies on (row 0 is the only row the
-    // BroadcastDim::Row consumer reads; measured BIT-IDENTICAL with rows 1..31
-    // seeded 1e5x wrong).
-    auto pc_compact_expand = [&](uint32_t cb_tiles, uint32_t cb_compact, uint32_t row_bytes, uint32_t c) {
-        const uint32_t tile_bytes = get_tile_size(cb_tiles);
-        const uint32_t face = tile_bytes / 4;
-        const uint32_t src_base = get_write_ptr(cb_compact) + c * WT_CHUNK * 2 * row_bytes;
-        cb_reserve_back(cb_tiles, WT_CHUNK);
-        uint32_t dst = get_write_ptr(cb_tiles);
-        for (uint32_t w = 0; w < WT_CHUNK; ++w) {
-            const uint32_t src = src_base + w * 2 * row_bytes;
-            l1_copy(dst, src, row_bytes);
-            l1_copy(dst + face, src + row_bytes, row_bytes);
-            dst += tile_bytes;
-        }
-        cb_push_back(cb_tiles, WT_CHUNK);
-    };
-
     // ---- the per-channel operands: one chunk's worth of tiles (or sticks) ----
     // In the RESIDENT regimes this runs once per core before the row-block loop
     // and the tiles are never popped; in STREAM it runs per pass-B chunk.
@@ -816,28 +772,6 @@ void kernel_main() {
     // whole-row schemes it is 0.
     auto stage_per_channel = [&](uint32_t c) {
         const uint32_t first_wt = w_start + c * WT_CHUNK;
-        if constexpr (PC_COMPACT_HOLD) {
-            if constexpr (PC_LAZY) {
-                // Chunks are always visited in order, so ONE watermark is the whole
-                // bookkeeping: the first block pays the DRAM read, every later one
-                // (and every later chunk of this one) finds it already in L1.
-                if (c >= pc_filled) {
-                    MaybeDeviceZoneScope("reader_pc_compact_boot");
-                    pc_fill_chunk(c);
-                    pc_filled = c + 1;
-                }
-            }
-            // No NoC read at all: the bytes are already in this core's L1.
-            if constexpr (HAS_G) {
-                MaybeDeviceZoneScope("reader_read_gamma");
-                pc_compact_expand(cb_gamma_tiles, cb_gamma_compact, PC_ROW_BYTES_G, c);
-            }
-            if constexpr (HAS_B) {
-                MaybeDeviceZoneScope("reader_read_bias");
-                pc_compact_expand(cb_bias_tiles, cb_bias_compact, PC_ROW_BYTES_B, c);
-            }
-            return;
-        }
         if constexpr (HAS_G) {
             MaybeDeviceZoneScope("reader_read_gamma");
             const auto g_acc = TensorAccessor(gamma_args, gamma_addr);
@@ -874,14 +808,258 @@ void kernel_main() {
     // row is cut into (NUM_W_CHUNKS == 1 in the RESIDENT regime, so this is one
     // call there).  In STREAM they are re-staged per pass-B chunk of every
     // row-block instead -- which for a prefill profile is as many DRAM bytes as x.
-    // D39: `PC_CHUNKED` is what used to be `!X_RESIDENT`.  A resident
-    // build whose per-channel ring is a CHUNK stages inside the row-block loop
-    // below instead, because the ring only has room for one chunk at a time.
-    if constexpr (X_RESIDENT && !PC_CHUNKED) {
+#ifdef RMS_PC_MCAST
+    // ===== PERF EXPERIMENT `per_channel_mcast_v2` ==========================
+    // `weight` / `bias` do not vary along the ROW axis, so every core that owns the
+    // same width slice reads the IDENTICAL bytes from DRAM.  At the focus shape that
+    // is ALL 110 cores reading the SAME 72 gamma tiles -- 144 x 64-byte reads per
+    // core against 72 pages, a hot-bank storm moving 1.0 MB of real traffic.  Read it
+    // on an injector instead and broadcast the staged block.
+    //
+    // WHAT IS BROADCAST: the WHOLE staged block (count * tile_bytes), not the D23
+    // trim's live face-rows.  The trim's live bytes are [0,64) and [512,576) of each
+    // 2048-byte tile -- SCATTERED -- so a trim-exact broadcast would be 2 * count tiny
+    // multicasts instead of one wide one, and the receivers do ZERO work this way: the
+    // block lands directly at their own cb write pointer, which is the same L1 address
+    // on every core of the program (the per-channel CBs are boot-filled once and never
+    // popped, so nothing has moved the pointer).
+    //
+    // PC_N > 1 SPLITS the read: injector i reads only slice i of the chunk and
+    // broadcasts that slice to everyone, so the injector's SERIAL DRAM read -- the
+    // acknowledged limiter of this pattern in master.md's `shared_input_reuse` /
+    // `mcast_topology` entries -- shrinks PC_N-fold while the bytes on the NoC stay
+    // the same.  The slices land at disjoint offsets of the same reserved block, so
+    // the rounds are order-INDEPENDENT; that is why the split path uses the monotone
+    // Counter data-ready signal and no pre-handshake.  A core only needs the counter
+    // to reach "every slice but my own".
+    Noc pc_noc;
+    const uint32_t pc_role = get_arg_val<uint32_t>(12);
+    [[maybe_unused]] const uint32_t g_tb = HAS_G ? get_tile_size(cb_gamma_tiles) : 0;
+    [[maybe_unused]] const uint32_t b_tb = HAS_B ? get_tile_size(cb_bias_tiles) : 0;
+    // The receiver pipe is built ONCE (its Counter form has no ctor side effect and
+    // its `signals_seen_` must not restart), and it is what `pc_finish` drains.
+    auto pc_receiver = pc_args.receiver(pc_noc);
+    auto pc_sender = pc_args.sender(pc_noc);
+    bool pc_pending = false;
+    // `pc_finish` is the RECEIVER's half, split out so PC_LATE can run it after the
+    // first activation read instead of before it.  Self-guarded, so the eager path
+    // and the deferred path call it in exactly one place each.
+    auto pc_finish = [&]() {
+        if (!pc_pending) {
+            return;
+        }
+        pc_pending = false;
+        MaybeDeviceZoneScope("reader_pc_recv");
+        if constexpr (HAS_G) {
+            pc_receiver.receive();
+            cb_push_back(cb_gamma_tiles, WT_CHUNK);
+        }
+        if constexpr (HAS_B) {
+            pc_receiver.receive();
+            cb_push_back(cb_bias_tiles, WT_CHUNK);
+        }
+    };
+    if constexpr (X_RESIDENT) {
+        if (pc_role == PC_ROLE_OPT_OUT) {
+            // This core's LINE is not a reuse group (its members do not want the same
+            // bytes, or do not run the same number of rounds), so it reads for itself
+            // exactly as the shipped op does.  Per-LINE and not per-PROGRAM: one ragged
+            // line must not cost the other nine their broadcast.
+            for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
+                stage_per_channel(c);
+            }
+        } else if constexpr (PC_N == 1) {
+            // ---- ONE injector per group: it owns the whole chunk ----
+            auto pc_send = [&](auto& sender, uint32_t cb, uint32_t first_wt, uint32_t tb, auto&& issue) {
+                cb_reserve_back(cb, WT_CHUNK);
+                const uint32_t l1 = get_write_ptr(cb);
+                issue(l1, tb);
+                noc_async_read_barrier();
+                sender.send(l1, l1, WT_CHUNK * tb);
+                cb_push_back(cb, WT_CHUNK);
+            };
+            if (pc_role != 0) {
+                MaybeDeviceZoneScope("reader_pc_inject");
+                auto sender = pc_args.sender(pc_noc);
+                for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
+                    const uint32_t first_wt = w_start + c * WT_CHUNK;
+                    if constexpr (HAS_G) {
+                        const auto g_acc = TensorAccessor(gamma_args, gamma_addr);
+                        pc_send(sender, cb_gamma_tiles, first_wt, g_tb, [&](uint32_t l1, uint32_t tb) {
+                            pc_issue_slice_reads<WT, GAMMA_ELEM_BYTES, PC_GTRIM>(g_acc, first_wt, WT_CHUNK, l1, tb);
+                        });
+                    }
+                    if constexpr (HAS_B) {
+                        const auto b_acc = TensorAccessor(bias_args, bias_addr);
+                        pc_send(sender, cb_bias_tiles, first_wt, b_tb, [&](uint32_t l1, uint32_t tb) {
+                            pc_issue_slice_reads<WT, BIAS_ELEM_BYTES, PC_BTRIM>(b_acc, first_wt, WT_CHUNK, l1, tb);
+                        });
+                    }
+                }
+            } else if constexpr (PC_LATE) {
+                // DEFERRED: reserve only -- `pc_finish` does the wait and the push after
+                // this core's first row-block of x.  ONE chunk, which the host guarantees
+                // (it clears the LATE bit unless NUM_W_CHUNKS == 1): a receiver cannot
+                // reserve chunk c+1 before it has pushed chunk c, so a deferred multi-chunk
+                // receiver would be a reserve that never advances -- which is exactly the
+                // HANG this static_assert now makes unbuildable.
+                if constexpr (HAS_G) {
+                    cb_reserve_back(cb_gamma_tiles, WT_CHUNK);
+                }
+                if constexpr (HAS_B) {
+                    cb_reserve_back(cb_bias_tiles, WT_CHUNK);
+                }
+                pc_pending = true;
+            } else {
+                // EAGER: one reserve / receive / push per chunk, in the SAME order the
+                // injector sends them.
+                for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
+                    if constexpr (HAS_G) {
+                        cb_reserve_back(cb_gamma_tiles, WT_CHUNK);
+                        pc_receiver.receive();
+                        cb_push_back(cb_gamma_tiles, WT_CHUNK);
+                    }
+                    if constexpr (HAS_B) {
+                        cb_reserve_back(cb_bias_tiles, WT_CHUNK);
+                        pc_receiver.receive();
+                        cb_push_back(cb_bias_tiles, WT_CHUNK);
+                    }
+                }
+            }
+        } else {
+            // ---- PC_N injectors, disjoint slices, everyone broadcasts to everyone ----
+            constexpr uint32_t PC_BASE = WT_CHUNK / PC_N;
+            constexpr uint32_t PC_REM = WT_CHUNK % PC_N;
+            auto pc_off = [](uint32_t i) { return i * PC_BASE + ((i < PC_REM) ? i : PC_REM); };
+            auto pc_cnt = [](uint32_t i) { return PC_BASE + ((i < PC_REM) ? 1u : 0u); };
+            auto sender = pc_args.sender(pc_noc);
+            auto& receiver = pc_receiver;
+            for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
+                const uint32_t first_wt = w_start + c * WT_CHUNK;
+                // The reserve happens on EVERY core before any round: the landing
+                // address must be identical program-wide, and it is only identical
+                // while nothing has been pushed.
+                uint32_t gl1 = 0;
+                uint32_t bl1 = 0;
+                if constexpr (HAS_G) {
+                    cb_reserve_back(cb_gamma_tiles, WT_CHUNK);
+                    gl1 = get_write_ptr(cb_gamma_tiles);
+                }
+                if constexpr (HAS_B) {
+                    cb_reserve_back(cb_bias_tiles, WT_CHUNK);
+                    bl1 = get_write_ptr(cb_bias_tiles);
+                }
+                if (pc_role != 0) {
+                    MaybeDeviceZoneScope("reader_pc_inject");
+                    const uint32_t i = pc_role - 1;
+                    const uint32_t off = pc_off(i);
+                    const uint32_t cnt = pc_cnt(i);
+                    if (cnt != 0) {
+                        // BOTH operands' reads are issued before either broadcast, so
+                        // they share ONE barrier instead of standing in series behind
+                        // two full DRAM round trips.
+                        if constexpr (HAS_G) {
+                            const auto g_acc = TensorAccessor(gamma_args, gamma_addr);
+                            pc_issue_slice_reads<WT, GAMMA_ELEM_BYTES, PC_GTRIM>(
+                                g_acc, first_wt + off, cnt, gl1 + off * g_tb, g_tb);
+                        }
+                        if constexpr (HAS_B) {
+                            const auto b_acc = TensorAccessor(bias_args, bias_addr);
+                            pc_issue_slice_reads<WT, BIAS_ELEM_BYTES, PC_BTRIM>(
+                                b_acc, first_wt + off, cnt, bl1 + off * b_tb, b_tb);
+                        }
+                        noc_async_read_barrier();
+                        if constexpr (HAS_G) {
+                            sender.send(gl1 + off * g_tb, gl1 + off * g_tb, cnt * g_tb);
+                        }
+                        if constexpr (HAS_B) {
+                            sender.send(bl1 + off * b_tb, bl1 + off * b_tb, cnt * b_tb);
+                        }
+                    }
+                }
+                {
+                    MaybeDeviceZoneScope("reader_pc_recv");
+                    for (uint32_t r = 0; r < PC_N; ++r) {
+                        if (r + 1 == pc_role || pc_cnt(r) == 0) {
+                            continue;  // my own slice is already in my L1
+                        }
+                        if constexpr (HAS_G) {
+                            receiver.receive(r);
+                        }
+                        if constexpr (HAS_B) {
+                            receiver.receive(r);
+                        }
+                    }
+                }
+                if constexpr (HAS_G) {
+                    cb_push_back(cb_gamma_tiles, WT_CHUNK);
+                }
+                if constexpr (HAS_B) {
+                    cb_push_back(cb_bias_tiles, WT_CHUNK);
+                }
+            }
+        }
+    }
+    // ---- the STREAM regime's per-(block, chunk) re-stage, multicast -------
+    // STREAM (X_RESIDENT == 0) re-reads the per-channel operands for EVERY pass-B chunk
+    // of EVERY row-block -- for a prefill profile that is as many DRAM bytes as x, and
+    // it is the largest single ablation number in the op.  The multicast applies here
+    // too, with two differences from the resident case:
+    //
+    //   * the per-channel CB is a RING that the compute kernel POPS, so the landing
+    //     slot can still be in use.  The pre-HANDSHAKE is therefore REQUIRED here
+    //     (the resident case could elide it only because its CBs are never popped),
+    //     and the host turns it on for this mode.
+    //   * the round count is `num_blocks * NUM_W_CHUNKS`, which is PER CORE.  A line
+    //     whose members disagree would desync, so the host engages a line only when
+    //     its members share (w_start, w_real, num_blocks) and marks the rest OPT-OUT.
+    auto pc_stream_stage = [&](uint32_t c) {
+        if (pc_role == PC_ROLE_OPT_OUT) {
+            stage_per_channel(c);
+            return;
+        }
+        const uint32_t first_wt = w_start + c * WT_CHUNK;
+        if (pc_role != 0) {
+            MaybeDeviceZoneScope("reader_pc_inject");
+            if constexpr (HAS_G) {
+                const auto g_acc = TensorAccessor(gamma_args, gamma_addr);
+                cb_reserve_back(cb_gamma_tiles, WT_CHUNK);
+                const uint32_t l1 = get_write_ptr(cb_gamma_tiles);
+                pc_issue_slice_reads<WT, GAMMA_ELEM_BYTES, PC_GTRIM>(g_acc, first_wt, WT_CHUNK, l1, g_tb);
+                noc_async_read_barrier();
+                pc_sender.send(l1, l1, WT_CHUNK * g_tb);
+                cb_push_back(cb_gamma_tiles, WT_CHUNK);
+            }
+            if constexpr (HAS_B) {
+                const auto b_acc = TensorAccessor(bias_args, bias_addr);
+                cb_reserve_back(cb_bias_tiles, WT_CHUNK);
+                const uint32_t l1 = get_write_ptr(cb_bias_tiles);
+                pc_issue_slice_reads<WT, BIAS_ELEM_BYTES, PC_BTRIM>(b_acc, first_wt, WT_CHUNK, l1, b_tb);
+                noc_async_read_barrier();
+                pc_sender.send(l1, l1, WT_CHUNK * b_tb);
+                cb_push_back(cb_bias_tiles, WT_CHUNK);
+            }
+        } else {
+            MaybeDeviceZoneScope("reader_pc_recv");
+            if constexpr (HAS_G) {
+                cb_reserve_back(cb_gamma_tiles, WT_CHUNK);
+                pc_receiver.receive();
+                cb_push_back(cb_gamma_tiles, WT_CHUNK);
+            }
+            if constexpr (HAS_B) {
+                cb_reserve_back(cb_bias_tiles, WT_CHUNK);
+                pc_receiver.receive();
+                cb_push_back(cb_bias_tiles, WT_CHUNK);
+            }
+        }
+    };
+#else
+    if constexpr (X_RESIDENT) {
         for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
             stage_per_channel(c);
         }
     }
+#endif
 
     // ---- BAND staging: a core's own resident RM shard -> the tilize ring -----
     // The band is `band_bytes` of every stick it owns, at base + local_stick *
@@ -1080,30 +1258,24 @@ void kernel_main() {
         for (uint32_t pass = 0; pass < NUM_PASSES; ++pass) {
             for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
                 stage_activations_chunk(r0, rows, c);
-                // STREAM: the per-channel operands are chunked and re-staged for
+#ifdef RMS_PC_MCAST
+                // PC_LATE: the receiver's broadcast wait, collected HERE -- after this
+                // core has issued its first row-block of x -- instead of in the
+                // prologue.  Self-guarded: it runs on the first pass through and is a
+                // predictable not-taken branch afterwards.
+                pc_finish();
+#endif
+                // STREAM: the per-channel operands are chunked and re-read for
                 // every pass-B chunk.
                 if constexpr (!X_RESIDENT) {
                     if (pass == 1) {
+#ifdef RMS_PC_MCAST
+                        pc_stream_stage(c);
+#else
                         stage_per_channel(c);
+#endif
                     }
                 }
-            }
-        }
-        // D39, ROW_RESIDENT with a CHUNKED per-channel ring: the chunks
-        // are pushed in a SECOND loop, after every activation chunk of this block
-        // is on its way.
-        //
-        // THE ORDER IS THE DEADLOCK ARGUMENT, not a preference.  The ring holds ONE
-        // chunk, so a push of chunk c blocks until the compute kernel pops chunk
-        // c-1 -- which happens in PASS B.  Interleaving the two loops would stall
-        // this thread inside pass A's feed (compute waiting on activation chunk
-        // c+1, this kernel waiting on a pass-B pop) and hang.  Pushing all of pass
-        // A's activations FIRST means the only thing left to wait for is a pass-B
-        // pop, which pass A's completion always delivers.  Compute needs no
-        // per-channel tile before pass B, so nothing is starved by the order.
-        if constexpr (X_RESIDENT && PC_CHUNKED) {
-            for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
-                stage_per_channel(c);
             }
         }
     }
