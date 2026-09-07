@@ -33,6 +33,8 @@ except ModuleNotFoundError:
 
 MODEL_DTYPE = ttnn.bfloat16
 GEMMA4_SLIDING_WINDOW_TOKENS = 1024
+PREFILL_CHUNK_SIZES = (4096, 8192, 16384, 32768)
+LAYER_PERF_CONTEXT_LENGTHS = (262144,)
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 
 
@@ -269,7 +271,7 @@ def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
 @torch.no_grad()
 @parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
 @pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
-@pytest.mark.parametrize("chunk_size", [4096, 8192, 16384, 32768], ids=lambda c: f"chunk{c}")
+@pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
 @pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
 @pytest.mark.parametrize("readback_all", [True, False], ids=["readback_all", "readback_final"])
 def test_prefill_long_context_traced(
@@ -487,12 +489,16 @@ def _perf_signposts(layer_type, chunk_idx):
 @pytest.mark.timeout(7200)
 @parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
 @pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
-@pytest.mark.parametrize("context_len", [262144], ids=lambda c: f"ctx_{c // 1024}k")
-@pytest.mark.parametrize("chunk_size", [8192], ids=lambda c: f"sz{c}")
+@pytest.mark.parametrize("context_len", LAYER_PERF_CONTEXT_LENGTHS, ids=lambda c: f"ctx_{c // 1024}k")
+@pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"sz{c}")
 @pytest.mark.parametrize(
     "layer_type", ["full_attention", "sliding_attention", "both"], ids=["global", "sliding", "both"]
 )
-@pytest.mark.parametrize("chunk_idx", [*range(262144 // 8192), "all"], ids=lambda c: f"chunk{c}")
+@pytest.mark.parametrize(
+    "chunk_idx",
+    [*range(max(LAYER_PERF_CONTEXT_LENGTHS) // min(PREFILL_CHUNK_SIZES)), "all"],
+    ids=lambda c: f"chunk{c}",
+)
 def test_prefill_layer_perf_chunk_n(
     mesh_device, chunk_idx, layer_type, chunk_size, context_len, token_source, reset_seeds, request
 ):
