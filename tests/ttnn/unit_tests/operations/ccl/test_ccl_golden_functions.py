@@ -2,10 +2,31 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
+
 import pytest
 import torch
 
 import ttnn
+
+
+def _distributed_golden(shards, *, mesh_shape=(2, 2), shard_dims=(0, 1), global_value=None):
+    mesh_coords = tuple(
+        ttnn.MeshCoordinate(*coordinate) for coordinate in itertools.product(*(range(d) for d in mesh_shape))
+    )
+    topology = ttnn.TensorTopologySnapshot(
+        distribution_shape=mesh_shape,
+        placements=tuple(
+            ttnn.PlacementReplicate() if shard_dim is None else ttnn.PlacementShard(shard_dim)
+            for shard_dim in shard_dims
+        ),
+        mesh_coords=mesh_coords,
+    )
+    return ttnn.DistributedGolden(
+        topology=topology,
+        global_value=global_value,
+        shards=dict(zip(mesh_coords, shards)),
+    )
 
 
 def _two_group_collective_inputs():
@@ -21,57 +42,49 @@ def test_all_broadcast_golden_composes_every_collective_group():
     golden_function = ttnn.get_golden_function(ttnn.all_broadcast)
 
     outputs = golden_function(
-        _two_group_collective_inputs(),
+        _distributed_golden(_two_group_collective_inputs()),
         cluster_axis=1,
-        _ttnn_golden_mesh_shape=(2, 2),
-        _ttnn_golden_mesh_shard_dims=(0, 1),
     )
 
     assert len(outputs) == 2
-    assert torch.equal(outputs[0], torch.tensor([[1.0, 2.0], [10.0, 20.0]], dtype=torch.bfloat16))
-    assert torch.equal(outputs[1], torch.tensor([[3.0, 4.0], [30.0, 40.0]], dtype=torch.bfloat16))
+    assert torch.equal(outputs[0].global_value, torch.tensor([[1.0, 2.0], [10.0, 20.0]], dtype=torch.bfloat16))
+    assert torch.equal(outputs[1].global_value, torch.tensor([[3.0, 4.0], [30.0, 40.0]], dtype=torch.bfloat16))
 
 
 def test_all_gather_golden_composes_every_collective_group():
     golden_function = ttnn.get_golden_function(ttnn.all_gather)
 
     output = golden_function(
-        _two_group_collective_inputs(),
+        _distributed_golden(_two_group_collective_inputs()),
         dim=1,
         cluster_axis=1,
-        _ttnn_golden_mesh_shape=(2, 2),
-        _ttnn_golden_mesh_shard_dims=(0, 1),
     )
 
     expected = torch.tensor([[1.0, 2.0, 3.0, 4.0], [10.0, 20.0, 30.0, 40.0]], dtype=torch.bfloat16)
-    assert torch.equal(output, expected)
+    assert torch.equal(output.global_value, expected)
 
 
 def test_all_reduce_golden_composes_every_collective_group():
     golden_function = ttnn.get_golden_function(ttnn.all_reduce)
 
     output = golden_function(
-        _two_group_collective_inputs(),
+        _distributed_golden(_two_group_collective_inputs()),
         cluster_axis=1,
-        _ttnn_golden_mesh_shape=(2, 2),
-        _ttnn_golden_mesh_shard_dims=(0, 1),
     )
 
-    assert torch.equal(output, torch.tensor([[4.0, 6.0], [40.0, 60.0]], dtype=torch.bfloat16))
+    assert torch.equal(output.global_value, torch.tensor([[4.0, 6.0], [40.0, 60.0]], dtype=torch.bfloat16))
 
 
 def test_reduce_scatter_golden_composes_every_rank_chunk():
     golden_function = ttnn.get_golden_function(ttnn.reduce_scatter)
 
     output = golden_function(
-        _two_group_collective_inputs(),
+        _distributed_golden(_two_group_collective_inputs()),
         dim=1,
         cluster_axis=1,
-        _ttnn_golden_mesh_shape=(2, 2),
-        _ttnn_golden_mesh_shard_dims=(0, 1),
     )
 
-    assert torch.equal(output, torch.tensor([[4.0, 6.0], [40.0, 60.0]], dtype=torch.bfloat16))
+    assert torch.equal(output.global_value, torch.tensor([[4.0, 6.0], [40.0, 60.0]], dtype=torch.bfloat16))
 
 
 def test_all_to_all_dispatch_golden_masks_placeholder_rows():
@@ -120,21 +133,21 @@ def test_reduce_to_root_golden_reduces_four_device_states():
     input_tensors_s = [torch.ones((1, 1, 1, 32), dtype=torch.float32) for _ in range(4)]
     input_tensors_m = [torch.zeros((1, 1, 1, 32), dtype=torch.float32) for _ in range(4)]
     golden_function = ttnn.get_golden_function(ttnn.reduce_to_root)
+    root_coord = ttnn.MeshCoordinate(1, 0)
 
     output_l, output_s, output_m = golden_function(
-        input_tensors_l,
-        input_tensors_s,
-        input_tensors_m,
-        root_coord=(1, 0),
-        _ttnn_golden_mesh_shape=(2, 2),
+        _distributed_golden(input_tensors_l, shard_dims=(None, None)),
+        _distributed_golden(input_tensors_s, shard_dims=(None, None)),
+        _distributed_golden(input_tensors_m, shard_dims=(None, None)),
+        root_coord=root_coord,
     )
 
-    assert torch.equal(output_l, torch.full_like(output_l, 2.5))
-    assert torch.equal(output_s, torch.full_like(output_s, 4.0))
-    assert torch.equal(output_m, torch.zeros_like(output_m))
-    assert output_l._ttnn_mesh_index == 2
-    assert output_s._ttnn_mesh_index == 2
-    assert output_m._ttnn_mesh_index == 2
+    assert torch.equal(output_l.shards[root_coord], torch.full_like(input_tensors_l[0], 2.5))
+    assert torch.equal(output_s.shards[root_coord], torch.full_like(input_tensors_s[0], 4.0))
+    assert torch.equal(output_m.shards[root_coord], torch.zeros_like(input_tensors_m[0]))
+    assert output_l.compare_coords == frozenset({root_coord})
+    assert output_s.compare_coords == frozenset({root_coord})
+    assert output_m.compare_coords == frozenset({root_coord})
 
 
 def _expected_moe_routing_outputs(
@@ -159,16 +172,16 @@ def _expected_moe_routing_outputs(
 def test_point_to_point_golden_selects_nonzero_receiver_shard():
     input_tensors = [torch.full((1, 4), index, dtype=torch.bfloat16) for index in range(4)]
     golden_function = ttnn.get_golden_function(ttnn.point_to_point)
+    receiver_coord = ttnn.MeshCoordinate(1, 0)
 
     output = golden_function(
-        input_tensors,
+        _distributed_golden(input_tensors, shard_dims=(None, None)),
         sender_coord=(0, 1),
-        receiver_coord=(1, 0),
-        _ttnn_golden_mesh_shape=(2, 2),
+        receiver_coord=receiver_coord,
     )
 
-    assert torch.equal(output, input_tensors[1])
-    assert output._ttnn_mesh_index == 2
+    assert torch.equal(output.shards[receiver_coord], input_tensors[1])
+    assert output.compare_coords == frozenset({receiver_coord})
 
 
 @pytest.mark.parametrize("cluster_axis, expert_parallel_size", [(0, 2), (1, 4)])
@@ -180,11 +193,15 @@ def test_moe_routing_remap_golden_partitions_each_mesh_member(cluster_axis, expe
     golden_function = ttnn.get_golden_function(ttnn.moe_routing_remap)
 
     output = golden_function(
-        routing_weights,
+        _distributed_golden(
+            [routing_weights] * 8,
+            mesh_shape=mesh_shape,
+            shard_dims=(None, None),
+            global_value=routing_weights,
+        ),
         non_zero_weight_size,
         expert_parallel_size,
         cluster_axis,
-        _ttnn_golden_mesh_shape=mesh_shape,
     )
     expected = _expected_moe_routing_outputs(
         routing_weights,
@@ -194,6 +211,6 @@ def test_moe_routing_remap_golden_partitions_each_mesh_member(cluster_axis, expe
         mesh_shape,
     )
 
-    assert torch.equal(output, expected)
+    assert torch.equal(output.global_value, expected)
     first_next_member = 4 if cluster_axis == 0 else 1
-    assert not torch.equal(output[0], output[first_next_member])
+    assert not torch.equal(output.global_value[0], output.global_value[first_next_member])
