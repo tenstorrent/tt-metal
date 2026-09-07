@@ -1,0 +1,3 @@
+# Run artifacts: per-host bindings, runner/producer logs, timing CSVs. Regenerate them; they are
+# large, per-machine, and their numbers belong in the docs rather than in the tree.
+logs/

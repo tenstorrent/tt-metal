@@ -1,0 +1,70 @@
+# NOTE: the TT_VISIBLE_DEVICES lists below are PLACEHOLDERS and are PER-GALAXY. Regenerate for your
+# host before running anything:
+#   python models/demos/gemma4/tests/perf/pp4/gen_gemma4_pp4_binding.py --profile
+# which writes <stem>.<hostname>.yaml next to this file; every runner here prefers that automatically.
+#
+# PROFILE variant: identical to the plain sibling except each rank carries its own
+# TT_METAL_PROFILER_DIR. It has its OWN file name for a reason -- sharing the plain template would
+# write both variants to <stem>.<host>.yaml and the second generation would silently overwrite the
+# first, leaving an "e2e" binding that profiles every cell and reports inflated times with no
+# indication why.
+#
+# 4-stage intra-galaxy pipeline prefill of Gemma 4 31B at stage shape [8,1] (CP=8 x TP=1): one 8x4
+# Blackhole galaxy carved into 4 Z-connected COLUMN sub-meshes, 15-ish layers each, with the hidden
+# state hopping stage->stage over the Z-link MeshSocket. Request mode -- rank 0 serves an external
+# prefill_producer.
+#
+# Why [8,1] rather than trading the other way: Gemma 4's own per-layer attribution puts the TP-axis
+# collectives (4 all-gathers + 2 reduce-scatters = 1344.8 us) at 30.6% of a global layer, MORE than
+# SDPA. TP=1 removes that bucket entirely, and it is free in memory: weights shard only on the TP
+# axis, so TP 4->1 quadruples per-device weight bytes while PP=4 quarters the layer count. CP stays
+# at 8, which is the measured-better axis (8x4 = 13.6 s vs 4x8 = 17.5 s at 256k) and which keeps
+# chunk 8192 legal (ring_joint needs a per-rank Q slab >= the 1024-token sliding window).
+#
+# TT_VISIBLE_DEVICES: one logical COLUMN of the 8x4 galaxy per rank, in the mesh's own row-major
+# order. A column spans TWO trays (4 chips from each), so these sets are NOT tray ids and cannot be
+# derived from tray discovery. A wrong map does NOT error -- it builds four stages that are not
+# columns and reports plausible, wrong numbers.
+
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_METAL_PROFILER_DIR: "G4_PROFILE_OUT/rank0", TT_VISIBLE_DEVICES: "0,1,2,3,11,10,9,8"}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {TT_METAL_PROFILER_DIR: "G4_PROFILE_OUT/rank1", TT_VISIBLE_DEVICES: "4,5,6,7,15,14,13,12"}}
+  - {rank: 2, mesh_id: 2, mesh_host_rank: 0, env_overrides: {TT_METAL_PROFILER_DIR: "G4_PROFILE_OUT/rank2", TT_VISIBLE_DEVICES: "28,29,30,31,23,22,21,20"}}
+  - {rank: 3, mesh_id: 3, mesh_host_rank: 0, env_overrides: {TT_METAL_PROFILER_DIR: "G4_PROFILE_OUT/rank3", TT_VISIBLE_DEVICES: "24,25,26,27,19,18,17,16"}}
+
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x8x1_z_chain_graph_descriptor.textproto
+
+global_env:
+  # Plain FABRIC_2D, matching the descriptor's dim_types [LINE, LINE] -- and this is where Gemma 4
+  # DIFFERS from the Mistral PP=4 binding this topology is ported from. Mistral needed the torus_y
+  # variant because its single-process comparison opened FABRIC_2D_TORUS_XY. Gemma 4's baseline does
+  # not: test_factory._fabric_config_for_shape gives an 8x4 mesh plain FABRIC_2D, and Gemma 4's CP
+  # collective is ring_joint_scaled_dot_product_attention, which passes topology=Topology.Linear
+  # unconditionally (attention/ring_prefill.py). So there is no wrap to match, and asking for one
+  # would only risk a Ring collective on an axis the fabric does not wrap, which hangs.
+  PREFILL_FABRIC_MODE: "2d"
+  # Every knob the run depends on lives HERE, not in the shell: ttrun applies global_env to every
+  # rank, while an exported variable reaches rank 0 only -- and the runner's config-fingerprint
+  # check will (correctly) abort the run when the ranks disagree.
+  PREFILL_MODEL: "gemma4_31b"
+  PREFILL_MANIFEST: "models/demos/gemma4/tt/runners/manifests/gemma4_31b_pp4.json"
+  PREFILL_SP: "8"
+  PREFILL_TP: "1"
+  PREFILL_NUM_LAYERS: "60"
+  PREFILL_CHUNK_SIZE: "8192"
+  PREFILL_MAX_SEQ_LEN: "262144"
+  PREFILL_NUM_USERS: "2"
+  PREFILL_USE_TRACE: "1"
+  PREFILL_H2D_SERVICE_ID: "gemma4_prefill"
+  # Stage balance is by GLOBAL-layer count, not layer count: layer_types is 50 sliding + 10 full with
+  # a global every 6th (5, 11, ... 59), a global layer costs ~6.7x a sliding one at depth, and
+  # throughput is 1/max(stage). An even 15/15/15/15 gives 2/3/2/3 globals and the 3-global stages set
+  # the rate. 17/13/17/13 keeps the same 2/3/2/3 split but takes 5 sliding layers off each slow stage.
+  PREFILL_PP_LAYER_COUNTS: "17,13,17,13"
+  # Only 12B of metadata transits the queue; the default 64KB clashes with the L1 allocation.
+  PREFILL_PP_D2D_FIFO_BYTES: "32768"
+  # Gemma 4 resolves its weight cache from the OPENED mesh shape, so a [8,1] rank looks for
+  # tensor_cache_bf16_mesh8x1 with _tp1_ filenames. Refuse the unqualified legacy directory rather
+  # than silently loading a TP=4 cache, whose failure mode is a deadlock in layer 0, not an error.
+  GEMMA4_WEIGHT_CACHE_MESH_ONLY: "1"
+  LOGURU_LEVEL: "INFO"
