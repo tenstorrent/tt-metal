@@ -310,7 +310,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     const uint32_t cb_in0_welford_index =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
     const uint32_t cb_normalize_in_fp32_index =
-        tilize_in ? static_cast<uint32_t>(tt::CBIndex::c_29) : static_cast<uint32_t>(tt::CBIndex::c_19);
+        tilize_in ? static_cast<uint32_t>(tt::CBIndex::c_29) : cb_in0_welford_index;
     constexpr uint32_t cb_ex_global_fp32_index = tt::CBIndex::c_7;
     constexpr uint32_t cb_ex2pe_fp32_index = tt::CBIndex::c_11;
 
