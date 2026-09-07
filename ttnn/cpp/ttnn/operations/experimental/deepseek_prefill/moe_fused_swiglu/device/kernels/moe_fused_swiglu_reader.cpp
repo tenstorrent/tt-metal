@@ -16,9 +16,11 @@
 //      iteration, with a posted per-slot-flag multicast.
 //
 // RAW-DATAFLOW DEVIATIONS, each because no in-tree helper expresses the thing:
-//   * the phase-2 W_down stream keeps the raw sticky `noc_async_read_set_trid`: the Noc form tags
-//     one call at a time, so it cannot tag a whole coalesced RUN issued by a shared helper
-//     (moe_fused_swiglu_bank_runs.hpp), and the per-K-block barrier is what the deferral needs.
+//   * the transaction ids stay on the raw sticky `noc_async_read_set_trid`. Noc tags per CALL, and
+//     that form spins on NIU_MST_REQS_OUTSTANDING_ID to cap outstanding transactions per id at 8 —
+//     a throttle on a stream whose whole point is that all HGROUPS W_down blocks leave as one
+//     batch. It is also a compile-time flag against a runtime `prefetch_next_x`, so every tagged
+//     read would need both instantiations behind a branch. Five sticky calls express all of it.
 //   * the reduce-scatter transport is raw unicast + counting semaphores: mcast_pipe's SenderPipe is
 //     a rectangle multicast, while a gather leg is point-to-point with a different destination per
 //     peer, and the fan-in needs counting.
@@ -617,7 +619,7 @@ void kernel_main() {
                     const uint32_t vy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
                     hrow_free.up(noc, vx, vy, 1);
                 }
-                noc_async_atomic_barrier();
+                noc.async_atomic_barrier();
             }
 
             // Resident weights read DRAM on M-block 0 only: `cb_pop_front` advances a read pointer
@@ -918,7 +920,7 @@ void kernel_main() {
                     const uint32_t py = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 1);
                     sem_go_obj.up(noc, px, py, 1);
                 }
-                noc_async_atomic_barrier();
+                noc.async_atomic_barrier();
             }
             {
                 {
