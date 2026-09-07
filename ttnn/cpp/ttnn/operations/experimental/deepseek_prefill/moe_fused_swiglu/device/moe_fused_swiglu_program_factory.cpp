@@ -318,6 +318,9 @@ std::vector<uint32_t> make_compute_ct(
         geo::CB_SLICE_GATE,
         geo::CB_SLICE_UP,
         geo::CB_H_SLICE,
+        geo::CB_GATE_BIAS,
+        geo::CB_UP_BIAS,
+        geo::CB_DOWN_BIAS,
     };
 }
 
