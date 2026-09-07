@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Guards reference/MODEL_ANALYSIS.md against drifting from the reference model.
+"""Guards docs/MODEL_ANALYSIS.md against drifting from the reference model.
 
 About two thirds of that document is machine-derived: the operator inventory, the per-module
 shape table, the parameter groups and the module tree. If the reference model changes and the
@@ -12,9 +12,9 @@ synthetic model this needs is allocated and released on its own instead of stack
 module's fixture. No weights and no network.
 """
 
-from models.experimental.nomic_embed_text_v2_moe.reference.analysis import OUTPUT_PATH, generate_markdown
+from models.experimental.nomic_embed_text_v2_moe.scripts.analysis import OUTPUT_PATH, generate_markdown
 
-REGENERATE_COMMAND = "python -m models.experimental.nomic_embed_text_v2_moe.reference.analysis"
+REGENERATE_COMMAND = "python -m models.experimental.nomic_embed_text_v2_moe.scripts.analysis"
 
 
 def test_committed_analysis_matches_regeneration():

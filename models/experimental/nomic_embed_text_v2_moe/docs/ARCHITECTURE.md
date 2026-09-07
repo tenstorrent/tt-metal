@@ -2,8 +2,12 @@
 
 Phase 0 deliverable for [#54917](https://github.com/tenstorrent/tt-metal/issues/54917).
 
-Every number here was measured against the pinned checkpoint. Input-dependent values say so.
-Open assumptions are in [Open questions](#open-questions), not stated as fact.
+Hand-written and hand-verified: every number was measured against the pinned checkpoint,
+input-dependent values say so, and open assumptions sit in [Open questions](#open-questions)
+rather than being stated as fact. The mechanical inventory the port is built against, meaning
+the graph, module hierarchy, operator list, per-module shapes and memory figures, is generated
+into [`MODEL_ANALYSIS.md`](MODEL_ANALYSIS.md). Phase sequencing, device measurements and the
+bring-up gates are in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
 
 Reproduce with `pytest models/experimental/nomic_embed_text_v2_moe/tests/pcc/ -v`.
 
@@ -26,15 +30,8 @@ decoder, no KV cache, no generation.
 Two repositories must be pinned. The weights repo's `auto_map` points at a different repo for
 the code, so pinning only the weights leaves the model definition floating on `main`.
 
-```
-input_ids -> word_embeddings -> (+) token_type_embeddings[0] -> emb_ln
-                                                                  |
-                                                                  v
-   block 0 (dense) -> block 1 (MoE) -> ... -> block 11 (MoE) -> last_hidden_state
-                                                                  |
-   each block is POST-norm:  h = norm1(attn(x) + x)               v
-                             y = norm2(mlp(h) + h)      mean pool -> [truncate] -> L2 norm
-```
+The full graph, with the mask path and both residual edges of each block, is
+[`MODEL_ANALYSIS.md` section 1](MODEL_ANALYSIS.md#1-model-graph).
 
 ## 2. Checkpoint contract
 
@@ -67,7 +64,8 @@ Verified absent: `position_embeddings`, `pooler`, `cls.`, `lm_head`, `ln_f`, `in
 `norm_factor`, router bias, anything vision. Each absence is a separate test; a hit means the
 reference is dropping a real weight.
 
-Resident weights: 1901 MB fp32, 951 MB bf16.
+Per-group parameter counts and the fp32 and bf16 footprint are in
+[`MODEL_ANALYSIS.md` section 5](MODEL_ANALYSIS.md#5-parameters-and-memory).
 
 ## 3. What is easy to get wrong
 
@@ -159,7 +157,8 @@ real tokens. The reference does not thread it through.
 
 `transformers` >= 5 ships a native `transformers.models.nomic_bert` targeting
 nomic-embed-text-v1.5: separate q/k/v/o, no biases, SwiGLU `gate_proj`/`up_proj`/`down_proj`,
-no MoE. Registered for `model_type == "nomic_bert"`, which is what this checkpoint declares.
+no MoE, `layer_norm_eps` 1e-12 and rope theta 1000.0. Registered for
+`model_type == "nomic_bert"`, which is what this checkpoint declares.
 
 Measured on transformers 5.12.1 at the pinned revision:
 
@@ -241,17 +240,17 @@ Phase 1 target, not implemented in this PR. Correctness only: `bfloat16`, `TILE_
 | three-major split | `ttnn.experimental.nlp_create_qkv_heads(num_heads=12, num_kv_heads=12, transpose_k_heads=False)` |
 | rotary | `ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False)`, cos/sin concat-duplicated (3.4) |
 | SDPA | `ttnn.transformer.scaled_dot_product_attention(..., is_causal=False, scale=1/8)`; `is_causal` defaults True |
-| head concat | `ttnn.transformer.concatenate_heads` |
+| head concat | `ttnn.transformer.concatenate_heads`, which takes rank-4 and returns rank-3, so the canonical rank-4 activation layout needs a reshape after it |
 | GELU | `ttnn.gelu(x)` as its own op, never `fused_activation=(GELU, True)`; the LUT error 2.3e-2 exceeds the bf16 noise floor |
-| router | fp32 `ttnn.linear`, `ttnn.softmax(dim=-1, compute_kernel_config=HiFi4)`, cast bf16, `ttnn.topk(k=2)`, `ttnn.scatter`. No sum-normalization (3.1) |
+| router | fp32 `ttnn.linear`, `ttnn.softmax(dim=-1, compute_kernel_config=HiFi4)`, cast bf16, `ttnn.topk(k=2)`, `ttnn.scatter`. No sum-normalization (3.1); `models/demos/gemma4/tt/router.py` divides by the top-k sum, which is exactly what must not be copied here |
 | experts | 2 broadcast-batch `ttnn.matmul`, `ttnn.gelu`, `ttnn.permute`, `ttnn.mul`, `ttnn.experimental.fast_reduce_nc(dims=[1])`, `ttnn.add(bias)` |
-| padding mask | built once per forward from the tokenizer's `attention_mask`, shared across layers |
+| padding mask | `eq`, `to_layout(TILE)`, `reshape`, `where(pad, -100000., 0.)`, `expand`, `typecast`. Built once per forward from the tokenizer's `attention_mask`, not from `input_ids != pad_token_id`, and shared across all 12 layers |
 | mean pool | `matmul(keep[B,1,1,S], hidden[B,1,S,D])` divided by `clip(sum(keep), 1., S)` |
 | L2 normalize | no single op: `mul`, `sum`, `rsqrt(+1e-12)`, `mul` |
 
 Device-side prerequisites (HiFi4 softmax, `ttnn.scatter` rejecting fp32, measured MoE-layer
-PCC, grid geometry) are in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) under "Device
-side".
+PCC, grid geometry) are in
+[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md#device-measurements).
 
 `NomicExperts.dense_forward` implements the device-shaped MoE in PyTorch and is asserted equal
 to the upstream loop, so it is the bridge between the two:
@@ -269,7 +268,7 @@ Carried to Phase 1; none blocks Phase 0.
 
 | | Question | Status |
 |---|---|---|
-| 1 | Router index agreement between torch fp32 and device bf16 | Top-2 over 8 experts is a discrete decision and near-ties flip. ~99.4% set-agreement measured in device probing. Needs a gate on agreement plus a margin analysis, not exact match. |
-| 2 | End-to-end 12-layer TTNN PCC | Not measurable until the TTNN model exists. Post-norm (3.8) is the reason to expect it not to compound. |
+| 1 | Router index agreement between torch fp32 and device bf16 | Top-2 over 8 experts is a discrete decision and near-ties flip. 99.41% set-agreement measured in device probing at T=512. Needs a gate on agreement plus a margin analysis, not exact match. |
+| 2 | End-to-end 12-layer TTNN PCC | Not measurable until the TTNN model exists. Post-norm (3.8) is the reason to expect it not to compound; the 0.98 target at bring-up step 9 is informed by the per-layer magnitudes above and by bge_m3 reaching 0.94 at bfloat8. |
 | 3 | Blackhole DRAM headroom for ~951 MB resident plus transient | No documented per-chip figure in-repo. Confirm by allocation at Phase 1 step 1. |
 | 4 | `fp32_dest_acc_en` on BH expert matmuls | From in-repo findings (#49068), not independently reproduced. Defaulting it off for matmuls is the safe side. |
