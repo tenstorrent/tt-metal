@@ -203,7 +203,7 @@ void kernel_main() {
                  .noc_x_end = mcast_end_x,
                  .noc_y_end = mcast_end_y,
                  .addr = gamma_l1_addr},
-                true);
+                true /* linked */);
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(beta_l1_addr),
                 mcast_ep,
@@ -215,8 +215,9 @@ void kernel_main() {
                  .noc_x_end = mcast_end_x,
                  .noc_y_end = mcast_end_y,
                  .addr = beta_l1_addr},
-                true);
+                true /* linked */);
             affine_done_sem.set(++affine_block_sequence);
+            // This unlinked semaphore multicast closes the chain; do not insert a barrier before it.
             affine_done_sem.set_multicast(noc, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_mcast_dests);
             noc.async_write_barrier();
 
