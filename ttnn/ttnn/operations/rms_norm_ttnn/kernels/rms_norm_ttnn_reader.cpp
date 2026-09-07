@@ -89,6 +89,12 @@
 #include "api/dataflow/dataflow_api.h"
 // PERMANENT per-stage device-profiler instrumentation (never remove; free when
 // the profiler is off -- see the header's durability contract).
+// ---- TEMPORARY ABLATION SWITCHES (/perf-measure cumulative peel) -----------
+// Uncomment to strip a stage's NoC PAYLOAD while keeping every CB handshake,
+// barrier and trip count.  Perf measurement only -- the op is WRONG with any of
+// these on.  They stay commented in the committed tree.
+// #define RMS_ABLATE_READ_X
+// #define RMS_ABLATE_PER_CHANNEL
 #include "perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -260,6 +266,9 @@ FORCE_INLINE void stage_per_channel_chunk(const Acc& acc, uint32_t first_wt) {
             // only as wide as the faces the consumer provably reads (measured:
             // rows 1..31 seeded 1e5x wrong left the output BIT-IDENTICAL;
             // corrupting row 0 instead collapsed pcc).
+#ifdef RMS_ABLATE_PER_CHANNEL
+            (void)tile_id;
+#else
             if constexpr (TRIM == 2) {
                 // Two face-rows.  The face offset tile_bytes/4 is 64-byte DRAM
                 // aligned for every LINEAR tiled format -- the descriptor has
@@ -277,6 +286,7 @@ FORCE_INLINE void stage_per_channel_chunk(const Acc& acc, uint32_t first_wt) {
             } else {
                 noc_async_read_tile(tile_id, acc, l1_addr);
             }
+#endif
             l1_addr += tile_bytes;
         }
         noc_async_read_barrier();
@@ -817,11 +827,15 @@ void kernel_main() {
                 const uint32_t tile_base = (first_tile_row + r + g) * WT + w_start + c * WT_CHUNK;
                 for (uint32_t w = 0; w < w_lim; ++w) {
                     if constexpr (!NATIVE_X) {
+#ifndef RMS_ABLATE_READ_X
                         noc_async_read_tile(tile_base + w, xa, xl1);
+#endif
                         xl1 += x_tile_bytes;
                     }
                     if constexpr (HAS_R && !NATIVE_R) {
+#ifndef RMS_ABLATE_READ_X
                         noc_async_read_tile(tile_base + w, ra, rl1);
+#endif
                         rl1 += x_tile_bytes;
                     }
                 }

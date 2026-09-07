@@ -94,6 +94,7 @@
 // #define RMS_ABLATE_ROOT_SUM
 // #define RMS_ABLATE_ROOT_FINALIZE
 // #define RMS_ABLATE_RECONFIG
+// #define RMS_ABLATE_COMPUTE
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -1241,11 +1242,20 @@ void kernel_main() {
                 // (D12).  `square` cannot carry the tile base, so the chain is spelled
                 // out; it is exactly what square<> expands to.
                 MaybeDeviceZoneScope("compute_square");
+#ifdef RMS_ABLATE_COMPUTE
+                // Payload stubbed: ONE unpack + ONE pack instead of the squaring
+                // FPU binary, with the identical CB lifecycle and trip count.
+                ckl::eltwise_chain(
+                    ckl::IterationShape::grid(rows, WT_CHUNK).block_size(SQ_BLK),
+                    ckl::CopyTile<X_IN_A>{hold_base},
+                    ckl::PackTile<SQ_OUT>{});
+#else
                 ckl::eltwise_chain(
                     ckl::IterationShape::grid(rows, WT_CHUNK).block_size(SQ_BLK),
                     ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, X_IN_A, X_IN_A, ckl::Dst::D0, SQ_OUT.dest_accumulation>{
                         hold_base, hold_base},
                     ckl::PackTile<SQ_OUT>{});
+#endif
             }
 
             // PERF 1: the reduce helper does NOT wait on its scaler CB -- its own contract
@@ -1801,6 +1811,12 @@ void kernel_main() {
             // popped -- every width chunk of this block re-reads it.
             {
                 MaybeDeviceZoneScope("compute_scale");
+#ifdef RMS_ABLATE_COMPUTE
+                ckl::eltwise_chain(
+                    ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
+                    ckl::CopyTile<X_IN_B>{hold_base},
+                    ckl::PackTile<PASS_B_OUT_NORM>{});
+#else
                 ckl::eltwise_chain(
                     ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
                     ckl::BinaryFpu<
@@ -1813,6 +1829,7 @@ void kernel_main() {
                             ckl::PopPolicy::None,
                             ckl::OperandKind::Col)>{hold_base},
                     ckl::PackTile<PASS_B_OUT_NORM>{});
+#endif
             }
 
             if constexpr (HAS_G) {

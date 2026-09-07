@@ -94,6 +94,7 @@
 // ---- TEMPORARY ABLATION SWITCH (/perf-measure cumulative peel) -------------
 // Uncomment to strip the gather boot-zeroing payload.  Perf measurement only.
 // #define RMS_ABLATE_GATHER_ZERO
+// #define RMS_ABLATE_WRITE
 #include "perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
@@ -389,7 +390,9 @@ void kernel_main() {
                         for (uint32_t w = 0; w < WT_CHUNK; ++w) {
                             const uint32_t wt = w_start + c * WT_CHUNK + w;
                             if (wt < WT) {  // a ragged width shard ends in pad tiles
+#ifndef RMS_ABLATE_WRITE
                                 noc_async_write_tile(tile_base + w, out_acc, l1_addr);
+#endif
                             }
                             l1_addr += out_tile_bytes;
                         }
