@@ -1031,6 +1031,50 @@ class TestNewModeFlow:
             assert call_args.kwargs["rank_binding"] == rank_bindings_path
             assert call_args.kwargs["rankfile"] == rankfile_path
             assert call_args.kwargs.get("phase2_failure_hint") is None
+            # The generated rankfile's slot=0 would pin each rank to one core; new mode unbinds by default.
+            phase2_args = call_args.kwargs["mpi_args"]
+            assert list(zip(phase2_args, phase2_args[1:])).count(("--bind-to", "none")) == 1
+
+    @pytest.mark.parametrize(
+        ("extra_cli", "env", "expect_none"),
+        [
+            pytest.param([], {}, True, id="default_unbinds"),
+            pytest.param(["--mpi-args", "--bind-to core"], {}, False, id="explicit_bind_to_wins"),
+            pytest.param([], {"TT_RUN_BIND_TO_NONE": "0"}, False, id="env_opt_out"),
+            pytest.param(["--bare"], {}, False, id="bare_adds_nothing"),
+        ],
+    )
+    def test_new_mode_flow_bind_to_none_policy(self, runner, temp_dir, monkeypatch, extra_cli, env, expect_none):
+        """Phase 2 of new mode gets --bind-to none unless the caller set a policy, opted out, or passed --bare."""
+        from unittest.mock import patch
+
+        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.touch()
+        rank_bindings_path = temp_dir / "rank_bindings.yaml"
+        rankfile_path = temp_dir / "rankfile"
+        rank_bindings_path.write_text("rank_bindings:\n  - rank: 0\n")
+        rankfile_path.write_text("rank 0=node1 slot=0\n")
+
+        with patch.object(
+            ttrun_module, "run_phase1_generate_rank_bindings", return_value=(rank_bindings_path, rankfile_path)
+        ), patch.object(ttrun_module, "legacy_flow") as mock_legacy, patch.object(
+            ttrun_module, "resolve_path", return_value=mgd_path
+        ), patch.object(
+            ttrun_module, "find_generate_rank_bindings_executable"
+        ):
+            runner.invoke(
+                main,
+                ["--mesh-graph-descriptor", str(mgd_path), "--hosts", "node1,node2", *extra_cli, "echo", "test"],
+            )
+            assert mock_legacy.called
+            phase2_args = mock_legacy.call_args.kwargs["mpi_args"] or []
+            has_none = ("--bind-to", "none") in list(zip(phase2_args, phase2_args[1:]))
+            assert has_none is expect_none, phase2_args
+            if extra_cli[:1] == ["--mpi-args"]:
+                assert "core" in phase2_args  # the caller's own policy is passed through untouched
 
     def test_new_mode_flow_phase1_cache_hit(self, runner, temp_dir, monkeypatch):
         """When cache dir has rank_bindings and rankfile, Phase 1 is skipped."""
