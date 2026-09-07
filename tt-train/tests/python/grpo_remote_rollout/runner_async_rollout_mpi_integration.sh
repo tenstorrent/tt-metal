@@ -30,6 +30,16 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
+# Slurm advertises the entire accelerator node as one CPU slot. Detach PRTE from
+# the batch allocation so tt-run's explicit hostfile and rank bindings control
+# placement of both device ranks within the node.
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    # shellcheck disable=SC2046
+    unset $(env | sed -n 's/^\(SLURM[^=]*\)=.*/\1/p')
+    export PRTE_MCA_ras="^slurm"
+    export PRTE_MCA_plm="^slurm"
+fi
+
 # The rank bindings use an MGD path relative to the one-step example directory.
 cd "${EXAMPLE_DIR}"
 
