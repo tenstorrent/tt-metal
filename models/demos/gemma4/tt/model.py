@@ -1434,10 +1434,14 @@ class Gemma4Model:
 
         if cp_degree(self.mesh_config) <= 1:
             return hidden_states
-        return ttnn.all_gather(
+        return ttnn.experimental.all_gather_async(
             hidden_states,
             dim=2,
             cluster_axis=self.mesh_config.sp_axis,
+            topology=self.ccl_manager.topology,
+            multi_device_global_semaphore=self.ccl_manager.get_ag_semaphore(),
+            num_links=self.ccl_manager.num_links,
+            barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

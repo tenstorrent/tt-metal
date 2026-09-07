@@ -415,7 +415,7 @@ def ring_prefill_attention(
         num_links=ccl_manager.num_links,
         cluster_axis=mesh_config.sp_axis,
         mesh_device=mesh_device,
-        topology=ttnn.Topology.Linear,
+        topology=ccl_manager.topology,
         ccl_core_grid_offset=ttnn.CoreCoord(*ccl_manager.ring_attention_ccl_core_grid_offset),
         use_column_major_ccl=True,
         is_causal=True,

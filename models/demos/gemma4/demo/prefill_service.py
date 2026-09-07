@@ -147,7 +147,7 @@ def _open_mesh_device(mesh_shape: tuple[int, int], trace_region_size: int):
     rows, cols = mesh_shape
     fabric_config = None
     if rows * cols > 1:
-        fabric_config = ttnn.FabricConfig.FABRIC_2D if rows > 1 and cols > 1 else ttnn.FabricConfig.FABRIC_1D
+        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if rows > 1 and cols > 1 else ttnn.FabricConfig.FABRIC_1D
         router_config = ttnn.FabricRouterConfig()
         router_config.max_packet_payload_size_bytes = 8192
         ttnn.set_fabric_config(

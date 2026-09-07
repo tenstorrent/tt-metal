@@ -69,7 +69,8 @@ def default_ccl_topology(mesh_device=None):
     Override with ``GEMMA4_CCL_TOPOLOGY=ring|linear``.
 
     Policy (when env unset):
-      * **Ring** only on **Blackhole** meshes with **≥8 devices** (P150x8 TTFT
+      * **Ring** on 2D meshes, matching FABRIC_2D_TORUS_XY.
+      * **Ring** on **Blackhole** line meshes with **≥8 devices** (P150x8 TTFT
         sweep: Ring+sync ~28.8s vs Linear+sync ~31.0s @ 31B/128k).
       * **Linear** everywhere else — including Wormhole T3K 1x8. Ring on WH
         drops 26B-A4B ``test_full_model`` PCC below the TEMP 0.76 gate
@@ -84,6 +85,10 @@ def default_ccl_topology(mesh_device=None):
         return ttnn.Topology.Ring
     if override in ("linear", "line", "l"):
         return ttnn.Topology.Linear
+
+    shape = getattr(mesh_device, "shape", (1, 1))
+    if shape[0] > 1 and shape[1] > 1:
+        return ttnn.Topology.Ring
 
     n = mesh_device.get_num_devices() if mesh_device is not None else 0
     # Ring TTFT win was swept on BH P150x8 only. WH T3K is also n=8 but must
@@ -409,10 +414,14 @@ def ccl_cp_allgather(tensor, mesh_config, ccl_manager, dim, memory_config=None):
     assert (
         tensor.layout == ttnn.TILE_LAYOUT
     ), f"ccl_cp_allgather requires TILE layout to stay on the native all_gather path, got {tensor.layout}"
-    gathered = ttnn.all_gather(
+    gathered = ttnn.experimental.all_gather_async(
         tensor,
         dim=dim,
         cluster_axis=mesh_config.sp_axis,
+        topology=ccl_manager.topology,
+        multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
+        num_links=ccl_manager.num_links,
+        barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
     )
     tensor.deallocate(True)
@@ -499,7 +508,7 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
     workers = ccl_num_workers_per_link()
     nbuf = ccl_num_buffers_per_channel()
 
-    if ccl_async_enabled():
+    if ccl_async_enabled() or topology == ttnn.Topology.Ring:
         # Fresh AG output each call (caller-owned); see ccl_allreduce note.
         gathered = ttnn.experimental.all_gather_async(
             tensor,

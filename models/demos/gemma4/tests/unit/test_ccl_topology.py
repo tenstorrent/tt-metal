@@ -32,11 +32,20 @@ def test_ccl_topology_env_override(monkeypatch, env, expected):
 
 
 class _FakeMesh:
-    def __init__(self, n):
+    def __init__(self, n, shape=None):
         self._n = n
+        self.shape = shape or (1, n)
 
     def get_num_devices(self):
         return self._n
+
+
+@pytest.mark.parametrize("shape", [(8, 4), (4, 8), (2, 2)])
+@pytest.mark.parametrize("blackhole", [True, False])
+def test_ccl_topology_ring_on_2d_mesh(monkeypatch, shape, blackhole):
+    monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: blackhole)
+    assert default_ccl_topology(_FakeMesh(math.prod(shape), shape)) == ttnn.Topology.Ring
 
 
 def test_ccl_topology_linear_on_4_device_mesh(monkeypatch):
