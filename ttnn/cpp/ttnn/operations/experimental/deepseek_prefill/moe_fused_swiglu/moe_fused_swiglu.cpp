@@ -24,6 +24,9 @@ ttnn::Tensor moe_fused_swiglu(
     const std::optional<ttnn::Tensor>& expert_region_offsets,
     bool read_x_at_offset,
     RoutedExpertActivation activation,
+    const std::optional<std::vector<ttnn::Tensor>>& gate_biases,
+    const std::optional<std::vector<ttnn::Tensor>>& up_biases,
+    const std::optional<std::vector<ttnn::Tensor>>& down_biases,
     uint32_t min_active_tokens,
     uint32_t max_active_tokens) {
     constexpr uint32_t TILE = 32;
@@ -83,11 +86,20 @@ ttnn::Tensor moe_fused_swiglu(
         /*default_l1_acc=*/false,
         /*default_dst_full_sync_en=*/false);
 
+    // Flattened to plain vectors here: nullopt and an empty list mean the same thing to the device
+    // operation, and collapsing them keeps one representation of "no bias" past this point.
+    const std::vector<ttnn::Tensor> gate_bias_list = gate_biases.value_or(std::vector<ttnn::Tensor>{});
+    const std::vector<ttnn::Tensor> up_bias_list = up_biases.value_or(std::vector<ttnn::Tensor>{});
+    const std::vector<ttnn::Tensor> down_bias_list = down_biases.value_or(std::vector<ttnn::Tensor>{});
+
     return ttnn::prim::moe_fused_swiglu(
         activations,
         w_gates,
         w_ups,
         w_downs,
+        gate_bias_list,
+        up_bias_list,
+        down_bias_list,
         counts,
         global_expert_idx_table,
         experts_per_chip,
