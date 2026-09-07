@@ -299,7 +299,7 @@ def test_sharded_norm_l1_budget_rejects_26b_prefill_1024(monkeypatch):
     per = sharded_norm_per_core_bytes(1024, 2816, 8)
     assert per == 720896
     assert not sharded_norm_fits_l1(1024, 2816, 8)
-    # 31B hidden=5376 on 56 cores still fits (the height-only cutoff case).
+    # 31B hidden=5376 on 56 cores still fits (I/O + kernel CBs).
     assert sharded_norm_fits_l1(1024, 5376, 56)
     assert width_shard_spec(_FakeNormMesh(), 2816, 1024) is None
 
@@ -328,7 +328,8 @@ def test_sharded_norm_l1_budget_keeps_12b_31b_wh_t3k(monkeypatch, label, dim, ex
     n, gx, gy = _norm_core_grid(spec)
     assert n == expect_cores, f"{label} h={height}: cores {n} ({gx}x{gy}), expected {expect_cores}"
     per = rn.sharded_norm_per_core_bytes(height, dim, n)
-    assert 2 * per <= rn._DEFAULT_L1_BANK_BYTES
+    scratch = rn.sharded_norm_scratch_bytes(height, dim, n)
+    assert 2 * per + scratch <= rn._DEFAULT_L1_BANK_BYTES
 
     orig = rn.sharded_norm_fits_l1
     rn.sharded_norm_fits_l1 = lambda *a, **k: True

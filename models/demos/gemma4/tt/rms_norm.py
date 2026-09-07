@@ -20,7 +20,27 @@ _SHARDED_NORM_MAX_HEIGHT = 1024
 # BH banks are larger; override with GEMMA4_SHARDED_NORM_L1_BANK.
 _DEFAULT_L1_BANK_BYTES = 1_393_472
 _SHARDED_NORM_ELEM_BYTES = 2  # bf16 activations on this path
-_SHARDED_NORM_SCRATCH_BYTES = 0
+_TILE = 32
+_FP32_BYTES = 4
+
+
+def sharded_norm_scratch_bytes(height, dim, num_cores, dtype_bytes=_SHARDED_NORM_ELEM_BYTES) -> int:
+    """Per-bank CB bytes the sharded RMSNorm kernel adds on top of live I/O.
+
+    From ``layernorm_op_multi_core_sharded``: gamma packed as a tile-tall
+    shard-width row, two fp32 stats tiles, and a one-tile-row column mask
+    (``block_wt * bfloat16_tile_size``). Height is unused; the kernel streams
+    the activation through those CBs rather than cloning another full shard.
+    """
+    del height
+    if num_cores <= 0 or int(dim) % int(num_cores) != 0:
+        return 1 << 62
+    shard_w = int(dim) // int(num_cores)
+    block_wt = max(1, shard_w // _TILE)
+    gamma = _TILE * shard_w * int(dtype_bytes)
+    stats = 2 * _TILE * _TILE * _FP32_BYTES
+    col_mask = block_wt * _TILE * _TILE * int(dtype_bytes)
+    return gamma + stats + col_mask
 
 
 def sharded_norm_enabled() -> bool:
@@ -142,7 +162,7 @@ def sharded_norm_fits_l1(
     num_cores,
     l1_bank_bytes=_DEFAULT_L1_BANK_BYTES,
     dtype_bytes=_SHARDED_NORM_ELEM_BYTES,
-    scratch_bytes=_SHARDED_NORM_SCRATCH_BYTES,
+    scratch_bytes=None,
 ) -> bool:
     """True when input + output (+ scratch) fit in one L1 bank.
 
@@ -151,7 +171,12 @@ def sharded_norm_fits_l1(
     cores: each tensor is 720,896 B and the pair exceeds the WH bank.
     """
     per = sharded_norm_per_core_bytes(height, dim, num_cores, dtype_bytes)
-    return (2 * per + int(scratch_bytes)) <= int(l1_bank_bytes)
+    scratch = (
+        int(scratch_bytes)
+        if scratch_bytes is not None
+        else sharded_norm_scratch_bytes(height, dim, num_cores, dtype_bytes)
+    )
+    return (2 * per + scratch) <= int(l1_bank_bytes)
 
 
 def _l1_bank_bytes(mesh_device) -> int:

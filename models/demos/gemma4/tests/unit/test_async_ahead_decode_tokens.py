@@ -212,6 +212,15 @@ def test_bounded_sliding_swap_remap():
     assert ids[1].tolist() == [0, 1, 2, 3]
 
 
+def test_continuing_request_matches_no_compaction_reference():
+    """Compacted B at row 0 must own the same blocks as B at row 1 with no compact."""
+    w, batch = 8, 2
+    ref_b = bounded_sliding_block_ids(batch, w, [0, 1])[1]
+    owners = apply_slot_remap_to_row_phys([0, 1], slot_remap=[1], batch=1)
+    compacted = bounded_sliding_block_ids(1, w, owners)
+    assert compacted[0].tolist() == ref_b.tolist()
+
+
 def test_zero_pad_dilutes_softmax_without_valid_mask():
     """Codex repro: zero-Q/K + unit real V → 385/1024 if pad rows are attended."""
     hist, valid = 1024, 385

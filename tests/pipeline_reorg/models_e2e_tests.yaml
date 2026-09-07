@@ -658,6 +658,13 @@
       models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
+    # Real-weight decoder / module gates (skipped in the config-only unit job).
+    pytest -s --timeout 900 \
+      models/demos/gemma4/tests/unit/test_prefill.py::test_prefill_isl_sanity \
+      models/demos/gemma4/tests/unit/test_decode.py::test_decode_multistep_kv_update \
+      models/demos/gemma4/tests/unit/test_decode.py::test_decode_multistep_kv_update_after_prefill \
+      models/demos/gemma4/tests/unit/test_rms_norm.py::test_rms_norm_real_weights \
+      models/demos/gemma4/tests/unit/test_attention.py::test_attention_decode_paged_real_weights
     pytest -s --timeout 3600 models/demos/gemma4/tests/e2e/test_teacher_forcing_e2e.py
   model: gemma-4-31b
   model_family: Gemma
@@ -688,6 +695,14 @@
       models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
+    # Real-weight decoder / module gates. Same set as 31B; CI=true picks the
+    # largest mesh (1x8 on WH, 1x1 on bh_p150).
+    pytest -s --timeout 900 \
+      models/demos/gemma4/tests/unit/test_prefill.py::test_prefill_isl_sanity \
+      models/demos/gemma4/tests/unit/test_decode.py::test_decode_multistep_kv_update \
+      models/demos/gemma4/tests/unit/test_decode.py::test_decode_multistep_kv_update_after_prefill \
+      models/demos/gemma4/tests/unit/test_rms_norm.py::test_rms_norm_real_weights \
+      models/demos/gemma4/tests/unit/test_attention.py::test_attention_decode_paged_real_weights
     pytest -s --timeout 3600 models/demos/gemma4/tests/e2e/test_teacher_forcing_e2e.py
   model: gemma-4-12b
   model_family: Gemma

@@ -152,7 +152,9 @@
     "1x1": {
       "test_attention_decode_paged[blackhole-cache512-global-1x1]": 0.98,
       "test_attention_decode_paged_batched[blackhole-cache512-batch1-global-1x1]": 0.989,
-      "test_attention_decode_bounded_vs_unbounded_parity[blackhole-cache1500-1x1]": 0.97
+      "test_attention_decode_bounded_vs_unbounded_parity[blackhole-cache1500-1x1]": 0.97,
+      "_comment_short_first_tail": "Chunked sliding continuation vs one unchunked 1536-token prefill. WH T3K 1x1 measured 0.98974 after RoPE is sliced to [chunk_start, chunk_start+len) (unsliced restart-at-0 was 0.47). The leftover is two SDPA graphs (hist-concat 1408 vs single 1536), not pad-attends-zeros. Gate 0.98 like other cross-path attention rows.",
+      "test_short_first_chunk_stashes_padded_sliding_tail[wormhole_b0-1x1]": 0.98
     },
     "1x4": {
       "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.97,
