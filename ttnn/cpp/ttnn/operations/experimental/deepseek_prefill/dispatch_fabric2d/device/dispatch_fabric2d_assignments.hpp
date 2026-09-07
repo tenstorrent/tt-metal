@@ -71,4 +71,21 @@ constexpr uint32_t relay_chunks_per_stream(uint32_t ring_extent) {
     return m * (m - 1) / 2;
 }
 
+// Pages one stream's forwarding region must hold. The host cannot know a chunk's length -- expert_offsets
+// lives on device and reading it back at build time would sync mid-build and defeat trace capture -- so
+// this bounds the region data-independently.
+//
+// Bounded per (origin, destination) pair rather than per chunk: one origin sends a destination at most
+// seq_len_per_chip * min(num_experts_per_tok, experts_per_chip) tokens, because a token picks DISTINCT
+// experts and the destination hosts experts_per_chip of them. The destinations a region carries sit at
+// distance 1..m-1; a destination at distance dd is fed by m-dd origins, of which exactly one is a full m
+// away and so splits across every stream while the rest split between the two planes. One spare page per
+// chunk covers integer slicing.
+uint32_t fwd_pages_per_stream(
+    uint32_t ring_extent,
+    uint32_t num_links,
+    uint32_t seq_len_per_chip,
+    uint32_t num_experts_per_tok,
+    uint32_t experts_per_chip);
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

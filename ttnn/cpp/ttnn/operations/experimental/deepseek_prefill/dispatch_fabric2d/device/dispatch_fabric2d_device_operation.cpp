@@ -81,6 +81,11 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         extent,
         args.axis);
 
+    // Identical across the dispatch group, so they arrive with a single row; they close the last
+    // origin's chunk, which expert_offsets alone cannot.
+    validate_control_tensor(tensor_args.expert_token_counts, args.num_routed_experts, "expert_token_counts");
+    validate_control_tensor(tensor_args.expert_region_offsets, args.num_routed_experts, "expert_region_offsets");
+
     // A padded token's unguarded lookup lands on a trailing sentinel column that maps to -1.
     validate_dram_row_major(tensor_args.expert_dispatch_table_tensor, "expert_dispatch_table");
     TT_FATAL(
@@ -186,6 +191,8 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& expert_offsets_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& expert_region_offsets,
     uint32_t experts_per_chip,
     uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
@@ -215,7 +222,9 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
             .input_tensor = input_tensor,
             .indices_tensor = indices_tensor,
             .expert_offsets_tensor = expert_offsets_tensor,
-            .expert_dispatch_table_tensor = expert_dispatch_table_tensor});
+            .expert_dispatch_table_tensor = expert_dispatch_table_tensor,
+            .expert_token_counts = expert_token_counts,
+            .expert_region_offsets = expert_region_offsets});
 }
 
 }  // namespace ttnn::prim

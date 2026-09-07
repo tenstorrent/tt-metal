@@ -22,6 +22,8 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& expert_offsets_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& expert_region_offsets,
     uint32_t experts_per_chip,
     uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
