@@ -1344,3 +1344,363 @@ measured this round: broadcasting D39's compact-cache **fill** (left on the tabl
 construction, since D39 and D40 are mutually exclusive today); a column-geometry broadcast
 that survives the deferred wait, which is what would reach the BLOCK shards; and the
 `Mcast1D` per-line predicate in the bypass table above.
+
+---
+
+## Perf 3
+
+Third and last perf round. Focus shape **re-ranked, and it moved**: with no `attention:`
+note anywhere in `LOOSE_CASES`, step 1 falls through to *measure every `perf` case and
+divide by its own `achievable_ns`*, which puts **case #4 `(1,1,8192,1024)` INTERLEAVED at
+0.866** ahead of Perf 2's focus (#5 `(1,1,8192,2304)`, 0.849) and #17 (BLOCK `gbr`, 0.838).
+Optimized at its full declared config — `bfloat16`, `TILE`, gamma-only with a **TILE**
+weight, `math_fidelity = HiFi2`, `fp32_dest_acc_en = False`, `math_approx_mode = False`,
+eps 1e-12, soft `pcc_threshold = 0.9995` — never a stand-in.
+
+Solved plan: `scheme=rows cores=110 wt_per_core=32 BLOCK_ROWS=2 WT_CHUNK=32
+NUM_W_CHUNKS=1 X_RESIDENT=1 depth=(3,3) rows_max=3`, D40's row broadcast engaged with 10
+injectors on 10/10 lines.
+
+### The measured breakdown
+
+**Cumulative peel** (each stage's payload stubbed with its CB reserve/push/wait/pop, loop
+trip counts and zone intact; stages peeled **together, never one at a time**):
+
+| configuration | ns | stage |
+|---|---:|---|
+| full op | 84,586 | |
+| − per-channel payload | 85,452 | per-channel = **~0** |
+| − compute FPU payload too | 85,319 | compute payload = **~0** |
+| − x read payload too | 63,513 | x read, marginal = **21,806** |
+| − write payload too (**everything** stubbed) | **14,225** | write = **49,288**; floor = **14,225** |
+| *write stubbed, read kept* (separate run) | 53,448 | read ALONE = **39,223** |
+
+Rates: read alone **428 GB/s**, write alone **340 GB/s**, the two together **473 GB/s**,
+whole op **394 GB/s**. A linear fit over an `Rt` sweep at this width gives
+`ns = 5,450 + 309.6·Rt`, i.e. a marginal aggregate rate of **423 GB/s** and a 5,450 ns
+fixed program cost — and it reconciles with the peel to within 0.5%
+(277 ns/row payload + 55.6 ns/row floor = 332.6 against the fit's 330.9).
+
+**The verdict needed the whole op stubbed at once, and got it.** The 14,225 ns residue is
+measured with *every* payload gone in ONE run, and it is **additive, not hidden**: payload
+70,923 + floor 14,225 = 85,148 = the wall. Zones on that same all-stubbed run say what it
+is — the floor is **TRISC-bound**, and by a wide margin:
+
+| RISC | marker span, max/core |
+|---|---:|
+| NCRISC (reader) | 2,493 |
+| TRISC_0/1/2 (unpack/math/pack) | 14,670 / 14,528 / 14,734 |
+| BRISC (writer) | 15,078, of which `writer_write` is 14,293 ns of **pure WAIT** |
+
+Per-stage inside the floor (max/core): `compute_square` **4,967**, `compute_scale`
+**3,681**, `compute_gamma_mul` **3,257**, `compute_reduce` **2,479**, `compute_finalize`
+**1,433**. All three TRISCs carry ~14,300 ns each — a *balanced* pipeline, which is the
+fact that decided the portfolio (see "why no pack-deleting idea was floated").
+
+**Three hypotheses tested and refuted before an idea was spent:**
+
+* **Load imbalance is NOT the wall — re-confirmed in a regime where it looked obvious.**
+  The zones show a 1.59x span imbalance (BRISC mean 52,489 vs max 83,276) and `Rt=256`
+  over 110 cores is 36 cores × 3 tile-rows + 74 × 2, a 0.776 balance factor. But sweeping
+  `Rt` at this exact width, so balance moves independently of bytes, is **flat**:
+  bal 0.727 → **404.4 GB/s**, 0.776 → 399.4, 0.833 → 398.1, 1.000 → **401.9** (Rt=330) and
+  390.4 (Rt=220). Perf 2 found this at W=2304 with `BLOCK_ROWS=1`; it holds at W=1024 with
+  `BLOCK_ROWS=2`. The span imbalance is a *consequence* of shared DRAM, not a cause — cores
+  with fewer rows finish early and the tail cores inherit their bandwidth.
+* **The per-channel operand is now free here.** Peeling its payload moves nothing, and
+  disabling D40's broadcast outright (`PC_MCAST_MODE=None`) measures **84,133 vs 84,586** —
+  neutral. The entire operand stage is ≤0.5% on this shape, against 9,238 ns at W=2304 in
+  Perf 2. D40 collected that prize; there was no second helping. (`PC_MCAST_LATE=False`
+  costs 2.6%, so the deferred receiver wait is still earning.)
+* **Reconfig is 42 ns** of the floor (`RMS_ABLATE=RECONFIG`). Gated.
+
+**Ranked, roofline-gated:**
+
+| rank | stage | ns | gate |
+|---|---|---:|---|
+| 1 | the **additive TRISC floor** | **14,225 (16.8%)** | **NOT gated** — it adds to the payload instead of hiding behind it |
+| 2 | payload DM | 70,923 (83%) | **ROOFLINE-GATED** — 473 GB/s against the 494 GB/s best ever measured on this op, 4.3% off |
+| 3 | per-channel operand | ~0 | gated (D40) |
+| 4 | load balance | 0 | **ROOFLINE-GATED** — refuted above |
+
+So rank 1 *was* the tournament, and its own sub-ranking (square-pack round trip → scale →
+gamma → reduce → finalize) is what the four ideas aimed at.
+
+### Two instrument defects found and fixed before any number was trusted
+
+1. **The `PER_CHANNEL` ablation switch had a hole D40 escaped through.** The broadcast
+   injector reads via `pc_issue_slice_reads()`, which carried no `RMS_ABLATE_PER_CHANNEL`
+   guard — so peeling the per-channel payload on a broadcast-engaged plan peeled *nothing*
+   and the tell was that **pcc stayed at 0.999985**, i.e. the read was still running. Fixed
+   in both read sites.
+2. **The JIT kernel cache key does not hash the kernel source's CONTENT**, so ablating by
+   uncommenting a `#define` at a kernel head is a **CACHE HIT on the previous binary**. An
+   "unablated baseline" reproduced **twice at 56,090 ns with pcc=nan** against a true
+   84,510 ns, because it was still the all-stubbed build. Every ablation switch is now a
+   **host define** (`RMS_ABLATE=READ_X,WRITE,COMPUTE,PER_CHANNEL,…`, emitted by
+   `_kernel_defines()`), which *is* part of the key — so no configuration can alias another
+   and no cache purge is needed. Editing kernel source in place also re-rolls every zone's
+   16-bit hash, which is a second reason not to.
+
+Both are permanent; the peel is reproducible from `perf_experiments/r3_breakdown/`
+(`peel.sh`, `knob.sh`, `zones_focus.py`, `rt_sweep.py`, `guard_set.py`, `ab.sh`).
+
+### The portfolio, and every verdict
+
+Four ideas, deliberately overlapping — two at the floor's *overlap* (A, C) by different
+levers, two at its *size* (B, D) on different passes.
+
+**Why no pack-deleting idea was floated.** The all-stubbed zones show the three TRISCs
+balanced to within 1.5% of each other, and `op_design.md` already records the same for pass
+B (unpack 8520 / math 8556 / pack 8110). A change that deletes only packs cannot move a
+balanced pipeline — which is exactly why Perf 1's `passb_fusion` LOST (13.5 vs 8.5 µs/core:
+`eltwise_binary_run_with_dest_reuse` restarts the MOP *per face* with a
+`move_d2a_fixed_face` + `TT_ZEROACC`, ~71 ns/tile against the helper's one-MOP bcast mul at
+~32). That idea was **not re-floated**, and idea D was briefed to find a route that is *not*
+DEST reuse.
+
+| # | idea | verdict | measured |
+|---|---|---|---|
+| A | `resident_block_count` — buy more row-blocks by taking a SMALLER block at a given depth (Lamp **L-OVERLAP**'s open half) | **WIN — graduated as D42** | focus **83,997 → 82,889 ns (1.013x, ~6.7σ over 17–20 reads)**; BLOCK shard 20,372 → 19,493 (1.045x) |
+| B | `square_fold_ceiling` — raise D12's fold ceiling by folding in GROUPS, decoupling the pack saving from the 16-bit serial depth | **WIN, regime-scoped — graduated as D43**; honest **NULL on the focus shape** | 1.033x–1.061x on the TRISC-bound geometries; focus 1.005x |
+| C | `block_stream_granularity` — stream a row-block at sub-block granularity, reader lever + writer twin | **WIN in isolation — SUPERSEDED by A** | focus 1.008–1.022x; reader half a **NULL** (0.999) and its finer forms a **REGRESSION** (0.996) |
+| D | `passb_op_count` — cut pass B's math op count by any non-DEST-reuse route | **idea-as-briefed NULL — and the null retired the whole class**; a reorder fell out as a **WIN — graduated as D44** | reorder 1.010x–1.151x on all 7 `combine=True` plans, bit-exact on all 6 `combine=False` |
+
+**Four findings from the nulls, each worth more than a percent:**
+
+* **D's null retired an entire idea class with one ablation.** Replacing the gamma
+  broadcast-mul with a bare `CopyTile` over the same tiles — traversal, unpack, pack and CB
+  lifecycle all kept, **only the multiply deleted** — is `0.982 / 1.002 / 0.982 / 1.004` on
+  perf cases 8 / 11 / 12 / 17, while deleting the whole **traversal** is
+  `1.096 / 1.113 / 1.244 / 1.168`. **Pass B's second pass costs its traversal; the multiply
+  is free.** No arithmetic argument is needed after that: fewer muls, pre-combined
+  broadcasts, `mul_tiles_bcast` variants and matmul-by-diagonal cannot pay at any geometry.
+  It also re-explains Perf 1's fusion loss from the other side, and it says where the real
+  prize is (`ceil` = **1.244x** on the BLOCK shard) and what shape a helper would need to
+  claim it.
+* **C falsified two premises of its own brief.** `DM_TXN_ROWS_MAX = 1`, so the reader
+  **already** pushes `cb_input_tiles` one tile-row at a time — the block-scale handover was
+  entirely in *compute* (`X_IN_A`'s `WaitPolicy::Upfront`), not in the reader. And the
+  tile-row is the *right* granularity: a half-row push is 0.999 and a quarter-row 0.996,
+  because a finer push needs a finer consumer and the row's reduce needs the row's whole
+  width. `noc_async_read_barrier()` also fences **all** outstanding reads on the RISC, so
+  sub-group *k+1* cannot be in flight during *k*'s barrier.
+* **A found that depth is irrelevant once the block is picked** (82,570–83,153 ns across
+  depths 2/3/4/5/6/8, a 0.7% band), which is what let D41's second ladder be *deleted*
+  rather than merely left alone — and hands back the L1 it was spending.
+* **A established the round's measurement discipline, and it is load-bearing.** The **first
+  variant measured in a device session reads 1.5–2.2% slow**, proven on cases whose program
+  does not change at all (4,381 vs 4,281 ns for the *identical* program). At this op's
+  effect sizes that bias *is* the signal, so every headline number below is either
+  drift-cancelled (BEFORE/AFTER alternated, `ab.sh`) or a min over ≥2 independent sessions.
+
+**Why C was superseded rather than shipped alongside A.** C gates on `BLOCK_ROWS > 1`; D42
+sets `br = 1` on every plan whose x is read over the NoC. After D42 that gate is **false
+everywhere C would have fired** — ROW_RESIDENT, STREAM and BAND are already
+`BLOCK_ROWS == 1`, and native shards are excluded from both. Same mechanism, same
+magnitude, but D42 is host-only, costs no kernel code and no L1, and *also* wins 1.073x on
+the BLOCK shard where C is gated off. A winning lever supersedes its component; this is
+that case, and the component is recorded here rather than shipped as a second path.
+
+### What graduated, and how widely
+
+Three changes. Each is the op's **one unqualified path** for every plan it is correct on,
+and each replaced its predecessor rather than sitting beside it: D42 **deleted**
+`CB_DEPTH_CANDIDATES_RESIDENT`, and D43 **deleted** the all-or-nothing fold predicate in
+favour of one `_x_squared_wt()` definition read by the L1 solve, the CB table and the CT arg
+alike.
+
+| # | change | domain | carve-outs, and what earned each |
+|---|---|---|---|
+| **D42** | **the block is PICKED, not inherited from what fits.** D41 got the objective right (row-blocks per core are the only thing to pipeline over) but raised the count only by deepening the ring, and still took the *largest* block that fits at each depth — a smaller block always fits, so the search never offered itself the finest split | every RESIDENT plan | (a) **measured regression** — a **zero-copy resident shard** (`native_in`) has no read to overlap, so every extra block is pure per-block overhead: `br 16 → 1` is **0.50x** on the `(1,1,8192,1024)` BLOCK shard and **0.42x** on `(1,1,7168,1024)` gbr. It keeps its coarsest block and only *balances* it at the same block count (20+12 → 16+16, **1.073x**); (b) **measured regression** — that rebalance only on an **exact** divisor, because an inexact one (11 → 10 on `(1,1,7168,1024)`) is **0.993x**. Depth is *not* a carve-out: it is provably unable to raise the block count, so the second ladder is gone rather than guarded |
+| **D43** | **the GROUPED square fold.** `DEST_ACC_SQUARE_MAX_WT` is a *precision* ceiling on the fold's serial 16-bit accumulation depth, and because the fold was all-or-nothing that ceiling was also a *perf* ceiling — every prefill profile paid `WT_CHUNK` packs plus `WT_CHUNK` unpacks per tile-row. `X_SQUARED_WT` may now be any **divisor** of `WT_CHUNK`, so depth and pack-saving are independent: a chunk of 32 folds in groups of 16 and deletes 15 of every 16 packs. Expressed purely by reshaping the chain's iteration grid — **no helper bypassed** | every plan with `PARTIAL_W == 0` | (a) **correctness (pre-existing, unchanged)** — `PARTIAL_W != 0` gets no fold at all: the fold folds the row's last width tile *including its pad lanes* before the reduce runs, so the reduce's partial scaler / 0-1 mask can no longer reach them; (b) **inexpressible** — a `WT_CHUNK` with no divisor in `[2, G]` gets no grouped fold, because a ragged last group needs a second iteration shape and one `eltwise_chain` call cannot carry two. Nothing in the sweep hit it (chunk 57 = 3×19 folds at depth 3). **Not a carve-out:** the roofline-gated prefill band, where the change is flat, keeps the unified path |
+| **D44** | **pass B does gamma FIRST on a cross-core plan.** Pass B's first op is the one that needs the finalized stat, and on a `combine` plan that stat arrives by gather → root fold → multicast. The gamma mul depends on x and gamma only, so doing it first fills that wait with the traversal instead of idling through it. On the small-block combine plans it measures **as fast as deleting the traversal outright** (1.095 vs 1.096; 1.129 vs 1.113; 1.036 vs 1.034; 1.074 vs 1.075), which only latency-hiding explains | every `combine`-engaged plan carrying a gamma | (a) **infeasible** — `!HAS_G`: with no gamma there is no second mul to move; (b) **measured regression** — `!CROSS_CORE`: with the stat computed locally there is no arrival to hide behind, and the reorder cost a reproducible **0.983x and 0.989x** in two independent sessions on `(1,1,8192,2304)`. Every other `combine=False` case was flat, so the carve-out is the **regime**, not that one shape. Written as `if constexpr (!HAS_G || !CROSS_CORE) { legacy } else { new }` — the narrow exception, so `combine=False` plans stay **bit-exact** |
+
+**Guard polarity was corrected on graduation.** The subagent returned D44 as
+`if constexpr (HAS_G && CROSS_CORE) { new } else { legacy }` — an allow-list around what it
+measured. It ships inverted, so each exception names the reason that earned it and shrinks
+as understanding grows instead of having to be widened by hand.
+
+**D44 carries a real, recorded cost — the round's one semantic price.** The reordered
+intermediate is `x · gamma`, which is **un-normalized**, so it can saturate the intermediate
+CB's dtype where the shipped intermediate (≈1) cannot. The boundary is exactly
+`|x · gamma| > dtype_max`: measured, `x=1e10, gamma=1e29` gives **9.965e28** shipped against
+**3.373e28** reordered. This **narrows the op's dynamic range on combine-engaged plans**.
+It is graduated because nothing in the op's tested universe reaches that band (all 19 perf
+cases and 31 device-reachable structural `LOOSE_CASES` match the shipped order to 6 decimal
+places of pcc, and the op's own `sum(x²)` already saturates by `|x| ≈ 1.8e19`) — but it is a
+*price*, not a free win, it is stated at the bypass site as well as here, and reverting it is
+one predicate.
+
+**Precision was never a lever.** `fp32_dest_acc_en`, `math_fidelity`, `math_approx_mode`,
+`dst_full_sync_en` and every dtype are untouched. D43 came back as an option menu and the
+**fastest option meeting the contract** was graduated, not the fastest option: against a
+float64 reference on adversarial inputs (every summand identical and non-dyadic — the
+textbook serial-sum worst case), `G = 16` is rel-RMS **0.00717** at chunk 72 against the
+shipped path's **0.01849**, i.e. **2.6× more accurate than what ships**, while the
+*unbounded* fold — the obvious way to raise the ceiling, and ~1.001x on the focus shape
+anyway — is **2.5× worse (0.01862 vs 0.00737)** and was **refused on precision, not on
+speed**. `G = 8`, which pins the depth at exactly today's vetted 8, is recorded as the
+conservative alternative at a cost of 0.5–2 points of the win.
+
+### Whole-op result — all 19 `perf` cases
+
+`min` over **two independent BEFORE sessions and two AFTER sessions**, same harness and
+method as Perf 1/2 (`probe_262`). `ratio` = measured / clock-scaled ceiling; lower is
+better, `> 1.0` MISSES.
+
+| # | case | before | after | x | ratio before → after |
+|---|---|---:|---:|---:|---|
+| 9 | `(1,1,32,2304)` W `[32,256]` (9,1) | 2,936 | **2,551** | **1.151** | 0.636 → 0.553 |
+| 3 | `(1,1,32,7168)` INT gamma (≥7× cell) | 8,440 | **7,541** | **1.119** | 0.567 → 0.506 |
+| 11 | `(1,1,32,7168)` W `[32,256]` (7,4) | 3,784 | **3,412** | **1.109** | 0.693 → 0.623 |
+| 2 | `(1,1,32,5120)` INT gamma | 7,004 | **6,354** | **1.102** | 0.092 → 0.084 |
+| 8 | `(1,1,32,1024)` W `[32,128]` (8,1) | 2,621 | **2,387** | **1.098** | 0.640 → 0.581 |
+| 10 | `(1,1,32,5120)` W `[32,160]` (8,4) | 3,451 | **3,153** | **1.095** | 0.657 → 0.599 |
+| 18 | `(1,1,128,4096)` INT, ROW_MAJOR weight | 11,176 | **10,217** | **1.094** | 0.172 → 0.156 |
+| 12 | `(1,1,8192,1024)` BLOCK `[1024,128]` (8,8) | 20,362 | **19,053** | **1.069** | 0.711 → 0.666 |
+| 13 | `(1,1,32,5120)` INT gbr `fp32_dest=True` | 9,612 | **9,021** | **1.066** | 0.062 → 0.057 |
+| 16 | `(1,1,32,5120)` W (8,4) gbr `fp32_dest=True` | 4,156 | **3,921** | **1.060** | 0.634 → 0.598 |
+| 1 | `(1,1,32,2304)` INT gamma | 5,136 | **4,859** | **1.057** | 0.304 → 0.286 |
+| 0 | `(1,1,32,1024)` INT gamma | 4,333 | **4,123** | **1.051** | 0.474 → 0.451 |
+| 4 | **`(1,1,8192,1024)` INT gamma — FOCUS** | **83,777** | **82,912** | **1.010** | **0.866 → 0.857** |
+| 17 | `(1,1,7168,1024)` BLOCK `[896,128]` (8,8) gbr | 28,984 | 28,684 | 1.010 | 0.838 → 0.830 |
+| 14 | `(1,1,8192,5120)` INT gbr `fp32_dest=True` | 611,992 | 610,251 | 1.003 | 0.466 → 0.464 |
+| 6 | `(1,1,8192,5120)` INT gamma | 406,697 | 405,861 | 1.002 | 0.551 → 0.550 |
+| 7 | `(1,1,8192,7168)` INT gamma | 560,072 | 559,427 | 1.001 | 0.544 → 0.542 |
+| 15 | `(1,1,8192,7168)` INT gbr `fp32_dest=True` | 1,043,276 | 1,046,247 | 0.997 | 0.568 → 0.569 |
+| 5 | `(1,1,8192,2304)` INT gamma | 179,391 | 180,536 | 0.994 | 0.849 → 0.854 |
+
+**Every case is under its ceiling, 12 of 19 gain ≥ 1.05x, and the worst ratio moves
+0.866 → 0.857.** Perf 1 → Perf 2 → Perf 3 on that worst cell: 0.908 → 0.871 → 0.857.
+
+The focus shape's own headline, measured **drift-cancelled** (BEFORE/AFTER alternated twice,
+9 reads each, `ab.sh`): **82,868 → 81,941 ns, 1.011x**, i.e. the paired table above and the
+alternated A/B agree to 0.1 points. That is a modest number and it is the honest one: the
+focus shape's payload is roofline-gated at 473 of 494 GB/s, and D43's real 1.019x saving
+there (visible the moment the write payload is stubbed) is *hidden* by that roofline. The
+round's value landed on the twelve cells where TRISC, not DRAM, holds the wall.
+
+**Case 5 is the one sub-parity read, and it is not a regression.** `(1,1,8192,2304)` is
+`combine=False`, so D44 is carved out and its program differs from pre-round only in D43's
+CT arg. The dedicated drift-cancelled A/B on that exact cell reads **178,401 / 179,126
+BEFORE against 179,154 / 178,420 AFTER — flat (0.999)**, and D43's own bench put it at
+0.998. The 0.994 above is single-session noise on a shape whose spread is ~1%. Reported as
+measured rather than smoothed, and deliberately **not** carved out: a predicate there would
+fence off the shapes that happened to land badly in one session.
+
+### Guard set — one representative per distinct kernel path × layout × placement
+
+Same 16-path set as Perf 2's, so the rounds compare. `min` of 3 reads; BEFORE is the Perf-2
+tip op files (`git checkout 79ab065a7f -- kernels rms_norm_ttnn_program_descriptor.py`).
+The five headline cells were additionally re-measured drift-cancelled at 9 reads.
+
+| path | before | after | x |
+|---|---:|---:|---:|
+| WIDTH shard, native + flat combine, D44 — `(1,1,32,7168)` | 3,704 | **3,338** | **1.104** |
+| BLOCK shard, native + slot tree, D42 balance + D44 — `(1,1,8192,1024)` | 20,262 | **18,873** | **1.073** |
+| interleaved, TILE weight, `fp32_dest=True` — `(1,1,128,4096)` | 11,589 | **10,707** | **1.082** |
+| ROW_MAJOR BAND, HEIGHT-sharded — `(1,1,256,512)` | 8,633 | **8,184** | **1.055** |
+| interleaved, ROW_MAJOR weight — `(1,1,128,4096)` `fp32_dest=True` | 10,670 | **10,248** | **1.041** |
+| W non-aligned (masked reduce, fold gated OFF) — `(1,1,224,1000)` | 6,546 | 6,427 | 1.019 |
+| interleaved RESIDENT, D42 engaged — **`(1,1,8192,1024)` FOCUS** | 82,619 | 81,773 | **1.011** |
+| ROW_RESIDENT + D39 compact — `(1,1,8192,7168)` gbr `fp32_dest=True` | 1,042,844 | 1,037,836 | 1.005 |
+| STREAM — `(1,1,1024,16384)` gbr | 495,095 | 493,320 | 1.004 |
+| ragged-`Wt` interleaved — `(1,1,32,4064)` | 32,307 | 32,224 | 1.003 |
+| ROW_RESIDENT tiled, no compact — `(1,1,8192,5120)` gamma | 404,127 | 403,659 | 1.001 |
+| ROW_MAJOR activation, TILE weight — `(1,1,8192,1024)` | 84,229 | 84,159 | 1.001 |
+| interleaved RESIDENT, `combine=False` — `(1,1,8192,2304)` | 178,401 | 179,154 | 0.999 |
+| HEIGHT shard, native, no combine — `(1,1,2048,256)` 64c | 2,243 | 2,259 | 0.993 |
+| ROW_MAJOR activation, 2-core line (D40 carve-out) — `(1,1,64,128)` | 5,267 | 5,309 | 0.992 |
+| H non-aligned — `(1,1,333,544)` | 8,055 | 8,126 | 0.991 |
+
+**No material regression anywhere.** The three cells at 0.991–0.993 are sub-9-µs kernels
+whose own session spread is 2.7–6.6%; two of them (`(1,1,2048,256)` HEIGHT native and
+`(1,1,64,128)`) build programs D42/D43/D44 cannot reach at all — `rows_max == 1` on a native
+shard, and no combine — so their delta is measurement, not code. `(1,1,333,544)` read 0.984
+in Perf 2 and 0.991 here on the same reasoning, and is again **not** carved out: two
+structurally identical cells gain instead (`(1,1,224,1000)` 1.019x, `(1,1,128,4096)`
+1.082x), so a predicate would fence off exactly the benchmark set rather than a real effect.
+
+### Golden
+
+`scripts/run_safe_pytest.sh --run-all eval/golden_tests/rms_norm_ttnn/`, 10 `pytest-split`
+shards (2648 + 2352 + 2120 + 1840 + 2376 + 2532 + 2571 + 2000 + 2571 + 2338):
+
+> **PASSED = 23,348, FAILED = 19, ERRORS = 0, HANGS = 0.**
+
+**Byte-identical to the Phase-0 / Refinement-1..4b / Perf-1 / Perf-2 figure in count and in
+identity** — the same three harness defects Phase 0 reproduced outside the op
+(`CoreRange.end_coord` on a build exposing `.start`/`.end`, 10 cells; `torch.max()` on a
+zero-element readback in `eval/metrics.py`, 3 cells; `test_regression` calling
+`check_output` without `tolerance=`, 6 cells). **Zero op-attributed failures, zero hangs.**
+
+Because D43 changes an accumulation, the 6 precision-shaped harness failures were re-run
+against the pre-round tree and are **bit-identical** before and after (rms 0.016671 /
+0.017828 / 0.018925 / 0.016491 / 0.017824 / 0.018904 in both) — those widths are
+`WT_CHUNK ≤ 8`, where the fold already shipped and D43 is byte-identical by construction.
+`test_rms_norm_ttnn_zone_hashes.py` green after every kernel edit (6 passed).
+
+### Helper bypasses
+
+**None.** All three graduations are helper-native: D42 is a host blocking rule, D43 is a
+`ckl::eltwise_chain` **iteration-shape reshape** with the shipped
+`ckl::output(..., DestAccumulation::PerRow)` spec, and D44 is a re-spelling of two existing
+chains in the other order. No raw LLK was admitted this round and no kernel-head bypass
+justification was needed.
+
+Three helper **gaps** were nevertheless measured and are reported as feedback, in the same
+schema, because a gap is worth recording whether or not it was worked around:
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `ckl::WaitPolicy::Cumulative` | capability | It emits `cb_wait_front(cb, i_flat + inner_count)` (`chain.inl:2643`) **without adding the operand's `TileBase`**, so it is only correct at base 0 — it cannot express an incremental wait on a **held** (non-popping) CB, which is every RESIDENT plan. Idea C had to express the same thing as a span loop of `Upfront` + `TileOffset::Set` chains, relying on `emit_wait_upfront` adding `tile_base` (`chain.inl:2784`). Adding the base to `Cumulative` would let pass A carry the split in one chain call. | 83,589 (Upfront, whole block) | 82,636 (span loop) | **not graduated** — superseded by D42; `perf_experiments/block_stream_granularity/` |
+| `ckl::IterationShape::grid(H,W).block_size(blk)` | capability | A chain block is **within a row** — it cannot span the row axis. On the BLOCK-shard plans (`WT_CHUNK = 4`, `BLOCK_ROWS = 20/11`) that caps the DEST-lane block at **4 of the 8 available lanes**, and the curve is still climbing at the cap: case 12 at `blk 1 / 2 / 4` is `1.000 / 1.182 / 1.243` and case 17 `1.000 / 1.200 / 1.245`. Missing piece is a 2-D block (`block_h × block_w ≤ the DEST limit`) so a narrow-and-tall block can fill DEST. **This is the single largest lever any of the four ideas pointed at and did not reach.** | 20,413 @ blk 4 | not built | pass B's two chains |
+| `ckl::DestReuseBinary` (`chain.hpp:526`) | capability | Perf 1 recorded the missing `BroadcastDim`; this round adds the other half and **sharpens the recommendation rather than repeating it**. The prize a fusion would claim is real and large — deleting pass B's second **traversal** is **1.244x** on case 12 and 1.168x on case 17 — but idea D's `nomul` ablation proves the cost is the traversal and **not the math**, so it is only claimable by a fusion that adds *no* math. Dest-reuse adds ~39 ns/tile (71 vs 32) by restarting the MOP per face. So: still **do not** add the broadcast parameter on this evidence; a **one-MOP, non-face-restarting DEST-as-srcA broadcast mul** would be the thing worth building. | 20,404 (un-fused) | 0.818x equivalent (Perf 1) | `perf_experiments/passb_fusion/k_fuse` |
+
+`CopyTile` also carries **no `DestAccumulation` parameter**, which is why
+`RMS_ABLATE=COMPUTE`'s payload-free stub for the square cannot compile on a *folding*
+geometry (`chain.inl:2906` static_asserts accumulation on both the math element and the
+output). That is a pre-existing hole D43 merely widens; the stub is now compile-time gated
+on `!SQ_FOLD` and the limit is documented at the site rather than left to fail a build.
+
+### Issues encountered
+
+1. **An ablation switch that a later feature routes around is a silently broken
+   instrument.** D40's broadcast reads through a *different* function than the one the
+   `PER_CHANNEL` guard sat in, so the peel reported "per-channel costs 1,771 ns" when the
+   read was still running — and the only tell was that **pcc did not move**. Check that an
+   ablated stage actually breaks the answer before believing its number.
+2. **The JIT cache does not hash kernel source content**, so ablating by editing a `.cpp`
+   in place is a cache hit on the previous build. It cost two measurements (a "baseline"
+   reproduced twice at 56,090 ns / pcc=nan against a true 84,510) and 377 GB of cache to
+   purge. Every switch is a host **define** now. Corollary for anyone measuring here: drive
+   a variant through a define, a CT arg, or a different file path — never an in-place edit.
+3. **`git checkout --` as an experiment-restore reverts uncommitted work in the same file.**
+   `knob.sh` used it and silently deleted this round's `RMS_ABLATE` plumbing mid-session; it
+   restores from a byte copy now.
+4. **The first variant in a device session reads 1.5–2.2% slow** on an *identical* program.
+   Any A-then-B comparison without a burn read or ABBA alternation favours B by roughly this
+   round's entire effect size. Both `ab.sh` and the two-session `min` in the tables above
+   exist for that reason.
+5. Perf 1's JIT-cache hygiene rule (never selectively delete `.ii` / `*.o.log` under
+   `built/*/kernels/`; purge whole kernel build DIRECTORIES or nothing) held, and issue 2
+   above is its sibling: the cache is content-blind, so it must be keyed or purged, never
+   trimmed.
+
+### Where the op stands after three rounds
+
+The worst `perf` cell is `(1,1,8192,1024)` INTERLEAVED at **0.857** (0.908 → 0.871 → 0.857
+across the three rounds), then `(1,1,8192,2304)` at 0.854 and the BLOCK `gbr`
+`(1,1,7168,1024)` at 0.830. All three are now **payload-bound at 473 of the 494 GB/s best
+this op has ever measured**, with an additive TRISC floor that this round cut from 16.8% by
+the amount the roofline lets show. The measured, unclaimed levers, in the order the evidence
+ranks them:
+
+* **A 2-D chain block** (`block_h × block_w`), worth a measured **1.24x** on the BLOCK
+  shards — the largest single number any experiment produced this round, and it is a helper
+  change, not an op change.
+* **A one-MOP DEST-as-srcA broadcast mul**, which would finally make pass B's two traversals
+  one; the prize is the same 1.24x and the reason it is unclaimed is documented above.
+* **`WaitPolicy::Cumulative` + `TileBase`**, which would let a held CB be consumed
+  incrementally in one chain call instead of a span loop.
