@@ -1000,58 +1000,6 @@ is priced in l1_ledger.md's "Deviations" table with its measurement:
           3, neither shape could reach it and this loss was invisible -- which is why
           the isolated bench that found the win did not find the trap.
 
-      SUPERSEDED BY D42, which reaches the same objective with the right lever and
-      hands the depth-3 L1 back.  D41's ROW_RESIDENT/STREAM measurement above is the
-      part that survives -- it is why the single ladder still offers no depth 3.
-
-  D42 Perf 3 (perf) -- THE BLOCK IS PICKED, NOT INHERITED FROM WHAT FITS, AND THE
-      RULE IS REGIME-SPLIT.  D41 raised a core's row-block count only by DEEPENING
-      the ring; at each depth it still took `min(max_rows, brmax)`, the LARGEST block
-      that fits.  A SMALLER block always fits, so the search never offered itself the
-      finest split at all -- `(1,1,8192,1024)` interleaved shipped at BLOCK_ROWS == 2
-      with 74 of 110 cores holding exactly two tile-rows, i.e. ONE row-block.
-
-      WHY IT IS THE ROUND'S TARGET, measured rather than argued.  Perf 3's cumulative
-      peel on that shape stubs every payload and the op STILL costs 14,225 ns (16.8%
-      of an 84,586 ns wall); the residue is TRISC-bound (NCRISC marker span 2,493 ns
-      against a TRISC span of 14,377, with `writer_write` 14,293 ns of pure WAIT); and
-      it ADDS to the payload rather than hiding behind it -- payload 70,923 + floor
-      14,225 = 85,148 = the wall.  The payload half is roofline-gated (473 GB/s of the
-      494 GB/s best ever measured on this op), so the floor was the whole tournament.
-
-      THE TWO REGIMES MEASURED OPPOSITE SIGNS, which is why one rule cannot serve
-      both:
-        * x READ OVER THE NoC (`not native_in`) -- the row-blocks ARE the pipeline.
-          Take ONE tile-row.  `(1,1,8192,1024)` INT 83,997 -> 82,889 ns in the
-          isolated bench (1.013x, ~6.7 sigma over 17-20 reads) and 83,777 -> 82,656
-          on the integrated tree; the masked `(1,1,8192,1000)` 84,766 -> 83,512
-          (1.015x); FLAT -- never worse -- where a core already holds many blocks
-          (`(1,1,28160,1024)`, `(1,1,65536,1024)`).
-        * x RESIDENT IN L1 (`native_in`, a zero-copy CB) -- there is NO read to
-          overlap, so every extra block is pure per-block overhead.  br 16 -> 1 on
-          the `(1,1,8192,1024)` BLOCK shard is 20,372 -> 40,618 ns (0.50x) and on
-          `(1,1,7168,1024)` BLOCK gbr 28,880 -> 69,566 (0.42x).  That is the
-          carve-out, and it is spelled as the narrow exception.  What a native shard
-          CAN take is the BALANCED block at the SAME block count -- 32 rows in 2
-          blocks is 20+12 today, 16+16 balanced -- 20,424 -> 19,538 ns (1.045x) on
-          the integrated tree.  Only on an EXACT divisor: rebalancing 11 -> 10 on
-          `(1,1,7168,1024)` measured 0.993x, so an inexact one is refused.
-
-      DEPTH IS NOW PROVABLY INERT, which is what retires D41's second ladder.
-      `br == 1` is the cheapest resident configuration in L1, so if it fits at any
-      depth it fits at the shallowest; and it already yields `max_rows` blocks, the
-      maximum, so no deeper candidate can strictly exceed it.  On a native shard the
-      depth term drops out of the block multiplier entirely (a shard-backed CB costs
-      zero arena bytes), so deeper is at best equal there too.  MEASURED on the focus
-      shape under this rule at depths 2/3/4/5/6/8: 82,924 / 82,961 / 83,153 / 82,570 /
-      82,713 / 82,673 ns -- a 0.7% band.
-
-      MEASUREMENT DISCIPLINE this established, and it is worth more than the number:
-      the FIRST variant measured in a device session reads 1.5-2.2% SLOW, proven on
-      cases whose program does not change at all (4,381 vs 4,281 ns for the identical
-      program).  Any A-then-B comparison without a burn read or ABBA counterbalancing
-      silently favours B, and at this op's effect sizes that is the whole signal.
-
 """
 
 from __future__ import annotations
@@ -1138,6 +1086,30 @@ PC_MCAST_SENDER_INDEX = 0
 PC_MCAST_DIAGONAL = True  # ~0.5% on the focus shape, neutral on STREAM
 
 TILE_DIM = 32
+
+# ===================== block_stream_granularity (THIS CLONE ONLY) ==========
+# Perf 3 idea C -- STREAM A ROW-BLOCK AT SUB-BLOCK GRANULARITY.  Every knob here
+# is 0/1-inert: at these defaults the fork builds the SHIPPED program, and the
+# kernel defines below are absent from the build key, so `base` is byte-identical
+# to the op.
+#
+# BSG_FORCE_BLOCK_ROWS  >0: cap RESIDENT's solved BLOCK_ROWS at this.  D41 already
+#                       picks the candidate with the MOST row-blocks per core, but
+#                       it only ever reaches a SMALLER block by buying a DEEPER
+#                       ring -- it never takes a block finer than the fit allows at
+#                       a given depth.  This knob reaches that unexplored point.
+# BSG_MODE              kernel-side handover granularity (compile-time define):
+#                       0 shipped;  1 pass A per tile-row;  2 pass B per tile-row;
+#                       3 both.
+# BSG_READ_SPLIT        reader sub-pushes per tile-row (1 = shipped whole tile-row).
+BSG_FORCE_BLOCK_ROWS = 0
+BSG_MODE = 0
+BSG_READ_SPLIT = 1
+# Sub-blocks per row-block for BSG_MODE's handover.  0 = one per TILE-ROW.
+BSG_SUB = 2
+# Width chains the SQUARE is split into inside one tile-row (the only consumer a
+# sub-tile-row reader push has).  1 = shipped.
+BSG_SQ = 1
 
 # ---------------------------------------------------------------------------
 # Primary knobs — the only hand-set numbers in this op.
@@ -1338,20 +1310,26 @@ CB_SQ_EXACT = 0
 # the RESIDENT regime at the first depth whose whole-row working set fits L1.
 #
 # (2, 1) was MEASURED a net loss (see D4), so a SHALLOWER depth is still not on
-# offer.  ONE ladder, walked by every regime.
-#
-# D42 (Perf 3) RETIRED D41's second, DEEPER ladder (`CB_DEPTH_CANDIDATES_RESIDENT
-# = (3, 2)`).  D41 bought depth 3 in order to force a SMALLER block and so raise a
-# core's row-block count; D42 picks the block directly (`br = 1` wherever x is read
-# over the NoC), which reaches the maximum block count at the SHALLOWEST depth and
-# makes any deeper candidate provably unable to beat it -- see the proof and the
-# measured depth sweep (82,570..83,153 ns across depths 2/3/4/5/6/8, a 0.7% band) at
-# the RESIDENT search.  So the deeper ring is not merely unnecessary now, it is
-# unreachable, and its L1 comes back.  D41's ROW_RESIDENT / STREAM loss (0.980x /
-# 0.984x, from a deeper ring bought with a finer WIDTH CHUNK) is what made the second
-# ladder necessary in the first place, and it stays closed for the same reason: those
-# regimes are on this ladder, which offers no depth 3.
+# offer.  This ladder is the one the CHUNKED regimes (ROW_RESIDENT, STREAM) walk,
+# and D41 deliberately leaves it alone -- see `CB_DEPTH_CANDIDATES_RESIDENT`.
 CB_DEPTH_CANDIDATES = (2,)
+
+# D41 (Perf 2) -- THE DEEPER RING, OFFERED ONLY WHERE IT IS NOT PAID FOR IN CHUNK.
+# What a deeper `cb_input_tiles` / `cb_output_tiles` trades against is regime-
+# dependent, and that is the whole reason this is a SECOND ladder rather than an
+# extra entry in the first one:
+#   * RESIDENT       the row IS one chunk (NUM_W_CHUNKS == 1), so the only thing a
+#                    deeper ring can cost is BLOCK_ROWS -- which is exactly what we
+#                    want it to cost when the core would otherwise get ONE row-block.
+#   * ROW_RESIDENT / the block is already one tile-row, so a deeper ring can only be
+#     STREAM         bought with a FINER WIDTH CHUNK.  MEASURED on the integrated
+#                    tree, that trade LOSES: (1,1,8192,5120) gamma_bias_residual
+#                    fp32_dest went WT_CHUNK 18x9 -> 11x15 and 608,816 -> 621,203 ns
+#                    (0.980x), and (1,1,1024,16384) gbr went 57x9 -> 43x12 and
+#                    501,932 -> 509,953 (0.984x).  Before D39 freed the L1 that pays
+#                    for depth 3, neither shape could reach it and the loss was
+#                    invisible.
+CB_DEPTH_CANDIDATES_RESIDENT = (3, 2)
 
 # Cores along the `width` axis (Lamp L1: the cross-core width split on an
 # INTERLEAVED input).  Phase 0 pinned this at the trivial 1 (one core owns the
@@ -1436,6 +1414,15 @@ def _kernel_defines():
     """
     defines = [("RMS_STAGE_ZONES", "1")] if STAGE_ZONES else []
     defines += [(f"RMS_ABLATE_{n}", "1") for n in ABLATE]
+    # block_stream_granularity: a DEFINE, never a source edit -- the JIT cache key
+    # hashes the define list and the kernel PATH but NOT the source content.
+    if BSG_MODE:
+        defines.append(("RMS_BSG_MODE", str(BSG_MODE)))
+        defines.append(("RMS_BSG_SUB", str(BSG_SUB)))
+    if BSG_SQ != 1:
+        defines.append(("RMS_BSG_SQ", str(BSG_SQ)))
+    if BSG_READ_SPLIT != 1:
+        defines.append(("RMS_BSG_READ_SPLIT", str(BSG_READ_SPLIT)))
     return defines
 
 
@@ -3454,10 +3441,8 @@ def create_program_descriptor(
         do0 = 0 if plan.native_out else None
         dr0 = 0 if (has_residual and plan.native_in) else None
         depth_candidates = CB_DEPTH_CANDIDATES if is_tile else (1,)
-        # D42 retired D41's second, deeper ladder: under D42's block rule a deeper
-        # ring can never raise the block count (see the proof at the RESIDENT search),
-        # so RESIDENT and everything else share the one ladder again.
-        resident_depths = depth_candidates
+        # D41: the deeper ring is RESIDENT's alone (see CB_DEPTH_CANDIDATES_RESIDENT).
+        resident_depths = CB_DEPTH_CANDIDATES_RESIDENT if is_tile else (1,)
 
         combine_tree = _combine_tree_arity(plan.group_size, 1) if plan.combine else None
         # Pages the NARROW per-channel staging ring gets (D30): a knob-derived depth
@@ -3531,65 +3516,15 @@ def create_program_descriptor(
         # (the BLOCK shard).  Every one of those keeps its pre-D41 program, byte for
         # byte, because the shallow candidate is evaluated first and only a STRICTLY
         # larger block count displaces it.
-        # D42 -- THE BLOCK IS PICKED, NOT INHERITED FROM WHAT FITS.
-        #
-        # D41 (above) got the OBJECTIVE right -- row-blocks per core are the only
-        # thing there is to pipeline read / compute / write over -- but reached for it
-        # with the wrong lever: it raised the block count only by DEEPENING the ring,
-        # and at each depth it still took `min(max_rows, brmax)`, the LARGEST block
-        # that fits.  A smaller block always fits, so the search never even offered
-        # itself the finest split.  On the round-3 focus shape that left
-        # `BLOCK_ROWS == 2` with 74 of 110 cores holding exactly TWO tile-rows, i.e.
-        # ONE row-block: read all of it, compute all of it, write all of it, nothing
-        # overlapped.  Perf 3 measured that this is the whole non-roofline half of
-        # that shape's wall -- with every payload stubbed the op still costs
-        # 14,225 ns (16.8%), it is TRISC-bound (NCRISC span 2,493 ns against a TRISC
-        # span of 14,377), and the peel shows it ADDS to the payload rather than
-        # hiding behind it (70,923 + 14,225 = 85,148 = the wall).
-        #
-        # THE RULE IS REGIME-SPLIT, because the two regimes measured OPPOSITE SIGNS:
-        #
-        #   * x READ OVER THE NoC (`not native_in`): take the FINEST block, one tile
-        #     row.  The blocks ARE the pipeline.  MEASURED (1,1,8192,1024) INT
-        #     83,997 -> 82,889 ns (1.013x, ~6.7 sigma over 17-20 reads), the masked
-        #     (1,1,8192,1000) 84,766 -> 83,512 (1.015x), and FLAT -- never worse --
-        #     where a core already holds many row-blocks ((1,1,28160,1024) and up).
-        #
-        #   * x RESIDENT IN L1 (`native_in`, a zero-copy CB): there is NO read to
-        #     overlap, so every extra block is pure per-block overhead.  MEASURED
-        #     br 16 -> 1 on the (1,1,8192,1024) BLOCK shard is 20,372 -> 40,618 ns
-        #     (0.50x) and on (1,1,7168,1024) BLOCK gbr 28,880 -> 69,566 (0.42x).
-        #     That is the carve-out, and it is written as the narrow exception.  What
-        #     a native shard CAN still take is the BALANCED block at the SAME block
-        #     count -- 32 rows in 2 blocks is 20+12 today and 16+16 balanced, and
-        #     that is 20,372 -> 19,493 ns (1.045x).  Only when it divides EXACTLY:
-        #     an inexact rebalance (11 -> 10 on case 17) measured 0.993x.
-        #
-        # DEPTH IS NOW PROVABLY INERT HERE, which is why D41's second ladder is gone
-        # (see CB_DEPTH_CANDIDATES).  `br = 1` is the CHEAPEST resident configuration
-        # in L1, so if it fits at any depth it fits at the shallowest; and it already
-        # yields `max_rows` blocks, the maximum, so no deeper candidate can strictly
-        # exceed it.  On a native shard the depth term drops out of the block
-        # multiplier altogether (a shard-backed CB costs zero arena bytes), so deeper
-        # is at best equal there too.  MEASURED across the focus shape at depths
-        # 2/3/4/5/6/8 under this rule: 82,924 / 82,961 / 83,153 / 82,570 / 82,713 /
-        # 82,673 ns -- a 0.7% band, i.e. nothing.  Taking depth 2 hands back the L1
-        # D41 was spending on depth 3.
         best = None
         for depth in reversed(resident_depths):
             brmax, _ = _resident_fit(depth, compact=True)
             if brmax < 2:
                 brmax = min(1, _resident_fit(depth, compact=False)[0])
             if brmax >= 1:
-                top = min(max_rows, brmax)
-                if plan.native_in:
-                    # The exception: a resident shard keeps its coarsest block, and
-                    # only levels it out at the same block count.
-                    blocks0 = -(-max_rows // top)
-                    br0 = -(-max_rows // blocks0)
-                    br = br0 if br0 * blocks0 == max_rows else top
-                else:
-                    br = 1
+                br = min(max_rows, brmax)
+                if BSG_FORCE_BLOCK_ROWS:
+                    br = min(br, BSG_FORCE_BLOCK_ROWS)
                 blocks = -(-max_rows // br)
                 if best is None or blocks > best[0]:
                     best = (blocks, depth, br)

@@ -1000,58 +1000,6 @@ is priced in l1_ledger.md's "Deviations" table with its measurement:
           3, neither shape could reach it and this loss was invisible -- which is why
           the isolated bench that found the win did not find the trap.
 
-      SUPERSEDED BY D42, which reaches the same objective with the right lever and
-      hands the depth-3 L1 back.  D41's ROW_RESIDENT/STREAM measurement above is the
-      part that survives -- it is why the single ladder still offers no depth 3.
-
-  D42 Perf 3 (perf) -- THE BLOCK IS PICKED, NOT INHERITED FROM WHAT FITS, AND THE
-      RULE IS REGIME-SPLIT.  D41 raised a core's row-block count only by DEEPENING
-      the ring; at each depth it still took `min(max_rows, brmax)`, the LARGEST block
-      that fits.  A SMALLER block always fits, so the search never offered itself the
-      finest split at all -- `(1,1,8192,1024)` interleaved shipped at BLOCK_ROWS == 2
-      with 74 of 110 cores holding exactly two tile-rows, i.e. ONE row-block.
-
-      WHY IT IS THE ROUND'S TARGET, measured rather than argued.  Perf 3's cumulative
-      peel on that shape stubs every payload and the op STILL costs 14,225 ns (16.8%
-      of an 84,586 ns wall); the residue is TRISC-bound (NCRISC marker span 2,493 ns
-      against a TRISC span of 14,377, with `writer_write` 14,293 ns of pure WAIT); and
-      it ADDS to the payload rather than hiding behind it -- payload 70,923 + floor
-      14,225 = 85,148 = the wall.  The payload half is roofline-gated (473 GB/s of the
-      494 GB/s best ever measured on this op), so the floor was the whole tournament.
-
-      THE TWO REGIMES MEASURED OPPOSITE SIGNS, which is why one rule cannot serve
-      both:
-        * x READ OVER THE NoC (`not native_in`) -- the row-blocks ARE the pipeline.
-          Take ONE tile-row.  `(1,1,8192,1024)` INT 83,997 -> 82,889 ns in the
-          isolated bench (1.013x, ~6.7 sigma over 17-20 reads) and 83,777 -> 82,656
-          on the integrated tree; the masked `(1,1,8192,1000)` 84,766 -> 83,512
-          (1.015x); FLAT -- never worse -- where a core already holds many blocks
-          (`(1,1,28160,1024)`, `(1,1,65536,1024)`).
-        * x RESIDENT IN L1 (`native_in`, a zero-copy CB) -- there is NO read to
-          overlap, so every extra block is pure per-block overhead.  br 16 -> 1 on
-          the `(1,1,8192,1024)` BLOCK shard is 20,372 -> 40,618 ns (0.50x) and on
-          `(1,1,7168,1024)` BLOCK gbr 28,880 -> 69,566 (0.42x).  That is the
-          carve-out, and it is spelled as the narrow exception.  What a native shard
-          CAN take is the BALANCED block at the SAME block count -- 32 rows in 2
-          blocks is 20+12 today, 16+16 balanced -- 20,424 -> 19,538 ns (1.045x) on
-          the integrated tree.  Only on an EXACT divisor: rebalancing 11 -> 10 on
-          `(1,1,7168,1024)` measured 0.993x, so an inexact one is refused.
-
-      DEPTH IS NOW PROVABLY INERT, which is what retires D41's second ladder.
-      `br == 1` is the cheapest resident configuration in L1, so if it fits at any
-      depth it fits at the shallowest; and it already yields `max_rows` blocks, the
-      maximum, so no deeper candidate can strictly exceed it.  On a native shard the
-      depth term drops out of the block multiplier entirely (a shard-backed CB costs
-      zero arena bytes), so deeper is at best equal there too.  MEASURED on the focus
-      shape under this rule at depths 2/3/4/5/6/8: 82,924 / 82,961 / 83,153 / 82,570 /
-      82,713 / 82,673 ns -- a 0.7% band.
-
-      MEASUREMENT DISCIPLINE this established, and it is worth more than the number:
-      the FIRST variant measured in a device session reads 1.5-2.2% SLOW, proven on
-      cases whose program does not change at all (4,381 vs 4,281 ns for the identical
-      program).  Any A-then-B comparison without a burn read or ABBA counterbalancing
-      silently favours B, and at this op's effect sizes that is the whole signal.
-
 """
 
 from __future__ import annotations
@@ -1338,20 +1286,26 @@ CB_SQ_EXACT = 0
 # the RESIDENT regime at the first depth whose whole-row working set fits L1.
 #
 # (2, 1) was MEASURED a net loss (see D4), so a SHALLOWER depth is still not on
-# offer.  ONE ladder, walked by every regime.
-#
-# D42 (Perf 3) RETIRED D41's second, DEEPER ladder (`CB_DEPTH_CANDIDATES_RESIDENT
-# = (3, 2)`).  D41 bought depth 3 in order to force a SMALLER block and so raise a
-# core's row-block count; D42 picks the block directly (`br = 1` wherever x is read
-# over the NoC), which reaches the maximum block count at the SHALLOWEST depth and
-# makes any deeper candidate provably unable to beat it -- see the proof and the
-# measured depth sweep (82,570..83,153 ns across depths 2/3/4/5/6/8, a 0.7% band) at
-# the RESIDENT search.  So the deeper ring is not merely unnecessary now, it is
-# unreachable, and its L1 comes back.  D41's ROW_RESIDENT / STREAM loss (0.980x /
-# 0.984x, from a deeper ring bought with a finer WIDTH CHUNK) is what made the second
-# ladder necessary in the first place, and it stays closed for the same reason: those
-# regimes are on this ladder, which offers no depth 3.
+# offer.  This ladder is the one the CHUNKED regimes (ROW_RESIDENT, STREAM) walk,
+# and D41 deliberately leaves it alone -- see `CB_DEPTH_CANDIDATES_RESIDENT`.
 CB_DEPTH_CANDIDATES = (2,)
+
+# D41 (Perf 2) -- THE DEEPER RING, OFFERED ONLY WHERE IT IS NOT PAID FOR IN CHUNK.
+# What a deeper `cb_input_tiles` / `cb_output_tiles` trades against is regime-
+# dependent, and that is the whole reason this is a SECOND ladder rather than an
+# extra entry in the first one:
+#   * RESIDENT       the row IS one chunk (NUM_W_CHUNKS == 1), so the only thing a
+#                    deeper ring can cost is BLOCK_ROWS -- which is exactly what we
+#                    want it to cost when the core would otherwise get ONE row-block.
+#   * ROW_RESIDENT / the block is already one tile-row, so a deeper ring can only be
+#     STREAM         bought with a FINER WIDTH CHUNK.  MEASURED on the integrated
+#                    tree, that trade LOSES: (1,1,8192,5120) gamma_bias_residual
+#                    fp32_dest went WT_CHUNK 18x9 -> 11x15 and 608,816 -> 621,203 ns
+#                    (0.980x), and (1,1,1024,16384) gbr went 57x9 -> 43x12 and
+#                    501,932 -> 509,953 (0.984x).  Before D39 freed the L1 that pays
+#                    for depth 3, neither shape could reach it and the loss was
+#                    invisible.
+CB_DEPTH_CANDIDATES_RESIDENT = (3, 2)
 
 # Cores along the `width` axis (Lamp L1: the cross-core width split on an
 # INTERLEAVED input).  Phase 0 pinned this at the trivial 1 (one core owns the
@@ -3454,10 +3408,8 @@ def create_program_descriptor(
         do0 = 0 if plan.native_out else None
         dr0 = 0 if (has_residual and plan.native_in) else None
         depth_candidates = CB_DEPTH_CANDIDATES if is_tile else (1,)
-        # D42 retired D41's second, deeper ladder: under D42's block rule a deeper
-        # ring can never raise the block count (see the proof at the RESIDENT search),
-        # so RESIDENT and everything else share the one ladder again.
-        resident_depths = depth_candidates
+        # D41: the deeper ring is RESIDENT's alone (see CB_DEPTH_CANDIDATES_RESIDENT).
+        resident_depths = CB_DEPTH_CANDIDATES_RESIDENT if is_tile else (1,)
 
         combine_tree = _combine_tree_arity(plan.group_size, 1) if plan.combine else None
         # Pages the NARROW per-channel staging ring gets (D30): a knob-derived depth
@@ -3531,68 +3483,97 @@ def create_program_descriptor(
         # (the BLOCK shard).  Every one of those keeps its pre-D41 program, byte for
         # byte, because the shallow candidate is evaluated first and only a STRICTLY
         # larger block count displaces it.
-        # D42 -- THE BLOCK IS PICKED, NOT INHERITED FROM WHAT FITS.
-        #
-        # D41 (above) got the OBJECTIVE right -- row-blocks per core are the only
-        # thing there is to pipeline read / compute / write over -- but reached for it
-        # with the wrong lever: it raised the block count only by DEEPENING the ring,
-        # and at each depth it still took `min(max_rows, brmax)`, the LARGEST block
-        # that fits.  A smaller block always fits, so the search never even offered
-        # itself the finest split.  On the round-3 focus shape that left
-        # `BLOCK_ROWS == 2` with 74 of 110 cores holding exactly TWO tile-rows, i.e.
-        # ONE row-block: read all of it, compute all of it, write all of it, nothing
-        # overlapped.  Perf 3 measured that this is the whole non-roofline half of
-        # that shape's wall -- with every payload stubbed the op still costs
-        # 14,225 ns (16.8%), it is TRISC-bound (NCRISC span 2,493 ns against a TRISC
-        # span of 14,377), and the peel shows it ADDS to the payload rather than
-        # hiding behind it (70,923 + 14,225 = 85,148 = the wall).
-        #
-        # THE RULE IS REGIME-SPLIT, because the two regimes measured OPPOSITE SIGNS:
-        #
-        #   * x READ OVER THE NoC (`not native_in`): take the FINEST block, one tile
-        #     row.  The blocks ARE the pipeline.  MEASURED (1,1,8192,1024) INT
-        #     83,997 -> 82,889 ns (1.013x, ~6.7 sigma over 17-20 reads), the masked
-        #     (1,1,8192,1000) 84,766 -> 83,512 (1.015x), and FLAT -- never worse --
-        #     where a core already holds many row-blocks ((1,1,28160,1024) and up).
-        #
-        #   * x RESIDENT IN L1 (`native_in`, a zero-copy CB): there is NO read to
-        #     overlap, so every extra block is pure per-block overhead.  MEASURED
-        #     br 16 -> 1 on the (1,1,8192,1024) BLOCK shard is 20,372 -> 40,618 ns
-        #     (0.50x) and on (1,1,7168,1024) BLOCK gbr 28,880 -> 69,566 (0.42x).
-        #     That is the carve-out, and it is written as the narrow exception.  What
-        #     a native shard CAN still take is the BALANCED block at the SAME block
-        #     count -- 32 rows in 2 blocks is 20+12 today and 16+16 balanced, and
-        #     that is 20,372 -> 19,493 ns (1.045x).  Only when it divides EXACTLY:
-        #     an inexact rebalance (11 -> 10 on case 17) measured 0.993x.
-        #
-        # DEPTH IS NOW PROVABLY INERT HERE, which is why D41's second ladder is gone
-        # (see CB_DEPTH_CANDIDATES).  `br = 1` is the CHEAPEST resident configuration
-        # in L1, so if it fits at any depth it fits at the shallowest; and it already
-        # yields `max_rows` blocks, the maximum, so no deeper candidate can strictly
-        # exceed it.  On a native shard the depth term drops out of the block
-        # multiplier altogether (a shard-backed CB costs zero arena bytes), so deeper
-        # is at best equal there too.  MEASURED across the focus shape at depths
-        # 2/3/4/5/6/8 under this rule: 82,924 / 82,961 / 83,153 / 82,570 / 82,713 /
-        # 82,673 ns -- a 0.7% band, i.e. nothing.  Taking depth 2 hands back the L1
-        # D41 was spending on depth 3.
-        best = None
-        for depth in reversed(resident_depths):
+        # ---- perf_experiments/resident_block_count (IDEA A) -----------------
+        _rule = os.environ.get("RMS_RBC", "shipped")
+        _maxb = int(os.environ.get("RMS_RBC_MAXB", "0"))
+        _fbr = int(os.environ.get("RMS_RBC_BR", "0"))
+        _fdepth = int(os.environ.get("RMS_RBC_DEPTH", "0"))
+        _ladder = os.environ.get("RMS_RBC_DEPTHS", "")
+        if _ladder and is_tile:
+            resident_depths = tuple(int(t) for t in _ladder.split(",") if t.strip())
+
+        def _brmax(depth):
             brmax, _ = _resident_fit(depth, compact=True)
             if brmax < 2:
                 brmax = min(1, _resident_fit(depth, compact=False)[0])
-            if brmax >= 1:
-                top = min(max_rows, brmax)
-                if plan.native_in:
-                    # The exception: a resident shard keeps its coarsest block, and
-                    # only levels it out at the same block count.
+            return brmax
+
+        # THE `half` RULE (idea A's measured form).  A core needs TWO row-blocks to
+        # overlap read / compute / write at all, and beyond two the extra blocks buy
+        # nothing while each one costs a fixed per-block overhead (measured: on a
+        # zero-copy shard, br 16 -> 1 costs 2.1x).  So take the FINEST BALANCED split
+        # that still gives EVERY core two blocks: br = rows_min // 2, clamped to L1.
+        min_rows = min((a.row_count for a in plan.assignment), default=1) or 1
+        if plan.combine:
+            min_rows = min(min_rows, TILE_DIM)
+        _target = max(1, min(max_rows, min_rows) // 2)
+
+        cands = []  # (blocks, br, depth), feasible only
+        for depth in reversed(resident_depths):
+            brmax = _brmax(depth)
+            if brmax < 1:
+                continue
+            top = min(max_rows, brmax)
+            if _rule == "shipped":
+                brs = (top,)
+            elif _rule == "half":
+                brs = (min(top, _target),)
+            elif _rule in ("ia", "ia_bal"):
+                # THE MEASURED FORM OF IDEA A, and it is REGIME-SPLIT because the two
+                # regimes measured OPPOSITE signs:
+                #   * x read over the NoC (interleaved DRAM): the row-blocks are the
+                #     ONLY thing there is to pipeline read/compute/write over, and a
+                #     core that gets one block overlaps nothing -- take the FINEST
+                #     block.  Measured 1.010-1.014x on (1,1,8192,1024) (74 of 110
+                #     cores hold 2 tile-rows, i.e. ONE block at the shipped br=2),
+                #     and FLAT (never worse) where cores already hold many rows.
+                #   * x resident in L1 (zero-copy CB, `native_in`): there is no read
+                #     to overlap, so every extra block is pure per-block overhead --
+                #     br 16 -> 1 measured 2.1x SLOWER, 24 -> 12 0.90x.  Keep the
+                #     shipped coarsest block; `ia_bal` additionally BALANCES it when
+                #     the balanced block divides the core's rows EXACTLY (32 rows in
+                #     2 blocks: 20+12 -> 16+16, measured 1.045x).
+                if not plan.native_in:
+                    brs = (1,)
+                else:
                     blocks0 = -(-max_rows // top)
                     br0 = -(-max_rows // blocks0)
-                    br = br0 if br0 * blocks0 == max_rows else top
-                else:
-                    br = 1
-                blocks = -(-max_rows // br)
-                if best is None or blocks > best[0]:
-                    best = (blocks, depth, br)
+                    brs = (br0,) if (_rule == "ia_bal" and br0 * blocks0 == max_rows) else (top,)
+            else:
+                brs = tuple(range(1, top + 1))
+            for br in brs:
+                cands.append((-(-max_rows // br), br, depth))
+        if _rule == "shallow" and cands:
+            d0 = min(d for _, _, d in cands)
+            cands = [c for c in cands if c[2] == d0]
+        if _maxb and cands:
+            capped = [c for c in cands if c[0] <= _maxb]
+            if capped:
+                cands = capped
+        best = None
+        for blocks, br, depth in cands:
+            # shipped == (blocks, shallowest); IDEA A adds the br sweep and
+            # tie-breaks the FINEST block at equal block count (evenness).
+            if _rule == "shipped":
+                key = (blocks, 0, -depth)
+            elif _rule in ("half", "ia", "ia_bal"):
+                # closest to the target block from below, then the SHALLOWEST ring
+                # (a deeper ring only ever shrinks brmax, so it can never help here;
+                # on a zero-copy shard the depth term drops out of the fit entirely,
+                # so this reproduces the shipped depth exactly there).
+                key = (br, 0, -depth)
+            else:
+                key = (blocks, -br, -depth)
+            if best is None or key > best[0]:
+                best = (key, depth, br)
+        if (_fbr or _fdepth) and cands:
+            depth = _fdepth or (best[1] if best else resident_depths[-1])
+            br = min(max_rows, _fbr) if _fbr else (best[2] if best else 1)
+            fit = _brmax(depth)
+            if fit >= 1 and br <= max(fit, 1):
+                best = ((0, 0, 0), depth, br)
+            else:
+                print(f"RMS_RBC_FORCE INFEASIBLE depth={depth} br={br} brmax={fit}", flush=True)
         if best is not None:
             _, depth, br = best
             return br, wt_core, 1, depth, depth, True, CB_RM_STAGE_DEPTH, False, False
