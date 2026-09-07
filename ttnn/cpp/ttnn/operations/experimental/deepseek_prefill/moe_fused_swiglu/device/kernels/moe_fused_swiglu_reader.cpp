@@ -260,6 +260,20 @@ constexpr auto idx_args = TensorAccessorArgs<cnt_args.next_compile_time_args_off
 // so the arg stream has one length and the accessor is simply unread when NEED_START is 0.
 constexpr auto start_args = TensorAccessorArgs<idx_args.next_compile_time_args_offset()>();
 
+#ifdef FUSE_BIAS
+// gpt-oss expert biases. Three CB ids then three accessors, appended after `start` so no offset
+// above moved; the per-expert bases follow the weight table for the same reason. Read once per
+// expert here and popped by compute at that expert's end, so the CBs stay single-buffered.
+constexpr uint32_t BIAS_CB_OFFSET = start_args.next_compile_time_args_offset();
+constexpr uint32_t cb_gate_bias = get_compile_time_arg_val(BIAS_CB_OFFSET + 0);
+constexpr uint32_t cb_up_bias = get_compile_time_arg_val(BIAS_CB_OFFSET + 1);
+constexpr uint32_t cb_down_bias = get_compile_time_arg_val(BIAS_CB_OFFSET + 2);
+constexpr auto gate_bias_args = TensorAccessorArgs<BIAS_CB_OFFSET + 3>();
+constexpr auto up_bias_args = TensorAccessorArgs<gate_bias_args.next_compile_time_args_offset()>();
+constexpr auto down_bias_args = TensorAccessorArgs<up_bias_args.next_compile_time_args_offset()>();
+constexpr uint32_t RT_BIAS = RT_WEIGHTS + 2 * EXPERTS_PER_CHIP;
+#endif
+
 // Three `WeightRuns` bindings, because the three tensors this kernel touches can have DIFFERENT
 // placements: each weight stream takes its own tensor's DRAM ND shard width (0 = interleaved,
 // one transaction per tile), and everything else stays on the interleaved binding.
@@ -398,6 +412,58 @@ void kernel_main() {
         const auto wg_acc = TensorAccessor(wg_args, get_arg_val<uint32_t>(RT_WEIGHTS + local_expert_id), W_TILE);
         const auto wd_acc =
             TensorAccessor(wd_args, get_arg_val<uint32_t>(RT_WEIGHTS + EXPERTS_PER_CHIP + local_expert_id), W_TILE);
+#ifdef FUSE_BIAS
+        // This expert's bias windows, fetched once. Gate/up take the COLUMN's whole HN_PAD window
+        // rather than a per-core slice: after the reduce-scatter a core's gate/up slice is a flat
+        // range of an `m * HN_PAD + n` block, so it indexes the bias as `idx % HN_PAD` and no
+        // contiguous shard would serve it. Down takes this core's own EC_MAX output columns, which
+        // IS contiguous. Bias is a single tile row, so the DRAM page index IS the tile column.
+        // Padding columns are zero-filled rather than left stale: the add would otherwise turn a
+        // column that gets discarded anyway into Inf/NaN.
+        {
+            const uint32_t gbias_tile = get_tile_size(cb_gate_bias);
+            const uint32_t dbias_tile = get_tile_size(cb_down_bias);
+            const auto gb_acc = TensorAccessor(
+                gate_bias_args, get_arg_val<uint32_t>(RT_BIAS + 0 * EXPERTS_PER_CHIP + local_expert_id), gbias_tile);
+            const auto ub_acc = TensorAccessor(
+                up_bias_args, get_arg_val<uint32_t>(RT_BIAS + 1 * EXPERTS_PER_CHIP + local_expert_id), gbias_tile);
+            const auto db_acc = TensorAccessor(
+                down_bias_args, get_arg_val<uint32_t>(RT_BIAS + 2 * EXPERTS_PER_CHIP + local_expert_id), dbias_tile);
+
+            cb_reserve_back(cb_gate_bias, HN_PAD);
+            cb_reserve_back(cb_up_bias, HN_PAD);
+            uint32_t lg = get_write_ptr(cb_gate_bias);
+            uint32_t lu = get_write_ptr(cb_up_bias);
+            for (uint32_t n = 0; n < HN_PAD; ++n) {
+                const uint32_t col = hstart + n;
+                if (n < hn_cols && col < HID_T) {
+                    noc_async_read(gb_acc.get_noc_addr(col), lg, gbias_tile);
+                    noc_async_read(ub_acc.get_noc_addr(col), lu, gbias_tile);
+                } else {
+                    moe_fused_swiglu::zero_l1(lg, gbias_tile);
+                    moe_fused_swiglu::zero_l1(lu, gbias_tile);
+                }
+                lg += gbias_tile;
+                lu += gbias_tile;
+            }
+
+            cb_reserve_back(cb_down_bias, EC_MAX);
+            uint32_t ld = get_write_ptr(cb_down_bias);
+            for (uint32_t n = 0; n < EC_MAX; ++n) {
+                const uint32_t col = out_col_start + n;
+                if (n < ec && col < EMB_T) {
+                    noc_async_read(db_acc.get_noc_addr(col), ld, dbias_tile);
+                } else {
+                    moe_fused_swiglu::zero_l1(ld, dbias_tile);
+                }
+                ld += dbias_tile;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_gate_bias, HN_PAD);
+            cb_push_back(cb_up_bias, HN_PAD);
+            cb_push_back(cb_down_bias, EC_MAX);
+        }
+#endif
         // Phase 0 — this expert's device-resident count. count = counts[ idx[local_expert_id] ].
         // Two one-page reads into unpushed scratch CBs, read back through a volatile L1 pointer.
         const uint32_t l1_idx = get_write_ptr(cb_idx_scratch);

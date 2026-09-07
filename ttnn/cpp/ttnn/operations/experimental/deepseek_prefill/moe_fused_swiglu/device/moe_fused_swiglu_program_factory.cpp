@@ -466,6 +466,19 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
           start_tensor.buffer()}) {
         TensorAccessorArgs(buffer).append_to(reader_ct);
     }
+    // Bias CB ids then the three bias accessors, appended last so every offset the reader already
+    // derives is unmoved. Only present when fuse_bias, which is in the program cache key.
+    if (operation_arguments.fuse_bias) {
+        reader_ct.push_back(geo::CB_GATE_BIAS);
+        reader_ct.push_back(geo::CB_UP_BIAS);
+        reader_ct.push_back(geo::CB_DOWN_BIAS);
+        for (auto* buffer :
+             {tensor_arguments.gate_biases[0].buffer(),
+              tensor_arguments.up_biases[0].buffer(),
+              tensor_arguments.down_biases[0].buffer()}) {
+            TensorAccessorArgs(buffer).append_to(reader_ct);
+        }
+    }
 
     auto writer_ct = make_writer_ct(
         blocking,
@@ -485,6 +498,9 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     auto compute_ct = make_compute_ct(blocking, experts_per_chip, activations_are_row_major);
 
     KernelDescriptor::Defines dataflow_defines{{"H_MCAST_POSTED", geo::H_MCAST_POSTED ? "1" : "0"}};
+    if (operation_arguments.fuse_bias) {
+        dataflow_defines.emplace_back("FUSE_BIAS", "1");
+    }
     KernelDescriptor::Defines compute_defines;
     if (stage_profile_enabled()) {
         dataflow_defines.emplace_back("MOE_FUSED_SWIGLU_STAGE_PROFILE", "1");
@@ -584,6 +600,16 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             }
             for (const auto& w_down : tensor_arguments.w_downs) {
                 reader_args.push_back(w_down.buffer());
+            }
+            // Per-expert bias bases, role-major, after the weight table for the same reason it sits
+            // last: one new constexpr offset in the reader and nothing above it moves.
+            if (operation_arguments.fuse_bias) {
+                for (const auto* list :
+                     {&tensor_arguments.gate_biases, &tensor_arguments.up_biases, &tensor_arguments.down_biases}) {
+                    for (const auto& bias : *list) {
+                        reader_args.push_back(bias.buffer());
+                    }
+                }
             }
             reader_descriptor.emplace_runtime_args(core, reader_args);
 
