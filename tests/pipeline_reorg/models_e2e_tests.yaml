@@ -1913,3 +1913,40 @@
 #       release_ready: false
 #   owner_id: U07K00A281X # Kevin Wu
 #   team: train
+
+# ── VibeVoice ──────────────────────────────────────────────────────
+
+# bh_p150b_civ2 is an LFC-mode SKU (.github/sku_config.yaml): the per-runner
+# cache is mounted at /mnt/MLPerf/huggingface :rw and is NOT pre-populated, so
+# the impl yaml sets HF_HUB_OFFLINE=0 and the first run on a runner downloads
+# the checkpoints there (VibeVoice ~5 GB, plus whisper-medium for WER and
+# wavlm-base-plus-sv for SIM); later runs reuse them. VIBEVOICE_MODEL_PATH aims
+# the snapshot at that persistent cache rather than the default ephemeral repo
+# checkout (models/experimental/vibevoice/weights/).
+#
+# Tier 3 is accuracy-only, so there are no perf assertions here. Each step is
+# guarded so one failure does not mask the others. Measured on a single P150:
+# demo smoke 1:07, WER 10:19, SIM 6:30 (17:56 total).
+- name: VibeVoice-1.5B e2e accuracy tests (P150 1x1)
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export VIBEVOICE_MODEL_PATH=/mnt/MLPerf/huggingface/microsoft/VibeVoice-1.5B
+    export MESH_DEVICE=P150
+    exit_code=0
+    # Demo smoke: the user-facing entry point (arg parsing, script/voice
+    # resolution, asset download, output writing) that the accuracy tests below
+    # bypass by driving the model directly. 2p_goat also covers speaker switching.
+    python3 models/experimental/vibevoice/demo/demo.py --demo 2p_goat --trace || exit_code=$?
+    # Teacher-forced WER vs the fp32 reference; gate WER <= 0.05 (measured 0.0000).
+    VV_WER_MAX_NEW_TOKENS=128 pytest --timeout 900 models/experimental/vibevoice/tests/pcc/test_e2e_wer.py || exit_code=$?
+    # Speaker similarity; gate floor 0.5 / margin 0.05 (measured 0.9915 vs 0.6415).
+    pytest --timeout 600 models/experimental/vibevoice/tests/pcc/test_e2e_sim.py || exit_code=$?
+    exit $exit_code
+  model: vibevoice-1.5b
+  model_family: VibeVoice
+  skus:
+    bh_p150b_civ2:
+      timeout: 22
+      tier: 3
+      release_ready: false
+  team: models

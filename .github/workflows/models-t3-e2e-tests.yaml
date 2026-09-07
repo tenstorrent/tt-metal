@@ -45,6 +45,7 @@ on:
           - mobilenetv3
           - ssd512
           - yunet
+          - vibevoice-1.5b
           - "[tt-train] tinyllama_1_1b_ddp32"
           - "[tt-train] qwen3_1_7b_ddp32"
           - "[tt-train] tiny_deepseek_v3_ddp32"
