@@ -46,7 +46,7 @@ def test_mac_all_tensors(device, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -71,7 +71,7 @@ def test_mac_tensor_with_2_scalaras(device, h, w, scalar1, scalar2):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 def assert_where_exact(torch_input_tensor, torch_input1, torch_input2, device):

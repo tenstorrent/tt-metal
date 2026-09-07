@@ -206,7 +206,7 @@ def test_binary_fmod_bf16(
     output = ttnn.fmod(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
-    assert_with_ulp(torch_output_tensor, output, 1)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=1)
 
 
 # This test was added for #17361
@@ -329,7 +329,7 @@ def test_div_by_zero(device, val_a, val_b, dtype, approx):
     if approx and dtype == "bfloat16":
         pytest.skip("Skipping test for fast approximate mode")
 
-    assert_with_ulp(z_torch, tt_out, 0, allow_nonfinite=True)
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=0, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize("val_a, val_b", [(0.5, 0.0), (-0.5, 0.0), (0.0, 0.0)])
@@ -356,7 +356,7 @@ def test_divide_inplace_by_zero(device, val_a, val_b, dtype, approx):
     if approx and dtype == "bfloat16":
         pytest.skip("Skipping test for fast approximate mode")
 
-    assert_with_ulp(z_torch, tt_out_inplace, 0, allow_nonfinite=True)
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out_inplace, ulp_threshold=0, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(

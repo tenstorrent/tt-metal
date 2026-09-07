@@ -971,7 +971,7 @@ def test_situ_glu(input_shape, ttnn_dtype, device):
     if is_bfp8:
         assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BFP8_PCC)
     else:
-        assert_with_ulp(golden, tt_res, ulp_threshold=SITU_GLU_ULP)
+        assert_with_ulp(expected_result=golden, actual_result=tt_res, ulp_threshold=SITU_GLU_ULP)
         assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
 
 
@@ -1023,7 +1023,7 @@ def test_situ_glu_sub_core_grids(device, sub_core_grid):
     assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
     tt_res = ttnn.to_torch(out)
     golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
-    assert_with_ulp(golden, tt_res, ulp_threshold=SITU_GLU_ULP)
+    assert_with_ulp(expected_result=golden, actual_result=tt_res, ulp_threshold=SITU_GLU_ULP)
     assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
 
 

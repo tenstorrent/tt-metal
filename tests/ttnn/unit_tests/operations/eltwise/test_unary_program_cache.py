@@ -123,7 +123,7 @@ def test_unary_cache_miss_different_op_types(device):
     assert_equal(torch_ref1, tt_out1)
 
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.sqrt, shape, dtype=ttnn.float32)
-    assert_with_ulp(torch_ref2, tt_out2, 1)
+    assert_with_ulp(expected_result=torch_ref2, actual_result=tt_out2, ulp_threshold=1)
 
     assert device.cache_entries_counter.total == 2
 
@@ -230,7 +230,7 @@ def test_unary_cache_correctness_same_volume_different_shapes(device):
     device.cache_entries_counter.reset()
     for shape in [[1, 1, 32, 64], [1, 1, 64, 32]]:
         torch_ref, tt_out = run_unary_op(device, ttnn.sqrt, shape, dtype=ttnn.float32)
-        assert_with_ulp(torch_ref, tt_out, 1)
+        assert_with_ulp(expected_result=torch_ref, actual_result=tt_out, ulp_threshold=1)
 
     assert device.cache_entries_counter.total == 1
 

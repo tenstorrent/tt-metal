@@ -2,10 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
+
 import pytest
 import torch
 
 from tests.ttnn.utils_for_testing import assert_with_ulp
+
+
+def test_assert_with_ulp_requires_keyword_arguments():
+    parameters = inspect.signature(assert_with_ulp).parameters
+    assert tuple(parameters) == ("expected_result", "actual_result", "ulp_threshold", "allow_nonfinite")
+    assert all(parameter.kind == inspect.Parameter.KEYWORD_ONLY for parameter in parameters.values())
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32, torch.float64])

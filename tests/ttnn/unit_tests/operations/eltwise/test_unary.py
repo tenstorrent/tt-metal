@@ -64,7 +64,12 @@ def run_unary_test(
     if pcc_check:
         assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp, allow_nonfinite=allow_nonfinite)
+        assert_with_ulp(
+            expected_result=torch_output_tensor,
+            actual_result=output_tensor,
+            ulp_threshold=ulp,
+            allow_nonfinite=allow_nonfinite,
+        )
 
 
 def run_unary_with_approx_mode_test(
@@ -85,7 +90,7 @@ def run_unary_with_approx_mode_test(
         # Fast-approximate path has a wider expected error than the ULP ≤ 5 cap; verify with PCC instead.
         assert_with_pcc(torch_output_tensor, output_tensor, approx_pcc)
     else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 def run_unary_test_fixed(
@@ -103,7 +108,12 @@ def run_unary_test_fixed(
     assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp, allow_nonfinite=allow_nonfinite)
+    assert_with_ulp(
+        expected_result=torch_output_tensor,
+        actual_result=output_tensor,
+        ulp_threshold=ulp,
+        allow_nonfinite=allow_nonfinite,
+    )
 
 
 def run_identity_test(device, h, w, data_type):
@@ -595,7 +605,7 @@ def run_unary_test_range(device, h, w, ttnn_function, layout=ttnn.TILE_LAYOUT, u
     assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 def run_unary_test_with_float(device, h, w, scalar, ttnn_function, layout=ttnn.TILE_LAYOUT, ulp=2):
@@ -611,7 +621,7 @@ def run_unary_test_with_float(device, h, w, scalar, ttnn_function, layout=ttnn.T
     assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 def run_unary_test_with_float_remainder(device, h, w, scalar, ttnn_function, ulp=2):
@@ -627,7 +637,7 @@ def run_unary_test_with_float_remainder(device, h, w, scalar, ttnn_function, ulp
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 @pytest.mark.parametrize("lower_limit", [0, 1.0, 2, -5.5])
@@ -1141,7 +1151,7 @@ def test_unary_floor(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.floor)
     golden_tensor = golden_function(in_data1)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -1159,7 +1169,7 @@ def test_unary_ceil(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.ceil)
     golden_tensor = golden_function(in_data1)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -2313,7 +2323,7 @@ def test_hardmish_bfloat16_ulp(device):
 
     tt_result = ttnn.hardmish(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
 def test_hardmish_bfloat16_allclose(device):
@@ -2383,10 +2393,15 @@ def test_unary_root_ops_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fas
             finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(output_tensor)
             if finite_mask.any():
                 assert_with_ulp(
-                    golden_tensor[finite_mask], output_tensor[finite_mask], ulp_threshold=2, allow_nonfinite=False
+                    expected_result=golden_tensor[finite_mask],
+                    actual_result=output_tensor[finite_mask],
+                    ulp_threshold=2,
+                    allow_nonfinite=False,
                 )
         else:
-            assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=2, allow_nonfinite=True)
+            assert_with_ulp(
+                expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=2, allow_nonfinite=True
+            )
 
 
 @pytest.mark.parametrize(
@@ -2447,7 +2462,9 @@ def test_unary_rdiv_ttnn(input_shapes, torch_dtype, ttnn_dtype, param, rounding_
     if (rounding_mode != None) and (torch_dtype == torch.bfloat16):
         assert_with_pcc(golden_tensor, output_tensor, pcc=0.999)
     else:
-        assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=3, allow_nonfinite=True)
+        assert_with_ulp(
+            expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=3, allow_nonfinite=True
+        )
 
 
 @pytest.mark.parametrize(
@@ -2711,7 +2728,7 @@ def test_unary_softcap(input_shapes, ttnn_dtype, device):
     if ttnn_dtype == ttnn.bfloat8_b:
         assert_with_pcc(golden, tt_res, pcc=SOFTCAP_BFP8_PCC)
     else:
-        assert_with_ulp(golden, tt_res, ulp_threshold=SOFTCAP_ULP)
+        assert_with_ulp(expected_result=golden, actual_result=tt_res, ulp_threshold=SOFTCAP_ULP)
         assert_with_pcc(golden, tt_res, pcc=SOFTCAP_BF16_PCC)
 
 
@@ -2746,7 +2763,7 @@ def test_softcap_bfloat16_full_domain(device):
     assert not torch.isnan(result).any(), "finite input produced NaN"
 
     mask = golden.abs() > SOFTCAP_FLUSH_FLOOR
-    assert_with_ulp(golden[mask], result[mask], ulp_threshold=SOFTCAP_ULP)
+    assert_with_ulp(expected_result=golden[mask], actual_result=result[mask], ulp_threshold=SOFTCAP_ULP)
     assert_with_pcc(golden[mask], result[mask], pcc=SOFTCAP_BF16_PCC)
 
     tiny_max = result[~mask].to(torch.float32).abs().max().item()
