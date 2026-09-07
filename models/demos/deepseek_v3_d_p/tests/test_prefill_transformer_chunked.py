@@ -2027,6 +2027,10 @@ def run_chunked_transformer_updated(
             # minimum (~0.86 @ L75), so applying it to GLM fails a perfectly good run.
             assert_threshold=TRACE_KV_CACHE_PCC_THRESHOLD if kv_pcc_threshold is None else kv_pcc_threshold,
             assert_layer_depth=GATED_LAYER_DEPTH,
+            # Without this the readback un-rotates over sp stripes while a TP-deduped cache holds
+            # sp*tp, and the gather comes back 1/tp as tall: "value tensor of shape [14080, 576]
+            # cannot be broadcast to indexing result of shape [56320, 576]".
+            tp_shard_kv=tp_shard_kv,
         )
         # GLM/DSA only: the indexer's own key cache. Read back after the run like the KVPE cache, so
         # unlike the per-layer decoder PCC (which needs a mid-forward host readback and is therefore
@@ -2042,6 +2046,7 @@ def run_chunked_transformer_updated(
                 seq_cache,
                 total_len,
                 config,
+                tp_shard_kv=tp_shard_kv,
             )
 
     # Release the captured trace + the sub-device managers that own its buffers BEFORE the mesh
