@@ -210,7 +210,8 @@ class TTSpatialCrossAttention:
         num_cams: int = 6,
         batch_first: bool = True,
         deformable_attention: Optional[dict] = None,
-        spatial_shapes=None,
+        *,
+        spatial_shapes,
         **kwargs,
     ):
         self.device = device
@@ -244,7 +245,6 @@ class TTSpatialCrossAttention:
         residual=None,
         query_pos=None,
         key_padding_mask=None,
-        spatial_shapes=None,
         level_start_index=None,
         rebatch_plan=None,
         **kwargs,
@@ -253,15 +253,14 @@ class TTSpatialCrossAttention:
         Forward pass of TTNN Spatial Cross Attention.
 
         Args:
-            query: BEV queries [B, num_queries, embed_dims].
-            reference_points_cam: Camera projected reference points [num_cams, B, num_queries, D, 2].
+            query: Bfloat16 BEV queries [B, num_queries, embed_dims].
+            reference_points_cam: Bfloat16 camera projected reference points [num_cams, B, num_queries, D, 2].
             bev_mask: Valid mask for camera projections [num_cams, B, num_queries, D].
             key: Multi-camera features [num_cams, H*W, B, embed_dims].
             value: Same as key.
             residual: Residual connection input.
             query_pos: Query positional encoding.
             key_padding_mask: Key padding mask.
-            spatial_shapes: Spatial shapes of multi-scale features.
             level_start_index: Start index of each level.
             rebatch_plan: Prebuilt :class:`SCARebatchPlan`. Shared by every encoder layer; built here if absent.
             **kwargs: Additional arguments.
@@ -345,7 +344,6 @@ class TTSpatialCrossAttention:
             key=key_reshaped,
             value=value_reshaped,
             reference_points=reference_points_batched,
-            spatial_shapes=spatial_shapes,
             level_start_index=level_start_index,
             **kwargs,
         )

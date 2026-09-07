@@ -62,7 +62,8 @@ class TTTemporalSelfAttention:
         num_points: int = 4,
         num_bev_queue: int = 2,
         batch_first: bool = True,
-        spatial_shapes=None,
+        *,
+        spatial_shapes,
         **kwargs,
     ):
         self.device = device
@@ -109,7 +110,6 @@ class TTTemporalSelfAttention:
         query_pos=None,
         key_padding_mask=None,
         reference_points=None,
-        spatial_shapes=None,
         prev_bev=None,
         **kwargs,
     ):
@@ -124,7 +124,6 @@ class TTTemporalSelfAttention:
             query_pos: Query positional encoding.
             key_padding_mask: Key padding mask.
             reference_points: Reference points for deformable attention.
-            spatial_shapes: Spatial shapes of BEV features.
             prev_bev: Previous BEV features [B, num_queries, embed_dims].
             **kwargs: Additional arguments.
 
@@ -162,7 +161,6 @@ class TTTemporalSelfAttention:
             query=query,
             value=value,
             reference_points=ref_points,
-            spatial_shapes=spatial_shapes,
             key_padding_mask=key_padding_mask,
             **kwargs,
         )
