@@ -5,10 +5,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from math import nan
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-from math import nan
 from loguru import logger
 
 OpDict = Dict[str, Any]
@@ -1129,16 +1129,16 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["Dest Read Backpressure"] = _group_to_stat_dict(ratio)
 
     if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("MATH_NOT_STALLED_DEST_WR_PORT"):
-        unstalled = get_counter_series("MATH_NOT_STALLED_DEST_WR_PORT")
+        not_stalled = get_counter_series("MATH_NOT_STALLED_DEST_WR_PORT")
         # Skip when the counter reads 0 for the whole op (would report bogus 100% stall rate).
-        if unstalled.sum() > 0:
+        if not_stalled.sum() > 0:
             avail = get_counter_series("MATH_INSTRN_AVAILABLE")
-            ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
+            ratio = ((avail - not_stalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
             per_op_stats["Math Dest Write Port Stall Rate"] = _group_to_stat_dict(ratio)
     if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("AVAILABLE_MATH"):
         avail = get_counter_series("MATH_INSTRN_AVAILABLE")
-        unstalled = get_counter_series("AVAILABLE_MATH")
-        ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
+        not_stalled = get_counter_series("AVAILABLE_MATH")
+        ratio = ((avail - not_stalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
         per_op_stats["Math Scoreboard Stall Rate"] = _group_to_stat_dict(ratio)
 
     # Per-thread total instruction issue rates (per cycle, not %).
@@ -1785,10 +1785,13 @@ def compute_device_only_metrics(
             safe_complement("value_MATH_NOT_STALLED_DEST_WR_PORT", "value_MATH_INSTRN_AVAILABLE"),
             axis=1,
         )
-    eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
-        safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"),
-        axis=1,
-    )
+    # Different capture groups (PACK, UNPACK), so either column can be absent; a missing numerator
+    # reads as a flat 100%. Existence only, unlike the sum guard above: all-zero is a real reading.
+    if "value_AVAILABLE_MATH" in eff_pivot.columns and "value_MATH_INSTRN_AVAILABLE" in eff_pivot.columns:
+        eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
+            safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"),
+            axis=1,
+        )
 
     # Per-thread total instruction issue rates (per cycle, not %).
     eff_pivot["T0 Instrn Issue Rate"] = eff_pivot.apply(
