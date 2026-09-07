@@ -51,7 +51,9 @@ constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t)
 
 // ---------------------------------------------------------------------------
 // Rotated Q split: host/device contract. The remainder ("float") Q chunks of an uneven work split
-// change owner core between ring iterations, so no grid row pays the +1 K-mcast slot on every one.
+// change owner core between ring iterations, so no LOCKSTEP GROUP pays the +1 K-mcast slot on
+// every one. A group is the set of cores one injector multicasts to while waiting for every
+// receiver -- today a full grid row, for either the shared-K (latent-V) or the GQA-grouped family.
 // Everything here is derived identically by the program factory and all three kernels.
 //
 // rotated_max_slots -- the per-iteration chunk-list length -- is not here: the factory pushes it as
@@ -64,7 +66,7 @@ constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t)
 constexpr uint32_t kRotatedHandoffSemDepth = 3;
 
 // Header words each kernel's per-iteration runtime-arg block carries before its chunk-id list.
-constexpr uint32_t kRotatedReaderIterHeaderWords = 2;   // [row_slot_count, my_count]
+constexpr uint32_t kRotatedReaderIterHeaderWords = 2;   // [group_slot_count, my_count]
 constexpr uint32_t kRotatedWriterIterHeaderWords = 3;   // [my_count, float_migrated_in, float_dest]
 constexpr uint32_t kRotatedComputeIterHeaderWords = 1;  // [my_count]
 
