@@ -1062,7 +1062,12 @@ void kernel_main() {
                             wd_mgroup ? ((gb * MGROUP_ROWS + lr) % DEPTH_H) : ((gb * KGROUPS + r) % DEPTH_H);
                         if (i_send && !writer_owns_send) {
                             sem_h_obj.wait_min(h_arrivals);
-                            noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, HROW_T * H_TILE);
+                            noc.async_read(
+                                PrecomposedUnicastEndpoint{},
+                                CoreLocalMem<uint32_t>(hdst),
+                                HROW_T * H_TILE,
+                                {.noc_addr = get_noc_addr(get_write_ptr(cb_h_local), noc.get_noc_id())},
+                                {});
                             phase2_read_barrier();
                             if constexpr (HMCAST_ACTIVE) {
                                 Semaphore<> h_free(SEM_H_FREE);
@@ -1153,7 +1158,12 @@ void kernel_main() {
                             // VALID, so the slot can be read before the write lands.
                             // cb_h_local needs no CB front — the workers' NoC writes assemble it.
                             sem_h_obj.wait_min(h_arrivals);
-                            noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, h_block_tiles * H_TILE);
+                            noc.async_read(
+                                PrecomposedUnicastEndpoint{},
+                                CoreLocalMem<uint32_t>(hdst),
+                                h_block_tiles * H_TILE,
+                                {.noc_addr = get_noc_addr(get_write_ptr(cb_h_local), noc.get_noc_id())},
+                                {});
                         }
 
                         if (i_send) {
