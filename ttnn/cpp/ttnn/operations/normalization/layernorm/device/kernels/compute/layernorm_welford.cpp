@@ -64,7 +64,12 @@ void kernel_main() {
 #ifdef FUSE_BETA
     constexpr auto dfb_beta = dfb::beta;
 #endif
+#ifdef COMPACT_FP32_FINALIZER
+    // The compact path never stages centred values; only discarded branches name dfb_xmm.
+    constexpr auto dfb_xmm = dfb_in;
+#else
     constexpr auto dfb_xmm = dfb::xmm;  // x - E[x]
+#endif
 
     constexpr auto dfb_ex = dfb::ex;        // E[x]
     constexpr auto dfb_ex2 = dfb::ex2;      // E[(x-E[x])^2]

@@ -63,8 +63,9 @@ struct LayerNormCbFootprint {
     constexpr bool fits(std::uint64_t usable_l1_bytes) const { return total() < usable_l1_bytes; }
 };
 
-constexpr bool uses_centred_values_buffer(bool rms_norm, bool fuse_pre_add, bool large_tensor) {
-    return !rms_norm || fuse_pre_add || large_tensor;
+constexpr bool uses_centred_values_buffer(
+    bool rms_norm, bool fuse_pre_add, bool large_tensor, bool compact_fp32_finalizer) {
+    return !compact_fp32_finalizer && (!rms_norm || fuse_pre_add || large_tensor);
 }
 
 // Blackhole measurements show that the affine multicast rendezvous is amortised at 20 active
@@ -233,6 +234,15 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
 
     const auto input_format = datatype_to_dataformat_converter(input.dtype());
     const auto output_format = input_format;
+    const bool row_major_affine = (gamma.has_value() && gamma->layout() == Layout::ROW_MAJOR) ||
+                                  (beta.has_value() && beta->layout() == Layout::ROW_MAJOR);
+    const bool fp32_finalizer_arch = device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0;
+    const bool fp32_finalizer_eligible = fp32_finalizer_arch && fp32_dest_acc_en && !rms_norm && !input_is_row_major &&
+                                         input_format == tt::DataFormat::Float32 &&
+                                         output_format == tt::DataFormat::Float32 &&
+                                         !operation_attributes.fused_activation.has_value();
+    // Compact residual finalisation supports row-major affine parameters; tiled affine uses the large kernel.
+    const bool compact_fp32_finalizer_eligible = fp32_finalizer_eligible && (!residual.has_value() || row_major_affine);
     const auto intermediate_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const auto gamma_format =
         gamma.has_value() ? datatype_to_dataformat_converter(gamma->dtype()) : tt::DataFormat::Float16_b;
@@ -277,14 +287,16 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
     // LayerNormDeviceOperation::compute_program_hash, so a contracted L1 span selects a distinct cached programme.
     const std::uint64_t usable_l1 = ttnn::operations::core::usable_program_l1_capacity(device);
     const auto footprint = [&](bool sfpu_statistics) {
+        const bool compact_finalizer = sfpu_statistics && compact_fp32_finalizer_eligible && !plan.large_tensor;
         return LayerNormCbFootprint{
             .input = static_cast<std::uint64_t>(plan.input_tiles) * input_tile_size,
             .residual_input =
                 residual.has_value() ? static_cast<std::uint64_t>(plan.residual_tiles) * residual_tile_size : 0,
             .output = static_cast<std::uint64_t>(plan.output_tiles) * output_tile_size,
-            .centred_values = uses_centred_values_buffer(rms_norm, residual.has_value(), plan.large_tensor)
-                                  ? static_cast<std::uint64_t>(plan.centred_tiles) * intermediate_tile_size
-                                  : 0,
+            .centred_values =
+                uses_centred_values_buffer(rms_norm, residual.has_value(), plan.large_tensor, compact_finalizer)
+                    ? static_cast<std::uint64_t>(plan.centred_tiles) * intermediate_tile_size
+                    : 0,
             .squared_values =
                 sfpu_statistics ? 0 : static_cast<std::uint64_t>(plan.squared_tiles) * intermediate_tile_size,
             .gamma = gamma.has_value() ? static_cast<std::uint64_t>(plan.gamma_tiles) * gamma_tile_size : 0,
@@ -307,8 +319,6 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
 
     const bool tile_fits = footprint(false).fits(usable_l1);
     const bool two_pass_fits = footprint(true).fits(usable_l1);
-    const bool row_major_affine = (gamma.has_value() && gamma->layout() == Layout::ROW_MAJOR) ||
-                                  (beta.has_value() && beta->layout() == Layout::ROW_MAJOR);
     plan.use_welford =
         layernorm::select_interleaved_statistics_backend(
             requested_use_welford,
@@ -322,11 +332,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
              .has_gamma = gamma.has_value(),
              .has_beta = beta.has_value(),
              .compact_two_pass_fits_in_l1 = two_pass_fits}) == layernorm::StatisticsBackend::SFPU_TWO_PASS;
-    const bool fp32_finalizer_arch = device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0;
-    const bool fp32_sfpu_finalizer = fp32_finalizer_arch && fp32_dest_acc_en && plan.use_welford && !rms_norm &&
-                                     !input_is_row_major && input_format == tt::DataFormat::Float32 &&
-                                     output_format == tt::DataFormat::Float32 &&
-                                     !operation_attributes.fused_activation.has_value();
+    const bool fp32_sfpu_finalizer = fp32_finalizer_eligible && plan.use_welford;
     const bool selected_fits = plan.use_welford ? two_pass_fits : tile_fits;
     const bool large_tensor_kernel_allowed = !row_major_affine || input_is_row_major;
     // These empirical limits keep the largest validated streaming configurations within L1. The tile-size ratio
@@ -344,9 +350,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
     }
     // The large-tensor reader cannot consume row-major affine tensors. Keep fused FP32 calls with
     // row-major affine parameters on the small kernel and use its retained-input SFPU finaliser.
-    const bool compact_fp32_finalizer_supports_residual = row_major_affine;
-    plan.compact_fp32_finalizer = fp32_sfpu_finalizer && !plan.large_tensor &&
-                                  (!residual.has_value() || compact_fp32_finalizer_supports_residual);
+    plan.compact_fp32_finalizer = plan.use_welford && compact_fp32_finalizer_eligible && !plan.large_tensor;
     if (large_tensor_kernel_allowed && fp32_sfpu_finalizer && !plan.compact_fp32_finalizer) {
         plan.large_tensor = true;
     }
@@ -696,7 +700,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     add_dfb(EX2, im2_t, single_tile_size, interm_data_format);
 
     // x - E[x].
-    if (uses_centred_values_buffer(rms_norm, fuse_pre_add, large_tensor_needed)) {
+    if (uses_centred_values_buffer(rms_norm, fuse_pre_add, large_tensor_needed, compact_fp32_finalizer)) {
         add_dfb(XMM, im0_t, single_tile_size, interm_data_format);
     }
 
@@ -1138,7 +1142,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (b && !rms_norm) {
         bind_self_loop(compute, X, "x");
     }
-    if (!rms_norm || fuse_pre_add || large_tensor_needed) {
+    if (uses_centred_values_buffer(rms_norm, fuse_pre_add, large_tensor_needed, compact_fp32_finalizer)) {
         bind_self_loop(compute, XMM, "xmm");
     }
     if (uses_reciprocal_lut) {

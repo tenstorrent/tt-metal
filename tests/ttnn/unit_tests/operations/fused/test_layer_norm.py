@@ -818,6 +818,40 @@ def test_l1_interleaved(device, use_welford, dtype):
 
 
 @run_for_blackhole("The near-capacity allocation is calibrated for Blackhole L1")
+def test_layer_norm_compact_fp32_omits_centred_buffer(device, enabled_program_cache):
+    torch.manual_seed(20260907)
+    shape = (64, 4096)
+    inputs = [1_000_000.0 + 128.0 * torch.rand(shape) for _ in range(2)]
+    device_inputs = [ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device) for x in inputs]
+    references = [torch.nn.functional.layer_norm(x.double(), [shape[-1]]).float() for x in inputs]
+    config = ttnn.LayerNormDefaultProgramConfig(use_welford=True)
+
+    # No reciprocal tensor: falling back to the large streaming kernel is an error.
+    warm_output = ttnn.layer_norm(device_inputs[0], program_config=config)
+    assert_output_accuracy(references[0], ttnn.to_torch(warm_output), use_welford=True)
+    warm_output.deallocate(force=True)
+
+    # The compact footprint fits only if the unused full-row XMM buffer is absent.
+    grid = device.compute_with_storage_grid_size()
+    pressure_tiles = (650 * 1024 * grid.x * grid.y + 2047) // 2048
+    l1_pressure = ttnn.allocate_tensor_on_device(
+        ttnn.Shape((1, 1, 32, pressure_tiles * 32)),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    cache_entries = None
+    for input_tensor, reference in zip(device_inputs, references):
+        output = ttnn.layer_norm(input_tensor, program_config=config)
+        assert_output_accuracy(reference, ttnn.to_torch(output), use_welford=True)
+        if cache_entries is not None:
+            assert device.num_program_cache_entries() == cache_entries
+        cache_entries = device.num_program_cache_entries()
+    assert l1_pressure.is_allocated()
+
+
+@run_for_blackhole("The near-capacity allocation is calibrated for Blackhole L1")
 def test_l1_interleaved_near_capacity(device, enabled_program_cache):
     torch.manual_seed(20260731)
 
