@@ -143,6 +143,13 @@ Blocking::Blocking(
     if (wd_mrow_rounds && (DEPTH_H * hid_t) % ((M_BLOCK / 2) * hn_pad) != 0) {
         wd_mrow_rounds = false;
     }
+    // The biased down path adds its bias on an out_interm -> out_tiles pass, so out_interm has to
+    // hold the WHOLE output block; the mrow schedule sizes it at half that. Giving up mrow here is
+    // what makes the full-block size fall out of the existing expression rather than costing L1,
+    // and it keeps the mrow arm out of the biased kernel entirely.
+    if (fuse_bias) {
+        wd_mrow_rounds = false;
+    }
 
     std::tie(ec_sizes, ec_starts) = split(emb_t, num_cores);
     ec_max = *std::max_element(ec_sizes.begin(), ec_sizes.end());

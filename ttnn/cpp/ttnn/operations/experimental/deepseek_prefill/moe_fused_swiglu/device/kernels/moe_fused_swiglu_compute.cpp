@@ -123,6 +123,13 @@ constexpr uint32_t GU_CHUNK_W = HN_PAD / GU_CHUNKS;
 // Eltwise DEST-window block size: tiles per acquire/commit/wait/release cycle.
 constexpr uint32_t ELTWISE_BLK = CT(ELTWISE_BLK);
 constexpr uint32_t DEST_LIMIT = CT(DEST_LIMIT);
+#ifdef FUSE_BIAS
+// The biased down path accumulates into out_interm so the bias can be added on the way out; the
+// bias-free one packs straight to the output CB.
+constexpr MatmulTarget DOWN_TARGET = MatmulTarget::Interm;
+#else
+constexpr MatmulTarget DOWN_TARGET = MatmulTarget::Out;
+#endif
 constexpr uint32_t GATHER_PAGES = CT(GATHER_PAGES);  // the WHOLE landing CB, in tiles
 
 constexpr uint32_t cb_x_in = CT(CB_X_IN);
@@ -820,7 +827,7 @@ void kernel_main() {
                         /*init_matmul=*/true,
                         /*retain_in0=*/false,
                         /*retain_in1=*/true,
-                        MatmulTarget::Out>(
+                        DOWN_TARGET>(
                         h_buf,
                         wd_buf,
                         out_tiles_buf,
@@ -837,7 +844,7 @@ void kernel_main() {
                         /*init_matmul=*/true,
                         /*retain_in0=*/false,
                         /*retain_in1=*/false,
-                        MatmulTarget::Out>(
+                        DOWN_TARGET>(
                         h_buf,
                         wd_buf,
                         out_tiles_buf,
@@ -847,6 +854,38 @@ void kernel_main() {
                         /*out_row_width=*/EC_MAX,
                         HnSteps{});
                 }
+#ifdef FUSE_BIAS
+                // DOWN_TARGET left the accumulated block in out_interm, so drain it to the output CB
+                // and add the down bias on the way. out_interm is scratch the matmul never pushes --
+                // reload_partials reads it the same way -- so it is indexed directly rather than
+                // fronted. The block is row-major at out_row_width = EC_MAX, so tile i sits in
+                // output column `i % EC_MAX`, which is the bias column.
+                {
+                    reconfig_data_format(cb_out_interm, cb_down_bias);
+                    add_bcast_rows_init(cb_out_interm, cb_down_bias);
+                    pack_reconfig_data_format(cb_out_tiles);
+                    // The matmul accumulated its K-blocks through PACKER_L1_ACC and leaves it
+                    // ARMED; the reset below runs after this pass. Without clearing it here every
+                    // pack would fold onto whatever the output CB already held.
+                    pack_reconfig_l1_acc(0);
+                    for (uint32_t t0 = 0; t0 < out_block_tiles; t0 += DEST_LIMIT) {
+                        uint32_t w = out_block_tiles - t0;
+                        if (w > DEST_LIMIT) {
+                            w = DEST_LIMIT;
+                        }
+                        tile_regs_acquire();
+                        for (uint32_t i = 0; i < w; ++i) {
+                            add_tiles_bcast_rows(cb_out_interm, cb_down_bias, t0 + i, (t0 + i) % EC_MAX, i);
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        for (uint32_t i = 0; i < w; ++i) {
+                            pack_tile(i, cb_out_tiles);
+                        }
+                        tile_regs_release();
+                    }
+                }
+#endif
                 if (!wd_mrow) {
                     out_tiles_buf.push_back(out_block_tiles);
                 }
@@ -865,6 +904,17 @@ void kernel_main() {
             x_buf.pop_front(X_SLOT_FULL);
         }
 
+#ifdef FUSE_BIAS
+        // The reader pushes these once per expert and single-buffers them, so the next expert's
+        // reserve blocks until this one drains. Popped here rather than inside the M-block loop:
+        // every block of this expert reads the same windows.
+        cb_wait_front(cb_gate_bias, HN_PAD);
+        cb_pop_front(cb_gate_bias, HN_PAD);
+        cb_wait_front(cb_up_bias, HN_PAD);
+        cb_pop_front(cb_up_bias, HN_PAD);
+        cb_wait_front(cb_down_bias, EC_MAX);
+        cb_pop_front(cb_down_bias, EC_MAX);
+#endif
         const uint32_t h_pad = (H_CAP - h_cursor) % H_CAP;
         if (h_pad != 0) {
             h_buf.wait_front(h_pad);

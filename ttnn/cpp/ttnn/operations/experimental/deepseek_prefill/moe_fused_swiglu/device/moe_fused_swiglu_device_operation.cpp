@@ -265,13 +265,6 @@ void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
                     tensor.dtype());
             }
         }
-        // The plumbing above carries the tensors and hashes fuse_bias, but no kernel applies them
-        // yet. Reject rather than ignore: a silently bias-free result is wrong numbers with no
-        // signal. Lift this together with the kernels' bias adds.
-        TT_FATAL(
-            !operation_arguments.fuse_bias,
-            "moe_fused_swiglu: expert biases are accepted by the interface but not yet applied by "
-            "the kernels; pass them to unified_routed_expert_moe instead");
     }
 
     TT_FATAL(
