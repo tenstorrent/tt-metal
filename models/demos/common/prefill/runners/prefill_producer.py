@@ -506,8 +506,10 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
         real_len = min(real_len, golden_cap)
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
-    if ADAPTER.name == "gpt_oss_d_p":
-        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
+    # Dense-GQA models (two caches: k heads then v heads, bfp8, Meta-swizzled K) share one reader —
+    # the layout is identical, only the dims come from the adapter's model_config.
+    if ADAPTER.name in ("gpt_oss_d_p", "mistral_3_5_d_p"):
+        return _read_slot_kv_and_check_pcc_dense_gqa(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
@@ -531,7 +533,15 @@ def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_
     return torch.cat(rows, dim=0)[:read_len]
 
 
-def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc_dense_gqa(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+    """Read back a DENSE-GQA two-cache layout over UMD and PCC it against the golden trace.
+
+    Config layout: ``0..N-1`` = k head 0..N-1, ``N..2N-1`` = v head 0..N-1, with
+    ``N == num_kv_heads == the TP column count``. Both caches are bfp8 with 32-token DRAM banks, and
+    the device K is Meta-RoPE swizzled over the rotary slice, so the golden K is permuted HF -> Meta
+    before comparing. Shared by every dense-GQA model (gpt_oss_d_p, mistral_3_5_d_p): the dims come
+    from ``ADAPTER.model_config``, nothing here is model-specific.
+    """
     from pathlib import Path
 
     from safetensors import safe_open
@@ -587,8 +597,8 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
 
     min_pcc = min(mins.values())
     logger.info(
-        f"[producer] slot {slot_id} GPT-OSS KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
-        f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min_pcc:.6f})"
+        f"[producer] slot {slot_id} dense-GQA ({ADAPTER.name}) KV PCC over [0,{real_len}) across "
+        f"{checked}/{NUM_LAYERS} local layers -> K={mins['k']:.5f} V={mins['v']:.5f} (min {min_pcc:.6f})"
     )
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")

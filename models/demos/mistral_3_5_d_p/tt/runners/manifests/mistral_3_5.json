@@ -1,0 +1,12 @@
+{
+  "_comment": "Per-model manifest for the disaggregated prefill runner. The runner applies this env map with setdefault before reading its config, so a binding's global_env still wins. Precedence under tt-run: global_env > manifest > code default. Point a binding at it with PREFILL_MANIFEST=models/demos/mistral_3_5_d_p/tt/runners/manifests/mistral_3_5.json so the rank-binding and mesh-graph descriptors stay model-agnostic.",
+  "_producer_note": "Only the RUNNER reads PREFILL_MANIFEST. prefill_producer.py resolves its adapter from PREFILL_MODEL alone, so a run driven by the manifest must ALSO export PREFILL_MODEL (and PREFILL_SP/PREFILL_TP, which the producer reads directly) or the producer silently falls back to the default MLA model and its KV read-back decodes with the wrong head_dim.",
+  "env": {
+    "PREFILL_MODEL": "mistral_3_5_d_p",
+    "PREFILL_CHUNK_SIZE": "5120",
+    "PREFILL_SP": "4",
+    "PREFILL_TP": "8",
+    "_topology_comment": "This pod is a plain 8x4 grid with no wrap-around links, so ring collectives cannot be mapped; PREFILL_TOPOLOGY=ring on a torus-wired galaxy.",
+    "PREFILL_TOPOLOGY": "linear"
+  }
+}

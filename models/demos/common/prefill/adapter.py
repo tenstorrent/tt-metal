@@ -293,6 +293,8 @@ ADAPTER_PATHS = {
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
+    # Mistral-Medium-3.5-128B: dense GQA + dense SwiGLU, 88 layers, no MoE and no sinks.
+    "mistral_3_5_d_p": "models.demos.mistral_3_5_d_p.tt.runners.adapters.mistral_3_5:MistralPrefillAdapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}
