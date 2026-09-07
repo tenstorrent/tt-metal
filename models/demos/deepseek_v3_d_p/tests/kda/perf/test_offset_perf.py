@@ -49,6 +49,15 @@ def _offset_sweep(local_rows: int) -> dict[str, int]:
 
 
 @pytest.mark.parametrize(
+    "sequence",
+    [
+        # 2560 rows per chip: LoudBox's own shape, where a split pins 4 groups to 1.
+        pytest.param(_SEQUENCE, id="T5120-4groups"),
+        # 640 rows per chip: one group natively, i.e. Galaxy SP8's per-chip geometry.
+        pytest.param(_SEQUENCE // 4, id="T1280-1group"),
+    ],
+)
+@pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
     [pytest.param((2, 4), 1, fabric_1d_device_params(), id="SP2xTP4-fabric-1d")],
     indirect=["mesh_device", "device_params"],
@@ -57,15 +66,16 @@ def test_offset_handling_cost(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
     device_params: dict,
+    sequence: int,
 ) -> None:
     """Measure interleaved warm trace wall time at each offset and report JSON."""
     mesh_shape = tuple(mesh_device.shape)
     sequence_parallel_axis = 1 - tensor_parallel_axis
     sp_size = mesh_shape[sequence_parallel_axis]
-    local_rows = _SEQUENCE // sp_size
+    local_rows = sequence // sp_size
     layout = f"SP{sp_size}xTP{mesh_shape[tensor_parallel_axis]}"
 
-    case = make_synthetic_kimi_k3_test_case(sequence=_SEQUENCE)
+    case = make_synthetic_kimi_k3_test_case(sequence=sequence)
     layer, hidden_tt = make_kimi_k3_device_case(
         mesh_device,
         case,
@@ -125,7 +135,7 @@ def test_offset_handling_cost(
         + json.dumps(
             {
                 "layout": layout,
-                "sequence": _SEQUENCE,
+                "sequence": sequence,
                 "local_rows": local_rows,
                 "repetitions": _REPETITIONS,
                 "timing_sample_count": _TIMING_SAMPLES,
