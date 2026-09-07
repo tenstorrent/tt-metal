@@ -33,6 +33,14 @@ class ChipArchitecture(Enum):
         return enum_value
 
 
+def _env_flag_enabled(name):
+    return os.getenv(name, "").strip().lower() in ("1", "true")
+
+
+def is_4row_arch():
+    return _env_flag_enabled("TT_METAL_QUASAR_FOUR_ROW")
+
+
 # Cache for chip architecture
 _cached_chip_architecture = None
 

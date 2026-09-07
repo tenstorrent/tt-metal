@@ -30,7 +30,7 @@ from ttexalens.tt_exalens_lib import (
 
 from . import device as device_module
 from . import golden_generators as golden_generators_module
-from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .chip_architecture import ChipArchitecture, get_chip_architecture, is_4row_arch
 from .data_format_inference import data_formats, is_format_combination_outlier
 from .device import (
     CHIP_DEFAULT_BOOT_MODES,
@@ -312,6 +312,7 @@ class TestConfig:
     @staticmethod
     def setup_arch():
         TestConfig.CHIP_ARCH = get_chip_architecture()
+        TestConfig.ARCH_SPECIFIC_OPTIONS = ""
         match TestConfig.CHIP_ARCH:
             case ChipArchitecture.WORMHOLE:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-wh"
@@ -333,6 +334,8 @@ class TestConfig:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-qsr32"
                 TestConfig.ARCH_COMPUTE = "-mcpu=tt-qsr32-tensix"
                 TestConfig.ARCH_DEFINE = "-DARCH_QUASAR"
+                math_rows = 4 if is_4row_arch() else 8
+                TestConfig.ARCH_SPECIFIC_OPTIONS = f"-DMATH_ROWS={math_rows}"
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_quasar"
                 TestConfig.ARCH = ChipArchitecture.QUASAR
                 TestConfig.DATA_FORMAT_ENUM = QUASAR_DATA_FORMAT_ENUM_VALUES
