@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TP helpers for Qwen3.5/3.6 on Blackhole (9B single-device + 27B TP=4 / TP=8).
+"""TP helpers for Qwen3.5/3.6 on Blackhole (P150 single-device, 27B TP=4/TP=8) and Wormhole
+(9B N300 TP=2, 27B T3K TP=8). Per-arch and per-mesh tuning is gated by the predicates below.
 
 Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.

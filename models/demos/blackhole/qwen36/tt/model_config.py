@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Qwen3.5-9B config for Blackhole P150.
+"""Qwen3.5/3.6 config for Blackhole (P150, P150x4) and Wormhole (N150, N300, T3K).
 
 Subclasses tt_transformers.ModelArgs. HF_MODEL env var is canonical (hub id or local dir);
 hub ids are snapshot_download'd first (AutoConfig on bare hub id is unreliable here).
@@ -18,7 +18,7 @@ GDN_CONV1D_L1_SMALL_SIZE = 24576
 
 
 class Qwen36ModelArgs(ModelArgs):
-    """Qwen3.5-9B ModelArgs for Blackhole P150."""
+    """Qwen3.5/3.6 ModelArgs; device/mesh-specific tuning is gated in tp_common.py."""
 
     # Opt into base ModelArgs TP > n_kv_heads path; attention/tp.py replicates via replicate_kv_weight.
     SUPPORTS_KV_REPLICATION = True
