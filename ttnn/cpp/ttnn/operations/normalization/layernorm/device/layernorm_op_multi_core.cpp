@@ -380,9 +380,9 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
             usable_l1);
     }
 
-    if (device->arch() == tt::ARCH::BLACKHOLE && plan.use_welford && !rms_norm && plan.large_tensor &&
-        residual.has_value() && gamma.has_value() && beta.has_value() && !input_is_row_major &&
-        input_format == tt::DataFormat::Float32 && !operation_attributes.fused_activation.has_value()) {
+    // Retained residual rows require the finaliser's offset-aware FP32 input alias.
+    if (device->arch() == tt::ARCH::BLACKHOLE && fp32_sfpu_finalizer && plan.large_tensor && residual.has_value() &&
+        gamma.has_value() && beta.has_value()) {
         const std::uint32_t full_row_tiles = tt::round_up(width_tiles, block_size);
         auto replay_footprint = footprint(true);
         replay_footprint.residual_values = static_cast<std::uint64_t>(full_row_tiles) * intermediate_tile_size;
