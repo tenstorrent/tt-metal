@@ -817,9 +817,9 @@ class TtPrefillRuntime:
         if release is not None:
             release()
         # The D2H ack service is baked into the capture, so this holds the last reference to it once
-        # the caller has dropped its own. Releasing its device service cores and their L1 needs the
-        # mesh still open, so keeping it alive past close leaves those cores claimed for the life of
-        # the process.
+        # the caller has dropped its own. Its device-side teardown -- barrier, termination signal,
+        # service-core L1 release -- only works while the mesh is open, so it has to run from here
+        # rather than from wherever the last reference happens to drop.
         self._trace_d2h_service = None
 
     def set_layer_ack_channel(self, layer_ack_channel) -> None:
