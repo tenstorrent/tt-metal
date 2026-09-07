@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Minimal threaded MPI weight bridge for the threaded_bridge_test example.
+"""Minimal threaded MPI weight bridge for the bridge_and_queue_test example.
 
 Data flows THROUGH a pre-allocated on-device `ttnn.Tensor` pad on each side.
 

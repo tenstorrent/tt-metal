@@ -2,9 +2,9 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Launches the 2-rank threaded_bridge_test via tt-run. Rank 0 pushes a
-# handful of tensors through ThreadedWeightBridge; rank 1 verifies and
-# prints [PASS] / [FAIL].
+# Launches the 2-rank threaded weight bridge test via tt-run. Rank 0
+# pushes a handful of tensors through ThreadedWeightBridge; rank 1
+# verifies and prints [PASS] / [FAIL].
 #
 # Configuration is a verbatim copy of gsm8k_fully_async/configurations/split_1_1
 # (two [1, 1] Blackhole meshes, one no-op fabric intermesh connection).
@@ -16,7 +16,7 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
     exit 1
 fi
 
-EX_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo_remote_rollout/threaded_bridge_test"
+EX_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo_remote_rollout/bridge_and_queue_test"
 CONFIG_DIR="split_1_1"
 HOST_FILE=""
 RANK_BINDINGS_FILE=""
