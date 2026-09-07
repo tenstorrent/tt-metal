@@ -97,6 +97,7 @@ def test_decode_profile(mesh_device, layers, steps):
     # eager decode steps (compile on the first)
     pos = T
     eager_times = []
+    dumps, toks = [], []
     for i in range(steps + 1):
         signpost(f"decode_eager_{i}")
         ttnn.synchronize_device(device)
@@ -108,10 +109,15 @@ def test_decode_profile(mesh_device, layers, steps):
             logger.info(f"[DECODE_PROF] logits out shape {out.shape} padded {out.padded_shape}")
         lg = model.process_output_decode(out, B=1, S=1).reshape(-1)
         nxt = int(torch.argmax(lg).item())
+        dumps.append(lg.float().clone())
+        toks.append(nxt)
         pos += 1
         _update(nxt, pos)
     signpost("decode_eager_end")
     logger.info(f"[DECODE_PROF] eager step wall ms: {['%.1f' % (t * 1e3) for t in eager_times]}")
+    logger.info(f"[DECODE_PROF] tokens {toks}")
+    if os.environ.get("DECODE_PROF_DUMP"):
+        torch.save({"logits": torch.stack(dumps), "tokens": toks}, os.environ["DECODE_PROF_DUMP"])
 
     # traced decode: capture once, time replays (skip under the device profiler: tracy's report asserts on trace ops)
     if os.environ.get("DECODE_PROF_NO_TRACE") == "1":

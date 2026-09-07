@@ -271,6 +271,11 @@ class TPGatedDeltaNet:
         # requiring a ROW_MAJOR gather, which removes the ~85 us full-chunk untilize per layer. The carry still
         # comes back as TILE [1,K-1,C], so every other piece of conv state bookkeeping is unchanged.
         self._kda_tile_in = self._gdn_conv_kda and os.environ.get("QWEN36_KDA_TILE_IN") == "1"
+        # QWEN36_GDN_DECODE_KDA=1: decode recurrence through the fused KDA chunk ops on a 32-row chunk (token in
+        # row 0, beta/g zero on the padding rows -> t_inv is the identity and the chunk math reduces exactly to
+        # the single-step delta rule). Replaces the ~35-op ttnn recurrent step. Constants built lazily.
+        self._decode_kda = os.environ.get("QWEN36_GDN_DECODE_KDA") == "1"
+        self._kda_dec_const = None
         # QWEN36_KDA_RM_L1=1: ROW_MAJOR fallback tuning. The untilize itself cannot use more than 64 cores
         # for a [1,2048,2560] chunk -- UntilizeCodegen splits work over tile-rows only
         # (untilize_codegen_program_factory.cpp:562 choose_2d_ncol returns 1 whenever
@@ -1295,6 +1300,99 @@ class TPGatedDeltaNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _kda_decode_constants(self):
+        """0/1 expansion matrices + a fixed sigmoid gate (row 0 open, padding rows closed) for the KDA decode step."""
+        if self._kda_dec_const is not None:
+            return self._kda_dec_const
+        Nk, Nv, Dk, Dv = self.Nk, self.Nv, self.Dk, self.Dv
+        rf = Nv // Nk
+        T = tpc.TILE_SIZE
+        e_q = torch.zeros(Nk * Dk, Nv * Dk)  # GQA expand: value head j reads q/k head j // rf
+        for j in range(Nv):
+            src = j // rf
+            e_q[src * Dk : (src + 1) * Dk, j * Dk : (j + 1) * Dk] = torch.eye(Dk)
+        e_g = torch.zeros(Nv, Nv * Dk)  # per-head log decay -> per-key (KDA prep takes [1,T,H*K])
+        for j in range(Nv):
+            e_g[j, j * Dk : (j + 1) * Dk] = 1.0
+        gate = torch.full((1, T, Nv * Dv), -30.0)
+        gate[0, 0, :] = 30.0  # sigmoid -> 1 on the token row, 0 on the padding rows
+
+        def dev(t):
+            return ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+
+        # sigmoid_gated_rms_norm wants the norm weight as a 1-D [V] tensor (tw["norm_w"] is stored 4-D).
+        w_host = ttnn.to_torch(ttnn.get_device_tensors(self.tw["norm_w"])[0]).float().reshape(-1)[:Dv]
+        self._kda_dec_const = {"e_q": dev(e_q), "e_g": dev(e_g), "gate": dev(gate), "norm_w": dev(w_host)}
+        return self._kda_dec_const
+
+    def _decode_kda_step(self, conv, z, a, b):
+        """One decode step of the gated delta rule via the fused KDA chunk ops (see _decode_kda).
+        conv: TILE [1,1,qkv_dim_tp] bf16 (post conv+silu, B=1). z/a/b: [1,1,value_dim]/[1,1,Nv]/[1,1,Nv].
+        Returns gated = rmsnorm(o) * norm_w * silu(z) as TILE [1,1,value_dim] (L1), rec_state updated in place."""
+        tw, Nv, Dk, Dv = self.tw, self.Nv, self.Dk, self.Dv
+        T = tpc.TILE_SIZE
+        C, kd, vd = self.qkv_dim_tp, self.key_dim_tp, self.value_dim_tp
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        const = self._kda_decode_constants()
+        exact = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+        )
+        # 32-row chunk with the token in row 0; the pad rows are exact zeros.
+        conv32 = ttnn.pad(conv, [(0, 0), (0, T - 1), (0, 0)], 0.0, memory_config=_L1)
+        ttnn.deallocate(conv)
+        q = ttnn.slice(conv32, (0, 0, 0), (1, T, kd), memory_config=_L1)
+        k = ttnn.slice(conv32, (0, 0, kd), (1, T, 2 * kd), memory_config=_L1)
+        v = ttnn.slice(conv32, (0, 0, 2 * kd), (1, T, C), memory_config=_L1)
+        ttnn.deallocate(conv32)
+        q_e = ttnn.matmul(q, const["e_q"], compute_kernel_config=exact, memory_config=_L1)
+        k_e = ttnn.matmul(k, const["e_q"], compute_kernel_config=exact, memory_config=_L1)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        # beta [Nv,1,32,1] fp32 and per-key g [1,32,Nv*Dk] bf16; both zero on rows 1..31.
+        beta_row = ttnn.pad(ttnn.sigmoid(b, memory_config=_L1), [(0, 0), (0, T - 1), (0, 0)], 0.0, memory_config=_L1)
+        ttnn.deallocate(b)
+        beta_t = ttnn.transpose(beta_row, -2, -1, memory_config=_L1)  # [1, Nv, 32]
+        ttnn.deallocate(beta_row)
+        beta_col = ttnn.reshape(beta_t, (Nv, 1, T, 1), memory_config=_L1)
+        ttnn.deallocate(beta_t)
+        beta_col = ttnn.typecast(beta_col, ttnn.float32, memory_config=_L1)
+        g = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"]), memory_config=_L1)
+        ttnn.deallocate(a)
+        if g.dtype != ttnn.bfloat16:
+            g = ttnn.typecast(g, ttnn.bfloat16, memory_config=_L1)
+        g_row = ttnn.pad(g, [(0, 0), (0, T - 1), (0, 0)], 0.0, memory_config=_L1)
+        ttnn.deallocate(g)
+        g_flat = ttnn.matmul(g_row, const["e_g"], compute_kernel_config=exact, memory_config=_L1)
+        ttnn.deallocate(g_row)
+        prep = ttnn.experimental.kda.prepare_chunk_recurrence(q_e, k_e, v, g_flat, beta_col, Nv, memory_config=_dram)
+        for t in (q_e, k_e, v, g_flat, beta_col):
+            ttnn.deallocate(t)
+        state3 = ttnn.reshape(self.rec_state, (Nv, Dk, Dv))
+        y, s_new = ttnn.experimental.kda.recurrent_chunk_scan(*prep, state3, memory_config=_dram)
+        for t in prep:
+            ttnn.deallocate(t)
+        ttnn.copy(ttnn.reshape(s_new, (1, Nv, Dk, Dv)), self.rec_state)
+        ttnn.deallocate(s_new)
+        y3 = ttnn.reshape(y, (Nv, T, Dv))
+        out = ttnn.experimental.kda.sigmoid_gated_rms_norm(
+            y3, const["gate"], const["norm_w"], Nv, epsilon=1e-6, memory_config=_L1, output_dtype=ttnn.bfloat16
+        )  # [1, 32, Nv*Dv]; padding rows gated to zero
+        ttnn.deallocate(y)
+        out_row = ttnn.slice(out, (0, 0, 0), (1, 1, vd), memory_config=_L1)
+        ttnn.deallocate(out)
+        gated = _silu_mul(out_row, z, _L1)
+        ttnn.deallocate(out_row)
+        ttnn.deallocate(z)
+        return gated
+
     def forward_decode(self, x):
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         Bmax = self.B
@@ -1334,6 +1432,20 @@ class TPGatedDeltaNet:
         conv = ttnn.silu(conv, memory_config=_L1)
 
         kd = self.key_dim_tp
+        if self._decode_kda and B == 1:
+            gated = self._decode_kda_step(conv, z, a, b)
+            partial = self._row_proj(gated, tw["out"])
+            ttnn.deallocate(gated)
+            partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
+            return tt_all_reduce(
+                partial,
+                self.mesh,
+                self.tt_ccl,
+                cluster_axis=0,
+                dim=3,
+                topology=self.args.ccl_topology(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd)), (B, Nk, Dk))
         k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, Nk, Dk))
         v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
