@@ -179,8 +179,9 @@ MemoryConfig recompute_shard_spec_for_output(
         const uint32_t num_cores = source_shard_spec.grid.num_cores();
         const uint32_t phys_dim = is_height ? phys_h : phys_w;
 
-        // Preserve the input grid; height/width_sharded() rounds the per-core shape up
-        // to tile alignment without changing the grid itself.
+        // Seed from the input grid; height/width_sharded() rounds the per-core shape up
+        // to tile alignment and keeps only as many cores as that shape yields shards, so
+        // the grid shrinks when the output needs fewer shards than the input had cores.
         output_mem_config = is_height ? output_shape.height_sharded(source_shard_spec.grid, orientation).memory_config()
                                       : output_shape.width_sharded(source_shard_spec.grid, orientation).memory_config();
 
