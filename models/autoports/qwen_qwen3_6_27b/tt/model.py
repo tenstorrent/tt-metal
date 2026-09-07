@@ -10,6 +10,7 @@ the only full-model boundaries; no decoder-layer output is gathered to host.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 from pathlib import Path
@@ -26,13 +27,45 @@ from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import _dram_weight_
 from models.autoports.qwen_qwen3_6_27b.tt.precision_config import load_precision_config
 
 
-def _streaming_prefill_chunk_size(max_chunk: int, page_size: int) -> int:
-    """Largest stack chunk no greater than ``max_chunk`` aligned to cache/scan."""
+def _streaming_prefill_chunk_size(max_chunk: int, page_size: int, batch: int = 1) -> int:
+    """Largest stack chunk no greater than ``max_chunk`` aligned to cache/scan.
+
+    ``max_chunk`` counts tokens per row, but streaming prefill embeds ``batch``
+    rows at once, so peak embedding memory is ``batch * chunk * hidden``.  Only
+    one sequence is ever being prefilled -- the rest of the batch is padding --
+    so a 32-slot server otherwise pays 32x the memory of a 1-slot one for the
+    same work.  At ``max_chunk`` 32768, ``batch`` 32 and ``hidden`` 5120 that is
+    a 10.7 GB bf16 allocation, and prefill dies on the first request past 32768
+    tokens: "Out of Memory: Not enough space to allocate 10737418240 B DRAM
+    buffer across 8 banks".  Dividing the token budget by ``batch`` holds peak
+    embedding memory at what ``batch`` 1 already costs, and leaves ``batch`` 1
+    itself on exactly the chunk it used before.
+    """
     quantum = math.lcm(int(page_size), LINEAR_PREFILL_CHUNK_SIZE)
-    chunk = (int(max_chunk) // quantum) * quantum
+    budget = max(int(max_chunk) // max(int(batch), 1), quantum)
+    chunk = (min(int(max_chunk), budget) // quantum) * quantum
     if chunk < quantum:
         raise ValueError(f"streaming prefill alignment quantum {quantum} exceeds maximum chunk {max_chunk}")
     return chunk
+
+
+def _to_device_int32_row(mesh, values):
+    """One-row int32 row-major tensor, replicated across the mesh."""
+    return _replicate(
+        torch.tensor(values, dtype=torch.int32),
+        mesh,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+
+def _slot_span(tensor, axis, start, end):
+    """``tensor[start:end]`` along ``axis`` for the 4-D linear-attention caches."""
+    lower = [0, 0, 0, 0]
+    upper = list(tensor.shape)
+    lower[axis] = int(start)
+    upper[axis] = int(end)
+    return ttnn.slice(tensor, tuple(lower), tuple(upper))
 
 
 def _replicate(value, mesh, *, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -446,6 +479,97 @@ class Qwen36Model:
         output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return output
 
+    @contextlib.contextmanager
+    def single_slot_prefill_view(self, slot: int):
+        """Present the model as a one-slot model for the duration of a prefill.
+
+        vLLM prefills one request per scheduler step -- chunked prefill is
+        disabled for model_type=qwen3_5 -- so a 32-slot server otherwise runs
+        the whole layer stack over 32 rows to fill one, and pays the measured
+        ~31.3x slot-width factor for work it discards at ``logits[slots]``.
+        Inactive rows were already *correct* (zero-length masks, conv selectors
+        that preserve state, and a -1 cache page table), just not free.
+
+        Narrowing the batch is only safe if per-slot state still lands in the
+        right slot.  Full attention needs nothing: ``caches["key"]`` is a global
+        block pool addressed by ``page_table``, so a one-row page table plus
+        ``batch_indices=[0]`` writes exactly slot ``slot``'s blocks.  Linear
+        attention keeps ``conv``/``recurrent`` state indexed by row, so this
+        swaps in one-row copies and splices them back on exit.
+        """
+        if not 0 <= int(slot) < self.batch:
+            raise ValueError(f"slot {slot} is outside the fixed batch {self.batch}")
+        slot = int(slot)
+        saved_batch = self.batch
+        swapped = []
+        layer_batches = []
+        try:
+            for layer in self.layers:
+                caches = layer.caches
+                if layer.layer_kind == "full_attention":
+                    original = caches["batch_indices"]
+                    caches["batch_indices"] = _to_device_int32_row(self.mesh_device, [0])
+                    swapped.append((layer, "batch_indices", original, None))
+                    continue
+                # conv is (1, batch, width, kernel); recurrent is (batch, heads, dv, dv)
+                conv = caches["conv"]
+                conv_row = ttnn.clone(
+                    ttnn.slice(conv, (0, slot, 0, 0), (1, slot + 1, conv.shape[-2], conv.shape[-1])),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                caches["conv"] = conv_row
+                swapped.append((layer, "conv", conv, slot))
+                recurrent = caches["recurrent"]
+                recurrent_row = ttnn.clone(
+                    ttnn.slice(
+                        recurrent,
+                        (slot, 0, 0, 0),
+                        (slot + 1, recurrent.shape[1], recurrent.shape[2], recurrent.shape[3]),
+                    ),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=recurrent.dtype,
+                )
+                caches["recurrent"] = recurrent_row
+                swapped.append((layer, "recurrent", recurrent, slot))
+            # Every decoder layer carries its own ``batch`` and shapes its
+            # per-chunk reshapes from it (conv selectors, state windows), so
+            # narrowing the model alone leaves the layers expecting the full
+            # slot count and they fail on a reshape volume mismatch.
+            for layer in self.layers:
+                layer_batches.append((layer, layer.batch))
+                layer.batch = 1
+            self.batch = 1
+            yield slot
+        finally:
+            self.batch = saved_batch
+            for layer, original_batch in layer_batches:
+                layer.batch = original_batch
+            for layer, name, original, target_slot in swapped:
+                produced = layer.caches[name]
+                layer.caches[name] = original
+                if target_slot is None:
+                    ttnn.deallocate(produced)
+                    continue
+                axis = 1 if name == "conv" else 0
+                pieces = []
+                if target_slot:
+                    pieces.append(_slot_span(original, axis, 0, target_slot))
+                pieces.append(produced)
+                if target_slot + 1 < saved_batch:
+                    pieces.append(_slot_span(original, axis, target_slot + 1, saved_batch))
+                merged = (
+                    pieces[0]
+                    if len(pieces) == 1
+                    else ttnn.concat(pieces, dim=axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                )
+                ttnn.copy(merged, original)
+                if merged is not produced:
+                    ttnn.deallocate(merged)
+                for piece in pieces:
+                    if piece is not merged:
+                        ttnn.deallocate(piece)
+            ttnn.synchronize_device(self.mesh_device)
+
     def prefill_forward(
         self,
         *,
@@ -510,7 +634,9 @@ class Qwen36Model:
         if logit_positions is None:
             raise ValueError("long streaming prefill returns terminal prompt logits only")
         sequence = token_ids.shape[-1]
-        stack_chunk_size = _streaming_prefill_chunk_size(self.PREFILL_STACK_CHUNK_SIZE, self.page_size)
+        stack_chunk_size = _streaming_prefill_chunk_size(
+            self.PREFILL_STACK_CHUNK_SIZE, self.page_size, self.batch
+        )
         terminal_rows = [None] * self.batch
         for start in range(0, sequence, stack_chunk_size):
             end = min(start + stack_chunk_size, sequence)

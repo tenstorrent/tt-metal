@@ -30,6 +30,32 @@ def test_vllm_capabilities_and_context_pool():
     assert concat_bytes_per_bank_at_64 // 2 < measured_largest_free_block
 
 
+def test_streaming_prefill_chunk_bounds_embedding_memory_across_the_batch():
+    """Peak prefill embedding memory must not scale with the serving batch.
+
+    Streaming prefill embeds ``batch`` rows per chunk while only one sequence is
+    actually being prefilled, so an unbounded chunk makes a 32-slot server pay
+    32x the memory of a 1-slot one. At chunk 32768 / hidden 5120 / bf16 that is
+    a 10.7 GB allocation and prefill dies on the first request past 32768
+    tokens. Batch 1 must be untouched; every larger batch must cost no more.
+    """
+    hidden, dtype_bytes = 5120, 2
+    baseline = 1 * _streaming_prefill_chunk_size(32768, 64, 1) * hidden * dtype_bytes
+    assert baseline == 335544320
+    for batch in (1, 2, 4, 8, 16, 32):
+        chunk = _streaming_prefill_chunk_size(32768, 64, batch)
+        assert batch * chunk * hidden * dtype_bytes <= baseline, (batch, chunk)
+        assert chunk % 64 == 0 and chunk >= 64
+    # batch 1 keeps the exact chunk it had before the bound existed
+    assert _streaming_prefill_chunk_size(32768, 64, 1) == 32768
+    # an odd page size still aligns, and still shrinks with batch. lcm(800, 32)
+    # is 800, so the batch-32 budget of 1024 floors to one 800-token quantum.
+    assert _streaming_prefill_chunk_size(32768, 800, 1) == 32000
+    assert _streaming_prefill_chunk_size(32768, 800, 32) == 800
+    # a batch large enough to undercut the quantum falls back to one quantum
+    assert _streaming_prefill_chunk_size(32768, 64, 100000) == 64
+
+
 def test_streaming_prefill_chunks_follow_effective_kv_page_boundaries():
     assert _streaming_prefill_chunk_size(32768, 64) == 32768
     assert _streaming_prefill_chunk_size(32768, 800) == 32000

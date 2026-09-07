@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional
 
+import contextlib
+import os
 import torch
 from transformers import AutoTokenizer
 
@@ -132,6 +134,46 @@ class Qwen36Generator(ReadinessGenerator):
             self.kv_cache = kv_cache
         return self._page_table if page_table is None else page_table
 
+    def _scatter_slot_logits(self, logits, slot: int, batch: int):
+        """Widen one-slot device logits back to the fixed slot count.
+
+        The on-device sampler path keeps logits on device, and both it and
+        generator_vllm address rows by absolute slot, so a narrowed prefill has
+        to restore the full height. Inactive rows carry zeros, which is what
+        they already contributed before the batch was narrowed -- their active
+        mask discards them either way.
+        """
+        if batch == 1:
+            return logits
+        shape = list(logits.shape)
+        zero_rows = []
+        if slot:
+            head = list(shape)
+            head[1] = slot
+            zero_rows.append(("head", head))
+        if slot + 1 < batch:
+            tail = list(shape)
+            tail[1] = batch - slot - 1
+            zero_rows.append(("tail", tail))
+        pieces = []
+        made = []
+        for where, dims in zero_rows:
+            block = ttnn.zeros(
+                ttnn.Shape(dims), dtype=logits.dtype, layout=logits.layout, device=self.mesh_device
+            )
+            made.append(block)
+            if where == "head":
+                pieces.append(block)
+        pieces.append(logits)
+        for where, _ in zero_rows:
+            if where == "tail":
+                pieces.append(made[-1])
+        widened = ttnn.concat(pieces, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for block in made:
+            ttnn.deallocate(block)
+        ttnn.deallocate(logits)
+        return widened
+
     def prefill_forward(
         self,
         tokens: torch.Tensor,
@@ -154,6 +196,23 @@ class Qwen36Generator(ReadinessGenerator):
             raise ValueError("logical prompt length is outside the supported context")
         if not any(prompt_lens):
             raise ValueError("prefill requires at least one active prompt")
+        # vLLM prefills one request per scheduler step, so the fixed slot count
+        # is almost always 31/32 padding. Narrow every downstream tensor to the
+        # one active row: positions, masks, selectors, the page table and the
+        # layer stack are all derived from these locals, so this is the whole
+        # compression. See MultichipModel.single_slot_prefill_view for why the
+        # per-slot state still lands in the right slot.
+        full_batch, full_prompt_lens = batch, list(prompt_lens)
+        active_slots = [slot for slot, length in enumerate(prompt_lens) if length]
+        # QWEN36_PREFILL_NARROW=0 restores the full-width prefill. Kept as the
+        # reference path the per-slot PCC test compares against, and as an
+        # escape hatch that needs no rebuild.
+        narrow_enabled = os.environ.get("QWEN36_PREFILL_NARROW", "1") != "0"
+        single_slot = active_slots[0] if (narrow_enabled and len(active_slots) == 1 and batch > 1) else None
+        if single_slot is not None:
+            tokens = tokens[single_slot : single_slot + 1]
+            prompt_lens = [prompt_lens[single_slot]]
+            batch = 1
         if return_all_logits and physical_len > self.model.PREFILL_STACK_CHUNK_SIZE:
             raise ValueError(
                 "return_all_logits is supported only through "
@@ -180,6 +239,12 @@ class Qwen36Generator(ReadinessGenerator):
                 selector[torch.arange(batch), active_len + lane] = 1
                 chunk_selectors.append(self._upload(selector, dtype=ttnn.bfloat16))
             selector_tensors.append(chunk_selectors)
+        narrowed_page_table = None
+        if single_slot is not None:
+            narrowed_page_table = self._upload(
+                self.page_table_host[single_slot : single_slot + 1].clone(), dtype=ttnn.int32
+            )
+            page_table = narrowed_page_table
         cache_page_table = page_table
         temporary_cache_page_table = None
         if any(length == 0 for length in prompt_lens):
@@ -194,15 +259,21 @@ class Qwen36Generator(ReadinessGenerator):
         host = None
         logits = None
         try:
-            logits = self.model.prefill_forward(
-                token_ids=token_tt,
-                page_table=page_table,
-                current_positions=position_tt,
-                sequence_mask=sequence_mask_tt,
-                conv_state_selectors=selector_tensors,
-                logit_positions=None if return_all_logits else prompt_lens,
-                cache_page_table=cache_page_table,
+            slot_view = (
+                self.model.single_slot_prefill_view(single_slot)
+                if single_slot is not None
+                else contextlib.nullcontext()
             )
+            with slot_view:
+                logits = self.model.prefill_forward(
+                    token_ids=token_tt,
+                    page_table=page_table,
+                    current_positions=position_tt,
+                    sequence_mask=sequence_mask_tt,
+                    conv_state_selectors=selector_tensors,
+                    logit_positions=None if return_all_logits else prompt_lens,
+                    cache_page_table=cache_page_table,
+                )
             if read_from_device:
                 host = self._to_host_logits(logits)
         finally:
@@ -223,14 +294,28 @@ class Qwen36Generator(ReadinessGenerator):
             ttnn.deallocate(position_tt)
             if temporary_cache_page_table is not None:
                 ttnn.deallocate(temporary_cache_page_table)
-        self._slots_requiring_prefill.difference_update(slot for slot, length in enumerate(prompt_lens) if length > 0)
+            if narrowed_page_table is not None:
+                ttnn.deallocate(narrowed_page_table)
+        self._slots_requiring_prefill.difference_update(
+            slot for slot, length in enumerate(full_prompt_lens) if length > 0
+        )
         if not read_from_device:
             if return_all_logits:
                 raise ValueError("device prefill output supports terminal logits only")
+            if single_slot is not None:
+                logits = self._scatter_slot_logits(logits, single_slot, full_batch)
             return logits
         if return_all_logits:
             return host.reshape(batch, physical_len, -1)
-        return host.reshape(batch, 1, -1)
+        host = host.reshape(batch, 1, -1)
+        if single_slot is not None:
+            # Callers index the result by absolute slot (generator_vllm does
+            # logits[slots]), so restore the fixed slot count. Inactive rows
+            # were already ignored by their active mask before this change.
+            full = torch.zeros((full_batch, 1, host.shape[-1]), dtype=host.dtype)
+            full[single_slot] = host[0]
+            host = full
+        return host
 
     def decode_forward(
         self, tokens: torch.Tensor, start_pos: torch.Tensor, *, page_table, kv_cache, active_mask=None, **kwargs: Any
