@@ -21,9 +21,9 @@ Differences from the Gemma3 demo (Gemma4-specific):
     token, which costs real time per step for token-for-token identical output.
     Set ``GEMMA4_HOST_SAMPLE=1`` to force the host path.
   * Decode token reads are pipelined one step deep (``GEMMA4_DECODE_PIPELINE=1``,
-    default): the sampled token's DMA overlaps the next decode submit instead of
-    blocking it. The step is device-bound, so this matters most where the model is
-    small relative to the host round trip.
+    default) when decode is traced: the sampled token's DMA overlaps the next
+    decode submit instead of blocking it. Untraced decode always consumes the
+    host token, so pipelining there would replay a stale token.
     ``GEMMA4_DECODE_PIPELINE=0`` restores the blocking loop.
   * No decode warmup (``warmup_model_decode`` is Gemma3-generator specific); the
     first decode iteration serves as the compile step and is excluded from the
@@ -532,17 +532,18 @@ def run_demo_text(
     users_decoding = True
 
     # Pipelined token readback: submit step j+1 before syncing step j's token.
-    # Only possible with device sampling, where the sampled token is written
-    # straight into the trace's token input buffer, so the next submit needs
-    # nothing from host (see Generator._decode_forward_trace_text: reset_inputs
-    # is False once decode is steady). The host loop then sits one step behind
-    # and EOS is seen one step late — that extra token is discarded below, so
-    # the emitted text is unchanged. GEMMA4_DECODE_PIPELINE=0 restores the
-    # blocking loop.
-    pipeline_reads = device_sampling_params is not None and os.environ.get("GEMMA4_DECODE_PIPELINE", "1").lower() in (
-        "1",
-        "true",
-        "yes",
+    # Only possible with device sampling AND tracing -- the sampled token is
+    # written straight into the trace's token input buffer, so the next submit
+    # needs nothing from host (see Generator._decode_forward_trace_text: reset_inputs
+    # is False once decode is steady). ``_decode_forward_no_trace_text`` always
+    # consumes the host ``tokens`` argument, and in the pipelined loop ``out_tok``
+    # is never refreshed on host, so pipelining an untraced decode would feed the
+    # same stale token every step. GEMMA4_DECODE_PIPELINE=0 restores the blocking
+    # loop.
+    pipeline_reads = (
+        device_sampling_params is not None
+        and enable_trace
+        and os.environ.get("GEMMA4_DECODE_PIPELINE", "1").lower() in ("1", "true", "yes")
     )
     device_tracks_pos = device_tracks_decode_on_device(
         generator.model[0],
