@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.chip_architecture import is_4row_arch
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     DataCopyGolden,
@@ -147,15 +148,19 @@ def generate_eltwise_unary_datacopy_combinations(
     return combinations
 
 
-DATACOPY_FORMATS = input_output_formats(
-    [
-        DataFormat.Float16_b,
-        DataFormat.Float16,
+_MX_FORMATS = (
+    []
+    if is_4row_arch()
+    else [
         DataFormat.MxFp4,
         DataFormat.MxInt8,
         DataFormat.MxInt4,
         DataFormat.MxInt2,
     ]
+)
+
+DATACOPY_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Float16, *_MX_FORMATS]
 )
 ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
     DATACOPY_FORMATS

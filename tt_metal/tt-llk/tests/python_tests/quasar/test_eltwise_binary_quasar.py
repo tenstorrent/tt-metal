@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from helpers.chip_architecture import is_4row_arch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -109,14 +110,22 @@ def valid_acc_to_dest(input_dimensions) -> list:
     return [False]
 
 
-ELTWISE_FORMATS = input_output_formats(
-    [
+_MX_FORMATS = (
+    []
+    if is_4row_arch()
+    else [
         DataFormat.MxFp8R,
         DataFormat.MxFp8P,
         DataFormat.MxFp4,
         DataFormat.MxInt8,
         DataFormat.MxInt4,
         DataFormat.MxInt2,
+    ]
+)
+
+ELTWISE_FORMATS = input_output_formats(
+    [
+        *_MX_FORMATS,
         DataFormat.Float16_b,
         DataFormat.Float16,
     ],

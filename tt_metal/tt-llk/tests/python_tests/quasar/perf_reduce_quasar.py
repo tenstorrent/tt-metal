@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.chip_architecture import is_4row_arch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
@@ -74,6 +75,10 @@ def test_perf_reduce_quasar(
 
 @pytest.mark.perf
 @pytest.mark.quasar
+@pytest.mark.skipif(
+    is_4row_arch(),
+    reason="MxFp4_2x GAPOOL reduce is not implemented on the 4-row Quasar architecture",
+)
 @parametrize(
     register_format_hint=[DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B],
     formats=lambda register_format_hint: [
