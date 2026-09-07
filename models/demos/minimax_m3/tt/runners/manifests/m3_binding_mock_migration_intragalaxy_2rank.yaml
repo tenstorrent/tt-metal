@@ -33,8 +33,6 @@ global_env:
   # Table on shared storage — num_ranks>1 rejects per-host paths like /tmp. Device map stays host-local.
   PREFILL_MIGRATION_TABLE_PATH: "/data/philei/tmp/m3_kv_chunk_table_pp.pb"
   PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/m3_kv_device_map.json"
-  # The producer's only barrier before it reads the KV back; without it the read races the device.
-  PREFILL_ENABLE_LAYER_ACK: "1"
   PREFILL_USE_TRACE: "1"
 
   LOGURU_LEVEL: "INFO"
