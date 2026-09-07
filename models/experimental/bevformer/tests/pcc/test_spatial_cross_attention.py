@@ -33,18 +33,32 @@ ENABLE_LOGGING = True
 # Default Test Configuration
 PRINT_DETAILED_COMPARISON_FLAG = False
 
+# A rebatch indexing bug corrupts single query rows, which PCC and mean-error checks average away.
+MAX_QUERY_ROW_REL_ERROR = 0.3
 
+
+# blank_cams: (cam_idx, batch_idx) pairs to clear in bev_mask, or "all".
+# valid_per_pair: None keeps the random 95%-invalid mask; an int pins max_len to that many valid
+# queries per (camera, batch) pair.
 @pytest.mark.parametrize(
-    "config_name, batch_size, bev_h, bev_w, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio, blank_cams",
+    "config_name, batch_size, bev_h, bev_w, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio, blank_cams, valid_per_pair",
     [
-        ("nuscenes_tiny", 1, 30, 30, 0.997, 0.06, 0.5, 0.5, ()),  # NuScenes tiny model - 30x30 BEV grid
-        ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5, ()),  # NuScenes base model - 50x50 BEV grid
-        ("nuscenes_base", 1, 100, 100, 0.999, 0.04, 1.3, 0.5, ()),  # NuScenes base model - 100x100 BEV grid
-        ("nuscenes_base", 1, 200, 200, 0.998, 0.04, 1.3, 0.5, ()),  # NuScenes base model - 200x200 BEV grid
-        ("carla_base", 1, 100, 100, 0.998, 0.04, 1.3, 0.5, ()),  # CARLA base model
-        ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5, ()),  # Batch size 2
-        ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5, ((0, 0),)),  # One camera sees nothing
-        ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 1),)),  # Blank in one batch item only
+        ("nuscenes_tiny", 1, 30, 30, 0.997, 0.06, 0.5, 0.5, (), None),  # NuScenes tiny model - 30x30 BEV grid
+        ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5, (), None),  # NuScenes base model - 50x50 BEV grid
+        ("nuscenes_base", 1, 100, 100, 0.999, 0.04, 1.3, 0.5, (), None),  # NuScenes base model - 100x100 BEV grid
+        ("nuscenes_base", 1, 200, 200, 0.998, 0.04, 1.3, 0.5, (), None),  # NuScenes base model - 200x200 BEV grid
+        ("carla_base", 1, 100, 100, 0.998, 0.04, 1.3, 0.5, (), None),  # CARLA base model
+        ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5, (), None),  # Batch size 2
+        # One camera sees nothing: its rebatch row is all padding.
+        ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5, ((0, 0),), None),
+        # Same, in one batch item only.
+        ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 1),), None),
+        # max_len == 0: residual-only early return.
+        ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5, "all", None),
+        ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5, "all", None),
+        # max_len == rebatch_len == 32: no tile-rounding padding rows at all.
+        ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5, (), 32),
+        ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 1),), 32),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
@@ -60,6 +74,7 @@ def test_spatial_cross_attention_forward(
     expected_rel_error,
     expected_high_error_ratio,
     blank_cams,
+    valid_per_pair,
     seed,
 ):
     """Test TTSpatialCrossAttention against PyTorch reference implementation using configurations."""
@@ -102,16 +117,31 @@ def test_spatial_cross_attention_forward(
     reference_points_cam = torch.rand(num_cams, batch_size, num_queries, D, 2, dtype=torch.float32)
 
     # Validity mask: [num_cams, batch_size, num_queries, D]
-    bev_mask = torch.ones(num_cams, batch_size, num_queries, D, dtype=torch.bool)
-    # Randomly mask out some invalid points for realism
-    # Randomly mask out 95% of points as invalid for realism
-    total_points = bev_mask.numel()
-    num_invalid = int(0.95 * total_points)
-    invalid_indices = torch.randperm(total_points)[:num_invalid]
-    bev_mask.view(-1)[invalid_indices] = False
+    if valid_per_pair is None:
+        bev_mask = torch.ones(num_cams, batch_size, num_queries, D, dtype=torch.bool)
+        # Randomly mask out some invalid points for realism
+        # Randomly mask out 95% of points as invalid for realism
+        total_points = bev_mask.numel()
+        num_invalid = int(0.95 * total_points)
+        invalid_indices = torch.randperm(total_points)[:num_invalid]
+        bev_mask.view(-1)[invalid_indices] = False
+    else:
+        # Strided visible queries, alternating between two offsets so cameras share queries (which
+        # exercises accumulation) and the parity flips per batch item so the items differ.
+        assert valid_per_pair * 2 <= num_queries, f"valid_per_pair ({valid_per_pair}) too large for {num_queries}"
+        bev_mask = torch.zeros(num_cams, batch_size, num_queries, D, dtype=torch.bool)
+        stride = num_queries // valid_per_pair
+        for cam_idx in range(num_cams):
+            for batch_idx in range(batch_size):
+                offset = ((cam_idx + batch_idx) % 2) * (stride // 2)
+                visible = torch.arange(valid_per_pair) * stride + offset
+                bev_mask[cam_idx, batch_idx, visible] = True
 
-    for cam_idx, batch_idx in blank_cams:
-        bev_mask[cam_idx, batch_idx] = False
+    if blank_cams == "all":
+        bev_mask[:] = False
+    else:
+        for cam_idx, batch_idx in blank_cams:
+            bev_mask[cam_idx, batch_idx] = False
 
     # Level start index
     indices = spatial_shapes.prod(1).cumsum(0)
@@ -200,6 +230,14 @@ def test_spatial_cross_attention_forward(
     # Output Comparison                                                           #
     # --------------------------------------------------------------------------- #
 
+    if not bev_mask.any():
+        # max_len == 0: both models return the residual, which on TT is the bfloat16 query.
+        expected_residual = bev_queries.to(torch.bfloat16).to(torch.float32)
+        assert torch.equal(tt_model_output, expected_residual), (
+            "Residual-only branch did not return the query unchanged; max abs diff "
+            f"{(tt_model_output - expected_residual).abs().max():.6f}."
+        )
+
     # Comprehensive comparison using enhanced test utilities
     if ENABLE_LOGGING:
         logger.info(f"Reference model output type: {type(ref_model_output)}, shape: {ref_model_output.shape}")
@@ -246,6 +284,17 @@ def test_spatial_cross_attention_forward(
     )
 
     assert passed, f"PCC check failed: {message}"
+
+    # Per-row error relative to the row's own magnitude, so one bound fits every config.
+    row_error = (tt_model_output - ref_model_output).flatten(0, -2).norm(dim=-1)
+    row_norm = ref_model_output.flatten(0, -2).norm(dim=-1)
+    row_rel_error = row_error / row_norm.clamp(min=1e-6)
+    worst_row = int(row_rel_error.argmax())
+    assert row_rel_error[worst_row] <= MAX_QUERY_ROW_REL_ERROR, (
+        f"Query row {worst_row % num_queries} of batch item {worst_row // num_queries} has relative "
+        f"error {row_rel_error[worst_row]:.4f} > {MAX_QUERY_ROW_REL_ERROR} "
+        f"(row norm {row_norm[worst_row]:.4f}); mean over rows is {row_rel_error.mean():.4f}."
+    )
 
     if ENABLE_LOGGING:
         logger.info("✅ All SCA tolerance checks passed successfully!")

@@ -174,7 +174,8 @@ class TTSpatialCrossAttention:
 
         # Find valid queries for each camera
         # Many BEV queries don't have valid projections to all cameras (due to occlusion, field of view, etc.)
-        # max_len must be a Python int, so only mask processing remains on the host.
+        # max_len sizes tensors, so it must be a Python int. Mask reduction, index construction and
+        # the contributor count stay on the host; the gathers and the scatter run on device.
         bev_mask_torch = ttnn.to_torch(bev_mask)
 
         valid_per_cam = bev_mask_torch.sum(-1) > 0  # [num_cams, B, num_queries]
@@ -189,7 +190,8 @@ class TTSpatialCrossAttention:
                 logger.warning("No valid points found in SCA, returning residual")
             return inp_residual
 
-        # Tile alignment keeps camera-axis merges as views. Padding is discarded after attention.
+        # Tile-align so folding num_cams into the row dim stays a view; unaligned would move data.
+        # Costs up to TILE_SIZE - 1 padded rows per camera through MSDA, discarded afterwards.
         rebatch_len = ((max_len + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
         if ENABLE_LOGGING:
@@ -198,20 +200,26 @@ class TTSpatialCrossAttention:
         if ENABLE_LOGGING:
             logger.info("SCA Rebatching Start")
 
-        # IDs stay batch-local. num_queries marks padding: gathers clamp it, while scatter writes
-        # it to the extra row discarded below.
-        query_ids = torch.full((bs, self.num_cams, rebatch_len), num_queries, dtype=torch.int32)
+        # Compact each camera to the queries it sees, so MSDA runs on rebatch_len rows, not all of
+        # them. IDs are batch-local; num_queries is the padding sentinel — scatter_ids keeps it to
+        # dump padding in a sink row sliced off later, gather_ids clamps it since embedding rejects
+        # out-of-range indices.
+        # TODO: vectorize this index construction off the host
+        scatter_ids = torch.full((bs, self.num_cams, rebatch_len), num_queries, dtype=torch.int32)
         for j in range(bs):
             for i in range(self.num_cams):
                 valid_indices = torch.nonzero(valid_per_cam[i, j], as_tuple=False).squeeze(-1)
-                query_ids[j, i, : valid_indices.numel()] = valid_indices.to(torch.int32)
-        gather_ids = query_ids.clamp(max=num_queries - 1)
+                scatter_ids[j, i, : valid_indices.numel()] = valid_indices.to(torch.int32)
+        gather_ids = scatter_ids.clamp(max=num_queries - 1)
 
-        # embedding requires bfloat16; scatter_add must use the same dtype.
-        assert query.dtype == ttnn.bfloat16 and reference_points_cam.dtype == ttnn.bfloat16, (
-            f"SCA rebatch requires bfloat16 inputs, got query={query.dtype} and "
-            f"reference_points_cam={reference_points_cam.dtype}."
-        )
+        # TODO: Extract the coupled rebatch/unbatch sentinel handling into helpers to keep
+        # the padding-sentinel contract local and prevent gather/scatter ID misuse.
+
+        # Both gathers below use these as ttnn.embedding weight tables, which must be bfloat16.
+        assert query.dtype == ttnn.bfloat16, f"SCA rebatch gathers query, so it must be bfloat16, got {query.dtype}."
+        assert (
+            reference_points_cam.dtype == ttnn.bfloat16
+        ), f"SCA rebatch gathers reference_points_cam, so it must be bfloat16, got {reference_points_cam.dtype}."
 
         # Fold batch and camera into row IDs to gather all valid queries in one embedding call.
         query_rows = ttnn.reshape(
@@ -234,7 +242,10 @@ class TTSpatialCrossAttention:
             + torch.arange(self.num_cams, dtype=torch.int32).reshape(1, self.num_cams, 1) * (bs * num_queries),
             self.device,
         )
-        # Split the last dimension before tilizing to avoid a re-layout.
+        # Split the gathered row back into MSDA's [.., rebatch_len, num_depth_levels, 2], the last
+        # dim being each depth level's (x, y) camera coordinate. Changing the row width from
+        # num_depth_levels * 2 to 2 requires a data-moving reshape before conversion to TILE layout.
+        # TODO: profile whether tilizing first is cheaper.
         reference_points_batched = ttnn.to_layout(
             ttnn.reshape(
                 ttnn.embedding(ref_index, ref_rows),
@@ -289,7 +300,8 @@ class TTSpatialCrossAttention:
         if ENABLE_LOGGING:
             logger.info("SCA Feature Aggregation Start")
 
-        # Accumulate all camera features by query ID. Padding lands in an extra row removed below.
+        # Accumulate camera features by query ID. Unclamped IDs, so padding lands in the sink row
+        # the slice below drops.
         scatter_src = ttnn.to_layout(
             ttnn.reshape(queries_output, (bs, self.num_cams * rebatch_len, self.embed_dims)),
             ttnn.ROW_MAJOR_LAYOUT,
@@ -297,7 +309,7 @@ class TTSpatialCrossAttention:
         # Expand row IDs on device to avoid transferring a full-width index.
         scatter_index = ttnn.repeat(
             ttnn.from_torch(
-                query_ids.reshape(bs, self.num_cams * rebatch_len, 1),
+                scatter_ids.reshape(bs, self.num_cams * rebatch_len, 1),
                 device=self.device,
                 dtype=_index_dtype(num_queries + 1),
                 layout=ttnn.ROW_MAJOR_LAYOUT,
