@@ -291,10 +291,14 @@ inline uint32_t wd_rows_writer(uint32_t block_hn_rows) { return (block_hn_rows *
 // tile. Both counters are monotone, so `wd_done + n` is the tightest legal gate.
 inline void wd_split_gate(uint32_t& wd_done, uint32_t n) {
     wd_done += n;
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_WDSPLIT)), wd_done);
+    Semaphore<> wdsplit(SEM_WDSPLIT);
+    wdsplit.wait_min(wd_done);
 }
 
 void kernel_main() {
+    // Carries this kernel's noc_index, which is the NoC the free-function increments used
+    // implicitly. The explicit noc_read(0) handles below stay as they are.
+    Noc noc;
     (void)get_arg_val<uint32_t>(0);  // retained runtime slot for cache-compatible argument layout
     const uint32_t x_addr = get_arg_val<uint32_t>(1);
     const uint32_t counts_addr = get_arg_val<uint32_t>(4);
@@ -356,12 +360,10 @@ void kernel_main() {
         noc_semaphore_set(x_ready, INVALID);
     }
 
-    const uint32_t sem_data = static_cast<uint32_t>(get_semaphore(SEM_DATA));
-    volatile tt_l1_ptr uint32_t* sem_data_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_data);
+    Semaphore<> sem_data_obj(SEM_DATA);
     uint32_t data_arrivals = 0;
     // The h-slice gather counter (scatter path, roots only). Monotone and cumulative.
-    volatile tt_l1_ptr uint32_t* sem_h_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_HSLICE)));
+    Semaphore<> sem_h_obj(SEM_HSLICE);
     uint32_t h_arrivals = 0;
     // Monotone ack accounting for the per-slot-flag h send: the rounds THIS CORE has sent, times
     // the fan-in each one waits for. Each core acks each round's sender exactly once per M-block, so
@@ -608,12 +610,12 @@ void kernel_main() {
             // hidden-column worker only after the preceding block's phase 2 has consumed the slot.
             // The writer waits this monotone counter before depositing its reduced HN fragment.
             if (wd_mrow && is_row_agg) {
-                const uint32_t sem = static_cast<uint32_t>(get_semaphore(SEM_HROW_FREE));
+                Semaphore<> hrow_free(SEM_HROW_FREE);
                 for (uint32_t x = 0; x < HGROUPS; ++x) {
                     const uint32_t sidx = my_row * HGROUPS + x;
                     const uint32_t vx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
                     const uint32_t vy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
-                    noc_semaphore_inc(get_noc_addr(vx, vy, sem), 1);
+                    hrow_free.up(noc, vx, vy, 1);
                 }
                 noc_async_atomic_barrier();
             }
@@ -778,15 +780,13 @@ void kernel_main() {
                         } else {
                             const uint32_t sx = get_arg_val<uint32_t>(RT_XMCAST + 4 + 2 * round + 0);
                             const uint32_t sy = get_arg_val<uint32_t>(RT_XMCAST + 4 + 2 * round + 1);
-                            noc_semaphore_inc(
-                                get_noc_addr(sx, sy, static_cast<uint32_t>(get_semaphore(XMCAST_FREE_SEM))), 1);
+                            Semaphore<>(XMCAST_FREE_SEM).up(noc, sx, sy, 1);
                             if (t == 0 && protect_x_stage) {
                                 constexpr uint32_t X_STAGED = 2;
                                 noc_semaphore_wait(x_ready, X_STAGED);
                                 noc_semaphore_set(x_ready, INVALID);
                                 issue_wg_chunk(0);
-                                noc_semaphore_inc(
-                                    get_noc_addr(sx, sy, static_cast<uint32_t>(get_semaphore(XMCAST_FREE_SEM))), 1);
+                                Semaphore<>(XMCAST_FREE_SEM).up(noc, sx, sy, 1);
                             }
                             noc_semaphore_wait(x_ready, VALID);
                             noc_semaphore_set(x_ready, INVALID);
@@ -919,14 +919,14 @@ void kernel_main() {
                     }
                 }
             }
-            const uint32_t sem_go = static_cast<uint32_t>(get_semaphore(SEM_GO));
+            Semaphore<> sem_go_obj(SEM_GO);
             {
                 MaybeDeviceZoneScope("reader_reduce_invite");
                 for (uint32_t i = 0; i < KGROUPS; ++i) {
                     const uint32_t p = i;
                     const uint32_t px = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 0);
                     const uint32_t py = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 1);
-                    noc_semaphore_inc(get_noc_addr(px, py, sem_go), 1);
+                    sem_go_obj.up(noc, px, py, 1);
                 }
                 noc_async_atomic_barrier();
             }
@@ -972,7 +972,7 @@ void kernel_main() {
                 data_arrivals += (SCATTER_ONE_SIGNAL ? 1 : 2) * KGROUPS;
                 {
                     MaybeDeviceZoneScope("reader_reduce_data_wait");
-                    noc_semaphore_wait_min(sem_data_ptr, data_arrivals);
+                    sem_data_obj.wait_min(data_arrivals);
                 }
                 cb_push_back(cb_gather_gate, GATHER_PAGES);
                 cb_push_back(cb_gather_up, GATHER_PAGES);
@@ -1044,8 +1044,7 @@ void kernel_main() {
                             const uint32_t sidx = gr * HGROUPS + gr;
                             const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
                             const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
-                            noc_semaphore_inc(
-                                get_noc_addr(svx, svy, static_cast<uint32_t>(get_semaphore(SEM_H_FREE))), 1);
+                            Semaphore<>(SEM_H_FREE).up(noc, svx, svy, 1);
                             ++next_ack;
                         }
 
@@ -1054,14 +1053,12 @@ void kernel_main() {
                         const uint32_t slot =
                             wd_mgroup ? ((gb * MGROUP_ROWS + lr) % DEPTH_H) : ((gb * KGROUPS + r) % DEPTH_H);
                         if (i_send && !writer_owns_send) {
-                            noc_semaphore_wait_min(sem_h_ptr, h_arrivals);
+                            sem_h_obj.wait_min(h_arrivals);
                             noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, HROW_T * H_TILE);
                             phase2_read_barrier();
                             if constexpr (HMCAST_ACTIVE) {
-                                noc_semaphore_wait_min(
-                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                        static_cast<uint32_t>(get_semaphore(SEM_H_FREE))),
-                                    hfree_seq);
+                                Semaphore<> h_free(SEM_H_FREE);
+                                h_free.wait_min(hfree_seq);
                                 h_slot_send_posted(slot, hdst, HROW_T * H_TILE, wd_mgroup);
                             }
                         } else if (i_send) {
@@ -1137,8 +1134,7 @@ void kernel_main() {
                             const uint32_t sidx = (next_ack % KGROUPS) * HGROUPS + next_ack;
                             const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
                             const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
-                            noc_semaphore_inc(
-                                get_noc_addr(svx, svy, static_cast<uint32_t>(get_semaphore(SEM_H_FREE))), 1);
+                            Semaphore<>(SEM_H_FREE).up(noc, svx, svy, 1);
                             ++next_ack;
                         }
                         const bool i_send = (is_root && r == my_col);
@@ -1148,7 +1144,7 @@ void kernel_main() {
                             // multicast whose rotating-sender flag reset races this core's own in-flight
                             // VALID, so the slot can be read before the write lands.
                             // cb_h_local needs no CB front — the workers' NoC writes assemble it.
-                            noc_semaphore_wait_min(sem_h_ptr, h_arrivals);
+                            sem_h_obj.wait_min(h_arrivals);
                             noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, h_block_tiles * H_TILE);
                         }
 
@@ -1169,10 +1165,8 @@ void kernel_main() {
                             // `h_free_expected` counter, because HACK_AHEAD deliberately breaks the
                             // round-to-round chain a reset-based handshake would need.
                             if constexpr (HMCAST_ACTIVE) {
-                                noc_semaphore_wait_min(
-                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                        static_cast<uint32_t>(get_semaphore(SEM_H_FREE))),
-                                    hfree_seq);
+                                Semaphore<> h_free(SEM_H_FREE);
+                                h_free.wait_min(hfree_seq);
                                 // `src == dst`, so exclude-source: a src != dst send is a LOOPBACK
                                 // multicast whose flag reset races this core's own in-flight VALID.
                                 h_slot_send_posted((gb * HGROUPS + r) % DEPTH_H, hdst, h_block_tiles * H_TILE);
