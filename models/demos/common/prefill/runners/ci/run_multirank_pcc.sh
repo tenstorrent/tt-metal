@@ -3,7 +3,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 set -euo pipefail
 
-MODEL="${1:?usage: run_multirank_pcc.sh <model-key>}"
+MODEL="${1:?usage: run_multirank_pcc.sh <model-key> [config]}"
+CONFIG="${2:-sc4}"
 
 : "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
 : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
@@ -18,11 +19,19 @@ PCC_THRESHOLD=0.85
 RUNNER_ENV=""
 PRODUCER_ENV=""
 TP_SHARD_KV_DEFAULT=0
+FABRIC_MODE=2d
+
+case "${CONFIG}" in
+  sc1|sc4) ;;
+  *)
+    echo "unknown config '${CONFIG}' (expected sc1 or sc4)" >&2
+    exit 2
+    ;;
+esac
 
 case "${MODEL}" in
   kimi27)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
-    MGD="${MGD_DIR}/kimi27_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
     MAX_SEQ_LEN=256000
     # Users are bounded by per-bank KV capacity, and that bound has to be bisected, not computed --
@@ -34,7 +43,6 @@ case "${MODEL}" in
     ;;
   glm52)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
-    MGD="${MGD_DIR}/glm52_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/glm52.json"
     MAX_SEQ_LEN=1049600
     # Same per-bank capacity bound, relaxed by the TP KV dedup below. The sparse KV format moves it
@@ -51,7 +59,27 @@ case "${MODEL}" in
     ;;
 esac
 
+MGD="${MGD_DIR}/${MODEL}_${CONFIG}_mgd.textproto"
+[ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${MODEL}/${CONFIG} at ${MGD}" >&2; exit 2; }
+
+# sc4's length and user count are per-model capacity bounds; sc1 does not inherit either. One galaxy
+# carries every layer, so the same request costs ~4x the per-galaxy KV and weight footprint, and both
+# bounds sit at the sc4 edge. Only slot 0 is ever prefilled, so one slot measures the same work.
+SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
+SC1_MAX_SEQ_LEN=256000
+if [ "${CONFIG}" = sc1 ]; then
+  MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN}
+  NUM_USERS_DEFAULT=1
+fi
+
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
+
+# Both configs probe the same absolute depths so the scaling table can align rows: the first chunk,
+# a shallow depth near the PCC verdict length, then each config's midpoint and last chunk. A leg drops
+# the depths it never reaches, which is what leaves the sc4-only rows blank on the sc1 side.
+SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
+SC4_CHUNKS=$((SC4_MAX_SEQ_LEN / CHUNK_SIZE))
+PROBE_CHUNKS="0,$((50000 / CHUNK_SIZE)),$((SC1_CHUNKS / 2 - 1)),$((SC1_CHUNKS - 1)),$((SC4_CHUNKS / 2 - 1)),$((SC4_CHUNKS - 1))"
 
 mkdir -p "${PIPELINE_DIR}"
 TTRUN_DIR="${TTRUN_DIR:-/etc/ttop}"
@@ -86,19 +114,22 @@ cleanup() {
     done
     python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
       --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
-      --chunk-size "${CHUNK_SIZE}" --perf-window-chunks "${PERF_WINDOW_CHUNKS:-4}" \
-      --summary-name "${MODEL}" \
+      --chunk-size "${CHUNK_SIZE}" \
+      --probe-chunks "${PROBE_CHUNKS}" \
+      --summary-name "${MODEL}_${CONFIG}" \
       || echo "summary generation failed (non-fatal)"
-    GANTT_DIR="${PREFILL_SUMMARIES}/plots"
-    mkdir -p "${GANTT_DIR}"
-    python3 -c "import matplotlib" 2>/dev/null \
-      || timeout 90 uv pip install --quiet matplotlib 2>/dev/null \
-      || timeout 90 python3 -m pip install --quiet matplotlib 2>/dev/null \
-      || echo "matplotlib install failed (gantt skipped, non-fatal)"
-    python3 "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
-      --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
-      -o "${GANTT_DIR}/${MODEL}_pipeline_gantt.png" \
-      || echo "gantt render failed (non-fatal)"
+    if [ "$(find "${TIMING_DIR}" -name '*.csv' 2>/dev/null | wc -l)" -ge 2 ]; then
+      GANTT_DIR="${PREFILL_SUMMARIES}/plots"
+      mkdir -p "${GANTT_DIR}"
+      python3 -c "import matplotlib" 2>/dev/null \
+        || timeout 90 uv pip install --quiet matplotlib 2>/dev/null \
+        || timeout 90 python3 -m pip install --quiet matplotlib 2>/dev/null \
+        || echo "matplotlib install failed (gantt skipped, non-fatal)"
+      python3 "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
+        --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
+        -o "${GANTT_DIR}/${MODEL}_pipeline_gantt.png" \
+        || echo "gantt render failed (non-fatal)"
+    fi
   fi
   rm -rf "${MR_DIR}"
 }
@@ -116,7 +147,7 @@ python3 "${TTRUN_PY}" \
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
-    export PREFILL_FABRIC_MODE=2d; \
+    export PREFILL_FABRIC_MODE=${FABRIC_MODE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_NUM_USERS=${PREFILL_NUM_USERS:-${NUM_USERS_DEFAULT}}; \
     export PREFILL_TP_SHARD_KV=${PREFILL_TP_SHARD_KV:-${TP_SHARD_KV_DEFAULT}}; \

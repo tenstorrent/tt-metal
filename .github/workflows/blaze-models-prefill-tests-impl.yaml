@@ -279,8 +279,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # archive:false makes the artifact URL a direct link to the PNG rather than a zip. Must precede the
-      # publish step below, which needs the URL.
+      # archive:false makes the artifact URL a direct link to the PNG rather than a zip.
       - name: ⬆️ Upload prefill plots
         id: upload-prefill-plots
         if: always() && !cancelled()
@@ -296,8 +295,6 @@ jobs:
       - name: 📊 Publish prefill summaries
         if: always() && !cancelled()
         continue-on-error: true
-        env:
-          PLOTS_URL: ${{ steps.upload-prefill-plots.outputs.artifact-url }}
         run: |
           shopt -s nullglob
           files=("$PREFILL_SUMMARIES"/perf/*.md "$PREFILL_SUMMARIES"/pcc/*.md)
@@ -309,13 +306,17 @@ jobs:
             cat "$f" | tee -a "$GITHUB_STEP_SUMMARY"
             printf '\n' >> "$GITHUB_STEP_SUMMARY"
           done
-          # The job-summary sanitizer strips inlined images, so the gantt can only be offered as a link.
-          # Gate on the PNG existing: a failed matplotlib install leaves the artifact empty but still URL'd.
-          plots=("$PREFILL_SUMMARIES"/plots/*.png)
-          if [ -n "$PLOTS_URL" ] && [ ${#plots[@]} -gt 0 ]; then
-            printf '[Pipeline gantt (PNG)](%s)\n\n' "$PLOTS_URL" >> "$GITHUB_STEP_SUMMARY"
-          fi
           echo "Published ${#files[@]} prefill summary file(s) to the job summary"
+
+      - name: ⬆️ Upload prefill perf metrics
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: prefill-perf-metrics-${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          path: ${{ env.PREFILL_SUMMARIES }}/perf_json/*.json
+          if-no-files-found: ignore
+          retention-days: 30
 
       # Keep the raw .md files for cross-run perf-trend analysis. Uploaded before cleanup; unique name per
       # matrix job so v7 (no auto-merge) doesn't collide when the whole suite runs.
@@ -352,7 +353,8 @@ jobs:
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "/home/user/tt-metal",
               "input_dirs": ["generated/test_logs"],
-              "output_dir": "generated/ai_summaries"
+              "output_dir": "generated/ai_summaries",
+              "authoritative_job_status": true
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
