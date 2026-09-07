@@ -102,6 +102,11 @@ struct ReadOut {
     uint32_t dies;
     uint32_t frames_needed;
     DieDesc die[kMaxDies];
+    // Board-level, the PCIe edge rails only -- see ioctl.h. Not total board power.
+    uint32_t slot_12v_w;
+    uint32_t slot_3v3_w;
+    uint32_t rest_of_chip_w;
+    uint32_t mvddq_w;
 };
 
 struct ReadArg {
@@ -247,6 +252,30 @@ public:
             }
             decode(views_[d], buf_.data() + desc.frame_offset, a.out, desc, now_us);
         }
+
+        // BOARD power, which needs every die and so cannot be done inside decode().
+        //
+        // A die's TDP does not include its VP/VPH/GDDR rails; the ARC keeps that as a
+        // separate fixed figure (25 W on an n300). So the card's draw is the sum over its
+        // dies of TDP + rest_of_chip + MVDDQ -- roughly 180 W under load against ~47 W on
+        // the slot rails, the difference being the auxiliary connector.
+        //
+        // Attached to the LOCAL die only, like slot power, so summing the rendered chips
+        // cannot double-count one card.
+        if (a.out.rest_of_chip_w > 0) {
+            uint32_t board_w = 0;
+            for (uint32_t d = 0; d < a.out.dies && d < views_.size(); ++d) {
+                if (!a.out.die[d].published) {
+                    continue;
+                }
+                board_w += views_[d].header.tdp_w + a.out.rest_of_chip_w + a.out.mvddq_w;
+            }
+            for (uint32_t d = 0; d < a.out.dies && d < views_.size(); ++d) {
+                if (a.out.die[d].location == 0) {
+                    views_[d].header.board_power_w = static_cast<uint16_t>(board_w);
+                }
+            }
+        }
         return true;
     }
 
@@ -289,6 +318,14 @@ private:
         h.tdp_w = static_cast<uint16_t>(telem_dword(f, kTelemTdp) & 0xFFFFu);
         h.tdc_a = static_cast<uint16_t>(telem_dword(f, kTelemTdc) & 0xFFFFu);
         h.throttler = telem_dword(f, kTelemThrottler);
+
+        // Slot power describes the CARD, not this die, so it is attached only to the local
+        // die. Putting it on both would invite a viewer to sum eight dies and report twice
+        // the board's slot draw.
+        if (desc.location == 0) {
+            h.slot_12v_w = static_cast<uint16_t>(o.slot_12v_w);
+            h.slot_3v3_w = static_cast<uint16_t>(o.slot_3v3_w);
+        }
 
         h.last_update_us = now_us;
         if (h.epoch_us == 0) {

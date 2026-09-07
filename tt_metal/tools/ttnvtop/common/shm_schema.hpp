@@ -26,7 +26,13 @@ namespace ttnvtop {
 //       axis (chip-level, so it lives in the header, not PerCoreView). Ported
 //       from the tt_coremon lineage; the struct stays 72 bytes, so a v2 reader
 //       sees the same layout it always did for every field it knows about.
-constexpr uint16_t kShmVersion = 4;
+//   v4 (2026-09-06): per-die ARC thermals and power, which the per-core frame
+//       already carried and the viewer discarded. UtilShmHeader 72 -> 96.
+//   v5 (2026-09-07): board-level power from outside the per-core frame -- PCIe
+//       slot rails from the M3 mailbox, and whole-card power built from each
+//       die's TDP plus the ARC's fixed VP/VPH/GDDR figure. Fits in the tail
+//       padding v4 already had, so the struct stays 96 bytes.
+constexpr uint16_t kShmVersion = 5;
 
 constexpr char kShmMagic[4] = {'T', 'T', 'U', 'T'};
 
@@ -103,7 +109,25 @@ struct UtilShmHeader {
     uint16_t tdc_a;
     uint16_t reserved0;
     uint32_t throttler;  // ARC throttler bitmask; 0 = not throttling
-    uint32_t reserved[1];
+    // PCIe EDGE CONNECTOR rails in watts, from the M3's CSM mailbox. BOARD-level and
+    // SLOT-ONLY: an n300's auxiliary power connector is not measured, so these sit near the
+    // slot's ~50 W budget while the dies' own TDP goes far higher under the same load.
+    // Label it "slot" -- calling it board or input power would understate the truth by
+    // whatever the aux rail is carrying, which is most of it.
+    //
+    // Set only on a card's LOCAL die, so summing across dies cannot double-count a figure
+    // that describes the card. 0 = unavailable.
+    uint16_t slot_12v_w;
+    uint16_t slot_3v3_w;
+    // Whole-CARD power: sum over the card's dies of (that die's TDP + the ARC's fixed
+    // VP/VPH/GDDR figure + measured MVDDQ). A die's TDP alone omits those rails, so summing
+    // TDP across dies understates the card; the slot fields above see only the edge
+    // connector and understate it far more, the aux rail carrying the rest.
+    //
+    // Set only on a card's LOCAL die, so summing across dies cannot double-count.
+    // 0 = unavailable.
+    uint16_t board_power_w;
+    uint16_t reserved1;
 };
 static_assert(sizeof(UtilShmHeader) == 96, "UtilShmHeader must be 96 bytes");
 

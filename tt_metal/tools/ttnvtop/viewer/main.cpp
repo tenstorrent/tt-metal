@@ -274,7 +274,8 @@ std::string render_thermals(const ttnvtop::UtilShmHeader* h) {
     if (h == nullptr) {
         return "";
     }
-    const bool any = h->asic_temp_c16 || h->tdp_w || h->tdc_a || h->vcore_mv || h->throttler;
+    const bool any = h->asic_temp_c16 || h->tdp_w || h->tdc_a || h->vcore_mv || h->throttler || h->slot_12v_w ||
+                     h->slot_3v3_w || h->board_power_w;
     if (!any) {
         return "";
     }
@@ -297,6 +298,19 @@ std::string render_thermals(const ttnvtop::UtilShmHeader* h) {
     // being held back", so it is called out rather than folded into the clock reading.
     if (h->throttler != 0) {
         o << kMetricThrotCol << "  THR 0x" << std::hex << h->throttler << std::dec << kAnsiReset;
+    }
+    // Board-level, and set only on a card's local die, so it appears once per CARD rather
+    // than once per die. Called "slot" deliberately: it is the PCIe edge rails only, and an
+    // n300's auxiliary connector carries the rest, so this is not the board's total draw.
+    // Under an 8-die load it sits near 50 W while each die's own TDP passes 70 W.
+    // Whole-card draw: every die's TDP plus the rails a die's TDP leaves out. Shown next
+    // to "slot" precisely because the two differ by the auxiliary connector -- board is the
+    // number people mean by "how much is this card using", slot is what the edge sees.
+    if (h->board_power_w > 0) {
+        o << kMetricThermCol << "  board " << h->board_power_w << "W" << kAnsiReset;
+    }
+    if (h->slot_12v_w > 0 || h->slot_3v3_w > 0) {
+        o << kAnsiDim << "  slot " << (h->slot_12v_w + h->slot_3v3_w) << "W" << kAnsiReset;
     }
     return o.str();
 }
