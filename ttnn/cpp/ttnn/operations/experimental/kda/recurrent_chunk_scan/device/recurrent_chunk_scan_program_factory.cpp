@@ -183,7 +183,8 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"Vt", Vt},
              {"Vt_full", Vt_full},
              {"summary_pair", static_cast<uint32_t>(summary)}},
-        .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"head", "value_block", "num_chunks", "state_row", "reset_chunk", "reset_state_row"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
     if (!summary) {
@@ -216,7 +217,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"Vt", Vt},
              {"Vt_full", Vt_full},
              {"summary_pair", static_cast<uint32_t>(summary)}},
-        .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks", "out_row", "second_out_row"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
 
@@ -280,7 +281,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
                 tt::tt_metal::experimental::ConsumerOf(summary_ring_dfb_name, "summary_ring"),
             },
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"summary_pair", static_cast<uint32_t>(summary)}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_chunks"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_chunks", "reset_chunk"}},
         .hw_config = std::move(compute_hw),
     };
 
@@ -291,16 +292,33 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         const auto& core = distribution.cores[index];
         const uint32_t head = distribution.head[index];
         const uint32_t value_block = distribution.value_block[index];
+        // Inert wrap arguments: state_row and out_row address the same rows `head`
+        // already did, and a reset_chunk of 0 means never. Giving them meaning is a
+        // separate step, so any divergence here is plumbing rather than semantics.
+        const uint32_t state_row = head;
+        const uint32_t reset_chunk = 0;
+        const uint32_t reset_state_row = 0;
+        const uint32_t out_row = head;
+        const uint32_t second_out_row = 0;
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
-            {{"head", head}, {"value_block", value_block}, {"num_chunks", NC}});
+            {{"head", head},
+             {"value_block", value_block},
+             {"num_chunks", NC},
+             {"state_row", state_row},
+             {"reset_chunk", reset_chunk},
+             {"reset_state_row", reset_state_row}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,
-            {{"head", head}, {"value_block", value_block}, {"num_chunks", NC}});
+            {{"head", head},
+             {"value_block", value_block},
+             {"num_chunks", NC},
+             {"out_row", out_row},
+             {"second_out_row", second_out_row}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values, core, {{"num_chunks", NC}});
+            compute_run_args.runtime_arg_values, core, {{"num_chunks", NC}, {"reset_chunk", reset_chunk}});
     }
 
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::TensorParameter> tensor_parameters = {
