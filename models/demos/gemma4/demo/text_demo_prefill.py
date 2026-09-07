@@ -20,7 +20,6 @@ from models.demos.gemma4.tests.test_factory import find_layer_idx, parametrize_m
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.demos.gemma4.utils.partial_weights import load_cache_completion_state
-from models.tt_transformers.tt.common import PagedAttentionConfig
 
 try:
     from tracy import signpost
@@ -33,7 +32,7 @@ except ModuleNotFoundError:
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 MODEL_DTYPE = ttnn.bfloat16
-PAGE_BLOCK_SIZE = 64
+_SLIDING_WINDOW_TOKENS = 1024
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 
 
@@ -49,11 +48,11 @@ def _load_full_weights():
 # ── Weight loading from the tensor cache ──────────────────────────────────────
 
 
-def _cache_root(model_path):
-    """Absolute path of the tensor cache directory for this model + dtype."""
+def _cache_root(model_path, mesh_shape):
+    """Absolute path of the tensor cache directory for this model, dtype, and mesh."""
     args = Gemma4ModelArgs()
     args.model_cache_path = Gemma4ModelArgs.resolve_model_cache_path(model_path)
-    return str(args.weight_cache_path(MODEL_DTYPE))
+    return str(args.weight_cache_path(MODEL_DTYPE, mesh_shape=mesh_shape))
 
 
 def _require_cache(cache_root, tp, num_layers):
@@ -129,7 +128,7 @@ def _host_tensor(mesh_device, torch_tensor, dtype, layout, mesh_config=None, seq
 
 
 def _cp_or_replicate_mapper(mesh_device, mesh_config, seq_dim=-2):
-    """Shard ``seq_dim`` across the CP axis, or replicate when CP is off."""
+    """Create a CP sharding mapper for ``seq_dim``, or a replication mapper."""
     from models.demos.gemma4.tt.ccl import cp_degree
 
     if mesh_config is not None and cp_degree(mesh_config) > 1:
@@ -165,26 +164,12 @@ def _text_token_stream(model_path):
         text = resp.text
         _TOKEN_TEXT_CACHE.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(text)
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
     return torch.tensor(tokenizer.encode(text), dtype=torch.int32).unsqueeze(0)
 
 
 def _prefill_tokens(model_path, context_len, vocab_size, source="text"):
-    """Deterministic token ids for a ``context_len``-token prefill.
-
-    ``text`` (the default) tokenizes real prose, so attention sees real token statistics
-    rather than uniform ids -- which is what the timings are meant to represent, and what
-    any future value check would need. The stream is tiled when the text runs short of the
-    requested length; repetition is still language.
-
-    ``random`` draws uniform ids from a fixed seed instead. Cheaper, and it needs neither
-    the network nor a tokenizer, so it is the fallback when the corpus cannot be fetched --
-    but token statistics are not a real prompt's.
-
-    Either way the result is prefix-consistent by construction, since every length is a
-    slice of one stream: the first N tokens of a 256k sequence are the whole of an N-token
-    sequence.
-    """
+    """Return prefix-consistent token IDs from text or a fixed-seed random stream."""
     if source == "random":
         gen = torch.Generator().manual_seed(0)
         return torch.randint(0, vocab_size, (1, context_len), dtype=torch.int32, generator=gen)
@@ -220,47 +205,12 @@ def _cp_gather_torch(tensor, mesh_device, mesh_config):
     return torch.cat(rows, dim=-2)
 
 
-def _identity_page_table(mesh_device, paged_config, mesh_config=None):
-    """Single-user page table mapping virtual block i to physical block i.
-
-    Under context parallelism the block pool is sharded along the CP axis (see
-    ``Gemma4Model._cp_block_pool_override``), so each rank owns ``max_num_blocks/cp``
-    blocks and addresses them locally, starting at 0. The table therefore just gets
-    narrower — it stays a replicated identity, because the per-rank difference is
-    carried by *which* tokens a rank holds, not by where it writes them.
-
-    The width also bounds the fill: paged_fill_cache requires the input length to be
-    <= ``page_table.shape[1] * block_size``, which here is exactly the local
-    sequence length.
-    """
-    from models.demos.gemma4.tt.ccl import cp_degree
-
-    cp = cp_degree(mesh_config) if mesh_config is not None else 1
-    num_blocks = paged_config.max_num_blocks // cp
-    page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
-    return ttnn.from_torch(
-        page_table,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.int32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-
 # ── Eager / traced execution ──────────────────────────────────────────────────
 
 
 @contextmanager
 def _lm_head_deferred(model):
-    """Make the model's prefill graph stop at the post-norm hidden states.
-
-    ``_prefill_trace_mode`` is really a "skip lm_head" switch, so this is used for
-    the eager body-only run too, not just for tracing. See ``Gemma4Model.__call__``
-    (models/demos/gemma4/tt/model.py) for why traced prefill defers the head: the
-    lm_head over a full padded sequence at 262k vocab is ~40x the model body at
-    4k tokens, and the last-token slice index varies per prompt so it cannot be
-    baked into a trace.
-    """
+    """Temporarily skip the LM head and return post-norm hidden states."""
     previous = getattr(model, "_prefill_trace_mode", False)
     model._prefill_trace_mode = True
     try:
@@ -282,23 +232,15 @@ def _hf_text_config(model_path):
 
 
 def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
-    """Create the full model from cache, sized for a ``context_len``-token prefill.
-
-    ``context_len`` defaults to a single ``chunk``. When larger, prefill runs as
-    ``context_len / chunk`` chunks and the model is told the chunk size so it can lay
-    the RoPE cache out chunk-major per CP rank and size the ring KV cache slabs.
-
-    Returns ``(model_args, model, kv_cache, page_table_tt)``.
-    """
+    """Create a CP prefill model with ring caches for one or more chunks."""
+    mesh_config = _mesh_config(mesh_device)
+    if mesh_config.prefill.sp <= 1:
+        raise ValueError("This demo requires context parallel prefill")
     tp = mesh_device.shape[1]
     context_len = context_len or chunk
     max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", context_len))
-    paged_config = PagedAttentionConfig(
-        block_size=PAGE_BLOCK_SIZE,
-        max_num_blocks=max(1, max_seq_len // PAGE_BLOCK_SIZE),
-    )
 
-    cache_root = _cache_root(model_path)
+    cache_root = _cache_root(model_path, mesh_device.shape)
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)
     num_layers = Gemma4ModelArgs.from_hf_config(hf_config).num_hidden_layers
     _require_cache(cache_root, tp, num_layers)
@@ -312,20 +254,13 @@ def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
         dtype=MODEL_DTYPE,
         state_dict=_cache_completion_state(model_path),
         model_path=model_path,
-        create_kv_cache=True,
-        paged_attention_config=paged_config,
-        prefill_chunk_size=chunk if context_len > chunk else None,
+        mesh_config=mesh_config,
+        create_kv_cache=False,
+        prefill_chunk_size=chunk,
     )
     logger.info(f"Model ready in {time.time() - t0:.1f}s")
 
-    return model_args, model, kv_cache, _identity_page_table(mesh_device, paged_config, _mesh_config(mesh_device))
-
-
-# Gemma4's sliding window, a model fact rather than a knob: ring_joint requires
-# ``halo_tokens <= N_local_q`` (ring_joint_sdpa_device_operation.cpp) and the window rounds
-# up to a 32-tile = 1024-token halo, so the per-rank Q slab ``chunk / cp`` must be at least
-# this. Every test that picks a chunk size is checked against it.
-_SLIDING_WINDOW_TOKENS = 1024
+    return model_args, model, kv_cache
 
 
 # ── Traced long-context chunked prefill (production shape) ────────────────────
@@ -419,9 +354,7 @@ def test_prefill_long_context_traced(
 
     model_path = _model_path()
     n_chunks = context_len // chunk
-    model_args, model, kv_cache, page_table_tt = _build_prefill_model(
-        mesh_device, model_path, chunk, context_len=context_len
-    )
+    model_args, model, kv_cache = _build_prefill_model(mesh_device, model_path, chunk, context_len=context_len)
     tokens_all = _prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
 
     rope_local_seq = chunk // cp
@@ -501,7 +434,7 @@ def test_prefill_long_context_traced(
     def _forward(chunk_start):
         with _lm_head_deferred(model):
             embeds, page_table, chunk_page_table, _ = model.transform_and_embed_prefill_inputs_device(
-                device_input, page_table_tt, None, None
+                device_input, None, None, None
             )
             return model.ttnn_prefill_forward(
                 x=embeds,
@@ -759,9 +692,7 @@ def test_prefill_layer_perf_chunk_n(
 
     model_path = _model_path()
     text_config = _hf_text_config(model_path)
-    model_args, model, kv_cache, page_table_tt = _build_prefill_model(
-        mesh_device, model_path, chunk, context_len=context_len
-    )
+    model_args, model, kv_cache = _build_prefill_model(mesh_device, model_path, chunk, context_len=context_len)
     tokens_all = _prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
 
     layer_idxs = {lt: find_layer_idx(text_config, lt) for lt in layer_types}
@@ -862,7 +793,7 @@ def test_prefill_layer_perf_chunk_n(
 
         def forward(chunk_start):
             embeds, page_table, chunk_page_table, _ = model.transform_and_embed_prefill_inputs_device(
-                device_input, page_table_tt, None, None
+                device_input, None, None, None
             )
             cos = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, cos_2d, layout=ttnn.TILE_LAYOUT))
             sin = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, sin_2d, layout=ttnn.TILE_LAYOUT))
