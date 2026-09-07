@@ -206,12 +206,35 @@ def device_is_responsive(timeout_s: float = 20.0) -> bool:
     Any failure returns False, which resets exactly as before: this only ever adds a reason NOT to
     reset, never a reason to.
     """
-    tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+    tt_smi = tt_smi_bin()
     try:
         proc = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=timeout_s)
         return bool((json.loads(proc.stdout) or {}).get("device_info"))
     except Exception:  # noqa: BLE001
         return False
+
+
+# WHERE tt-smi IS, ASKED ONCE. Nine sites resolved this independently -- eight spelled
+# `tt_smi_bin()` and the ninth, tt_smi_probe,
+# ran the bare name and trusted PATH. That one fails from any launch that does not inherit an
+# interactive shell: the venv reaches PATH from a .bashrc line that sits AFTER the
+# `case $- in *i*) ;; *) return;;` guard, so a service, a cron entry or a CI job gets
+# FileNotFoundError at Step 1/10. Verified with `env -i bash -lc 'command -v tt-smi'` -- not found,
+# with or without -l.
+#
+# The literal home path is also the kind of thing that cannot stay in source: it names one machine's
+# user. PERF_MCP_TT_SMI states it for any host that puts the binary elsewhere, PATH answers on a host
+# that has it, and the historical location is the last resort so nothing that works today stops.
+_TT_SMI_FALLBACK = "~/.tenstorrent-venv/bin/tt-smi"
+
+
+def tt_smi_bin() -> str:
+    """The tt-smi to run. Never a bare name: PATH is not guaranteed to a non-interactive launch."""
+    return (
+        (os.environ.get("PERF_MCP_TT_SMI") or "").strip()
+        or shutil.which("tt-smi")
+        or str(Path(_TT_SMI_FALLBACK).expanduser())
+    )
 
 
 def tt_smi_probe() -> str:
@@ -220,7 +243,7 @@ def tt_smi_probe() -> str:
     The real snapshot has no `arch` key — it carries board_info.board_type
     (e.g. "n300 L"); we adapt that to the arch token here.
     """
-    proc = subprocess.run(["tt-smi", "-s"], check=True, capture_output=True, text=True, timeout=120)
+    proc = subprocess.run([tt_smi_bin(), "-s"], check=True, capture_output=True, text=True, timeout=120)
     data = json.loads(proc.stdout)
     devices = data.get("device_info") or []
     if not devices:
@@ -831,7 +854,7 @@ def note_board(card: str = "", device_count: int = 0, box: str = "", tt_smi: str
     if "galaxy" not in text and 0 < device_count < 32:
         _GALAXY_HOST = False
         return
-    smi = tt_smi or shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+    smi = tt_smi or tt_smi_bin()
     probed = _galaxy_capability_probe(smi)
     if probed is not None:
         _GALAXY_HOST = probed
@@ -883,7 +906,7 @@ def _device_reset(error_text: str = "", config_target: str = "") -> bool:
     from . import device_recovery as _dr
 
     def _issue(target):
-        tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+        tt_smi = tt_smi_bin()
         arg_sets = [["-r", target]] if target and target != "all" else _reset_arg_sets()
         for args in arg_sets:
             try:
@@ -1207,7 +1230,7 @@ def _tt_smi_asic_temp():
     global _TT_SMI_HUNG_AT
     if _TT_SMI_HUNG_AT and time.time() - _TT_SMI_HUNG_AT < _TT_SMI_BREAKER_S:
         return None
-    tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+    tt_smi = tt_smi_bin()
     try:
         proc = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=_TT_SMI_TEMP_TIMEOUT_S)
         temp = _max_asic_temp(json.loads(proc.stdout))

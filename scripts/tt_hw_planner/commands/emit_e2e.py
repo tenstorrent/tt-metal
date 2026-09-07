@@ -229,7 +229,9 @@ def _reset_device() -> str:
             chips = widened
     except Exception:  # noqa: BLE001
         pass
-    tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+    from models.experimental.perf_automation.agent.probes import tt_smi_bin
+
+    tt_smi = tt_smi_bin()
     if not Path(tt_smi).exists():
         return "device reset SKIPPED (tt-smi not found)"
     try:

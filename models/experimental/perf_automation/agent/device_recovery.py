@@ -31,7 +31,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -40,7 +39,11 @@ from pathlib import Path
 from .state_dir import state_dir
 
 
-TT_SMI = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+from .probes import tt_smi_bin as _tt_smi_bin
+
+# Resolved at import for a module-level constant, but through the ONE resolver -- see
+# agent.probes.tt_smi_bin for why a bare "tt-smi" is not safe from a non-interactive launch.
+TT_SMI = _tt_smi_bin()
 
 DEAD_BOARD_SIGS = ("0xffffffff", "board should be reset", "pcie link", "device hang", "hang detected")
 

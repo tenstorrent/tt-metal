@@ -3117,7 +3117,9 @@ def _reset_devices(devices: str) -> str:
     chip 0, leaving a multi-chip ETH fabric half-reset (heartbeat-stuck wedge). Explicit/single ids
     target exactly those chips."""
     d = (devices or "").strip().lower()
-    tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+    from agent.probes import tt_smi_bin
+
+    tt_smi = tt_smi_bin()
     if not Path(tt_smi).is_file():
         return "device reset SKIPPED (tt-smi not found)"
     try:

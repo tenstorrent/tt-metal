@@ -36,6 +36,7 @@ sys.path.insert(0, str(_PKG))  # the perf_automation dir, so `agent` imports res
 
 from agent import gitio, perf_target, promote, roofline, router  # noqa: E402
 from agent import integrity as _integrity  # noqa: E402
+from agent.probes import tt_smi_bin as _tt_smi_bin  # noqa: E402
 from agent.layer_depth import set_depth as _set_depth  # noqa: E402
 
 _DEPTH_GUARD = "models.experimental.perf_automation.agent.depth_guard_plugin"
@@ -319,7 +320,9 @@ def _dr():
 
 
 _CONSEC_CRASH = _dr().CONSEC_CRASH
-_TT_SMI = _shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+# One resolver -- see agent.probes.tt_smi_bin: a bare "tt-smi" is not on PATH for a launch that
+# did not inherit an interactive shell.
+_TT_SMI = _tt_smi_bin()
 
 
 _RUN_MOD = None
