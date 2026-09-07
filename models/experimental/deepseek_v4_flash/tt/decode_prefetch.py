@@ -89,7 +89,9 @@ HC_FN_GCB_PAGES = 8
 # pair share a shape, and which shape depends on the kind (HCA projects a token to ``Dh``,
 # CSA to ``2*Dh``).
 DECODE_LAYOUTS = {
-    "q_a_proj": {"K": 4096, "N": 1024, "partial_width_sharded": True, "k_blocks": 2, "n_blocks": 32},
+    # Full-width on 32 cores so matmul_decode can fuse q_a's RMSNorm and multicast the
+    # normalized full row directly onto q_b's 64-core weight grid.
+    "q_a_proj": {"K": 4096, "N": 1024, "n_blocks": 32},
     "q_b_proj": {"K": 1024, "N": 32768, "n_blocks": 64},
     "kv_proj": {"K": 4096, "N": 512, "partial_width_sharded": True, "k_blocks": 4, "n_blocks": 16},
     # q_a and kv projected by one matmul over their concatenated weight (see
@@ -138,12 +140,11 @@ DECODE_LAYOUTS = {
 }
 
 # The order one layer's matmuls consume the buffer, which is the order the requests must be
-# queued in. Attention runs first: q_a/q_b/kv from ``_qkv``, then the compressor (it runs
-# after ``_qkv`` and before ``_attend``), then ``_attend``'s grouped output projection
-# (o_a_proj before o_b_proj -- see ``DeepSeekV4Attention._grouped_output``). The MoE block
-# follows.
+# queued in. q_a has a private 32-receiver FIFO; this shared FIFO starts with q_b/kv from
+# ``_qkv``, then the compressor (it runs after ``_qkv`` and before ``_attend``), then
+# ``_attend``'s grouped output projection (o_a_proj before o_b_proj -- see
+# ``DeepSeekV4Attention._grouped_output``). The MoE block follows.
 DECODE_GCB_GROUP = (
-    "q_a_proj",
     "q_b_proj",
     "kv_proj",
     "compressed_sparse_attention",
@@ -157,6 +158,7 @@ DECODE_GCB_GROUP = (
 
 # Extra GCBs attached to the per-device prefetch mapping under TP. Not in
 # ``DECODE_GCB_GROUP``: different receiver counts, independent FIFOs.
+Q_A_GCB = "q_a_full"
 SEQUENTIAL_OA_GCB = "o_a_sequential"
 TP_GATE_UP_GCB = "shared_gate_up_tp"
 # Those private rings cannot use the shared 16/24-page depth: each has a single
@@ -274,6 +276,11 @@ def hc_fn_page_bytes(weight_dtype: ttnn.DataType) -> int:
     :func:`ensure_named_gcb` builds from the same list.
     """
     return decode_gcb_page_bytes(hc_fn_ring_specs(), weight_dtype)
+
+
+def q_a_page_bytes(weight_dtype: ttnn.DataType) -> int:
+    """Page size for q_a's private 32-receiver full-width ring."""
+    return decode_gcb_page_bytes([DECODE_LAYOUTS["q_a_proj"]], weight_dtype)
 
 
 def make_decode_prefetch_buffers(
