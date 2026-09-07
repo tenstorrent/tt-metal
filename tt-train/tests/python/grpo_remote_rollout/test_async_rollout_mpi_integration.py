@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import gc
 import os
-import time
 from threading import Event, Lock
 
 import pytest
@@ -83,6 +82,7 @@ class _DeterministicGenerationWorker:
     def __init__(self) -> None:
         self.models = [object()]
         self.generation_inflight = Event()
+        self.weights_received = Event()
         self._version = INITIAL_VERSION
         self._generation_count = 0
         self._lock = Lock()
@@ -98,10 +98,9 @@ class _DeterministicGenerationWorker:
 
         self.generation_inflight.set()
         try:
-            # Leave enough time for the stage command and small host transfer
-            # to overlap the first rollout on an unloaded CI node.
             if generation_index == 0:
-                time.sleep(2)
+                if not self.weights_received.wait(30):
+                    raise TimeoutError("weight receipt did not overlap the initial rollout")
             return _expected_output(version, len(prompts))
         finally:
             self.generation_inflight.clear()
@@ -118,14 +117,16 @@ class _DeterministicGenerationWorker:
 
 
 class _RecordingReceiverBridge:
-    def __init__(self, bridge: HostWeightBridge, generation_inflight: Event) -> None:
+    def __init__(self, bridge: HostWeightBridge, generation_inflight: Event, weights_received: Event) -> None:
         self._bridge = bridge
         self._generation_inflight = generation_inflight
+        self._weights_received = weights_received
         self.received_during_generation = False
 
     def receive_weights(self):
         weights = self._bridge.receive_weights()
         self.received_during_generation = self._generation_inflight.is_set()
+        self._weights_received.set()
         return weights
 
     def barrier(self) -> None:
@@ -187,7 +188,7 @@ def _worker_side(mesh) -> None:
     _trace("initializing worker bridge, transport, and engine")
     worker = _DeterministicGenerationWorker()
     raw_bridge = HostWeightBridge.init_receiver(mesh=mesh, peer_rank=SENDER_RANK, submeshes=[mesh])
-    bridge = _RecordingReceiverBridge(raw_bridge, worker.generation_inflight)
+    bridge = _RecordingReceiverBridge(raw_bridge, worker.generation_inflight, worker.weights_received)
     transport = MPIRolloutWorkerTransport(peer_rank=SENDER_RANK, capacity=2)
     service = RolloutWorkerService(transport)
     engine = TttRolloutEngine(
