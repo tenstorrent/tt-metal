@@ -620,8 +620,6 @@ models/vllm_test_utils/ @viktorpusTT @tchedaTT @uaydonat
 
 # tracy
 tools/tracy/ @mo-tenstorrent @akerteszTT
-tools/tracy_inspect/ @mo-tenstorrent @yusufbashiTT
-tools/tracy_inspect/**/CMakeLists.txt @mo-tenstorrent @yusufbashiTT @tenstorrent/metalium-developers-infra
 tt_metal/third_party/tracy @mo-tenstorrent @akerteszTT @tenstorrent-github-bot
 
 tools/scripts/ @mtairum
