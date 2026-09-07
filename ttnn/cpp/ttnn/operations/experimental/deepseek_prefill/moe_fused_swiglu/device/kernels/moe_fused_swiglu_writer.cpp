@@ -22,6 +22,8 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
@@ -308,7 +310,7 @@ void kernel_main() {
             // extra outstanding block legal.
             if (out_pending) {
                 MaybeDeviceZoneScope("writer_out_drain");
-                noc_async_write_barrier();
+                noc.async_write_barrier();
                 out_buf.pop_front(out_pending);
                 out_pending = 0;
                 // BFP8 phase alias: only after the DMA no longer reads cb_out_tiles may this core's
@@ -350,7 +352,7 @@ void kernel_main() {
                         HID_T,
                         wp,
                         W_TILE);
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                     wu_buf.push_back(WU_CHUNK_TILES);
                 }
             }
@@ -496,8 +498,13 @@ void kernel_main() {
                     dst = h_local_buf.get_write_ptr() + my_row * slice_bytes;
                     bytes = slice_bytes;
                 }
-                noc_async_write(h_slice_buf.get_read_ptr(), get_noc_addr(rvx, rvy, dst), bytes);
-                noc_async_write_barrier();
+                noc.async_write(
+                    use<CircularBuffer::AddrSelector::READ_PTR>(h_slice_buf),
+                    UnicastEndpoint{},
+                    bytes,
+                    {},
+                    {.noc_x = rvx, .noc_y = rvy, .addr = dst});
+                noc.async_write_barrier();
                 Semaphore<>(SEM_HSLICE).up(noc, rvx, rvy, 1);
                 noc.async_atomic_barrier();
                 h_slice_buf.pop_front(SLICE_FULL);
@@ -517,8 +524,13 @@ void kernel_main() {
                 // rows, so every block's physical cb_h write pointer restarts at the base.  Round r's
                 // physical row is therefore r % DEPTH_H even though its VALID flag rotates globally.
                 const uint32_t hdst = h_buf.get_write_ptr() + (my_row % DEPTH_H) * HID_T * H_TILE;
-                noc_async_read(get_noc_addr(h_local_buf.get_write_ptr()), hdst, HID_T * H_TILE);
-                noc_async_read_barrier();
+                noc.async_read(
+                    PrecomposedUnicastEndpoint{},
+                    CoreLocalMem<uint32_t>(hdst),
+                    HID_T * H_TILE,
+                    {.noc_addr = get_noc_addr(h_local_buf.get_write_ptr(), noc.get_noc_id())},
+                    {});
+                noc.async_read_barrier();
                 h_slot_send_posted_noc1(flag_slot, hdst, HID_T * H_TILE);
 
                 asm volatile("fence" ::: "memory");
@@ -567,7 +579,7 @@ void kernel_main() {
     }
 
     if (out_pending) {
-        noc_async_write_barrier();
+        noc.async_write_barrier();
         out_buf.pop_front(out_pending);
     }
 }
