@@ -539,13 +539,15 @@ inline void _llk_unpack_tilizeA_B_(
  *
  * Drains the unpacker, rewrites the unpack config (clearing tilize mode) and restores the
  * face_r_dim-aware canonical Tile_x_dim so subsequent ops see a normal tile layout — i.e. it
- * reverts exactly the state @ref _llk_unpack_tilize_init_ altered. The SrcA tile-descriptor
- * Y/Z-dim word is deliberately left untouched: tilize neither writes nor mutates it, so it is
- * not this op's to restore. Whoever switches the operand owns re-establishing it — Z-dim via
- * an explicit reconfig_full_operand / reconfig_tile_shape (a plain format reconfig with
- * p_dim_stride_target::IGNORE does not reprogram geometry), Y-dim only by configure_unpack_AB
- * at kernel start. x-start/x-end is transient and reprogrammed by the next operation's init
- * (see tt-llk#1036), so it is not restored here.
+ * reverts the two persistent fields @ref _llk_unpack_tilize_init_ altered: unpack config word-0
+ * and Tile_x_dim_cntx0. The SrcA tile-descriptor Y/Z-dim word is deliberately left untouched:
+ * tilize neither writes nor mutates it, so it is not this op's to restore. Whoever switches the
+ * operand owns re-establishing it — Z-dim via an explicit reconfig_full_operand /
+ * reconfig_tile_shape (a plain format reconfig with p_dim_stride_target::IGNORE does not
+ * reprogram geometry), Y-dim only by configure_unpack_AB at kernel start. The other two things
+ * init touches — x-start/x-end (TT_SETADCXX) and the unpacker MOP — are transient and
+ * reprogrammed by the next operation's init (see tt-llk#1036), so they are not restored here
+ * either.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
  * @param tensor_shape: Tile geometry; face_r_dim restores the canonical Tile_x_dim.
