@@ -83,8 +83,6 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
         pc.allowed_worker_cores =
             CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(device_grid.x - 1, device_grid.y - 1)));
     }
-    auto compute_with_storage_grid_size = pc.allowed_worker_cores.value().bounding_box().grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t c_batch_size = get_batch_size(cshape);
     auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;
     auto
@@ -94,7 +92,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
          core_group_2,
          num_output_tiles_per_core_group_1,
          num_output_tiles_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
+            tt::tt_metal::split_work_to_cores(pc.allowed_worker_cores.value(), num_output_tiles_total);
 
     // C = A*B*...
     // MN = MK*KN
@@ -184,25 +182,20 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names =
-                    {"Mt",
-                     "Kt",
-                     "Nt",
-                     "MtKt",
-                     "KtNt",
-                     "batch",
-                     "bcast_B",
-                     "output_tile_start_id",
-                     "num_output_tiles",
-                     "MtNt"},
+                .runtime_arg_names = {"output_tile_start_id", "num_output_tiles"},
+                // Node-invariant: every core reads the whole matmul shape, so these are declared once
+                // per kernel rather than duplicated per core.
+                .common_runtime_arg_names = {"Mt", "Kt", "Nt", "MtKt", "KtNt", "batch", "bcast_B", "MtNt"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
-    // Writer kernel
     KernelSpec writer{
         .unique_id = WRITER,
-        .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        .source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+            "writer_unary_interleaved_start_id_metal2.cpp",
         .dfb_bindings =
             {
                 DFBBinding{
@@ -215,21 +208,33 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
             {
                 TensorBinding{
                     .tensor_parameter_name = OUTPUT,
-                    .accessor_name = "output",
+                    .accessor_name = "dst",
                 },
             },
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Per-node runtime args for reader and writer
     KernelRunArgs reader_run_args{.kernel = READER};
+    reader_run_args.common_runtime_arg_values = {
+        {"Mt", Mt},
+        {"Kt", Kt},
+        {"Nt", Nt},
+        {"MtKt", MtKt},
+        {"KtNt", KtNt},
+        {"batch", B},
+        {"bcast_B", uint32_t(bcast_batch)},
+        {"MtNt", MtNt},
+    };
     KernelRunArgs writer_run_args{.kernel = WRITER};
+    const auto cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/false);
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        const CoreCoord& core = cores[i];
 
         uint32_t num_output_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
@@ -242,16 +247,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
-            {{"Mt", Mt},
-             {"Kt", Kt},
-             {"Nt", Nt},
-             {"MtKt", MtKt},
-             {"KtNt", KtNt},
-             {"batch", B},
-             {"bcast_B", uint32_t(bcast_batch)},
-             {"output_tile_start_id", num_tiles_written},
-             {"num_output_tiles", num_output_tiles_per_core},
-             {"MtNt", MtNt}});
+            {{"output_tile_start_id", num_tiles_written}, {"num_output_tiles", num_output_tiles_per_core}});
         AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,
@@ -266,32 +262,24 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
-    // Compute kernel(s) — one per core group with different tile counts
+    // Compute kernel(s) — one per core group with different tile counts.
+    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+    unpack_modes(compute_hw) = {
+        {IN0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
+        {IN1_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
+    };
+    const KernelSpec::CompilerOptions compute_compiler_options{
+        .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
+        .opt_level = KernelBuildOptLevel::O3,
+    };
+
     // bmm compute kernel: B, Mt, Nt are just 3 for loops that act as 1 large loop,
     // so only set Nt for simplicity
     auto make_compute = [&](KernelSpecName unique_id, uint32_t num_output_tiles_per_core_group) {
-        auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
-        // The legacy ComputeConfigDescriptor set no unpack_to_dest_mode vector, so every buffer took
-        // UnpackToDestMode::Default -- the SrcA/B path, which is UnpackMode::UnpackToSrc. Stated
-        // explicitly rather than left implicit because a compute kernel that consumes an FP32
-        // dataflow buffer with a 32-bit Dest register must make the choice explicit, and that is
-        // exactly this kernel whenever the inputs are FP32 and fp32_dest_acc_en is set. The value is
-        // the legacy one, so the lowered per-buffer vector is unchanged.
-        unpack_modes(compute_hw) = {
-            {IN0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
-            {IN1_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
-        };
         return KernelSpec{
             .unique_id = std::move(unique_id),
             .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_metal2.cpp",
-            // Legacy ComputeConfigDescriptor defaults opt_level to O3; Metal 2.0's
-            // type-agnostic CompilerOptions defaults to O2, so a compute kernel must say O3
-            // explicitly or it silently drops a level.
-            .compiler_options =
-                {
-                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
-                    .opt_level = KernelBuildOptLevel::O3,
-                },
+            .compiler_options = compute_compiler_options,
             .dfb_bindings =
                 {
                     DFBBinding{
@@ -317,20 +305,18 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
                     {"Kt", Kt},
                     {"Nt", num_output_tiles_per_core_group},
                 },
-            .hw_config = std::move(compute_hw),
+            .hw_config = compute_hw,
         };
     };
 
     const bool has_core_group_2 = !core_group_2.ranges().empty();
 
     Group<KernelSpec> kernels;
-    kernels.reserve(has_core_group_2 ? 4 : 3);
     kernels.push_back(std::move(reader));
     kernels.push_back(std::move(writer));
     kernels.push_back(make_compute(COMPUTE_G1, num_output_tiles_per_core_group_1));
 
     Group<WorkUnitSpec> work_units;
-    work_units.reserve(has_core_group_2 ? 2 : 1);
     work_units.push_back(WorkUnitSpec{
         .name = "core_group_1",
         .kernels = {READER, WRITER, COMPUTE_G1},
@@ -360,7 +346,6 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
     };
 
     ProgramRunArgs run_args;
-    run_args.kernel_run_args.reserve(2);
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
     run_args.kernel_run_args.push_back(std::move(writer_run_args));
     run_args.tensor_args = {

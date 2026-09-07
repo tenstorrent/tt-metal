@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,6 @@
 
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
@@ -21,9 +20,6 @@ using std::uint32_t;
 //
 void kernel_main() {
     constexpr int onetile = 1;
-
-    int dst_tile_index = 0;
-    int in0_block_tile_index = 0;
 
     uint32_t batch = get_arg(args::batch);
     uint32_t Mt = get_arg(args::Mt);

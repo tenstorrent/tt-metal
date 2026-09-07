@@ -17,8 +17,6 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // Argument names follow the legacy positional order this kernel shared with
-    // reader_binary_diff_lengths for compat.
     uint32_t Mt = get_arg(args::Mt);
     uint32_t Kt = get_arg(args::Kt);
     uint32_t Nt = get_arg(args::Nt);
@@ -34,7 +32,6 @@ void kernel_main() {
     constexpr uint32_t in0_last_ktile_h = get_arg(args::in0_last_ktile_h);
 
     // DPRINT("Mt={} Kt={} Nt={} MtKt={} KtNt={}\n", Mt, Kt, Nt, MtKt, KtNt);
-    // DPRINT("src0={} src1={}\n", src0_addr, src1_addr);
     // DPRINT("batch={}\n", batch);
 
     DataflowBuffer dfb_in0(dfb::in0);
