@@ -585,7 +585,7 @@ def test_topk_large_indices_valid_length_program_cache_reuse_while_growing(devic
     device.clear_program_cache()
     try:
         entries = []
-        for valid_length in (31 * k, 32 * k, 32 * k + 17, 33 * k, n):
+        for valid_length in (31 * k, 32 * k, 32 * k + 17, 33 * k, n, n, 32 * k, 31 * k):
             tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length)
             entries.append(device.num_program_cache_entries())
 
@@ -597,6 +597,31 @@ def test_topk_large_indices_valid_length_program_cache_reuse_while_growing(devic
 
         assert entries[0] > 0
         assert max(entries) == min(entries)  # no recompile as valid_length grew
+    finally:
+        device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize("k", [512, 1024, 2048])
+def test_topk_large_indices_cached_runtime_shape_changes(device, k):
+    # Same rows with a new stride; shrinking/repeated prefixes; then changed row counts.
+    cases = [(2, 3072, 2048), (2, 4096, 3072), (2, 4096, 2048), (2, 4096, 2048), (3, 3072, 2048), (2, 3072, None)]
+    inputs = []
+    for step, (rows, width, valid_length) in enumerate(cases):
+        values = _make_bf16_exact_input(rows, width)
+        # Fresh buffers and different winners expose stale address or schedule updates.
+        values = torch.roll(values, shifts=137 * step, dims=-1)
+        inputs.append((values, _to_device(values, device), valid_length))
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        entries = []
+        for values, tt_input, valid_length in inputs:
+            tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length)
+            entries.append(device.num_program_cache_entries())
+            _assert_topk_matches_torch(values[:, :valid_length], tt_indices, k)
+        assert entries[0] > 0
+        assert max(entries) == min(entries)
     finally:
         device.disable_and_clear_program_cache()
 
@@ -727,6 +752,8 @@ def test_topk_large_indices_rejects_offset_without_metadata(device, expect_error
 
 
 def test_topk_large_indices_metadata_trace_replay(device):
+    # Earlier cache-reuse tests disable caching on this module-scoped device.
+    device.enable_program_cache()
     num_rows, n, k = 2, 4096, 1024
     bounds = [1024, 2048, 1536, 4096]
     torch_input = _make_bf16_exact_input(num_rows, n)
