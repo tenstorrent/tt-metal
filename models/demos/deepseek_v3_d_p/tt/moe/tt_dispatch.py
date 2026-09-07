@@ -253,19 +253,22 @@ class TtDispatchModule(LightweightModule):
                 are dispatched, with fields 3.. holding the per-128-block fp32 scale tail.
                 Used by TtCombineModule to route processed tokens back to their origin.
         """
-        logger.debug(f"[TtDispatchModule.forward] INPUT SHAPES:")
-        logger.debug(f"  x.shape={x.shape}")
-        logger.debug(f"  weights.shape={weights.shape}")
-        logger.debug(f"  indices.shape={indices.shape}")
-        logger.debug(f"  tt_expert_offsets.shape={tt_expert_offsets.shape}")
-        logger.debug(f"  tt_expert_dispatch_table.shape={tt_expert_dispatch_table.shape}")
-        logger.debug(f"[TtDispatchModule.forward] CONFIG:")
-        logger.debug(f"  dispatch_group_size={self.dispatch_group_size}, experts_per_chip={self.experts_per_chip}")
-        logger.debug(f"  num_routed_experts={self.num_routed_experts}, num_experts_per_tok={self.num_experts_per_tok}")
-        logger.debug(
-            f"  metadata_len={self.metadata_len}, max_dispatch_buffer_token_size={self.max_dispatch_buffer_token_size}"
+        logger.opt(lazy=True).debug(
+            "{}",
+            lambda: (
+                "[TtDispatchModule.forward] INPUT SHAPES:\n"
+                f"  x.shape={x.shape}\n"
+                f"  weights.shape={weights.shape}\n"
+                f"  indices.shape={indices.shape}\n"
+                f"  tt_expert_offsets.shape={tt_expert_offsets.shape}\n"
+                f"  tt_expert_dispatch_table.shape={tt_expert_dispatch_table.shape}\n"
+                "[TtDispatchModule.forward] CONFIG:\n"
+                f"  dispatch_group_size={self.dispatch_group_size}, experts_per_chip={self.experts_per_chip}\n"
+                f"  num_routed_experts={self.num_routed_experts}, num_experts_per_tok={self.num_experts_per_tok}\n"
+                f"  metadata_len={self.metadata_len}, max_dispatch_buffer_token_size={self.max_dispatch_buffer_token_size}\n"
+                f"  cluster_axis={self.cluster_axis}, num_links={self.num_links}, topology={self.topology}"
+            ),
         )
-        logger.debug(f"  cluster_axis={self.cluster_axis}, num_links={self.num_links}, topology={self.topology}")
 
         (
             tt_dispatched_buffer,
@@ -292,10 +295,13 @@ class TtDispatchModule(LightweightModule):
             num_workers_per_sender=self.num_workers_per_sender,
         )
 
-        tt_dispatched_buffer_shape = tt_dispatched_buffer.shape
-        tt_dispatched_metadata_shape = tt_dispatch_metadata.shape
-        logger.debug(f"[TtDispatchModule.forward] OUTPUT SHAPES:")
-        logger.debug(f"  tt_dispatched_buffer.shape={tt_dispatched_buffer_shape}")
-        logger.debug(f"  tt_dispatch_metadata.shape={tt_dispatched_metadata_shape}")
+        logger.opt(lazy=True).debug(
+            "{}",
+            lambda: (
+                "[TtDispatchModule.forward] OUTPUT SHAPES:\n"
+                f"  tt_dispatched_buffer.shape={tt_dispatched_buffer.shape}\n"
+                f"  tt_dispatch_metadata.shape={tt_dispatch_metadata.shape}"
+            ),
+        )
 
         return (tt_dispatched_buffer, tt_dispatch_metadata)
