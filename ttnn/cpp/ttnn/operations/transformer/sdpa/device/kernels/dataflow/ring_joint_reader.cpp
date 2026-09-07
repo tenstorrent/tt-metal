@@ -469,7 +469,7 @@ void kernel_main() {
 
     // Rotated per-ring-iteration Q distribution. Chunk-LIST LENGTH per iteration (base chunks plus
     // one float slot), or 0 when the host declined the rotation. Per ring iteration the factory
-    // appends [row_slot_count, my_count, chunk ids x rotated_max_slots] at this fixed stride; when
+    // appends [group_slot_count, my_count, chunk ids x rotated_max_slots] at this fixed stride; when
     // enabled, the static global_q_start/global_q_end range is superseded entirely.
     // The factory pushes rotated_max_slots as the final compile-time arg of every kernel, so
     // read it from there rather than tracking a per-kernel index into the block above.
@@ -759,9 +759,11 @@ void kernel_main() {
             }
         }
 
-        // Rotated: the factory precomputes this row's mcast slot count per ring iteration (its row
-        // max, so members with less real work still run the padded handshakes), superseding the
-        // static per-chain maxima. Indexed by ACTIVE ordinal -- see rotated_active_ordinal.
+        // Rotated: the factory precomputes this lockstep GROUP's mcast slot count per ring iteration
+        // (the group max, so members with less real work still run the padded handshakes),
+        // superseding the static per-chain maxima -- both max_q_per_core (shared-K) and
+        // gqa_max_q_per_core (GQA), which is why this branch needs no per-family case.
+        // Indexed by ACTIVE ordinal -- see rotated_active_ordinal.
         // Static: when K/V mcast is enabled, loop the per-chain max so receivers with less real Q
         // work still participate in padded multicast handshakes without pushing visible data.
         uint32_t loop_q_count;
