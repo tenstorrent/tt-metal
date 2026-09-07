@@ -37,7 +37,7 @@ python -m tracy --perf-counter-multipass --profiler-capture-perf-counters=all \
 
 With `--perf-counter-multipass` a request is split into passes (at most three groups and one L1 bank per pass) and `all` expands to the architecture's full group set.
 
-Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`; `all` expands to the running architecture's full set.
+Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`, `l1_5`; `all` expands to the running architecture's full set.
 
 Two limits force a request like `all` into several capture passes: the BRISC firmware image only fits the readout code for 3 counter groups, and the L1 banks share one count-time mux, so at most one L1 bank can count per run. `python -m tracy` schedules the passes automatically. A request that fits one pass runs once, exactly as before; a request that does not stops with the printed pass plan unless `--perf-counter-multipass` is given, in which case the workload is replayed once per pass and the per-pass device logs are merged. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for details.
 
@@ -53,9 +53,10 @@ Two limits force a request like `all` into several capture passes: the BRISC fir
 | `1 << 3` | 8 | L1 bank 0 (ring0 NOC, L1 arbitration) |
 | `1 << 4` | 16 | L1 bank 1 (ring1 NOC, TDMA extended) |
 | `1 << 5` | 32 | INSTRN (instruction thread) |
-| `1 << 6` | 64 | L1 bank 2 (BH only: NOC Ring 2) |
-| `1 << 7` | 128 | L1 bank 3 (BH only: NOC Ring 3) |
-| `1 << 8` | 256 | L1 bank 4 (BH only: misc ports) |
+| `1 << 6` | 64 | L1 bank 2 (BH only: extended unpackers 4-7, ring0 NOC ports 2-3) |
+| `1 << 7` | 128 | L1 bank 3 (BH only: ring1 NOC ports 2-3, extended packers 2-5) |
+| `1 << 8` | 256 | L1 bank 4 (BH only: extended packers 6-7, tag search, extended unpackers 8-12) |
+| `1 << 9` | 512 | L1 bank 5 (BH only: extended unpackers 13-14; the mux wires only two slots here) |
 
 The env-var path selects one pass directly, so keep it to at most 3 groups: the BRISC firmware image only fits the readout code for 3, and a larger mask overflows its `.text` section (measured on Blackhole). Example single-pass capture:
 
@@ -69,7 +70,7 @@ export TT_METAL_PROFILE_PERF_COUNTERS=11   # FPU | PACK | L1 bank 0
 
 | | Wormhole | Blackhole |
 |---|---|---|
-| Tensix counters read | 135 | 154 |
+| Tensix counters read (sum of the per-group tables) | 130 | 173 |
 
 The derived-metric catalogue (106 metrics, below) is shared between architectures; a metric whose counters exist on only one architecture reports N/A on the other.
 
