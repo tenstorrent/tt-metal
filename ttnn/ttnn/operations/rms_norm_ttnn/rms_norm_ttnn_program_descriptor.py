@@ -903,6 +903,70 @@ is priced in l1_ledger.md's "Deviations" table with its measurement:
       pure arbitration spread) where the lazy fill issues the identical reads into
       the hole where the reader is already blocked on pass B.  1,101,601 -> 1,048,060 ns.
 
+  D40 Perf 2 (perf) -- THE PER-CHANNEL BROADCAST.  Closes the Blocking Model's
+      deferred `GAMMA_MCAST` regime row.  `weight` / `bias` do not vary along the
+      ROW axis, so every core owning the same width slice reads the IDENTICAL DRAM
+      bytes.  On the focus shape that is ALL 110 cores hitting the SAME 72 gamma
+      pages -- 144 x 64-byte reads each (D23's TRIM) against a 72-page working set,
+      a hot-bank storm that moves 1.0 MB of real traffic for 16,138 ns, 8.4% of the
+      op, at ~63 GB/s effective (~7x off the op's own payload rate).
+      `reader_read_gamma` profiles at 67,563 ns/core MEAN and 158,451 ns MAX -- a
+      2.3x spread that is pure DRAM arbitration.  One injector per grid ROW now
+      reads the block and multicasts it (`SenderPipe` / `ReceiverPipe` over
+      `ttnn.Mcast1D(PerRow)`).  MEASURED, blackhole p150b, whole-op:
+          FOCUS (1,1,8192,2304) INT gamma        192,455 -> 179,342 ns   1.073x
+          (1,1,8192,2304) INT gamma+bias         213,759 -> 194,924      1.097x
+          (1,1,8192,5120) INT gbr fp32_dest      649,237 -> 608,816      1.066x
+          (1,1,8192,7168) INT gamma              575,877 -> 557,880      1.032x
+          (1,1,8192,1024) INT gamma               86,541 ->  84,906      1.019x
+      The focus number is 1.9% off the no-operand ABLATION (176,013 ns), i.e. this
+      recovers ~73% of the operand's entire whole-op cost.
+      FOUR decisions, each measured, none inherited:
+        * ROW lines, not COLUMN lines.  Perf 1's ancestor used columns; under the
+          deferred wait columns REGRESS (0.968-0.988x), and on the STREAM geometry
+          a column engages 0 of 11 lines because it mixes 2-block and 3-block cores.
+        * DEFER the receiver's wait past its first row-block of x (`PC_MCAST_LATE`).
+          This is where the win lives, not in the transport: row eager is 1.005x,
+          row deferred 1.059x.  The stage is a prologue with an empty pipeline
+          behind it, so a receiver blocking on the broadcast idles its own x stream.
+          Only expressible at NUM_W_CHUNKS == 1, so the host clears the bit
+          otherwise and those plans take the eager form -- which still wins
+          (1.097x / 1.066x above).
+        * Keep D23's trim ON THE INJECTOR.  Whole-tile injector reads lose once the
+          wait is deferred (182,700 vs 181,683 ns focus; 1,502k vs 1,450k STREAM).
+        * Do NOT split the read across N injectors.  11 injectors is 204,884 vs
+          192,455 ns, and `one` (1 injector reading all 72 tiles) TIES `col` (11
+          injectors each reading all 72) -- so the injector's serial DRAM read is
+          not the limiter, and N concurrent broadcasts only add N x the ack fan-out.
+      ENGAGEMENT IS PER LINE, not per program: a line whose members disagree on
+      (w_start, w_real, block count) takes the pre-D40 per-core read (role OPT_OUT)
+      and costs the other lines nothing.  On the STREAM case 9 of 10 grid rows
+      engage and 11 cores opt out, and that still yields 1.089x.
+      WHERE IT IS INERT, and why that is not a carve-out: on WIDTH / BLOCK shards
+      and on the one-tile-row interleaved decode a grid ROW's members own DISJOINT
+      width slices -- there is no reuse to remove -- so no line engages and the
+      program is the pre-D40 one, byte for byte.  Perf 1's measured BLOCK regression
+      therefore does not reproduce and is NOT carved out: BLOCK's reuse runs along
+      COLUMNS, and column geometry is the measured loser.  Leaving BLOCK on the
+      table is the trade.  Two hard exclusions: ROW_MAJOR per-channel operands (a
+      different staging-ring shape), and D39's COMPACT hold (its per-channel staging
+      is a local L1 expand -- there is no DRAM read left to broadcast; the compact
+      plan's boot FILL is broadcastable in principle and is left for a later round
+      rather than claimed).
+      THE OFF PATH IS PROVED IDENTICAL, not asserted -- and that proof is the whole
+      reason this graduated now and not in Perf 1.  Perf 1 measured its ancestor
+      regressing NON-ENGAGED plans 4-5% and could not attribute it.  The cause was
+      not the idea: `ttnn/ttnn/operations/__init__.py` `walk_packages()`-executes
+      every package under `operations/`, two `perf_experiments/` dirs set
+      `RMS_STAGE_ZONES=1` at module scope, and the shipped descriptor is imported
+      EARLIER in that walk than a forked one -- so the baseline compiled clean
+      kernels and the candidate compiled zone-instrumented ones.  The `__init__.py`
+      files are gone (see `perf_experiments/README.md`) and identity is now checked
+      two ways: `check_off_identity.py` preprocesses the reader and diffs (4/4 files
+      identical), and `check_off_descriptor.py` records every CB / semaphore /
+      kernel / runtime-arg call from both factories and diffs (9/9 cases, the
+      engaged mode landing on a non-engaged plan included).
+
 """
 
 from __future__ import annotations
@@ -915,6 +979,73 @@ from typing import NamedTuple
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
+
+# ===========================================================================
+# D40 (Perf 2) -- THE PER-CHANNEL BROADCAST.  See the D40 note in the module
+# docstring for the measurements behind every constant below.
+# ===========================================================================
+# `weight` / `bias` do not vary along the ROW axis, so every core owning the same
+# width slice reads the IDENTICAL DRAM bytes.  On the focus shape that is ALL 110
+# cores against the SAME 72 gamma pages -- a hot-bank storm moving 1.0 MB of real
+# traffic for 16,138 ns (8.4% of the op).  One injector per grid ROW reads it and
+# broadcasts the staged block instead.
+#
+# `None` is the OFF build and it is what every plan that is NOT a reuse group gets:
+# no extra CB, no extra semaphore, no extra runtime arg, no extra compile-time arg
+# and no `RMS_PC_MCAST` define, so the reader preprocesses to the pre-D40 text and
+# the descriptor is field-for-field the pre-D40 one.  Both halves of that are
+# PROVED, not asserted -- `perf_experiments/per_channel_mcast_v2/check_off_identity.py`
+# (preprocess-and-diff, 4/4 kernel files identical) and `check_off_descriptor.py`
+# (record every CB / semaphore / kernel / RT-arg call from both factories and diff,
+# 9/9 cases).  Perf 1 shipped this idea's ancestor un-graduated for exactly the lack
+# of that proof.
+#
+#   "col"    Mcast1D PerColumn -- one injector per grid column (Perf 1's geometry;
+#                                MEASURED LOSER under the deferred wait, 0.968-0.988x,
+#                                and it engages 0 of 11 lines on the STREAM case
+#                                because a column mixes 2-block and 3-block cores)
+#   "row"    Mcast1D PerRow    -- one injector per grid row.  THE SHIPPED CHOICE.
+#   "one"    Mcast2D           -- ONE injector for the whole rectangle (1.00-1.02x)
+#   "split"  Mcast2D rotating  -- PC_MCAST_SPLIT injectors each reading 1/N and
+#                                broadcasting its slice.  MEASURED LOSER: 11 injectors
+#                                is 204,884 vs 192,455 ns.  `one` (1 injector reading
+#                                all 72 tiles) TIES `col` (11 injectors each reading
+#                                all 72), so the injector's serial DRAM read is not
+#                                the limiter -- N concurrent broadcasts just add N x
+#                                the atomic-ack fan-out.
+PC_MCAST_MODE = "row"
+
+# The receiver-readiness PRE-HANDSHAKE.  There is no landing buffer to protect here:
+# the per-channel CBs are boot-filled once and never popped, so on every core the
+# landing pointer is the ring base from program start.  With the handshake off the
+# data-ready signal switches to the monotone Counter, whose `wait_min(n)` is correct
+# no matter which side reaches the cell first -- so the elision needs no ordering
+# argument at all.  The SPLIT mode REQUIRES this (its rounds complete out of order).
+PC_MCAST_HANDSHAKE = False
+
+# How many injectors split the chunk in "split" mode.
+PC_MCAST_SPLIT = 1
+
+# The INJECTOR's per-channel read granularity.  `None` keeps D23's trim; 0 makes the
+# injector fetch WHOLE tiles.  See the kernel-side comment on `pc_issue_slice_reads`.
+PC_MCAST_INJ_TRIM = None
+
+# DEFER the receiver's broadcast wait past its first activation read.  The per-channel
+# stage is a prologue with an empty pipeline behind it, so a receiver that blocks on the
+# broadcast is idling its own x stream; with this on it reserves, reads its first
+# row-block, and collects the broadcast afterwards.  Only expressible at
+# NUM_W_CHUNKS == 1 (where "the first activation read" is unambiguous), so the host
+# clears the bit otherwise rather than the kernel guessing.
+# MEASURED: row eager 1.005x, row DEFERRED 1.059x -- the deferral is where the
+# win actually lives, not the transport.
+PC_MCAST_LATE = True
+
+# Which core of a "col" / "row" LINE injects, and whether the choice STAGGERS from line
+# to line.  Index 0 is the line's first core (leftmost / topmost); a middle index halves
+# the worst-case broadcast distance; `Diagonal` advances the index per line so the
+# injectors do not all sit in one grid column and start their DRAM reads together.
+PC_MCAST_SENDER_INDEX = 0
+PC_MCAST_DIAGONAL = True  # ~0.5% on the focus shape, neutral on STREAM
 
 TILE_DIM = 32
 
@@ -1603,6 +1734,16 @@ def _writer_dm_config(plan):
         processor=ttnn.DataMovementProcessor.RISCV_0,
         noc=_combine_noc(plan.native_in),
     )
+
+
+def _reader_noc(plan):
+    """`per_channel_mcast_v2`: the NoC the READER kernel runs on.
+
+    The per-channel multicast rides the reader's own NoC, and `McastRect` orders the
+    broadcast bounding box from that NoC's routing corner, so the host wire must agree
+    with the kernel's NoC or the box would be walked from the wrong corner.
+    """
+    return ttnn.NOC.NOC_1 if _combine_noc_swapped(plan) else ttnn.NOC.NOC_0
 
 
 def _reader_dm_config(plan):
@@ -3681,6 +3822,134 @@ def create_program_descriptor(
         else partial_w != 0
     )
 
+    # ======================================================================
+    # D40 (Perf 2) -- the GAMMA_MCAST regime row of the Blocking Model, closed.
+    # ======================================================================
+    # PRECONDITIONS (all host-checkable; any failure falls back to the pre-D40
+    # per-core read and emits the pre-D40 program byte for byte):
+    #   * NOT a D39 COMPACT hold.  The two do not compose: with a compact hold the
+    #     per-channel staging is a LOCAL L1 expand out of the reader's own cache, so
+    #     there is no DRAM read left to broadcast and `stage_per_channel` issues no
+    #     NoC transaction for the mcast to replace.  The compact plan's own boot
+    #     FILL is broadcastable in principle and is left on the table (a round-3
+    #     follow-up), not claimed here.  The reader pins this with a static_assert.
+    #   * TILE per-channel operands -- the RM staging ring is a different shape
+    #   * X_RESIDENT -- the operands are staged ONCE per core at boot, so every
+    #     member of a group runs the same number of multicast rounds.  In STREAM the
+    #     round count is ceil(row_count / BLOCK_ROWS) * NUM_W_CHUNKS, which is
+    #     PER CORE, so a group would desync; see the STREAM note in the README.
+    #   * the core set is a FULL rectangle and every core in it is ACTIVE -- the
+    #     reader returns early on `num_rows == 0`, and an inactive receiver would
+    #     leave the landing box short of a core that never consumes its bytes
+    #   * (w_start, w_real) is CONSTANT inside each group, or the members do not
+    #     want the same bytes.  This is what makes the WIDTH / BLOCK shards inert
+    #     under "one" / "split": their cores own DISJOINT width slices, so there is
+    #     no reuse to remove and the build falls straight back.
+    pc_mcast = None
+    pc_role = {}
+    pc_n = 1
+    PC_OPT_OUT = 0xFFFFFFFF
+    pc_lines_on = 0
+    pc_lines = 0
+    if PC_MCAST_MODE is not None and (has_gamma or has_bias) and not per_channel_is_rm and not pc_compact:
+        cores = _cores_in(all_cores)
+        xs = sorted({c.x for c in cores})
+        ys = sorted({c.y for c in cores})
+        rect = (
+            len(cores) == len(xs) * len(ys)
+            and xs == list(range(xs[0], xs[-1] + 1))
+            and ys == list(range(ys[0], ys[-1] + 1))
+        )
+        act = {(a.core.x, a.core.y): a for a in assignment if a.row_count}
+        # `one` / `split` broadcast over the WHOLE rectangle, so they need one global
+        # group; `col` / `row` cut it into independent LINES and can engage them one at
+        # a time.  STREAM's round count is per core, which only a line can reconcile.
+        ok = rect and len(act) == len(cores) and (x_resident or PC_MCAST_MODE in ("col", "row"))
+        if ok:
+            if PC_MCAST_MODE == "col":
+                groups = [[(cx, cy) for cy in ys] for cx in xs]
+            elif PC_MCAST_MODE == "row":
+                groups = [[(cx, cy) for cx in xs] for cy in ys]
+            else:
+                groups = [[(cx, cy) for cy in ys for cx in xs]]
+
+            def _key(k):
+                a = act[k]
+                # A group's members must want the SAME BYTES and run the SAME NUMBER OF
+                # ROUNDS.  In the resident regimes the round count is NUM_W_CHUNKS on
+                # every core, so only the width slice matters; in STREAM it is
+                # ceil(row_count / BLOCK_ROWS) * NUM_W_CHUNKS, so the block count joins
+                # the key.  A group that fails either test takes the shipped per-core
+                # read (role = OPT_OUT) and costs the others nothing.
+                blocks = 0 if x_resident else -(-a.row_count // block_rows)
+                return (a.w_start, a.w_real, blocks)
+
+            live = [g for g in groups if len(g) > 1 and len({_key(k) for k in g}) == 1]
+            pc_lines, pc_lines_on = len(groups), len(live)
+            ok = pc_lines_on > 0
+        if ok:
+            base_sem = 0
+            if combine:
+                base_sem = plan.gather_sem_id + (1 if combine_tree is None else 2)
+            rotating = PC_MCAST_MODE == "split"
+            # THE HANDSHAKE IS NOT OPTIONAL IN STREAM.  The resident regimes may elide it
+            # because their per-channel CBs are boot-filled once and never popped, so the
+            # landing slot is provably idle.  In STREAM the CB is a ring the compute kernel
+            # pops, so a broadcast that arrives before the receiver has reserved would land
+            # on tiles still being read.
+            handshake = PC_MCAST_HANDSHAKE or not x_resident
+            cfg = ttnn.McastConfig(
+                noc=_reader_noc(plan),
+                handshake=handshake,
+                data_ready=(ttnn.McastDataReady.Flag if handshake else ttnn.McastDataReady.Counter),
+                base_sem_id=base_sem,
+                rotating_sender=rotating,
+            )
+            if PC_MCAST_MODE in ("col", "row"):
+                shape = ttnn.Mcast1DShape.PerColumn if PC_MCAST_MODE == "col" else ttnn.Mcast1DShape.PerRow
+                if PC_MCAST_DIAGONAL:
+                    pc_mcast = ttnn.Mcast1D(
+                        device,
+                        all_cores,
+                        shape,
+                        PC_MCAST_SENDER_INDEX,
+                        ttnn.Mcast1DSenderPlacement.Diagonal,
+                        cfg,
+                    )
+                else:
+                    pc_mcast = ttnn.Mcast1D(device, all_cores, shape, PC_MCAST_SENDER_INDEX, cfg)
+                on = {k for g in live for k in g}
+                pc_role = {
+                    (c.x, c.y): ((1 if pc_mcast.is_sender(c) else 0) if (c.x, c.y) in on else PC_OPT_OUT) for c in cores
+                }
+            elif PC_MCAST_MODE == "one":
+                pc_mcast = ttnn.Mcast2D(device, all_cores, cores[0], cfg)
+                pc_role = {(c.x, c.y): (1 if pc_mcast.is_sender(c) else 0) for c in cores}
+            else:
+                # SPLIT.  The injectors are spread EVENLY through the rectangle in
+                # (y, x) order -- the same order `Mcast2D::senders_from_grid_` sorts
+                # them into -- so slice i lands on rotating round i.  Spread and not
+                # "the first N": N adjacent injectors would hammer one NoC row and
+                # would all be far from the far corner of the box.
+                pc_n = min(int(PC_MCAST_SPLIT), len(cores), wt_chunk)
+                by_yx = sorted(cores, key=lambda c: (c.y, c.x))
+                pick = [by_yx[(i * len(by_yx)) // pc_n] for i in range(pc_n)]
+                sender_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in pick])
+                pc_mcast = ttnn.Mcast2D(device, all_cores, pick[0], cfg, 0, sender_grid)
+                order = {(c.x, c.y): i for i, c in enumerate(sorted(pick, key=lambda c: (c.y, c.x)))}
+                pc_role = {(c.x, c.y): (order.get((c.x, c.y), -1) + 1) for c in cores}
+    if os.environ.get("RMS_PC_TRACE"):
+        print(
+            f"PC_MCAST mode={PC_MCAST_MODE} engaged={pc_mcast is not None} "
+            f"cores={len(_cores_in(all_cores))} "
+            f"injectors={sum(1 for v in pc_role.values() if v not in (0, 0xFFFFFFFF))} "
+            f"optout={sum(1 for v in pc_role.values() if v == 0xFFFFFFFF)} "
+            f"lines={pc_lines_on}/{pc_lines} n={pc_n} "
+            f"wt_chunk={wt_chunk} num_w_chunks={num_w_chunks} x_resident={x_resident} "
+            f"pc_rm={per_channel_is_rm} combine={combine} handshake={PC_MCAST_HANDSHAKE}",
+            flush=True,
+        )
+
     # ---- reader -----------------------------------------------------------
     reader_ct_args = [
         1 if is_tile else 0,  # 0  IS_TILE
@@ -3736,6 +4005,15 @@ def create_program_descriptor(
     for tensor in (input_tensor, weight, bias, residual):
         args = ttnn.TensorAccessorArgs(tensor) if tensor is not None else ttnn.TensorAccessorArgs()
         reader_ct_args.extend(args.get_compile_time_args())
+    # `per_channel_mcast_v2`: appended ONLY when the multicast engages.  Round 1
+    # emitted these seven words unconditionally "so the offset chain is
+    # build-independent" and paid 4-5% for it on every plan that never engages.
+    if pc_mcast is not None:
+        inj_g = gamma_trim if PC_MCAST_INJ_TRIM is None else PC_MCAST_INJ_TRIM
+        inj_b = bias_trim if PC_MCAST_INJ_TRIM is None else PC_MCAST_INJ_TRIM
+        pc_late = 1 if (PC_MCAST_LATE and num_w_chunks == 1) else 0
+        reader_ct_args.append(pc_n | (int(inj_g) << 8) | (int(inj_b) << 16) | (pc_late << 24))
+        reader_ct_args.extend(pc_mcast.compile_time_args())
 
     # ---- writer -----------------------------------------------------------
     # The writer owns the whole cross-core combine (gather -> root -> mcast back):
@@ -3856,6 +4134,10 @@ def create_program_descriptor(
                 b_addr,
                 r_addr,
             ]
+            # `per_channel_mcast_v2`: 12 = this core's ROLE (0 = pure receiver,
+            # 1 + i = injector of slice i), 13.. = the multicast wire.  Appended
+            # ONLY on an engaged plan -- an off build ships the shipped 12-word block.
+            + ([pc_role.get((core.x, core.y), 0)] + list(pc_mcast.runtime_args(core)) if pc_mcast is not None else [])
         )
         writer_rt[core.x][core.y] = (
             [out_addr, w.row_start, w.row_count, w.w_start, 1 if w.is_root else 0, w.slot]
@@ -3868,7 +4150,9 @@ def create_program_descriptor(
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_ttnn_reader.cpp"),
         core_ranges=all_cores,
-        defines=_kernel_defines(),
+        # `per_channel_mcast_v2`: the ONE define that switches the multicast on.  The
+        # writer and compute kernels never see it, so their build keys are untouched.
+        defines=_kernel_defines() + ([("RMS_PC_MCAST", "1")] if pc_mcast is not None else []),
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt,
         config=_reader_dm_config(plan),  # NoC0, or NoC1 when the combine swaps
@@ -3897,6 +4181,9 @@ def create_program_descriptor(
             semaphores.append(
                 ttnn.SemaphoreDescriptor(id=plan.gather_sem_id + lvl, core_ranges=all_cores, initial_value=0)
             )
+
+    if pc_mcast is not None:
+        semaphores = semaphores + list(pc_mcast.owned_semaphores())
 
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
