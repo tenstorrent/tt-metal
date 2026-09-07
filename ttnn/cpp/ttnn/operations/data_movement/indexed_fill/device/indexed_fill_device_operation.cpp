@@ -119,38 +119,25 @@ void IndexedFillDeviceOperation::validate_on_program_cache_miss(
     require_interleaved_if_not_sharded(
         input_tensor_a.is_sharded(), input_tensor_a.memory_config().memory_layout(), "input_a");
 
-    // For WIDTH_SHARDED / BLOCK_SHARDED input_a the shard-local path requires the output to
-    // use the same sharding layout (same grid + same shard shape). INTERLEAVED or
-    // HEIGHT_SHARDED outputs are handled by the native / generic HEIGHT path.
+    // WIDTH_SHARDED / BLOCK_SHARDED input_a use the fast shard-local kernel only when
+    // is_shard_local_indexed_fill() agrees (same function create_program_artifacts() uses to
+    // pick the kernel). Any other combination -- dim != 0, DRAM sharding, an unsupported
+    // sharded input_b, uneven sharding, non-ROW_MAJOR orientation, etc. -- falls through to the
+    // generic TensorAccessor path instead, which has none of the preconditions checked below.
     if (input_tensor_a.is_sharded() &&
         (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
          input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED)) {
-        // Resolve the output memory config so that configs that omit shard_spec (relying on
-        // compute_output_specs() to derive one) are expanded before the comparison. This avoids
-        // incorrectly rejecting valid callers that pass a shard_spec-less MemoryConfig.
         const auto resolved_out = ttnn::operations::data_movement::indexed_fill::resolve_output_memory_config(
             input_tensor_a, input_tensor_a.padded_shape(), args.output_mem_config);
 
-        TT_FATAL(
-            resolved_out.is_sharded() && resolved_out.memory_layout() == input_tensor_a.memory_config().memory_layout(),
-            "indexed_fill: WIDTH_SHARDED / BLOCK_SHARDED input_a requires the output to have "
-            "the same sharding layout as input_a");
+        const bool will_use_shard_local =
+            args.dim == 0 && ttnn::operations::data_movement::indexed_fill::is_shard_local_indexed_fill(
+                                 input_tensor_a.tensor_spec(), input_tensor_b.tensor_spec(), resolved_out);
 
-        // If input_a has an explicit shard_spec, verify the grid and shape match. When input_a
-        // only has nd_shard_spec the detailed comparison is skipped.
-        const bool output_matches =
-            !input_tensor_a.memory_config().shard_spec().has_value() || !resolved_out.shard_spec().has_value() ||
-            (resolved_out.shard_spec()->grid == input_tensor_a.memory_config().shard_spec()->grid &&
-             resolved_out.shard_spec()->shape == input_tensor_a.memory_config().shard_spec()->shape);
-        TT_FATAL(
-            output_matches,
-            "indexed_fill: WIDTH_SHARDED / BLOCK_SHARDED input_a requires the output to have "
-            "the same shard grid and shard shape as input_a");
-
-        // For BLOCK_SHARDED the shard-local kernel divides batches evenly across shard rows
-        // (total_batches_per_core = B / n_y). Require B to be divisible by n_y so no batch
-        // is silently skipped.
-        if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+        // BLOCK_SHARDED divides batches evenly across shard rows (B / n_y); this precondition
+        // isn't checked by is_shard_local_indexed_fill itself, so verify it here.
+        if (will_use_shard_local &&
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
             input_tensor_a.memory_config().shard_spec().has_value()) {
             const uint32_t n_y = input_tensor_a.memory_config().shard_spec()->grid.bounding_box().grid_size().y;
             TT_FATAL(
@@ -160,15 +147,6 @@ void IndexedFillDeviceOperation::validate_on_program_cache_miss(
                 input_tensor_a_shape[0],
                 n_y);
         }
-
-        // The shard-local kernel assumes even sharding (shard_ppb is uniform across all cores).
-        // Uneven sharding would cause the last core to process a different number of pages,
-        // producing wrong results.  Reject early with a clear message.
-        TT_FATAL(
-            !ttnn::operations::data_movement::indexed_fill::is_uneven(input_tensor_a.tensor_spec()),
-            "indexed_fill: WIDTH_SHARDED / BLOCK_SHARDED input_a must have even sharding "
-            "(shard shape must divide the padded tensor shape evenly); "
-            "the shard shape or tensor shape must be adjusted to make sharding even");
     }
 
     require_interleaved_if_not_sharded(
