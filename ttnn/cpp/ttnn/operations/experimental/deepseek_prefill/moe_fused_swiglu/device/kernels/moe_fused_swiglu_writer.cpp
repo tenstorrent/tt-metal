@@ -124,6 +124,7 @@ inline bool h_round_on_writer(uint32_t r) { return ((H_ROUND_NOC1_MASK >> r) & 1
 // A complete writer-owned round.  Payload, linked flag, flush and the rotating-sender local reset
 // all stay on this RISC/NoC, which is the ownership boundary the earlier byte-wise split violated.
 inline void h_slot_send_posted_noc1(uint32_t slot, uint32_t l1, uint32_t size) {
+    Noc noc;
     const auto hrect = moe_fused_swiglu::McastRect<noc_index>(
         get_arg_val<uint32_t>(RT_HRECT + 0),
         get_arg_val<uint32_t>(RT_HRECT + 1),
@@ -131,8 +132,7 @@ inline void h_slot_send_posted_noc1(uint32_t slot, uint32_t l1, uint32_t size) {
         get_arg_val<uint32_t>(RT_HRECT + 3));
     const auto& rb = hrect.bounds();
     constexpr uint32_t ndest = NUM_CORES - 1;
-    const uint32_t hf_addr = static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + slot));
-    volatile tt_l1_ptr uint32_t* hf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hf_addr);
+    Semaphore<> hf(SEM_H_RDY_BASE + slot);
 
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc_index,
@@ -146,11 +146,10 @@ inline void h_slot_send_posted_noc1(uint32_t slot, uint32_t l1, uint32_t size) {
         ndest,
         /*multicast_path_reserve=*/true,
         /*posted=*/kHMcastPosted);
-    noc_semaphore_set(hf, VALID);
-    noc_semaphore_set_multicast(
-        hf_addr, get_noc_multicast_addr(rb.sx, rb.sy, rb.ex, rb.ey, hf_addr), ndest, /*linked=*/false);
-    noc_async_writes_flushed();
-    noc_semaphore_set(hf, INVALID);
+    hf.set(VALID);
+    hf.set_multicast(noc, rb.sx, rb.sy, rb.ex, rb.ey, ndest, /*linked=*/false);
+    noc.async_writes_flushed();
+    hf.set(INVALID);
 }
 
 // The accessor block follows the scalar block; CT_COUNT is its length.
@@ -176,6 +175,9 @@ using BRG = moe_fused_swiglu::WeightRuns<WG_SHARD_W>;
 // old and new numbers stay comparable; give any new fast path its own zone.
 
 void kernel_main() {
+    // Bound to this kernel's noc_index (NOC_1). The raw ncrisc_* multicasts below pass the same
+    // noc_index explicitly, so every transaction this kernel issues rides one NoC.
+    Noc noc;
     // Device-2.0 CircularBuffer views over the same compile-time ids. A view only wraps the index,
     // so constructing them costs no L1 access and changes no ordering -- the free-function calls
     // below become methods on these.
@@ -216,10 +218,8 @@ void kernel_main() {
     // exactly HGROUPS K-blocks, so K-block r lives at `base + r * WD_BLOCK_TILES * W_TILE`.
     const uint32_t wd_base = wd_buf.get_write_ptr();
 
-    volatile tt_l1_ptr uint32_t* sem_go_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_GO)));
-    volatile tt_l1_ptr uint32_t* phase_free_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_PHASE_FREE)));
+    Semaphore<> sem_go(SEM_GO);
+    Semaphore<> phase_free(SEM_PHASE_FREE);
     uint32_t invites = 0;
     // The reader's running totals, mirrored here. Every one is advanced on the blocks the READER
     // advances it on, so the two kernels agree without a second channel.
@@ -315,7 +315,7 @@ void kernel_main() {
                 // reader invite peers to overwrite the same SRAM through cb_gather_gate. The value is
                 // the next block index and is monotone, like every other same-core publication here.
                 if constexpr (PHASE_CB_ALIAS) {
-                    *phase_free_ptr = gb;
+                    phase_free.set(gb);
                 }
             }
 
@@ -332,8 +332,7 @@ void kernel_main() {
                 // blocked on. Intra-core: an L1 poll, no NoC traffic. Never entered when m_blocks == 0,
                 // so the zero-count dispatch still cannot hang.
                 if constexpr (XPRIO) {
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_XSTAGED)), gb + 1);
+                    Semaphore<>(SEM_XSTAGED).wait_min(gb + 1);
                 }
                 for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
                     wu_buf.reserve_back(WU_CHUNK_TILES);
@@ -367,10 +366,9 @@ void kernel_main() {
                 // two RISC-Vs on the SAME core sharing one L1, and this word has exactly one writer.
                 // It counts K-BLOCKS COMPLETED SINCE THE START OF THE OP, so it is monotone across
                 // M-blocks and needs no reset — the same discipline as every other counter in this op.
-                volatile tt_l1_ptr uint32_t* pub =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_WDSPLIT));
+                Semaphore<> pub(SEM_WDSPLIT);
                 if (!((b == 0) || (WD_RESIDENT == 0))) {
-                    *pub = (gb + 1) * HGROUPS;  // resident: nothing to read, the bytes are already there
+                    pub.set((gb + 1) * HGROUPS);  // resident: nothing to read, the bytes are already there
                     return;
                 }
                 for (uint32_t r = 0; r < HGROUPS; ++r) {
@@ -399,7 +397,7 @@ void kernel_main() {
                 // the block it is about to push — worth +13 % at count 128.
                 for (uint32_t r = 0; r < HGROUPS; ++r) {
                     noc_async_read_barrier_with_trid(r + 1);
-                    *pub = gb * HGROUPS + r + 1;
+                    pub.set(gb * HGROUPS + r + 1);
                 }
             };
             issue_wd_share();
@@ -419,7 +417,7 @@ void kernel_main() {
                 // compute has not consumed yet. MONOTONE, never reset — the running total only grows.
                 {
                     MaybeDeviceZoneScope("writer_scatter_invite_wait");
-                    noc_semaphore_wait_min(sem_go_ptr, invites + KGROUPS);
+                    sem_go.wait_min(invites + KGROUPS);
                 }
                 invites += KGROUPS;
                 {
@@ -487,10 +485,7 @@ void kernel_main() {
                     // The full-M reduce gives row r exactly one HN_PAD-wide token tile-row in every
                     // hidden column.  Gather those eleven adjacent fragments horizontally onto the
                     // diagonal row aggregator, producing one contiguous HID_T-wide W_down operand.
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                            static_cast<uint32_t>(get_semaphore(SEM_HROW_FREE))),
-                        hrow_seq);
+                    Semaphore<>(SEM_HROW_FREE).wait_min(hrow_seq);
                     rvx = row_agg_vx;
                     rvy = row_agg_vy;
                     dst = h_local_buf.get_write_ptr() + hstart * H_TILE;
@@ -503,8 +498,8 @@ void kernel_main() {
                 }
                 noc_async_write(h_slice_buf.get_read_ptr(), get_noc_addr(rvx, rvy, dst), bytes);
                 noc_async_write_barrier();
-                noc_semaphore_inc(get_noc_addr(rvx, rvy, static_cast<uint32_t>(get_semaphore(SEM_HSLICE))), 1);
-                noc_async_atomic_barrier();
+                Semaphore<>(SEM_HSLICE).up(noc, rvx, rvy, 1);
+                noc.async_atomic_barrier();
                 h_slice_buf.pop_front(SLICE_FULL);
             }
 
