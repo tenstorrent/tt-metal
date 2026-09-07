@@ -99,17 +99,15 @@ def make_rope_gather_index_buffer(mesh_device, size: int) -> ttnn.Tensor:
     )
 
 
-def gather_rope_on_device_buffered(
-    mesh_device, idx_buffer: ttnn.Tensor, positions: list[int], cos_2d, sin_2d, head_dim: int
-):
-    """Same result as ``gather_rope_on_device``, but refreshes ``idx_buffer`` in place
-    (``copy_host_to_device_tensor``) instead of allocating a fresh index tensor, and
-    always gathers at the buffer's fixed full size before slicing down to
-    ``len(positions)`` -- a genuinely fixed-shape op every call, the form a Metal trace
-    can actually replay. ``len(positions)`` must be <= ``idx_buffer.shape[-1]``; the
-    padding slots (beyond the real positions) are filled by repeating the last real
-    position, which is harmless since the corresponding gathered rows are sliced away
-    before being returned."""
+def refresh_rope_gather_buffer(mesh_device, idx_buffer: ttnn.Tensor, positions: list[int]) -> None:
+    """Refresh ``idx_buffer`` in place (``copy_host_to_device_tensor``) with ``positions``
+    -- the host-side half of the buffered gather, split out from the device-side half
+    (``gather_rope_from_buffer`` below) so a trace can capture ONLY the gather (a pure
+    device op reading from the now-current buffer contents) while this refresh runs
+    eagerly before each replay, exactly like ``verify.py``'s
+    ``refresh_verify_positions``/``run_verify_forward`` split. ``len(positions)`` must be
+    <= ``idx_buffer.shape[-1]``; padding slots beyond the real positions are filled by
+    repeating the last real position (harmless -- see ``gather_rope_from_buffer``)."""
     max_size = idx_buffer.shape[-1]
     n = len(positions)
     assert n <= max_size, f"{n} positions don't fit in a size-{max_size} rope gather buffer"
@@ -122,9 +120,27 @@ def gather_rope_on_device_buffered(
         ttnn.from_torch(idx, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=mapper), idx_buffer
     )
 
+
+def gather_rope_from_buffer(idx_buffer: ttnn.Tensor, cos_2d, sin_2d, head_dim: int, n: int | None = None):
+    """Pure on-device gather from ``idx_buffer``'s CURRENT contents -- no host tensor
+    construction, no ``copy_host_to_device_tensor``, safe to capture inside a Metal
+    trace. Always gathers at the buffer's fixed full size; pass ``n < idx_buffer.shape[-1]``
+    to additionally slice down to just the first ``n`` (real) rows -- DFlash's own
+    steady-state usage never needs this (context+noise positions always exactly fill the
+    buffer), so the default (``n=None``, no slicing) is the trace-safe fixed-shape path."""
+    max_size = idx_buffer.shape[-1]
     cos = ttnn.unsqueeze_to_4D(ttnn.embedding(idx_buffer, cos_2d, layout=ttnn.TILE_LAYOUT))
     sin = ttnn.unsqueeze_to_4D(ttnn.embedding(idx_buffer, sin_2d, layout=ttnn.TILE_LAYOUT))
-    if n != max_size:
+    if n is not None and n != max_size:
         cos = ttnn.slice(cos, [0, 0, 0, 0], [1, 1, n, head_dim])
         sin = ttnn.slice(sin, [0, 0, 0, 0], [1, 1, n, head_dim])
     return cos, sin
+
+
+def gather_rope_on_device_buffered(
+    mesh_device, idx_buffer: ttnn.Tensor, positions: list[int], cos_2d, sin_2d, head_dim: int
+):
+    """Convenience wrapper combining ``refresh_rope_gather_buffer`` + ``gather_rope_from_buffer``
+    for eager (non-traced) callers -- same result as before this function was split."""
+    refresh_rope_gather_buffer(mesh_device, idx_buffer, positions)
+    return gather_rope_from_buffer(idx_buffer, cos_2d, sin_2d, head_dim, n=len(positions))

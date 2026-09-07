@@ -13,8 +13,9 @@ context tapping is only proven against that lower-level path so far (see
 docs/dflash_design.md's status section). This demo is a first real measurement, not yet
 the fully-optimized/traced production path spec-decode already has.
 
-Run with DFlash:    pytest models/demos/gemma4/demo/dflash_demo.py -k 1x8 -s
-Run without DFlash: GEMMA4_USE_DFLASH=0 pytest models/demos/gemma4/demo/dflash_demo.py -k 1x8 -s
+Run with DFlash (eager):   pytest models/demos/gemma4/demo/dflash_demo.py -k 1x8 -s
+Run with DFlash (traced):  GEMMA4_USE_TRACE=1 pytest models/demos/gemma4/demo/dflash_demo.py -k 1x8 -s
+Run without DFlash:        GEMMA4_USE_DFLASH=0 pytest models/demos/gemma4/demo/dflash_demo.py -k 1x8 -s
 """
 
 from __future__ import annotations
@@ -132,7 +133,7 @@ def _report(mode, ctx_len, output_ids, elapsed, acceptance_lengths, block_size, 
     }
 
 
-def _run_dflash(prompt, max_generated_tokens, mesh_device):
+def _run_dflash(prompt, max_generated_tokens, mesh_device, use_trace=False):
     model_path = _model_path()
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     input_ids, ctx_len = _prepare_prompt(prompt, tokenizer)
@@ -145,7 +146,8 @@ def _run_dflash(prompt, max_generated_tokens, mesh_device):
 
     model, tt_kv_cache, page_table = _make_target_model(mesh_device, model_path)
     input_ids_padded = torch.nn.functional.pad(input_ids.squeeze(0), (0, MAX_SEQ_LEN - ctx_len), value=0)
-    stop_token_ids = [tokenizer.eos_token_id] if tokenizer.eos_token_id is not None else None
+    stop_at_eos = os.environ.get("GEMMA4_DFLASH_STOP_AT_EOS", "1") == "1"
+    stop_token_ids = [tokenizer.eos_token_id] if stop_at_eos and tokenizer.eos_token_id is not None else None
 
     t0 = time.perf_counter()
     output_ids, acceptance_lengths = dflash_generate(
@@ -162,9 +164,11 @@ def _run_dflash(prompt, max_generated_tokens, mesh_device):
         ctx_len,
         max_generated_tokens,
         stop_token_ids=stop_token_ids,
+        use_trace=use_trace,
     )
     elapsed = time.perf_counter() - t0
-    return _report("DFLASH", ctx_len, output_ids, elapsed, acceptance_lengths, config.block_size, tokenizer)
+    mode = "DFLASH-TRACE" if use_trace else "DFLASH"
+    return _report(mode, ctx_len, output_ids, elapsed, acceptance_lengths, config.block_size, tokenizer)
 
 
 def _run_plain(prompt, max_generated_tokens, mesh_device):
@@ -200,7 +204,8 @@ def _run_plain(prompt, max_generated_tokens, mesh_device):
         torch.argmax(logits_torch.float().reshape(1, -1, logits_torch.shape[-1])[0, ctx_len - 1 - tile_start]).item()
     )
 
-    stop_tokens = {tokenizer.eos_token_id} if tokenizer.eos_token_id is not None else set()
+    stop_at_eos = os.environ.get("GEMMA4_DFLASH_STOP_AT_EOS", "1") == "1"
+    stop_tokens = {tokenizer.eos_token_id} if stop_at_eos and tokenizer.eos_token_id is not None else set()
     output_ids = [real_first_token]
     pos = ctx_len
     stopped = real_first_token in stop_tokens
@@ -244,9 +249,10 @@ def test_demo_dflash(mesh_device, device_params):
     prompt = os.environ.get("GEMMA4_DFLASH_PROMPT", DEFAULT_PROMPT)
     max_generated_tokens = int(os.environ.get("GEMMA4_DFLASH_MAX_NEW_TOKENS", 24))
     use_dflash = os.environ.get("GEMMA4_USE_DFLASH", "1") == "1"
+    use_trace = os.environ.get("GEMMA4_USE_TRACE", "0") == "1"
 
     if use_dflash:
-        metrics = _run_dflash(prompt, max_generated_tokens, mesh_device)
+        metrics = _run_dflash(prompt, max_generated_tokens, mesh_device, use_trace=use_trace)
     else:
         metrics = _run_plain(prompt, max_generated_tokens, mesh_device)
 

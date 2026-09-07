@@ -103,7 +103,18 @@ def build_attention_mask_additive_device_dynamic(
     ``context_valid_len_tt`` is an ON-DEVICE scalar tensor (``[1,1]`` int32), not a Python
     int -- its VALUE can differ every call without changing the mask's SHAPE, which is
     exactly what makes this trace-replay-compatible (a captured trace can't have its op
-    graph depend on a Python-int branch, but it CAN depend on a tensor's contents)."""
+    graph depend on a Python-int branch, but it CAN depend on a tensor's contents).
+
+    NOT trace-safe by itself: builds the static grids from scratch every call via
+    ``ttnn.arange``/``ones``/``zeros``/``full``, each of which does a host->device WRITE
+    internally (confirmed: ``creation.cpp``'s ``arange_impl``/``full_impl`` build a host
+    ``std::vector`` and upload it via ``Tensor::from_vector``) -- disallowed mid-capture
+    (``TT_FATAL: Writes are not supported during trace capture``). Eager (non-traced)
+    callers only. For the traced steady-state loop, use
+    ``build_attention_mask_static_parts`` (once, outside capture) +
+    ``combine_attention_mask_dynamic`` (inside the captured body, per replay) instead --
+    identical result, split so only the ``context_valid_len_tt``-dependent combine step
+    re-runs on every replay."""
     total = ctx_len + q_len
     query_position = ttnn.arange(total - q_len, total, 1, device=mesh_device, dtype=ttnn.int32)
     key_position = ttnn.arange(0, total, 1, device=mesh_device, dtype=ttnn.int32)
@@ -130,6 +141,78 @@ def build_attention_mask_additive_device_dynamic(
     zero = ttnn.zeros([q_len, total], dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
     neg = ttnn.full([q_len, total], fill_value=-1e4, dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
     mask = ttnn.where(visible, zero, neg)
+    return ttnn.unsqueeze_to_4D(ttnn.unsqueeze_to_4D(mask))  # [1,1,q_len,total]
+
+
+class DynamicMaskStaticParts:
+    """Everything about ``build_attention_mask_additive_device_dynamic`` that does NOT
+    depend on ``context_valid_len_tt``'s current value -- built ONCE (via
+    ``build_attention_mask_static_parts``) outside a trace capture, since ``ctx_len``,
+    ``q_len``, ``is_causal`` and ``sliding_window`` are all fixed for the whole steady-state
+    loop. Holds device tensors only (no host state), safe to reference from inside a
+    captured trace body."""
+
+    __slots__ = ("key_full", "visible_base", "is_noise_col", "zero", "neg", "q_len", "total")
+
+    def __init__(self, key_full, visible_base, is_noise_col, zero, neg, q_len, total):
+        self.key_full = key_full
+        self.visible_base = visible_base
+        self.is_noise_col = is_noise_col
+        self.zero = zero
+        self.neg = neg
+        self.q_len = q_len
+        self.total = total
+
+
+def build_attention_mask_static_parts(
+    mesh_device, ctx_len: int, q_len: int, is_causal: bool, sliding_window: int | None
+) -> DynamicMaskStaticParts:
+    """One-time setup (call OUTSIDE ``begin_trace_capture``): builds every piece of
+    ``build_attention_mask_additive_device_dynamic`` that's independent of
+    ``context_valid_len_tt``'s value -- the position grids, the causal/sliding base
+    visibility, the noise-column exemption, and the bf16 zero/neg constants. Uses
+    ``ttnn.arange``/``ones``/``zeros``/``full`` (host-write ops), which is fine here since
+    this runs once, before capture begins -- see ``combine_attention_mask_dynamic`` for the
+    per-replay half that's actually inside the trace."""
+    total = ctx_len + q_len
+    query_position = ttnn.arange(total - q_len, total, 1, device=mesh_device, dtype=ttnn.int32)
+    key_position = ttnn.arange(0, total, 1, device=mesh_device, dtype=ttnn.int32)
+    query_col = ttnn.reshape(query_position, [q_len, 1])
+    key_row = ttnn.reshape(key_position, [1, total])
+    query_full = ttnn.repeat(query_col, ttnn.Shape([1, total]))
+    key_full = ttnn.repeat(key_row, ttnn.Shape([q_len, 1]))
+
+    visible_base = ttnn.ones([q_len, total], dtype=ttnn.int32, device=mesh_device)
+    if is_causal:
+        visible_base = ttnn.logical_and(visible_base, ttnn.le(key_full, query_full))
+    if sliding_window is not None:
+        visible_base = ttnn.logical_and(visible_base, ttnn.lt(ttnn.subtract(query_full, key_full), sliding_window))
+        if not is_causal:
+            visible_base = ttnn.logical_and(visible_base, ttnn.lt(ttnn.subtract(key_full, query_full), sliding_window))
+
+    is_noise_col = ttnn.ge(key_full, ctx_len)  # noise columns are unaffected by context padding
+
+    zero = ttnn.zeros([q_len, total], dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
+    neg = ttnn.full([q_len, total], fill_value=-1e4, dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
+    return DynamicMaskStaticParts(key_full, visible_base, is_noise_col, zero, neg, q_len, total)
+
+
+def combine_attention_mask_dynamic(static: DynamicMaskStaticParts, context_valid_len_tt: ttnn.Tensor) -> ttnn.Tensor:
+    """The per-replay half: ONLY elementwise ops on already-existing device tensors
+    (``reshape``/``repeat``/``lt``/``logical_and``/``logical_or``/``where``/``typecast``/
+    ``to_layout``) -- no ``arange``/``ones``/``zeros``/``full``, so no host->device write,
+    safe to call from inside a captured trace body. Recomputes exactly the
+    ``context_valid_len_tt``-dependent part of
+    ``build_attention_mask_additive_device_dynamic``, using ``static``'s precomputed,
+    value-independent pieces for everything else. Confirmed bit-for-bit identical to that
+    function's output for the same inputs."""
+    q_len, total = static.q_len, static.total
+    valid_len_col = ttnn.repeat(ttnn.reshape(context_valid_len_tt, [1, 1]), ttnn.Shape([q_len, 1]))
+    valid_len_full = ttnn.repeat(valid_len_col, ttnn.Shape([1, total]))
+    is_valid_context_col = ttnn.lt(static.key_full, valid_len_full)
+    visible = ttnn.logical_and(static.visible_base, ttnn.logical_or(is_valid_context_col, static.is_noise_col))
+    visible = ttnn.to_layout(ttnn.typecast(visible, ttnn.bfloat16), ttnn.TILE_LAYOUT)
+    mask = ttnn.where(visible, static.zero, static.neg)
     return ttnn.unsqueeze_to_4D(ttnn.unsqueeze_to_4D(mask))  # [1,1,q_len,total]
 
 
