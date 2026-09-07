@@ -1,4 +1,5 @@
 import ast
+import tempfile
 import inspect
 import json
 from pathlib import Path
@@ -184,3 +185,48 @@ def test_decode_skips_unchanged_sampler_parameter_refresh():
     source = inspect.getsource(Qwen36ForCausalLM.decode_forward)
     assert "sampling_changed = sampling_key != self._sampling_contract_key" in source
     assert "refresh_sampling_params=sampling_changed" in source
+
+
+def test_default_snapshot_prefers_host_staged_weights():
+    """The autoport must accept weights the way tt-inference-server stages them.
+
+    run_vllm_api_server downloads with snapshot_download(local_dir=...) into a
+    flat CACHE_ROOT/weights/<name> directory and sets MODEL_WEIGHTS_DIR. That
+    path carries no revision, so a resolver that insists on the pinned revision
+    in the HF hub layout fails *after* the weights are successfully on disk --
+    which is exactly how CI run 34116873055 died.
+    """
+    import os
+    from pathlib import Path
+    from models.autoports.qwen_qwen3_6_27b.tt import functional_decoder as fd
+
+    saved = {k: os.environ.get(k) for k in ("MODEL_WEIGHTS_DIR", "CACHE_ROOT")}
+    with tempfile.TemporaryDirectory() as tmp:
+        staged = Path(tmp) / "staged"
+        staged.mkdir()
+        try:
+            # an incomplete directory must NOT be trusted: it looks non-empty
+            # but would fail later at load
+            os.environ["MODEL_WEIGHTS_DIR"] = str(staged)
+            os.environ.pop("CACHE_ROOT", None)
+            assert fd.default_snapshot() != staged
+
+            (staged / "model.safetensors.index.json").write_text("{}")
+            assert fd.default_snapshot() == staged
+
+            # CACHE_ROOT/weights/<name> is the fallback when the variable did
+            # not reach this process
+            os.environ.pop("MODEL_WEIGHTS_DIR")
+            root = Path(tmp) / "cache_root"
+            weights = root / "weights" / fd.MODEL_ID.split("/")[-1]
+            weights.mkdir(parents=True)
+            os.environ["CACHE_ROOT"] = str(root)
+            assert fd.default_snapshot() != weights
+            (weights / "model.safetensors.index.json").write_text("{}")
+            assert fd.default_snapshot() == weights
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value

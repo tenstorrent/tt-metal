@@ -46,18 +46,48 @@ REPRESENTATIVE_LAYERS = {"linear_attention": 0, "full_attention": 3}
 
 
 def default_snapshot():
-    """Local snapshot dir for MODEL_ID/MODEL_REVISION.
+    """Local weights directory for MODEL_ID, however the host staged them.
 
-    Ask ``huggingface_hub`` where the revision is actually cached rather than
-    reconstructing a path: it honours ``HF_HOME`` / ``HF_HUB_CACHE`` / the XDG
-    default, so this resolves on hosts whose cache is not at ``/huggingface/hub``.
-    ``local_files_only=True`` keeps a model load from silently fetching weights.
+    Resolution order matters, because tt-inference-server and a bare checkout
+    stage weights differently and the autoport has to satisfy both.
 
-    The constructed path remains as a fallback, so a host without
-    ``huggingface_hub`` behaves exactly as before. On the host this port was
-    validated on both paths agree.
+    1. ``MODEL_WEIGHTS_DIR``.  This is how tt-inference-server hands weights to
+       a model: ``run_vllm_api_server`` either finds it already bind-mounted, or
+       downloads with ``snapshot_download(local_dir=CACHE_ROOT/weights/<name>)``
+       and sets the variable itself.  That is a **flat** directory, not the HF
+       hub cache layout, and it carries no revision in its path -- the download
+       takes the repo's default revision.  Ignoring it is what made a CI run die
+       with ``FileNotFoundError: .../snapshots/<pinned-revision>/model.safetensors.index.json``
+       *after* the server had successfully downloaded the weights.
+    2. ``CACHE_ROOT/weights/<model name>`` directly, for the case where the
+       server staged weights but the variable did not reach this process.
+    3. The HF cache at ``MODEL_REVISION``.  This is the bare-checkout path and
+       the one the bring-up validated, so it stays exactly as it was.
+
+    Every candidate must contain ``model.safetensors.index.json``; a partially
+    downloaded directory looks non-empty but would fail later at load, and
+    falling through is better than trusting it.  ``local_files_only=True`` is
+    kept on the hub lookup so a model load still never silently fetches weights.
+
+    NOTE the revision pin only constrains step 3.  When the host stages weights,
+    what gets served is whatever revision the host downloaded, and ``MODEL_ID``
+    is the only thing tying it to this checkpoint.  Log lines in the caller
+    record which path won.
     """
     from pathlib import Path as _Path
+
+    def _usable(path):
+        return path.is_dir() and (path / "model.safetensors.index.json").is_file()
+
+    staged = os.environ.get("MODEL_WEIGHTS_DIR")
+    if staged and _usable(_Path(staged)):
+        return _Path(staged)
+
+    cache_root = os.environ.get("CACHE_ROOT")
+    if cache_root:
+        candidate = _Path(cache_root) / "weights" / MODEL_ID.split("/")[-1]
+        if _usable(candidate):
+            return candidate
 
     try:
         from huggingface_hub import snapshot_download
