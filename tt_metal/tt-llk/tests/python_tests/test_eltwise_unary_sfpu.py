@@ -1044,6 +1044,8 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
     # ISA semantics for that pair rather than a guess. Recorded as a non-strict xfail rather
     # than skipped so the case still *executes* and reports XPASS the moment it is fixed.
     #
+    # Tracked as tt-metal issue #55643. Drop this marker as part of fixing the kernel.
+    #
     # Nothing ships on this path: no Compute API entry point passes a negative integer
     # threshold (relu_tile_int32 passes 0, relu_min_tile_int32 routes to relu_clamp_int), and
     # the harness itself hard-coded 5u until this test parametrized it. Wormhole-scoped
@@ -1056,7 +1058,8 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
                 reason="Wormhole _relu_min_ vInt branch mishandles a negative threshold: the "
                 "sign+magnitude re-encoding wins every comparison and is stored raw "
                 "(threshold -5 returns 0x80000005). Unreached before this test; no shipping "
-                "op passes a negative integer threshold.",
+                "op passes a negative integer threshold. See tt-metal issue #55643, which "
+                "carries the measurements for both encodings.",
                 strict=False,
             )
         )
