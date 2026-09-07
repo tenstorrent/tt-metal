@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_RECURRENT_STATE_DTYPE,
     KDARecurrenceProgramConfig,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology
 
 
 def _group_summary_memory_config(device: ttnn.Device, group_heads: int, key_dim: int) -> ttnn.MemoryConfig:
@@ -220,9 +221,15 @@ def _distributed_affine_prefix(
     initial_state: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
+    topology: OffsetTopology,
     compute_config: ttnn.DeviceComputeKernelConfig,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Compose SP partition affine summaries and return entry/final carries."""
+    """Compose SP partition affine summaries and return entry/final carries.
+
+    Summaries compose in ``topology`` order, never physical rank order. At
+    ``actual_start=0`` the boundary chip is rank zero and the chronological order
+    is the identity, so this reduces exactly to the pre-offset behavior.
+    """
     shape = tuple(transform_a.shape)
 
     mesh_device = transform_a.device()
@@ -248,19 +255,21 @@ def _distributed_affine_prefix(
 
     carry = ttnn.to_memory_config(initial_state, working_memory)
     carry = ttnn.reshape(carry, (1, batch_heads, key_dim, value_dim))
-    entry_states = []
-    for rank in range(sp_size):
-        entry_states.append(carry)
+    entry_states: list[ttnn.Tensor | None] = [None] * sp_size
+    for chip in topology.chip_order:
+        # Stored by physical chip so mesh_partition still hands each device its own
+        # entry state, while the carry advances in chronological order.
+        entry_states[chip] = carry
         transported_rank_a = ttnn.slice(
             gathered,
-            (rank, 0, 0, 0),
-            (rank + 1, batch_heads, key_dim, key_dim),
+            (chip, 0, 0, 0),
+            (chip + 1, batch_heads, key_dim, key_dim),
             memory_config=working_memory,
         )
         transported_rank_b = ttnn.slice(
             gathered,
-            (rank, 0, 0, key_dim),
-            (rank + 1, batch_heads, key_dim, key_dim + value_dim),
+            (chip, 0, 0, key_dim),
+            (chip + 1, batch_heads, key_dim, key_dim + value_dim),
             memory_config=working_memory,
         )
         # Precision boundary: BF16 collective payload is restored for FP32 carry math.
@@ -321,6 +330,7 @@ def _scan_grouped_chunks(
     *,
     summary_group_chunks: int,
     sequence_parallel_axis: int | None,
+    topology: OffsetTopology | None,
     compute_config: _RecurrenceComputeConfig,
 ) -> _ScanResult:
     group_chunks = _effective_summary_group_chunks(geometry.num_chunks, summary_group_chunks)
@@ -338,6 +348,8 @@ def _scan_grouped_chunks(
     prefix_initial_state = initial_state
     prefix_memory_config = KDA_LOCAL_PREFIX_MEMORY_CONFIG
     if sequence_parallel_axis is not None:
+        if topology is None:
+            raise ValueError("sequence-parallel recurrence requires an offset topology")
         partition_a, partition_b = ttnn.experimental.kda.reduce_affine_transforms(
             summary_a,
             summary_b,
@@ -350,6 +362,7 @@ def _scan_grouped_chunks(
             partition_b,
             initial_state,
             sequence_parallel_axis=sequence_parallel_axis,
+            topology=topology,
             compute_config=compute_config.affine_prefix,
         )
         prefix_memory_config = KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG
@@ -423,8 +436,13 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
+        topology: OffsetTopology | None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Return ``(new_state, output)`` for directly named recurrence tensors."""
+        """Return ``(new_state, output)`` for directly named recurrence tensors.
+
+        ``topology`` carries the chronological SP segment order and is required
+        whenever sequence parallelism is enabled.
+        """
         geometry = _recurrence_geometry(q, v, beta)
 
         state = ttnn.reshape(
@@ -447,6 +465,7 @@ class KDARecurrence:
                 geometry,
                 summary_group_chunks=self._summary_group_chunks,
                 sequence_parallel_axis=self._sequence_parallel_axis,
+                topology=topology,
                 compute_config=self._compute_config,
             )
         else:
