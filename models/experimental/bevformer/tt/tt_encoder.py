@@ -75,9 +75,10 @@ class TTBEVFormerLayer:
         use_spatial_cross_attention: bool = True,
         feedforward_channels: int = 1024,
         batch_first: bool = True,
-        spatial_shapes=None,
-        bev_shape=None,
-        bev_reference_points=None,
+        *,
+        spatial_shapes,
+        bev_shape,
+        bev_reference_points,
         **kwargs,
     ):
         self.device = device
@@ -87,8 +88,6 @@ class TTBEVFormerLayer:
         self.use_spatial_cross_attention = use_spatial_cross_attention
         self.batch_first = batch_first
         self.feedforward_channels = feedforward_channels
-        self.spatial_shapes = spatial_shapes
-        self.bev_shape = bev_shape
         self.bev_reference_points = bev_reference_points
 
         # Temporal Self-Attention
@@ -172,7 +171,6 @@ class TTBEVFormerLayer:
             value=prev_bev,  # Use previous BEV as value for temporal context
             query_pos=bev_pos,
             reference_points=bev_reference_points,
-            spatial_shapes=self.bev_shape,
             **kwargs,
         )
 
@@ -199,7 +197,6 @@ class TTBEVFormerLayer:
             reference_points_cam=reference_points_cam,
             bev_mask=bev_mask,
             rebatch_plan=rebatch_plan,
-            spatial_shapes=self.spatial_shapes,
             level_start_index=level_start_index,
             **kwargs,
         )
@@ -327,7 +324,8 @@ class TTBEVFormerEncoder:
         z_cfg: Dict[str, Any] = None,
         bev_h: int = 30,
         bev_w: int = 30,
-        spatial_shapes=None,
+        *,
+        spatial_shapes,
         batch_size: int = 1,
         **kwargs,
     ):
@@ -344,8 +342,17 @@ class TTBEVFormerEncoder:
                 "end": pc_range[5],  # z_max
             }
 
-        if spatial_shapes is not None and not isinstance(spatial_shapes, torch.Tensor):
-            spatial_shapes = torch.tensor(spatial_shapes, dtype=torch.long)
+        if spatial_shapes is None:
+            raise ValueError("spatial_shapes is required")
+        if not isinstance(spatial_shapes, torch.Tensor):
+            spatial_shapes = torch.as_tensor(spatial_shapes)
+        if spatial_shapes.ndim != 2 or spatial_shapes.shape != (num_levels, 2):
+            raise ValueError(f"spatial_shapes must have shape [{num_levels}, 2], got {tuple(spatial_shapes.shape)}")
+        if spatial_shapes.dtype not in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8):
+            raise ValueError(f"spatial_shapes must contain integers, got {spatial_shapes.dtype}")
+        if torch.any(spatial_shapes <= 0):
+            raise ValueError(f"spatial_shapes dimensions must be positive, got {spatial_shapes.tolist()}")
+        spatial_shapes = spatial_shapes.to(dtype=torch.long).clone()
 
         self.num_layers = num_layers
         self.embed_dims = embed_dims
@@ -440,7 +447,7 @@ class TTBEVFormerEncoder:
         output = bev_query
         intermediate = []
 
-        # Get batch size and number of queries for reference point generation
+        # Validate runtime tensor dimensions against the configured model geometry.
         bs, num_queries, _ = bev_query.shape
         assert bs == self.batch_size, f"batch_size {bs} != encoder batch_size {self.batch_size}"
         assert (
@@ -448,7 +455,7 @@ class TTBEVFormerEncoder:
         ), f"num_queries {num_queries} != bev_h*bev_w {self.bev_h * self.bev_w}"
 
         shapes = self.spatial_shapes
-        if shapes is not None and key is not None:
+        if key is not None:
             expected_L = shapes.prod(dim=1).sum().item()
             L = key.shape[1]
             assert expected_L == L, (
@@ -459,16 +466,12 @@ class TTBEVFormerEncoder:
         if use_signpost:
             signpost(header="BEVEncoder Reference Points Generation Start")
 
-        # Generate 3D reference points and project them to camera coordinates
+        # Project the cached 3D reference points to camera coordinates.
         # These reference points define where each BEV query will sample features from camera views
         reference_points_cam = None
         bev_mask = None
-        reference_points_3d = None
 
         if img_metas is not None:
-            # 3D grid is built at init. Camera projection is per-frame.
-            reference_points_3d = self.reference_points_3d
-
             # Extract camera transformation matrices from metadata
             # These matrices transform 3D world coordinates to 2D camera pixel coordinates
             if "lidar2img" in img_metas[0]:
@@ -498,7 +501,7 @@ class TTBEVFormerEncoder:
             # Returns: reference_points_cam [num_cams, B, num_queries, num_points, 2] (pixel coordinates)
             #          bev_mask [num_cams, B, num_queries, num_points] (validity mask)
             reference_points_cam, bev_mask = point_sampling_3d_to_2d_ttnn(
-                reference_points=reference_points_3d,
+                reference_points=self.reference_points_3d,
                 pc_range=self.pc_range,
                 lidar2img=lidar2img,
                 img_metas=img_metas,
