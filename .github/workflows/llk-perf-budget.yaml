@@ -8,11 +8,29 @@ name: "LLK perf time budget"
 # (compile) and consumer (device measure) phases are timed separately by
 # tt_metal/tt-llk/tests/run_llk_perf_budget.sh.
 #
-# Dispatch only. It shares no code path with the nightly llk-perf.yaml beyond
-# the docker image and the matrix helpers, so a change here cannot affect the
-# nightly, and it publishes nothing to the perf warehouse.
+# It shares no code path with the nightly llk-perf.yaml beyond the docker image
+# and the matrix helpers, so a change here cannot affect the nightly, and it
+# publishes nothing to the perf warehouse.
+#
+# HOW TO START A RUN
+#
+# workflow_dispatch only works once this file is on the default branch, which
+# is why the push trigger exists: a push to the measurement branch can produce
+# a real run, and a real run URL, before anything is merged. A push starts
+# nothing unless its commit message carries a marker, so an ordinary push to
+# the branch cannot occupy the lab by accident:
+#
+#   [budget-run]    the whole matrix -- both architectures, four configurations,
+#                   two cards each
+#   [budget-smoke]  one job: Blackhole, L1_TO_L1, one card. Use this first
+#                   after touching the workflow or the runner script.
+#
+# Dispatch inputs, when present, override both.
 
 on:
+  push:
+    branches:
+      - "nstojictt/llk-perf-budget-ci"
   workflow_dispatch:
     inputs:
       architecture:
@@ -46,7 +64,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.architecture }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.architecture || 'push' }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -55,10 +73,18 @@ env:
 jobs:
   build-images:
     name: "Docker setup"
+    # A push runs only when its commit message asks for it, so an ordinary push
+    # to the measurement branch cannot occupy the lab by accident.
+    if: ${{ github.event_name == 'workflow_dispatch'
+      || contains(github.event.head_commit.message, '[budget-run]')
+      || contains(github.event.head_commit.message, '[budget-smoke]') }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
 
   load-test-matrix:
+    if: ${{ github.event_name == 'workflow_dispatch'
+      || contains(github.event.head_commit.message, '[budget-run]')
+      || contains(github.event.head_commit.message, '[budget-smoke]') }}
     runs-on: ubuntu-slim
     needs: [build-images]
     outputs:
@@ -86,7 +112,10 @@ jobs:
       - name: Build test matrix
         id: build-matrix
         env:
-          ARCHITECTURE: ${{ inputs.architecture }}
+          # Dispatch inputs win. A push has none, so the marker decides.
+          ARCHITECTURE: ${{ inputs.architecture
+            || (contains(github.event.head_commit.message, '[budget-smoke]')
+            && 'blackhole' || 'all') }}
         run: |
           case "$ARCHITECTURE" in
             all)       ENABLED_SKUS="ALL_SKUS_IN_TESTS" ;;
@@ -106,8 +135,12 @@ jobs:
         id: trim
         env:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
-          CONFIGS: ${{ inputs.configs }}
-          CARDS: ${{ inputs.cards }}
+          CONFIGS: ${{ inputs.configs
+            || (contains(github.event.head_commit.message, '[budget-smoke]')
+            && 'l1' || 'full,isolates,l1,isolates_l1') }}
+          CARDS: ${{ inputs.cards
+            || (contains(github.event.head_commit.message, '[budget-smoke]')
+            && '1' || '1,2') }}
         run: |
           FILTER='import json, os, sys
           rows = json.loads(os.environ["MATRIX"])
@@ -179,7 +212,9 @@ jobs:
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         env:
-          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          # A push carries no inputs, so this falls through to false, which is
+          # the mode being measured.
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light || false }}
           BUDGET_CARD: ${{ matrix.test-group.card }}
         run: |
           ${{ matrix.test-group.cmd }}
@@ -220,7 +255,11 @@ jobs:
   llk-perf-budget-summary:
     name: "Budget summary"
     needs: [llk-perf-budget-exec]
-    if: always()
+    # always(), so a failed measurement still gets a table -- but not on a push
+    # that asked for nothing, where the whole workflow is skipped.
+    if: ${{ always() && (github.event_name == 'workflow_dispatch'
+      || contains(github.event.head_commit.message, '[budget-run]')
+      || contains(github.event.head_commit.message, '[budget-smoke]')) }}
     runs-on: ubuntu-latest
     steps:
       - name: Download every job's summary
