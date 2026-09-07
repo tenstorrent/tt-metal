@@ -162,6 +162,23 @@ SCENARIOS = {
         "producer_timeout_s": 7200,
         "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
     },
+    # 5) Scenario (4) + SPxTP KV dedup: each of the 32 devices holds a distinct 1/(sp*tp) slice. Storage
+    #    only, so acceptance is per-layer PCC EQUAL to (4); the floor just clears (4)'s 0.8608 nope minimum.
+    "glm52_full_depth_kv_table_tp_sharded": {
+        "users": 1,
+        "layers": 78,
+        "max_seq_len": 56320,
+        "env": {
+            "PREFILL_MODEL": "glm_5_2",
+            "PREFILL_TRACE_DIR": GLM52_TRACE,
+            "PREFILL_KV_ONLY_LAST_LAYER": "0",  # match (4): the table covers all 78 layers
+            "PREFILL_TP_SHARD_KV": "1",
+            "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
+        },
+        "ready_timeout_s": 3600,
+        "producer_timeout_s": 7200,
+        "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
+    },
 }
 
 # Opt-in prompt-driven scenario: instead of a recorded golden trace, generate the reference KV from a
