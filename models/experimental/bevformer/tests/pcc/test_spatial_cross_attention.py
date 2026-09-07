@@ -186,6 +186,7 @@ def test_spatial_cross_attention_forward(
             "num_points": num_points,
             "num_heads": num_heads,
         },
+        spatial_shapes=spatial_shapes,
     )
 
     # --------------------------------------------------------------------------- #

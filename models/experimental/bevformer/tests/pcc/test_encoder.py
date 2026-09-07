@@ -164,6 +164,10 @@ def test_bevformer_encoder_forward(
     tt_model = TTBEVFormerEncoder(
         device=device,
         params=tt_parameters,
+        bev_h=bev_h,
+        bev_w=bev_w,
+        spatial_shapes=spatial_shapes,
+        batch_size=batch_size,
         **encoder_kwargs,
     )
 
@@ -192,9 +196,6 @@ def test_bevformer_encoder_forward(
         key=tt_camera_features,
         value=tt_camera_features,
         bev_pos=tt_bev_pos,
-        bev_h=bev_h,
-        bev_w=bev_w,
-        spatial_shapes=spatial_shapes,
         level_start_index=tt_level_start_index,
         prev_bev=None,  # No temporal attention
         img_metas=img_metas,
