@@ -14,6 +14,7 @@
 #include "api/compute/experimental/mul_reduce_scalar.h"
 #include "api/compute/experimental/pack_block.h"
 #include "api/compute/experimental/rmsnorm.h"
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #endif
@@ -68,12 +69,12 @@ void kernel_main() {
     constexpr uint32_t rms_scale_cb_id = get_named_compile_time_arg_val("cb_rms_scale");
     constexpr uint32_t rms_reduce_scaler_cb_id = get_named_compile_time_arg_val("cb_rms_reduce_scaler");
     constexpr uint32_t rms_reduced_cb_id = get_named_compile_time_arg_val("cb_rms_reduced");
+    constexpr uint32_t rms_gamma_cb_id = get_named_compile_time_arg_val("cb_rms_gamma");
     constexpr uint32_t rms_packed_tiles_per_row = get_named_compile_time_arg_val("rms_packed_tiles_per_row");
 
     const bool rms_is_hub = get_arg_val<uint32_t>(0) != 0;
     const uint32_t rms_inv_n_bits = get_arg_val<uint32_t>(1);
     const uint32_t rms_epsilon_bits = get_arg_val<uint32_t>(2);
-    const uint32_t rms_gamma_bits = get_arg_val<uint32_t>(3);
 #else
     constexpr uint32_t mm_out_cb_id = out_cb_id;
 #endif
@@ -221,7 +222,7 @@ void kernel_main() {
     // epilogue packs 1x32 tiles whose stride is 64 bytes, and with a 2048-byte stride each tile's
     // second face lands a whole 32x32 tile away instead of next to the first. Reprogram the packer
     // from the geometry of the circular buffers this epilogue actually uses.
-    compute_kernel_hw_startup(mm_out_cb_id, rms_scale_cb_id, out_cb_id);
+    compute_kernel_hw_startup(mm_out_cb_id, rms_gamma_cb_id, out_cb_id);
 
     mm_out_cb.wait_front(local_out_tiles);
 
@@ -260,7 +261,7 @@ void kernel_main() {
     rms_local_cb.push_back(M_tiles);
 
     // Only the first row-major producer consumes the gathered statistics. It sums the producers'
-    // partial mean-squares and forms gamma * rsqrt(mean + epsilon), then publishes it to BRISC for
+    // partial mean-squares and forms rsqrt(mean + epsilon), then publishes it to BRISC for
     // multicast. The writer has packed the scalar-only producer pages into full tiles, so one
     // REDUCE_SCALAR pass replaces the old O(num_producers) copy/add chain.
     if (rms_is_hub) {
@@ -288,8 +289,6 @@ void kernel_main() {
             mul_unary_tile(0, rms_inv_n_bits);
             add_rsqrt_tile_init();
             add_rsqrt_tile<false, VectorMode::RC_custom, 1>(0, rms_epsilon_bits);
-            binop_with_scalar_tile_init();
-            mul_unary_tile(0, rms_gamma_bits);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile<true>(0, rms_scale_src_cb_id, mt);
@@ -364,6 +363,11 @@ void kernel_main() {
         // row must fit in DST.
         rmsnorm_mul_bcast_scalar_reuse_tiles_init<N_tiles_per_core>(mm_out_cb_id);
         rmsnorm_mul_bcast_scalar_reuse_tiles<N_tiles_per_core, true>(mm_out_cb_id, mt * N_tiles_per_core, 0, 0);
+        reconfig_data_format(rms_gamma_cb_id, rms_gamma_cb_id);
+        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(rms_gamma_cb_id);
+        for (uint32_t nt = 0; nt < N_tiles_per_core; ++nt) {
+            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(rms_gamma_cb_id, nt, nt);
+        }
         tile_regs_commit();
         tile_regs_wait();
         pack_block_contiguous(0, out_cb_id, N_tiles_per_core);

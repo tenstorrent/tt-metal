@@ -31,6 +31,16 @@ inline tt::tt_metal::Tile in0_tile_for_compute(const Tensor& input_tensor_a) {
     return input_tensor_a.tensor_spec().tile();
 }
 
+// A ROW_MAJOR output spec cannot carry Tile(1, 32). Compute still packs those faces; for BF16
+// (and other dense dtypes) a 1x32 face is 32 contiguous row elements and writes straight into
+// the ROW_MAJOR buffer. Take the packing tile from A, not from the output spec.
+inline tt::tt_metal::Tile out_tile_for_compute(const Tensor& input_tensor_a, const Tensor& output_tensor) {
+    if (output_tensor.layout() == Layout::ROW_MAJOR) {
+        return in0_tile_for_compute(input_tensor_a);
+    }
+    return output_tensor.tensor_spec().tile();
+}
+
 // custom_mm in0 tiles are [{1,2,4,8}, 32]. 16- and 32-high TILE A stays on matmul_block.
 inline bool is_custom_mm_in0_tile_height(uint32_t tile_height) {
     return tile_height == 1 || tile_height == 2 || tile_height == 4 || tile_height == 8;
@@ -95,15 +105,15 @@ struct MatmulDecodeDeviceOperation {
         // dest grid).
         bool output_mcast_two_hub = false;
         // Full-width only: normalize each output row using stats reduced over the producer
-        // shards. Gamma is a scalar folded into the multicast inverse-RMS scale.
+        // shards. Vector gamma is a separate WIDTH_SHARDED tensor on the weight grid.
         bool rms_norm = false;
-        std::optional<float> rms_norm_gamma = std::nullopt;
         float rms_norm_epsilon = 1.0e-6F;
     };
 
     struct tensor_args_t {
         const Tensor& input_tensor_a;
         const Tensor& input_tensor_b;
+        std::optional<Tensor> rms_norm_gamma = std::nullopt;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -177,6 +187,6 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     const std::optional<tt::tt_metal::CoreRangeSet>& output_core_grid = std::nullopt,
     bool output_mcast_two_hub = false,
     bool rms_norm = false,
-    std::optional<float> rms_norm_gamma = std::nullopt,
+    const std::optional<Tensor>& rms_norm_gamma = std::nullopt,
     float rms_norm_epsilon = 1.0e-6F);
 }  // namespace ttnn::prim
