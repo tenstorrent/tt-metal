@@ -495,7 +495,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     """Measure selected layer/chunk pairs with one trace per layer type.
 
     Each layer is compiled and captured once, then each selected chunk is measured once.
-    GEMMA4_PERF_KV_FILL selects random, replay-filled, or zeroed cache contents.
+    Ring caches are initialized with random values before measurement.
     Inputs are token embeddings, so this is an isolated-layer benchmark.
     """
     from models.demos.gemma4.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
@@ -649,23 +649,14 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
             f"[layer_perf_chunk] {lt} layer_idx={layer_idxs[lt]} " f"compile={compile_s:.1f}s capture={capture_s:.1f}s"
         )
 
-    measured_set = set(chunk_idxs)
-    fill_upto = max(chunk_idxs)
-    n_fill = (fill_upto + 1) - len(measured_set)
-
-    kv_fill = os.environ.get("GEMMA4_PERF_KV_FILL", "random").strip().lower()
-    assert kv_fill in ("replay", "random", "none"), f"GEMMA4_PERF_KV_FILL must be replay|random|none, got {kv_fill!r}"
-
-    def _initialize_ring_caches(randomize):
+    def _initialize_ring_caches():
         """Initialize the ring-cache tensors in place, preserving captured addresses."""
         for lt in layer_types:
             cache = model.layers[layer_idxs[lt]].self_attn.ring_kv_cache
             tensors = (cache.kv,) if isinstance(cache, PackedRingKVCache) else cache
             for tensor in tensors:
                 host = ttnn.from_torch(
-                    0.1 * torch.randn(list(tensor.shape), dtype=torch.float32)
-                    if randomize
-                    else torch.zeros(list(tensor.shape), dtype=torch.float32),
+                    0.1 * torch.randn(list(tensor.shape), dtype=torch.float32),
                     dtype=tensor.dtype,
                     layout=ttnn.TILE_LAYOUT,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -673,31 +664,17 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
                 ttnn.copy_host_to_device_tensor(host, tensor)
         ttnn.synchronize_device(mesh_device)
 
-    if kv_fill in ("random", "none"):
-        t0 = time.time()
-        _initialize_ring_caches(randomize=kv_fill == "random")
-        logger.info(
-            f"[layer_perf_chunk] GEMMA4_PERF_KV_FILL={kv_fill} — initialized "
-            f"{len(layer_types)} ring cache(s) in {time.time() - t0:.1f}s"
-        )
-    elif n_fill:
-        logger.info(
-            f"[layer_perf_chunk] GEMMA4_PERF_KV_FILL=replay — replaying {n_fill} unmeasured "
-            f"chunk(s) below/between the requested ones so each measured chunk sees a real prefix"
-        )
-
-    replay_order = range(fill_upto + 1) if kv_fill == "replay" else sorted(measured_set)
+    t0 = time.time()
+    _initialize_ring_caches()
+    logger.info(
+        f"[layer_perf_chunk] Initialized {len(layer_types)} ring cache(s) with random values "
+        f"in {time.time() - t0:.1f}s"
+    )
 
     results = []
     try:
-        for idx in replay_order:
+        for idx in chunk_idxs:
             for lt in layer_types:
-                if idx not in measured_set:
-                    _stage(idx)
-                    ttnn.execute_trace(mesh_device, traces[lt], cq_id=0, blocking=False)
-                    ttnn.synchronize_device(mesh_device)
-                    continue
-
                 sp_start, sp_stop = _perf_signposts(lt, idx)
 
                 chunk_start = _stage(idx)
