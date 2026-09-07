@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.hpp"
+
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -30,6 +33,31 @@ void LlamaAllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
             input0.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
         input0.memory_config().memory_layout());
+
+    // The all-gather half is only partly tile-aware: it derives the weight tensor width as
+    // padded_shape[3] / 32 and both shard page counts by dividing by TILE_HW, so a non-standard tile
+    // compiles a mis-sized program even though the tile is now in the key. Guard rather than rely on
+    // hashing, which would only give a wrong program its own cache entry. Those same divisions are
+    // meaningless for a row-major operand, and no other check in this op requires TILE, so the layout
+    // is pinned here too. This op has no cache-hit validator, so the miss validator runs on both paths.
+    const auto require_standard_tile = [](const Tensor& tensor, const char* name) {
+        TT_FATAL(
+            tensor.layout() == Layout::TILE,
+            "llama_all_gather_matmul_async does not currently support non-TILE layouts, but {} has {} layout",
+            name,
+            tensor.layout());
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "llama_all_gather_matmul_async does not currently support tiles other than 32x32, but {} has a "
+            "{}x{} tile",
+            name,
+            tile.get_height(),
+            tile.get_width());
+    };
+    require_standard_tile(input0, "input0");
+    require_standard_tile(tensor_args.input1, "input1");
+    require_standard_tile(tensor_args.intermediate, "the intermediate tensor");
 }
 
 LlamaAllGatherMatmulAsyncDeviceOperation::spec_return_value_t
@@ -92,22 +120,31 @@ ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_has
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input0 = tensor_args.input0;
     const auto& input1 = tensor_args.input1;
+    const auto& intermediate = tensor_args.intermediate;
 
     auto input0_shape = input0.padded_shape();
     auto input0_memory_layout = input0.layout();
     auto input0_dtype = input0.dtype();
     auto input0_memory_config = input0.memory_config();
+    // The matmul half reads in0/in1 tiles off its operands to size every block and circular buffer,
+    // and the aggregated matmul input inherits input0's page config, so tile geometry must be keyed.
+    auto input0_page_config = input0.tensor_spec().page_config();
 
     auto input1_shape = input1.padded_shape();
     auto input1_memory_layout = input1.layout();
     auto input1_dtype = input1.dtype();
     auto input1_memory_config = input1.memory_config();
+    auto input1_page_config = input1.tensor_spec().page_config();
 
-    auto intermediate_shape = input1.padded_shape();
-    auto intermediate_memory_layout = input1.layout();
-    auto intermediate_dtype = input1.dtype();
-    auto intermediate_memory_config = input1.memory_config();
+    auto intermediate_shape = intermediate.padded_shape();
+    auto intermediate_memory_layout = intermediate.layout();
+    auto intermediate_dtype = intermediate.dtype();
+    auto intermediate_memory_config = intermediate.memory_config();
+    auto intermediate_page_config = intermediate.tensor_spec().page_config();
 
+    // The fused matmul half compiles from MatmulParams (program_config, compute kernel config,
+    // fused activation, output dtype/tile, untilize_out, transpose, global_cb); none of those can
+    // be refreshed on a cache hit, so the whole struct must be keyed.
     return tt::tt_metal::operation::hash_operation<LlamaAllGatherMatmulAsyncDeviceOperation>(
         args.dim,
         args.num_links,
@@ -115,18 +152,35 @@ ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_has
         args.output_memory_config,
         args.topology,
         args.cluster_axis,
+        // sub_device_id selects the sender worker core pool and is forwarded to the matmul half, so it
+        // is structural to the compiled program rather than per-call data. Widened past the uint8 range
+        // so the disengaged optional cannot collide with a real sub-device id.
+        args.sub_device_id.has_value() ? static_cast<uint32_t>(args.sub_device_id->get()) : 0xFFFFFFFFu,
+        args.matmul_struct,
+        // MatmulParams reaches global_cb through reflection, which covers the GCB's structure (core
+        // mapping, size, buffer type) but not which allocation it is. The matmul's remote CB is created
+        // against the GCB and bakes both addresses at build time, and UpdateDynamicCircularBufferAddress
+        // refuses to re-point a GCB-backed CB, so two same-shaped GCBs at different allocations must not
+        // share a program. Same reasoning as dram_prefetcher_validator.
+        static_cast<uint64_t>(
+            args.matmul_struct.global_cb.has_value() ? args.matmul_struct.global_cb->buffer_address() : 0),
+        static_cast<uint64_t>(
+            args.matmul_struct.global_cb.has_value() ? args.matmul_struct.global_cb->config_address() : 0),
         input0_shape,
         input0_memory_layout,
         input0_dtype,
         input0_memory_config,
+        input0_page_config,
         input1_shape,
         input1_memory_layout,
         input1_dtype,
         input1_memory_config,
+        input1_page_config,
         intermediate_shape,
         intermediate_memory_layout,
         intermediate_dtype,
-        intermediate_memory_config);
+        intermediate_memory_config,
+        intermediate_page_config);
 }
 
 }  // namespace ttnn::experimental::prim

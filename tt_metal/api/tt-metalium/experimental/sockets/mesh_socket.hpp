@@ -152,6 +152,11 @@ enum class SocketEndpoint : uint8_t { SENDER, RECEIVER };
 // through the socket_config object.
 class MeshSocket {
 public:
+    // A rank-scoped socket is point-to-point between two ranks, so this returns early on every
+    // other rank (a "null socket") and allocates nothing, including on ranks co-owning the
+    // endpoint's mesh. Such a socket must therefore be fully per-core (see
+    // socket_is_fully_per_core): its buffers then occupy L1 only on the two endpoint cores and a
+    // co-owner has nothing to reserve. One needing lockstep buffers is rejected instead.
     MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config);
     // Sockets can only be created in sender/receiver pairs.
     static std::pair<MeshSocket, MeshSocket> create_socket_pair(
@@ -162,6 +167,10 @@ public:
     std::shared_ptr<MeshBuffer> get_data_buffer() const;
     // Access the config buffer associated with this socket.
     std::shared_ptr<MeshBuffer> get_config_buffer() const;
+    // The L1 address of the config buffer, as handed to device kernels and to the peer descriptor.
+    // Not the same as get_config_buffer()->address(): a per-core buffer holds its address on each
+    // device's Buffer and leaves the mesh-level scalar at 0, so that would report 0.
+    DeviceAddr get_config_buffer_address() const;
     // Access the underlying configuration of the instantiated socket (connectivity of senders/receivers and the socket
     // memory config).
     const SocketConfig& get_config() const;

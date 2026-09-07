@@ -73,6 +73,18 @@
   owner_id: U08ARDXARPF # Ilija Anastasijevic
   team: ttnn
 
+# The op gathers over a mesh axis, and a mesh smaller than the box is a submesh, which
+# fabric does not come up on — so the mesh a row asks for is fixed by the box it runs on.
+- id: bh-lb-ttnn-attn-res-gather-softmax-unit
+  name: ttnn attn_res_gather_softmax unit tests
+  model-name: kimi_k3
+  cmd: pytest tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py -k "mesh-2x4"
+  skus:
+    bh_loudbox:
+      timeout: 10
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: ttnn
+
 # --- unit (fast) ---
 # Fast multi-card legs that the legacy blackhole-multi-card-unit-tests-impl.yaml
 # also runs in post-commit (fast-only: true). Kept in e2e to match the run-count
@@ -151,6 +163,7 @@
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528
     pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and ((fabric2d-mesh-4x2 or fabric2d-mesh-2x4 or fabric2d-2x4) or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe)) and not (ttnn_moe and kimi and perf) and not pad50 and (not hca or (flash and chunk5120-varying))" --timeout 1800 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "fabric2d-2x4 and random and scaled_sl and check_pcc" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP2xTP4" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d-mesh-2x4 and not pretrained and iter2 and not iter25 and not iter2000" -vvv --tb=short --timeout=900 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "fabric2d-mesh-2x4-2link and layer0 and device" -vvv --tb=short || exit_code=$?
     exit $exit_code
@@ -205,6 +218,7 @@
     # chunked + non_balanced, covered by the chunked Galaxy perf tests. Its uncollect_if
     # makes this nodeid collect nothing on CI, which would exit 5 and fail the job.
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_2x4" -vvv --tb=short || exit_code=$?
+    KDA_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP2xTP4" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
@@ -279,4 +293,20 @@
     bh_quietbox_2:
       timeout: 10
   owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+
+- id: bh-lb-kimi-k3-attn-res
+  name: bh_lb_Kimi_K3_ATTN_RES
+  model-name: kimi_k3
+  # Kimi K3 attention residuals: the device walk at 1280 tokens over SP 2 and `d` over
+  # TP 4. Needs tp > 1 — the read's reduction is over the hidden shards — and bh_loudbox
+  # is the smallest box carrying Galaxy's TP factor of 4. The directory's host-only files
+  # come along because they gate code the device tests cannot: the PCC and bit-exactness
+  # helpers those tests reach their verdicts through, and the weight cache path, which is
+  # only taken when a checkpoint is staged and CI stages none.
+  cmd: pytest models/demos/deepseek_v3_d_p/tests/attn_res/ -vvv --tb=short
+  skus:
+    bh_loudbox:
+      timeout: 10
+  owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
