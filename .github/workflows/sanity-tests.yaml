@@ -505,12 +505,16 @@ jobs:
   # Single source of truth for fabric coverage in the sanity pipeline.
   fabric-sanity-tests:
     if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && (needs.generate-sku-matrix.outputs.run-wormhole == 'true' || needs.generate-sku-matrix.outputs.run-blackhole == 'true') && toJSON(inputs.run-fabric-sanity-tests) != 'false' }}
-    needs: [build-artifact, generate-sku-matrix]
+    # bake-env-dev-full is in needs but deliberately absent from the if: above.
+    # A failed bake leaves the ref empty and the leg falls back to the artifact
+    # path, which a gate on the bake would turn into a skipped suite instead.
+    needs: [build-artifact, generate-sku-matrix, bake-env-dev-full]
     secrets: inherit
     uses: ./.github/workflows/fabric-sanity-tests-impl.yaml
     with:
       enabled-skus: ${{ format('{0}{1}', needs.generate-sku-matrix.outputs.sanity-skus, needs.generate-sku-matrix.outputs.run-wormhole == 'true' && ',wh_llmbox_civ2' || '') }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
