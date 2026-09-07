@@ -22,8 +22,9 @@ PERF_COUNTER_GROUP_BITS = {
     "l1_2": 6,
     "l1_3": 7,
     "l1_4": 8,
+    "l1_5": 9,
 }
-PERF_COUNTER_L1_GROUPS = {"l1_0", "l1_1", "l1_2", "l1_3", "l1_4"}
+PERF_COUNTER_L1_GROUPS = {"l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"}
 # Measured on Blackhole BRISC firmware: 3 groups of readout code fit, 4 overflow .text.
 PERF_COUNTER_MAX_GROUPS_PER_PASS = 3
 # PERF_COUNTER_PROFILER_ID in perf_counters.hpp: the timer_id the firmware tags counter rows with.
@@ -51,8 +52,8 @@ def schedule_perf_counter_passes(requested_groups, max_groups_per_pass=PERF_COUN
 
 
 def arch_l1_groups(is_blackhole):
-    """L1 counter groups an architecture has: Blackhole's 2-NOC L1 exposes banks 2-4 as well."""
-    return ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4"] if is_blackhole else ["l1_0", "l1_1"]
+    """L1 counter groups an architecture has: Blackhole's 2-NOC L1 exposes banks 2-5 as well."""
+    return ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"] if is_blackhole else ["l1_0", "l1_1"]
 
 
 def perf_counter_groups_to_bitfield(groups):
@@ -237,7 +238,7 @@ def main():
     parser.add_option(
         "--profiler-capture-perf-counters",
         type="string",
-        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1_0..l1_4, instrn, all",
+        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1_0..l1_5, instrn, all",
         action="callback",
         callback=split_comma_list,
         dest="perf_counter_groups",
@@ -383,7 +384,7 @@ def main():
         resolved = list(dict.fromkeys(resolved))
 
         # Reject BH-only groups on non-BH architectures.
-        bh_only = sorted(set(resolved) & {"l1_2", "l1_3", "l1_4"})
+        bh_only = sorted(set(resolved) & {"l1_2", "l1_3", "l1_4", "l1_5"})
         if bh_only and not is_blackhole:
             raise ValueError(
                 f"Performance counter groups {', '.join(bh_only)} are supported only on Blackhole, "

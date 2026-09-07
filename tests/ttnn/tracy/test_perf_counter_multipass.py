@@ -23,9 +23,9 @@ def assert_pass_invariants(passes):
 
 
 def test_full_blackhole_set_schedules_one_pass_per_l1_bank():
-    groups = ["fpu", "pack", "unpack", "instrn", "l1_0", "l1_1", "l1_2", "l1_3", "l1_4"]
+    groups = ["fpu", "pack", "unpack", "instrn", "l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"]
     passes = schedule_perf_counter_passes(groups)
-    assert len(passes) == 5
+    assert len(passes) == 6
     assert_pass_invariants(passes)
     assert sorted(g for p in passes for g in p) == sorted(groups)
 
@@ -59,6 +59,7 @@ def test_dedup_case_insensitive_and_empty():
 def test_bitfield_matches_perf_counters_hpp_bits():
     assert perf_counter_groups_to_bitfield(["fpu", "pack", "unpack", "l1_0", "instrn"]) == 47
     assert perf_counter_groups_to_bitfield(["l1_4"]) == 1 << 8
+    assert perf_counter_groups_to_bitfield(["l1_5"]) == 1 << 9
 
 
 def test_merge_keeps_pass0_whole_and_appends_only_counter_rows(tmp_path):
@@ -79,5 +80,5 @@ def test_merge_keeps_pass0_whole_and_appends_only_counter_rows(tmp_path):
 
 
 def test_arch_l1_groups():
-    assert arch_l1_groups(True) == ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4"]
+    assert arch_l1_groups(True) == ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"]
     assert arch_l1_groups(False) == ["l1_0", "l1_1"]
