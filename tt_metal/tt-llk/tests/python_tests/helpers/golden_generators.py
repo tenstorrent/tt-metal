@@ -2428,6 +2428,11 @@ class UnarySFPUGolden:
             MathOperation.UnaryMinInt32,
             MathOperation.UnaryMaxUint32,
             MathOperation.UnaryMinUint32,
+            # relu_min is the one op here that is not integer-*only*: sfpu_operations.h
+            # picks the vInt branch of _relu_min_ at runtime on math_format == Int32 and
+            # the vFloat branch otherwise, so the same MathOperation needs an exact
+            # integer golden as well as the float one. See _relu_min.
+            MathOperation.ReluMin,
         }
         # Fixed dispatch constants shared with sfpu_operations.h: unary shift by 3
         # bits, integer unary max/min against the scalar 1000.
@@ -3141,6 +3146,13 @@ class UnarySFPUGolden:
         return sfpu_relu_max(float(x), float(threshold))
 
     def _relu_min(self, x, threshold=RELU_MIN_THRESHOLD):
+        if isinstance(x, int):
+            # Integer dst. The kernel takes the vInt branch of _relu_min_, which loads an
+            # integer threshold into LREG2 and compares under INT32_2S_COMP, so the golden
+            # is an exact integer max with no float round-trip. Deliberately independent of
+            # self.dst_format: _call_integer returns before __call__ assigns it, so reading
+            # it here would pick up whatever the previous call left behind.
+            return max(x, int(threshold))
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)

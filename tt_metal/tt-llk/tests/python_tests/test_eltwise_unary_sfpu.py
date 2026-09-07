@@ -36,6 +36,7 @@ from helpers.sfpu_domains import (
     for_op_pipeline,
     negative_zero_delivered,
     op_edge_points,
+    op_threshold,
     sfpu_unary_ops,
     specials_after_nan_sign_gate,
     specials_safe,
@@ -899,6 +900,12 @@ _INT_UNARY_OPS = [
     MathOperation.UnaryMinInt32,
     MathOperation.UnaryMaxUint32,
     MathOperation.UnaryMinUint32,
+    # relu_min is the only entry that is not an integer-only op. sfpu_operations.h selects
+    # the vInt branch of _relu_min_ at runtime on math_format == Int32, and nothing else
+    # drives that branch -- the float sweeps all take the vFloat one -- so without this the
+    # integer half of the kernel, including its 2's-complement to sign+magnitude threshold
+    # conversion, has no coverage at all.
+    MathOperation.ReluMin,
 ]
 
 # Ops whose kernel interprets DST as unsigned; run them under UInt32.
@@ -1160,39 +1167,51 @@ def test_eltwise_unary_sfpu_isinf_isnan(
     )
 
 
-# Threshold comparison ops: each maps every element to 0/1 by comparing against a
-# fixed threshold, so a plain random float sweep never lands on the threshold and the
-# output collapses to a constant (PCC undefined). Keyed by mathop:
-#   logical_not(x) = (x == 0) ? 1 : 0   -> threshold 0.0
-#   unary_eq / unary_ne(x)  compare vs 0.5 -> threshold 0.5
+# Ops whose behaviour turns on a comparison against a fixed scalar. A plain random float
+# sweep reaches such a scalar with probability ~0, so the one input where a `>` / `>=` slip
+# or a missing branch is visible never gets driven. Keyed by mathop:
+#   logical_not(x) = (x == 0) ? 1 : 0        -> threshold 0.0
+#   unary_eq / unary_ne(x)  compare vs 0.5   -> threshold 0.5
+#   relu_min(x) = max(x, threshold)          -> threshold RELU_MIN_THRESHOLD
+#   relu_max(x) = clamp(x, 0, threshold)     -> threshold RELU_MAX_THRESHOLD
+#
+# The first three collapse to 0/1 and are here because their output would otherwise be a
+# constant. The two clamps are here for the tie itself: their random domains (widened to
+# clear the threshold) already cover both branches, but neither lands *on* the cutoff, and
+# both kernels compare strictly -- `> threshold` for relu_max, and an SFPSWAP fold for
+# relu_min -- so the boundary is exactly where an off-by-one would hide.
 _THRESHOLD_OPS = [
     MathOperation.LogicalNotUnary,
     MathOperation.UnaryEq,
     MathOperation.UnaryNe,
+    MathOperation.ReluMin,
+    MathOperation.ReluMax,
 ]
 
 
 def _threshold_op_stimuli_spec(mathop):
-    # Force a regular subset onto the op's threshold so both the equal and not-equal
-    # branches fire and the output is non-constant.
+    # Force a regular subset onto the op's threshold so the tie branch fires and, for the
+    # 0/1 ops, the output is non-constant.
     #
-    # The threshold comes from op_edge_points() rather than a local literal, which could drift
-    # from UNARY_COMP_THRESHOLD -- the value the golden reads -- with no test noticing. These
-    # three ops are outside _OP_DOMAIN_REGISTRY, so this is the only consumer of their
-    # _OP_EDGE_POINTS entry, the same arrangement the int32 comparison ops have.
-    edges = op_edge_points(mathop)
-    if not edges:
+    # The threshold comes from op_threshold() rather than a local literal, which could drift
+    # from the dispatch constant the golden reads with no test noticing. Deliberately NOT
+    # op_edge_points()[0]: that held only while every entry was exactly (threshold,), and the
+    # clamp entries now straddle their cutoff, so index 0 is a probe beside the threshold.
+    threshold = op_threshold(mathop)
+    if threshold is None:
         raise AssertionError(
-            f"{mathop.name} has no op_edge_points() entry, so the threshold sweep cannot "
-            "land on its comparison threshold — add one in sfpu_domains._OP_EDGE_POINTS"
+            f"{mathop.name} has no op_threshold() entry, so the threshold sweep cannot "
+            "land on its comparison threshold — add one in sfpu_domains._OP_COMPARISON_THRESHOLD"
         )
-    # logical_not's entry is the signed-zero pair (+0.0, -0.0); both are the same
-    # threshold, so the first element is the value to hit in every case.
-    threshold = edges[0]
 
     def dist(size, dtype, generator):
         idx = torch.arange(size, dtype=torch.float32)
-        x = (idx % 5) - 2.0  # {-2, -1, 0, 1, 2}; none equal 0.5
+        # Spread *relative to* the threshold: {t-2, t-1, t, t+1, t+2}. An absolute
+        # {-2, -1, 0, 1, 2} spread works only for a threshold near zero -- against
+        # relu_min's 5.0 every value sat on the clamped side and the golden went constant,
+        # which is the same defect the widened domains fixed. Unchanged for logical_not,
+        # whose threshold is 0.0.
+        x = threshold + ((idx % 5) - 2.0)
         x[0::3] = threshold  # guaranteed threshold hits
         return x.to(dtype)
 

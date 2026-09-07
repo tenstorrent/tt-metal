@@ -1889,6 +1889,36 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
 }
 
 
+# The scalar each threshold-driven op compares against, mirrored from the dispatch constants
+# the kernels read.
+#
+# Explicit rather than positional. Callers used to take the threshold as op_edge_points(op)[0],
+# which held only while an entry was exactly (threshold,). Several entries now *straddle* their
+# cutoff -- ReluMin is (4.0, 5.0, 6.0) and ReluMax leads with its relu knee -- so index 0 is a
+# probe beside the threshold rather than the threshold, and a positional read would place the
+# wrong value with nothing noticing. Consumers: test_eltwise_unary_sfpu._threshold_op_stimuli_spec.
+_OP_COMPARISON_THRESHOLD: Dict[MathOperation, float] = {
+    # logical_not(x) = (x == 0) ? 1 : 0.
+    MathOperation.LogicalNotUnary: 0.0,
+    **{op: UNARY_COMP_THRESHOLD for op in _COMPARISON_EDGE_OPS},
+    # The two clamps. relu_min clamps below at its threshold; relu_max clamps *above* at
+    # its own, and its relu knee at 0 is a second cutoff the random domain already covers.
+    MathOperation.ReluMin: RELU_MIN_THRESHOLD,
+    MathOperation.ReluMax: RELU_MAX_THRESHOLD,
+    # threshold(x) jumps to THRESHOLD_V below THRESHOLD_T.
+    MathOperation.Threshold: THRESHOLD_T,
+}
+
+
+def op_threshold(op: MathOperation) -> Optional[float]:
+    """The scalar *op* compares its input against, or None if it has no such scalar.
+
+    Use this rather than reading op_edge_points(op)[0]: the edge-point entries straddle
+    their cutoffs, so index 0 is not the threshold for every op that has one.
+    """
+    return _OP_COMPARISON_THRESHOLD.get(op)
+
+
 # Cat D for an operand other than A. _OP_EDGE_POINTS describes the op's own input, which for
 # a unary or binary op is operand A. A ternary op breaks that: lerp is a + c * (b - a), so
 # its interesting values are properties of the *weight*, operand C. pow's interesting
