@@ -90,28 +90,15 @@ void kernel_main() {
     // output cb
     constexpr std::uint32_t dfb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
-    constexpr std::uint32_t dfb_out_id = tt::CBIndex::c_30;
-#else
-    constexpr std::uint32_t dfb_out_id =
-        (do_gamma or do_beta) ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? dfb_in_id : dfb_out0_id)
-                              : dfb_out0_id;
-#endif
-
-#ifdef UNTILIZE_OUT
-    constexpr int dfb_outgamma_id = dfb_in_id;
-    constexpr int dfb_outbeta_id = do_gamma ? dfb_out_id : dfb_in_id;
-    constexpr int dfb_untilize_in_id = (do_gamma and not do_beta) ? dfb_outgamma_id
-                                       : do_beta                  ? dfb_outbeta_id
-                                                                  : dfb_out_id;
+    // The tilised input remains live throughout normalisation. Never use its
+    // full FIFO as output staging, including gamma-only and beta-only calls.
+    constexpr std::uint32_t dfb_untilize_in_id = tt::CBIndex::c_30;
     constexpr int dfb_untilize_out_id =
 #ifdef READER_REPACK
         dfb_repack_out_id;
 #else
         dfb_out0_id;
 #endif
-#else
-    constexpr int dfb_outgamma_id = do_beta ? dfb_in_id : dfb_out0_id;
-    constexpr int dfb_outbeta_id = dfb_out0_id;
 #endif
 
     DataflowBuffer dfb_beta(dfb_beta_id);
@@ -563,11 +550,13 @@ void kernel_main() {
                     mul_tiles_bcast_rows(dfb_x_id, dfb_gamma_id, 0, nt, dst0);
                     tile_regs_commit();
                     dfb_x.pop_front(1);
-                    dfb_x.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_x_id);
-                    tile_regs_release();
-                    dfb_x.push_back(1);
+                    if constexpr (do_beta) {
+                        dfb_x.reserve_back(1);
+                        tile_regs_wait();
+                        pack_tile(dst0, dfb_x_id);
+                        tile_regs_release();
+                        dfb_x.push_back(1);
+                    }
                 }
 
                 if constexpr (do_beta) {
@@ -583,26 +572,23 @@ void kernel_main() {
                     add_tiles_bcast_rows(dfb_x_id, dfb_beta_id, 0, nt, dst0);
                     tile_regs_commit();
                     dfb_x.pop_front(1);
-                    dfb_x.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_x_id);
-                    tile_regs_release();
-                    dfb_x.push_back(1);
                 }
 
-                // Write out the final output
-                // fp32: reset SrcA to dfb_x (fp32).
-                if constexpr (enable_fp32_reconfig) {
-                    reconfig_data_format_srca(dfb_x_id);
-                }
-                reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
-                copy_init(dfb_x_id);
+                if constexpr (!do_gamma && !do_beta) {
+                    if constexpr (enable_fp32_reconfig) {
+                        reconfig_data_format_srca(dfb_x_id);
+                    }
+                    reconfig_data_format_srcb(dfb_xmm_id, dfb_x_id);
+                    copy_init(dfb_x_id);
 
-                dfb_x.wait_front(1);
-                tile_regs_acquire();
-                copy_tile(dfb_x_id, 0, dst0);
-                tile_regs_commit();
-                dfb_x.pop_front(1);
+                    dfb_x.wait_front(1);
+                    tile_regs_acquire();
+                    copy_tile(dfb_x_id, 0, dst0);
+                    tile_regs_commit();
+                    dfb_x.pop_front(1);
+                }
+
+                // The final affine operation leaves its result in DST for this pack.
 #ifdef UNTILIZE_OUT
                 auto write_dfb_id = dfb_untilize_in_id;
 #else
@@ -612,8 +598,8 @@ void kernel_main() {
                 write_dfb.reserve_back(1);
                 tile_regs_wait();
 #ifndef UNTILIZE_OUT
-                // Packer was last set for bf16 dfb_xmm; reconfigure to write_dfb_id (may be fp32) before pack, restore
-                // after. Gated out for bf16 (no format change).
+                // Switch from the intermediate format to output for this pack,
+                // then restore it. All-BF16 configurations need no reconfiguration.
                 if constexpr (enable_fp32_reconfig) {
                     pack_reconfig_data_format(write_dfb_id);
                 }

@@ -22,6 +22,14 @@ TEST_PADDING_VALUE = -42
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
 DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK = [{"l1_small_size": 47000}]
 
+
+@pytest.fixture
+def enabled_program_cache(device):
+    device.enable_program_cache()
+    yield
+    device.disable_and_clear_program_cache()
+
+
 HEIGHT_SHARDED_SHAPES = [
     (1, 320, 32, 32, 16),
 ]
@@ -2295,6 +2303,113 @@ def test_group_norm_optional_weight_bias(
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("grid_size, spatial, num_groups", [(1, 128, 16), (8, 1024, 32)], ids=["single_core", "8x8"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+@pytest.mark.parametrize(
+    "has_weight, has_bias",
+    [(False, False), (True, False), (False, True), (True, True)],
+    ids=["no_affine", "weight_only", "bias_only", "full_affine"],
+)
+def test_group_norm_sharded_optional_affine_program_cache(
+    device, enabled_program_cache, grid_size, spatial, num_groups, dtype, layout, has_weight, has_bias
+):
+    """The final affine operation must publish all output tiles on cached calls too."""
+    available_grid = device.compute_with_storage_grid_size()
+    if min(available_grid.x, available_grid.y) < grid_size:
+        pytest.skip(f"Requires a {grid_size}x{grid_size} compute grid")
+    channels = 256
+    grid = ttnn.CoreGrid(y=grid_size, x=grid_size)
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    weight = torch.linspace(0.75, 1.25, channels).to(torch_dtype) if has_weight else None
+    bias = torch.linspace(-0.25, 0.25, channels).to(torch_dtype) if has_bias else None
+
+    def make_parameter(value):
+        if value is None:
+            return None
+        return ttnn.from_torch(
+            ttnn.create_group_norm_weight_bias_rm(value, channels, grid.y),
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    gamma, beta = make_parameter(weight), make_parameter(bias)
+    input_mask = ttnn.to_device(ttnn.create_group_norm_input_mask(channels, num_groups, grid.y, ttnn.bfloat8_b), device)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size - 1, grid_size - 1))})
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED if grid_size == 1 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (spatial // grid_size, channels // grid_size), ttnn.ShardOrientation.COL_MAJOR),
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    previous_input = None
+    cache_entries = None
+    for repeat in range(3):
+        torch.manual_seed(41 + repeat)
+        # Quantise before forming the FP64 reference, matching values sent to the device.
+        source = torch.rand((1, channels, 1, spatial), dtype=torch.float32).to(torch_dtype)
+        reference = (
+            torch.nn.functional.group_norm(
+                source.double(),
+                num_groups,
+                weight.double() if weight is not None else None,
+                bias.double() if bias is not None else None,
+            )
+            .permute(0, 2, 3, 1)
+            .reshape(1, 1, spatial, channels)
+        )
+        input_tensor = ttnn.from_torch(
+            source.permute(0, 2, 3, 1).reshape(1, 1, spatial, channels),
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        input_tensor = ttnn.to_memory_config(input_tensor, memory_config)
+        if previous_input is not None:
+            assert input_tensor.buffer_address() != previous_input.buffer_address()
+        output = ttnn.group_norm(
+            input_tensor,
+            num_groups=num_groups,
+            input_mask=input_mask,
+            weight=gamma,
+            bias=beta,
+            memory_config=memory_config,
+            core_grid=grid,
+            dtype=dtype,
+            compute_kernel_config=compute_config,
+            use_welford=True,
+            output_layout=layout,
+            inplace=False,
+        )
+        actual = ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG))).double()
+        assert torch.isfinite(actual).all()
+        assert_numeric_metrics(
+            reference,
+            actual.reshape(reference.shape),
+            pcc_threshold=0.999,
+            rtol=0.008 if dtype == ttnn.float32 else 0.01,
+            atol=0.02 if dtype == ttnn.float32 else 0.06,
+            frobenius_threshold=0.004 if dtype == ttnn.float32 else 0.015,
+        )
+        if cache_entries is None:
+            cache_entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == cache_entries
+        # Keep the old allocation live until the next input is allocated, exercising address updates.
+        previous_input = input_tensor
+        del output
 
 
 @pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_SHARDED_SHAPES)
