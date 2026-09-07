@@ -3,10 +3,12 @@ name: "LLK perf time budget"
 # on a reserved lab machine, so the run itself is the evidence: one URL, a
 # summary table, and the per-job artefacts behind it.
 #
-# One job = one architecture x one run-type selection x one card. The perf suite
-# runs in a single group, so each job measures the whole sweep, and the producer
-# (compile) and consumer (device measure) phases are timed separately by
-# tt_metal/tt-llk/tests/run_llk_perf_budget.sh.
+# One job = one card. That job measures every requested run-type selection in
+# sequence on that card, each with a cold build, so the whole matrix is four
+# cards -- two per architecture -- rather than one card per configuration. The
+# perf suite runs in a single group, so each measurement covers the whole sweep,
+# and the producer (compile) and consumer (device measure) phases are timed
+# separately by tt_metal/tt-llk/tests/run_llk_perf_budget.sh.
 #
 # It shares no code path with the nightly llk-perf.yaml beyond the docker image
 # and the matrix helpers, so a change here cannot affect the nightly, and it
@@ -20,9 +22,9 @@ name: "LLK perf time budget"
 # nothing unless its commit message carries a marker, so an ordinary push to
 # the branch cannot occupy the lab by accident:
 #
-#   [budget-run]    the whole matrix -- both architectures, four configurations,
-#                   two cards each
-#   [budget-smoke]  one job: Blackhole, L1_TO_L1, one card. Use this first
+#   [budget-run]    the whole matrix -- both architectures, two cards each,
+#                   four configurations per card
+#   [budget-smoke]  one job: one Blackhole card, L1_TO_L1 alone. Use this first
 #                   after touching the workflow or the runner script.
 #
 # Dispatch inputs, when present, override both.
@@ -43,12 +45,12 @@ on:
           - wormhole
           - blackhole
       configs:
-        description: "Run-type selections to measure, comma separated: full, isolates, l1, isolates_l1"
+        description: "Run-type selections each card measures, in order, comma separated: full, isolates, l1, isolates_l1"
         required: false
         default: "full,isolates,l1,isolates_l1"
         type: string
       cards:
-        description: "Which card replicas to run, comma separated (1,2). One entry measures one card per configuration."
+        description: "How many cards per architecture, as a comma-separated list of labels (1,2). One entry means one card."
         required: false
         default: "1,2"
         type: string
@@ -89,6 +91,7 @@ jobs:
     needs: [build-images]
     outputs:
       matrix: ${{ steps.trim.outputs.matrix }}
+      configs: ${{ steps.trim.outputs.configs }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_perf_budget_tests.yaml
     steps:
@@ -131,7 +134,7 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
-      - name: Keep only the requested configurations and cards
+      - name: Keep the requested cards, and validate the configurations
         id: trim
         env:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
@@ -142,23 +145,29 @@ jobs:
             || (contains(github.event.head_commit.message, '[budget-smoke]')
             && '1' || '1,2') }}
         run: |
+          # Cards are matrix rows; configurations are not -- each job measures
+          # every one of them in sequence, so they travel to the runner as
+          # CONFIGS. Validated here all the same, because a typo would
+          # otherwise surface an hour into a job that had a card reserved.
           FILTER='import json, os, sys
+          KNOWN = ["full", "isolates", "l1", "isolates_l1"]
           rows = json.loads(os.environ["MATRIX"])
           configs = [c.strip() for c in os.environ["CONFIGS"].split(",") if c.strip()]
           cards = [c.strip() for c in os.environ["CARDS"].split(",") if c.strip()]
-          known = {r["perf_config"] for r in rows}
-          unknown = [c for c in configs if c not in known]
+          unknown = [c for c in configs if c not in KNOWN]
           if unknown:
-              sys.exit("unknown config(s) %s; the matrix declares %s"
-                       % (unknown, sorted(known)))
-          keep = [r for r in rows
-                  if r["perf_config"] in configs and str(r["card"]) in cards]
+              sys.exit("unknown config(s) %s; valid: %s" % (unknown, KNOWN))
+          if not configs:
+              sys.exit("no configuration requested")
+          keep = [r for r in rows if str(r["card"]) in cards]
           if not keep:
-              sys.exit("no matrix row left for configs=%s cards=%s" % (configs, cards))
-          print("%d job(s):" % len(keep), file=sys.stderr)
+              sys.exit("no matrix row left for cards=%s" % cards)
+          print("%d job(s), each measuring %s:" % (len(keep), ", ".join(configs)),
+                file=sys.stderr)
           for r in keep:
               print("  " + r["name"], file=sys.stderr)
-          print("matrix=" + json.dumps(keep))'
+          print("matrix=" + json.dumps(keep))
+          print("configs=" + ",".join(configs))'
           python3 -c "$FILTER" >> "$GITHUB_OUTPUT"
 
   llk-perf-budget-exec:
@@ -200,7 +209,7 @@ jobs:
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
           echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
-          echo "SLUG=$CHIP_ARCH-${{ matrix.test-group.perf_config }}-card${{ matrix.test-group.card }}" >> "$GITHUB_ENV"
+          echo "SLUG=$CHIP_ARCH-card${{ matrix.test-group.card }}" >> "$GITHUB_ENV"
       - name: Record which machine and card this landed on
         shell: bash
         run: |
@@ -216,15 +225,17 @@ jobs:
           # the mode being measured.
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light || false }}
           BUDGET_CARD: ${{ matrix.test-group.card }}
+          # Every configuration this card measures, in order.
+          CONFIGS: ${{ needs.load-test-matrix.outputs.configs }}
         run: |
           ${{ matrix.test-group.cmd }}
 
-      - name: Upload the budget summary
+      - name: Upload the budget summaries
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: budget-summary-${{ env.SLUG }}
-          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_budget/summary.json
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_budget/summary-*.json
           if-no-files-found: warn
 
       - name: Upload performance data
@@ -275,7 +286,7 @@ jobs:
           import glob, json, os
 
           rows = []
-          for path in sorted(glob.glob("summaries/**/summary.json", recursive=True)):
+          for path in sorted(glob.glob("summaries/**/summary-*.json", recursive=True)):
               with open(path) as f:
                   rows.append(json.load(f))
 
@@ -312,9 +323,21 @@ jobs:
               pct = (hi - lo) / lo * 100 if lo else 0
               print(f"| {arch} | {config} | {hms(hi)} | {hms(lo)} | {hms(hi - lo)} ({pct:.1f}%) |")
 
+          # What each card spent in total, which is what this run occupied the
+          # lab for -- as opposed to what any one configuration would cost a gate.
+          print("\n## What each card spent\n")
+          print("| arch | card | configurations | measured | runner |")
+          print("| --- | --: | --: | --: | --- |")
+          cards = {}
+          for r in rows:
+              cards.setdefault((r["arch"], str(r["card"])), []).append(r)
+          for (arch, card), got in sorted(cards.items()):
+              spent = sum(r["total_s"] for r in got)
+              print(f"| {arch} | {card} | {len(got)} | {hms(spent)} | {got[0]['runner']} |")
+
           missing = [r for r in rows if r["producer_rc"] or r["consumer_rc"]]
           if missing:
-              print("\n> Jobs with a non-zero pytest exit code are listed above. "
+              print("\n> Measurements with a non-zero pytest exit code are listed above. "
                     "The durations are still real, but a failure can shorten a phase.")
           PY
       - name: Check job results

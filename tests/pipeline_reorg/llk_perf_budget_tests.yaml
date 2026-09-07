@@ -1,205 +1,68 @@
-# LLK perf time budget -- matrix for llk-perf-budget.yaml (workflow_dispatch
-# only; nothing here runs on a schedule or on a PR).
+# LLK perf time budget -- matrix for llk-perf-budget.yaml (workflow_dispatch or
+# a marked push; nothing here runs on a schedule or on a PR).
 #
-# One row is one measurement: one architecture, one run-type selection, one
-# card, the whole perf suite in a single group, non speed-of-light, cold build.
-# Two cards per (architecture, configuration) so machine-to-machine spread is
-# visible instead of assumed -- the two rows are identical apart from `card`,
-# and because a runner takes one job at a time they land on different machines.
+# One row is one card. Each job measures every requested run-type selection in
+# sequence on that card -- full, isolates, l1, isolates_l1 -- each with a cold
+# build, the whole perf suite in a single group, non speed-of-light. Four jobs
+# occupy four cards, not sixteen: a card is the scarce thing, and measuring the
+# configurations on one card also removes the machine from the comparison
+# between them.
+#
+# Two cards per architecture, because a gate's budget has to hold on the slower
+# card and the spread between machines was so far assumed rather than measured.
+# The two rows differ only in `card`; a runner takes one job at a time, so they
+# land on different machines, and each job records its runner, host and devices.
 #
 # The runner is tt_metal/tt-llk/tests/run_llk_perf_budget.sh, which times the
-# producer and the consumer separately and writes perf_budget/summary.json.
-# {perf_config} is substituted per row by prepare_test_matrix.py.
+# producer and the consumer of every configuration separately and writes one
+# perf_budget/summary-<config>.json each. Which configurations it runs comes
+# from CONFIGS, set by the workflow.
+#
+# Timeouts hold every configuration in one job. Measured on one Blackhole card,
+# non-SoL, whole suite: full 19:41, isolates 12:40, L1_TO_L1 6:17 -- about an
+# hour for all four. The cap is several times that, and the per-SKU sum stays
+# inside the llk/perf allocation in .github/time_budget.yaml.
 
-- name: llk_perf_budget wormhole full card 1
-  # all declared run types
-  perf_config: full
+- name: llk_perf_budget wormhole card 1
   card: 1
   team: llk
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
+    ./tests/run_llk_perf_budget.sh 1 1
   skus:
     wh_n150_civ2:
-      timeout: 120
+      timeout: 240
   owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget wormhole full card 2
-  # all declared run types
-  perf_config: full
+
+- name: llk_perf_budget wormhole card 2
   card: 2
   team: llk
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
+    ./tests/run_llk_perf_budget.sh 1 1
   skus:
     wh_n150_civ2:
-      timeout: 120
+      timeout: 240
   owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget wormhole isolates card 1
-  # UNPACK_ISOLATE, MATH_ISOLATE, PACK_ISOLATE
-  perf_config: isolates
+
+- name: llk_perf_budget blackhole card 1
   card: 1
   team: llk
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
+    ./tests/run_llk_perf_budget.sh 1 1
   skus:
-    wh_n150_civ2:
-      timeout: 90
+    bh_p150b_civ2:
+      timeout: 240
   owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget wormhole isolates card 2
-  # UNPACK_ISOLATE, MATH_ISOLATE, PACK_ISOLATE
-  perf_config: isolates
+
+- name: llk_perf_budget blackhole card 2
   card: 2
   team: llk
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
-  skus:
-    wh_n150_civ2:
-      timeout: 90
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget wormhole l1 card 1
-  # L1_TO_L1
-  perf_config: l1
-  card: 1
-  team: llk
-  cmd: |
-    set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
-  skus:
-    wh_n150_civ2:
-      timeout: 60
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget wormhole l1 card 2
-  # L1_TO_L1
-  perf_config: l1
-  card: 2
-  team: llk
-  cmd: |
-    set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
-  skus:
-    wh_n150_civ2:
-      timeout: 60
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget wormhole isolates_l1 card 1
-  # L1_TO_L1 + the three isolates
-  perf_config: isolates_l1
-  card: 1
-  team: llk
-  cmd: |
-    set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
-  skus:
-    wh_n150_civ2:
-      timeout: 120
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget wormhole isolates_l1 card 2
-  # L1_TO_L1 + the three isolates
-  perf_config: isolates_l1
-  card: 2
-  team: llk
-  cmd: |
-    set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
-  skus:
-    wh_n150_civ2:
-      timeout: 120
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget blackhole full card 1
-  # all declared run types
-  perf_config: full
-  card: 1
-  team: llk
-  cmd: |
-    set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
+    ./tests/run_llk_perf_budget.sh 1 1
   skus:
     bh_p150b_civ2:
-      timeout: 120
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget blackhole full card 2
-  # all declared run types
-  perf_config: full
-  card: 2
-  team: llk
-  cmd: |
-    set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
-  skus:
-    bh_p150b_civ2:
-      timeout: 120
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget blackhole isolates card 1
-  # UNPACK_ISOLATE, MATH_ISOLATE, PACK_ISOLATE
-  perf_config: isolates
-  card: 1
-  team: llk
-  cmd: |
-    set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
-  skus:
-    bh_p150b_civ2:
-      timeout: 90
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget blackhole isolates card 2
-  # UNPACK_ISOLATE, MATH_ISOLATE, PACK_ISOLATE
-  perf_config: isolates
-  card: 2
-  team: llk
-  cmd: |
-    set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
-  skus:
-    bh_p150b_civ2:
-      timeout: 90
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget blackhole l1 card 1
-  # L1_TO_L1
-  perf_config: l1
-  card: 1
-  team: llk
-  cmd: |
-    set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
-  skus:
-    bh_p150b_civ2:
-      timeout: 60
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget blackhole l1 card 2
-  # L1_TO_L1
-  perf_config: l1
-  card: 2
-  team: llk
-  cmd: |
-    set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
-  skus:
-    bh_p150b_civ2:
-      timeout: 60
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget blackhole isolates_l1 card 1
-  # L1_TO_L1 + the three isolates
-  perf_config: isolates_l1
-  card: 1
-  team: llk
-  cmd: |
-    set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
-  skus:
-    bh_p150b_civ2:
-      timeout: 120
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_perf_budget blackhole isolates_l1 card 2
-  # L1_TO_L1 + the three isolates
-  perf_config: isolates_l1
-  card: 2
-  team: llk
-  cmd: |
-    set -euo pipefail
-    ./tests/run_llk_perf_budget.sh {perf_config} 1 1
-  skus:
-    bh_p150b_civ2:
-      timeout: 120
+      timeout: 240
   owner_id: U09UC143684 # Nemanja Divnic
