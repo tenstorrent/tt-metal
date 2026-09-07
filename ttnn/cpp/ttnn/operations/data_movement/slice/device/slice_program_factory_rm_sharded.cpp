@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
 
 #include <map>
 #include <optional>
+#include <utility>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -19,9 +21,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
-
 namespace {
-
 inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<uint32_t>& values) {
     std::vector<std::vector<uint32_t>> chunks;
     if (values.empty()) {
@@ -208,7 +208,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-
 tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
@@ -356,7 +355,8 @@ void patch_slice_program_addresses(
     const SliceDeviceOperation::program_factory_t& factory,
     const SliceParams& operation_attributes,
     const SliceInputs& tensor_args,
-    Tensor& output) {
+    Tensor& output,
+    const std::vector<SliceTileArgRange>* cached_tile_args) {
     // Height-sharded RM is CB-bound: the reader args are all keyed, so only the two sharded CB
     // addresses move. CBs are matched positionally -- src0, then c_16.
     if (std::holds_alternative<SliceRmShardedProgramFactory>(factory)) {
@@ -369,6 +369,31 @@ void patch_slice_program_addresses(
 
     // A slot holding 0 belongs to a core create_descriptor left zero-filled; leave those alone.
     constexpr uint32_t kReaderKernelIdx = 0, kWriterKernelIdx = 1;
+    if (cached_tile_args != nullptr) {
+        TT_FATAL(
+            std::holds_alternative<SliceTileProgramFactory>(factory),
+            "Cached tile scalar plans require the scalar tiled slice factory");
+        // MeshPartition stores exact coordinate scalars. Reapply them even if unchanged (#52651).
+        // Its validated writer ranges contain {num_tiles, start_id}, allowing the address update
+        // to share this traversal. Derive active/noop state from the plan, never old dispatch args.
+        GetCommonRuntimeArgs(program, kReaderKernelIdx).at(0) = tensor_args.input.buffer()->address();
+        const uint32_t output_address = output.buffer()->address();
+        auto& reader_args = GetRuntimeArgs(program, kReaderKernelIdx);
+        auto& writer_args = GetRuntimeArgs(program, kWriterKernelIdx);
+        for (const auto& range : *cached_tile_args) {
+            auto& matrix = range.kernel_idx == kReaderKernelIdx ? reader_args : writer_args;
+            auto& data = matrix.at(range.core.x).at(range.core.y);
+            TT_FATAL(
+                range.first_arg + range.values.size() <= data.size(),
+                "Cached tile scalar range exceeds runtime arguments");
+            if (range.kernel_idx == kWriterKernelIdx) {
+                data[0] = range.values[0] != 0 ? output_address : 0;
+            }
+            std::copy(range.values.begin(), range.values.end(), data.data() + range.first_arg);
+        }
+        return;
+    }
+
     const auto patch_slot0 = [&program](uint32_t kernel_idx, uint32_t addr) {
         for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
             for (auto& a : col) {
@@ -404,9 +429,14 @@ void patch_slice_program_addresses(
                                                   ? ttnn::operations::data_movement::get_tiled_start_offset(
                                                         tensor_args.input, operation_attributes.slice_start)
                                                   : 0u;
-                const auto per_core = slice_tile_dynamic_args(
-                    operation_attributes, tensor_args, output, start_offset, kReaderKernelIdx, kWriterKernelIdx);
-                tt::tt_metal::apply_dynamic_runtime_args(program, per_core);
+                apply_slice_tile_dynamic_args(
+                    program,
+                    operation_attributes,
+                    tensor_args,
+                    output,
+                    start_offset,
+                    kReaderKernelIdx,
+                    kWriterKernelIdx);
             }
         },
         factory);

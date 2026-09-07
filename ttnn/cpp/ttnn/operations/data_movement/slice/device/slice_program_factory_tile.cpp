@@ -7,6 +7,7 @@
 
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
+#include <algorithm>
 #include <optional>
 #include <span>
 #include <tt-metalium/work_split.hpp>
@@ -195,13 +196,16 @@ void SliceTileProgramFactory::override_runtime_arguments(
     patch_slice_program_addresses(program, SliceTileProgramFactory{}, args, tensor_args, output);
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> slice_tile_dynamic_args(
+namespace {
+
+template <typename Prepare, typename Emit>
+void emit_slice_tile_scalars(
     const SliceParams& args,
     const SliceInputs& tensor_args,
     const Tensor& output,
     uint32_t start_offset,
-    uint32_t reader_kernel_idx,
-    uint32_t writer_kernel_idx) {
+    Prepare&& prepare,
+    Emit&& emit) {
     // Must reproduce create_descriptor's work split exactly; divergence leaves stale scalars in these slots.
     const auto& input = tensor_args.input;
     tt::tt_metal::IDevice* device = input.device();
@@ -235,9 +239,8 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> slice_tile_dynamic_args(
     }
 
     const auto cores = corerange_to_cores(all_cores);
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(cores.size() * (2 + num_dims + 2));
-
+    prepare(cores.size(), num_dims);
+    std::vector<uint32_t> id_per_dim(num_dims, 0);
     uint32_t num_tiles_written = 0;
     for (const auto& core : cores) {
         uint32_t num_tiles_per_core = 0;
@@ -251,7 +254,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> slice_tile_dynamic_args(
         }
 
         uint32_t id0 = 0, start_id = 0;
-        std::vector<uint32_t> id_per_dim(num_dims, 0);
+        std::fill(id_per_dim.begin(), id_per_dim.end(), 0);
         if (active) {
             id0 = num_tiles_written % num_unpadded_tiles_per_dim[0];
             uint32_t unpadded_written = num_tiles_written / num_unpadded_tiles_per_dim[0];
@@ -263,21 +266,86 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> slice_tile_dynamic_args(
             }
         }
 
-        dynamic_args.push_back({reader_kernel_idx, core, 0, start_id, false});
-        dynamic_args.push_back({reader_kernel_idx, core, 1, num_tiles_per_core, false});
-        dynamic_args.push_back({reader_kernel_idx, core, 2, id0, false});
-        for (uint32_t j = 1; j < num_dims; ++j) {
-            dynamic_args.push_back({reader_kernel_idx, core, 2 + j, id_per_dim[j], false});
-        }
-        // Writer slot 0 (dst buffer) is patched by patch_slot0; re-emit only slots 1 and 2.
-        dynamic_args.push_back({writer_kernel_idx, core, 1, num_tiles_per_core, false});
-        dynamic_args.push_back({writer_kernel_idx, core, 2, num_tiles_written, false});
+        emit(core, start_id, num_tiles_per_core, id0, std::span<const uint32_t>(id_per_dim), num_tiles_written);
 
         if (active) {
             num_tiles_written += num_tiles_per_core;
         }
     }
+}
+
+}  // namespace
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> slice_tile_dynamic_args(
+    const SliceParams& args,
+    const SliceInputs& tensor_args,
+    const Tensor& output,
+    uint32_t start_offset,
+    uint32_t reader_kernel_idx,
+    uint32_t writer_kernel_idx) {
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    emit_slice_tile_scalars(
+        args,
+        tensor_args,
+        output,
+        start_offset,
+        [&](size_t num_cores, uint32_t num_dims) { dynamic_args.reserve(num_cores * (num_dims + 4)); },
+        [&](const CoreCoord& core,
+            uint32_t start_id,
+            uint32_t num_tiles,
+            uint32_t id0,
+            std::span<const uint32_t> ids,
+            uint32_t written) {
+            dynamic_args.push_back({reader_kernel_idx, core, 0, start_id, false});
+            dynamic_args.push_back({reader_kernel_idx, core, 1, num_tiles, false});
+            dynamic_args.push_back({reader_kernel_idx, core, 2, id0, false});
+            for (uint32_t j = 1; j < ids.size(); ++j) {
+                dynamic_args.push_back({reader_kernel_idx, core, 2 + j, ids[j], false});
+            }
+            dynamic_args.push_back({writer_kernel_idx, core, 1, num_tiles, false});
+            dynamic_args.push_back({writer_kernel_idx, core, 2, written, false});
+        });
     return dynamic_args;
+}
+
+void apply_slice_tile_dynamic_args(
+    tt::tt_metal::Program& program,
+    const SliceParams& args,
+    const SliceInputs& tensor_args,
+    const Tensor& output,
+    uint32_t start_offset,
+    uint32_t reader_kernel_idx,
+    uint32_t writer_kernel_idx) {
+    // Resolve views on every invocation: first enqueue can retarget their storage.
+    auto& reader_matrix = GetRuntimeArgs(program, reader_kernel_idx);
+    auto& writer_matrix = GetRuntimeArgs(program, writer_kernel_idx);
+    emit_slice_tile_scalars(
+        args,
+        tensor_args,
+        output,
+        start_offset,
+        [](size_t, uint32_t) {},
+        [&](const CoreCoord& core,
+            uint32_t start_id,
+            uint32_t num_tiles,
+            uint32_t id0,
+            std::span<const uint32_t> ids,
+            uint32_t written) {
+            auto& reader = reader_matrix.at(core.x).at(core.y);
+            auto& writer = writer_matrix.at(core.x).at(core.y);
+            TT_FATAL(
+                reader.size() >= ids.size() + 2 && writer.size() >= 3,
+                "Slice scalar slots must match the cached descriptor at core {}",
+                core);
+            reader[0] = start_id;
+            reader[1] = num_tiles;
+            reader[2] = id0;
+            for (uint32_t j = 1; j < ids.size(); ++j) {
+                reader[2 + j] = ids[j];
+            }
+            writer[1] = num_tiles;
+            writer[2] = written;
+        });
 }
 
 }  // namespace ttnn::prim

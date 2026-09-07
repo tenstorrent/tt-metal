@@ -47,6 +47,10 @@ struct MeshPartitionDeviceOperation {
         // slot layout that factory baked (see patch_slice_program_addresses).
         struct shared_variables_t {
             prim::SliceDeviceOperation::program_factory_t slice_program_factory;
+            prim::SliceParams slice_attributes;
+            // Stable coordinates only; runtime argument storage can move during enqueue/trace creation.
+            std::vector<CoreCoord> reader_address_cores;
+            std::vector<CoreCoord> writer_address_cores;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
