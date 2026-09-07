@@ -138,19 +138,16 @@ Without the flag the suite still runs the same sources but builds the NC variant
 | Flag | Implies `--enable-perf-counters` | Effect |
 |------|----------------------------------|--------|
 | `--enable-perf-counters` | — | Build the WC variant and collect raw counters per zone |
-| `--dump-raw-counters` | yes | Print raw HW counter values to the console per variant |
-| `--dump-raw-metrics` | yes | Print derived efficiency metrics (utilisation, stall, BP %) to the console |
-| `--dump-csv-counters` | yes | Export raw counter values to a separate `<test>.counters.csv` alongside the main results CSV |
+| `--dump-perf-counters` | yes | Export raw counter values to a separate `<test>.counters.csv` alongside the main results CSV |
 
-Any of `--dump-raw-counters`, `--dump-raw-metrics`, or `--dump-csv-counters` implicitly enables counter collection; you don't need to specify `--enable-perf-counters` separately.
+`--dump-perf-counters` implicitly enables counter collection; you don't need to specify `--enable-perf-counters` separately.
 
 ### Output
 
 For each test variant, the WC build emits:
 
 - A row per `(zone, bank, counter_id, l1_mux)` in the main results DataFrame, with raw `cycles` and `count` columns.
-- A `*.counters.csv` file if `--dump-csv-counters` was passed.
-- A merged metrics summary (Min / Median / Max / Avg of every derived metric across variants) if `--dump-raw-metrics` was passed.
+- A `*.counters.csv` file if `--dump-perf-counters` was passed.
 
 The NC build emits per-zone wall-clock cycle counts in the same results DataFrame so a single run with both builds (different pytest invocations) can be merged off-line to compare wall-clock cycles against counter-derived cycle counts.
 
@@ -264,7 +261,7 @@ The mux is latched at counter-start time. The macro path re-writes it before eac
 
 ## Derived Metrics Reference
 
-Derived metrics are computed in `tests/python_tests/helpers/metrics.py` from the raw counter DataFrame. The metric set mirrors the metal-level [PerfCounters tech report](../../../../tech_reports/PerfCounters/perf-counters.md) — the same catalogue applies to **both Wormhole and Blackhole** (architecture differences are confined to a few WH-only or BH-only counters, called out per-metric). The LLK driver operates on per-zone snapshots rather than per-op aggregates, so all derived values appear in the merged CSV and the `--dump-raw-metrics` console output.
+Derived metrics are computed in `tests/python_tests/helpers/metrics.py` from the raw counter DataFrame. The metric set mirrors the metal-level [PerfCounters tech report](../../../../tech_reports/PerfCounters/perf-counters.md) — the same catalogue applies to **both Wormhole and Blackhole** (architecture differences are confined to a few WH-only or BH-only counters, called out per-metric). The LLK driver operates on per-zone snapshots rather than per-op aggregates, so all derived values appear in the merged CSV.
 
 > **Full catalogue.** Metrics #1–#47 in `tech_reports/PerfCounters/perf-counters.md` are the authoritative list. The sections below document the ones the LLK driver surfaces directly; raw counters for every other upstream metric are present in the per-zone CSV, so any upstream formula can be re-evaluated on LLK data without code changes.
 

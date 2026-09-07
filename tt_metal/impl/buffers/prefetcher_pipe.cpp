@@ -186,7 +186,9 @@ void PrefetcherPipe::setup_buffers(BufferType buffer_type) {
         config_allocation.address);
     config_address_ = static_cast<uint32_t>(config_allocation.address);
 
-    const DeviceAddr persistent_end = config_allocation.address + config_allocation.size;
+    const DeviceAddr persistent_begin = std::min(data_allocation.address, config_allocation.address);
+    const DeviceAddr persistent_end = std::max(
+        data_allocation.address + data_allocation.size, config_allocation.address + config_allocation.size);
     for (const CoreCoord& core : corerange_to_cores(all_cores_)) {
         const auto& bank_ids = device_->allocator_impl()->get_bank_ids_from_logical_core(BufferType::L1, core);
         TT_FATAL(bank_ids.size() == 1, "Expected one L1 bank for PrefetcherPipe core {}", core.str());
@@ -195,7 +197,7 @@ void PrefetcherPipe::setup_buffers(BufferType buffer_type) {
         TT_FATAL(
             !lowest_global_allocation.has_value() || persistent_end <= *lowest_global_allocation,
             "PrefetcherPipe persistent L1 region [{}, {}) overlaps an existing L1 allocation at {} on core {}",
-            data_allocation.address,
+            persistent_begin,
             persistent_end,
             lowest_global_allocation.value_or(0),
             core.str());
@@ -276,6 +278,7 @@ uint32_t CreatePrefetcherPipeRelayDataflowBuffer(
         "CreatePrefetcherPipeRelayDataflowBuffer: relay cores {} must be a subset of receiver cores {}",
         receiver_cores.str(),
         pipe.receiver_cores().str());
+    TT_FATAL(config.entry_size > 0, "CreatePrefetcherPipeRelayDataflowBuffer: entry_size must be > 0");
     TT_FATAL(
         pipe.ring_size() % config.entry_size == 0,
         "CreatePrefetcherPipeRelayDataflowBuffer: entry size {} must divide PrefetcherPipe ring size {}",
