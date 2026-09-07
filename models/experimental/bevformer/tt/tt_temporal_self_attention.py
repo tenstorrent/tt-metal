@@ -66,6 +66,13 @@ class TTTemporalSelfAttention:
     ):
         self.device = device
         self.params = params
+        self._level_start_index_key = (0,)
+        self._level_start_index = ttnn.from_torch(
+            torch.tensor([0], dtype=torch.long),
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
 
         if embed_dims % num_heads != 0:
             raise ValueError(f"embed_dims must be divisible by num_heads, " f"but got {embed_dims} and {num_heads}")
@@ -153,15 +160,18 @@ class TTTemporalSelfAttention:
         # Use reference points as-is for simplified version
         ref_points = reference_points
 
-        # Prepare level start index if not provided
+        # Prepare level start index if not provided. Temporal attention runs a single level, so
+        # the default is the tensor uploaded at init. Rebuild when the index values change.
         if level_start_index is None:
-            level_start_index = torch.tensor([0], dtype=torch.long)
-
-        # Convert level_start_index to ttnn if needed
-        if isinstance(level_start_index, torch.Tensor):
-            level_start_index = ttnn.from_torch(
-                level_start_index, device=self.device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
+            level_start_index = self._level_start_index
+        elif isinstance(level_start_index, torch.Tensor):
+            key = tuple(level_start_index.flatten().tolist())
+            if key != self._level_start_index_key:
+                self._level_start_index = ttnn.from_torch(
+                    level_start_index, device=self.device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+                self._level_start_index_key = key
+            level_start_index = self._level_start_index
 
         if ENABLE_LOGGING:
             logger.info("TSA Tensor Conversion Complete")

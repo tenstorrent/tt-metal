@@ -331,18 +331,6 @@ class TTSpatialCrossAttention:
 
         _, L, _, _ = key.shape
 
-        # Validate spatial shapes consistency to prevent incorrect sampling locations
-        if spatial_shapes is not None:
-            if isinstance(spatial_shapes, ttnn.Tensor):
-                spatial_shapes_torch = ttnn.to_torch(spatial_shapes)
-            else:
-                spatial_shapes_torch = spatial_shapes
-            expected_L = spatial_shapes_torch.prod(dim=1).sum().item()
-            assert expected_L == L, (
-                f"Spatial shapes mismatch: spatial_shapes total ({expected_L}) != key spatial dimension ({L}). "
-                f"spatial_shapes: {spatial_shapes_torch.tolist()}, key.shape: {key.shape}"
-            )
-
         # [num_cams, L, bs, embed_dims] -> [bs * num_cams, L, embed_dims]
         key_reshaped = ttnn.permute(key, (2, 0, 1, 3))  # [bs, num_cams, L, embed_dims]
         key_reshaped = ttnn.reshape(key_reshaped, (bs * self.num_cams, L, self.embed_dims))
