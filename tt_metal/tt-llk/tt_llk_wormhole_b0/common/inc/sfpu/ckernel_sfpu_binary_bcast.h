@@ -395,6 +395,43 @@ inline void _calculate_sfpu_binary_bcast_col_full_tile_(std::uint32_t dst_index_
     }
 }
 
+// LREG_DATA0..3 contain centred values; LREG_BCAST contains the broadcast inverse standard deviation.
+sfpi_inline void _scale_and_store_normalized_row_band_(std::uint32_t dst0, std::uint32_t dst1, std::uint32_t dst2, std::uint32_t dst3)
+{
+    constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
+    TTI_SFPMUL(LREG_DATA0, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA0, 0);
+    TTI_SFPMUL(LREG_DATA1, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA1, 0);
+    TTI_SFPMUL(LREG_DATA2, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA2, 0);
+    TTI_SFPMUL(LREG_DATA3, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA3, 0);
+
+    TT_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_3, dst0);
+    TT_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_3, dst1);
+    TT_SFPSTORE(LREG_DATA2, IM, ADDR_MOD_3, dst2);
+    TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_3, dst3);
+}
+
+// LREG7 holds -mean. Interleave centring with the dependent inverse-standard-deviation broadcast.
+sfpi_inline void _finish_col_normalize_row_band_(
+    std::uint32_t inv_std_col0_addr, std::uint32_t dst0, std::uint32_t dst1, std::uint32_t dst2, std::uint32_t dst3)
+{
+    constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
+    TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_3, inv_std_col0_addr);
+    lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
+    // Centre the data in the dependent rotate chain's four latency slots.
+    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA0, 0);
+    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA1, 0);
+    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA2, 0);
+    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA3, 0);
+    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
+    TTI_SFPNOP;
+
+    _scale_and_store_normalized_row_band_(dst0, dst1, dst2, dst3);
+}
+
 inline void _process_col_normalize_row_band_(
     std::uint32_t mean_col0_addr,
     std::uint32_t inv_std_col0_addr,
@@ -416,29 +453,7 @@ inline void _process_col_normalize_row_band_(
 
     TTI_SFPMOV(0, LREG_BCAST, p_sfpu::LREG7, 1 /* SFPMOV_MOD1_NEGATE */);
 
-    TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_3, inv_std_col0_addr);
-    lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
-    // Centre the data in the dependent rotate chain's four latency slots.
-    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA0, 0);
-    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA1, 0);
-    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA2, 0);
-    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA3, 0);
-    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
-    TTI_SFPNOP;
-
-    TTI_SFPMUL(LREG_DATA0, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA0, 0);
-    TTI_SFPMUL(LREG_DATA1, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA1, 0);
-    TTI_SFPMUL(LREG_DATA2, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA2, 0);
-    TTI_SFPMUL(LREG_DATA3, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA3, 0);
-
-    TT_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_3, out_tile_offset + slot0);
-    TT_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_3, out_tile_offset + slot1);
-    TT_SFPSTORE(LREG_DATA2, IM, ADDR_MOD_3, out_tile_offset + slot2);
-    TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_3, out_tile_offset + slot3);
+    _finish_col_normalize_row_band_(inv_std_col0_addr, out_tile_offset + slot0, out_tile_offset + slot1, out_tile_offset + slot2, out_tile_offset + slot3);
 }
 
 inline void _calculate_sfpu_normalize_bcast_col_full_tile_(
@@ -484,27 +499,8 @@ inline void _process_col_normalize_two_tiles_row_band_(
         first_data_tile_offset + slot0, first_data_tile_offset + slot1, first_data_tile_offset + slot2, first_data_tile_offset + slot3);
     TTI_SFPMOV(0, LREG_BCAST, p_sfpu::LREG7, 1 /* SFPMOV_MOD1_NEGATE */);
 
-    TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_3, inv_std_col0_addr);
-    lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
-    // Centre the data in the dependent rotate chain's four latency slots.
-    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA0, 0);
-    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA1, 0);
-    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA2, 0);
-    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA3, 0);
-    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
-    TTI_SFPNOP;
-    TTI_SFPMUL(LREG_DATA0, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA0, 0);
-    TTI_SFPMUL(LREG_DATA1, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA1, 0);
-    TTI_SFPMUL(LREG_DATA2, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA2, 0);
-    TTI_SFPMUL(LREG_DATA3, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA3, 0);
-    TT_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_3, first_data_tile_offset + slot0);
-    TT_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_3, first_data_tile_offset + slot1);
-    TT_SFPSTORE(LREG_DATA2, IM, ADDR_MOD_3, first_data_tile_offset + slot2);
-    TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_3, first_data_tile_offset + slot3);
+    _finish_col_normalize_row_band_(
+        inv_std_col0_addr, first_data_tile_offset + slot0, first_data_tile_offset + slot1, first_data_tile_offset + slot2, first_data_tile_offset + slot3);
 
     TT_SFPLOAD(LREG_DATA0, IM, ADDR_MOD_3, second_data_tile_offset + slot0);
     TT_SFPLOAD(LREG_DATA1, IM, ADDR_MOD_3, second_data_tile_offset + slot1);
@@ -514,14 +510,8 @@ inline void _process_col_normalize_two_tiles_row_band_(
     TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA1, 0);
     TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA2, 0);
     TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA3, 0);
-    TTI_SFPMUL(LREG_DATA0, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA0, 0);
-    TTI_SFPMUL(LREG_DATA1, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA1, 0);
-    TTI_SFPMUL(LREG_DATA2, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA2, 0);
-    TTI_SFPMUL(LREG_DATA3, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA3, 0);
-    TT_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_3, second_data_tile_offset + slot0);
-    TT_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_3, second_data_tile_offset + slot1);
-    TT_SFPSTORE(LREG_DATA2, IM, ADDR_MOD_3, second_data_tile_offset + slot2);
-    TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_3, second_data_tile_offset + slot3);
+    _scale_and_store_normalized_row_band_(
+        second_data_tile_offset + slot0, second_data_tile_offset + slot1, second_data_tile_offset + slot2, second_data_tile_offset + slot3);
 }
 
 inline void _calculate_sfpu_normalize_bcast_col_two_tiles_(
@@ -594,28 +584,7 @@ inline void _process_col_residual_normalize_row_band_(
     _broadcast_stage3_preserve_data_();
     TTI_SFPMOV(0, LREG_BCAST, p_sfpu::LREG7, 1 /* SFPMOV_MOD1_NEGATE */);
 
-    TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_3, inv_std_col0_addr);
-    lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
-    // Centre the data in the dependent rotate chain's four latency slots.
-    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA0, 0);
-    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA1, 0);
-    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA2, 0);
-    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA3, 0);
-    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
-    TTI_SFPNOP;
-    TTI_SFPMUL(LREG_DATA0, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA0, 0);
-    TTI_SFPMUL(LREG_DATA1, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA1, 0);
-    TTI_SFPMUL(LREG_DATA2, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA2, 0);
-    TTI_SFPMUL(LREG_DATA3, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA3, 0);
-
-    TT_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_3, out_tile_offset + slot0);
-    TT_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_3, out_tile_offset + slot1);
-    TT_SFPSTORE(LREG_DATA2, IM, ADDR_MOD_3, out_tile_offset + slot2);
-    TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_3, out_tile_offset + slot3);
+    _finish_col_normalize_row_band_(inv_std_col0_addr, out_tile_offset + slot0, out_tile_offset + slot1, out_tile_offset + slot2, out_tile_offset + slot3);
 }
 
 inline void _calculate_sfpu_residual_normalize_bcast_col_full_tile_(
