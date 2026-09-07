@@ -1242,8 +1242,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
 
     // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
     const bool partials_cb_uses_output =
-        !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated &&
-        !arch_is_quasar;
+        !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
+    log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
 
     const bool reader_indices_globally_allocated =
         get_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).is_globally_allocated;
