@@ -1,4 +1,4 @@
-Note: DEPRECATED. PLEASE CHECK THE YAML FILE [models/model_targets.yaml](models/model_targets.yaml)
+Note: DEPRECATED. PLEASE CHECK THE YAML FILE [models/model_targets.yaml](../model_targets.yaml)
 
 # Model performance and accuracy
 
