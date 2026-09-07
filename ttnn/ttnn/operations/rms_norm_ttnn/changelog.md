@@ -1512,7 +1512,7 @@ alike.
 
 | # | change | domain | carve-outs, and what earned each |
 |---|---|---|---|
-| **D42** | **the block is PICKED, not inherited from what fits.** D41 got the objective right (row-blocks per core are the only thing to pipeline over) but raised the count only by deepening the ring, and still took the *largest* block that fits at each depth — a smaller block always fits, so the search never offered itself the finest split | every RESIDENT plan | (a) **measured regression** — a **zero-copy resident shard** (`native_in`) has no read to overlap, so every extra block is pure per-block overhead: `br 16 → 1` is **0.50x** on the `(1,1,8192,1024)` BLOCK shard and **0.42x** on `(1,1,7168,1024)` gbr. It keeps its coarsest block and only *balances* it at the same block count (20+12 → 16+16, **1.073x**); (b) **measured regression** — that rebalance only on an **exact** divisor, because an inexact one (11 → 10 on `(1,1,7168,1024)`) is **0.993x**. Depth is *not* a carve-out: it is provably unable to raise the block count, so the second ladder is gone rather than guarded |
+| **D42** | **the block is PICKED, not inherited from what fits.** D41 got the objective right (row-blocks per core are the only thing to pipeline over) but raised the count only by deepening the ring, and still took the *largest* block that fits at each depth — a smaller block always fits, so the search never offered itself the finest split | every RESIDENT plan whose x is read from DRAM **as tiles** | Three, and all three are the *same* principle — a finer block is only worth the per-block fixed cost it multiplies, so it pays exactly where a block boundary is what overlaps a DRAM read of tiles and nothing else. (a) **measured regression** — a **zero-copy resident shard** (`native_in`) has no read to overlap: `br 16 → 1` is **0.50x** on the `(1,1,8192,1024)` BLOCK shard and **0.42x** on `(1,1,7168,1024)` gbr. (b) **measured regression** — a **ROW_MAJOR activation** (`not is_tile`) is *tilized by compute* out of a stick ring, one `ckl::tilize<WT_CHUNK>(rows)` call per block, and that fixed cost dwarfs the overlap: `BLOCK_ROWS 8 → 1` is **0.711x** on `(1,1,256,512)` ROW_MAJOR WIDTH-sharded and **0.647x** on `(1,1,512,1024)`. (An RM plan is also pinned to depth 1, so it has no ring to pipeline the finer blocks against.) Both exceptions may still **level out** their blocks at the same block count — 20+12 → 16+16 is **1.074x** — and (c) **measured regression** limits that to an **exact** divisor, because an inexact rebalance (11 → 10 on `(1,1,7168,1024)`) is **0.993x**. Depth is *not* a carve-out: it is provably unable to raise the block count, so the second ladder is gone rather than guarded |
 | **D43** | **the GROUPED square fold.** `DEST_ACC_SQUARE_MAX_WT` is a *precision* ceiling on the fold's serial 16-bit accumulation depth, and because the fold was all-or-nothing that ceiling was also a *perf* ceiling — every prefill profile paid `WT_CHUNK` packs plus `WT_CHUNK` unpacks per tile-row. `X_SQUARED_WT` may now be any **divisor** of `WT_CHUNK`, so depth and pack-saving are independent: a chunk of 32 folds in groups of 16 and deletes 15 of every 16 packs. Expressed purely by reshaping the chain's iteration grid — **no helper bypassed** | every plan with `PARTIAL_W == 0` | (a) **correctness (pre-existing, unchanged)** — `PARTIAL_W != 0` gets no fold at all: the fold folds the row's last width tile *including its pad lanes* before the reduce runs, so the reduce's partial scaler / 0-1 mask can no longer reach them; (b) **inexpressible** — a `WT_CHUNK` with no divisor in `[2, G]` gets no grouped fold, because a ragged last group needs a second iteration shape and one `eltwise_chain` call cannot carry two. Nothing in the sweep hit it (chunk 57 = 3×19 folds at depth 3). **Not a carve-out:** the roofline-gated prefill band, where the change is flat, keeps the unified path |
 | **D44** | **pass B does gamma FIRST on a cross-core plan.** Pass B's first op is the one that needs the finalized stat, and on a `combine` plan that stat arrives by gather → root fold → multicast. The gamma mul depends on x and gamma only, so doing it first fills that wait with the traversal instead of idling through it. On the small-block combine plans it measures **as fast as deleting the traversal outright** (1.095 vs 1.096; 1.129 vs 1.113; 1.036 vs 1.034; 1.074 vs 1.075), which only latency-hiding explains | every `combine`-engaged plan carrying a gamma | (a) **infeasible** — `!HAS_G`: with no gamma there is no second mul to move; (b) **measured regression** — `!CROSS_CORE`: with the stat computed locally there is no arrival to hide behind, and the reorder cost a reproducible **0.983x and 0.989x** in two independent sessions on `(1,1,8192,2304)`. Every other `combine=False` case was flat, so the carve-out is the **regime**, not that one shape. Written as `if constexpr (!HAS_G || !CROSS_CORE) { legacy } else { new }` — the narrow exception, so `combine=False` plans stay **bit-exact** |
 
@@ -1520,6 +1520,39 @@ alike.
 `if constexpr (HAS_G && CROSS_CORE) { new } else { legacy }` — an allow-list around what it
 measured. It ships inverted, so each exception names the reason that earned it and shrinks
 as understanding grows instead of having to be widened by hand.
+
+**D42's ROW_MAJOR carve-out was found by a STRUCTURAL PIN, not by the perf harness — and
+that is the round's most useful process finding.** `tests/.../test_rms_norm_ttnn_perf.py::`
+`test_program_is_structurally_the_seeds` diffs the op's program against the seed's; after
+D42 it reported *three dropped staging CBs* on the ROW_MAJOR WIDTH-sharded plan. Chasing
+that flag showed `BLOCK_ROWS 8 → 1` there and a measured **0.711x / 0.647x**. The guard set
+could not have caught it: the row it inherited from Perf 2 was a **pinned 64×1 grid that no
+longer fits this part's live 11×10 compute grid**, so it had been substituted with a
+HEIGHT-sharded shape that D42's rule does not reach. A guard set whose rows silently stop
+being constructible is a guard set with holes, and a program-structure diff is what found
+this one. Both ROW_MAJOR WIDTH-sharded cells are now in the guard set explicitly, built
+with `auto_shard_config` so they cannot go stale the same way.
+
+**That pin was itself stale, and the round left it in better shape than it found it.** It
+asserted `mine's CB set == the seed's` — an *identity* the op has deliberately and
+measurably outgrown across six rounds (D39's compact hold, D41/D42's block, D43's
+`cb_x_squared` width), and it was already red on 3 cells before Perf 3. Two changes, both
+measured rather than asserted:
+* the CB assertion is now a **budget plus a buffer-set identity**: re-blocking may change a
+  CB's *size* but may never cost MORE L1 than the seed's, and may never add or drop a
+  buffer. Every divergence is in fact strictly **cheaper** — `(1,1,8192,1024)` INTERLEAVED
+  1,009,664 → 276,480 bytes (**−733,184**), the BLOCK shard 1,103,872 → 878,592
+  (−225,280) — so the identity form was pointing the wrong way.
+* the three **blocking** CT-arg indices are masked **by name** with the decision that owns
+  each (`BLOCK_ROWS` at reader 4 / writer 4 / compute 3, its per-core row count at reader
+  20, `X_SQUARED_WT` at compute 14). What the test still asserts — that a configuration
+  supplying **no operand pays nothing for operands** — is intact and unweakened.
+
+Rescoped, the pin reads **2 failed / 70 passed against the pre-round op** (better than the
+original form's 3/70) and **7 failed / 65 passed** after. The five it still flags are
+earlier rounds' buffer-set and reader-arg drift plus one allocator fatal in the test's own
+two-descriptor setup; they are recorded here rather than masked, because unlike the
+blocking indices nobody has yet established what owns them.
 
 **D44 carries a real, recorded cost — the round's one semantic price.** The reordered
 intermediate is `x · gamma`, which is **un-normalized**, so it can saturate the intermediate
@@ -1554,29 +1587,32 @@ better, `> 1.0` MISSES.
 | 9 | `(1,1,32,2304)` W `[32,256]` (9,1) | 2,936 | **2,551** | **1.151** | 0.636 → 0.553 |
 | 3 | `(1,1,32,7168)` INT gamma (≥7× cell) | 8,440 | **7,541** | **1.119** | 0.567 → 0.506 |
 | 11 | `(1,1,32,7168)` W `[32,256]` (7,4) | 3,784 | **3,412** | **1.109** | 0.693 → 0.623 |
-| 2 | `(1,1,32,5120)` INT gamma | 7,004 | **6,354** | **1.102** | 0.092 → 0.084 |
-| 8 | `(1,1,32,1024)` W `[32,128]` (8,1) | 2,621 | **2,387** | **1.098** | 0.640 → 0.581 |
-| 10 | `(1,1,32,5120)` W `[32,160]` (8,4) | 3,451 | **3,153** | **1.095** | 0.657 → 0.599 |
+| 8 | `(1,1,32,1024)` W `[32,128]` (8,1) | 2,621 | **2,370** | **1.106** | 0.640 → 0.577 |
+| 2 | `(1,1,32,5120)` INT gamma | 7,004 | **6,350** | **1.103** | 0.092 → 0.084 |
+| 10 | `(1,1,32,5120)` W `[32,160]` (8,4) | 3,451 | **3,147** | **1.097** | 0.657 → 0.597 |
 | 18 | `(1,1,128,4096)` INT, ROW_MAJOR weight | 11,176 | **10,217** | **1.094** | 0.172 → 0.156 |
 | 12 | `(1,1,8192,1024)` BLOCK `[1024,128]` (8,8) | 20,362 | **19,053** | **1.069** | 0.711 → 0.666 |
-| 13 | `(1,1,32,5120)` INT gbr `fp32_dest=True` | 9,612 | **9,021** | **1.066** | 0.062 → 0.057 |
-| 16 | `(1,1,32,5120)` W (8,4) gbr `fp32_dest=True` | 4,156 | **3,921** | **1.060** | 0.634 → 0.598 |
-| 1 | `(1,1,32,2304)` INT gamma | 5,136 | **4,859** | **1.057** | 0.304 → 0.286 |
+| 13 | `(1,1,32,5120)` INT gbr `fp32_dest=True` | 9,612 | **8,991** | **1.069** | 0.062 → 0.057 |
+| 16 | `(1,1,32,5120)` W (8,4) gbr `fp32_dest=True` | 4,156 | **3,919** | **1.060** | 0.634 → 0.598 |
+| 1 | `(1,1,32,2304)` INT gamma | 5,136 | **4,857** | **1.057** | 0.304 → 0.286 |
 | 0 | `(1,1,32,1024)` INT gamma | 4,333 | **4,123** | **1.051** | 0.474 → 0.451 |
+| 17 | `(1,1,7168,1024)` BLOCK `[896,128]` (8,8) gbr | 28,984 | 28,679 | 1.011 | 0.838 → 0.830 |
 | 4 | **`(1,1,8192,1024)` INT gamma — FOCUS** | **83,777** | **82,912** | **1.010** | **0.866 → 0.857** |
-| 17 | `(1,1,7168,1024)` BLOCK `[896,128]` (8,8) gbr | 28,984 | 28,684 | 1.010 | 0.838 → 0.830 |
-| 14 | `(1,1,8192,5120)` INT gbr `fp32_dest=True` | 611,992 | 610,251 | 1.003 | 0.466 → 0.464 |
+| 14 | `(1,1,8192,5120)` INT gbr `fp32_dest=True` | 611,992 | 608,898 | 1.005 | 0.466 → 0.463 |
 | 6 | `(1,1,8192,5120)` INT gamma | 406,697 | 405,861 | 1.002 | 0.551 → 0.550 |
 | 7 | `(1,1,8192,7168)` INT gamma | 560,072 | 559,427 | 1.001 | 0.544 → 0.542 |
-| 15 | `(1,1,8192,7168)` INT gbr `fp32_dest=True` | 1,043,276 | 1,046,247 | 0.997 | 0.568 → 0.569 |
+| 15 | `(1,1,8192,7168)` INT gbr `fp32_dest=True` | 1,043,276 | 1,044,230 | 0.999 | 0.568 → 0.568 |
 | 5 | `(1,1,8192,2304)` INT gamma | 179,391 | 180,536 | 0.994 | 0.849 → 0.854 |
 
 **Every case is under its ceiling, 12 of 19 gain ≥ 1.05x, and the worst ratio moves
 0.866 → 0.857.** Perf 1 → Perf 2 → Perf 3 on that worst cell: 0.908 → 0.871 → 0.857.
 
-The focus shape's own headline, measured **drift-cancelled** (BEFORE/AFTER alternated twice,
-9 reads each, `ab.sh`): **82,868 → 81,941 ns, 1.011x**, i.e. the paired table above and the
-alternated A/B agree to 0.1 points. That is a modest number and it is the honest one: the
+The focus shape's own headline, measured **drift-cancelled** (BEFORE/AFTER alternated over
+**four** pairs, 9 reads each, `ab.sh`): per-pair **1.005x / 1.008x / 1.011x / 1.005x**,
+pooled **82,594 → 81,939 ns = 1.008x**. The paired table above reads 1.010x, so the two
+methods agree to within 0.2 points — and the spread across pairs is itself the honest
+caveat, because it is the same size as the effect. That is a modest number and it is the
+right one: the
 focus shape's payload is roofline-gated at 473 of 494 GB/s, and D43's real 1.019x saving
 there (visible the moment the write payload is stubbed) is *hidden* by that roofline. The
 round's value landed on the twelve cells where TRISC, not DRAM, holds the wall.
@@ -1591,30 +1627,41 @@ fence off the shapes that happened to land badly in one session.
 
 ### Guard set — one representative per distinct kernel path × layout × placement
 
-Same 16-path set as Perf 2's, so the rounds compare. `min` of 3 reads; BEFORE is the Perf-2
-tip op files (`git checkout 79ab065a7f -- kernels rms_norm_ttnn_program_descriptor.py`).
-The five headline cells were additionally re-measured drift-cancelled at 9 reads.
+Perf 2's 16-path set, so the rounds compare, **plus the two ROW_MAJOR WIDTH-sharded rows
+this round had to add** (see below). `min` of 3–9 reads; BEFORE is the Perf-2 tip op files
+(`git checkout 79ab065a7f -- kernels rms_norm_ttnn_program_descriptor.py`); the headline and
+ROW_MAJOR cells were measured **drift-cancelled** with BEFORE and AFTER alternated (`ab.sh`).
+One inherited row had to change shape: Perf 2's "ROW_MAJOR BAND, WIDTH-sharded `(1,1,256,512)`
+64c" pins a 64×1 grid that **no longer fits this part's live 11×10 compute grid** and now
+raises rather than measuring — which is exactly how D42's ROW_MAJOR regression stayed hidden
+from the perf harness. It is replaced by a HEIGHT-sharded band plus two `auto_shard_config`
+ROW_MAJOR WIDTH-sharded cells that cannot go stale the same way.
 
 | path | before | after | x |
 |---|---:|---:|---:|
-| WIDTH shard, native + flat combine, D44 — `(1,1,32,7168)` | 3,704 | **3,338** | **1.104** |
-| BLOCK shard, native + slot tree, D42 balance + D44 — `(1,1,8192,1024)` | 20,262 | **18,873** | **1.073** |
+| WIDTH shard, native + flat combine, D44 — `(1,1,32,7168)` | 3,684 | **3,330** | **1.106** |
+| BLOCK shard, native + slot tree, D42 balance + D44 — `(1,1,8192,1024)` | 20,272 | **18,876** | **1.074** |
 | interleaved, TILE weight, `fp32_dest=True` — `(1,1,128,4096)` | 11,589 | **10,707** | **1.082** |
-| ROW_MAJOR BAND, HEIGHT-sharded — `(1,1,256,512)` | 8,633 | **8,184** | **1.055** |
+| ROW_MAJOR BAND, HEIGHT-sharded — `(1,1,256,512)` | 8,627 | **8,187** | **1.054** |
 | interleaved, ROW_MAJOR weight — `(1,1,128,4096)` `fp32_dest=True` | 10,670 | **10,248** | **1.041** |
 | W non-aligned (masked reduce, fold gated OFF) — `(1,1,224,1000)` | 6,546 | 6,427 | 1.019 |
-| interleaved RESIDENT, D42 engaged — **`(1,1,8192,1024)` FOCUS** | 82,619 | 81,773 | **1.011** |
+| interleaved RESIDENT, D42 engaged — **`(1,1,8192,1024)` FOCUS** | 82,310 | 81,912 | **1.005–1.011** (4 pairs) |
 | ROW_RESIDENT + D39 compact — `(1,1,8192,7168)` gbr `fp32_dest=True` | 1,042,844 | 1,037,836 | 1.005 |
 | STREAM — `(1,1,1024,16384)` gbr | 495,095 | 493,320 | 1.004 |
 | ragged-`Wt` interleaved — `(1,1,32,4064)` | 32,307 | 32,224 | 1.003 |
 | ROW_RESIDENT tiled, no compact — `(1,1,8192,5120)` gamma | 404,127 | 403,659 | 1.001 |
-| ROW_MAJOR activation, TILE weight — `(1,1,8192,1024)` | 84,229 | 84,159 | 1.001 |
+| ROW_MAJOR activation, TILE weight — `(1,1,8192,1024)` | 84,389 | 84,293 | 1.001 |
+| **ROW_MAJOR WIDTH-sharded — `(1,1,256,512)`** (D42 carve-out) | 22,318 | 22,290 | 1.001 (**0.711 without it**) |
+| **ROW_MAJOR WIDTH-sharded — `(1,1,512,1024)`** (D42 carve-out) | 39,027 | 39,019 | 1.000 (**0.647 without it**) |
 | interleaved RESIDENT, `combine=False` — `(1,1,8192,2304)` | 178,401 | 179,154 | 0.999 |
 | HEIGHT shard, native, no combine — `(1,1,2048,256)` 64c | 2,243 | 2,259 | 0.993 |
 | ROW_MAJOR activation, 2-core line (D40 carve-out) — `(1,1,64,128)` | 5,267 | 5,309 | 0.992 |
 | H non-aligned — `(1,1,333,544)` | 8,055 | 8,126 | 0.991 |
 
-**No material regression anywhere.** The three cells at 0.991–0.993 are sub-9-µs kernels
+**No material regression anywhere — after one was found and carved out.** The two ROW_MAJOR
+WIDTH-sharded rows are the round's one real regression: D42 reached them and cost
+**0.711x / 0.647x** until the `not is_tile` exception was added, and they now read at
+parity. Every other path is flat or better. The three cells at 0.991–0.993 are sub-9-µs kernels
 whose own session spread is 2.7–6.6%; two of them (`(1,1,2048,256)` HEIGHT native and
 `(1,1,64,128)`) build programs D42/D43/D44 cannot reach at all — `rows_max == 1` on a native
 shard, and no combine — so their delta is measurement, not code. `(1,1,333,544)` read 0.984
@@ -1687,12 +1734,26 @@ on `!SQ_FOLD` and the limit is documented at the site rather than left to fail a
    `built/*/kernels/`; purge whole kernel build DIRECTORIES or nothing) held, and issue 2
    above is its sibling: the cache is content-blind, so it must be keyed or purged, never
    trimmed.
+6. **`git checkout HEAD --` as an experiment-restore bit TWICE**, and the second time it
+   cost a wrong conclusion, not just work: `ab.sh` reverted D42's ROW_MAJOR carve-out
+   between the BEFORE and AFTER legs, so both columns measured the *same* code and the fix
+   appeared not to work. The rule that came out of it: an A/B harness must **snapshot the
+   working tree** and restore from that copy, and any graduation must be **committed before
+   it is measured**. Both `ab.sh` and `knob.sh` do it that way now.
+7. **A guard-set row that has silently stopped being constructible is a hole, not a row.**
+   Perf 2's ROW_MAJOR WIDTH-sharded entry pins a 64×1 grid; on this part it now raises
+   `shard grid 64x1 exceeds live compute grid 11x10`, and substituting a nearby shape moved
+   it off the very code path D42 changed. The regression was caught by a **program-structure
+   diff** instead. Worth carrying: a perf guard set and a structural pin fail in different
+   directions, and this round needed both.
 
 ### Where the op stands after three rounds
 
 The worst `perf` cell is `(1,1,8192,1024)` INTERLEAVED at **0.857** (0.908 → 0.871 → 0.857
 across the three rounds), then `(1,1,8192,2304)` at 0.854 and the BLOCK `gbr`
-`(1,1,7168,1024)` at 0.830. All three are now **payload-bound at 473 of the 494 GB/s best
+`(1,1,7168,1024)` at 0.830. Across the three rounds the *shape* of the remaining gap has
+changed: rounds 1 and 2 were spent on DRAM traffic and per-channel staging, and round 3
+found both of those closed on this family and the residue sitting on the TRISCs. All three are now **payload-bound at 473 of the 494 GB/s best
 this op has ever measured**, with an additive TRISC floor that this round cut from 16.8% by
 the amount the roofline lets show. The measured, unclaimed levers, in the order the evidence
 ranks them:
