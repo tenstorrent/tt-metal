@@ -327,15 +327,29 @@ private:
             h.slot_3v3_w = static_cast<uint16_t>(o.slot_3v3_w);
         }
 
-        h.last_update_us = now_us;
+        // FRESHNESS IS THE FRAME'S EPOCH, NOT THE FACT THAT WE READ IT. `published` is
+        // sticky: a die whose sweep has stopped keeps published=1 and keeps handing back
+        // the LAST frame it produced, forever (see tenstorrent_percore_die in ioctl.h).
+        // Stamping last_update_us on every read therefore told the viewer a frozen frame
+        // was live, and main.cpp's chip_stale check -- which exists precisely to catch
+        // this -- could never fire in --direct mode.
+        //
+        // Observed on a quad-n300: one die rendered 75% activity and a 69-82% per-core
+        // gradient while its own telemetry on the same row read 8 W, 11 A and 0.70 V,
+        // against 26 W and 0.89 V on genuinely idle dies. The utilisation was real, just
+        // minutes old -- left over from a matmul that had already finished.
+        const uint16_t epoch = rd16(f, kOffEpoch);
+        const bool fresh = (epoch != last_epoch_[desc.location]);
+        if (fresh) {
+            h.last_update_us = now_us;
+        }
         if (h.epoch_us == 0) {
             h.epoch_us = now_us;
         }
 
         // DRAM is MB in THIS frame, so a rate needs the frame count over wall time rather
         // than an assumed 9.9 Hz -- a missed frame would otherwise inflate it.
-        const uint16_t epoch = rd16(f, kOffEpoch);
-        if (epoch != last_epoch_[desc.location]) {
+        if (fresh) {
             dram_rd_acc_[desc.location] += rd16(f, kOffDramRd);
             dram_wr_acc_[desc.location] += rd16(f, kOffDramWr);
             last_epoch_[desc.location] = epoch;
