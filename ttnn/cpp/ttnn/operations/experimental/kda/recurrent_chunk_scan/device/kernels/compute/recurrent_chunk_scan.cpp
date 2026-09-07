@@ -223,7 +223,7 @@ FORCE_INLINE void update_state(
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t reset_chunk) {
+FORCE_INLINE void compute_summary(uint32_t active_chunks, uint32_t reset_chunk) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
     DataflowBuffer v_beta(dfb::v_beta);
@@ -248,10 +248,10 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t reset_chunk) {
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(kd.get_id(), v_beta.get_id(), output.get_id());
-    for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+    for (uint32_t chunk = 0; chunk < active_chunks; chunk++) {
         DataflowBuffer& current_b = chunk == 0 ? state : state_ring;
         DataflowBuffer& current_ab = chunk == 0 ? summary_seed : summary_ring;
-        const bool last = chunk == num_chunks - 1;
+        const bool last = chunk == active_chunks - 1;
 
         kd.wait_front(chunk_key_tiles);
         v_beta.wait_front(chunk_value_tiles);
@@ -291,7 +291,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t reset_chunk) {
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
+FORCE_INLINE void compute_recurrent(uint32_t active_chunks, uint32_t reset_chunk) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
     DataflowBuffer v_beta(dfb::v_beta);
@@ -313,7 +313,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(kd.get_id(), v_beta.get_id(), output.get_id());
     pack_reconfig_data_format(dfb::scratch);
-    for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+    for (uint32_t chunk = 0; chunk < active_chunks; chunk++) {
         // A wrap restarts the causal stream mid-group. The recurrence is affine in
         // the state, so no per-chunk term changes -- only where the carry comes
         // from. reset_chunk 0 means never, which is exact rather than a sentinel:
@@ -327,7 +327,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
             state_ring.pop_front(key_value_tiles);
         }
         DataflowBuffer& current_state = (chunk == 0 || reseed) ? state : state_ring;
-        DataflowBuffer& destination = chunk == num_chunks - 1 ? final_state : state_ring;
+        DataflowBuffer& destination = chunk == active_chunks - 1 ? final_state : state_ring;
 
         compute_value_new<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
             current_state, kd, v_beta, t_inv, scratch, output_intermediate, value_new);
@@ -341,10 +341,10 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary_pair>
-TT_KERNEL void compute(uint32_t num_chunks, uint32_t reset_chunk) {
+TT_KERNEL void compute(uint32_t active_chunks, uint32_t reset_chunk) {
     if constexpr (summary_pair) {
-        compute_summary<Ct, Kt, Vt>(num_chunks, reset_chunk);
+        compute_summary<Ct, Kt, Vt>(active_chunks, reset_chunk);
     } else {
-        compute_recurrent<Ct, Kt, Vt>(num_chunks, reset_chunk);
+        compute_recurrent<Ct, Kt, Vt>(active_chunks, reset_chunk);
     }
 }
