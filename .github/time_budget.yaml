@@ -376,6 +376,7 @@ models:
     bh_p300: 42
     bh_quietbox_2: 220
   e2e_tier3:
+    wh_llmbox: 12
     wh_llmbox_perf: 180
     wh_galaxy_perf: 55
     wh_n150: 108
@@ -403,12 +404,12 @@ models:
     bh_p150: 20
     bh_quietbox_2: 95
   unit_tier3:
-    wh_llmbox: 90
+    wh_llmbox: 100
     wh_galaxy: 80
     wh_llmbox_perf: 58
     wh_n150: 75
     wh_n150_civ2: 12
-    wh_n300: 73  # 43 (incl. +10 DiffusionDrive #42995) + 30 for Qwen3.5-9B unit tests (measured 26 min)
+    wh_n300: 43  # +10 DiffusionDrive unit tests (#42995)
     bh_p150: 50 # 30 + 20 for cherry-picked Qwen3.5-9B P150 unit tests; needs #tt-metal-infra sign-off
     bh_p300: 30
     bh_quietbox_2: 25

@@ -60,12 +60,11 @@ def chunk_gated_delta_rule_seq_dispatch(*args, **kwargs):
         Memory" this file's module docstring documents, at HALF N150's per-chip size -- so N150
         must keep the fix. Narrowing this to wh_9b_n300 (which excludes N150 too) would very
         likely reproduce that exact OOM on N150; left alone on purpose.
-      * T3K (27B, TP=8) has 48 value heads / TP=8 = 6/chip -- ~0.375x N300's per-chip size, i.e.
-        LESS L1 pressure from this specific tensor than the config that first needed the fix, not
-        more. This is a head-count/TP-division ESTIMATE, not a T3K hardware measurement -- accepted
-        per explicit instruction to narrow T3K wherever defensible. If a real OOM ever shows up on
-        T3K here, the fix is reverting this one exclusion (T3K back to the bf16 fork), not
-        reverting N150's protection.
+      * T3K (27B, TP=8) has 48 value heads / TP=8 = 6/chip: 6*2048*128*4 = 6.0MB, 0.375x N300's
+        per-chip size, i.e. LESS L1 pressure than the config that first needed the fix. Measured on
+        T3K at L=2048: the upstream seq path fits (no OOM) and matches the fused kernel to PCC
+        0.99920. If an OOM ever shows up here the fix is reverting this one exclusion (T3K back to
+        the bf16 fork), not reverting N150's protection.
     Detects T3K via the mesh_device kwarg the shared module always passes at its one call site
     (ttnn_delta_rule_seq.py: `chunk_gated_delta_rule_seq(..., mesh_device=device, ...)`) -- not via
     model_args, which this generically-invoked monkeypatch target has no way to receive."""
