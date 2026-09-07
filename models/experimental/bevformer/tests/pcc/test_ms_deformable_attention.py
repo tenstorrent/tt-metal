@@ -120,6 +120,7 @@ def test_ms_deformable_attention_forward(
         config=config,
         device=device,
         params=tt_parameters,
+        spatial_shapes=spatial_shapes,
     )
 
     # --------------------------------------------------------------------------- #

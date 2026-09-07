@@ -131,6 +131,7 @@ def test_temporal_self_attention_forward(
         num_points=num_points,
         num_bev_queue=num_bev_queue,
         batch_first=True,
+        spatial_shapes=bev_spatial_shapes,
     )
 
     # --------------------------------------------------------------------------- #
@@ -152,7 +153,6 @@ def test_temporal_self_attention_forward(
         query=tt_current_bev,
         reference_points=tt_reference_points_2d,
         spatial_shapes=bev_spatial_shapes,
-        level_start_index=level_start_index,
         bev_h=bev_h,
         bev_w=bev_w,
     )
