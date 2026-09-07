@@ -9,6 +9,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/kernel/compute/dest_format_helpers.hpp"
@@ -19,6 +20,9 @@
 //   out[.., nope tile]  = in[.., nope tile]
 //   out[.., rope tile]  = in * cos + (in @ trans_mat) * sin
 // The rotation is block-diagonal per tile, so each rope tile rotates independently of the split.
+//
+// A ROW_MAJOR X is 1x32 while cos/sin/trans_mat stay 32x32, so each stage re-programs the source
+// tile/face geometry it needs (see the height-sharded kernel for why the matmul cannot inherit it).
 namespace {
 // DST tile budget per acquire/commit batch (safe for fp32 dest-acc mode).
 constexpr uint32_t kDstBatch = 8;
@@ -36,7 +40,7 @@ void kernel_main() {
     constexpr uint32_t out_cb = get_compile_time_arg_val(7);
     constexpr uint32_t Ht = get_compile_time_arg_val(8);
     constexpr uint32_t Wt_local = get_compile_time_arg_val(9);
-    // When set, cos/sin hold a single tile-row that is broadcast across all 32 input rows.
+    // When set, cos/sin hold a single tile-row that is broadcast across all input rows.
     constexpr bool cos_bcast = get_compile_time_arg_val(10) != 0;
 
     // This core's split of its own column slice; both are runtime args because they depend on
@@ -78,6 +82,7 @@ void kernel_main() {
         const uint32_t row_base = rt * Wt_local;
 
         // 1) Pass-through this row-tile's leading "nope" tiles.
+        reconfig_full_operand_srca(in_cb);
         copy_tile_init_with_dt(in_cb);
         for (uint32_t base = 0; base < nope_local; base += kDstBatch) {
             const uint32_t g = (nope_local - base) < kDstBatch ? (nope_local - base) : kDstBatch;
@@ -101,6 +106,9 @@ void kernel_main() {
         const uint32_t cos_base = cos_bcast ? 0 : rt * rope_local;
 
         // 2) Rotate this row-tile's rope tiles: rotated = in_rope @ trans_mat.
+        // matmul maps in0 -> SrcB and in1 -> SrcA, so SrcA carries the 32x32 trans_mat.
+        reconfig_full_operand_srca(trans_mat_cb);
+        reconfig_full_operand_srcb(in_cb);
         matmul_init(in_cb, trans_mat_cb);
         rotated_interm_cb_obj.reserve_back(rope_local);
         for (uint32_t base = 0; base < rope_local; base += kDstBatch) {
@@ -120,6 +128,8 @@ void kernel_main() {
         rotated_interm_cb_obj.wait_front(rope_local);
 
         // sin_interm = rotated * sin  (broadcast sin's single row across all input rows if cos_bcast)
+        reconfig_full_operand_srca(rotated_interm_cb);
+        reconfig_full_operand_srcb(sin_cb);
         if constexpr (cos_bcast) {
             mul_bcast_rows_init(rotated_interm_cb, sin_cb);
         } else {
@@ -147,6 +157,8 @@ void kernel_main() {
         rotated_interm_cb_obj.pop_front(rope_local);
 
         // cos_interm = in_rope * cos  (broadcast cos's single row across all input rows if cos_bcast)
+        reconfig_full_operand_srca(in_cb);
+        reconfig_full_operand_srcb(cos_cb);
         if constexpr (cos_bcast) {
             mul_bcast_rows_init(in_cb, cos_cb);
         } else {
@@ -175,6 +187,8 @@ void kernel_main() {
         // out_rope = cos_interm + sin_interm
         sin_interm_cb_obj.wait_front(rope_local);
         cos_interm_cb_obj.wait_front(rope_local);
+        reconfig_full_operand_srca(cos_interm_cb);
+        reconfig_full_operand_srcb(sin_interm_cb);
         add_init(cos_interm_cb, sin_interm_cb);
         for (uint32_t base = 0; base < rope_local; base += kDstBatch) {
             const uint32_t g = (rope_local - base) < kDstBatch ? (rope_local - base) : kDstBatch;

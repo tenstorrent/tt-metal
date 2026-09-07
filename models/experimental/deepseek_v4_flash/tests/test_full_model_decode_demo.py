@@ -293,10 +293,9 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
             assert attn.kv_proj.use_prefetcher
             assert not attn.q_a_proj.keep_weights_in_l1
             assert not attn.kv_proj.keep_weights_in_l1
-            for proj, k_blocks, n_blocks in ((attn.q_a_proj, 2, 32), (attn.kv_proj, 4, 16)):
-                assert proj.partial_width_sharded
-                assert proj.k_blocks == k_blocks
-                assert proj.n_blocks == n_blocks
+            assert not attn.q_a_proj.partial_width_sharded
+            assert not attn.kv_proj.partial_width_sharded
+            assert attn.kv_proj.num_inputB_cores == 16
             assert attn.q_b_proj.N == attn.num_heads * attn.head_dim // tp_size
         logger.info(
             f"parallelism: {model.num_submeshes} pipeline stages x TP{tp_size} " f"({model.pipeline_devices} chips)"

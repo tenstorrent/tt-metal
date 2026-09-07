@@ -93,7 +93,7 @@ DECODE_LAYOUTS = {
     # normalized full row directly onto q_b's 64-core weight grid.
     "q_a_proj": {"K": 4096, "N": 1024, "n_blocks": 32},
     "q_b_proj": {"K": 1024, "N": 32768, "n_blocks": 64},
-    "kv_proj": {"K": 4096, "N": 512, "partial_width_sharded": True, "k_blocks": 4, "n_blocks": 16},
+    "kv_proj": {"K": 4096, "N": 512, "n_blocks": 16},
     # q_a and kv projected by one matmul over their concatenated weight (see
     # ``DeepSeekV4Attention._qkv``). Deliberately absent from ``DECODE_GCB_GROUP``: a
     # 1536-wide weight cuts into 3-tile rows per B core, and the group's page is 32 tiles,
@@ -140,13 +140,12 @@ DECODE_LAYOUTS = {
 }
 
 # The order one layer's matmuls consume the buffer, which is the order the requests must be
-# queued in. q_a has a private 32-receiver FIFO; this shared FIFO starts with q_b/kv from
-# ``_qkv``, then the compressor (it runs after ``_qkv`` and before ``_attend``), then
-# ``_attend``'s grouped output projection (o_a_proj before o_b_proj -- see
+# queued in. q_a and kv have private FIFOs (32- and 16-receiver); this shared FIFO starts
+# with q_b from ``_qkv``, then the compressor (it runs after ``_qkv`` and before ``_attend``),
+# then ``_attend``'s grouped output projection (o_a_proj before o_b_proj -- see
 # ``DeepSeekV4Attention._grouped_output``). The MoE block follows.
 DECODE_GCB_GROUP = (
     "q_b_proj",
-    "kv_proj",
     "compressed_sparse_attention",
     "heavily_compressed_attention",
     "o_a_proj",
@@ -159,6 +158,7 @@ DECODE_GCB_GROUP = (
 # Extra GCBs attached to the per-device prefetch mapping under TP. Not in
 # ``DECODE_GCB_GROUP``: different receiver counts, independent FIFOs.
 Q_A_GCB = "q_a_full"
+KV_GCB = "kv_full"
 SEQUENTIAL_OA_GCB = "o_a_sequential"
 TP_GATE_UP_GCB = "shared_gate_up_tp"
 # Those private rings cannot use the shared 16/24-page depth: each has a single
@@ -281,6 +281,11 @@ def hc_fn_page_bytes(weight_dtype: ttnn.DataType) -> int:
 def q_a_page_bytes(weight_dtype: ttnn.DataType) -> int:
     """Page size for q_a's private 32-receiver full-width ring."""
     return decode_gcb_page_bytes([DECODE_LAYOUTS["q_a_proj"]], weight_dtype)
+
+
+def kv_page_bytes(weight_dtype: ttnn.DataType) -> int:
+    """Page size for kv's private 16-receiver full-width ring."""
+    return decode_gcb_page_bytes([DECODE_LAYOUTS["kv_proj"]], weight_dtype)
 
 
 def make_decode_prefetch_buffers(
