@@ -396,7 +396,7 @@ inline void _llk_math_matmul_load_replay_()
     // if in1 is transposed then faces 1&2 need to be swapped during read
     // by changing address increment amount via addr_mods
     constexpr std::uint32_t replay_buf_len = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
-    constexpr std::uint32_t ops_per_face = 16 / ELTWISE_MATH_ROWS;
+    constexpr std::uint32_t ops_per_face   = 16 / ELTWISE_MATH_ROWS;
 
     if constexpr (ENABLE_2X_FORMAT)
     {
@@ -607,6 +607,114 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
 }
 
 /**
+ * @brief Initializes mop config for matrix multiply on the 4-row FPU (4row_arch, ELTWISE_MATH_ROWS == 4).
+ *
+ * Same face traversal as @ref _llk_math_matmul_di_mop_config_, but each MVMULDI writes 4 dest rows instead of 8,
+ * so every face is covered by 4 MVMULDIs (srcb/dest index step 1) instead of 2 — twice the count per tile
+ * (Int8_2x: 16; plain: 32). Shares @ref _llk_math_matmul_di_addrmod_ with the 8-row path (row-count agnostic).
+ *
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam ENABLE_2X_FORMAT: Select the Int8_2x traversal (16 MVMULDI) instead of the plain one (32 MVMULDI)
+ * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
+ * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
+ */
+template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT>
+inline void _llk_math_matmul_di_mop_config_4row_(std::uint8_t ct_dim, std::uint8_t rt_dim)
+{
+    constexpr std::uint32_t FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
+    const bool reuse_a                      = ct_dim >= rt_dim;
+
+    constexpr std::uint32_t replay_buf_len =
+        ENABLE_2X_FORMAT ? 16 - 1 : 32 - 1; // -1 since the last instruction for the Tile * Tile operation will come out of the MOP
+    if constexpr (ENABLE_2X_FORMAT)
+    {
+        load_replay_buf<0, replay_buf_len>(
+            // Lambda function to load reply buffer
+            []
+            {
+                // [B0] x [A0 A1]  (srcb/dest step 1: 4 MVMULDIs per face)
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x0, 0x0, 0x0);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x1, 0x0, 0x0, 0x1);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x0, 0x0, 0x2);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x3, 0x0, 0x0, 0x3);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x4, 0x0, 0x4);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x1, 0x4, 0x0, 0x5);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x4, 0x0, 0x6);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x3, 0x4, 0x0, 0x7);
+                // [B1] x [A0 A1]
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0x0, 0x0, 0x8);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x5, 0x0, 0x0, 0x9);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x0, 0x0, 0xA);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x7, 0x0, 0x0, 0xB);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0x4, 0x0, 0xC);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x5, 0x4, 0x0, 0xD);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x4, 0x0, 0xE);
+            });
+    }
+    else
+    {
+        load_replay_buf<0, replay_buf_len>(
+            // Lambda function to load reply buffer
+            []
+            {
+                // [B0] x [A0 A1]  (srcb/dest step 1: 4 MVMULDIs per face)
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x0, 0x0, 0x0);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x1, 0x0, 0x0, 0x1);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x0, 0x0, 0x2);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x3, 0x0, 0x0, 0x3);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x4, 0x0, 0x4);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x1, 0x4, 0x0, 0x5);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x4, 0x0, 0x6);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x3, 0x4, 0x0, 0x7);
+                // [B2] x [A0 A1]
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x8, 0x0, 0x0, 0x8);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x9, 0x0, 0x0, 0x9);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xA, 0x0, 0x0, 0xA);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xB, 0x0, 0x0, 0xB);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x8, 0x4, 0x0, 0xC);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x9, 0x4, 0x0, 0xD);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xA, 0x4, 0x0, 0xE);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xB, 0x4, 0x0, 0xF);
+                // [B1] x [A2 A3]  (accumulates onto [B0] x [A0 A1])
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0x8, 0x0, 0x0);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x5, 0x8, 0x0, 0x1);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x8, 0x0, 0x2);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x7, 0x8, 0x0, 0x3);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0xC, 0x0, 0x4);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x5, 0xC, 0x0, 0x5);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0xC, 0x0, 0x6);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x7, 0xC, 0x0, 0x7);
+                // [B3] x [A2 A3]  (accumulates onto [B2] x [A0 A1])
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xC, 0x8, 0x0, 0x8);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xD, 0x8, 0x0, 0x9);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xE, 0x8, 0x0, 0xA);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xF, 0x8, 0x0, 0xB);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xC, 0xC, 0x0, 0xC);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xD, 0xC, 0x0, 0xD);
+                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xE, 0xC, 0x0, 0xE);
+            });
+    }
+
+    const std::uint32_t matmul_op = ENABLE_2X_FORMAT ? TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x7, 0x4, ADDR_MOD_1, 0xF)
+                                                     : TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xF, 0xC, ADDR_MOD_1, 0xF);
+    std::uint32_t matmul_op_last;
+    if constexpr (ENABLE_2X_FORMAT)
+    {
+        matmul_op_last =
+            reuse_a ? TT_OP_MVMULDI(p_setrwc::CLR_A, 0x0, 0x7, 0x4, ADDR_MOD_2, 0xF) : TT_OP_MVMULDI(p_setrwc::CLR_B, 0x0, 0x7, 0x4, ADDR_MOD_2, 0xF);
+    }
+    else
+    {
+        matmul_op_last =
+            reuse_a ? TT_OP_MVMULDI(p_setrwc::CLR_A, 0x0, 0xF, 0xC, ADDR_MOD_2, 0xF) : TT_OP_MVMULDI(p_setrwc::CLR_B, 0x0, 0xF, 0xC, ADDR_MOD_2, 0xF);
+    }
+
+    ckernel_template temp(1 /* outer loop */, FIDELITY_PHASES, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), matmul_op);
+    temp.set_last_outer_loop_instr(matmul_op_last);
+    temp.program_bank0_sw_cntl(instrn_buffer);
+}
+
+/**
  * @brief Initializes addrmod and config for matrix multiply operation of Input 0 * Input 1 -> SrcB * SrcA.
  *
  * Input 0 dim = [rt_dim, 1], Input 1 dim = [1, ct_dim]; output is a matrix block of dimension [rt_dim, ct_dim].
@@ -641,12 +749,22 @@ inline void _llk_math_matmul_init_(
             "direct-indexing and 2x matmul support exact 16x16-face, 2x2 operand shapes only");
     }
 
-    if constexpr (ENABLE_DIRECT_INDEXING)
+    // On 4row_arch the Int8_2x matmul only has a direct-indexing path, so force DI for 2x there.
+    constexpr bool USE_DIRECT_INDEXING = ENABLE_DIRECT_INDEXING || (ELTWISE_MATH_ROWS == 4 && ENABLE_2X_FORMAT);
+
+    if constexpr (USE_DIRECT_INDEXING)
     {
         // Direct-indexing path. Supports plain DI and DI+X2 (DI+X2 is the original
-        // MXFP4_2x matmul implementation).
+        // MXFP4_2x matmul implementation on Quasar, the Int8_2x path on 4row_arch).
         _llk_math_matmul_di_addrmod_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim);
-        _llk_math_matmul_di_mop_config_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
+        if constexpr (ELTWISE_MATH_ROWS == 4)
+        {
+            _llk_math_matmul_di_mop_config_4row_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
+        }
+        else
+        {
+            _llk_math_matmul_di_mop_config_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
+        }
         _set_tile_shape_idx_gpr_(NUM_FACES * MAX_FACE_R_DIM);
     }
     else

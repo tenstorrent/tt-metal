@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from helpers.chip_architecture import is_4row_arch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -80,17 +81,25 @@ def unary_broadcast_implied_math_formats(formats, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
+_MX_FORMATS = (
+    []
+    if is_4row_arch()
+    else [
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
+    ]
+)
+
 UNARY_BROADCAST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float32,
-        # DataFormat.MxFp8R,
-        # DataFormat.MxFp8P,
-        # DataFormat.MxFp4,
         DataFormat.Int32,
-        # DataFormat.MxInt8,
-        # DataFormat.MxInt4,
-        # DataFormat.MxInt2,
+        *_MX_FORMATS,
     ],
     same=True,  # input_fmt != output_fmt not tested, ISSUE: #47560
 )

@@ -11,6 +11,7 @@ import math
 
 import pytest
 import torch
+from helpers.chip_architecture import is_4row_arch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import ImpliedMathFormat, MathOperation, format_dict
@@ -41,10 +42,18 @@ from helpers.utils import passed_test
 # Keeps x² comfortably within the output format and |x| within the input format.
 SQUARE_RANGE_SAFETY_FACTOR = 0.9
 
+_MX_FORMATS = (
+    []
+    if is_4row_arch()
+    else [
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
+    ]
+)
+
 SFPU_SQUARE_FORMATS = input_output_formats(
     [
-        # DataFormat.MxFp8R,
-        # DataFormat.MxFp8P,
+        *_MX_FORMATS,
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,

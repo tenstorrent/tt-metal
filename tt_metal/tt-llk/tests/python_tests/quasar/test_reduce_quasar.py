@@ -6,7 +6,11 @@ from itertools import product
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import (
+    ChipArchitecture,
+    get_chip_architecture,
+    is_4row_arch,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ReduceGapoolGolden,
@@ -66,14 +70,22 @@ MATH_FIDELITY_MODES = [
 POOL_TYPES = [ReducePool.Max, ReducePool.Sum, ReducePool.Average]
 
 
+_MX_FORMATS = (
+    []
+    if is_4row_arch()
+    else [
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
+    ]
+)
+
 REDUCE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-        # DataFormat.MxFp4,
-        # DataFormat.MxInt8,
-        # DataFormat.MxInt4,
-        # DataFormat.MxInt2,
+        *_MX_FORMATS,
     ],
 )
 

@@ -1452,6 +1452,11 @@ static std::map<std::string, std::string> build_kernel_defines(
     auto arch = MetalContext::instance().get_cluster().arch();
     if (arch == ARCH::QUASAR) {
         defines["ARCH_QUASAR"] = "1";
+        // Build the 4-row FPU variant when TT_METAL_QUASAR_FOUR_ROW is set; default is 8-row.
+        const char* four_row = std::getenv("TT_METAL_QUASAR_FOUR_ROW");
+        if (four_row != nullptr && (std::string(four_row) == "1" || std::string(four_row) == "true")) {
+            defines["MATH_ROWS"] = "4";
+        }
     } else if (arch == ARCH::WORMHOLE_B0) {
         defines["ARCH_WORMHOLE"] = "1";
     } else if (arch == ARCH::BLACKHOLE) {

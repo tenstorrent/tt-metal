@@ -5,6 +5,7 @@
 # Test for eltwise binary operations with reuse_dest on Quasar.
 import pytest
 import torch
+from helpers.chip_architecture import is_4row_arch
 from helpers.constraints import get_perf_math_operations
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -58,16 +59,24 @@ OUTPUT_DIMENSIONS = [
     [128, 32],
 ]
 
+_MX_FORMATS = (
+    []
+    if is_4row_arch()
+    else [
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
+    ]
+)
+
 REUSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-        # DataFormat.MxFp8R,
-        # DataFormat.MxFp8P,
-        # DataFormat.MxFp4,
-        # DataFormat.MxInt8,
-        # DataFormat.MxInt4,
-        # DataFormat.MxInt2,
+        *_MX_FORMATS,
     ],
 )
 
