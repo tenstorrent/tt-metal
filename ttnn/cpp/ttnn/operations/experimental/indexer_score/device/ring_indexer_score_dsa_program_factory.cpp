@@ -314,7 +314,7 @@ ProgramDescriptor build_ring_program_descriptor(
     make_cb(cb_out_strip_arg, 2 * (block_pool ? blocks_per_unit : KC), tt::DataFormat::Float16_b, bf16_tile);
     if (block_pool) {
         make_cb(cb_scaler_arg, 1, tt::DataFormat::Float16_b, bf16_tile);
-        make_cb(cb_pool_scratch_arg, 1, tt::DataFormat::Float16_b, bf16_tile);
+        make_cb(cb_pool_scratch_arg, 2, tt::DataFormat::Float16_b, bf16_tile);
     }
     // cb_acc_strip accumulates a whole unit's QC*KC strip, then untilizes under ONE pack_untilize bracket.
     // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
@@ -561,10 +561,10 @@ ProgramDescriptor build_ring_program_descriptor(
             } else {
                 reader_rt.push_back(0u);
             }
-            reader_rt.append(fused_rt);             // rt_arg::reader_fused_rt_base (27..35): ring/dir/sems/split
-            reader_rt.push_back(k_local.buffer());  // rt_arg::reader_k_local_addr (36): local SP shard address
+            reader_rt.append(fused_rt);             // rt_arg::reader_fused_rt_base (28..36): ring/dir/sems/split
+            reader_rt.push_back(k_local.buffer());  // rt_arg::reader_k_local_addr (37): local SP shard address
             reader_rt.push_back(k_local_batch_page_offset);  // selected slot in the original local cache
-            reader_rt.append(physical_starts);               // rt_arg::reader_band_perm_base (38..): physical K starts
+            reader_rt.append(physical_starts);               // rt_arg::reader_band_perm_base (39..): physical K starts
             reader_kernel.emplace_runtime_args(core, reader_rt);
 
             KernelDescriptor::RTArgList compute_rt;

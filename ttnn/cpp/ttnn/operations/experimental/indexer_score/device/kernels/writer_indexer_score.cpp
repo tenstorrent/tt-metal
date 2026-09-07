@@ -143,7 +143,15 @@ inline void write_pooled_strip(
 
     CircularBuffer scratch_cb(cb_pool_scratch);
     const uint32_t scratch_addr = scratch_cb.get_write_ptr();
-    uint16_t* scratch = reinterpret_cast<uint16_t*>(scratch_addr);  // query-major
+    // Shard-major units can emit fewer than eight bf16 blocks. Match the destination's
+    // low address bits and keep every scratch row aligned for these short NoC writes.
+    constexpr uint32_t align_bytes = NOC_DRAM_WRITE_ALIGNMENT_BYTES;
+    const uint32_t col_off_bytes = col_off_blocks * sizeof(uint16_t);
+    const uint32_t row_bytes = valid_blocks * sizeof(uint16_t);
+    const uint32_t scratch_offset = col_off_bytes % align_bytes;
+    const uint32_t scratch_row_bytes = ((scratch_offset + row_bytes + align_bytes - 1) / align_bytes) * align_bytes;
+    const uint32_t scratch_row_elems = scratch_row_bytes / sizeof(uint16_t);
+    uint16_t* scratch = reinterpret_cast<uint16_t*>(scratch_addr + scratch_offset);
 
     for (uint32_t b = 0; b < valid_blocks; ++b) {
         volatile tt_l1_ptr uint16_t* tile = src + b * POOL_TILE_HW;
@@ -151,7 +159,8 @@ inline void write_pooled_strip(
         for (uint32_t fr = 0; fr < POOL_FACE_ROWS; ++fr) {
             const uint32_t face_base = fr * POOL_FACE_ROW_STRIDE;
             for (uint32_t rr = 0; rr < tt::constants::FACE_HEIGHT; ++rr) {
-                scratch[qrow * valid_blocks + b] = tile[face_base + rr * tt::constants::FACE_WIDTH];  // col 0, row qrow
+                scratch[qrow * scratch_row_elems + b] =
+                    tile[face_base + rr * tt::constants::FACE_WIDTH];  // col 0, row qrow
                 ++qrow;
             }
         }
@@ -167,15 +176,13 @@ inline void write_pooled_strip(
         const uint32_t q_pos = iscore::causal_diag_tile(q_seq, chunk_start_keys, straddle_q_keys, straddle_jump_keys);
         const uint32_t local_block = q_pos / POOL_BLOCK_KEYS;
         if (local_block >= col_off_blocks && local_block < col_off_blocks + valid_blocks) {
-            scratch[rr * valid_blocks + (local_block - col_off_blocks)] = POOL_POS_INF_BF16;
+            scratch[rr * scratch_row_elems + (local_block - col_off_blocks)] = POOL_POS_INF_BF16;
         }
     }
 
-    const uint32_t row_bytes = valid_blocks * sizeof(uint16_t);
-    const uint32_t col_off_bytes = col_off_blocks * sizeof(uint16_t);
     for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
         noc.async_write(
-            CoreLocalMem<uint32_t>(scratch_addr + rr * row_bytes),
+            CoreLocalMem<uint32_t>(scratch_addr + scratch_offset + rr * scratch_row_bytes),
             out_acc,
             row_bytes,
             {},
