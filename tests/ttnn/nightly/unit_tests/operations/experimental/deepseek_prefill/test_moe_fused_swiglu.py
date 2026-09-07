@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
     ACTIVATION_SITU,
     ACTIVATION_SWIGLUOAI,
     TorchExpert,
+    apply_glu_activation,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
@@ -108,15 +109,33 @@ def run_moe_fused_swiglu(
     torch_input[:active_tokens] = torch_active
 
     with torch.no_grad():
-        torch_expert = TorchExpert(
-            emb_dim,
-            hidden_dim,
-            weights,
-            activation=torch_activation,
-            situ_beta=_SITU_BETA_GATE,
-            situ_linear_beta=_SITU_BETA_UP,
-        )
-        torch_output_active = torch_expert(torch_active)
+        if gate_bias is None:
+            torch_expert = TorchExpert(
+                emb_dim,
+                hidden_dim,
+                weights,
+                activation=torch_activation,
+                situ_beta=_SITU_BETA_GATE,
+                situ_linear_beta=_SITU_BETA_UP,
+            )
+            torch_output_active = torch_expert(torch_active)
+        else:
+            # TorchExpert carries no bias, and the bias terms sit outside apply_glu_activation's
+            # contract anyway -- gate/up before the activation, down after the down matmul -- so a
+            # biased case builds the reference explicitly around that one shared activation.
+            gb = ttnn.to_torch(gate_bias).reshape(-1)[:hidden_dim].float()
+            ub = ttnn.to_torch(up_bias).reshape(-1)[:hidden_dim].float()
+            db = ttnn.to_torch(down_bias).reshape(-1)[:emb_dim].float()
+            gate_out = torch_active @ weights["gate_proj"].T + gb
+            up_out = torch_active @ weights["up_proj"].T + ub
+            activated = apply_glu_activation(
+                gate_out,
+                up_out,
+                activation=torch_activation,
+                situ_beta=_SITU_BETA_GATE,
+                situ_linear_beta=_SITU_BETA_UP,
+            )
+            torch_output_active = activated @ weights["down_proj"].T + db
 
     # The op addresses weights as [K, N] tile pages, the transpose of the Linear convention above.
     def to_device(tensor, dtype, layout):
