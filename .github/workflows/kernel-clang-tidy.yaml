@@ -210,6 +210,8 @@ jobs:
           echo "finding pages rendered: $pages"
           if [ -s /work/site/index.html ] && [ "$pages" -gt 0 ]; then
             touch /work/site/.nojekyll
+            # CodeChecker titles every page "Plist HTML Viewer" and ships no icon.
+            python3 .github/scripts/utils/brand_kernel_tidy_site.py /work/site
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::render produced no finding pages; not publishing."

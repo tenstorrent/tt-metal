@@ -204,7 +204,19 @@ gh workflow run kernel-clang-tidy.yaml --ref <branch> \
 `consolidate-report` merges every leg's plists and runs `CodeChecker parse
 --export html` once, so the published site is one genuine CodeChecker report: a
 sortable table with Severity, Checker name, File and Message columns, plus its
-own checker- and severity-statistics pages. No hand-written HTML and no per-leg
+own checker- and severity-statistics pages.
+
+One cosmetic pass runs over that output.
+`.github/scripts/utils/brand_kernel_tidy_site.py` sets a `<title>` and adds a
+favicon, because `--export html` titles every page "Plist HTML Viewer" and
+references no icon, neither of which is configurable — so a published report is
+an unlabelled tab with the browser's default globe. The export is flat, with
+`index.html`, `statistics.html` and every `*.plist.html` in one directory, so a
+relative `favicon.svg` resolves from all of them; finding pages take their title
+from the source file encoded in their own filename. The pass is idempotent and
+runs only when the render actually produced finding pages.
+
+No hand-written HTML and no per-leg
 navigation — leg provenance is deliberately dropped, since the same kernel code
 is analyzed on many legs and the reader only cares about the finding.
 
