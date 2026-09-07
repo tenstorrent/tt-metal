@@ -20,8 +20,18 @@ from helpers.perf.core import (
 )
 from helpers.perf.parquet import write_run_batch
 
+# Split groups per architecture, as tests/pipeline_reorg/llk_perf_tests.yaml
+# defines them -- llk_perf_wormhole group 1/5 .. 5/5, and the same for
+# blackhole -- which .github/workflows/llk-perf-impl.yaml turns into one job
+# each.
+SPLIT_GROUPS = 5
+ARCHES = ("wormhole", "blackhole")
+ROWS_PER_SHARD = 2
 
-def _shard(root, *, run_id, arch, shard, timestamp, commit_sha="deadbeef", rows=2):
+
+def _shard(
+    root, *, run_id, arch, shard, timestamp, commit_sha="deadbeef", rows=ROWS_PER_SHARD
+):
     """Write one shard's Parquet the way a nightly job does."""
     tag = f"{run_id.split('-', 1)[0]}-{arch}-{shard}"
     path = root / tag / f"{tag}.parquet"
@@ -47,15 +57,13 @@ def _shard(root, *, run_id, arch, shard, timestamp, commit_sha="deadbeef", rows=
 
 
 def _sharded_nightly(root, run="42", *, commit_sha="deadbeef"):
-    """One nightly's artefacts: five split groups on each of two architectures.
+    """One nightly's artefacts: SPLIT_GROUPS shards on each of two architectures.
 
-    Five because that is what tests/pipeline_reorg/llk_perf_tests.yaml defines
-    -- llk_perf_wormhole group 1/5 .. 5/5, and the same for blackhole -- which
-    llk-perf-impl.yaml turns into one job each. Write times are staggered
-    because every shard stamps its own, minutes apart.
+    Write times are staggered because every shard stamps its own, minutes
+    apart.
     """
-    for arch in ("wormhole", "blackhole"):
-        for shard in range(5):
+    for arch in ARCHES:
+        for shard in range(SPLIT_GROUPS):
             _shard(
                 root,
                 run_id=run,
@@ -74,8 +82,8 @@ def test_merge_produces_one_file_per_arch(tmp_path):
     )
 
     assert [(m["arch"], m["shards"], m["rows"]) for m in merged] == [
-        ("blackhole", 5, 10),
-        ("wormhole", 5, 10),
+        ("blackhole", SPLIT_GROUPS, SPLIT_GROUPS * ROWS_PER_SHARD),
+        ("wormhole", SPLIT_GROUPS, SPLIT_GROUPS * ROWS_PER_SHARD),
     ]
     assert sorted(p.name for p in (tmp_path / "out").glob("*.parquet")) == [
         "llk_perf_nightly-20260901-42-blackhole.parquet",
@@ -266,7 +274,10 @@ def test_cli_merges_and_reports(tmp_path, capsys):
     )
 
     assert code == 0
-    assert "10 shard file(s) -> 2 run file(s)" in capsys.readouterr().out
+    assert (
+        f"{SPLIT_GROUPS * len(ARCHES)} shard file(s) -> {len(ARCHES)} run file(s)"
+        in capsys.readouterr().out
+    )
 
 
 def test_cli_fails_on_an_empty_input_dir(tmp_path):
