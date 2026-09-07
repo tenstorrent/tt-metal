@@ -32,6 +32,11 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
                                   run it neither wrote nor receives.
             expert_dispatch_table global expert id -> chip in the dispatch group, -1 when the expert is
                                   not in this group.
+            expert_token_counts   tokens per expert summed over every source chip.
+            expert_region_offsets where each expert's region starts in the destination buffer. Together
+                                  with expert_token_counts this closes the last source chip's run, which
+                                  expert_offsets alone cannot: its rows are absolute buffer positions, so
+                                  the close is counts + region_offsets - row, not counts alone.
 
         Returns {dispatched_buffer, metadata}, both per device and ROW_MAJOR:
         dispatched_buffer is (1, 1, max_dispatch_buffer_token_size, emb_dim) BFLOAT16 and metadata is
@@ -49,6 +54,8 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         nb::arg("indices_tensor"),
         nb::arg("expert_offsets"),
         nb::arg("expert_dispatch_table"),
+        nb::arg("expert_token_counts"),
+        nb::arg("expert_region_offsets"),
         nb::arg("experts_per_chip"),
         nb::arg("num_routed_experts"),
         nb::arg("num_experts_per_tok"),

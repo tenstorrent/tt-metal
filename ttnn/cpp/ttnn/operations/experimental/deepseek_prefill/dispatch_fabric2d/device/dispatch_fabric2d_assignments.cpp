@@ -4,6 +4,7 @@
 
 #include "dispatch_fabric2d_assignments.hpp"
 
+#include <algorithm>
 #include <set>
 
 #include <tt_stl/assert.hpp>
@@ -106,6 +107,26 @@ std::vector<dspf2d::ChunkDescriptor> forwarding_chunks(
             .split_count = distance == m ? stream_count(num_links) : num_links});
     }
     return chunks;
+}
+
+uint32_t fwd_pages_per_stream(
+    uint32_t ring_extent,
+    uint32_t num_links,
+    uint32_t seq_len_per_chip,
+    uint32_t num_experts_per_tok,
+    uint32_t experts_per_chip) {
+    const uint32_t m = ring_extent / 2;
+    const uint32_t per_pair = seq_len_per_chip * std::min(num_experts_per_tok, experts_per_chip);
+    const uint32_t sc = stream_count(num_links);
+    const auto div_up = [](uint32_t a, uint32_t b) { return (a + b - 1) / b; };
+
+    uint32_t pages = 0;
+    for (uint32_t dd = 1; dd < m; dd++) {
+        const uint32_t origins = m - dd;
+        pages += (origins - 1) * div_up(per_pair, num_links);
+        pages += div_up(per_pair, sc);
+    }
+    return pages + relay_chunks_per_stream(ring_extent) * experts_per_chip;
 }
 
 std::vector<dspf2d::ChunkDescriptor> outgoing_chunks(

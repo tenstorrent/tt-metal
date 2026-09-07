@@ -4,8 +4,54 @@
 
 #pragma once
 
+// What both kernel roles and the host agree on: the wire format of a ring slot's routing tail, the sizes
+// the compile-time arguments are built from, and the host-side geometry the two argument structs are
+// derived from. Each role's arguments live beside its kernel.
+//
+// Everything the host needs sits behind KERNEL_BUILD, so a kernel translation unit never sees it --
+// neither the code nor its includes.
+
 #include <cstddef>
 #include <cstdint>
+
+#ifndef KERNEL_BUILD
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt_stl/assert.hpp>
+
+#include "../../dispatch_fabric2d_placement.hpp"
+#include "../../dispatch_fabric2d_types.hpp"
+
+namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
+
+struct L1Layout {
+    uint32_t pkt_hdr_drain;
+    uint32_t drain_sink;
+    uint32_t ring;          // num_l1_slots tokens, filled by the reader and drained by the sender
+    uint32_t pkt_hdr_ring;  // TWO prebuilt headers per slot: the last hop issues two writes from one slot
+    // The reader's copy of the control tensors and its routing index, read once at startup and then
+    // indexed from L1. Nothing on another chip addresses this, so it sits last -- but it is still
+    // computed identically everywhere.
+    uint32_t control;
+};
+
+// The per-chip values that had to be worked out rather than read off the arguments, plus the stream.
+struct KernelPlan {
+    StreamId stream = 0;
+    uint32_t extent = 0;
+    uint32_t fwd_pages_per_stream = 0;
+    uint32_t ring_filled_addr = 0;
+    uint32_t ring_freed_addr = 0;
+    uint32_t fwd_arrived_addr = 0;
+};
+
+}  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d
+
+namespace dspf2d {
+namespace op = ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d;
+}
+#endif
 
 namespace dspf2d {
 
