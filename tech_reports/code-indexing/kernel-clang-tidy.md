@@ -338,6 +338,7 @@ this domain:
 | `prefix:cert` | Every one of the 41 `cert-*` checks is an alias, so the prefix removes no capability; 461 of the 463 findings it drops are reported at an identical position under the aliased original. See the note on alias duplication for the two it does cost. |
 | `clang-diagnostic-reserved-identifier` | The third name for a rule `bugprone-reserved-identifier` already covers. Its only 3 unique findings are the linker-mandated `_start` entry symbol. |
 | `clang-diagnostic-documentation` | 561 of its 642 findings object to a documented LLK convention, in comments no docs build reads; see below. |
+| `clang-diagnostic-extra-semi-stmt` | 96% of its 347 findings are macro idioms where the semicolon is required, including macros that expand to nothing by design; the ~21 real ones were fixed in #55658. See below. |
 
 Two more are muted on volume. `modernize-use-trailing-return-type` (1,182
 findings) is pure style and tt-umd mutes it too.
@@ -547,6 +548,95 @@ a static-analysis report. Disabling was chosen over the path rule because the 81
 genuine findings — 41 `@tparam` on a non-template, 11 and 10 real parameter-name
 mismatches, 6 `@return` on a void function, 6 empty paragraphs — did not justify
 carrying the config. Revisit if the LLK convention ever changes.
+
+`clang-diagnostic-extra-semi-stmt` (347) is disabled because the semicolon it
+objects to is, in almost every case, load-bearing. 254 findings are `v_endif;`
+and 7 are `v_endblock;`, the SFPI predication macros, and a further 72 are other
+function-like macro invocations. Together that is 96% of the check, and none of
+it is removable: the macro is invoked in statement position, so the semicolon
+belongs to the call site.
+
+The `PREPROCESS` family in the eltwise kernels shows why a fix is not even
+locally possible:
+
+```c
+#define PREPROCESS(op, ...) P_CAT(PREPROCESS_, HAS_ACTIVATIONS(op))(op, __VA_ARGS__)
+#define PREPROCESS_0(...)          // expands to nothing
+#define PREPROCESS_1(op, cb_pre, cb_post, cb_out, per_core_block_size) \ ...
+```
+
+`PREPROCESS_0` expands to nothing, so in a kernel without activations
+`PREPROCESS(LHS, ...);` reduces to a bare `;` and the diagnostic fires. Deleting
+it would break the `HAS_ACTIVATIONS=1` expansion, which needs it. Suppressing a
+no-op macro this way is idiomatic C, and clang offers no way to mark a macro as
+legitimately empty.
+
+That left ~21 genuine stray semicolons, all of them a null statement after a
+`switch` block or an empty spin loop:
+
+```cpp
+while (semaphore_read(semaphore::MATH_PACK) > 0)
+{
+}; // Wait for previous packs to finish before claiming all dest
+```
+
+Those were fixed upstream in #55658 rather than suppressed — they were spread
+over 11 device headers (`ckernel_defs.h`, `llk_math_common.h`, `ckernel_debug.h`,
+`dataflow_api_addrgen.h`, `stream_interface.h`) and are a one-character change
+each. With them gone the check reports nothing that can be acted on, so it is
+muted rather than left to contribute 300-odd permanent findings.
+
+**Rejected: `misc-non-private-member-variables-in-classes`** (416) is recorded
+here because it looks like the same kind of candidate and is not. The premise
+would be that device structs are memory layouts rather than encapsulated types,
+which holds for a good number of them — `fabric_edm_packet_header.hpp` (34
+findings, 25 `sizeof`/`offsetof` asserts), `edm_fabric_counters.hpp` (26, no
+member functions at all), `ckernel_addrmod.h` (27 designated-init aggregates),
+`tensix_types.h` (13). That is around 115 findings where public data is the
+point.
+
+The remainder are ordinary classes. `worker_sync_utils.hpp` (29) holds
+`OpSignaler`, which has ten member functions and public state with default
+initializers; `edm_fabric_worker_adapters.hpp` (20) has 49 member functions and
+`compute_streaming.hpp` (9) has 147. Public data there is arguable technical
+debt, not a hardware constraint, and the checker is right to say so.
+
+Nor does it scope by path, which is what a `review_status.yaml` rule would need.
+The 416 findings span 38 files across `fabric`, `ccl`, `tt-llk`, `hw/inc` and the
+TTNN kernel trees, and layouts and behaviour classes are mixed *within* files —
+`ckernel_addrmod.h` reads as a behaviour-heavy file by member-function count, yet
+all 27 of its findings are on genuine aggregates. Left enabled in full.
+
+**Fixed in the generator, not the config.**
+`clang-diagnostic-missing-prototypes` (542) is the largest diagnostic remaining,
+and 461 of it is one fact repeated per translation unit: kernels define
+`kernel_main()` at global scope and nothing declares it first. The situation is
+benign — the firmware calls it from the *same* TU, since the generated header
+`#include`s the kernel body into it — so only the declaration was missing.
+`get_kernel_source_to_include()` now emits `void kernel_main();` ahead of the
+body (#55659); both entry paths share that helper, so one line covers
+`kernel_includes.hpp` and all four `chlkc_*.cpp`.
+
+Worth recording why a declaration and not `static`, since `static` is the more
+obvious reading of the warning and needs no kernel edits either — a `static`
+forward declaration alone gives the later definition internal linkage:
+
+| | warning | `kernel_main` in ELF | `.text` |
+| --- | --- | --- | --- |
+| today | 1 per TU | present | — |
+| `void kernel_main();` | none | present | 4,431 B |
+| `static void kernel_main();` | none | gone, inlined away | 4,423 B |
+
+With a single in-TU call site the compiler inlines the body at `-O2` and the
+symbol leaves the ELF, which breaks `tt_metal/tools/dump-consts.py`
+(`--function=kernel_main`) and `llk-audit`, whose `registry.py` sets
+`KERNEL_ENTRY_NAMES = ("kernel_main",)`. Internal linkage also buys nothing:
+the definition is already in the caller's TU, so the optimiser has full
+visibility regardless, and the out-of-line copy it would let us drop measured 8
+bytes. The remaining 81 findings are genuine — `run` (12), `_start` (3,
+linker-mandated) and header helpers such as `recip_block_inplace` and
+`copy_block` in `compute_common.hpp` that want `static` or `inline` where they
+are defined.
 
 **Alias duplication** is a side effect of `--enable-all` worth knowing about,
 because it inflates the report without adding problems. Aliased checkers report

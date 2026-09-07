@@ -54,6 +54,8 @@
         "checker:clang-diagnostic-reserved-identifier",
         "--disable",
         "checker:clang-diagnostic-documentation",
+        "--disable",
+        "checker:clang-diagnostic-extra-semi-stmt",
         "--checker-config",
         "clang-tidy:readability-function-cognitive-complexity:IgnoreMacros=false",
         "--checker-config",
