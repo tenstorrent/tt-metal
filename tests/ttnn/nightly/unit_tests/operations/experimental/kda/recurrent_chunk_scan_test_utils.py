@@ -118,6 +118,7 @@ def run_recurrent(
     protocol: Sequence[ttnn.Tensor],
     state: ttnn.Tensor,
     *,
+    tail_state: ttnn.Tensor | None = None,
     groups_per_head: int = 1,
     wrap_chunk: int = 0,
     memory_config: ttnn.MemoryConfig | None = None,
@@ -127,6 +128,7 @@ def run_recurrent(
         return ttnn.experimental.kda.recurrent_chunk_scan(
             *protocol,
             state,
+            tail_state=tail_state,
             groups_per_head=groups_per_head,
             wrap_chunk=wrap_chunk,
             memory_config=memory_config,

@@ -57,6 +57,9 @@ struct RecurrentChunkScanInputs {
     Tensor final_decay;
     Tensor t_inv;
     std::optional<Tensor> initial_state;
+    // Seed for the post-wrap loop on the boundary chip: the prefix's final carry,
+    // already replicated across SP. Absent when there is no wrap.
+    std::optional<Tensor> tail_state;
 };
 
 inline WrapLayout wrap_layout(const RecurrentChunkScanParams& attrs) {

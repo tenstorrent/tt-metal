@@ -107,9 +107,16 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         check_same_device(in.v_beta, *in.initial_state, operation_name, "initial_state");
         // A wrap adds one entry-state slot: the straddling group needs both a
         // chunk-0 seed and a mid-group reload seed.
-        const auto layout = wrap_layout(attrs);
-        check_shape(
-            *in.initial_state, Shape({layout.real_heads * layout.slots, K, V}), "initial_state", operation_name);
+        check_shape(*in.initial_state, Shape({BH, K, V}), "initial_state", operation_name);
+        // The wrap needs no extra entry slot. The head seed is this chip's own entry
+        // state; the tail seed is the prefix's final carry, which every chip already
+        // derives identically from the gathered summaries.
+        if (in.tail_state.has_value()) {
+            check_protocol_tensor(*in.tail_state, "tail_state", false, operation_name);
+            check_same_device(in.v_beta, *in.tail_state, operation_name, "tail_state");
+            check_shape(*in.tail_state, Shape({BH, K, V}), "tail_state", operation_name);
+        }
+        TT_FATAL(attrs.wrap_chunk == 0 || in.tail_state.has_value(), "{}: a wrap requires tail_state", operation_name);
     } else {
         TT_FATAL(!in.initial_state.has_value(), "{}: initial_state is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);
@@ -122,17 +129,15 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
     const auto output_dtype = summary ? DataType::FLOAT32 : DataType::BFLOAT16;
     const auto output_layout = TensorLayout(output_dtype, PageConfig(Layout::TILE), attrs.output_mem_config);
     const auto state_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
-    // Summary emits one affine pair per SLOT, so a wrap adds one: the straddling
-    // group contributes its pre-wrap and post-wrap halves separately.
-    const auto layout = wrap_layout(attrs);
-    const uint32_t summary_rows = layout.real_heads * layout.slots;
+    // No output shape depends on the wrap. A wrapped chip publishes one transform
+    // like every other chip -- its head transform -- because nothing in the
+    // sequence follows its tail, so nobody consumes a tail transform.
     const auto first_shape =
-        summary ? Shape({summary_rows, attrs.key_dim, attrs.value_dim})
+        summary ? Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim})
                 : Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim});
-    const auto state_rows = summary ? summary_rows : attrs.batch_heads;
     return {
         TensorSpec(first_shape, output_layout),
-        TensorSpec(Shape({state_rows, attrs.key_dim, attrs.value_dim}), state_layout)};
+        TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout)};
 }
 
 RecurrentChunkScanOperation::tensor_return_value_t RecurrentChunkScanOperation::create_output_tensors(
@@ -186,6 +191,7 @@ std::vector<Tensor> recurrent_chunk_scan(
     const Tensor& final_decay,
     const Tensor& t_inv,
     const std::optional<Tensor>& initial_state,
+    const std::optional<Tensor>& tail_state,
     RecurrentChunkScanMode mode,
     uint32_t groups_per_head,
     uint32_t wrap_chunk,
@@ -215,7 +221,8 @@ std::vector<Tensor> recurrent_chunk_scan(
             .k_dec_t = k_dec_t,
             .final_decay = final_decay,
             .t_inv = t_inv,
-            .initial_state = initial_state});
+            .initial_state = initial_state,
+            .tail_state = tail_state});
 }
 
 }  // namespace ttnn::experimental::prim

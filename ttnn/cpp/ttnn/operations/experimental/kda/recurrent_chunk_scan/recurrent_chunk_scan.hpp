@@ -21,6 +21,7 @@ std::vector<ttnn::Tensor> recurrent_chunk_scan(
     const ttnn::Tensor& final_decay,
     const ttnn::Tensor& t_inv,
     const ttnn::Tensor& initial_state,
+    const std::optional<ttnn::Tensor>& tail_state = std::nullopt,
     uint32_t groups_per_head = 1,
     uint32_t wrap_chunk = 0,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,

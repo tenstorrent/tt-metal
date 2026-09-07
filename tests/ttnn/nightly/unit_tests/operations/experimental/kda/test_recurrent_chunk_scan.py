@@ -26,7 +26,9 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     initial_state,
     one_core_height_sharded,
     recurrent_oracle,
+    summary_oracle,
     run_recurrent,
+    run_summary,
     to_device,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -566,84 +568,77 @@ def test_recurrent_chunk_scan_does_not_expose_prototype_modes(
         ttnn.experimental.kda.recurrent_chunk_scan(*inputs, state, **{removed_keyword: True})
 
 
-def _wrap_case(groups_per_head: int, group_chunks: int, wrap_offset: int):
-    """Protocol plus two deliberately mismatched seeds for a mid-group barrier.
-
-    The seeds differ by five orders of magnitude so a leaked carry cannot hide
-    inside a PCC tolerance -- the failure mode this barrier risks is a plausible
-    output with a corrupted state, not an obviously wrong one.
-    """
-    batch_heads, key_dim, value_dim = 2, 32, 32
-    folded = batch_heads * groups_per_head
-    slots = groups_per_head + (1 if wrap_offset else 0)
-    protocol = host_protocol(folded, group_chunks, key_dim, value_dim)
-    seeds = torch.zeros(batch_heads * slots, key_dim, value_dim)
-    eye = torch.eye(key_dim, value_dim)
-    for row in range(batch_heads * slots):
-        seeds[row] = eye * (1e-3 if row % 2 == 0 else 1e2)
-    return protocol, seeds, batch_heads, groups_per_head, slots
-
-
 @run_for_blackhole()
 @pytest.mark.parametrize(
-    "groups_per_head,group_chunks,wrap_offset",
+    "num_chunks,wrap_chunk",
     [
-        pytest.param(1, 8, 3, id="G1-mid"),
-        pytest.param(2, 8, 1, id="G2-first"),
-        pytest.param(2, 8, 7, id="G2-last"),
-        pytest.param(4, 4, 2, id="G4-mid"),
+        pytest.param(20, 1, id="c20-w1"),
+        pytest.param(20, 7, id="c20-w7"),
+        pytest.param(20, 13, id="c20-w13"),
+        pytest.param(20, 19, id="c20-w19"),
+        pytest.param(8, 3, id="c8-w3"),
     ],
 )
-def test_wrap_reloads_the_carry_mid_group(device, groups_per_head, group_chunks, wrap_offset):
-    """A wrap must restart the carry at its chunk and leave earlier chunks untouched."""
-    protocol, seeds, batch_heads, G, slots = _wrap_case(groups_per_head, group_chunks, wrap_offset)
-    wrap_group = 0
-    wrap_chunk = wrap_group * group_chunks + wrap_offset
+def test_wrap_reloads_the_carry_from_tail_state(device, num_chunks, wrap_chunk):
+    """A wrap reloads the carry from tail_state, with no extra output slot.
 
-    device_inputs = device_protocol(protocol, device)
+    Seeds are five orders of magnitude apart so a leaked pre-wrap carry cannot
+    hide inside a tolerance. Shapes are identical to the unwrapped case.
+    """
+    batch_heads, key_dim, value_dim = 2, 32, 32
+    protocol = host_protocol(batch_heads, num_chunks, key_dim, value_dim)
+    head_seed = torch.eye(key_dim, value_dim).expand(batch_heads, key_dim, value_dim) * 1e-3
+    tail_seed = torch.eye(key_dim, value_dim).expand(batch_heads, key_dim, value_dim) * 1e2
+
     outputs = run_recurrent(
-        device_inputs,
-        to_device(seeds, device),
-        groups_per_head=G,
+        device_protocol(protocol, device),
+        to_device(head_seed.contiguous(), device),
+        tail_state=to_device(tail_seed.contiguous(), device),
         wrap_chunk=wrap_chunk,
     )
+    assert tuple(outputs[0].shape) == (batch_heads, num_chunks, CHUNK_SIZE, value_dim)
 
-    # Oracle: every folded row scans from its own slot seed, except the straddling
-    # group, which scans [0,r) from its slot then [r,g) from the reload slot.
-    expected = torch.empty(batch_heads * G, group_chunks, CHUNK_SIZE, protocol[0].shape[3], dtype=torch.bfloat16)
-    for folded in range(batch_heads * G):
-        group = folded % G
-        real_head = folded // G
-        slot = group + (1 if (wrap_offset and group > wrap_group) else 0)
-        row = protocol_row = folded
-        sub = tuple(t[row : row + 1] for t in protocol)
-        if wrap_offset and group == wrap_group:
-            head_sub = tuple(t[:, :wrap_offset] for t in sub)
-            tail_sub = tuple(t[:, wrap_offset:] for t in sub)
-            head_out, _ = recurrent_oracle(head_sub, seeds[real_head * slots + slot : real_head * slots + slot + 1])
-            reload_row = real_head * slots + wrap_group + 1
-            tail_out, _ = recurrent_oracle(tail_sub, seeds[reload_row : reload_row + 1])
-            expected[row] = torch.cat((head_out, tail_out), dim=1)
-        else:
-            whole, _ = recurrent_oracle(sub, seeds[real_head * slots + slot : real_head * slots + slot + 1])
-            expected[row] = whole
+    head_part = tuple(t[:, :wrap_chunk] for t in protocol)
+    tail_part = tuple(t[:, wrap_chunk:] for t in protocol)
+    head_out, _ = recurrent_oracle(head_part, head_seed)
+    tail_out, tail_final = recurrent_oracle(tail_part, tail_seed)
+    expected = torch.cat((head_out, tail_out), dim=1)
 
     assert_outputs_accurate(
-        [expected],
-        [outputs[0]],
-        names=["output"],
-        context=f"G{G} r{wrap_offset} wrapped",
+        [expected, tail_final],
+        [outputs[0], outputs[1]],
+        names=["output", "final_state"],
+        context=f"wrap {wrap_chunk}/{num_chunks}",
     )
 
 
 @run_for_blackhole()
-def test_wrap_on_a_group_boundary_matches_no_wrap(device):
-    """r == 0 means nothing straddles, so it must be indistinguishable from wrap 0."""
-    batch_heads, G, group_chunks, key_dim, value_dim = 2, 2, 8, 32, 32
-    folded = batch_heads * G
-    protocol = device_protocol(host_protocol(folded, group_chunks, key_dim, value_dim), device)
-    seeds = to_device(initial_state(folded, key_dim, value_dim), device)
+def test_no_wrap_is_untouched_by_the_tail_state_input(device):
+    """wrap_chunk 0 must ignore tail_state entirely and stay bit-identical."""
+    batch_heads, num_chunks, key_dim, value_dim = 2, 8, 32, 32
+    protocol = device_protocol(host_protocol(batch_heads, num_chunks, key_dim, value_dim), device)
+    seed = to_device(initial_state(batch_heads, key_dim, value_dim), device)
+    junk = to_device(1e3 * initial_state(batch_heads, key_dim, value_dim, seed=99), device)
 
-    plain = ttnn.to_torch(run_recurrent(protocol, seeds, groups_per_head=G, wrap_chunk=0)[0])
-    aligned = ttnn.to_torch(run_recurrent(protocol, seeds, groups_per_head=G, wrap_chunk=group_chunks)[0])
-    assert torch.equal(plain, aligned), "a group-aligned wrap must be bit-identical to no wrap"
+    plain = ttnn.to_torch(run_recurrent(protocol, seed)[0])
+    with_tail = ttnn.to_torch(run_recurrent(protocol, seed, tail_state=junk, wrap_chunk=0)[0])
+    assert torch.equal(plain, with_tail), "wrap_chunk 0 must ignore tail_state"
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("wrap_chunk", [3, 5, 11])
+def test_summary_publishes_only_the_head_transform(device, wrap_chunk):
+    """A wrapped chip's summary must equal the transform over its head chunks only."""
+    batch_heads, num_chunks, dim = 2, 16, 32
+    protocol = host_protocol(batch_heads, num_chunks, dim, dim)
+    outputs = run_summary(device_protocol(protocol, device), wrap_chunk=wrap_chunk)
+    assert tuple(outputs[0].shape) == (batch_heads, dim, dim)
+
+    head_only = tuple(t[:, :wrap_chunk] for t in protocol)
+    expected_a, expected_b = summary_oracle(head_only)
+    assert_outputs_accurate(
+        [expected_a, expected_b],
+        [outputs[0], outputs[1]],
+        names=["A", "B"],
+        context=f"head-only summary w{wrap_chunk}",
+    )
