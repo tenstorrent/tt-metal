@@ -31,7 +31,6 @@ from pathlib import Path
 _PA = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PA))
 
-_MID = "mistralai/Voxtral-Mini-3B-2507"
 
 # THE JOIN DOES NOT CARE WHICH MODEL THIS IS. The two cases below exercise how two sources of
 # stage->root are MERGED; the id is only an argument on the way through. Passing a real one made them
@@ -40,6 +39,27 @@ _MID = "mistralai/Voxtral-Mini-3B-2507"
 # empty. A skip would have been the pattern; it also stops the join being tested at all, on every
 # machine without the weights. Stubbing the one call that reaches the cache keeps them running.
 _ANY_ID = "org/some-model"
+
+
+def _a_cached_model():
+    """SOME model the local cache holds, whichever it is, or "" when it holds none.
+
+    The bugs below are not voxtral's. A reader that globs <arg>/*.safetensors returns empty for ANY
+    hub id, and a census that cannot find the checkpoint from a pipeline fails for ANY model -- so
+    naming one here narrowed a universal check to a machine that had downloaded that specific model,
+    and told the next model nothing. Discovered from the cache instead: the case runs wherever there
+    is anything to read, and skips only on a machine with an empty cache.
+    """
+    import re as _re
+
+    hub = Path.home() / ".cache" / "huggingface" / "hub"
+    for _d in sorted(hub.glob("models--*--*")) if hub.is_dir() else []:
+        if not any(_d.glob("snapshots/*/*.safetensors")):
+            continue
+        _m = _re.match(r"models--(.+?)--(.+)$", _d.name)
+        if _m:
+            return "%s/%s" % (_m.group(1), _m.group(2))
+    return ""
 
 
 def _trace_replay():
@@ -131,16 +151,20 @@ def test_the_checkpoint_readers_accept_a_hub_id_not_only_a_directory():
     from agent.weight_census import checkpoint_numels, checkpoint_section_numels
     from agent.checkpoint_sections import hf_cache_dir
 
-    if not hf_cache_dir(_MID):
+    mid = _a_cached_model()
+    if not mid or not hf_cache_dir(mid):
         import pytest
 
-        pytest.skip("voxtral not in the local HF cache")
+        pytest.skip("no model with weights in the local HF cache")
 
-    by_id = checkpoint_section_numels(_MID)
-    by_dir = checkpoint_section_numels(str(hf_cache_dir(_MID)))
+    by_id = checkpoint_section_numels(mid)
+    by_dir = checkpoint_section_numels(str(hf_cache_dir(mid)))
     assert by_id == by_dir and by_id, "an id and its cache directory must read the same"
-    assert {"audio_tower", "language_model"} <= set(by_id.values())
-    assert len(checkpoint_numels(_MID)) == len(checkpoint_numels(str(hf_cache_dir(_MID))))
+    # WHAT the sections are called is the model's business. That they were FOUND is the bug: a hub id
+    # used to read as a directory that does not exist, so this came back empty and was
+    # indistinguishable from a checkpoint with no tensors.
+    assert all(str(v).strip() for v in by_id.values()), "every tensor must land in a named section"
+    assert len(checkpoint_numels(mid)) == len(checkpoint_numels(str(hf_cache_dir(mid))))
 
 
 def test_an_unresolvable_name_is_still_empty_rather_than_an_error():
@@ -159,7 +183,7 @@ def test_the_census_is_called_with_a_checkpoint():
     assert "checkpoint=" in src[max(0, i - 200) : i + 300], "the census records attribute names only again"
 
 
-def test_the_checkpoint_is_found_from_the_pipeline_itself(monkeypatch):
+def test_the_checkpoint_is_found_from_the_pipeline_itself(monkeypatch, tmp_path):
     """No env var names the model root -- checked against a live run's whole process tree. The
     object being measured knows where it lives: its class's module file sits inside the model dir."""
     import sys as _sys
@@ -170,13 +194,27 @@ def test_the_checkpoint_is_found_from_the_pipeline_itself(monkeypatch):
     monkeypatch.delenv("PERF_MCP_MODEL_ROOT", raising=False)
     monkeypatch.delenv("TT_PERF_MODEL_ROOT", raising=False)
 
-    demo = _PA.parent.parent / "tt_transformers" / "demo" / "voxtral_mini_3b_2507"
-    if not (demo / "tt" / "pipeline.py").exists():
+    # A DEMO BUILT HERE, not one borrowed from the tree. This walked up from the real voxtral demo
+    # and asserted the id that demo happens to name, so it skipped wherever that model was absent and
+    # proved nothing about any other. The behaviour under test is the WALK -- pipeline module ->
+    # its file -> up to the directory whose source names a hub repo -- and that is the same walk for
+    # every model. So the fixture states its own id and the case runs everywhere.
+    mid = _a_cached_model()
+    if not mid:
         import pytest
 
-        pytest.skip("voxtral demo not in this tree")
+        pytest.skip("no model with weights in the local HF cache")
 
-    mod_name = "models.tt_transformers.demo.voxtral_mini_3b_2507.tt.pipeline"
+    # The id has to be one the cache really holds: model_id_from_source deliberately returns only an
+    # id with weights behind it, because a pipeline commonly names several repos and the weights are
+    # the one that matters. So the fixture names whatever this machine has -- any model exercises the
+    # same walk.
+    demo = tmp_path / "some_demo"
+    (demo / "tt").mkdir(parents=True)
+    (demo / "tt" / "pipeline.py").write_text("class Pipeline:\n    pass\n")
+    (demo / "model.py").write_text('MODEL_ID = "%s"\n' % mid)
+
+    mod_name = "a_demo_somewhere.tt.pipeline"
     mod = types.ModuleType(mod_name)
     mod.__file__ = str(demo / "tt" / "pipeline.py")
     monkeypatch.setitem(_sys.modules, mod_name, mod)
@@ -185,7 +223,7 @@ def test_the_checkpoint_is_found_from_the_pipeline_itself(monkeypatch):
         pass
 
     _Pipe.__module__ = mod_name
-    assert TR._checkpoint_for_census(_Pipe()) == _MID
+    assert TR._checkpoint_for_census(_Pipe()) == mid
 
 
 def test_no_pipeline_and_no_env_is_none_not_a_crash():
