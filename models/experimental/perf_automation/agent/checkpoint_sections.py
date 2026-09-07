@@ -215,6 +215,28 @@ def sections_from_keys(keys) -> dict:
     return {p: max(v) + 1 for p, v in idx.items() if len(v) >= 2 and 0 in v}
 
 
+def _cfg_int(cfg: dict, *names) -> int:
+    """The first of `names` this config states, as a whole number, or 0 when it states none.
+
+    ONE READER FOR EVERY GEOMETRY FIELD. Each of these was its own try/int/except, and the first of
+    them answered a TypeError with `continue` -- so a single list-valued field dropped the entire
+    tower rather than the one field. Coercion is perf_target._scalar's job and it already does lists,
+    dicts and non-finite floats; this only picks the first stated name and rounds.
+    """
+    from .perf_target import _scalar
+
+    for _n in names:
+        if cfg.get(_n) in (None, ""):
+            continue
+        try:
+            _v = int(_scalar(cfg.get(_n), 0))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if _v:
+            return _v
+    return 0
+
+
 def tower_geometry(snapshot) -> dict:
     """{depth: {layers, hidden_size, intermediate_size}} for every tower the config declares.
 
@@ -248,33 +270,30 @@ def tower_geometry(snapshot) -> dict:
     for sub in list(doc.values()) + [doc]:
         if not isinstance(sub, dict):
             continue
-        try:
-            n = int(sub.get("num_hidden_layers") or sub.get("layers") or 0)
-            h = int(sub.get("hidden_size") or sub.get("d_model") or 0)
-        except (TypeError, ValueError):
-            continue
+        # A CONFIG FIELD MAY ARRIVE AS A LIST, and losing one must not lose the tower.
+        #
+        # HF configs express per-layer geometry as a list on some models -- num_hidden_layers [32],
+        # head_dim [128, 128]. int() raises TypeError on those, and the except below said `continue`,
+        # which skips the WHOLE sub-dict: layers, hidden size, the KV term, all of it. The stage then
+        # has no memory ceiling at all and the roofline quietly falls back to a weaker estimate, with
+        # nothing said. One structured field, and the model loses its ceiling.
+        #
+        # perf_target._scalar already exists for exactly this ("a config value that may arrive as a
+        # list/dict ... so a structured value degrades instead of crashing") and is used 25 times
+        # over there. Imported rather than repeated -- it also handles dicts, and NaN/inf, which a
+        # second copy written here would get wrong.
+        n = _cfg_int(sub, "num_hidden_layers", "layers")
+        h = _cfg_int(sub, "hidden_size", "d_model")
         if n <= 0 or h <= 0 or n in out:
             continue
-        try:
-            i = int(sub.get("intermediate_size") or sub.get("ffn_dim") or 0)
-        except (TypeError, ValueError):
-            i = 0
+        i = _cfg_int(sub, "intermediate_size", "ffn_dim")
         # ATTENTION GEOMETRY COMES FROM THE SAME SUB-DICT, or not at all. The KV term needs kv_heads
         # and head_dim, and reading them from a different tower than hidden_size is the mistake this
         # function exists to end -- so they are taken from THIS tower's config, and left absent when
         # it does not declare them rather than borrowed from the model root.
-        try:
-            _kvh = int(sub.get("num_key_value_heads") or sub.get("num_attention_heads") or sub.get("num_heads") or 0)
-        except (TypeError, ValueError):
-            _kvh = 0
-        try:
-            _hd = int(sub.get("head_dim") or 0)
-        except (TypeError, ValueError):
-            _hd = 0
-        try:
-            _heads = int(sub.get("num_attention_heads") or sub.get("num_heads") or 0)
-        except (TypeError, ValueError):
-            _heads = 0
+        _kvh = _cfg_int(sub, "num_key_value_heads", "num_attention_heads", "num_heads")
+        _hd = _cfg_int(sub, "head_dim")
+        _heads = _cfg_int(sub, "num_attention_heads", "num_heads")
         if not _hd and h and _heads:
             _hd = h // _heads
         geo = {"layers": n, "hidden_size": h, "intermediate_size": i or 4 * h}
