@@ -307,12 +307,19 @@ def test_run_type_names_match_source():
 
 
 def test_metric_bases_match_source():
-    """The catalog's metric bases must equal the *_pct dict keys metrics.py exports."""
-    tree = ast.parse((ROOT / "helpers" / "metrics.py").read_text())
-    # export_metrics keeps exactly the metric-dict keys ending in "_pct" (see
-    # _exportable()). Read the dict keys via ast, not a text scan, so an
-    # unrelated "_pct" string literal (log line, docstring, m.get() arg) can
-    # neither trip nor evade the gate.
+    """The catalog's metric bases must equal the metric keys the shared engine computes.
+
+    The formulas live in tools/tracy/perf_metrics_common.py (metrics.py only adapts the
+    counter DataFrame to it), so that module is the source of truth for the *_pct and
+    *_ratio names. Read the dict keys via ast, not a text scan, so an unrelated string
+    literal (log line, docstring, m.get() arg) can neither trip nor evade the gate.
+    """
+    engine = next(
+        parent / "tools" / "tracy" / "perf_metrics_common.py"
+        for parent in ROOT.resolve().parents
+        if (parent / "tools" / "tracy" / "perf_metrics_common.py").is_file()
+    )
+    tree = ast.parse(engine.read_text())
     live = {
         key.value
         for node in ast.walk(tree)
@@ -320,7 +327,7 @@ def test_metric_bases_match_source():
         for key in node.keys
         if isinstance(key, ast.Constant)
         and isinstance(key.value, str)
-        and key.value.endswith("_pct")
+        and (key.value.endswith("_pct") or key.value.endswith("_ratio"))
     }
     ps = load_pure_module("schema.py")
     assert live == set(ps.METRIC_BASES), (
