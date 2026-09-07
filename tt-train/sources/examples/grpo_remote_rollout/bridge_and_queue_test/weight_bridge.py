@@ -257,7 +257,9 @@ class ThreadedWeightBridge:
             with self._recv_pad_cv:
                 self._recv_pad_cv.notify_all()
 
-    # ---- sender API ----------------------------------------------------------
+    # ==== Sender ==============================================================
+
+    # ---- sender public API ---------------------------------------------------
 
     def send_weights(self, weights: Dict[str, "ttnn.Tensor"]) -> None:
         """Send a dict of tensors. Under the send pad lock:
@@ -317,7 +319,7 @@ class ThreadedWeightBridge:
                 )
             self._send_pads = pads
             print(
-                f"[weight-bridge sender] lazy-alloc'd {len(pads)} send pad(s): " f"{sorted(pads.keys())}",
+                f"[weight-bridge sender] lazy-alloc'd {len(pads)} send pad(s): {sorted(pads.keys())}",
                 flush=True,
             )
             return
@@ -330,61 +332,28 @@ class ThreadedWeightBridge:
         for k, t in weights.items():
             pad = self._send_pads[k]
             if tuple(t.shape) != tuple(pad.shape):
-                raise RuntimeError(
-                    f"send_weights: {k!r} shape changed. pad={tuple(pad.shape)}, " f"new={tuple(t.shape)}"
-                )
+                raise RuntimeError(f"send_weights: {k!r} shape changed. pad={tuple(pad.shape)}, new={tuple(t.shape)}")
             if t.dtype != pad.dtype:
                 raise RuntimeError(f"send_weights: {k!r} dtype changed. pad={pad.dtype}, new={t.dtype}")
 
+    # ---- sender transport thread ---------------------------------------------
+
     def _sender_loop(self) -> None:
-        """Sender transport thread body. Runs under the send pad lock end
-        to end for a message: wait_for_event -> send manifest -> per-key
-        to_torch on CQ1 + torch.save + MPI send -> clear has_data + notify.
-        """
+        """Sender transport thread body. One iteration = one message. All
+        MPI work stays under the send pad lock, so the caller's next
+        ``send_weights`` cannot race with an in-flight transfer."""
         assert self._ctx is not None
         while True:
             with self._send_pad_cv:
-                while not self._has_send_data and not self._shutdown.is_set():
-                    self._send_pad_cv.wait()
+                self._wait_send_pad_full_or_shutdown()
 
-                if not self._has_send_data and self._shutdown.is_set():
-                    # No pending dict; emit the length-0 close message.
-                    try:
-                        self._ctx.send(struct.pack("<Q", 0), self._peer_rank, _TAG_MANIFEST_LEN)
-                    except Exception as e:
-                        print(
-                            f"[weight-bridge sender] close-message send failed: " f"{type(e).__name__}: {e}",
-                            flush=True,
-                        )
+                if not self._has_send_data:
+                    # Only reason to wake here is shutdown.
+                    self._send_close_message()
                     return
 
-                # Cross-CQ ordering: make CQ1 wait for CQ0's copies to retire.
-                ttnn.wait_for_event(1, self._send_pending_event)
-
-                assert self._send_pads is not None
-                keys = list(self._send_keys)
-
-                # 1. Manifest.
-                entries = [
-                    {
-                        "key": k,
-                        "shape": _shape_to_list(self._send_pads[k].shape),
-                        "dtype": self._send_pads[k].dtype.name,
-                        "layout": self._send_pads[k].layout.name,
-                    }
-                    for k in keys
-                ]
-                manifest = json.dumps({"version": 1, "entries": entries}).encode("utf-8")
                 try:
-                    self._ctx.send(struct.pack("<Q", len(manifest)), self._peer_rank, _TAG_MANIFEST_LEN)
-                    self._ctx.send(manifest, self._peer_rank, _TAG_MANIFEST_BODY)
-
-                    # 2. Per-key D->H on CQ1 + torch.save + MPI send.
-                    for k in keys:
-                        host = ttnn.to_torch(self._send_pads[k], cq_id=1)
-                        blob = _torch_save_bytes(host)
-                        self._ctx.send(struct.pack("<Q", len(blob)), self._peer_rank, _TAG_WEIGHT_LEN)
-                        self._ctx.send(blob, self._peer_rank, _TAG_WEIGHT_BODY)
+                    self._send_one_dict_over_wire()
                 except Exception as e:
                     print(
                         f"[weight-bridge sender] MPI send failed: {type(e).__name__}: {e}",
@@ -392,12 +361,71 @@ class ThreadedWeightBridge:
                     )
                     return
 
-                self._has_send_data = False
-                self._send_pending_event = None
-                self._send_keys = []
-                self._send_pad_cv.notify_all()
+                self._mark_send_pad_empty()
 
-    # ---- receiver API --------------------------------------------------------
+    def _wait_send_pad_full_or_shutdown(self) -> None:
+        """Precondition: caller holds ``self._send_pad_cv``. Blocks until
+        either a caller has populated the pad or ``close()`` fired."""
+        while not self._has_send_data and not self._shutdown.is_set():
+            self._send_pad_cv.wait()
+
+    def _send_close_message(self) -> None:
+        """Emit the length-0 manifest header the peer treats as
+        end-of-stream. Best-effort; the sender thread exits either way."""
+        assert self._ctx is not None
+        try:
+            self._ctx.send(struct.pack("<Q", 0), self._peer_rank, _TAG_MANIFEST_LEN)
+        except Exception as e:
+            print(
+                f"[weight-bridge sender] close-message send failed: {type(e).__name__}: {e}",
+                flush=True,
+            )
+
+    def _send_one_dict_over_wire(self) -> None:
+        """Precondition: caller holds ``self._send_pad_cv`` AND
+        ``self._has_send_data`` is True. Ships the current send-pad dict
+        as manifest + per-key blob over MPI. Blocks on CQ1 while
+        ``ttnn.to_torch`` runs."""
+        assert self._ctx is not None
+        assert self._send_pads is not None
+
+        # Cross-CQ ordering: make CQ1 wait for CQ0's copies to retire.
+        ttnn.wait_for_event(1, self._send_pending_event)
+
+        keys = list(self._send_keys)
+
+        # 1. Manifest.
+        entries = [
+            {
+                "key": k,
+                "shape": _shape_to_list(self._send_pads[k].shape),
+                "dtype": self._send_pads[k].dtype.name,
+                "layout": self._send_pads[k].layout.name,
+            }
+            for k in keys
+        ]
+        manifest = json.dumps({"version": 1, "entries": entries}).encode("utf-8")
+        self._ctx.send(struct.pack("<Q", len(manifest)), self._peer_rank, _TAG_MANIFEST_LEN)
+        self._ctx.send(manifest, self._peer_rank, _TAG_MANIFEST_BODY)
+
+        # 2. Per-key D->H on CQ1 + torch.save + MPI send.
+        for k in keys:
+            host = ttnn.to_torch(self._send_pads[k], cq_id=1)
+            blob = _torch_save_bytes(host)
+            self._ctx.send(struct.pack("<Q", len(blob)), self._peer_rank, _TAG_WEIGHT_LEN)
+            self._ctx.send(blob, self._peer_rank, _TAG_WEIGHT_BODY)
+
+    def _mark_send_pad_empty(self) -> None:
+        """Precondition: caller holds ``self._send_pad_cv``. Wakes any
+        ``send_weights`` blocked on the pad-full backpressure."""
+        self._has_send_data = False
+        self._send_pending_event = None
+        self._send_keys = []
+        self._send_pad_cv.notify_all()
+
+    # ==== Receiver ============================================================
+
+    # ---- receiver public API -------------------------------------------------
 
     @contextmanager
     def receive_weights(self) -> Iterator[List[Dict[str, "ttnn.Tensor"]]]:
@@ -474,7 +502,7 @@ class ThreadedWeightBridge:
             self._recv_pads = pads
             self._recv_manifest_entries = list(entries)
             print(
-                f"[weight-bridge receiver] lazy-alloc'd {len(pads)} recv pad(s): " f"{sorted(pads.keys())}",
+                f"[weight-bridge receiver] lazy-alloc'd {len(pads)} recv pad(s): {sorted(pads.keys())}",
                 flush=True,
             )
             return
@@ -483,7 +511,7 @@ class ThreadedWeightBridge:
         new_keys = {e["key"] for e in entries}
         if prev_keys != new_keys:
             raise RuntimeError(
-                f"receive_weights: manifest key set changed. previous={sorted(prev_keys)}, " f"new={sorted(new_keys)}"
+                f"receive_weights: manifest key set changed. previous={sorted(prev_keys)}, new={sorted(new_keys)}"
             )
         prev_by_key = {e["key"]: e for e in (self._recv_manifest_entries or [])}
         for e in entries:
@@ -491,92 +519,119 @@ class ThreadedWeightBridge:
             if p["shape"] != e["shape"] or p["dtype"] != e["dtype"] or p["layout"] != e["layout"]:
                 raise RuntimeError(f"receive_weights: {e['key']!r} spec drifted. prev={p}, new={e}")
 
+    # ---- receiver transport thread -------------------------------------------
+
     def _receiver_loop(self) -> None:
-        """Receiver transport thread body. Recv manifest -> lazy-alloc pads
-        on first call -> per-key length + blob -> torch.load -> wrap as
-        ttnn host tensor -> copy_host_to_device_tensor into the recv pad
-        on CQ1 -> record event on CQ1 -> notify.
-        """
+        """Receiver transport thread body. One iteration = one message.
+        Manifest recv runs OUTSIDE the recv pad lock (so ``close()`` on
+        this rank can flip ``_shutdown_seen`` without contending), then
+        the per-key blob recv + H->D copy + event record all run under
+        the lock so the caller's ``with receive_weights()`` sees a
+        coherent pad."""
         assert self._ctx is not None
         while True:
-            try:
-                raw_len = self._ctx.recv(8, self._peer_rank, _TAG_MANIFEST_LEN)
-            except Exception as e:
-                print(
-                    f"[weight-bridge receiver] manifest-len recv failed: " f"{type(e).__name__}: {e}",
-                    flush=True,
-                )
-                with self._recv_pad_cv:
-                    self._shutdown_seen = True
-                    self._recv_pad_cv.notify_all()
-                return
-            (manifest_len,) = struct.unpack("<Q", raw_len)
+            manifest = self._recv_next_manifest_or_close()
+            if manifest is None:
+                return  # peer closed or MPI failure
 
-            if manifest_len == 0:
-                # Peer sent the close message.
-                with self._recv_pad_cv:
-                    self._shutdown_seen = True
-                    self._recv_pad_cv.notify_all()
-                return
-
-            try:
-                manifest_bytes = self._ctx.recv(int(manifest_len), self._peer_rank, _TAG_MANIFEST_BODY)
-            except Exception as e:
-                print(
-                    f"[weight-bridge receiver] manifest-body recv failed: " f"{type(e).__name__}: {e}",
-                    flush=True,
-                )
-                return
-            manifest = json.loads(manifest_bytes.decode("utf-8"))
-
-            # Under the recv pad lock end-to-end for this message.
             with self._recv_pad_cv:
-                # Block the bridge from overwriting the pads while a caller
-                # is still inside `with receive_weights()`.
-                while self._has_recv_data and not self._shutdown.is_set():
-                    self._recv_pad_cv.wait()
-                if self._shutdown.is_set():
+                if not self._wait_recv_pad_empty_or_shutdown():
                     return
-
                 try:
                     self._ensure_recv_pads(manifest["entries"])
                 except Exception as e:
                     print(
-                        f"[weight-bridge receiver] ensure_recv_pads failed: " f"{type(e).__name__}: {e}",
+                        f"[weight-bridge receiver] ensure_recv_pads failed: {type(e).__name__}: {e}",
                         flush=True,
                     )
                     return
-
                 try:
-                    for entry in manifest["entries"]:
-                        (blob_len,) = struct.unpack("<Q", self._ctx.recv(8, self._peer_rank, _TAG_WEIGHT_LEN))
-                        blob = self._ctx.recv(int(blob_len), self._peer_rank, _TAG_WEIGHT_BODY)
-                        host_tensor = _torch_load_bytes(blob)
-                        # Wrap the torch host tensor as a ttnn host tensor
-                        # (no device= arg) and copy it into the pre-allocated
-                        # recv pad on CQ1.
-                        ttnn_host = ttnn.from_torch(
-                            host_tensor,
-                            dtype=_dtype_from_name(entry["dtype"]),
-                            layout=_layout_from_name(entry["layout"]),
-                        )
-                        ttnn.copy_host_to_device_tensor(ttnn_host, self._recv_pads[entry["key"]], cq_id=1)
+                    self._recv_blobs_into_pads(manifest["entries"])
                 except Exception as e:
                     print(
-                        f"[weight-bridge receiver] weight recv failed: " f"{type(e).__name__}: {e}",
+                        f"[weight-bridge receiver] weight recv failed: {type(e).__name__}: {e}",
                         flush=True,
                     )
                     return
-
-                # Cross-CQ ordering: give the main thread an event on CQ1 so
-                # its CQ0 read waits for these writes to retire.
-                self._recv_pending_event = ttnn.record_event(self._mesh, 1)
-                self._has_recv_data = True
-                self._recv_pad_version += 1
-                v = self._recv_pad_version
-                self._recv_pad_cv.notify_all()
+                v = self._mark_recv_pad_full()
 
             print(
-                f"[weight-bridge receiver] wrote pad v={v} " f"({len(manifest['entries'])} keys)",
+                f"[weight-bridge receiver] wrote pad v={v} ({len(manifest['entries'])} keys)",
                 flush=True,
             )
+
+    def _recv_next_manifest_or_close(self) -> Optional[dict]:
+        """Recv the manifest length + body. Returns the parsed dict, or
+        ``None`` if the peer sent the length-0 close message or an MPI
+        failure occurred. On close/failure sets ``_shutdown_seen`` and
+        notifies main so a blocking ``receive_weights`` returns.
+        Called with NO lock held."""
+        assert self._ctx is not None
+        try:
+            raw_len = self._ctx.recv(8, self._peer_rank, _TAG_MANIFEST_LEN)
+        except Exception as e:
+            print(
+                f"[weight-bridge receiver] manifest-len recv failed: {type(e).__name__}: {e}",
+                flush=True,
+            )
+            with self._recv_pad_cv:
+                self._shutdown_seen = True
+                self._recv_pad_cv.notify_all()
+            return None
+        (manifest_len,) = struct.unpack("<Q", raw_len)
+
+        if manifest_len == 0:
+            with self._recv_pad_cv:
+                self._shutdown_seen = True
+                self._recv_pad_cv.notify_all()
+            return None
+
+        try:
+            manifest_bytes = self._ctx.recv(int(manifest_len), self._peer_rank, _TAG_MANIFEST_BODY)
+        except Exception as e:
+            print(
+                f"[weight-bridge receiver] manifest-body recv failed: {type(e).__name__}: {e}",
+                flush=True,
+            )
+            return None
+        return json.loads(manifest_bytes.decode("utf-8"))
+
+    def _wait_recv_pad_empty_or_shutdown(self) -> bool:
+        """Precondition: caller holds ``self._recv_pad_cv``. Blocks until
+        the caller has consumed the previous dict (via ``receive_weights``)
+        or ``close()`` fires. Returns True to proceed, False if the
+        receiver should exit."""
+        while self._has_recv_data and not self._shutdown.is_set():
+            self._recv_pad_cv.wait()
+        return not self._shutdown.is_set()
+
+    def _recv_blobs_into_pads(self, entries: List[dict]) -> None:
+        """Precondition: caller holds ``self._recv_pad_cv``. Per-key
+        length + blob recv + torch.load + wrap as ttnn host tensor +
+        ``ttnn.copy_host_to_device_tensor`` into the pre-allocated recv
+        pad on CQ1."""
+        assert self._ctx is not None
+        assert self._recv_pads is not None
+        for entry in entries:
+            (blob_len,) = struct.unpack("<Q", self._ctx.recv(8, self._peer_rank, _TAG_WEIGHT_LEN))
+            blob = self._ctx.recv(int(blob_len), self._peer_rank, _TAG_WEIGHT_BODY)
+            host_tensor = _torch_load_bytes(blob)
+            # Wrap the torch host tensor as a ttnn host tensor (no device=
+            # arg -> stays on host) and copy into the pre-allocated pad.
+            ttnn_host = ttnn.from_torch(
+                host_tensor,
+                dtype=_dtype_from_name(entry["dtype"]),
+                layout=_layout_from_name(entry["layout"]),
+            )
+            ttnn.copy_host_to_device_tensor(ttnn_host, self._recv_pads[entry["key"]], cq_id=1)
+
+    def _mark_recv_pad_full(self) -> int:
+        """Precondition: caller holds ``self._recv_pad_cv``. Records the
+        CQ1 event the caller's CQ0 read waits on, flips ``_has_recv_data``,
+        bumps ``_recv_pad_version``, notifies. Returns the new version
+        for logging."""
+        self._recv_pending_event = ttnn.record_event(self._mesh, 1)
+        self._has_recv_data = True
+        self._recv_pad_version += 1
+        self._recv_pad_cv.notify_all()
+        return self._recv_pad_version
