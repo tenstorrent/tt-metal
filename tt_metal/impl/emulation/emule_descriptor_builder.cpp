@@ -9,7 +9,9 @@
 
 #include "emule_descriptor_builder.hpp"
 
+#include <cstdlib>
 #include <set>
+#include <string>
 #include <tuple>
 #include <type_traits>
 
@@ -163,6 +165,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     (void)device;                 // kept for signature symmetry with build_soc_view; this half is program-only
     auto& impl = program.impl();  // non-const: get_kernels/get_kernel_groups/get_program_config_sizes
     const auto& hw = MetalContext::instance().hal();
+    const char* four_row = std::getenv("TT_METAL_QUASAR_FOUR_ROW");
+    const bool quasar_four_row =
+        MetalContext::instance(impl.get_context_id()).get_cluster().arch() == ARCH::QUASAR &&
+        four_row != nullptr && (std::string(four_row) == "1" || std::string(four_row) == "true");
 
     EmuleProgramDescriptor pd;
     pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
@@ -209,6 +215,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             });
             k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
+            if (quasar_four_row) {
+                kd.defines["MATH_ROWS"] = "4";
+            }
             kd.is_compute = (k.get_kernel_processor_class() == HalProcessorClassType::COMPUTE);
             {
                 const auto cfg = k.config();

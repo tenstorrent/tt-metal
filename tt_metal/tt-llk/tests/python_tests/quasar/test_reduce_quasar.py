@@ -6,7 +6,11 @@ from itertools import product
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import (
+    ChipArchitecture,
+    get_chip_architecture,
+    is_4row_arch,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ReduceGapoolGolden,
@@ -327,8 +331,8 @@ _ARCH = get_chip_architecture()
 # the FP4 zf mux while srca_fmt_spec is still MXFP4_2x -- producing all-zero Dest.
 @pytest.mark.quasar
 @pytest.mark.skipif(
-    _ARCH != ChipArchitecture.QUASAR,
-    reason="MxFp4_2x GAPOOL reduce is op_mmul-family-only and exists on Quasar. Architecture derivations don't support it.",
+    _ARCH != ChipArchitecture.QUASAR or is_4row_arch(),
+    reason="MxFp4_2x GAPOOL reduce is not implemented on this architecture",
 )
 @parametrize(
     register_format_hint=[DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B],

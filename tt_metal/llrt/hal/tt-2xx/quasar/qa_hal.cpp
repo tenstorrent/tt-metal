@@ -378,6 +378,11 @@ public:
         } else {
             defines.push_back("NOC_API_V" + std::to_string(params.rtoptions.get_quasar_noc_api_version()));
         }
+        // Build the 4-row FPU variant when TT_METAL_QUASAR_FOUR_ROW is set; default is 8-row.
+        const char* four_row = std::getenv("TT_METAL_QUASAR_FOUR_ROW");
+        if (four_row != nullptr && (std::string(four_row) == "1" || std::string(four_row) == "true")) {
+            defines.push_back("MATH_ROWS=4");
+        }
         return defines;
     }
 

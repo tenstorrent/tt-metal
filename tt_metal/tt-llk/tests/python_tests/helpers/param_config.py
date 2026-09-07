@@ -11,7 +11,7 @@ import pytest
 from helpers.tile_shape import construct_tile_shape
 from typing_extensions import deprecated
 
-from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .chip_architecture import ChipArchitecture, get_chip_architecture, is_4row_arch
 from .constraints import (
     _quasar_effective_sfpu_format,
     _quasar_fpu_source_format,
@@ -463,9 +463,11 @@ def quasar_mx_smoke(
         an MX output when the test's MX coverage is on the pack side.
     output_format (DataFormat): the paired output format.
     Returns:
-    List[InputOutputFormat]: a one-element list, ready to concatenate onto an
-        input_output_formats() product.
+    List[InputOutputFormat]: a one-element list, or an empty list on four-row Quasar,
+        ready to concatenate onto an input_output_formats() product.
     """
+    if is_4row_arch():
+        return []
     return [InputOutputFormat(input_format, output_format)]
 
 

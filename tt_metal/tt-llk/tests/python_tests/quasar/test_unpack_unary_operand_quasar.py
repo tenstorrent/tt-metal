@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.chip_architecture import is_4row_arch
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     DataCopyGolden,
@@ -164,6 +165,12 @@ def generate_unpack_unary_operand_combinations(
     return combinations
 
 
+_MX_FORMATS = (
+    []
+    if is_4row_arch()
+    else [DataFormat.MxFp4, DataFormat.MxInt8, DataFormat.MxInt4, DataFormat.MxInt2]
+)
+
 # MxFp8R/P decode on UnpA/UnpB: one MxFp8* -> Float16_b pair each, kept off the
 # cross product. Encode of those two formats lives on test_pack_quasar.
 UNPACK_FORMATS = (
@@ -172,10 +179,7 @@ UNPACK_FORMATS = (
             DataFormat.Float16_b,
             DataFormat.Float16,
             DataFormat.Float32,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
+            *_MX_FORMATS,
         ]
     )
     + quasar_mx_smoke(DataFormat.MxFp8R, DataFormat.Float16_b)

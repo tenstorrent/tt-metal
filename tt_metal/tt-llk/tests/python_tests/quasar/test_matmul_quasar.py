@@ -4,7 +4,11 @@
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import (
+    ChipArchitecture,
+    get_chip_architecture,
+    is_4row_arch,
+)
 from helpers.data_format_inference import data_formats
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -260,7 +264,7 @@ MATMUL_FORMAT = (
         ],
     )
     + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
-    + MATMUL_2X_FORMATS
+    + ([] if is_4row_arch() else MATMUL_2X_FORMATS)
     + quasar_mx_smoke(DataFormat.MxInt8, DataFormat.Float16_b)
 )
 

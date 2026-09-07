@@ -58,8 +58,9 @@ inline void _llk_math_eltwise_binary_init_custom_([[maybe_unused]] const ckernel
  * @brief SDPA blocked bcast-col SUB over ct_dim column tiles reusing one held SrcB tile (Quasar).
  *
  * Each column tile subtracts the same (col-broadcast) SrcB from its SrcA and lands in dest slot
- * dst_index + i. Per face-row, four ops cover the two dest faces: the SrcB counter walks
- * +8, -8, +8, +24 so both dest faces of the row read the same SrcB face before moving on.
+ * dst_index + i. Per face-row, 2 * (16 / ELTWISE_MATH_ROWS) ops cover the two dest faces. The
+ * SrcB counter rewinds after the even face so both dest faces read the same SrcB face, then moves
+ * to the next face-row.
  * SrcA dvalid is cleared per tile (CLR_A) to flip the SrcA bank for the next unpack while SrcB is
  * held; SrcB dvalid is cleared only once, after the last tile of the block row.
  *
@@ -79,12 +80,9 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(
     // Two faces make up one face-row; a full 32x32 tile has two of them, a 16x32 tile one.
     const std::uint32_t num_face_rows = tensor_shape.num_faces_r_dim;
 
-    static_assert(
-        ELTWISE_MATH_ROWS == 8, "custom sub bcast-col path hardcodes a 4-op face-row walk and a +24 face-row jump, both valid only for MATH_ROWS == 8");
-
-    constexpr std::uint8_t SRCB_STEP      = ELTWISE_MATH_ROWS; // +8: second half of the current face
-    constexpr std::uint8_t SRCB_REWIND    = static_cast<std::uint8_t>(0x3F & -static_cast<std::int32_t>(ELTWISE_MATH_ROWS)); // -8 in 6-bit two's complement
-    constexpr std::uint8_t SRCB_NEXT_FROW = 3 * ELTWISE_MATH_ROWS;                                                           // +24: skip the unused odd face
+    constexpr std::uint8_t SRCB_STEP      = ELTWISE_MATH_ROWS;
+    constexpr std::uint8_t SRCB_REWIND    = static_cast<std::uint8_t>(0x3F & -static_cast<std::int32_t>(MAX_FACE_R_DIM - ELTWISE_MATH_ROWS));
+    constexpr std::uint8_t SRCB_NEXT_FROW = MAX_FACE_R_DIM + ELTWISE_MATH_ROWS;
 
     // Programmed here rather than in the init so the ELWSUBs below cannot pick up a slot some other
     // math-thread init reprogrammed in between: ADDR_MOD_7 in particular is zeroed by
@@ -116,12 +114,27 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(
 
         for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)
         {
-            // Even dest face: consume this SrcB face, then rewind so the odd face rereads it.
-            TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 0 -> 8
-            TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_5, 0); // SrcB 8 -> 0
-            // Odd dest face: same SrcB face again, then jump to the next face-row.
-            TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 0 -> 8
-            TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_6, 0); // SrcB 8 -> 32
+            if constexpr (ELTWISE_MATH_ROWS == 8)
+            {
+                // Even dest face: consume this SrcB face, then rewind so the odd face rereads it.
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 0 -> 8
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_5, 0); // SrcB 8 -> 0
+                // Odd dest face: same SrcB face again, then jump to the next face-row.
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 0 -> 8
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_6, 0); // SrcB 8 -> 32
+            }
+            else
+            {
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 0 -> 4
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 4 -> 8
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 8 -> 12
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_5, 0); // SrcB 12 -> 0
+
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 0 -> 4
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 4 -> 8
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 8 -> 12
+                TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_6, 0); // SrcB 12 -> 32
+            }
         }
 
         // Release this column's SrcA tile and rewind both read counters; KEEP the held SrcB.

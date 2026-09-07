@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.chip_architecture import is_4row_arch
 from helpers.data_format_inference import infer_data_formats
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
@@ -179,6 +180,12 @@ def generate_qsr_pack_combinations(
     return combinations
 
 
+_MX_FORMATS = (
+    []
+    if is_4row_arch()
+    else [DataFormat.MxFp4, DataFormat.MxInt8, DataFormat.MxInt4, DataFormat.MxInt2]
+)
+
 # MxFp8R/P encode only: one Float16_b -> MxFp8* pair each, kept off the cross
 # product. Decode of those two formats lives on test_unpack_unary_operand_quasar.
 PACK_FORMATS = (
@@ -191,10 +198,7 @@ PACK_FORMATS = (
             DataFormat.Int8,
             DataFormat.UInt8,
             DataFormat.Int16,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
+            *_MX_FORMATS,
         ]
     )
     + quasar_mx_smoke(DataFormat.Float16_b, DataFormat.MxFp8R)
