@@ -940,18 +940,28 @@ def test_layer_norm_bfp8_residual_affine_two_pass(device):
 
 
 @run_for_blackhole("Blackhole replays retained residual rows and multicasts affine parameters")
-def test_layer_norm_fp32_residual_affine_replay_program_cache(device, enabled_program_cache):
+@pytest.mark.parametrize("multicast", [False, True], ids=["replay", "affine_multicast"])
+def test_layer_norm_fp32_residual_affine_replay_program_cache(device, enabled_program_cache, multicast):
     torch.manual_seed(20260824)
     h, w = 1024, 2880
+    if multicast:
+        grid = device.compute_with_storage_grid_size()
+        # Reach the 20-core crossover with a complete rectangle in row-wise allocation order.
+        core_rows = (20 + grid.x - 1) // grid.x
+        if core_rows > grid.y:
+            pytest.skip("Affine multicast requires at least 20 compute cores")
+        h = 32 * grid.x * core_rows
     torch_input = torch.rand((h, w), dtype=torch.float32)
     torch_residual = torch.rand((h, w), dtype=torch.float32)
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
     residual_tensor = ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device)
     reciprocal = create_recip_tensor(device, w, use_welford=True)
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=True)
-    first_weight = ttnn.from_torch(torch.rand((w,), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
-    first_bias = ttnn.from_torch(torch.rand((w,), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.layer_norm(
+    first_torch_weight = torch.rand((w,), dtype=torch.float32)
+    first_torch_bias = torch.rand((w,), dtype=torch.float32)
+    first_weight = ttnn.from_torch(first_torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+    first_bias = ttnn.from_torch(first_torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+    first_output = ttnn.layer_norm(
         input_tensor,
         residual_input_tensor=residual_tensor,
         weight=first_weight,
@@ -959,9 +969,14 @@ def test_layer_norm_fp32_residual_affine_replay_program_cache(device, enabled_pr
         program_config=program_config,
         recip_tensor=reciprocal,
     )
+    first_reference = torch.nn.functional.layer_norm(
+        torch_input + torch_residual, [w], weight=first_torch_weight, bias=first_torch_bias
+    )
+    assert_output_accuracy(first_reference, ttnn.to_torch(first_output), use_welford=True)
+    cache_entries = device.num_program_cache_entries()
 
-    torch_weight = torch.zeros((w,), dtype=torch.float32)
-    torch_bias = torch.full((w,), 2.0, dtype=torch.float32)
+    torch_weight = torch.rand((w,), dtype=torch.float32) + 0.5
+    torch_bias = torch.rand((w,), dtype=torch.float32) + 2.0
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.layer_norm(
@@ -980,6 +995,7 @@ def test_layer_norm_fp32_residual_affine_replay_program_cache(device, enabled_pr
         bias=torch_bias,
     )
     assert_output_accuracy(reference, ttnn.to_torch(output), use_welford=True)
+    assert device.num_program_cache_entries() == cache_entries
 
 
 @pytest.mark.parametrize("dim_a", [24, 2048, 3072, 4096])
