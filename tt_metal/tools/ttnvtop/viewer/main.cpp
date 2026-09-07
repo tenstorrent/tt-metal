@@ -131,7 +131,11 @@ char poll_key() {
 
 // Which per-core metric the htop-style meters display. F is the default
 // because FPU compute% is the closest analogue of htop's CPU%.
-enum class Metric { Fpu, Sfpu, Dispatch, Pack, Unpack, All };
+// Pack and unpack are PUBLISHED and declared via SIGNAL_SRC_PACK/UNPACK, but not shown:
+// slot 3 of the ARC sample is overloaded, so unpack is unavailable whenever SFPU is
+// measured, and a column that reads n/a on the shipping firmware is worse than none.
+// Re-adding is a metric enum entry and a render line -- the data is already in the shm.
+enum class Metric { Fpu, Sfpu, Dispatch, All };
 
 // WHICH SIGNAL IS THE THIRD COLUMN? The schema has always carried signal_sources for this
 // and the viewer has always ignored it, so a producer publishing instruction-issue activity
@@ -165,8 +169,6 @@ const char* metric_name(Metric m) {
         case Metric::Fpu: return "FPU";
         case Metric::Sfpu: return "SFPU";
         case Metric::Dispatch: return "DISPATCH";
-        case Metric::Pack: return "PACK";
-        case Metric::Unpack: return "UNPACK";
         case Metric::All: return "ALL (F/S/D)";
     }
     return "?";
@@ -178,8 +180,6 @@ uint16_t metric_p1000(const ttnvtop::PerCoreView& v, Metric m) {
         case Metric::Fpu: return v.compute_busy_p1000;
         case Metric::Sfpu: return v.sfpu_busy_p1000;
         case Metric::Dispatch: return v.dispatch_busy_p1000;
-        case Metric::Pack: return v.pack_busy_p1000;
-        case Metric::Unpack: return v.unpack_busy_p1000;
         case Metric::All: return v.compute_busy_p1000;  // unused in All mode
     }
     return 0;
@@ -714,8 +714,6 @@ int main(int argc, char* argv[]) {
         switch (poll_key()) {
             case 'f': metric = Metric::Fpu; break;
             case 's': metric = Metric::Sfpu; break;
-            case 'p': metric = Metric::Pack; break;
-            case 'u': metric = Metric::Unpack; break;
             case 'd': metric = Metric::Dispatch; break;
             case 'a': metric = Metric::All; break;
             case 'g': meter_view = !meter_view; break;
@@ -801,11 +799,10 @@ int main(int argc, char* argv[]) {
             << (metric == Metric::Dispatch ? third_metric_name(chip_sources) : metric_name(metric)) << "%" << kAnsiReset
             << "\n"
             << kAnsiDim << "  [f] FPU  [s] SFPU  [d] "
-            << (third_metric_name(chip_sources)[0] == 'A' ? "activity" : "dispatch")
-            << "  [p] pack  [u] unpack  [a] all   [g] " << (meter_view ? "NoC grid" : "meters")
-            << "   [q] quit     saturation: " << kAnsiReset << kPctGray << "idle" << kAnsiReset << " " << kPctGreen
-            << "low" << kAnsiReset << " " << kPctYellow << "mid" << kAnsiReset << " " << kPctRed << "hot" << kAnsiReset
-            << "\n";
+            << (third_metric_name(chip_sources)[0] == 'A' ? "activity" : "dispatch") << "  [a] all   [g] "
+            << (meter_view ? "NoC grid" : "meters") << "   [q] quit     saturation: " << kAnsiReset << kPctGray
+            << "idle" << kAnsiReset << " " << kPctGreen << "low" << kAnsiReset << " " << kPctYellow << "mid"
+            << kAnsiReset << " " << kPctRed << "hot" << kAnsiReset << "\n";
 
         // ---- htop-style meter view -------------------------------------
         // One meter per core, laid out in as many columns as the terminal
@@ -822,19 +819,15 @@ int main(int argc, char* argv[]) {
                 // Chip-level averages for ALL three units are always shown, even when
                 // the per-core cells display only one -- the per-chip picture is
                 // cheap and is nearly always wanted as context.
-                uint64_t sf = 0, ss = 0, sd = 0, sp = 0, su = 0;
+                uint64_t sf = 0, ss = 0, sd = 0;
                 for (uint32_t i = 0; i < n; ++i) {
                     sf += cores[i].compute_busy_p1000;
                     ss += cores[i].sfpu_busy_p1000;
                     sd += cores[i].dispatch_busy_p1000;
-                    sp += cores[i].pack_busy_p1000;
-                    su += cores[i].unpack_busy_p1000;
                 }
                 const uint32_t af = n ? static_cast<uint32_t>(sf / n / 10) : 0;
                 const uint32_t as = n ? static_cast<uint32_t>(ss / n / 10) : 0;
                 const uint32_t ad = n ? static_cast<uint32_t>(sd / n / 10) : 0;
-                const uint32_t ap = n ? static_cast<uint32_t>(sp / n / 10) : 0;
-                const uint32_t au = n ? static_cast<uint32_t>(su / n / 10) : 0;
                 // STALENESS, in the default view too.
                 //
                 // The other chip-title path prints (STALE); this one did not, and this is
@@ -873,24 +866,7 @@ int main(int argc, char* argv[]) {
                     out << "n/a";
                 }
                 out << kAnsiReset << "  " << kMetricDispCol << third_metric_short(h->signal_sources) << " " << ad << "%"
-                    << kAnsiReset;
-                // Pack and unpack are declared independently, because the ARC sweep's slot 3
-                // is overloaded: it carries SFPU instead of unpack on a TU_SFPU_CONCURRENT
-                // build, so unpack is zero there because it was never sampled. Printing 0%
-                // would read as "this core unpacked nothing", a different claim entirely.
-                out << "  P ";
-                if (h->signal_sources & ttnvtop::SIGNAL_SRC_PACK) {
-                    out << ap << "%";
-                } else {
-                    out << "n/a";
-                }
-                out << "  U ";
-                if (h->signal_sources & ttnvtop::SIGNAL_SRC_UNPACK) {
-                    out << au << "%";
-                } else {
-                    out << "n/a";
-                }
-                out << render_dram(h);
+                    << kAnsiReset << render_dram(h);
                 if (chip_stale) {
                     const double age = static_cast<double>(monotonic_us() - h->last_update_us) / 1e6;
                     out << kAnsiBold << "   (STALE " << std::fixed << std::setprecision(0) << age
