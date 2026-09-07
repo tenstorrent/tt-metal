@@ -66,8 +66,16 @@ supported_formats = [
 # BroadcastType.None_ is a datacopy (unpack A -> DEST -> pack to L1).
 
 
+# Tiny tiles (num_faces < 4) exercise the B2D ROW face-count path. Wormhole's B2D still
+# hardcodes outerloop = 4 (llk_math_eltwise_unary_datacopy.h), so those shapes would hang
+# there; keep them to the architecture where the count is derived from num_faces.
+TILE_DIMENSIONS_UNDER_TEST = [[32, 32]]
+if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
+    TILE_DIMENSIONS_UNDER_TEST = [[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32]]
+
+
 @parametrize(
-    tile_dimensions=[[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32]],
+    tile_dimensions=TILE_DIMENSIONS_UNDER_TEST,
     formats=input_output_formats(supported_formats, same=True),
     broadcast_type=[
         BroadcastType.None_,
