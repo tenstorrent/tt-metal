@@ -164,8 +164,10 @@ constexpr uint32_t TILE_H = 32;
 // compile-time and this reads one CB at a RUNTIME tile offset.
 template <uint32_t ACC, uint32_t IN>
 ALWI void fold_dest(uint32_t num_contributors, uint32_t n) {
-    cb_wait_front(IN, num_contributors * n);
-    cb_reserve_back(ACC, n);
+    CircularBuffer in_buf(IN);
+    CircularBuffer acc_buf(ACC);
+    in_buf.wait_front(num_contributors * n);
+    acc_buf.reserve_back(n);
     // RECONFIG BEFORE INIT, BOTH sides: `*_init` sets the math MOP but NOT the unpacker's format
     // registers, which still hold the gate/up matmul's operands. Without this the tiles are decoded
     // through the wrong format — the right bit pattern, the wrong exponents.
@@ -218,8 +220,8 @@ ALWI void fold_dest(uint32_t num_contributors, uint32_t n) {
     // against a static CB sequence this raw block is invisible to — so the hardware must already
     // match, whether or not the chain re-emits.
     reconfig_data_format(ACC, IN);
-    cb_pop_front(IN, num_contributors * n);
-    cb_push_back(ACC, n);
+    in_buf.pop_front(num_contributors * n);
+    acc_buf.push_back(n);
 }
 
 // Fold `num_contributors` contributors of `IN` into `ACC`, all accumulating in DEST behind ONE pack. See
@@ -234,12 +236,15 @@ ALWI void fold_chain(uint32_t num_contributors, uint32_t n) {
 // chain library (and its unrelated operation catalogue) onto origin/main.
 template <uint32_t A, uint32_t B, uint32_t OUT>
 ALWI void mul_blocked(uint32_t n) {
+    CircularBuffer a_buf(A);
+    CircularBuffer b_buf(B);
+    CircularBuffer out_buf(OUT);
     reconfig_data_format(A, B);
     pack_reconfig_data_format(OUT);
     mul_tiles_init(A, B);
-    cb_wait_front(A, n);
-    cb_wait_front(B, n);
-    cb_reserve_back(OUT, n);
+    a_buf.wait_front(n);
+    b_buf.wait_front(n);
+    out_buf.reserve_back(n);
     for (uint32_t base = 0; base < n; base += ELTWISE_BLK) {
         uint32_t width = n - base;
         if (width > ELTWISE_BLK) {
@@ -256,9 +261,9 @@ ALWI void mul_blocked(uint32_t n) {
         }
         tile_regs_release();
     }
-    cb_pop_front(A, n);
-    cb_pop_front(B, n);
-    cb_push_back(OUT, n);
+    a_buf.pop_front(n);
+    b_buf.pop_front(n);
+    out_buf.push_back(n);
 }
 
 #ifdef FUSED_BINARY_ACT
@@ -266,11 +271,14 @@ ALWI void mul_blocked(uint32_t n) {
 // and four up outputs fill the eight-tile window, eliminating the old pack-to-L1 + reload boundary.
 template <uint32_t GATE, uint32_t UP, uint32_t OUT>
 ALWI void fold_binary_act_blocked(uint32_t num_contributors, uint32_t n) {
+    CircularBuffer gate_in(GATE);
+    CircularBuffer up_in(UP);
+    CircularBuffer out_buf(OUT);
     constexpr uint32_t OUTPUTS_PER_WINDOW = DEST_LIMIT / 2;
     pack_reconfig_data_format(OUT);
-    cb_wait_front(GATE, num_contributors * n);
-    cb_wait_front(UP, num_contributors * n);
-    cb_reserve_back(OUT, n);
+    gate_in.wait_front(num_contributors * n);
+    up_in.wait_front(num_contributors * n);
+    out_buf.reserve_back(n);
     for (uint32_t base = 0; base < n; base += OUTPUTS_PER_WINDOW) {
         uint32_t width = n - base;
         if (width > OUTPUTS_PER_WINDOW) {
@@ -332,9 +340,9 @@ ALWI void fold_binary_act_blocked(uint32_t num_contributors, uint32_t n) {
         }
         tile_regs_release();
     }
-    cb_pop_front(GATE, num_contributors * n);
-    cb_pop_front(UP, num_contributors * n);
-    cb_push_back(OUT, n);
+    gate_in.pop_front(num_contributors * n);
+    up_in.pop_front(num_contributors * n);
+    out_buf.push_back(n);
 }
 #endif
 
@@ -352,15 +360,18 @@ ALWI void fold_binary_act_blocked(uint32_t num_contributors, uint32_t n) {
 template <uint32_t GATE, uint32_t UP, uint32_t OUT, uint32_t SG, uint32_t SU>
 ALWI void fold_binary_act_biased(
     uint32_t num_contributors, uint32_t n, uint32_t slice_start, uint32_t cb_gbias, uint32_t cb_ubias) {
+    CircularBuffer sg_in(SG);
+    CircularBuffer su_in(SU);
+    CircularBuffer out_buf(OUT);
     constexpr uint32_t OUTPUTS_PER_WINDOW = DEST_LIMIT / 2;
     // Pass one: the same reductions, packed out instead of held in DEST. Pops both gather CBs by
     // num_contributors * n, so the caller's drain accounting is unchanged.
     fold_chain<SG, GATE>(num_contributors, n);
     fold_chain<SU, UP>(num_contributors, n);
 
-    cb_wait_front(SG, n);
-    cb_wait_front(SU, n);
-    cb_reserve_back(OUT, n);
+    sg_in.wait_front(n);
+    su_in.wait_front(n);
+    out_buf.reserve_back(n);
     pack_reconfig_data_format(OUT);
     for (uint32_t base = 0; base < n; base += OUTPUTS_PER_WINDOW) {
         uint32_t width = n - base;
@@ -390,9 +401,9 @@ ALWI void fold_binary_act_biased(
         }
         tile_regs_release();
     }
-    cb_pop_front(SG, n);
-    cb_pop_front(SU, n);
-    cb_push_back(OUT, n);
+    sg_in.pop_front(n);
+    su_in.pop_front(n);
+    out_buf.push_back(n);
 }
 #endif
 
@@ -908,12 +919,15 @@ void kernel_main() {
         // The reader pushes these once per expert and single-buffers them, so the next expert's
         // reserve blocks until this one drains. Popped here rather than inside the M-block loop:
         // every block of this expert reads the same windows.
-        cb_wait_front(cb_gate_bias, HN_PAD);
-        cb_pop_front(cb_gate_bias, HN_PAD);
-        cb_wait_front(cb_up_bias, HN_PAD);
-        cb_pop_front(cb_up_bias, HN_PAD);
-        cb_wait_front(cb_down_bias, EC_MAX);
-        cb_pop_front(cb_down_bias, EC_MAX);
+        CircularBuffer gate_bias_buf(cb_gate_bias);
+        CircularBuffer up_bias_buf(cb_up_bias);
+        CircularBuffer down_bias_buf(cb_down_bias);
+        gate_bias_buf.wait_front(HN_PAD);
+        gate_bias_buf.pop_front(HN_PAD);
+        up_bias_buf.wait_front(HN_PAD);
+        up_bias_buf.pop_front(HN_PAD);
+        down_bias_buf.wait_front(EC_MAX);
+        down_bias_buf.pop_front(EC_MAX);
 #endif
         const uint32_t h_pad = (H_CAP - h_cursor) % H_CAP;
         if (h_pad != 0) {
