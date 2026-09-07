@@ -16,6 +16,18 @@ class GptOss20BConfig:
     # Core dimensions
     EMB_SIZE = 2880
     MOE_INTERMEDIATE_SIZE = 2880
+    # Routed-expert hybrid split: experts with <= this many active tokens go to
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. Measured under SwiGLU-OAI -- the
+    # activation these experts actually run -- on the 2880x2880 routed-expert shape: the fused op
+    # wins only at 256 (0.75x) and loses from 512 on, so 256 is both the last M_BLOCK boundary it
+    # wins at and the aggregate-optimal cut (+0.04% against a per-count oracle).
+    # The 120B shares this routed-expert shape exactly, so the crossover is the same.
+    # Not enabled, for two independent reasons. Nothing forwards a threshold: the gpt-oss MoE
+    # builds TtRoutedExpert directly and passes none. And moe_fused_swiglu has no bias inputs,
+    # so TtRoutedExpert rejects a threshold outright whenever use_expert_bias is on -- the fused
+    # band would silently drop the gate/up/down biases the composite band applies. The measured
+    # crossover is kept under _MEASURED so it is not re-derived.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 256
     INTERMEDIATE_SIZE = 2880
     HEAD_DIM = 64
 
