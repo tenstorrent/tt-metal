@@ -57,6 +57,20 @@ def _pf_in(mesh_device, args, t):
     return shard_to_device(mesh_device, t, dim=-1) if fused else replicate_to_device(mesh_device, t)
 
 
+def _parametrize_prefill_in_dtype():
+    """Parametrize ``in_dtype`` over the PREFILL activation dtypes this ARCH actually produces.
+
+    bf8 is Wormhole-only (see test_gdn_tp_prefill), gated at COLLECTION time so the case does not
+    exist on Blackhole rather than being generated and skipped -- a skip would report a coverage
+    gap that is not one. Arch is the whole gate: gdn/tp.py's _fuse_agmm reduces to is_blackhole()
+    because _fuse_ab follows gdn_qkvz_weight_memcfg, which model_config.py always sets.
+    is_blackhole() reads ttnn.get_arch_name() only, so this is safe before a device is open."""
+    dtypes = [pytest.param(ttnn.bfloat16, id="in_bf16")]
+    if not is_blackhole():
+        dtypes.append(pytest.param(ttnn.bfloat8_b, id="in_bf8"))
+    return pytest.mark.parametrize("in_dtype", dtypes)
+
+
 @torch.no_grad()
 @parametrize_mesh_tp()
 @parametrize_batch()
@@ -467,10 +481,7 @@ def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, 
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-@pytest.mark.parametrize(
-    "in_dtype",
-    [pytest.param(ttnn.bfloat16, id="in_bf16"), pytest.param(ttnn.bfloat8_b, id="in_bf8")],
-)
+@_parametrize_prefill_in_dtype()
 def test_gdn_tp_prefill(mesh_device, in_dtype, reset_seeds, ensure_gc, request):
     """Check that chunk-prefill and step-by-step decode agree on the same T=128 tokens.
 
@@ -478,10 +489,24 @@ def test_gdn_tp_prefill(mesh_device, in_dtype, reset_seeds, ensure_gc, request):
     self-consistency check between forward_prefill and forward_decode.
 
     ``in_dtype`` is the PREFILL activation dtype only (decode always feeds bf16), which is what
-    makes this pair a measurement rather than a tautology: ``layer.py`` narrows attention_norm's
-    prefill gather to bf8 on GDN layers, so the in-proj sees a bf8 in0 in prefill and a bf16 one in
-    decode. The bf8 row therefore prices exactly that asymmetry against the same decode oracle.
-    Model-level TP tests cannot see it -- they compare two paths that carry the same quantisation.
+    makes that pair a measurement rather than a tautology: on Wormhole layer.py narrows
+    attention_norm's prefill gather to bf8 on GDN layers, so the in-proj sees a bf8 in0 in prefill
+    and a bf16 one in decode. Model-level TP tests cannot see this -- they compare two paths
+    carrying the same quantisation. MEASURED bf16/bf8: N300 9B TP=2 0.99926/0.99908,
+    T3K 27B TP=8 0.99939/0.99929 (threshold 0.95).
+
+    bf8 is Wormhole-only because on Blackhole the configuration cannot exist, not because it is
+    untested: the narrowing applies to attention_norm's gather, and layer.py's _fuse_norm_agmm
+    disables that gather and lets the in-proj AGMM do it instead (hardcoded bf16 by
+    tp_common.all_gather_matmul_prefill), which is why _attn_gather_dtype carries the same
+    ``not is_blackhole()``. Forcing bf8 there reports PCC 0.0: qwen36 lets the op allocate its own
+    activation-gather intermediate, which is sized at ``output_dtype`` (bf16, 2048 B/tile) rather
+    than at the activation's dtype (bf8_b, 1088 B/tile), and the gather is a raw page copy with no
+    conversion. A caller-side contract, not an op limit -- llama3_70b_galaxy keeps ``dtype`` equal
+    to its bf8 activation and tt_dit passes a ``persistent_output_buffer`` at ``x.get_dtype()``.
+    Adopting the latter would make a bf8 in0 correct here, at the cost of a buffer on the L1-tight
+    prefill path shared with attention and MLP. Until then do not relax the threshold, and do not
+    re-add the Blackhole row without that buffer.
     """
     os.environ.setdefault("HF_MODEL", model_path())
     T = 128
