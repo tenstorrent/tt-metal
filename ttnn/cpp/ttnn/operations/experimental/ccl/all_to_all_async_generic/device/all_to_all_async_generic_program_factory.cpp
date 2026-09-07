@@ -1081,12 +1081,18 @@ AllToAllAsyncGenericProgram::create_at(
         tt::tt_metal::SetRuntimeArgs(program, sender_writer_kernel_ids[sender_stream], {core}, sender_writer_rt_args);
     }
 
+    // Tensor addresses are identical across all workers of each kernel. Unique runtime
+    // argument slot 0 remains reserved so routing/fabric suffix positions stay unchanged.
+    tt::tt_metal::SetCommonRuntimeArgs(
+        program, sender_reader_kernel_id, {tensor_args.input_tensor.buffer()->address()});
+    for (const auto kernel_id : sender_writer_kernel_ids) {
+        tt::tt_metal::SetCommonRuntimeArgs(program, kernel_id, {tensor_return_value.buffer()->address()});
+    }
+
     return {
         std::move(program),
         {.sender_reader_kernel_id = sender_reader_kernel_id,
          .sender_writer_kernel_ids = std::move(sender_writer_kernel_ids),
-         .sender_worker_cores = sender_worker_cores,
-         .num_senders_per_link = num_senders_per_link,
          .init_barrier_semaphore = init_barrier_semaphore,
          .final_barrier_semaphore = final_barrier_semaphore}};
 }
@@ -1096,6 +1102,8 @@ void AllToAllAsyncGenericProgram::override_runtime_arguments(
     const AllToAllAsyncGenericParams& /*operation_attributes*/,
     const AllToAllAsyncGenericInputs& tensor_args,
     Tensor& tensor_return_value) {
+    const auto input_address = tensor_args.input_tensor.buffer()->address();
+    const auto output_address = tensor_return_value.buffer()->address();
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         const auto& coord = coordinate_range.start_coord();
         TT_FATAL(
@@ -1105,19 +1113,13 @@ void AllToAllAsyncGenericProgram::override_runtime_arguments(
             coordinate_range.end_coord());
         auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
 
-        auto& sender_reader_runtime_args = GetRuntimeArgs(program, shared_variables.sender_reader_kernel_id);
-        for (size_t core_id = 0; core_id < shared_variables.sender_worker_cores.size(); ++core_id) {
-            const auto& core = shared_variables.sender_worker_cores[core_id];
-            const auto writer_kernel_id =
-                shared_variables.sender_writer_kernel_ids[core_id % shared_variables.num_senders_per_link];
-            auto& sender_writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
-            auto& worker_sender_reader_runtime_args = sender_reader_runtime_args[core.x][core.y];
-            auto& worker_sender_writer_runtime_args = sender_writer_runtime_args[core.x][core.y];
-            worker_sender_reader_runtime_args[0] = tensor_args.input_tensor.buffer()->address();
-            worker_sender_writer_runtime_args[0] = tensor_return_value.buffer()->address();
-            worker_sender_writer_runtime_args[1] = shared_variables.init_barrier_semaphore.address();
-            worker_sender_writer_runtime_args[2] = shared_variables.final_barrier_semaphore.address();
+        GetCommonRuntimeArgs(program, shared_variables.sender_reader_kernel_id).at(0) = input_address;
+        for (const auto kernel_id : shared_variables.sender_writer_kernel_ids) {
+            GetCommonRuntimeArgs(program, kernel_id).at(0) = output_address;
         }
+        // create_at installed the two semaphore addresses in each unique argument table.
+        // shared_variables owns those same allocations for this cached workload's lifetime;
+        // only the caller-owned tensor addresses can change across invocations.
     }
 }
 

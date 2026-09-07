@@ -464,7 +464,8 @@ void kernel_main() {
     // ARGS
     ///////////////////////////////////////////////////
     size_t arg_idx = 0;
-    address_t output_address = get_arg_val<address_t>(arg_idx++);
+    address_t output_address = get_common_arg_val<address_t>(0);
+    ++arg_idx;  // Reserved address slot; keep schedule and fabric suffix positions unchanged.
     uint32_t global_init_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t global_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
 

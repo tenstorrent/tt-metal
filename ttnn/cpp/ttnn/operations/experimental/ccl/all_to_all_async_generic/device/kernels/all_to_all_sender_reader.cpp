@@ -96,7 +96,8 @@ void kernel_main() {
     // ARGS
     ///////////////////////////////////////////////////
     size_t arg_idx = 0;
-    address_t input_address = get_arg_val<address_t>(arg_idx++);
+    address_t input_address = get_common_arg_val<address_t>(0);
+    ++arg_idx;  // Reserved address slot; keep schedule and fabric suffix positions unchanged.
     uint32_t local_num_devices = get_arg_val<uint32_t>(arg_idx++);
     constexpr auto input_tensor_args = TensorAccessorArgs<12>();
     auto input_addrgen = TensorAccessor(input_tensor_args, input_address);
