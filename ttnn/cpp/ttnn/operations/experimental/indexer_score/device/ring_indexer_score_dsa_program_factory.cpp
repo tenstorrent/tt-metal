@@ -7,8 +7,9 @@
 #include <algorithm>
 #include <array>
 #include <initializer_list>
-#include <utility>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -531,12 +532,12 @@ ProgramDescriptor build_ring_program_descriptor(
                 q_sender,
                 cols_used - 1);
             // Preserve unique tail offsets; changing scalars and addresses are common args.
-            reader_rt.push_back(0u);                   // rt_arg::reader_k_batch_offset (25)
-            reader_rt.push_back(0u);                   // rt_arg::reader_kv_len_tiles (26)
-            reader_rt.append(fused_rt);                // rt_arg::reader_fused_rt_base (27..35): ring/dir/sems/split
-            reader_rt.push_back(0u);                   // Reserved k_local address slot (36); bound through common args.
-            reader_rt.push_back(0u);                   // Reserved local batch offset (common args).
-            reader_rt.append(physical_starts);               // rt_arg::reader_band_perm_base (38..): physical K starts
+            reader_rt.push_back(0u);            // rt_arg::reader_k_batch_offset (25)
+            reader_rt.push_back(0u);            // rt_arg::reader_kv_len_tiles (26)
+            reader_rt.append(fused_rt);         // rt_arg::reader_fused_rt_base (27..35): ring/dir/sems/split
+            reader_rt.push_back(0u);            // Reserved k_local address slot (36); bound through common args.
+            reader_rt.push_back(0u);            // Reserved local batch offset (common args).
+            reader_rt.append(physical_starts);  // rt_arg::reader_band_perm_base (38..): physical K starts
             reader_kernel.emplace_runtime_args(core, reader_rt);
 
             KernelDescriptor::RTArgList compute_rt;
@@ -694,7 +695,35 @@ RingIndexerScoreDsaMeshWorkloadFactory::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensors,
     tensor_return_value_t& out) {
-    return descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensors, out);
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    auto descriptor_cached = descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensors, out);
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    constexpr std::array kernel_indices{
+        kAllGatherReaderForwardKernelIndex,
+        kAllGatherReaderBackwardKernelIndex,
+        kAllGatherWriterForwardKernelIndex,
+        kAllGatherWriterBackwardKernelIndex};
+    for (auto& [range, program] : descriptor_cached.workload.get_programs()) {
+        auto& shared = shared_variables[range];
+        shared.descriptor = std::move(descriptor_cached.shared_variables.at(range));
+        for (size_t index = 0; index < kernel_indices.size(); ++index) {
+            auto& plan = shared.ag_plans[index];
+            plan.kernel_idx = kernel_indices[index];
+            const auto& grid = tt::tt_metal::GetRuntimeArgs(program, plan.kernel_idx);
+            for (uint32_t x = 0; x < grid.size(); ++x) {
+                for (uint32_t y = 0; y < grid[x].size(); ++y) {
+                    if (grid[x][y].size() != 0) {
+                        plan.active_cores.emplace_back(x, y);
+                    }
+                }
+            }
+            TT_FATAL(
+                !plan.active_cores.empty(),
+                "indexer_score fused AG kernel {} has no runtime arguments",
+                plan.kernel_idx);
+        }
+    }
+    return {std::move(descriptor_cached.workload), std::move(shared_variables)};
 }
 
 void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
@@ -710,14 +739,14 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     // variables. Operand order and distributed-buffer addresses therefore do not depend on range.
     // Collect fresh operands once per dispatch, preserving resolved indices and resource ownership.
     const auto collected = descriptor_adapter_t::collect_tensor_buffers(
-        tensors, out, cached.shared_variables.begin()->second.workload_descriptor);
+        tensors, out, cached.shared_variables.begin()->second.descriptor.workload_descriptor);
     ttsl::SmallVector<uint32_t, 16> addresses;
     addresses.reserve(collected.buffers.size());
     for (const auto* buffer : collected.buffers) {
         addresses.push_back(buffer->address());
     }
     for (auto& [range, program] : cached.workload.get_programs()) {
-        const auto& bindings = cached.shared_variables.at(range).resolved_bindings;
+        const auto& bindings = cached.shared_variables.at(range).descriptor.resolved_bindings;
         if (!bindings.cbs.empty()) {
             // Retain the general implementation for any future CB binding variant.
             tt::tt_metal::apply_resolved_bindings(program, bindings, collected.buffers);
@@ -800,32 +829,25 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
 
         // Visit each AG kernel/core once for all of its changing scalars. The largest field
         // bounds-check implies every field in this fixed table fits; empty AG cores stay skipped.
-        const auto patch_fields = [&](uint32_t kernel_idx,
-                                      std::initializer_list<std::pair<uint32_t, uint32_t>> fields,
-                                      bool skip_empty = false) {
+        const auto& ag_plans = cached.shared_variables.at(range).ag_plans;
+        const auto patch_fields = [&](size_t plan_index, std::initializer_list<std::pair<uint32_t, uint32_t>> fields) {
+            const auto& plan = ag_plans.at(plan_index);
             const auto max_slot = std::max_element(fields.begin(), fields.end(), [](const auto& a, const auto& b) {
                                       return a.first < b.first;
                                   })->first;
-            auto& grid_args = GetRuntimeArgs(program, kernel_idx);
-            bool patched_any = false;
-            for (auto& col_args : grid_args) {
-                for (auto& core_args : col_args) {
-                    if (skip_empty && core_args.size() == 0) {
-                        continue;
-                    }
-                    TT_FATAL(
-                        max_slot < core_args.size(),
-                        "indexer_score fused override: scalar slot {} out of range (size {}) for kernel {}",
-                        max_slot,
-                        core_args.size(),
-                        kernel_idx);
-                    for (const auto& [slot, value] : fields) {
-                        core_args[slot] = value;
-                    }
-                    patched_any = true;
+            auto& grid_args = GetRuntimeArgs(program, plan.kernel_idx);
+            for (const auto& core : plan.active_cores) {
+                auto& core_args = grid_args.at(core.x).at(core.y);
+                TT_FATAL(
+                    max_slot < core_args.size(),
+                    "indexer_score fused override: scalar slot {} out of range (size {}) for kernel {}",
+                    max_slot,
+                    core_args.size(),
+                    plan.kernel_idx);
+                for (const auto& [slot, value] : fields) {
+                    core_args[slot] = value;
                 }
             }
-            TT_FATAL(patched_any, "indexer_score fused override: kernel {} has no runtime arguments", kernel_idx);
         };
         {
             namespace common = indexer_fused_common;
@@ -854,25 +876,19 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         constexpr uint32_t ag_reader_valid_pages = ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
         constexpr uint32_t ag_writer_valid_pages = ag_rt::kWriterRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
         patch_fields(
-            kAllGatherReaderForwardKernelIndex,
+            0,
             {{ag_rt::kReaderReadySemaphoreFieldOffset, forward_semaphore},
              {ag_reader_input_base, input_batch_base},
-             {ag_reader_valid_pages, valid_pages}},
-            true);
+             {ag_reader_valid_pages, valid_pages}});
         patch_fields(
-            kAllGatherReaderBackwardKernelIndex,
+            1,
             {{ag_rt::kReaderReadySemaphoreFieldOffset, backward_semaphore},
              {ag_reader_input_base, input_batch_base},
-             {ag_reader_valid_pages, valid_pages}},
-            true);
+             {ag_reader_valid_pages, valid_pages}});
         patch_fields(
-            kAllGatherWriterForwardKernelIndex,
-            {{ag_rt::kWriterReadySemaphoreFieldOffset, forward_semaphore}, {ag_writer_valid_pages, valid_pages}},
-            true);
+            2, {{ag_rt::kWriterReadySemaphoreFieldOffset, forward_semaphore}, {ag_writer_valid_pages, valid_pages}});
         patch_fields(
-            kAllGatherWriterBackwardKernelIndex,
-            {{ag_rt::kWriterReadySemaphoreFieldOffset, backward_semaphore}, {ag_writer_valid_pages, valid_pages}},
-            true);
+            3, {{ag_rt::kWriterReadySemaphoreFieldOffset, backward_semaphore}, {ag_writer_valid_pages, valid_pages}});
     }
 }
 

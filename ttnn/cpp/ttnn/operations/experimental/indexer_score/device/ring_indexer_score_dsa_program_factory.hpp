@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <array>
+#include <vector>
+
 #include <tt-metalium/workload_descriptor.hpp>
 
 #include "indexer_score_device_operation_types.hpp"
@@ -42,7 +45,16 @@ struct RingIndexerScoreDsaMeshWorkloadFactory {
     using descriptor_adapter_t =
         ttnn::device_operation::MeshDeviceOperationAdapter<detail::RingIndexerScoreDsaDescriptorAdapterOperation>::
             DescriptorMeshWorkloadAdapter<RingIndexerScoreDsaProgramFactory>;
-    using cached_mesh_workload_t = typename descriptor_adapter_t::cached_mesh_workload_t;
+    struct AgArgumentPlan {
+        uint32_t kernel_idx{};
+        // Core placement is structural; runtime storage is still resolved on every update.
+        std::vector<tt::tt_metal::CoreCoord> active_cores;
+    };
+    struct shared_variables_t {
+        typename descriptor_adapter_t::shared_variables_t descriptor;
+        std::array<AgArgumentPlan, 4> ag_plans;
+    };
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
         const operation_attributes_t& args,

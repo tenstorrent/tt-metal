@@ -8,13 +8,17 @@
 
 #include "ttnn/device_operation.hpp"
 
+#include <array>
+
 #include <tt-metalium/global_semaphore.hpp>
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
 struct HighBwAllGatherUnicastFactory {
     struct shared_variables_t {
-        std::vector<tt::tt_metal::CoreCoord> worker_cores;
+        // Slice-order destinations and receive counts are fixed when the cached program is created.
+        std::vector<std::array<tt::tt_metal::CoreCoord, 2>> destinations;
+        std::array<uint32_t, 2> receive_counts{};
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
         tt::tt_metal::GlobalSemaphore ready_sem;
@@ -29,6 +33,7 @@ struct HighBwAllGatherUnicastFactory {
         bool is_ring{};
         bool ring_even_split{};
         bool output_bank_owned_schedule{};
+        uint32_t control_group{};
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

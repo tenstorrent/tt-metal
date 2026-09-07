@@ -5,11 +5,14 @@
 #include "high_bw_all_gather_unicast_factory.hpp"
 #include "high_bw_all_gather_scheduler.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
+#include <iterator>
 #include <optional>
 
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt_stl/small_vector.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
@@ -239,6 +242,7 @@ HighBwAllGatherUnicastFactory::cached_mesh_workload_t HighBwAllGatherUnicastFact
     Tensor& output_tensor) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    ttsl::SmallVector<std::array<uint32_t, 5>, 4> control_group_keys;
 
     auto* mesh_device = tensor_args.input_tensor.device();
     auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
@@ -267,6 +271,20 @@ HighBwAllGatherUnicastFactory::cached_mesh_workload_t HighBwAllGatherUnicastFact
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program =
             create_at(operation_attributes, coord, tensor_args, output_tensor, ready_sem, data_valid_sem);
+        const std::array<uint32_t, 5> control_group_key{
+            cached_program.shared_variables.num_links,
+            cached_program.shared_variables.workers_per_direction,
+            cached_program.shared_variables.num_dram_banks,
+            cached_program.shared_variables.output_bank_owned_schedule,
+            cached_program.shared_variables.ring_even_split};
+        const auto group = std::find(control_group_keys.begin(), control_group_keys.end(), control_group_key);
+        if (group == control_group_keys.end()) {
+            cached_program.shared_variables.control_group = static_cast<uint32_t>(control_group_keys.size());
+            control_group_keys.push_back(control_group_key);
+        } else {
+            cached_program.shared_variables.control_group =
+                static_cast<uint32_t>(std::distance(control_group_keys.begin(), group));
+        }
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -737,7 +755,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // All workers in a kernel read the same tensor addresses; keep these per-dispatch
     // values common instead of duplicating their patches across every worker core.
     tt::tt_metal::SetCommonRuntimeArgs(program, reader_kernel_id, {input_addr, output_addr});
-    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr});
+    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, data_valid_granularity});
 
     // Mux runtime args: one fabric connection per active direction per link, to that direction's neighbor. The
     // direction's workers all feed this one connection.
@@ -905,7 +923,8 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     }
 
     shared_variables_t shared_variables{
-        .worker_cores = worker_cores,
+        .receive_counts =
+            {is_ring ? num_devices / 2 : device_idx, is_ring ? num_devices / 2 : num_devices - 1 - device_idx},
         .reader_kernel_id = reader_kernel_id,
         .writer_kernel_id = writer_kernel_id,
         .ready_sem = ready_sem,
@@ -921,6 +940,15 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         .ring_even_split = ring_even_split,
         .output_bank_owned_schedule = output_bank_owned_schedule,
     };
+
+    shared_variables.destinations.reserve(num_links * workers_per_dir);
+    for (uint32_t link = 0; link < num_links; ++link) {
+        for (uint32_t worker = 0; worker < workers_per_dir; ++worker) {
+            shared_variables.destinations.push_back(
+                {worker_cores[(link * 2) * workers_per_dir + worker],
+                 worker_cores[(link * 2 + 1) * workers_per_dir + worker]});
+        }
+    }
 
     return {std::move(program), std::move(shared_variables)};
 }
@@ -938,6 +966,20 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
                                    ? derive_page_geometry(tensor_args.input_tensor, output_tensor, operation_attributes)
                                    : PageGeometry{};
 
+    struct SliceControls {
+        uint32_t input_page_start;
+        uint32_t input_page_end;
+        uint32_t local_output_start;
+        uint32_t slice_count;
+        std::array<uint32_t, 2> final_start;
+        std::array<uint32_t, 2> final_count;
+    };
+    struct PreparedControlGroup {
+        ttsl::SmallVector<SliceControls, 32> slices;
+        uint32_t data_valid_granularity;
+    };
+    ttsl::SmallVector<std::optional<PreparedControlGroup>, 4> prepared_control_groups;
+
     // create_at installs the semaphore addresses once. shared_variables owns copies of those same
     // GlobalSemaphore allocations for the cached workload's lifetime; neither buffer is replaced on
     // a cache hit. Keep their runtime slots intact while refreshing every caller-owned tensor address.
@@ -947,32 +989,30 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
         auto& reader_common = GetCommonRuntimeArgs(program, shared_vars.reader_kernel_id);
         reader_common.at(0) = input_addr;
         reader_common.at(1) = output_addr;
-        GetCommonRuntimeArgs(program, shared_vars.writer_kernel_id).at(0) = output_addr;
+        auto& writer_common = GetCommonRuntimeArgs(program, shared_vars.writer_kernel_id);
+        writer_common.at(0) = output_addr;
 
         if (!has_runtime_controls) {
             continue;
         }
-        auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
-        auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
 
-        // Patch only scalar runtime arguments: no program rebuild, worker re-selection, allocation, or
-        // tensor view/slice is involved on a cache hit. The compiled schedule may be bank-owned; in that
-        // case each worker keeps one output DRAM bank while the selected input base and active count vary.
-        const uint32_t total_slices = shared_vars.num_links * shared_vars.workers_per_direction;
-        const uint32_t data_valid_granularity =
-            derive_data_valid_granularity(page_geometry, operation_attributes.packet_size, total_slices);
-        const uint32_t input_pages_per_slice = page_geometry.num_input_pages / total_slices;
-        const uint32_t remainder = page_geometry.num_input_pages % total_slices;
-        const uint32_t slice_step = shared_vars.output_bank_owned_schedule ? shared_vars.num_dram_banks : 1;
-        for (uint32_t link = 0; link < shared_vars.num_links; ++link) {
-            for (uint32_t dir = 0; dir < 2; ++dir) {
-                const bool is_forward = dir == 0;
-                const uint32_t num_recv =
-                    shared_vars.is_ring
-                        ? shared_vars.num_devices / 2
-                        : (is_forward ? shared_vars.device_idx : shared_vars.num_devices - 1 - shared_vars.device_idx);
-                for (uint32_t w = 0; w < shared_vars.workers_per_direction; ++w) {
-                    const uint32_t slice_idx = link * shared_vars.workers_per_direction + w;
+        if (prepared_control_groups.size() <= shared_vars.control_group) {
+            prepared_control_groups.resize(shared_vars.control_group + 1);
+        }
+        auto& prepared = prepared_control_groups[shared_vars.control_group];
+        if (!prepared.has_value()) {
+            const uint32_t total_slices = shared_vars.num_links * shared_vars.workers_per_direction;
+            PreparedControlGroup controls{
+                .slices = {},
+                .data_valid_granularity =
+                    derive_data_valid_granularity(page_geometry, operation_attributes.packet_size, total_slices)};
+            controls.slices.reserve(total_slices);
+            const uint32_t input_pages_per_slice = page_geometry.num_input_pages / total_slices;
+            const uint32_t remainder = page_geometry.num_input_pages % total_slices;
+            const uint32_t slice_step = shared_vars.output_bank_owned_schedule ? shared_vars.num_dram_banks : 1;
+            for (uint32_t link = 0; link < shared_vars.num_links; ++link) {
+                for (uint32_t worker = 0; worker < shared_vars.workers_per_direction; ++worker) {
+                    const uint32_t slice_idx = link * shared_vars.workers_per_direction + worker;
                     uint32_t input_page_start = slice_idx * input_pages_per_slice + std::min(slice_idx, remainder);
                     uint32_t worker_input_page_count = input_pages_per_slice + (slice_idx < remainder ? 1u : 0u);
                     if (shared_vars.output_bank_owned_schedule) {
@@ -982,7 +1022,7 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
                             shared_vars.workers_per_direction,
                             shared_vars.num_dram_banks,
                             link,
-                            w);
+                            worker);
                         input_page_start = bank_owned_slice.input_page_start;
                         worker_input_page_count = bank_owned_slice.page_count;
                     }
@@ -1002,39 +1042,55 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
                                   page_geometry.num_input_pages;
                     const uint32_t slice_count = local_output_end - local_output_start;
                     const uint32_t half = slice_count / 2;
-                    const uint32_t final_start =
-                        shared_vars.ring_even_split
-                            ? (is_forward ? local_output_start : local_output_start + half * slice_step)
-                            : local_output_start;
-                    const uint32_t final_count =
-                        shared_vars.ring_even_split ? (is_forward ? half : slice_count - half) : slice_count;
-                    const uint32_t total_chunks =
-                        num_recv * slice_count - (shared_vars.ring_even_split ? slice_count - final_count : 0);
-                    const auto& core =
-                        shared_vars.worker_cores[(link * 2 + dir) * shared_vars.workers_per_direction + w];
-
-                    auto& reader_args = reader_args_by_core[core.x][core.y];
-                    reader_args.at(rt_arg_index(ReaderRtArg::TotalChunks)) = total_chunks;
-                    reader_args.at(rt_arg_index(ReaderRtArg::SliceStart)) = local_output_start;
-                    reader_args.at(rt_arg_index(ReaderRtArg::SliceCount)) = slice_count;
-                    reader_args.at(rt_arg_index(ReaderRtArg::FinalStart)) = final_start;
-                    reader_args.at(rt_arg_index(ReaderRtArg::FinalCount)) = final_count;
-                    reader_args.at(rt_arg_index(ReaderRtArg::InputPageStart)) =
-                        page_geometry.input_page_base + input_page_start;
-                    reader_args.at(rt_arg_index(ReaderRtArg::InputPageEnd)) =
-                        page_geometry.input_page_base + input_page_end;
-                    reader_args.at(rt_arg_index(ReaderRtArg::OutputChunksPerStripe)) =
-                        page_geometry.output_chunks_per_stripe;
-
-                    auto& writer_args = writer_args_by_core[core.x][core.y];
-                    writer_args.at(rt_arg_index(WriterRtArg::SliceStart)) = local_output_start;
-                    writer_args.at(rt_arg_index(WriterRtArg::SliceCount)) = slice_count;
-                    writer_args.at(rt_arg_index(WriterRtArg::FinalStart)) = final_start;
-                    writer_args.at(rt_arg_index(WriterRtArg::FinalCount)) = final_count;
-                    writer_args.at(rt_arg_index(WriterRtArg::OutputChunksPerStripe)) =
-                        page_geometry.output_chunks_per_stripe;
-                    writer_args.at(rt_arg_index(WriterRtArg::DataValidGranularity)) = data_valid_granularity;
+                    controls.slices.push_back(
+                        {.input_page_start = page_geometry.input_page_base + input_page_start,
+                         .input_page_end = page_geometry.input_page_base + input_page_end,
+                         .local_output_start = local_output_start,
+                         .slice_count = slice_count,
+                         .final_start =
+                             {local_output_start,
+                              shared_vars.ring_even_split ? local_output_start + half * slice_step
+                                                          : local_output_start},
+                         .final_count = {
+                             shared_vars.ring_even_split ? half : slice_count,
+                             shared_vars.ring_even_split ? slice_count - half : slice_count}});
                 }
+            }
+            prepared = std::move(controls);
+        }
+        writer_common.at(1) = prepared->data_valid_granularity;
+
+        auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
+        auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
+
+        TT_FATAL(
+            prepared->slices.size() == shared_vars.destinations.size(),
+            "high_bw_all_gather prepared {} slices for {} destinations",
+            prepared->slices.size(),
+            shared_vars.destinations.size());
+        for (size_t index = 0; index < prepared->slices.size(); ++index) {
+            const auto& slice = prepared->slices[index];
+            for (uint32_t dir = 0; dir < 2; ++dir) {
+                const uint32_t final_start = slice.final_start[dir];
+                const uint32_t final_count = slice.final_count[dir];
+                const uint32_t total_chunks = shared_vars.receive_counts[dir] * slice.slice_count -
+                                              (shared_vars.ring_even_split ? slice.slice_count - final_count : 0);
+                const auto& core = shared_vars.destinations[index][dir];
+
+                auto& reader_args = reader_args_by_core[core.x][core.y];
+                reader_args.at(rt_arg_index(ReaderRtArg::TotalChunks)) = total_chunks;
+                reader_args.at(rt_arg_index(ReaderRtArg::SliceStart)) = slice.local_output_start;
+                reader_args.at(rt_arg_index(ReaderRtArg::SliceCount)) = slice.slice_count;
+                reader_args.at(rt_arg_index(ReaderRtArg::FinalStart)) = final_start;
+                reader_args.at(rt_arg_index(ReaderRtArg::FinalCount)) = final_count;
+                reader_args.at(rt_arg_index(ReaderRtArg::InputPageStart)) = slice.input_page_start;
+                reader_args.at(rt_arg_index(ReaderRtArg::InputPageEnd)) = slice.input_page_end;
+
+                auto& writer_args = writer_args_by_core[core.x][core.y];
+                writer_args.at(rt_arg_index(WriterRtArg::SliceStart)) = slice.local_output_start;
+                writer_args.at(rt_arg_index(WriterRtArg::SliceCount)) = slice.slice_count;
+                writer_args.at(rt_arg_index(WriterRtArg::FinalStart)) = final_start;
+                writer_args.at(rt_arg_index(WriterRtArg::FinalCount)) = final_count;
             }
         }
     }
