@@ -285,6 +285,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         .hw_config = std::move(compute_hw),
     };
 
+    const auto layout = wrap_layout(attrs);
     tt::tt_metal::experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel_name};
     tt::tt_metal::experimental::KernelRunArgs writer_run_args{.kernel = writer_kernel_name};
     tt::tt_metal::experimental::KernelRunArgs compute_run_args{.kernel = compute_kernel_name};
@@ -292,14 +293,16 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         const auto& core = distribution.cores[index];
         const uint32_t head = distribution.head[index];
         const uint32_t value_block = distribution.value_block[index];
-        // Inert wrap arguments: state_row and out_row address the same rows `head`
-        // already did, and a reset_chunk of 0 means never. Giving them meaning is a
-        // separate step, so any divergence here is plumbing rather than semantics.
-        const uint32_t state_row = head;
-        const uint32_t reset_chunk = 0;
-        const uint32_t reset_state_row = 0;
-        const uint32_t out_row = head;
-        const uint32_t second_out_row = 0;
+        // Map the folded work index onto the wrap's slot layout. Only the core
+        // owning the straddling group gets a live reset; everyone else keeps 0.
+        const uint32_t group = head % layout.groups;
+        const uint32_t real_head = head / layout.groups;
+        const uint32_t straddles = layout.wrap_offset != 0 && group == layout.wrap_group;
+        const uint32_t state_row = real_head * layout.slots + layout.slot_of(group);
+        const uint32_t reset_chunk = straddles ? layout.wrap_offset : 0;
+        const uint32_t reset_state_row = real_head * layout.slots + layout.wrap_group + 1;
+        const uint32_t out_row = state_row;
+        const uint32_t second_out_row = straddles ? reset_state_row : 0;
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
