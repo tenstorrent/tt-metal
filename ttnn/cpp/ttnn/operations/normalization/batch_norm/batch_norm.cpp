@@ -139,7 +139,13 @@ Tensor batch_norm(
             }
         }
         ttnn::prim::running_statistics(
-            batch_mean, var_for_running_stats, momentum, running_mean, running_var, memory_config, compute_kernel_config);
+            batch_mean,
+            var_for_running_stats,
+            momentum,
+            running_mean,
+            running_var,
+            memory_config,
+            compute_kernel_config);
     }
 
     return output_tensor;
