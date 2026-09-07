@@ -1143,3 +1143,7 @@ __attribute__((noinline)) void trace_only_init() {
 
 #endif
 #endif
+
+#ifndef DeviceZoneScopedNIf
+#define DeviceZoneScopedNIf(name, active) DeviceZoneScopedN(name)
+#endif

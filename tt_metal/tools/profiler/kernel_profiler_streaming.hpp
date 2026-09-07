@@ -403,6 +403,24 @@ struct profileScope {
     inline __attribute__((always_inline)) ~profileScope() { mark_zone_close(timer_id, start_hi, start_lo); }
 };
 
+// profileScope gated on a bool evaluated once at entry; false reads no clock and writes nothing. A constant argument
+// folds to the plain zone or to no code.
+template <uint32_t timer_id>
+struct profileScopeIf {
+    bool on;
+    uint32_t start_hi, start_lo;
+    inline __attribute__((always_inline)) profileScopeIf(bool active) : on(active) {
+        if (on) {
+            read_wall_clock(start_hi, start_lo);
+        }
+    }
+    inline __attribute__((always_inline)) ~profileScopeIf() {
+        if (on) {
+            mark_zone_close(timer_id, start_hi, start_lo);
+        }
+    }
+};
+
 // Lifecycle only, no markers. Every kernel must be wrapped or nothing it records is published.
 struct profileScopeLifecycle {
     inline __attribute__((always_inline)) profileScopeLifecycle() { init_profiler(); }
@@ -470,6 +488,10 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
     TT_ZONE_DEFINE_ID(hash, name); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
+#define DeviceZoneScopedNIf(name, active) \
+    TT_ZONE_DEFINE_ID(hash, name);        \
+    kernel_profiler::profileScopeIf<hash> zone = kernel_profiler::profileScopeIf<hash>(active);
+
 // DeviceTimestampedData carries a payload; DeviceFlag is a bare 2-word flag. Both have a compile-time tag
 // and an ELF-resolvable name.
 #define DeviceTimestampedData(name, data)               \
@@ -521,6 +543,8 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #define DeviceZoneScopedMainChildN(name) (void(name))
 
 #define DeviceZoneScopedN(name) (void(name))
+
+#define DeviceZoneScopedNIf(name, active) (void(name), void(sizeof(active)))
 
 #define DeviceZoneScopedSumN1(name) (void(name))
 

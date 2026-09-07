@@ -8,7 +8,8 @@
 // connected tracy-capture. Grid and iterations via argv.
 //
 // --bench K prices one marker kind on the device instead: K = 0 spin only, 1 empty DeviceZoneScopedN, 2 DeviceFlag,
-// 3 DeviceTimestampedData. Each RISC times bursts against its wall clock and the host prints cycles per marker; the
+// 3 DeviceTimestampedData, 4 / 5 DeviceZoneScopedNIf with an opaque runtime true / false. Each RISC times bursts
+// against its wall clock and the host prints cycles per marker; the
 // K = 0 run with the same --benchdelay is the loop's own cost to subtract. Measure on a 1x1 grid with a paced
 // --benchdelay (20 is enough) and no "profiler stalls" or "FAILED TO START" in the log, or the number is the stall.
 #include <atomic>
