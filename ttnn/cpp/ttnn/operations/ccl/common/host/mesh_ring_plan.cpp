@@ -112,9 +112,7 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
         return std::nullopt;
     }
 
-    // Topology decides closure for BOTH the axis and full-mesh cases: a full-mesh
-    // caller passes Ring for a cycle candidate and Linear for an open path, and an
-    // open path legitimately has no wrap edge to prove.
+    // The caller picks closure: Ring to prove a wrap edge, Linear for an open path that has none.
     const bool is_ring = topology == tt::tt_fabric::Topology::Ring;
     auto hash =
         ttsl::hash::hash_objects_with_default_seed(cluster_axis, full_mesh, orientation, num_links, shape, topology);
@@ -255,11 +253,7 @@ std::optional<MeshRingPlan> resolve_mesh_ring_plan(
             .route_plan_hash = ttsl::hash::hash_objects(*route_hash, fabric_config, axis_topology)};
     }
 
-    // A snake CYCLE needs an even lane count somewhere and more than two devices (a
-    // two-device "ring" is a degenerate double edge the op rejects). 1xN is not excluded:
-    // its boustrophedon degenerates to a straight line whose closing edge is the axis
-    // wrap, so it closes on a torus exactly as the axis ring does, and the edge proof is
-    // what decides. An open PATH needs only two devices, so it covers everything else.
+    // A cycle needs an even lane count and >2 devices; 1xN can still close on a torus, so the edge proof decides.
     const bool cycle_possible = shape.mesh_size() > 2 && (shape[0] % 2 == 0 || shape[1] % 2 == 0);
     const bool path_possible = allow_open_path && shape.mesh_size() >= 2;
     if (!cycle_possible && !path_possible) {
@@ -316,9 +310,7 @@ std::optional<MeshRingPlan> resolve_mesh_ring_plan(
         }
     }
 
-    // No cycle closed. The same boustrophedon walked as an open path has no wrap edge to
-    // prove and no parity precondition, so it resolves wherever the mesh is wired --
-    // including 1xN, where it degenerates to exactly the axis line.
+    // No cycle closed. The same walk as an open path has no wrap edge to prove, so it resolves on any wired mesh.
     if (path_possible) {
         for (const auto orientation :
              {ttnn::ccl::snake_ring::Orientation::Row, ttnn::ccl::snake_ring::Orientation::Column}) {
@@ -333,8 +325,7 @@ std::optional<MeshRingPlan> resolve_mesh_ring_plan(
     if (log_rejection) {
         // Repeat the deterministic fallback orientation with logging enabled
         // so the caller gets the exact edge/link that made the mesh ineligible.
-        // Report against the weakest candidate: an open path demands least, so an edge it
-        // cannot prove is the real obstacle.
+        // Log against the weakest candidate -- an edge the open path cannot prove is the real obstacle.
         const auto fallback =
             shape[0] % 2 == 0 ? ttnn::ccl::snake_ring::Orientation::Row : ttnn::ccl::snake_ring::Orientation::Column;
         const auto fallback_topology = path_possible ? tt::tt_fabric::Topology::Linear : tt::tt_fabric::Topology::Ring;
@@ -365,8 +356,7 @@ MeshRingPosition get_mesh_ring_position(
         const tt::tt_metal::distributed::MeshShape plan_shape(plan.mesh_rows, plan.mesh_cols);
         const uint32_t transport_rank = ttnn::ccl::snake_ring::index_from_coordinate(
             coordinate[0], coordinate[1], plan.mesh_rows, plan.mesh_cols, plan.orientation);
-        // On an open path the two ends are dead in one direction each; the schedule reads
-        // that off a missing neighbour exactly as it does for an axis line.
+        // Open path: the end ranks have no neighbor one way, which is how an axis line signals a dead direction.
         const bool closed = plan.topology == tt::tt_fabric::Topology::Ring;
         std::optional<ttnn::MeshCoordinate> forward_coord;
         std::optional<ttnn::MeshCoordinate> backward_coord;

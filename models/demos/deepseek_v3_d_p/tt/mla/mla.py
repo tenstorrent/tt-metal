@@ -1808,11 +1808,7 @@ class ttMLA:
 
         if self._kv_dedup:
             # GLM-5.2 KV dedup: the cache is dim-2 sharded across BOTH mesh axes, and row-major over the
-            # mesh IS the sp*tp linearization, so ONE full-mesh gather rebuilds the slab in the order the
-            # old TP-inner -> SP-outer route produced. The op linearizes every mesh: a cycle where one
-            # exists (comb, so no torus needed) and an open path otherwise, which on the 1xN shape this
-            # path can take is the axis line itself. There is no geometry left for a second route to
-            # cover, so there is no second route -- see the asserts in _gather_kvpe_prefix_full_mesh.
+            # mesh IS the sp*tp linearization, so one full-mesh gather rebuilds the slab in that exact order.
             return self._gather_kvpe_prefix_full_mesh(
                 kvpe_cache,
                 cache_batch_idx,
@@ -1905,13 +1901,10 @@ class ttMLA:
         )
         assert gathered_dim_size > 0
         assert self._sparse_kv_gather_buffer is not None
-        # These used to select between two gather routes; with one route they are invariants, so state
-        # them loudly here instead of silently rerouting when they do not hold.
+        # Preconditions of the full-mesh gather -- wrong here means a silently misordered gather.
         # Row-major over the mesh equals the sp*tp linearization only for this axis assignment.
         assert self.sp_axis == 0 and self.tp_axis == 1, "full-mesh KVPE gather assumes sp_axis=0, tp_axis=1"
-        # The op gathers across every device, which is sound only if the cache metadata says the sequence
-        # really is split sp*tp ways. A cache still declaring the legacy kv-head-on-TP layout reports tp
-        # fewer stripes and would silently under-gather.
+        # A cache still declaring the legacy kv-head-on-TP layout reports too few stripes and would under-gather.
         assert self._declared_seq_shard_factor(storage) == stripes, (
             f"TP-deduped KVPE cache declares {self._declared_seq_shard_factor(storage)} dim-2 stripes, "
             f"expected sp*tp = {stripes}"

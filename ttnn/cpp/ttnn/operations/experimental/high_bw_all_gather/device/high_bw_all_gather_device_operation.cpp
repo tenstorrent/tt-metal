@@ -99,9 +99,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     // participate when it has been linearized into one Hamiltonian ring.
     const auto mesh_shape = input_tensor.device()->shape();
     if (args.linearized_mesh_ring) {
-        // Parity and both-extents-greater-than-one are what a CLOSED cycle needs; an open
-        // path has neither requirement, and a 1-wide mesh has a legitimate ring when its
-        // axis wrap is wired. The host edge proof is what established which one applies.
+        // Parity is a cycle requirement only; the resolver already chose the shape, so check against that.
         if (args.linearized_mesh_open_path) {
             TT_FATAL(
                 mesh_shape.mesh_size() > 1,
@@ -322,8 +320,7 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             *cluster_axis,
             mesh_shape);
     } else {
-        // Cycle or open path -- resolve_mesh_ring_plan decides which below. Both need more
-        // than one device; nothing stronger can be asserted before it has run.
+        // The route is not resolved yet, so more than one device is all that can be asserted here.
         TT_FATAL(
             mesh_shape.mesh_size() > 1,
             "high_bw_all_gather cluster_axis=None requires a mesh with more than one device, got {}",
@@ -379,8 +376,7 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     std::optional<uint64_t> direct_neighbor_route_hash;
     bool linearized_mesh_open_path = false;
     if (fabric_is_2d && (linearized_mesh_ring || one_active_axis)) {
-        // This op's schedule already handles dead endpoints -- an axis line uses the same
-        // code -- so it opts in to an open-path linearization where no cycle closes.
+        // Safe to opt in: this op's line schedule already handles dead endpoints for axis gathers.
         const auto mesh_ring_plan = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
             input_tensor,
             cluster_axis,

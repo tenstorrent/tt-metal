@@ -53,9 +53,7 @@ void check_snake_ring_bijection(uint32_t rows, uint32_t cols, ttnn::ccl::snake_r
     EXPECT_TRUE(std::all_of(seen_tensor_ranks.begin(), seen_tensor_ranks.end(), [](bool seen) { return seen; }));
 }
 
-// An open Hamiltonian path: same bijection and same nearest-neighbour steps, but the
-// last rank is NOT required to reach the first. Every mesh of two or more devices has
-// one, so this is what a mesh with no closable cycle falls back to.
+// Open path: same order and same neighbor steps, but the last rank need not reach the first.
 void check_snake_ring_open_path(uint32_t rows, uint32_t cols, ttnn::ccl::snake_ring::Orientation orientation) {
     const uint32_t ring_size = rows * cols;
     std::vector<bool> seen_tensor_ranks(ring_size, false);
@@ -80,7 +78,7 @@ void check_snake_ring_open_path(uint32_t rows, uint32_t cols, ttnn::ccl::snake_r
             const uint32_t col_delta = col > next_col ? col - next_col : next_col - col;
             EXPECT_EQ(row_delta + col_delta, 1u)
                 << "orientation " << static_cast<uint32_t>(orientation) << " on " << rows << "x" << cols << " step "
-                << transport_rank << " -> " << next_rank << " is not a nearest neighbour";
+                << transport_rank << " -> " << next_rank << " is not a nearest neighbor";
         }
     }
     EXPECT_TRUE(std::all_of(seen_tensor_ranks.begin(), seen_tensor_ranks.end(), [](bool seen) { return seen; }));
@@ -97,11 +95,8 @@ TEST(CclHelpers, SnakeRingMappingsAreBijectionsWithRowMajorTensorRanks) {
 }
 
 TEST(CclHelpers, BoustrophedonOpenPathCoversEveryMeshIncludingThoseWithNoCycle) {
-    // A grid has a Hamiltonian cycle only when both extents are >= 2 and their product is
-    // even; a 1-wide grid has one only if its axis wrap is wired. None of these shapes is
-    // guaranteed a cycle, yet all have a path -- which is what makes the path universal.
-    // 8x4 is included to show the path is available there too, which is what a plain
-    // (non-torus) 2D fabric falls back to.
+    // None of these shapes is guaranteed a cycle, but every one of them has a path.
+    // 8x4 included because that is what a plain (non-torus) 2D fabric falls back to.
     constexpr std::array<std::array<uint32_t, 2>, 7> mesh_shapes{
         {{1, 8}, {8, 1}, {1, 2}, {3, 3}, {5, 5}, {3, 5}, {8, 4}}};
     for (const auto& shape : mesh_shapes) {
@@ -111,8 +106,7 @@ TEST(CclHelpers, BoustrophedonOpenPathCoversEveryMeshIncludingThoseWithNoCycle) 
 }
 
 TEST(CclHelpers, OpenPathOnAOneWideMeshIsExactlyTheAxisLine) {
-    // A 1xN full-mesh linearization must reproduce the axis order device for device,
-    // otherwise routing a 1xN mesh through the full-mesh path would reorder the gather.
+    // A 1xN full-mesh route must match the axis order device for device, or the gather is reordered.
     for (uint32_t transport_rank = 0; transport_rank < 8; ++transport_rank) {
         EXPECT_EQ(
             ttnn::ccl::snake_ring::coordinate_row(transport_rank, 1, 8, ttnn::ccl::snake_ring::Orientation::Row), 0u);
