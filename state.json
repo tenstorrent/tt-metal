@@ -1,6 +1,6 @@
 {
-  "last_run": "2026-09-07T12:40:00Z",
-  "run_id": "34122745559",
+  "last_run": "2026-09-07T18:40:00Z",
+  "run_id": 34151761111,
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -74,12 +74,6 @@
     "55424_clamp_output_tensor": {
       "issue": 55334,
       "status": "CI: 5/5 pre-checks green (RTL Sim CI + 4 Cycode scans); no build-artifact yet (PR Gate likely action_required pending maintainer approval); corrects prior memory which had wrong PR number 55334 (that was the issue, not the PR)"
-    },
-    "55582_transpose_wh_rm": {
-      "issue": 55582,
-      "branch": "repo-assist/fix-issue-55582-transpose-wh-rm-height-split",
-      "title": "tighten transpose WH sharded routing to avoid silent all-zero output",
-      "status": "opened this run; narrows use_sharded_wh gating to require both input/output fully H+W contained in a single shard (removes N==1&&C==1&&input_height_sharded&&output_width_sharded disjunct that admitted shard_height<H causing num_hw_blocks_per_core=0 silent no-op); added regression test WH_RM_height_to_width; CI triggered, outcome unknown yet, check next run"
     },
     "55435": {
       "ci_status_2026-09-07": "RTL Sim CI test FAILING (~14min run, unusual vs ~1s passes); other 4 Cycode checks green; job log 404 - could not self-diagnose; posted comment flagging for maintainer"
@@ -903,7 +897,9 @@
         "feature-request"
       ],
       "note": "GPT-OSS multi-batch request; already has impl PR #55589"
-    }
+    },
+    "55633": "bug (2026-09-07)",
+    "55609": "docs (2026-09-07)"
   },
   "issues_commented": {
     "53922": {
@@ -936,7 +932,8 @@
     "55585": "2026-09-06: confirmed root cause against current moreh_norm_backward_kernel.cpp + moreh_common.hpp (power_and_recip_tile_to_cb unconditional recip on y^p); noted open questions on SFPU NaN/inf handling for p=+-inf, unverified without hardware",
     "55587": {
       "date": "2026-09-06"
-    }
+    },
+    "55643": "2026-09-07 - relu_min vInt sign+magnitude bug, root cause confirmed against current code, left fix to maintainer"
   },
   "run_history": [
     {
@@ -1024,6 +1021,11 @@
         "task8"
       ],
       "summary": "Labeled #55599 bug; verified 4 tracked PRs CI green; nudged stale PRs #47587 and #46578; updated monthly summary #55015"
+    },
+    {
+      "run_id": 34151761111,
+      "date": "2026-09-07",
+      "summary": "Task5: reverified PR CI/state (#55435 still failing RTL Sim CI/broken url, #55424/#55293 green, #54666/#54246/#51868/#53113/#53690 unchanged). Corrected stale memory: #55591 (transpose WH) closed, superseded by #55583. Task1/2: labeled #55633 bug, #55609 docs; commented on #55643 (relu_min vInt bug) with confirmed root-cause citation. Reviewed #55622 (paged_update_cache) - already labeled/assigned, no action. Task8: updated monthly summary #55015."
     }
   ],
   "no_action_reviewed": [
@@ -1056,6 +1058,7 @@
       "status": "merged",
       "merged_by": "fvranicTT",
       "merged_at": "2026-09-03T20:46:55Z"
-    }
+    },
+    "55591": "closed - superseded by community PR #55583 (mouliraj-mcw), narrower scope, HW-verified"
   }
 }
