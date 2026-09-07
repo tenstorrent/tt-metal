@@ -723,6 +723,34 @@ def test_prepare_chunk_recurrence_captured_inputs(device: ttnn.Device, layer_idx
     )
 
 
+def _layer13_like_inputs(seed: int) -> tuple[torch.Tensor, ...]:
+    """Sample near-parallel keys and high beta without loading any captured values."""
+    inputs = list(_host_inputs(1, 1, 128, 128, seed=seed))
+    generator = torch.Generator().manual_seed(seed)
+    # Layer 13's failing chunk has cosine similarity around 0.997, key norm
+    # around 0.36, and beta around 0.918. A shared Gaussian direction plus
+    # small independent noise approximates that geometry; exact gate values
+    # are unnecessary to expose the inverse's cancellation.
+    direction = torch.randn(1, 1, 128, generator=generator)
+    noise = torch.randn(1, CHUNK_SIZE, 128, generator=generator)
+    inputs[1] = ((0.36 / 128**0.5) * (direction + 0.07 * noise)).to(torch.bfloat16).float()
+    inputs[3] = torch.full_like(inputs[3], -0.05).to(torch.bfloat16).float()
+    inputs[4] = 0.90 + 0.03 * torch.rand(1, 1, CHUNK_SIZE, 1, generator=generator)
+    return tuple(inputs)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2, 3], ids=["seed0", "seed1", "seed2", "seed3"])
+def test_prepare_chunk_recurrence_layer13_like_inverse(device: ttnn.Device, seed: int) -> None:
+    """High beta and correlated keys expose cancellation without a trace fixture."""
+    inputs = _layer13_like_inputs(seed)
+    expected = _oracle(inputs, 1, 0)
+    outputs = _run(_device_inputs(inputs, device), 1, compute_kernel_config=_production_compute_config(device))
+    actual = ttnn.to_torch(outputs[-1]).float()
+    _assert_t_inv_strict_lower_accurate(
+        expected[-1], actual, context=f"layer13-like seed {seed}", max_abs_threshold=_T_INV_MAX_ABS
+    )
+
+
 def _real_chunk_inputs() -> tuple[torch.Tensor, ...]:
     from safetensors.torch import load_file
 
