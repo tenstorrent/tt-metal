@@ -66,17 +66,48 @@ def _import_migration_client():
         ) from e
 
 
+def _is_transient_attach_error(e: BaseException) -> bool:
+    """The client ctor reports two conditions that resolve on their own: the queue file is not there yet
+    (shm_open ENOENT) or the producer created it but has not written the header (num_slots == 0).
+    Everything else (wrong size, mmap failure, permission) is permanent and must not be polled."""
+    msg = str(e)
+    return "No such file or directory" in msg or "not initialized yet" in msg
+
+
+def _poll_client(construct, what: str, on_timeout: str, timeout_s: float | None = None):
+    """Call construct() every 0.25s until it returns a client; transient ctor errors are retried within
+    the PREFILL_MIGRATION_ATTACH_WAIT_S budget (0 = forever), anything else is rethrown at once."""
+    budget = _migration_attach_wait_s() if timeout_s is None else timeout_s
+    start = last_log = time.monotonic()
+    deadline = start + budget if budget > 0 else None
+    while True:
+        try:
+            return construct()
+        except RuntimeError as e:
+            if not _is_transient_attach_error(e):
+                raise
+            now = time.monotonic()
+            if deadline is not None and now >= deadline:
+                raise RuntimeError(f"{on_timeout}: {e}") from e
+            if now - last_log >= _MIGRATION_ATTACH_HEARTBEAT_S:
+                last_log = now
+                bound = "no timeout" if deadline is None else f"{budget:.0f}s budget"
+                logger.info(
+                    f"[migration] still waiting for {what} after {now - start:.0f}s ({bound}) — "
+                    f"is the migration layer up on this host yet?"
+                )
+            time.sleep(0.25)
+
+
 def _attach_migration_client():
     cmd_q, table_q, resp_q = _resolve_queue_names()
     mod = _import_migration_client()
-    try:
-        client = mod.MigrationLayerClient(cmd_q, table_q, resp_q)
-    except RuntimeError as e:
-        raise RuntimeError(
-            f"[migration] could not attach MigrationLayerClient to queues "
-            f"({cmd_q}, {table_q}, {resp_q}): {e}. The orchestrator / inference server "
-            f"must launch migration_endpoint and create the shmem queues before the runner."
-        ) from e
+    client = _poll_client(
+        lambda: mod.MigrationLayerClient(cmd_q, table_q, resp_q),
+        f"endpoint queues ({cmd_q})",
+        f"[migration] could not attach MigrationLayerClient to queues ({cmd_q}, {table_q}, {resp_q}); "
+        f"is migration_endpoint running on this host?",
+    )
     return client, cmd_q, table_q, resp_q
 
 
@@ -165,9 +196,17 @@ def _deliver_local_device_map(device_map, rank: int, timeout_s: float | None = N
         time.sleep(0.25)
         trios, skipped = _discover()
 
+    # Discovery proved the files exist, not that the worker finished writing the headers; construct under
+    # the same poll so a rank that attaches in that window waits instead of dying.
     for cmd, table, resp in trios:
         try:
-            mod.MigrationLayerClient(cmd, table, resp).send_device_map(device_map)
+            client = _poll_client(
+                lambda cmd=cmd, table=table, resp=resp: mod.MigrationLayerClient(cmd, table, resp),
+                f"worker queue header init ({resp})",
+                f"[migration] worker queue {cmd} found but never initialized",
+                timeout_s,
+            )
+            client.send_device_map(device_map)
             logger.info(f"[migration] delivered {len(device_map)} local device-map entries -> {cmd}")
         except RuntimeError as e:
             if "Permission denied" in str(e):
