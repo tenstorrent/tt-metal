@@ -786,7 +786,7 @@ def _golden_function_reglu(input_tensor, dim=-1, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.reglu, golden_function=_golden_function_reglu)
 
 
-def _golden_function_geglu(input_tensor, dim=-1, *args, **kwargs):
+def _golden_function_geglu(input_tensor, dim=-1, *args, variant=None, **kwargs):
     import torch
 
     # Match the C++ default when comparison mode receives no dim argument.
@@ -795,7 +795,8 @@ def _golden_function_geglu(input_tensor, dim=-1, *args, **kwargs):
     split_size = input_tensor.size(-1) // 2
     split_tensors = torch.split(input_tensor, split_size_or_sections=[split_size, split_size], dim=dim)
     tensA, tensB = split_tensors[0], split_tensors[1]
-    return tensA * torch.nn.functional.gelu(tensB)
+    approximate = "tanh" if variant == ttnn.GeluVariant.Tanh else "none"
+    return tensA * torch.nn.functional.gelu(tensB, approximate=approximate)
 
 
 ttnn.attach_golden_function(ttnn.geglu, golden_function=_golden_function_geglu)

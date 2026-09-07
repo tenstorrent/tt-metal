@@ -75,8 +75,6 @@ uint32_t run_persistent_sender_push(
     distributed::MeshDevice& device = *mesh_device;
     const CoreRangeSet sender_cores = pipe.sender_cores();
     const uint32_t data_pattern = cross_node_dfb_test::data_pattern_for_write_primitive(2);
-    const uint32_t staging_size =
-        cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, num_entries, 1);
 
     Program program = CreateProgram();
     // Attach only sender cores — PrefetcherPipe is cross-program; this program owns the producer role.
@@ -90,7 +88,7 @@ uint32_t run_persistent_sender_push(
             .noc = NOC::RISCV_0_default,
             .compile_args = {prefetcher_pipe_id, entry_size, num_entries, 2u, data_pattern, 0u}});
     prefetcher_pipe_test::write_sender_l1_staging(device, sender_cores, pipe, data_pattern, entry_size, num_entries, 1);
-    prefetcher_pipe_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, pipe, staging_size);
+    prefetcher_pipe_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, pipe);
     distributed::MeshWorkload workload;
     persistent_run_on_mesh_device(mesh_device, std::move(program), workload);
     return 1u;
@@ -140,8 +138,6 @@ uint32_t run_persistent_1toN_cross_program(
     const auto receivers = corerange_to_cores(receiver_cores);
     const uint32_t num_receivers = static_cast<uint32_t>(receivers.size());
     const uint32_t data_pattern = cross_node_dfb_test::data_pattern_for_write_primitive(write_primitive);
-    const uint32_t staging_size =
-        cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, num_entries, num_receivers);
 
     Program sender_program = CreateProgram();
     EXPECT_EQ(AttachPrefetcherPipe(sender_program, pipe, sender_cores, entry_size), prefetcher_pipe_id);
@@ -155,8 +151,7 @@ uint32_t run_persistent_1toN_cross_program(
             .compile_args = {prefetcher_pipe_id, entry_size, num_entries, write_primitive, data_pattern, 0u}});
     prefetcher_pipe_test::write_sender_l1_staging(
         device, sender_cores, pipe, data_pattern, entry_size, num_entries, num_receivers);
-    prefetcher_pipe_test::set_sender_l1_staging_runtime_args(
-        sender_program, sender_k, sender_cores, pipe, staging_size);
+    prefetcher_pipe_test::set_sender_l1_staging_runtime_args(sender_program, sender_k, sender_cores, pipe);
 
     Program receiver_program = CreateProgram();
     EXPECT_EQ(AttachPrefetcherPipe(receiver_program, pipe, receiver_cores, entry_size), prefetcher_pipe_id);
@@ -682,8 +677,6 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_StaleCommitRejected) {
     const CoreCoord sender_core(0, 0);
     const CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     const uint32_t data_pattern = cross_node_dfb_test::data_pattern_for_write_primitive(2);
-    const uint32_t staging_size =
-        cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, /*num_entries=*/1, 1);
 
     Program program = CreateProgram();
     EXPECT_EQ(AttachPrefetcherPipe(program, pipe, sender_cores, entry_size), 0u);
@@ -699,7 +692,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_StaleCommitRejected) {
 
     prefetcher_pipe_test::write_sender_l1_staging(
         device, sender_cores, pipe, data_pattern, entry_size, /*num_entries=*/1, 1);
-    prefetcher_pipe_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, pipe, staging_size);
+    prefetcher_pipe_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, pipe);
 
     distributed::MeshWorkload workload;
     persistent_run_on_mesh_device(mesh_device, std::move(program), workload);
@@ -831,8 +824,6 @@ static uint32_t run_prefetcher_pipe_relay_cross_program(
     // --- Program A: sender push ---
     {
         const uint32_t data_pattern = cross_node_dfb_test::data_pattern_for_write_primitive(0);
-        const uint32_t staging_size =
-            cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, total_entries, 1);
         Program program_a = CreateProgram();
         EXPECT_EQ(AttachPrefetcherPipe(program_a, pipe, sender_cores, entry_size), 0u);
         KernelHandle sender_k = CreateKernel(
@@ -846,7 +837,7 @@ static uint32_t run_prefetcher_pipe_relay_cross_program(
                     0u, entry_size, total_entries, /*write_primitive=*/0, data_pattern, /*do_barrier=*/0}});
         prefetcher_pipe_test::write_sender_l1_staging(
             device, sender_cores, pipe, data_pattern, entry_size, total_entries, 1);
-        prefetcher_pipe_test::set_sender_l1_staging_runtime_args(program_a, sender_k, sender_cores, pipe, staging_size);
+        prefetcher_pipe_test::set_sender_l1_staging_runtime_args(program_a, sender_k, sender_cores, pipe);
         distributed::MeshWorkload workload_a;
         persistent_run_on_mesh_device(mesh_device, std::move(program_a), workload_a);
     }
@@ -948,8 +939,6 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Backpressure_NoOverwrite) 
         experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, entry_size * ring_depth);
 
     const uint32_t data_pattern = cross_node_dfb_test::data_pattern_for_write_primitive(0);
-    const uint32_t staging_size =
-        cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, total_entries, 1);
     constexpr uint32_t result_page_size = 32;
     auto result_buffer = cross_node_dfb_test::make_cross_node_data_buffer(device, receiver_cores, result_page_size, 1);
 
@@ -986,7 +975,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Backpressure_NoOverwrite) 
         program, relay_host_id, receiver_kernel, trisc_kernel);
     prefetcher_pipe_test::write_sender_l1_staging(
         device, sender_cores, pipe, data_pattern, entry_size, total_entries, 1);
-    prefetcher_pipe_test::set_sender_l1_staging_runtime_args(program, sender_kernel, sender_cores, pipe, staging_size);
+    prefetcher_pipe_test::set_sender_l1_staging_runtime_args(program, sender_kernel, sender_cores, pipe);
     SetRuntimeArgs(program, trisc_kernel, receiver_cores, {static_cast<uint32_t>(result_buffer->address())});
 
     distributed::MeshWorkload workload;
@@ -1061,9 +1050,6 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
         experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, e1 * ring_depth_e1);
     distributed::Synchronize(*mesh_device, std::nullopt);
 
-    const uint32_t staging_size =
-        cross_node_dfb_test::sender_staging_size_bytes(data_pattern, e1, total_entries_e1, 1, e2, total_entries_e2);
-
     // --- Program A (SD0): push E1 → resize without drain → signal → wait go → push E2 ---
     Program program_a = CreateProgram();
     EXPECT_EQ(AttachPrefetcherPipe(program_a, pipe, sender_cores, e1), 0u);
@@ -1090,7 +1076,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
         program_a,
         sender_k,
         sender_cores,
-        {prefetcher_pipe_test::sender_l1_staging_address(pipe, staging_size),
+        {prefetcher_pipe_test::sender_l1_staging_address(pipe),
          static_cast<uint32_t>(resized_sem.address()),
          static_cast<uint32_t>(go_sem.address())});
 
