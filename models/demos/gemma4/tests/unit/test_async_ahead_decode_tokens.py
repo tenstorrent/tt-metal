@@ -12,7 +12,11 @@ from __future__ import annotations
 
 import torch
 
-from models.demos.gemma4.tt.async_decode import merge_async_ahead_decode_tokens
+from models.demos.gemma4.tt.async_decode import (
+    apply_slot_remap_to_row_phys,
+    bounded_sliding_block_ids,
+    merge_async_ahead_decode_tokens,
+)
 
 
 def test_matching_buffers_merge_device_token_when_pos_ahead():
@@ -183,3 +187,50 @@ def test_slot_remap_beyond_device_width_still_falls_back():
     )
     assert src == "host_fallback"
     assert int(merged[0]) == 111
+
+
+def test_bounded_sliding_ownership_follows_slot_remap():
+    """Request B moving 1→0 keeps physical slot 1, not A's row-0 blocks."""
+    owners = apply_slot_remap_to_row_phys([0, 1], slot_remap=[1], batch=1)
+    assert owners == [1]
+    w = 8
+    ids = bounded_sliding_block_ids(1, w, owners)
+    assert ids[0].tolist() == list(range(w, 2 * w))
+
+
+def test_bounded_sliding_identity_without_remap():
+    ids = bounded_sliding_block_ids(2, 4, [0, 1])
+    assert ids[0].tolist() == [0, 1, 2, 3]
+    assert ids[1].tolist() == [4, 5, 6, 7]
+
+
+def test_bounded_sliding_swap_remap():
+    owners = apply_slot_remap_to_row_phys([0, 1], slot_remap=[1, 0], batch=2)
+    assert owners == [1, 0]
+    ids = bounded_sliding_block_ids(2, 4, owners)
+    assert ids[0].tolist() == [4, 5, 6, 7]
+    assert ids[1].tolist() == [0, 1, 2, 3]
+
+
+def test_zero_pad_dilutes_softmax_without_valid_mask():
+    """Codex repro: zero-Q/K + unit real V → 385/1024 if pad rows are attended."""
+    hist, valid = 1024, 385
+    q = torch.zeros(hist)
+    k = torch.zeros(hist)
+    v = torch.zeros(hist)
+    v[-valid:] = 1.0
+    scores = q * k
+    attn = torch.softmax(scores, dim=0)
+    padded = (attn * v).sum()
+    masked = (attn[-valid:] / attn[-valid:].sum() * v[-valid:]).sum()
+    assert abs(float(padded) - valid / hist) < 1e-5
+    assert abs(float(masked) - 1.0) < 1e-5
+
+
+def test_next_sliding_tail_valid_merges_history():
+    from models.demos.gemma4.tt.attention.prefill import next_sliding_tail_valid
+
+    assert next_sliding_tail_valid(384, 128, 1024) == 512
+    assert next_sliding_tail_valid(384, 1024, 1024) == 1024
+    assert next_sliding_tail_valid(1024, 128, 1024) == 1024
+    assert next_sliding_tail_valid(0, 384, 1024) == 384
