@@ -316,9 +316,15 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     K = len(taps)
     T_out = (T_pad - K) // stride + 1
 
-    # Cache the prepared (tilized/sharded) weight to keep the on-device path; key on
-    # (C, stride, taps) since the upsampler reuses one cache for distinct sub-tap vectors.
-    wkey = ("w", C, stride, K, tuple(taps))
+    # Cache the prepared (tilized/sharded) weight to keep the on-device path; key on (C, stride, taps)
+    # since the upsampler reuses one cache for distinct sub-tap vectors -- AND on the input geometry:
+    # `ttnn.conv1d` prepares the weight for the parallelization it picks for *this* (B, T_pad), and a
+    # weight prepared at another length decodes to garbage without raising. That is how every 15 s
+    # MiniMax-H3 generation on a 4x8 came out 86-100 % saturated at -1.0: the pipeline's construction
+    # warm-up decodes a 207-frame clip first, and the 603-frame request then reused its weights
+    # (fresh decoder 79 dB vs reference, same decoder after the short clip -15 dB;
+    # test_audio_long_clip_minimax_h3.py).
+    wkey = ("w", C, stride, K, tuple(taps), B, T_pad)
     weight = cache.get(wkey)
     prepared = weight is not None
     if weight is None:
@@ -448,7 +454,8 @@ def _depthwise_tap_conv1d_chunked(
     the mantissa to TF32.
     """
     assert (chunk * 4) % 64 == 0, f"C-chunk {chunk} would make ttnn.concat(dim=-1) lossy in fp32"
-    wkey = ("w", chunk, stride, K, tuple(taps))
+    # Keyed on the input geometry too -- see `depthwise_tap_filter`.
+    wkey = ("w", chunk, stride, K, tuple(taps), B, T_pad)
     weight = cache.get(wkey)
     prepared = weight is not None
     if weight is None:

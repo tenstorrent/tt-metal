@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -189,11 +190,17 @@ class MiniMaxH3Attention(Module):
         self.exp_ring_max_passes = 3  # kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
         self.exp_ring_num_passes = math.ceil(self.n_local_heads / full_grid.y)
         self.exp_ring_max_k_chunk = 512  # largest k worth trying; `_exp_sdpa_l1_bytes` picks down from here
+        # Production rule: the exp ring op serves the quad (SP=32), where PR #54481 measured it 21 %
+        # faster than the normal ring joint SDPA. MINIMAX_H3_EXP_RING_SDPA=1/0 forces it on/off for
+        # screening other meshes -- at SP=8 the config search admits (q 224, k 256) at 5 s and
+        # (q 384, k 128) at 10 s, and nothing at 15 s (falls back to the normal ring path).
+        exp_env = os.environ.get("MINIMAX_H3_EXP_RING_SDPA")
+        exp_mesh_ok = parallel_config.sequence_parallel.factor == 32 if exp_env is None else exp_env == "1"
         self.use_exp_ring_sdpa = (
             self.use_ring
             and is_blackhole()
             and tp_factor == 4
-            and parallel_config.sequence_parallel.factor == 32
+            and exp_mesh_ok
             and self.exp_ring_num_passes <= self.exp_ring_max_passes
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
@@ -296,6 +303,20 @@ class MiniMaxH3Attention(Module):
         if key not in self._sdpa_program_configs:
             tile = ttnn.TILE_SIZE
             measured = self.measured_sdpa_chunk_sizes.get(seq_local)
+            if measured is None and os.environ.get("MINIMAX_H3_SDPA_NEAREST_KEY", "1") == "1":
+                # The table is keyed by the perf test's 512-token shards (4768 / 9216 / 13632); a served
+                # 39-token prompt lands one or two tiles away (4736 / 9152 / 13664) and fell through to
+                # the generic rule -- at 5 s that is the k=256 family the docstring above measured as
+                # clearly worse than (320, 384). The optimum moves with length on a scale of thousands
+                # of rows, not a tile, so take the nearest measured length within a few tiles.
+                # MINIMAX_H3_SDPA_NEAREST_KEY=0 restores the exact-key lookup: a different chunking
+                # changes the flash accumulation order, and 50 diffusion steps turn that into a
+                # different sample (a 5 s 4x8 run with this and the AGMM v3 switch measured 30 dB
+                # against the previous frames) -- so this was judged by the repo's CLIP gate, not by
+                # dump identity: 37.54 (min 36.38) with both on vs 37.44 (min 35.94) on the base branch.
+                nearest = min(self.measured_sdpa_chunk_sizes, key=lambda length: abs(length - seq_local))
+                if abs(nearest - seq_local) <= 4 * ttnn.TILE_SIZE:
+                    measured = self.measured_sdpa_chunk_sizes[nearest]
             if measured is not None:
                 q_chunk, k_chunk = measured
             else:

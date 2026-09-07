@@ -19,6 +19,7 @@ from ....models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3Au
 from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
+from ....utils.test import ring_params_8k_req_exact_devices
 from .common import (
     CLIP_FRAMES,
     DECODE_LATENT_FRAMES,
@@ -227,6 +228,15 @@ MESH_4X8_RING = [
         id="4x8ring",
     )
 ]
+# The quad, for the same stage bench under tt-run (multi-host readback path). Same 8 KB-packet ring
+# params the pipeline opens the 4x32 with, no trace region (the decode stage does not trace).
+DECODE_STAGE_MESHES = MESH_4X8_RING + [
+    pytest.param(
+        (4, 32),
+        {**ring_params_8k_req_exact_devices, "l1_small_size": 65536},
+        id="4x32ring",
+    )
+]
 
 # 1344x768 at 16x spatial compression. Latent frame counts follow the 17n -> 5n rule less
 # `token_drop`, so 124 frames (5 s) is 37 and 362 (15 s) is 107.
@@ -272,7 +282,9 @@ def _decode_stage_state(weights_dir: str) -> dict[str, torch.Tensor]:
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8_RING, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"), DECODE_STAGE_MESHES, indirect=["mesh_device", "device_params"]
+)
 @pytest.mark.parametrize("seconds", [5, 15], ids=["5s", "15s"])
 @pytest.mark.parametrize("mode", sorted(DECODE_STAGE_MODES), ids=sorted(DECODE_STAGE_MODES))
 def test_decode_stage(mesh_device, seconds, mode):

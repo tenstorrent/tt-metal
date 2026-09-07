@@ -32,9 +32,25 @@ from __future__ import annotations
 # The op derives its worker grid from the device, reserving the mux axis: M parallelizes over 12
 # cores when transposed (narrow output, M > N) and 10 otherwise. per_core_M -- the M-tiles each core
 # walks -- follows.
+import os
+
 _TILE = 32
 _M_CORES_TRANSPOSED = 12
 _M_CORES_NON_TRANSPOSED = 10
+# MINIMAX_H3_AGMM_EXACT_ONLY (default 1): use a table entry only for a per_core_M that was itself swept,
+# else defer to the v3 rule engine (`utils/agmm_rules.py`). =0 restores the divisor rule below, and with
+# it bit-identical output to the base branch: a different blocking changes the fp32 accumulation order,
+# and 50 diffusion steps turn that into a different sample (a 5 s 4x8 run with this and the SDPA
+# nearest-key switch measured 30 dB against the previous frames). Judged by the repo's quality gate,
+# not by dump identity: CLIP prompt alignment 37.54 (min 36.38) with both on vs 37.44 (min 35.94) on the
+# base branch, audio sanity OK, 5 s fox 16:9, 2026-09-07. Measured
+# on a 4x8 with the profiled block test (Tracy, one warm block, 2026-09-07): the divisor rule's reuse of
+# entries swept at another per_core_M / core-grid orientation costs 11 % of the AGMM time at 5 s
+# (4.71 -> 4.19 ms per block, -1.2 s per video) and 14 % at 15 s (13.82 -> 11.88 ms, -4.9 s per video);
+# every other op is unchanged. The v3 picks at M=13632 were to_qkv (6, 7, 12), to_out (9, 8, 5, sub (3, 1)),
+# ff1 (6, 7, 14). A different blocking changes the fp32 accumulation order, so this is PSNR-neutral, not
+# bit-identical. The quad's 15 s shard (3744 rows) hits exact entries either way.
+_EXACT_ONLY = os.environ.get("MINIMAX_H3_AGMM_EXACT_ONLY", "1") == "1"
 
 
 def _per_core_m(m: int, n: int) -> int:
@@ -107,6 +123,12 @@ def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     """
     per_core_m = _per_core_m(m, n)
     swept = [pcm for (kk, nn, pcm) in AGMM_BLOCK_SIZES if kk == k and nn == n]
+    if _EXACT_ONLY:
+        # Screening mode: only a per_core_M that was itself swept uses the table; everything else
+        # falls to the v3 rule engine. The divisor rule below can land a 13-tile-per-core operating
+        # point on the entry swept at 1 tile per core (5 s to_out on a 4x8: 148 tiles / 12 cores = 13,
+        # prime), or reuse an entry swept in the other core-grid orientation.
+        return AGMM_BLOCK_SIZES.get((k, n, per_core_m))
     divisors = [pcm for pcm in swept if per_core_m % pcm == 0]
     if not divisors:
         return None
