@@ -2451,6 +2451,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                     break;
                 }
                 if (cfg.is_injector) {
+                    // mcast_num_dests is written only by configure_row_wide_chain_mcast, never by
+                    // build_linear_chain, so it is what actually distinguishes a lockstep group from
+                    // a store-and-forward chain. participates/is_injector are set by BOTH, and are
+                    // safe here only because every row a live mcast family skipped happens to be
+                    // all-zero-work and therefore non-participating -- a non-local invariant two
+                    // passes away. Check the distinguishing field instead, so a future change that
+                    // breaks that invariant declines loudly rather than silently rotating a pipeline.
+                    if (cfg.mcast_num_dests == 0) {
+                        rotated_group_reject = fmt::format("row {} injector is not a mcast injector", row);
+                        break;
+                    }
                     if (injector_found) {
                         rotated_group_reject = fmt::format("row {} has more than one mcast injector", row);
                         break;
@@ -2701,8 +2712,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // tail flat ids and, by the head-boundary term in the predicate, live only in heads with
         // no base chunks -- heads whose chain is therefore never built (segs.size() < 2), so the
         // reader's `nq != chain_head` fallback reads their V from DRAM.
-        // The K chain was already built above from the static head_work, which is what its
-        // single-head-injector rule needs; only the head chain, built below, sees this version.
+        // Only the head chain, built below, sees this rebuilt version. The K chain was built above
+        // from the static head_work, but on this path that is moot rather than merely satisfied:
+        // the rotation requires a live row-wide mcast family, and configure_row_wide_chain_mcast
+        // rewrites every field of every batch_chain_configs entry, so the linear K chain built
+        // earlier is discarded wholesale before any of it is used.
         //
         // RECOVERED from 6c319e724e9. It was still present when separate-V rotation was gated out
         // (409d944b14d removed only the predicate), became unreachable at that point, and was then
