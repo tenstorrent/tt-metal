@@ -54,12 +54,12 @@ def test_bounded_request_and_result_queues_apply_backpressure(expect_error):
     transports = create_in_memory_rollout_transports(capacity=1)
     transports.trainer.submit(_lease("lease-1"))
 
-    with expect_error(Full):
+    with expect_error(Full, "^$"):
         transports.trainer.submit(_lease("lease-2"), timeout=0)
 
     transports.worker.receive()
     transports.worker.publish(_result("lease-1"))
-    with expect_error(Full):
+    with expect_error(Full, "^$"):
         transports.worker.publish(_result("lease-2"), timeout=0)
 
 
@@ -121,5 +121,5 @@ def test_close_wakes_blocked_consumer_and_preserves_already_accepted_work(expect
 def test_empty_queue_timeout_uses_standard_empty_exception(expect_error):
     transports = create_in_memory_rollout_transports(capacity=1)
 
-    with expect_error(Empty):
+    with expect_error(Empty, "^$"):
         transports.worker.receive(timeout=0)

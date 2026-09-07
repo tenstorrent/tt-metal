@@ -252,8 +252,8 @@ inline void init_env(int& argc, char**& argv) {
             MPI_Finalize();
             TT_THROW(
                 "MPI runtime does not provide MPI_THREAD_MULTIPLE (requested {}, provided {})",
-                MPI_THREAD_MULTIPLE,
-                provided);
+                static_cast<int>(MPI_THREAD_MULTIPLE),
+                static_cast<int>(provided));
         }
 
         // Ensure MPI_Finalize is called when the program exits
