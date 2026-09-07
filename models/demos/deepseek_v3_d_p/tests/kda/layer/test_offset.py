@@ -211,3 +211,81 @@ def test_zero_offset_is_deterministic_and_matches_reference(
         config=config,
         label=f"tp_axis={tensor_parallel_axis} start=0",
     )
+
+
+SPLIT_KINDS = {"smallest": 1, "midpoint": None, "largest": -1}
+
+
+def _tail_rows(kind: str, local_rows: int) -> int:
+    """Tail length for a named split, in rows."""
+    if kind == "smallest":
+        return 32
+    if kind == "largest":
+        return local_rows - 32
+    return local_rows // 2
+
+
+@pytest.mark.parametrize("split_kind", ["smallest", "midpoint", "largest"])
+@pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
+def test_split_offsets_match_natural_order(
+    mesh_device: ttnn.MeshDevice,
+    tensor_parallel_axis: int,
+    split_kind: str,
+) -> None:
+    """Offsets that split a chip must still equal natural-order KDA.
+
+    This is the case the shared rotation alone cannot handle: one chip holds the
+    chronologically first and last rows at once. Split sizes are separate test
+    items so a failure names the geometry that broke.
+    """
+    sp_axis = 1 - tensor_parallel_axis
+    sp_size = tuple(mesh_device.shape)[sp_axis]
+    local_rows = SEQUENCE // sp_size
+    tail_rows = _tail_rows(split_kind, local_rows)
+
+    config, weights, hidden, expected_output, expected_state = _reference_case()
+    layer = _build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis)
+
+    for boundary_chip in range(sp_size):
+        actual_start = boundary_chip * local_rows + tail_rows
+        permutation = _mla_row_permutation(actual_start, sp_size, local_rows)
+        hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            output_tt, state = layer.forward(hidden_tt, layer.allocate_state(batch_size=1), actual_start)
+        _assert_matches_reference(
+            output_tt=output_tt,
+            state=state,
+            permutation=permutation,
+            expected_output=expected_output,
+            expected_state=expected_state,
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            tp_axis=tensor_parallel_axis,
+            config=config,
+            label=f"tp_axis={tensor_parallel_axis} {split_kind} start={actual_start}",
+        )
+
+
+@pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
+def test_worst_case_split_offset_is_deterministic(
+    mesh_device: ttnn.MeshDevice,
+    tensor_parallel_axis: int,
+) -> None:
+    """The maximum one-hop payload (o = C/2) must be bit-identical across runs."""
+    sp_axis = 1 - tensor_parallel_axis
+    sp_size = tuple(mesh_device.shape)[sp_axis]
+    local_rows = SEQUENCE // sp_size
+    actual_start = local_rows + local_rows // 2
+
+    config, weights, hidden, _, _ = _reference_case()
+    layer = _build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis)
+    permutation = _mla_row_permutation(actual_start, sp_size, local_rows)
+    hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
+
+    def run():
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            output_tt, state = layer.forward(hidden_tt, layer.allocate_state(batch_size=1), actual_start)
+        return output_tt, state.recurrent, state.convolution
+
+    _, mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
+    assert all(marker.item() == 0 for marker in mismatch_markers), "split-offset KDA is not bit-identical"

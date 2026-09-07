@@ -23,7 +23,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_RECURRENT_STATE_DTYPE,
     KDARecurrenceProgramConfig,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology
+from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology, fragment_order
 
 
 def _group_summary_memory_config(device: ttnn.Device, group_heads: int, key_dim: int) -> ttnn.MemoryConfig:
@@ -215,37 +215,41 @@ def _scan_chunks(
     return _ScanResult(output=output, final_state=final_states)
 
 
-def _distributed_affine_prefix(
-    transform_a: ttnn.Tensor,
-    transform_b: ttnn.Tensor,
+def _distributed_fragment_prefix(
+    fragment_transforms: list[tuple[ttnn.Tensor, ttnn.Tensor]],
     initial_state: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
-    topology: OffsetTopology,
+    order: tuple[tuple[int, int], ...],
+    sp_size: int,
     compute_config: ttnn.DeviceComputeKernelConfig,
-) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Compose SP partition affine summaries and return entry/final carries.
+) -> tuple[list[ttnn.Tensor], ttnn.Tensor]:
+    """Compose fragment affine summaries in chronological order.
 
-    Summaries compose in ``topology`` order, never physical rank order. At
-    ``actual_start=0`` the boundary chip is rank zero and the chronological order
-    is the identity, so this reduces exactly to the pre-offset behavior.
+    ``fragment_transforms`` holds this chip's summaries in local fragment order;
+    ``order`` lists ``(chip, fragment)`` chronologically. One fragment per chip is
+    the whole-partition case and reduces exactly to composing over SP rank order
+    when the boundary chip is rank zero.
+
+    Entry states are returned per local fragment, delivered by ``mesh_partition``
+    so each device receives only its own.
     """
-    shape = tuple(transform_a.shape)
-
-    mesh_device = transform_a.device()
-    mesh_shape = tuple(mesh_device.shape)
-    sp_size = mesh_shape[sequence_parallel_axis]
-    batch_heads, key_dim = shape[0], shape[1]
+    per_chip = len(fragment_transforms)
+    transform_a, transform_b = fragment_transforms[0]
+    batch_heads, key_dim = tuple(transform_a.shape)[0], tuple(transform_a.shape)[1]
     value_dim = transform_b.shape[-1]
     output_memory = KDA_OUTPUT_MEMORY_CONFIG
     working_memory = KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG
 
-    # Precision boundary: FP32 composition is transported as BF16.
-    transport_a = ttnn.typecast(transform_a, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
-    transport_b = ttnn.typecast(transform_b, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
-    transport_a = ttnn.reshape(transport_a, (1, batch_heads, key_dim, key_dim))
-    transport_b = ttnn.reshape(transport_b, (1, batch_heads, key_dim, value_dim))
-    packed = ttnn.concat([transport_a, transport_b], dim=3, memory_config=output_memory)
+    packed_fragments = []
+    for fragment_a, fragment_b in fragment_transforms:
+        # Precision boundary: FP32 composition is transported as BF16.
+        transport_a = ttnn.typecast(fragment_a, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
+        transport_b = ttnn.typecast(fragment_b, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
+        transport_a = ttnn.reshape(transport_a, (1, batch_heads, key_dim, key_dim))
+        transport_b = ttnn.reshape(transport_b, (1, batch_heads, key_dim, value_dim))
+        packed_fragments.append(ttnn.concat([transport_a, transport_b], dim=3, memory_config=output_memory))
+    packed = packed_fragments[0] if per_chip == 1 else ttnn.concat(packed_fragments, dim=0, memory_config=output_memory)
     gathered = ttnn.all_gather(
         packed,
         dim=0,
@@ -255,54 +259,57 @@ def _distributed_affine_prefix(
 
     carry = ttnn.to_memory_config(initial_state, working_memory)
     carry = ttnn.reshape(carry, (1, batch_heads, key_dim, value_dim))
-    entry_states: list[ttnn.Tensor | None] = [None] * sp_size
-    for chip in topology.chip_order:
-        # Stored by physical chip so mesh_partition still hands each device its own
-        # entry state, while the carry advances in chronological order.
-        entry_states[chip] = carry
-        transported_rank_a = ttnn.slice(
+    entry_states: list[ttnn.Tensor | None] = [None] * (sp_size * per_chip)
+    for chip, fragment in order:
+        index = chip * per_chip + fragment
+        # Stored by physical slot so mesh_partition still hands each device its
+        # own entry states, while the carry advances chronologically.
+        entry_states[index] = carry
+        transported_a = ttnn.slice(
             gathered,
-            (chip, 0, 0, 0),
-            (chip + 1, batch_heads, key_dim, key_dim),
+            (index, 0, 0, 0),
+            (index + 1, batch_heads, key_dim, key_dim),
             memory_config=working_memory,
         )
-        transported_rank_b = ttnn.slice(
+        transported_b = ttnn.slice(
             gathered,
-            (chip, 0, 0, key_dim),
-            (chip + 1, batch_heads, key_dim, key_dim + value_dim),
+            (index, 0, 0, key_dim),
+            (index + 1, batch_heads, key_dim, key_dim + value_dim),
             memory_config=working_memory,
         )
         # Precision boundary: BF16 collective payload is restored for FP32 carry math.
-        rank_a_for_carry = ttnn.typecast(
-            transported_rank_a,
-            KDA_RECURRENT_STATE_DTYPE,
-            memory_config=working_memory,
-        )
-        rank_b_for_carry = ttnn.typecast(
-            transported_rank_b,
-            KDA_RECURRENT_STATE_DTYPE,
-            memory_config=working_memory,
-        )
+        a_for_carry = ttnn.typecast(transported_a, KDA_RECURRENT_STATE_DTYPE, memory_config=working_memory)
+        b_for_carry = ttnn.typecast(transported_b, KDA_RECURRENT_STATE_DTYPE, memory_config=working_memory)
         carry = ttnn.matmul(
-            rank_a_for_carry,
+            a_for_carry,
             carry,
             memory_config=working_memory,
             dtype=KDA_RECURRENT_STATE_DTYPE,
             compute_kernel_config=compute_config,
         )
-        carry = ttnn.add(carry, rank_b_for_carry, memory_config=working_memory)
+        carry = ttnn.add(carry, b_for_carry, memory_config=working_memory)
 
     replicated_entries = ttnn.concat(entry_states, dim=0, memory_config=output_memory)
-    entry_state = ttnn.mesh_partition(
+    local_entries = ttnn.mesh_partition(
         replicated_entries,
         dim=0,
         cluster_axis=sequence_parallel_axis,
         memory_config=output_memory,
     )
-    final_state = ttnn.to_memory_config(carry, output_memory)
-    entry_state = ttnn.reshape(entry_state, (batch_heads, key_dim, value_dim))
-    final_state = ttnn.reshape(final_state, (batch_heads, key_dim, value_dim))
-    return entry_state, final_state
+    entries = [
+        ttnn.reshape(
+            ttnn.slice(
+                local_entries,
+                (fragment, 0, 0, 0),
+                (fragment + 1, batch_heads, key_dim, value_dim),
+                memory_config=output_memory,
+            ),
+            (batch_heads, key_dim, value_dim),
+        )
+        for fragment in range(per_chip)
+    ]
+    final_state = ttnn.reshape(ttnn.to_memory_config(carry, output_memory), (batch_heads, key_dim, value_dim))
+    return entries, final_state
 
 
 def _last_group_state(
@@ -323,6 +330,46 @@ def _last_group_state(
     return ttnn.reshape(last_final_state, (geometry.batch_heads, geometry.key_dim, geometry.value_dim))
 
 
+def _slice_chunk_range(prepared: _PreparedChunks, start_chunk: int, end_chunk: int) -> _PreparedChunks:
+    """Restrict every prepared term to a half-open chunk range.
+
+    Chunk preparation is token-local, so a fragment is a plain slice of its
+    outputs -- no term needs recomputing.
+    """
+
+    def cut(term: ttnn.Tensor) -> ttnn.Tensor:
+        shape = tuple(term.shape)
+        return ttnn.slice(
+            term,
+            (0, start_chunk, 0, 0),
+            (shape[0], end_chunk, shape[2], shape[3]),
+            memory_config=KDA_PREPARATION_MEMORY_CONFIG,
+        )
+
+    return _PreparedChunks(*(cut(term) for term in prepared.as_kernel_args()))
+
+
+def _group_fragment(
+    fragment: _PreparedChunks,
+    geometry: _RecurrenceGeometry,
+    *,
+    num_chunks: int,
+    summary_group_chunks: int,
+    compute_config: _RecurrenceComputeConfig,
+) -> tuple[_PreparedChunks, ttnn.Tensor, ttnn.Tensor, int]:
+    """Group one fragment's chunks and summarize each group."""
+    group_chunks = _effective_summary_group_chunks(num_chunks, summary_group_chunks)
+    groups_per_head = num_chunks // group_chunks
+    grouped = _reshape_chunks_for_groups(
+        fragment,
+        geometry,
+        group_heads=geometry.batch_heads * groups_per_head,
+        summary_group_chunks=group_chunks,
+    )
+    summary_a, summary_b = _summarize_chunk_groups(grouped, geometry, compute_config=compute_config)
+    return grouped, summary_a, summary_b, groups_per_head
+
+
 def _scan_grouped_chunks(
     prepared: _PreparedChunks,
     initial_state: ttnn.Tensor,
@@ -333,60 +380,86 @@ def _scan_grouped_chunks(
     topology: OffsetTopology | None,
     compute_config: _RecurrenceComputeConfig,
 ) -> _ScanResult:
-    group_chunks = _effective_summary_group_chunks(geometry.num_chunks, summary_group_chunks)
-    groups_per_head = geometry.num_chunks // group_chunks
-    group_heads = geometry.batch_heads * groups_per_head
+    """Scan the local partition, splitting it into fragments when the offset splits it.
 
-    grouped = _reshape_chunks_for_groups(
-        prepared,
-        geometry,
-        group_heads=group_heads,
-        summary_group_chunks=group_chunks,
-    )
-    summary_a, summary_b = _summarize_chunk_groups(grouped, geometry, compute_config=compute_config)
+    When the boundary chip holds two causally non-adjacent pieces, every chip
+    splits at the same row. Mesh operations take group counts as scalars shared
+    by the whole mesh, so a ragged split -- two fragments on one chip and one
+    elsewhere -- is not expressible; splitting uniformly keeps every shape equal
+    while only the boundary chip's fragments are actually non-adjacent.
+    """
+    split_chunk = topology.head_rows // geometry.chunk_size if topology is not None and topology.is_split else None
+    if split_chunk is None:
+        fragment_chunks = [(0, geometry.num_chunks)]
+    else:
+        fragment_chunks = [(0, split_chunk), (split_chunk, geometry.num_chunks)]
 
-    prefix_initial_state = initial_state
+    fragments = [
+        _group_fragment(
+            prepared if len(fragment_chunks) == 1 else _slice_chunk_range(prepared, start, end),
+            geometry,
+            num_chunks=end - start,
+            summary_group_chunks=summary_group_chunks,
+            compute_config=compute_config,
+        )
+        for start, end in fragment_chunks
+    ]
+
+    prefix_initial_states = [initial_state] * len(fragments)
+    distributed_final_state = None
     prefix_memory_config = KDA_LOCAL_PREFIX_MEMORY_CONFIG
     if sequence_parallel_axis is not None:
         if topology is None:
             raise ValueError("sequence-parallel recurrence requires an offset topology")
-        partition_a, partition_b = ttnn.experimental.kda.reduce_affine_transforms(
-            summary_a,
-            summary_b,
-            groups_per_head,
-            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
-            compute_kernel_config=compute_config.affine_prefix,
+        partition_transforms = [
+            ttnn.experimental.kda.reduce_affine_transforms(
+                summary_a,
+                summary_b,
+                groups_per_head,
+                memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+                compute_kernel_config=compute_config.affine_prefix,
+            )
+            for _, summary_a, summary_b, groups_per_head in fragments
+        ]
+        order = (
+            fragment_order(topology) if split_chunk is not None else tuple((chip, 0) for chip in topology.chip_order)
         )
-        prefix_initial_state, distributed_final_state = _distributed_affine_prefix(
-            partition_a,
-            partition_b,
+        prefix_initial_states, distributed_final_state = _distributed_fragment_prefix(
+            partition_transforms,
             initial_state,
             sequence_parallel_axis=sequence_parallel_axis,
-            topology=topology,
+            order=order,
+            sp_size=topology.sp_size,
             compute_config=compute_config.affine_prefix,
         )
         prefix_memory_config = KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG
 
-    group_initial_states = ttnn.experimental.kda.affine_exclusive_scan(
-        summary_a,
-        summary_b,
-        prefix_initial_state,
-        groups_per_head,
-        memory_config=prefix_memory_config,
-        compute_kernel_config=compute_config.affine_prefix,
-    )
-    grouped_scan = _scan_chunks(grouped, group_initial_states, compute_config=compute_config.scan)
-    output = ttnn.reshape(
-        grouped_scan.output,
-        (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim),
-    )
+    outputs = []
+    last_local_state = None
+    for (grouped, summary_a, summary_b, groups_per_head), entry_state, (start, end) in zip(
+        fragments, prefix_initial_states, fragment_chunks, strict=True
+    ):
+        group_initial_states = ttnn.experimental.kda.affine_exclusive_scan(
+            summary_a,
+            summary_b,
+            entry_state,
+            groups_per_head,
+            memory_config=prefix_memory_config,
+            compute_kernel_config=compute_config.affine_prefix,
+        )
+        fragment_scan = _scan_chunks(grouped, group_initial_states, compute_config=compute_config.scan)
+        outputs.append(
+            ttnn.reshape(
+                fragment_scan.output,
+                (geometry.batch_heads, end - start, geometry.chunk_size, geometry.value_dim),
+            )
+        )
+        last_local_state = _last_group_state(fragment_scan.final_state, geometry, groups_per_head)
 
-    if sequence_parallel_axis is not None:
+    output = outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=1, memory_config=KDA_OUTPUT_MEMORY_CONFIG)
+    if distributed_final_state is not None:
         return _ScanResult(output=output, final_state=distributed_final_state)
-    return _ScanResult(
-        output=output,
-        final_state=_last_group_state(grouped_scan.final_state, geometry, groups_per_head),
-    )
+    return _ScanResult(output=output, final_state=last_local_state)
 
 
 class KDARecurrence:

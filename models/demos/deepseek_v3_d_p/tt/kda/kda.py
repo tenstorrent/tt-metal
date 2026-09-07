@@ -254,16 +254,52 @@ class ttKDA:
             )
         # The replacement state is BF16 row-major DRAM [B, K - 1, Q_local + K_local + V_local],
         # channel-sharded across TP and replicated across SP.
-        q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
-            qkv_row_major,
-            state_row_major,
-            *self.weights.convolution_taps,
-            config.q_dim,
-            config.k_dim,
-            config.v_dim,
-            program_config=self.qkv_convolution_program_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        history = config.conv_kernel_size - 1
+        # A split partition must convolve its head and tail separately: they are
+        # causally non-adjacent on the boundary chip, so convolving the local rows
+        # as one run would give the tail the head's rows as predecessors.
+        row_ranges = [(0, topology.head_rows), (topology.head_rows, sequence)] if topology.is_split else [(0, sequence)]
+        convolved = []
+        for fragment, (start, end) in enumerate(row_ranges):
+            fragment_rows = (
+                qkv_row_major
+                if len(row_ranges) == 1
+                else ttnn.slice(
+                    qkv_row_major,
+                    (0, start, 0),
+                    (qkv_row_major.shape[0], end, channels),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
+            fragment_carry = (
+                state_row_major
+                if len(row_ranges) == 1
+                else ttnn.slice(
+                    state_row_major,
+                    (0, fragment * history, 0),
+                    (state_row_major.shape[0], (fragment + 1) * history, channels),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
+            convolved.append(
+                ttnn.experimental.kda.qkv_causal_conv1d_silu(
+                    fragment_rows,
+                    fragment_carry,
+                    *self.weights.convolution_taps,
+                    config.q_dim,
+                    config.k_dim,
+                    config.v_dim,
+                    program_config=self.qkv_convolution_program_config,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
+        if len(convolved) == 1:
+            q, k, v = convolved[0]
+        else:
+            q, k, v = (
+                ttnn.concat([part[index] for part in convolved], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                for index in range(3)
+            )
         return q, k, v, new_state
 
     def _project_inputs(
