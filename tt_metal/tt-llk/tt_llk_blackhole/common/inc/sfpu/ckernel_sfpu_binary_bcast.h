@@ -133,7 +133,7 @@ constexpr std::uint32_t ODD_COLS_OFFSET             = 2; // addr +2 selects cols
 //   LREG6/LREG7 retain the negated scalar mean and inverse standard deviation for the
 //   tile traversal. This invalidates the BCAST_COL lane mask in LREG6, so a
 //   subsequent BCAST_COL operation must call sfpu_bcast_col_init() again.
-//   LREG12 (programmable constant 0) is clobbered while extracting each scalar.
+//   LREG14 (programmable constant 2) is clobbered while extracting each scalar.
 //   A subsequent SFPU operation that uses this constant must run its init first.
 
 constexpr std::uint32_t LREG_BCAST = p_sfpu::LREG0;
@@ -640,8 +640,9 @@ inline void _broadcast_scalar_from_dest_(std::uint32_t scalar_addr)
     // SFPCONFIG vertically broadcasts the first eight lanes. Moving the
     // result back to LREG0 makes scalar lane zero available in every 8-lane
     // sub-vector; the inline rotate-and-add sequence fills each one.
-    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG12, LREG_BCAST, 0);
+    // ttsim v1.10.5 permits non-uniform source lanes only for LREG14.
+    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG14, LREG_BCAST, 0);
     TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPNOP;
     TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);

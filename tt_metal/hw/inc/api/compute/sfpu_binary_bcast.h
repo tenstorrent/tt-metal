@@ -237,7 +237,7 @@ ALWI void sfpu_normalize_bcast_scalar_init() {
  * `sfpu_normalize_bcast_scalar_init()` must have been called.
  *
  * This operation invalidates the persistent column-broadcast mask and clobbers
- * programmable constant register 0. A later column-broadcast or SFPU operation
+ * programmable constant register 2. A later column-broadcast or SFPU operation
  * that consumes that constant must run its corresponding init first.
  *
  * Return value: None
