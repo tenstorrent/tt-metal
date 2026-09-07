@@ -556,7 +556,16 @@ void kernel_main() {
     // runtime-arg count -- which is 4, or 4 + 2*PC_N when the senders rotate --
     // does not have to be known to find it.
     constexpr auto pc_args = dataflow_kernel_lib::McastArgs<PC_CT + 1, 13>();
-    static_assert(IS_TILE != 0, "per_channel_mcast_v2: TILE per-channel operands only");
+    // D40 requires the PER-CHANNEL operand to be TILE -- the reader stages it into
+    // `cb_gamma_tiles` / `cb_bias_tiles` itself, which is the block the broadcast moves.
+    // A ROW_MAJOR one is tilized by the COMPUTE kernel out of a stick ring, so there is
+    // no reader-side block to send; `_pc_mcast_plan` refuses it on the host and this
+    // mirrors that refusal.  It is deliberately NOT a test on `IS_TILE`, which is the
+    // ACTIVATION's layout and has nothing to do with it: a ROW_MAJOR activation with a
+    // TILE weight stages its per-channel operand through the identical TILE branch, and
+    // asserting on the wrong flag failed to BUILD all 48 of the golden suite's
+    // `1x1x64x128 layout=ROW_MAJOR gamma_layout=TILE` cells.
+    static_assert(PER_CHANNEL_IS_RM == 0, "rms_norm_ttnn: D40 broadcasts a TILE per-channel operand");
     static_assert(PC_N >= 1, "per_channel_mcast_v2: at least one injector");
     // A DEFERRED receiver cannot reserve chunk c+1 before it has pushed chunk c, so the
     // deferred arm is a ONE-CHUNK regime; the host clears the bit otherwise.  Written as
