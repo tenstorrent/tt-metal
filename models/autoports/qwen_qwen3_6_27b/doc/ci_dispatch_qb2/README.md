@@ -194,28 +194,74 @@ So a dedup is forced before Qwen3.8 can resolve at all. Which copy to keep:
 
 ## Long-ISL evals that used to time out
 
-Both points were **measured on device**, not estimated: `full_model_perf_batch.py`
-on the 4-chip mesh, batch 1, one cold prefill iteration plus 4 decode tokens.
-Raw output in `longisl_65536.json` / `longisl_131072.json`.
+All numbers below are **measured on device**, not estimated.
 
-Read the comparison carefully -- the two sides are **not the same harness**. The
-recorded column is the vLLM serving sweep in
-`qwen38_checkpoint_swap/benchmarks_c1/sweep_summary.json` (`max_concurrency: 1`,
-`num_prompts: 1`, `mean_ttft_ms`); the rerun is the bare harness, which carries
-no vLLM serving overhead. The ratio below is therefore an upper bound on what a
-vLLM eval would show, not a like-for-like speedup.
+### Under vLLM, like for like
 
-| ISL | recorded TTFT (vLLM sweep) | rerun TTFT (bare) | rerun wall |
+The recorded baseline is the vLLM serving sweep in
+`qwen38_checkpoint_swap/benchmarks_c1/sweep_summary.json`. Re-running the same
+ISL 65536 point under vLLM (`vllm_isl65536_result.json`):
+
+| | recorded (2026-08-31) | now | |
 | --- | --- | --- | --- |
-| 65536 | 1837.1 s | **573.9 s** (3.20x) | 740.1 s |
-| 131072 | **TIMEOUT** (rc124, no number) | **1151.2 s** | 1341.8 s |
+| `mean_ttft_ms` | 1837053.3 | **569324.7** | **3.23x** |
+| `mean_tpot_ms` | 69.67 | 56.36 | 1.24x |
+| completed / failed | 1 / 0 | 1 / 0 | |
 
-ISL 131072 produces a number where the recorded sweep produced only a timeout.
-That timeout was the sweep harness hitting its own budget, so this shows the
-work now fits in the time available to the bare harness -- it is not by itself
-proof that the vLLM eval would finish inside its timeout. Confirming that needs
-the vLLM sweep rerun, which the CI runs will provide.
+The TPOT change is **not** attributable to the prefill work, which cannot affect
+decode; it is most likely the fused KDA conv in the decode path, and possibly
+`max_num_seqs` (see the caveat below). Do not report it as a prefill result.
 
-Decode is unchanged, as expected for prefill work: 52.1 ms/token at ISL 65536
-and 53.7 ms/token at 131072, against a recorded `mean_tpot_ms` of 69.7 at 65536
-(again bare vs vLLM, so not directly comparable).
+A useful cross-check: the bare harness measured 573.907 s TTFT for this point
+and vLLM measures 569.325 s -- 0.8% apart. At this ISL vLLM serving overhead is
+negligible, so bare-harness prefill numbers can be read as serving numbers.
+
+**Caveat on the baseline.** The sweep artifacts never recorded the server's
+`max_num_seqs` (`benchmarks_c1` names the *client* concurrency, a different
+setting), so one variable in the 3.23x is unverifiable. Anything reported from
+that sweep should be treated as a soft baseline until a server-side config is
+recorded alongside it.
+
+### `max_num_seqs 32` cannot prefill past 32768 tokens at all
+
+The first three attempts at this point all died identically:
+
+```
+TT_FATAL: Out of Memory: Not enough space to allocate 10737418240 B DRAM buffer
+across 8 banks, where each bank needs to store 1342177280 B, but bank size is
+4247339392 B (allocated: 3354056896 B, free: 893282496 B)
+```
+
+It is not a leak. The size is exact arithmetic --
+`32 x 32768 x 5120 x 2 = 10737418240` -- for the embedding of one streaming
+prefill chunk: `self.batch` x `PREFILL_STACK_CHUNK_SIZE` x `hidden_size` x bf16.
+It fails on the very first request (`step_counter=0`, `kv_cache_usage=0.038`),
+and three runs reported byte-identical free/allocated figures.
+
+The waste is that only one sequence is ever being prefilled
+(`num_running_reqs=1`), yet the embedding is materialised for all 32 padded
+batch rows -- 31/32 of that 10.7 GB is zeros. Ruled out as causes, each by
+measurement:
+
+| Suspect | Test | Result |
+| --- | --- | --- |
+| the prefill optimizations | rerun with `QWEN36_PREFILL_SCAN=hillis`, `QWEN36_SCAN_MATMUL_GRID=0` | identical OOM, same bytes |
+| fabric / sampling mode | rerun with the sweep's `FABRIC_1D` + `decode_only` | identical OOM, same bytes |
+| a regression on this branch | `PREFILL_STACK_CHUNK_SIZE` and `_prefill_forward_streaming` | unchanged since 2026-08-14 |
+
+Fixes, cheapest first:
+
+1. `--max-num-seqs 1` -- config only, allocation drops to 336 MB. This is what
+   produced the numbers above.
+2. `PREFILL_STACK_CHUNK_SIZE` 32768 -> 4096 (`tt/model.py:89`) -- 1.34 GB, keeps
+   32-slot serving, costs more outer-loop iterations. The inner scan already
+   works in 32-token units, so throughput should barely move.
+3. Embed and prefill only the active rows -- removes the waste at any
+   `max_num_seqs`. The proper fix.
+
+**This affects CI.** The tt-inference-server spec sets `max_concurrency: 32`, so
+any long-context benchmark or eval in a dispatched run will hit this. The ISL
+128 graded point is unaffected. Not introduced by this branch: peak prefill
+memory is `batch x 32768 x hidden` with nothing bounding the product, and the
+constant only bites once ISL exceeds 32768, which is why no shorter-ISL test
+caught it.
