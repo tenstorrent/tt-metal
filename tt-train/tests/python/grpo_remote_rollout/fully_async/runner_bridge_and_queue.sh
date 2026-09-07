@@ -2,12 +2,12 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Launches the 2-rank combined bridge + queue test via tt-run.
+# Launches the 2-rank combined ThreadedWeightBridge + RolloutQueue test
+# via tt-run. Both channels run concurrently on separate duplicated MPI
+# contexts.
 #
 # Rank 0 (TTML): weight bridge sender + rollout queue consumer.
 # Rank 1 (TTT):  weight bridge receiver + rollout queue producer.
-#
-# Both duplicated MPI contexts run concurrently under MPI_THREAD_MULTIPLE.
 
 set -euo pipefail
 
@@ -16,11 +16,11 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
     exit 1
 fi
 
-EX_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo_remote_rollout/bridge_and_queue_test"
-CONFIG_DIR="split_1_1"
-HOST_FILE=""
-RANK_BINDINGS_FILE=""
-SCRIPT="${EX_DIR}/test_bridge_and_queue.py"
+FA_DIR="${TT_METAL_HOME}/tt-train/tests/python/grpo_remote_rollout/fully_async"
+TESTS_DIR="${TT_METAL_HOME}/tt-train/tests/python/grpo_remote_rollout"
+HOST_FILE="${FA_DIR}/configurations/split_1_1/hosts.txt"
+RANK_BINDINGS_FILE="${FA_DIR}/configurations/split_1_1/rank_bindings.yaml"
+TEST_FILE="${FA_DIR}/test_bridge_and_queue.py"
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -28,8 +28,8 @@ while [[ "$#" -gt 0 ]]; do
             shift; HOST_FILE="$1" ;;
         --rank-bindings)
             shift; RANK_BINDINGS_FILE="$1" ;;
-        --script)
-            shift; SCRIPT="$1" ;;
+        --test-file)
+            shift; TEST_FILE="$1" ;;
         *)
             echo "Unknown argument: $1" >&2
             exit 1
@@ -38,14 +38,11 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-: "${HOST_FILE:=${EX_DIR}/configurations/${CONFIG_DIR}/hosts.txt}"
-: "${RANK_BINDINGS_FILE:=${EX_DIR}/configurations/${CONFIG_DIR}/rank_bindings.yaml}"
+cd "${FA_DIR}"
 
-cd "${EX_DIR}"
-
-CMD="python3 ${SCRIPT}"
+CMD="python3 -m pytest -s -p no:cacheprovider --rootdir=${TESTS_DIR} ${TEST_FILE}"
 
 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
     --rank-binding "${RANK_BINDINGS_FILE}" \
     --mpi-args "--hostfile ${HOST_FILE} --tag-output" \
-    ${CMD}
+    -- ${CMD}

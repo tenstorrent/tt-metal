@@ -6,11 +6,11 @@
 Rank 0 (sender):
   - Opens a [1, 1] mesh with `num_command_queues=2`.
   - Allocates two live tensors ``x0`` (grows +1 per add) and ``x1`` (grows
-    +2 per add). Different rates so both keys are visibly captured.
+    +2 per add).
   - Every ``PUSH_EVERY_S`` seconds, calls
     ``bridge.send_weights({"w0": x0, "w1": x1})``. Immediately after the
-    call, does another burst of ``ttnn.add`` on the SAME `x0` / `x1`. This
-    proves the caller can mutate its live tensors right after
+    call, does another burst of ``ttnn.add`` on the SAME ``x0`` / ``x1``.
+    This proves the caller can mutate its live tensors right after
     ``send_weights`` returns: the ``ttnn.copy`` inside ``send_weights``
     froze the values into the on-device pads.
   - After ``N_PUSHES`` calls, ``bridge.close()`` emits the length-0
@@ -22,29 +22,38 @@ Rank 1 (receiver):
   - Loops on ``with bridge.receive_weights() as dicts:``. The recv pad
     lock is held across the ``with`` body, so the bridge cannot overwrite
     the recv pads while rank 1 reads them.
-  - Samples the first elem of each key on CQ0, records both, and prints
-    ``[PASS]`` / ``[FAIL]`` after comparing to the summary from rank 0.
+  - Samples the first elem of each key on CQ0, records both, then
+    asserts the received trail matches rank 0's expected summary.
+
+Run via ``runner_threaded_weight_bridge.sh``.
 """
 
 from __future__ import annotations
 
-import gc
-import json
-import struct
-import sys
-import time
-from pathlib import Path
-from typing import List
+import os
 
-import torch
+import pytest
 
-_HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))
+_WORLD_SIZE = int(os.environ.get("OMPI_COMM_WORLD_SIZE", "0"))
+if _WORLD_SIZE != 2:
+    pytest.skip(
+        "test_threaded_weight_bridge must run under tt-run with world_size == 2 "
+        "(use runner_threaded_weight_bridge.sh).",
+        allow_module_level=True,
+    )
 
+_MPI_RANK = int(os.environ["OMPI_COMM_WORLD_RANK"])
+
+import gc  # noqa: E402
+import json  # noqa: E402
+import struct  # noqa: E402
+import time  # noqa: E402
+from typing import List  # noqa: E402
+
+import torch  # noqa: E402
 import ttnn  # noqa: E402
 
-from weight_bridge import ThreadedWeightBridge  # noqa: E402
+from utils.threaded_weight_bridge import ThreadedWeightBridge  # noqa: E402
 
 
 # ---- knobs -------------------------------------------------------------------
@@ -85,7 +94,7 @@ def _fresh(mesh: "ttnn.MeshDevice", value: float) -> "ttnn.Tensor":
     )
 
 
-def _rank0_main() -> None:
+def _rank0_side() -> None:
     print(f"[rank 0] opening [1, 1] mesh with num_command_queues={NUM_CQS}...", flush=True)
     mesh = _open_mesh()
 
@@ -160,7 +169,7 @@ def _rank0_main() -> None:
             print(f"[rank 0] close_mesh_device: {type(e).__name__}: {e}", flush=True)
 
 
-def _rank1_main() -> None:
+def _rank1_side() -> None:
     print(f"[rank 1] opening [1, 1] mesh with num_command_queues={NUM_CQS}...", flush=True)
     mesh = _open_mesh()
 
@@ -182,7 +191,7 @@ def _rank1_main() -> None:
                     entry[k] = float(ttnn.to_torch(dev_dict[k], cq_id=0)[0, 0])
             received.append(entry)
             print(
-                f"[rank 1] received v={len(received)-1} " + " ".join(f"{k}[0,0]={v}" for k, v in entry.items()),
+                f"[rank 1] received v={len(received) - 1} " + " ".join(f"{k}[0,0]={v}" for k, v in entry.items()),
                 flush=True,
             )
 
@@ -190,11 +199,9 @@ def _rank1_main() -> None:
         (n,) = struct.unpack("<I", ttnn.distributed_context_recv_bytes(4, SENDER_RANK, _TAG_SUMMARY_LEN))
         expected = json.loads(ttnn.distributed_context_recv_bytes(int(n), SENDER_RANK, _TAG_SUMMARY_BODY).decode())
 
-        ok = expected == received
-        tag = "[PASS]" if ok else "[FAIL]"
-        print(f"[rank 1] {tag} expected={expected} got={received}", flush=True)
-
         bridge.close()
+
+        assert expected == received, f"expected={expected} got={received}"
     finally:
         gc.collect()
         try:
@@ -203,27 +210,11 @@ def _rank1_main() -> None:
             print(f"[rank 1] close_mesh_device: {type(e).__name__}: {e}", flush=True)
 
 
-def main() -> None:
+def test_threaded_weight_bridge() -> None:
+    """End-to-end dict-API round-trip on the ThreadedWeightBridge."""
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
-
-    world_size = int(ttnn.distributed_context_get_size())
-    if world_size != 2:
-        raise RuntimeError(
-            f"test_threaded_bridge must run under tt-run with world_size == 2 (got {world_size}). Use runner.sh."
-        )
-
-    rank = int(ttnn.distributed_context_get_rank())
-    if rank == SENDER_RANK:
-        _rank0_main()
-    elif rank == RECEIVER_RANK:
-        _rank1_main()
+    if _MPI_RANK == SENDER_RANK:
+        _rank0_side()
     else:
-        raise RuntimeError(
-            f"Unexpected MPI rank {rank} (world_size={world_size}); "
-            f"expected exactly two ranks: SENDER={SENDER_RANK}, RECEIVER={RECEIVER_RANK}."
-        )
-
-
-if __name__ == "__main__":
-    main()
+        _rank1_side()

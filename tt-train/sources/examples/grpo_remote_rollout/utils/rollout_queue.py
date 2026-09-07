@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""SPSC cross-process rollout queue for the bridge_and_queue_test example.
+"""SPSC cross-process rollout queue for the fully-async GRPO trainer.
+
+Exercised end-to-end by the tests under
+``tt-train/tests/python/grpo_remote_rollout/fully_async/``.
 
 Design
 ======

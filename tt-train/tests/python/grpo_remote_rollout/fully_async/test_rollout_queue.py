@@ -4,42 +4,48 @@
 """Two-rank tt-run test for :class:`RolloutQueue`.
 
 Rank 1 (producer):
-  - Builds ``N_BATCHES`` deterministic RolloutBatch objects.
+  - Builds ``N_BATCHES`` deterministic ``RolloutBatch`` objects.
   - Pushes each one through the queue.
   - Records a per-batch checksum before pushing and ships the whole list
-    of checksums to rank 0 at the end (world context, tags 998 / 999).
+    to rank 0 at the end (world context, tags 998 / 999).
 
 Rank 0 (consumer):
-  - Pops batches until pop() returns None.
+  - Pops batches until ``pop()`` returns ``None``.
   - Computes the checksum for each received batch.
-  - Reads the expected checksums from rank 1.
-  - Prints [PASS] / [FAIL].
+  - Reads the expected checksums from rank 1 and asserts they match.
 
-Also visible in the log: per-push wall-clock. If ``CONSUMER_SLEEP_S > 0``
-and ``CAPACITY`` is small, the producer's push time should grow once the
-pipeline fills up, confirming Policy A back-pressure.
+Also visible in the log at ``pytest -s``: per-push wall-clock. If
+``CONSUMER_SLEEP_S > 0`` and ``CAPACITY`` is small, the producer's push
+time grows once the pipeline fills up (Policy A back-pressure).
+
+Run via ``runner_rollout_queue.sh``.
 """
 
 from __future__ import annotations
 
-import gc
-import json
-import struct
-import sys
-import time
-from pathlib import Path
-from typing import List
+import os
 
-import torch
+import pytest
 
-# Make this file's own directory importable so `rollout_queue` resolves.
-_HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))
+_WORLD_SIZE = int(os.environ.get("OMPI_COMM_WORLD_SIZE", "0"))
+if _WORLD_SIZE != 2:
+    pytest.skip(
+        "test_rollout_queue must run under tt-run with world_size == 2 (use runner_rollout_queue.sh).",
+        allow_module_level=True,
+    )
 
+_MPI_RANK = int(os.environ["OMPI_COMM_WORLD_RANK"])
+
+import gc  # noqa: E402
+import json  # noqa: E402
+import struct  # noqa: E402
+import time  # noqa: E402
+from typing import List  # noqa: E402
+
+import torch  # noqa: E402
 import ttnn  # noqa: E402
 
-from rollout_queue import RolloutBatch, RolloutQueue  # noqa: E402
+from utils.rollout_queue import RolloutBatch, RolloutQueue  # noqa: E402
 
 
 # ---- knobs -------------------------------------------------------------------
@@ -47,21 +53,17 @@ PRODUCER_RANK: int = 1  # TTT rollout worker in the real system
 CONSUMER_RANK: int = 0  # TTML trainer in the real system
 
 MESH_SHAPE: tuple = (1, 1)
-NUM_CQS: int = 1  # queue is host-only, one CQ is enough for
-# tt-run's fabric handshake
+NUM_CQS: int = 1  # queue is host-only; one CQ is enough for the fabric handshake
 
 N_BATCHES: int = 10
-BATCH_B: int = 4  # completions per batch
-MAX_COMPLETION_LEN: int = 32  # per-completion max token count
-PROMPT_LEN: int = 6  # constant per batch (deterministic)
+BATCH_B: int = 4
+MAX_COMPLETION_LEN: int = 32
+PROMPT_LEN: int = 6
 
-CAPACITY: int = 2  # local-queue max size on each rank
-CONSUMER_SLEEP_S: float = 0.25  # slow consumer -> visible back-pressure
-PRODUCER_GAP_S: float = 0.0  # producer pushes tight
+CAPACITY: int = 2
+CONSUMER_SLEEP_S: float = 0.25
+PRODUCER_GAP_S: float = 0.0
 
-# Reserved MPI tags on the world context for the producer -> consumer handoff
-# of the "expected checksums" JSON summary. Disjoint from anything the queue
-# uses on the duplicated context.
 _TAG_SUMMARY_LEN: int = 998
 _TAG_SUMMARY_BODY: int = 999
 
@@ -75,12 +77,11 @@ def _open_mesh() -> "ttnn.MeshDevice":
 
 
 def _build_batch(batch_id: int, weight_version: int) -> RolloutBatch:
-    """Deterministic fake batch. Same batch_id -> same tokens and logprobs
-    on both ranks, so both sides can compute the same checksum."""
+    """Deterministic fake batch. Same batch_id -> same tokens and
+    logprobs on both ranks, so both sides can compute the same checksum."""
     torch.manual_seed(1000 + batch_id)
     prompts = [[(batch_id * 100 + p * 10 + t) % 32000 for t in range(PROMPT_LEN)] for p in range(BATCH_B)]
     completions = [
-        # Ragged completions of different lengths: batch_id + p + 1 tokens.
         [(batch_id * 200 + p * 20 + t) % 32000 for t in range((batch_id + p + 1) % MAX_COMPLETION_LEN + 1)]
         for p in range(BATCH_B)
     ]
@@ -100,7 +101,7 @@ def _batch_checksum(batch: RolloutBatch) -> float:
     return float(batch.logprobs.sum().item()) + float(tok_hash)
 
 
-def _rank_producer_main() -> None:
+def _rank_producer_side() -> None:
     print(f"[rank {PRODUCER_RANK}] producer: opening [1, 1] mesh with num_command_queues={NUM_CQS}...", flush=True)
     mesh = _open_mesh()
     q = RolloutQueue.producer(peer_rank=CONSUMER_RANK, capacity=CAPACITY)
@@ -128,7 +129,6 @@ def _rank_producer_main() -> None:
         q.close()
         print(f"[rank {PRODUCER_RANK}] queue closed", flush=True)
 
-        # Ship the expected checksums for verification.
         body = json.dumps(expected_checksums).encode()
         ttnn.distributed_context_send_bytes(struct.pack("<I", len(body)), CONSUMER_RANK, _TAG_SUMMARY_LEN)
         ttnn.distributed_context_send_bytes(body, CONSUMER_RANK, _TAG_SUMMARY_BODY)
@@ -141,7 +141,7 @@ def _rank_producer_main() -> None:
             print(f"[rank {PRODUCER_RANK}] close_mesh_device: {type(e).__name__}: {e}", flush=True)
 
 
-def _rank_consumer_main() -> None:
+def _rank_consumer_side() -> None:
     print(f"[rank {CONSUMER_RANK}] consumer: opening [1, 1] mesh with num_command_queues={NUM_CQS}...", flush=True)
     mesh = _open_mesh()
     q = RolloutQueue.consumer(peer_rank=PRODUCER_RANK, capacity=CAPACITY)
@@ -170,24 +170,14 @@ def _rank_consumer_main() -> None:
             flush=True,
         )
 
-        (n,) = struct.unpack(
-            "<I",
-            ttnn.distributed_context_recv_bytes(4, PRODUCER_RANK, _TAG_SUMMARY_LEN),
-        )
+        (n,) = struct.unpack("<I", ttnn.distributed_context_recv_bytes(4, PRODUCER_RANK, _TAG_SUMMARY_LEN))
         expected = json.loads(ttnn.distributed_context_recv_bytes(int(n), PRODUCER_RANK, _TAG_SUMMARY_BODY).decode())
 
-        ok = len(expected) == len(received_checksums) and all(
-            abs(a - b) < 1e-3 for a, b in zip(expected, received_checksums)
-        )
-        tag = "[PASS]" if ok else "[FAIL]"
-        print(
-            f"[rank {CONSUMER_RANK}] {tag} "
-            f"expected={[round(x, 4) for x in expected]} "
-            f"got={[round(x, 4) for x in received_checksums]}",
-            flush=True,
-        )
-
         q.close()
+
+        assert len(expected) == len(received_checksums) and all(
+            abs(a - b) < 1e-3 for a, b in zip(expected, received_checksums)
+        ), (f"expected={[round(x, 4) for x in expected]} " f"got={[round(x, 4) for x in received_checksums]}")
     finally:
         gc.collect()
         try:
@@ -196,25 +186,13 @@ def _rank_consumer_main() -> None:
             print(f"[rank {CONSUMER_RANK}] close_mesh_device: {type(e).__name__}: {e}", flush=True)
 
 
-def main() -> None:
+def test_rollout_queue() -> None:
+    """End-to-end round-trip of ``N_BATCHES`` fake ``RolloutBatch``es."""
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
-
-    world_size = int(ttnn.distributed_context_get_size())
-    if world_size != 2:
-        raise RuntimeError(
-            f"test_rollout_queue must run under tt-run with world_size == 2 (got {world_size}). "
-            "Use runner_rollout_queue.sh."
-        )
-
-    rank = int(ttnn.distributed_context_get_rank())
-    if rank == PRODUCER_RANK:
-        _rank_producer_main()
-    elif rank == CONSUMER_RANK:
-        _rank_consumer_main()
+    if _MPI_RANK == PRODUCER_RANK:
+        _rank_producer_side()
+    elif _MPI_RANK == CONSUMER_RANK:
+        _rank_consumer_side()
     else:
-        raise RuntimeError(f"Unexpected MPI rank {rank}; expected {PRODUCER_RANK} or {CONSUMER_RANK}.")
-
-
-if __name__ == "__main__":
-    main()
+        raise RuntimeError(f"Unexpected MPI rank {_MPI_RANK}; expected {PRODUCER_RANK} or {CONSUMER_RANK}.")

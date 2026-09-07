@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Two-rank tt-run test that runs the ThreadedWeightBridge (dict API) and
-the RolloutQueue concurrently on separate duplicated MPI contexts.
+"""Two-rank tt-run test that runs :class:`ThreadedWeightBridge` (dict API)
+and :class:`RolloutQueue` concurrently on separate duplicated MPI contexts.
 
 Rank directions match the real fully-async trainer:
 
@@ -15,46 +15,53 @@ Rank directions match the real fully-async trainer:
         ``with bridge.poll_weights() as dicts:`` between rounds.
       - ``RolloutQueue.producer``: pushes freshly generated batches.
 
-Rank 0 main loop (mirrors the training loop):
+Rank 0 main loop mirrors the training loop:
 
-  1. Pop a rollout batch from RolloutQueue.
-  2. Run ``ttnn.add`` bursts on CQ0 (mock gradient work) on
-     ``x0`` (+1/add) and ``x1`` (+2/add).
+  1. Pop a rollout batch from ``RolloutQueue``.
+  2. Run ``ttnn.add`` bursts on CQ0 (mock gradient work) on ``x0``
+     (+1/add) and ``x1`` (+2/add).
   3. Every other round, ``send_weights({"w0": x0, "w1": x1})`` and then
      keep mutating x0 / x1 -- the pads are the freeze point.
 
 Rank 1 main loop:
 
-  1. Push a fake rollout batch through RolloutQueue.
+  1. Push a fake rollout batch through ``RolloutQueue``.
   2. ``with bridge.poll_weights() as dicts:`` non-blocking. If a fresh
-     dict is there, sample both keys under the lock and record. The lock
-     ensures the bridge cannot overwrite the pads while rank 1 reads.
+     dict is there, sample both keys under the lock and record.
 
 Verification: rank 1 ships two expected-summary lists at the end
 (rollout checksums + observed weight first-elems per key). Rank 0
-prints PASS/FAIL per channel plus a top-level ``[COMBINED PASS]``.
+asserts both channels match.
+
+Run via ``runner_bridge_and_queue.sh``.
 """
 
 from __future__ import annotations
 
-import gc
-import json
-import struct
-import sys
-import time
-from pathlib import Path
-from typing import List
+import os
 
-import torch
+import pytest
 
-_HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))
+_WORLD_SIZE = int(os.environ.get("OMPI_COMM_WORLD_SIZE", "0"))
+if _WORLD_SIZE != 2:
+    pytest.skip(
+        "test_bridge_and_queue must run under tt-run with world_size == 2 (use runner_bridge_and_queue.sh).",
+        allow_module_level=True,
+    )
 
+_MPI_RANK = int(os.environ["OMPI_COMM_WORLD_RANK"])
+
+import gc  # noqa: E402
+import json  # noqa: E402
+import struct  # noqa: E402
+import time  # noqa: E402
+from typing import List  # noqa: E402
+
+import torch  # noqa: E402
 import ttnn  # noqa: E402
 
-from rollout_queue import RolloutBatch, RolloutQueue  # noqa: E402
-from weight_bridge import ThreadedWeightBridge  # noqa: E402
+from utils.rollout_queue import RolloutBatch, RolloutQueue  # noqa: E402
+from utils.threaded_weight_bridge import ThreadedWeightBridge  # noqa: E402
 
 
 # ---- knobs -------------------------------------------------------------------
@@ -122,7 +129,31 @@ def _batch_checksum(batch: RolloutBatch) -> float:
     return float(batch.logprobs.sum().item()) + float(tok_hash)
 
 
-def _ttml_main() -> None:
+def _drain_weight_bridge_once(bridge: "ThreadedWeightBridge", observed: List[dict]) -> bool:
+    """Non-blockingly try to read ONE weight dict from the bridge.
+
+    Returns True if a dict was consumed; False otherwise. Uses the
+    ``poll_weights`` context manager, so the lock is held across the read
+    when a dict is available.
+    """
+    with bridge.poll_weights() as dicts:
+        if dicts is None:
+            return False
+        dev_dict = dicts[0]
+        if not dev_dict:
+            return False
+        entry: dict = {}
+        for k in sorted(dev_dict.keys()):
+            entry[k] = float(ttnn.to_torch(dev_dict[k], cq_id=0)[0, 0])
+    observed.append(entry)
+    print(
+        f"[rank {TTT_RANK}] observed fresh weight dict " + " ".join(f"{k}={v}" for k, v in entry.items()),
+        flush=True,
+    )
+    return True
+
+
+def _ttml_side() -> None:
     """Rank 0: weight bridge sender (dict API) + rollout queue consumer."""
     print(f"[rank {TTML_RANK}] TTML: opening mesh with num_command_queues={NUM_CQS}...", flush=True)
     mesh = _open_mesh()
@@ -200,28 +231,28 @@ def _ttml_main() -> None:
             ttnn.distributed_context_recv_bytes(int(n), TTT_RANK, _TAG_BRIDGE_SUMMARY_BODY).decode()
         )
 
-        queue_ok = expected_rollout == received_rollout_checksums
-        bridge_ok = expected_bridge == pushed_weight_snapshots
+        q.close()
 
+        # Two independent PASS/FAIL asserts so the log shows which channel failed.
+        assert expected_rollout == received_rollout_checksums, (
+            f"rollout channel mismatch: expected={[round(x, 4) for x in expected_rollout]} "
+            f"got={[round(x, 4) for x in received_rollout_checksums]}"
+        )
         print(
-            f"[rank {TTML_RANK}] rollout channel: {'PASS' if queue_ok else 'FAIL'} "
+            f"[rank {TTML_RANK}] rollout channel: PASS "
             f"expected={[round(x, 4) for x in expected_rollout]} "
             f"got={[round(x, 4) for x in received_rollout_checksums]}",
             flush=True,
         )
+        assert (
+            expected_bridge == pushed_weight_snapshots
+        ), f"bridge channel mismatch: pushed={pushed_weight_snapshots} rank1_saw={expected_bridge}"
         print(
-            f"[rank {TTML_RANK}] bridge channel:  {'PASS' if bridge_ok else 'FAIL'} "
+            f"[rank {TTML_RANK}] bridge channel:  PASS "
             f"pushed={pushed_weight_snapshots} rank1_saw={expected_bridge}",
             flush=True,
         )
-
-        overall_ok = queue_ok and bridge_ok
-        print(
-            f"[rank {TTML_RANK}] {'[COMBINED PASS]' if overall_ok else '[COMBINED FAIL]'}",
-            flush=True,
-        )
-
-        q.close()
+        print(f"[rank {TTML_RANK}] [COMBINED PASS]", flush=True)
     finally:
         gc.collect()
         try:
@@ -230,7 +261,7 @@ def _ttml_main() -> None:
             print(f"[rank {TTML_RANK}] close_mesh_device: {type(e).__name__}: {e}", flush=True)
 
 
-def _ttt_main() -> None:
+def _ttt_side() -> None:
     """Rank 1: weight bridge receiver (dict API) + rollout queue producer."""
     print(f"[rank {TTT_RANK}] TTT: opening mesh with num_command_queues={NUM_CQS}...", flush=True)
     mesh = _open_mesh()
@@ -290,49 +321,14 @@ def _ttt_main() -> None:
             print(f"[rank {TTT_RANK}] close_mesh_device: {type(e).__name__}: {e}", flush=True)
 
 
-def _drain_weight_bridge_once(bridge: "ThreadedWeightBridge", observed: List[dict]) -> bool:
-    """Non-blockingly try to read ONE weight dict from the bridge.
-
-    Returns True if a dict was consumed; False otherwise. Uses the
-    ``poll_weights`` context manager, so the lock is held across the read
-    when a dict is available.
-    """
-    with bridge.poll_weights() as dicts:
-        if dicts is None:
-            return False
-        dev_dict = dicts[0]
-        if not dev_dict:
-            return False
-        entry: dict = {}
-        for k in sorted(dev_dict.keys()):
-            entry[k] = float(ttnn.to_torch(dev_dict[k], cq_id=0)[0, 0])
-    observed.append(entry)
-    print(
-        f"[rank {TTT_RANK}] observed fresh weight dict " + " ".join(f"{k}={v}" for k, v in entry.items()),
-        flush=True,
-    )
-    return True
-
-
-def main() -> None:
+def test_bridge_and_queue() -> None:
+    """Combined end-to-end test: weight bridge and rollout queue running
+    concurrently on separate duplicated MPI contexts."""
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
-
-    world_size = int(ttnn.distributed_context_get_size())
-    if world_size != 2:
-        raise RuntimeError(
-            f"test_bridge_and_queue must run under tt-run with world_size == 2 (got {world_size}). "
-            "Use runner_bridge_and_queue.sh."
-        )
-
-    rank = int(ttnn.distributed_context_get_rank())
-    if rank == TTML_RANK:
-        _ttml_main()
-    elif rank == TTT_RANK:
-        _ttt_main()
+    if _MPI_RANK == TTML_RANK:
+        _ttml_side()
+    elif _MPI_RANK == TTT_RANK:
+        _ttt_side()
     else:
-        raise RuntimeError(f"Unexpected MPI rank {rank}; expected 0 or 1.")
-
-
-if __name__ == "__main__":
-    main()
+        raise RuntimeError(f"Unexpected MPI rank {_MPI_RANK}; expected 0 or 1.")
