@@ -220,7 +220,7 @@ commit-pinned) and are addressable by id (`--demo <id>`):
 | `2p_goat` | 1–2 | 22 | 3.5 KB | Sports-debate podcast (English) |
 | `3p_gpt5` | 1–3 | 47 | 13 KB | 3-way tech panel discussion |
 | `4p_climate_45min` | 1–4 | 211 | 60 KB | ~45-min 4-speaker podcast |
-| `4p_climate_100min` | 1–4 | 363 | 107 KB | ~100-min 4-speaker podcast (~23k prefill tokens) — the perf/CI workload |
+| `4p_climate_100min` | 1–4 | 363 | 107 KB | ~100-min 4-speaker podcast (~23k prefill tokens) — the perf workload |
 
 Only English and Chinese are supported upstream, which is why the bundled set covers just those two.
 
@@ -294,7 +294,7 @@ python models/experimental/vibevoice/demo/demo.py
 # 4-speaker demo, cap the AR loop at 32 frames, verbose stage/timing logs
 python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_new_tokens 32 --debug
 
-# Full long-form render (the CI workload, ~25 min of device time)
+# Full long-form render (~26 min of device time; not a CI workload)
 python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_100min --trace
 ```
 
@@ -463,7 +463,7 @@ pytest models/experimental/vibevoice/tests/pcc/test_safe_paths.py -v
 | Parameter | Applies to | Meaning |
 |-----------|-----------|---------|
 | `VV_PREFILL_ISL_SWEEP=32,64,…` | `test_prefill.py` | Replace the 11-point ISL sweep with this list |
-| `VV_WER_MAX_NEW_TOKENS=<int>` | `test_e2e_wer.py` | AR frame cap for the teacher-forced stream (CI uses 256; the table below is 512) |
+| `VV_WER_MAX_NEW_TOKENS=<int>` | `test_e2e_wer.py` | AR frame cap for the teacher-forced stream (CI uses 128; the table below is 512) |
 | `VV_WER_THRESHOLD=<float>` | `test_e2e_wer.py` | WER gate (default 0.05) |
 | `-s` | all | Required to see the per-test PCC / metric tables on stdout |
 | `mesh_device` / `device_params` | all | Fixed at `[1]` and `l1_small_size=32768` — do not override |
@@ -731,7 +731,8 @@ repeated here — see [Model description](#model-description) and [Upstream refe
   boundary costs roughly one garbled minute** of audio. The reference has no equivalent stitching, so
   this artifact is specific to this implementation.
 - **Host RAM peaks at ~1.15 GB for a 100-min render** (frame chunks + the concatenated copy).
-- **CI's long-form demo job can time out.** See the budget caveat under [CI](#ci).
+- **A cold CI runner can time out on the first run.** The LFC weight cache starts empty; see
+  the weights note under [CI](#ci).
 
 **Unvalidated optimizations (off by default)**
 
@@ -740,32 +741,56 @@ repeated here — see [Model description](#model-description) and [Upstream refe
 
 ## CI
 
-VibeVoice is wired into the **Blackhole demo tests** pipeline
-([`.github/workflows/blackhole-demo-tests.yaml`](../../../.github/workflows/blackhole-demo-tests.yaml)
-→ entries in [`tests/pipeline_reorg/blackhole_demo_tests.yaml`](../../../tests/pipeline_reorg/blackhole_demo_tests.yaml)),
-which runs nightly (`cron: "0 4 * * *"`, 04:00 UTC) and on manual dispatch. Only single-P150
-(`bh_p150b_civ2`) is targeted, with `MESH_DEVICE=P150`. The three entries fan out as **independent
-parallel matrix jobs** in `blackhole-demo-tests-impl.yaml` (`fail-fast: false`, one `test-group` per
-entry); actual concurrency depends on the P150b runner-pool size.
+VibeVoice is a **tier 3** model in the [3-tier Models CI](../../MIGRATING_TO_TIERED_CI.md)
+(see [`models/model_ci_tiers.md`](../../model_ci_tiers.md)). Tier 3 is minimum coverage: an
+end-to-end accuracy check and PCC for the most critical modules — no perf targets, no sweeps, no
+device-perf, no PR/merge gate. Two nightly pipelines run it, both single-P150 (`bh_p150b_civ2`,
+`MESH_DEVICE=P150`):
 
-| Job | Command | Gate | Timeout |
-|-----|---------|------|---------|
-| demo `4p_climate_100min` | `demo.py --demo 4p_climate_100min --trace` | full long-form render completes | 80 min |
-| e2e WER | `pytest tests/pcc/test_e2e_wer.py` (`VV_WER_MAX_NEW_TOKENS=256`) | TT-vs-reference WER ≤ 0.05 | 25 min |
-| speaker similarity | `pytest tests/pcc/test_e2e_sim.py` | SIM target floor 0.5 / margin 0.05 | 25 min |
+| Pipeline | Workflow | Registry entry | Schedule |
+|---|---|---|---|
+| (Tier 3) Models E2E | [`models-t3-e2e-tests.yaml`](../../../.github/workflows/models-t3-e2e-tests.yaml) | [`models_e2e_tests.yaml`](../../../tests/pipeline_reorg/models_e2e_tests.yaml) | 05:00 UTC |
+| (Tier 3) Models Unit | [`models-t3-unit-tests.yaml`](../../../.github/workflows/models-t3-unit-tests.yaml) | [`models_unit_tests.yaml`](../../../tests/pipeline_reorg/models_unit_tests.yaml) | 06:00 UTC |
 
-> **Timeout budget.** The `models → demo → bh_p150b_civ2` pipeline has a **130-minute** total budget
-> (`.github/time_budget.yaml`), enforced as the *sum* of the per-job timeouts at matrix-load time.
-> The three jobs are split to fit exactly (80 + 25 + 25 = 130), so the long-form
-> `4p_climate_100min` render gets **80 min**. A full render measures ~25 min of device time
-> (2026-08-11, commit `5a965b7` — see the [ISL sweep](#end-to-end-isl-sweep-4p_climate_100min-blackhole-p150)
-> full-prompt row), so the demo job has comfortable headroom. If a future regression makes it tight,
-> either raise the demo budget (ping `#tt-metal-infra`) and bump the demo timeout, or cap the render
-> (`--max_new_tokens` / `--isl`).
+Each pipeline runs **one job** for VibeVoice. The e2e job runs three steps in sequence, each guarded
+with `|| exit_code=$?` so one failure does not mask the others:
 
-Weights + demo text/voices auto-download and cache under `HF_HOME`; WER/SIM additionally pull
-Whisper and the SV model. Trigger manually with **Actions → (Blackhole) Demo tests → Run workflow →
-model: `vibevoice-1.5b`** (optionally system-type `bh_p150b_civ2`).
+| Job | Step | Gate | Measured |
+|-----|------|------|----------|
+| **e2e** (22 min) | `demo.py --demo 2p_goat --trace` | render completes | 1:07 |
+| | `pytest tests/pcc/test_e2e_wer.py` (`VV_WER_MAX_NEW_TOKENS=128`) | TT-vs-reference WER ≤ 0.05 | 10:19 (WER 0.0000) |
+| | `pytest tests/pcc/test_e2e_sim.py` | SIM floor 0.5 / margin 0.05 | 6:30 (0.9915 vs 0.6415) |
+| **unit** (6 min) | `pytest` over diffusion head, acoustic + semantic tokenizer, connector, DPM scheduler | per-module PCC | 3:19 (10 tests) |
+
+The demo step is a smoke check of the user-facing entry point — arg parsing, script/voice resolution,
+asset download, output writing — which the two accuracy tests bypass by driving the model directly.
+`2p_goat` is a 622-word two-speaker script, so it also covers speaker switching. The
+`4p_climate_100min` long-form render is **not** in CI: at ~26 min it is a perf workload, and tier 3
+does not gate perf. Run it manually (see [Running the demo](#running-the-demo)).
+
+**Not registered.** `tests/perf/*` (device-perf is tier 1 only), `test_prefill.py` /
+`test_decode.py` (covered by the e2e leg), `test_lm_head_pcc.py` / `test_decoder_layer_pcc.py`
+(Qwen2.5-1.5B backbone, covered by `tt_transformers`), and `test_safe_paths.py` (host-only).
+
+> **Timeout budget.** Budgets live in [`.github/time_budget.yaml`](../../../.github/time_budget.yaml)
+> keyed on `(team, pipeline_tier, sku)` and are enforced as the *sum* of per-job timeouts at
+> matrix-load time — a violation fails the whole tier pipeline, not just this model. VibeVoice holds
+> `models → e2e_tier3 → bh_p150b_civ2 = 22` and `models → unit_tier3 → bh_p150b_civ2 = 6`, both
+> measured on a single P150 plus ~15% runner margin. These 28 minutes were *moved* from the retired
+> `models → demo → bh_p150b_civ2` allocation (130 → 102), not added.
+
+> **Weights.** `bh_p150b_civ2` is an **LFC-mode** SKU ([`.github/sku_config.yaml`](../../../.github/sku_config.yaml)):
+> the per-runner cache `/localdev/blackhole_demos/huggingface_data` is mounted at
+> `/mnt/MLPerf/huggingface` read-write and is **not** pre-populated. The impl yaml sets
+> `HF_HUB_OFFLINE=0` for this mode so first use fills it, and the entries set
+> `VIBEVOICE_MODEL_PATH=/mnt/MLPerf/huggingface/microsoft/VibeVoice-1.5B` so the ~5 GB snapshot lands
+> in that persistent cache rather than the ephemeral repo checkout. WER additionally pulls
+> `openai/whisper-medium` and SIM `microsoft/wavlm-base-plus-sv` into the same cache. **The first run
+> on a cold runner pays ~8.5 GB of download inside the job timeout and may time out; the cache is
+> still populated, so a re-run succeeds.**
+
+Trigger manually with **Actions → (Tier 3) Models End-To-End Tests** (or **Models Unit Tests**) **→
+Run workflow → model: `vibevoice-1.5b`, sku: `bh_p150b_civ2 (P150 CIv2)`**.
 
 ## Upstream references
 
