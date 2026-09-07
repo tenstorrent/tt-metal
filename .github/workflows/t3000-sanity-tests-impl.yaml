@@ -135,9 +135,12 @@ jobs:
       image: ${{ inputs.prebuilt-image || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
-        # /work/ttnn as well as /work: the ccl tests are pytest and import ttnn,
-        # which a full-profile image supplies from the tree rather than a wheel.
-        PYTHONPATH: /work:/work/ttnn
+        # /work/ttnn and /work/tools as well as /work: the ccl tests are pytest and
+        # import ttnn, which a full-profile image supplies from the tree rather than
+        # a wheel. Sanity builds with tracy=true, so _ttnn imports the `tracy` module
+        # at init; the wheel maps it in via package_dir (setup.py), while in place it
+        # is only importable from /work/tools. Same list as bisect-dispatch.yaml.
+        PYTHONPATH: /work:/work/ttnn:/work/tools
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: wormhole_b0
         LOGURU_LEVEL: INFO
