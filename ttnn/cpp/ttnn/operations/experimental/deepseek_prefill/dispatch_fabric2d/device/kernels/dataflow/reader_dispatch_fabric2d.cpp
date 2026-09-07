@@ -19,6 +19,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "dispatch_fabric2d_reader_ct_args.hpp"
 
 constexpr dspf2d::ReaderCtArgs ct{};
@@ -39,6 +40,9 @@ struct Control {
     volatile tt_l1_ptr uint32_t* bucket_len;    // extent x experts_per_chip
     volatile tt_l1_ptr uint32_t* bucket_start;  // extent x experts_per_chip
     volatile tt_l1_ptr uint32_t* entries;       // 3 words per surviving (token, top-k slot)
+    volatile tt_l1_ptr uint32_t* in_start;      // page offset of each chunk this stream reads
+    volatile tt_l1_ptr uint32_t* out_start;     // page offset of each chunk it writes downstream
+    volatile tt_l1_ptr uint32_t* diag;          // bring-up scratch, staged out to a spare output page
     uint32_t end;
 };
 
@@ -62,6 +66,9 @@ Control carve_control() {
     c.bucket_len = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * ct.experts_per_chip));
     c.bucket_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * ct.experts_per_chip));
     c.entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(3 * ct.seq_len * ct.topk));
+    c.in_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.num_relay * ct.experts_per_chip));
+    c.out_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.num_relay * ct.experts_per_chip));
+    c.diag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(16));
     c.end = a;
     return c;
 }
@@ -263,6 +270,43 @@ struct Ring {
     }
 };
 
+// Tokens one origin chip owes one expert. Every chip on the axis computes this identically from the
+// replicated table, which is what lets a chip size a run it neither wrote nor receives. Rows are
+// absolute buffer positions, so the last origin closes against counts + region, not counts alone.
+uint32_t run_len(const Control& c, uint32_t origin_row, uint32_t e) {
+    const uint32_t at = c.offsets[origin_row * ct.num_routed_experts + e];
+    return (origin_row + 1 < ct.extent) ? c.offsets[(origin_row + 1) * ct.num_routed_experts + e] - at
+                                        : c.counts[e] + c.region[e] - at;
+}
+
+uint32_t chunk_len(const Control& c, uint32_t origin_row, uint32_t e, uint32_t idx, uint32_t count) {
+    const uint32_t n = run_len(c, origin_row, e);
+    return slice_begin(n, idx + 1, count) - slice_begin(n, idx, count);
+}
+
+// Where each chunk of a descriptor list starts, as a page offset into a stream's region. The region is
+// dense and holds no addresses, so a chunk is found only by summing the lengths before it -- and both
+// sides of a region run this over lists validate_chunk_agreement proved identical.
+uint32_t chunk_starts(const Control& c, uint32_t block_base, volatile tt_l1_ptr uint32_t* start) {
+    uint32_t at = 0;
+    for (uint32_t d = 0; d < ct.num_relay; d++) {
+        const uint32_t base = block_base + d * dspf2d::ASSIGNMENT_WORDS;
+        const uint32_t origin = kernel_compile_time_args[base + 0];
+        const uint32_t dst = kernel_compile_time_args[base + 1];
+        const uint32_t idx = kernel_compile_time_args[base + 2];
+        const uint32_t cnt = kernel_compile_time_args[base + 3];
+        for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
+            const uint32_t e = c.chip_experts[dst * ct.experts_per_chip + j];
+            start[d * ct.experts_per_chip + j] = at;
+            at += chunk_len(c, origin, e, idx, cnt);
+        }
+    }
+    // The host bounds the region without knowing any of these lengths, so this is where that bound is
+    // actually tested against the data.
+    ASSERT(at <= ct.fwd_pages_per_stream);
+    return at;
+}
+
 uint32_t slot_addr(uint32_t slot) { return ct.ring_addr + slot * ct.slot_stride(); }
 
 volatile tt_l1_ptr dspf2d::FwdMetadata* slot_tail(uint32_t slot) {
@@ -295,24 +339,45 @@ void kernel_main() {
     const auto out_acc = TensorAccessor(dspf2d::ReaderCtArgs::out_payload_args, get_arg_val<uint32_t>(6));
     const auto meta_acc = TensorAccessor(dspf2d::ReaderCtArgs::out_meta_args, get_arg_val<uint32_t>(7));
 
+    const auto fwd_acc = TensorAccessor(dspf2d::ReaderCtArgs::fwd_args, get_arg_val<uint32_t>(8));
+    const uint32_t my_region = ct.stream * ct.fwd_pages_per_stream;
+
+    chunk_starts(c, ct.in_chunks_base, c.in_start);
+    chunk_starts(c, ct.out_chunks_base, c.out_start);
+
+    // Which position on the axis the chip across this cable holds. The outgoing list is ordered by it,
+    // and a page bound for it is delivered rather than forwarded.
+    uint32_t nbr_row = 0;
+    for (uint32_t r = 0; r < ct.extent; r++) {
+        if (kernel_compile_time_args[ct.ring_chip_ids_base + r] == ct.nbr_chip_id) {
+            nbr_row = r;
+        }
+    }
+
+#if DSPF2D_DIAG
+    for (uint32_t i = 0; i < 16; i++) {
+        c.diag[i] = 0;
+    }
+#endif
+
     Ring ring;
-    // Own assignments bound for the chip across this cable. Those are single hops that land straight in
-    // the destination's output, so they need nothing from the forwarding region -- destinations further
-    // round do, and arrive with the relay.
+    // Own assignments, furthest first. The nearest one is the chip across the cable: a single hop that
+    // lands straight in its output. Everything further goes into that chip's forwarding region instead,
+    // at the position the two chips agree this chunk occupies -- own assignment a is outgoing
+    // descriptor a, because both lists are emitted furthest-first by the same generator.
     for (uint32_t a = 0; a < ct.num_own; a++) {
         const uint32_t base = ct.assignment_base + a * dspf2d::ASSIGNMENT_WORDS;
         const uint32_t dst_chip = kernel_compile_time_args[base + 0];
         const uint32_t dst_row = kernel_compile_time_args[base + 1];
         const uint32_t split_idx = kernel_compile_time_args[base + 2];
         const uint32_t split_count = kernel_compile_time_args[base + 3];
-        if (dst_chip != ct.nbr_chip_id) {
-            continue;
-        }
+        const bool direct = (dst_chip == ct.nbr_chip_id);
         for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
             const uint32_t b = dst_row * ct.experts_per_chip + j;
             const uint32_t n = c.bucket_len[b];
             const uint32_t from = slice_begin(n, split_idx, split_count);
             const uint32_t to = slice_begin(n, split_idx + 1, split_count);
+            const uint32_t out_base = direct ? 0 : c.out_start[a * ct.experts_per_chip + j];
             for (uint32_t i = from; i < to; i++) {
                 const uint32_t at = (c.bucket_start[b] + i) * ENTRY_WORDS;
                 const uint32_t token = c.entries[at + 0];
@@ -330,14 +395,111 @@ void kernel_main() {
                 tail->meta[0] = ct.linearized_coord;
                 tail->meta[1] = token;
                 tail->meta[2] = c.entries[at + 2];
-                tail->cmd = dspf2d::CMD_FINAL_WRITE;
-                tail->this_addr = tail->final_payload_addr;
+                if (direct) {
+                    tail->cmd = dspf2d::CMD_FINAL_WRITE;
+                    tail->this_addr = tail->final_payload_addr;
+                } else {
+                    // The last page of a chunk forces the downstream bump, which is the boundary that
+                    // reader switches on: leave it uncounted and the whole axis waits.
+                    tail->cmd = (i + 1 == to) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
+                    tail->this_addr = fwd_acc.get_noc_addr(my_region + out_base + (i - from));
+                }
             }
         }
     }
     ring.flush_publish();
 
-    // Relays and the local same-chip phase land next.
+    // Arrivals, in the order upstream wrote them. A page here is bound for the chip across the cable or
+    // further; the first case is a final write, the second goes into that chip's region at the position
+    // the outgoing list gives it.
+    uint32_t out_d = ct.num_own - 1;  // own assignments occupy the first num_own - 1 outgoing descriptors
+    for (uint32_t d = 0; d < (DSPF2D_SKIP_RELAY ? 0u : ct.num_relay); d++) {
+        const uint32_t base = ct.in_chunks_base + d * dspf2d::ASSIGNMENT_WORDS;
+        const uint32_t origin = kernel_compile_time_args[base + 0];
+        const uint32_t dst_row = kernel_compile_time_args[base + 1];
+        const uint32_t idx = kernel_compile_time_args[base + 2];
+        const uint32_t cnt = kernel_compile_time_args[base + 3];
+        const bool continues = (dst_row != nbr_row);
+        const uint32_t dst_chip = kernel_compile_time_args[ct.ring_chip_ids_base + dst_row];
+        const uint32_t this_out_d = continues ? out_d++ : 0;
+#if DSPF2D_RELAY_DEPTH1
+        // Bring-up: take only what the immediate upstream produced in its OWN phase, so no chunk
+        // depends on another chip having relayed first.
+        {
+            const int32_t travel = (nbr_row == (ct.my_row + 1) % ct.extent) ? 1 : -1;
+            const uint32_t upstream_row =
+                (uint32_t)(((int32_t)ct.my_row - travel + (int32_t)ct.extent) % (int32_t)ct.extent);
+            if (origin != upstream_row) {
+                continue;
+            }
+        }
+#endif
+        for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
+            const uint32_t e = c.chip_experts[dst_row * ct.experts_per_chip + j];
+            const uint32_t len = chunk_len(c, origin, e, idx, cnt);
+            const uint32_t in_base = c.in_start[d * ct.experts_per_chip + j];
+            const uint32_t out_base = continues ? c.out_start[this_out_d * ct.experts_per_chip + j] : 0;
+            volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr);
+            for (uint32_t p = 0; p < len; p++) {
+                // Upstream fills the region strictly left to right, so its page count is the high-water
+                // offset and a page is ready once that count passes it.
+                uint32_t spins = 0;
+                while (true) {
+                    invalidate_l1_cache();
+                    if (*arrived > in_base + p) {
+                        break;
+                    }
+                    ring.flush_publish();  // let our own sender work while we wait on upstream
+                    if (DSPF2D_WAIT_BOUND != 0 && ++spins > DSPF2D_WAIT_BOUND) {
+#if DSPF2D_DIAG
+                        if (c.diag[0] == 0) {  // the FIRST stall on this core only
+                            c.diag[0] = 1;
+                            DPRINT(
+                                "STALL row{} s{} d{} j{} p{} off{} arrived{} len{}\n",
+                                (uint32_t)ct.my_row,
+                                (uint32_t)ct.stream,
+                                d,
+                                j,
+                                p,
+                                in_base + p,
+                                *arrived,
+                                len);
+                        }
+#endif
+                        break;
+                    }
+                }
+                const uint32_t slot = ring.claim_slot();
+                noc_async_read(
+                    fwd_acc.get_noc_addr(my_region + in_base + p),
+                    slot_addr(slot),
+                    ct.token_size_bytes + dspf2d::FWD_EXTRA_BYTES);
+                noc_async_read_barrier();  // the routing tail decides the next hop, so it must be here
+                // The read landed behind the data cache, and this slot carried a different page eight
+                // iterations ago: without this, the tail's addresses can still be that page's.
+                invalidate_l1_cache();
+
+                volatile tt_l1_ptr dspf2d::FwdMetadata* tail = slot_tail(slot);
+                // Whether this hop is the last is a property of the CHUNK, so it comes from the
+                // descriptor rather than from the arriving tail: every page of (origin, dst_row) shares
+                // one destination, and the descriptor lists are the pair validate_chunk_agreement
+                // proved the two chips agree on. Reading it back out of the tail would instead make
+                // control flow depend on a DRAM round-trip, and an unwritten tail reads as chip 0 --
+                // indistinguishable from a genuine destination on the chip whose id is 0.
+                ASSERT(tail->dst_chip == (uint64_t)dst_chip);
+                if (!continues) {
+                    tail->cmd = dspf2d::CMD_FINAL_WRITE;
+                    tail->this_addr = tail->final_payload_addr;
+                } else {
+                    tail->cmd = (p + 1 == len) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
+                    tail->this_addr = fwd_acc.get_noc_addr(my_region + out_base + p);
+                }
+            }
+        }
+    }
+    ring.flush_publish();
+
+    // The local same-chip phase lands next.
     const uint32_t end_slot = ring.claim_slot();
     slot_tail(end_slot)->cmd = dspf2d::CMD_END;
     ring.flush_publish();
