@@ -149,3 +149,37 @@ def test_nlp_cqkv_sharded_addr_change_on_hit(device, isolate_program_cache):
     _check((q2, k2, v2), _refs_sharded(A2, batch, seq_len, head_dim, num_q_heads, num_kv_heads), 1.0)
 
     assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1048576}], indirect=True)
+@pytest.mark.parametrize("seq_len", [128, 4800], ids=["few_cores", "uneven_split"])
+def test_nlp_cqkv_query_only_cache_and_trace(device, isolate_program_cache, seq_len):
+    """GLM's query-only path refreshes fresh inputs and outputs on hits and capture."""
+    torch.manual_seed(0)
+    heads, head_dim = 4, 64
+    values = [torch.randn([1, 1, seq_len, heads * head_dim], dtype=torch.bfloat16) for _ in range(3)]
+    inputs = [ttnn.from_torch(value, device=device, layout=ttnn.TILE_LAYOUT) for value in values]
+
+    def run(index):
+        return _run_interleaved(inputs[index], heads, 0, False, ttnn.DRAM_MEMORY_CONFIG)
+
+    def check(outputs):
+        for output, value in zip(outputs, values):
+            expected = value.reshape(1, seq_len, heads, head_dim).transpose(1, 2)
+            assert torch.equal(ttnn.to_torch(output[0]), expected)
+
+    outputs = []
+    for index in range(len(inputs)):
+        outputs.append(run(index))
+        assert device.num_program_cache_entries() == 1
+    check(outputs)
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    traced_outputs = [run(index) for index in range(len(inputs))]
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    try:
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        check(traced_outputs)
+        assert device.num_program_cache_entries() == 1
+    finally:
+        ttnn.release_trace(device, trace_id)
