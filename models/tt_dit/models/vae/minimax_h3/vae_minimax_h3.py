@@ -384,7 +384,11 @@ class MiniMaxH3Vae:
         single_host = not ttnn.using_distributed_env()
         env_async = os.environ.get(_ASYNC_STITCH_ENV)
         self.async_stitch = (env_async == "1") if env_async is not None else single_host
-        self.shard_readback = self.async_stitch and os.environ.get(_SHARD_READBACK_ENV, "1") == "1"
+        # Single host only. On a multi-host mesh the pooled path keeps the concatenating readback: its
+        # zero-copy shard variant (an inter-host gather with a fresh output buffer) was measured worth
+        # 0.5 s of a 97 s quad request, and the one corrupted quad run of this work (garbage latents
+        # after the warm generation, 2026-09-07) had exercised that branch and nothing else unusual.
+        self.shard_readback = self.async_stitch and single_host and os.environ.get(_SHARD_READBACK_ENV, "1") == "1"
         # Worker threads for the host post-processing (unpatchify pool + chunk-stitch pool, each this
         # wide). Chunks are independent, so the stitch parallelizes across them; torch's intra-op
         # threads parallelize within each op on top.

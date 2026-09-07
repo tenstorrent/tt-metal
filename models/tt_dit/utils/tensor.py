@@ -780,19 +780,13 @@ def fast_device_to_host_shards(
     view of its DMA buffer, which the torch tensor keeps alive -- trimmed to the logical shape as the
     concatenating path does. Shard `r * cols + c` is the piece `ShardTensorToMesh(dim=0)` handed to
     device `(r, c)`, so the list is in unit order. Single-host only: on a multi-host mesh a rank can
-    only see its own shards, and the concatenating path's inter-host gather is what makes it whole.
+    only see its own shards, and the concatenating path's inter-host gather (`fast_device_to_host`) is
+    what makes it whole. A multi-host variant (the same gather with a fresh output buffer, shards
+    returned without the concat) measured 0.5 s of a 97 s quad request and was the one unusual thing
+    the single corrupted quad run of 2026-09-07 had exercised, so it was removed rather than kept.
     """
     if ttnn.using_distributed_env():
-        # Same on-device inter-host gather + re-shard as the concatenating path (it converts the wave
-        # to row-major on device itself), minus the host memcpy: return the local shards in unit order.
-        # After the re-shard every rank holds the whole wave across its local devices, `span` units each.
-        local = _local_shards_multihost(
-            tt_tensor, mesh_device, [0, 0], ccl_manager, pre_transfer_fn, use_persistent_buffer=False
-        )
-        local_coords, shards, _logical_shape, local_mesh_shape = local
-        cols = local_mesh_shape[1]
-        order = sorted(range(len(shards)), key=lambda i: int(local_coords[i][0]) * cols + int(local_coords[i][1]))
-        return [shards[i] for i in order]
+        raise NotImplementedError("fast_device_to_host_shards is single-host only; use fast_device_to_host")
     mesh_coords = list(tt_tensor.tensor_topology().mesh_coords())
     if pre_transfer_fn is not None:
         tt_tensor = pre_transfer_fn(tt_tensor)
