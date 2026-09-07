@@ -49,18 +49,20 @@ _CEILING_ONLY = 1.0
 _LOW_ISL_MARGIN = 0.08
 _KNEE_TOKENS = 512
 
+# Keyed kimi_k26 until the name was found to match no entry in SINGLE_EXPERT_MODELS; the shape is
+# unchanged (7168 x 2048 on both configs), so these numbers carried over as measured.
 # Device duration in ns per (model, active), x_rm layout, 11x8 grid: median of 3 dispatches on a
 # BH p150b (2026-08-28). Recalibrate on the perf runner (DDR-speed dependent): each case logs an
 # "RT-CAL" line in this dict's format, so one run regenerates the table.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k26", 0): 2_815,
-    ("kimi_k26", 128): 94_981,
-    ("kimi_k26", 256): 117_485,
-    ("kimi_k26", 512): 199_692,
-    ("kimi_k26", 1024): 344_132,
-    ("kimi_k26", 2048): 641_895,
-    ("kimi_k26", 4096): 1_227_771,
-    ("kimi_k26", 5120): 1_522_123,
+    ("kimi_k2_7", 0): 2_815,
+    ("kimi_k2_7", 128): 94_981,
+    ("kimi_k2_7", 256): 117_485,
+    ("kimi_k2_7", 512): 199_692,
+    ("kimi_k2_7", 1024): 344_132,
+    ("kimi_k2_7", 2048): 641_895,
+    ("kimi_k2_7", 4096): 1_227_771,
+    ("kimi_k2_7", 5120): 1_522_123,
     ("glm_51", 0): 2_742,
     ("glm_51", 128): 85_149,
     ("glm_51", 256): 107_656,
