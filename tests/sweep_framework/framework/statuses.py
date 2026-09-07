@@ -15,6 +15,10 @@ class TestStatus(Enum):
     FAIL_UNSUPPORTED_DEVICE_PERF = 6
     XFAIL = 7  # Expected failure - test failed as expected
     XPASS = 8  # Unexpected pass - test passed when it was expected to fail
+    # Every run passed its own PCC check, but repeated executions of the same vector did not
+    # produce bit-identical outputs (--determinism-runs N). PCC alone cannot see this: for
+    # eltwise it is ~1.0 on every run, so this is a distinct status rather than a message.
+    FAIL_NON_DETERMINISTIC = 9
 
 
 class VectorValidity(str, Enum):
