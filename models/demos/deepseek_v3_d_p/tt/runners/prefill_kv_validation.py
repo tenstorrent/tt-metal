@@ -88,6 +88,20 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int) -> "torch.Te
     return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
 
 
+def kvpe_golden_present(trace_dir, layer_idx: int) -> bool:
+    """True when ``trace_dir`` carries a KVPE golden for this layer.
+
+    A hybrid stack writes a KV slab on only some layers, so its golden holds only those: Kimi-K3's 1M
+    trace ships 24 files for a 93-layer model. A reader walking every layer has to tell "no reference
+    for this layer" apart from "reference missing", and both the single-file and the sharded (vllm)
+    layouts have to be checked -- the same two reads ``_load_golden_kv_post`` does.
+    """
+    root = Path(trace_dir) / "kv_cache"
+    if (root / f"layer_{layer_idx}.safetensors").exists():
+        return True
+    return any((root / f"layer_{layer_idx}").glob("rows_*.safetensors"))
+
+
 def index_golden_present(trace_dir) -> bool:
     """True when ``trace_dir`` carries the indexer-key golden that ``_load_golden_index_k`` reads.
 
