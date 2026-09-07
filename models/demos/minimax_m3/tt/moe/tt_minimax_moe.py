@@ -57,6 +57,7 @@ class TtMiniMaxMoE(LightweightModule):
         layer_idx: int = 0,
         route_scale: float = 1.0,
         reduce_scatter_fn=None,
+        routed_expert_hybrid_token_threshold: int | None = None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -161,6 +162,10 @@ class TtMiniMaxMoE(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
             activation=ttnn.RoutedExpertActivation.SwiGluOai,
+            # Splits the experts across both routed-expert ops by load. None keeps every expert on
+            # the composite; TtRoutedExpert rejects a threshold combined with expert biases or an
+            # activation moe_fused_swiglu cannot run, and M3 has neither problem.
+            hybrid_token_threshold=routed_expert_hybrid_token_threshold,
         )
         # M3's own reduce module (tt/moe/tt_reduce.py), not DeepSeek's: same shared post_combine_reduce
         # kernel, but the closing collective goes through the caller's reduce_scatter_fn — M3 passes
