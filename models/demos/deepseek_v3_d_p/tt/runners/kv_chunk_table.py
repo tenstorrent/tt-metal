@@ -96,6 +96,7 @@ def build_and_serialize_kv_chunk_table(
     first_layer_idx=0,
     num_my_layers=None,
     stage_layouts=None,
+    layer_rows=None,
     index_layer_ids=None,
 ) -> str:
     """Build the MLA block-cyclic KV chunk address table and serialize it to ``path`` for the
@@ -179,6 +180,7 @@ def build_and_serialize_kv_chunk_table(
             first_layer_idx=first_layer_idx,
             num_my_layers=num_my_layers,
             stage_layout=stage_layout,
+            layer_rows=layer_rows,
         )
 
     return serialize_kv_chunk_table(
