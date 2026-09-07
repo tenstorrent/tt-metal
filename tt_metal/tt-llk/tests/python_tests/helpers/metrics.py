@@ -140,8 +140,8 @@ def _compute_single(df: pd.DataFrame) -> dict:
     pack_sem_wait = _safe_div(sem_wait_2, instrn_cycles)
 
     # ── Unpacker Write Efficiency (TDMA_UNPACK bank) ──
-    srca_write = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE_ACTUAL")
-    srcb_write = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE_ACTUAL")
+    srca_write = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE_NOT_BLOCKED_PORT")
+    srcb_write = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_OVR")
     unpack0_busy = _avg_count(df, "TDMA_UNPACK", "UNPACK0_BUSY_THREAD0")
     unpack1_busy = _avg_count(df, "TDMA_UNPACK", "UNPACK1_BUSY_THREAD0")
     unpack0_eff = _safe_div(srca_write, unpack0_busy)

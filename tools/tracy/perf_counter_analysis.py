@@ -23,7 +23,7 @@ COUNTER_TYPE_NAMES = {
     3: "MATH_COUNTER",
     # TDMA_UNPACK Group
     4: "MATH_SRC_DATA_READY",
-    5: "DATA_HAZARD_STALLS_MOVD2A",
+    5: "MATH_NOT_D2S_STALLED",
     6: "MATH_FIDELITY_STALL",
     7: "MATH_INSTRN_STARTED",
     8: "MATH_INSTRN_AVAILABLE",
@@ -40,7 +40,7 @@ COUNTER_TYPE_NAMES = {
     # TDMA_PACK Group
     18: "PACKER_DEST_READ_AVAILABLE",
     19: "PACKER_BUSY",
-    20: "AVAILABLE_MATH",
+    20: "MATH_NOT_SCOREBOARD_STALLED",
     # INSTRN_THREAD Group (req)
     21: "CFG_INSTRN_AVAILABLE_0",
     22: "CFG_INSTRN_AVAILABLE_1",
@@ -54,9 +54,9 @@ COUNTER_TYPE_NAMES = {
     30: "MOVE_INSTRN_AVAILABLE_0",
     31: "MOVE_INSTRN_AVAILABLE_1",
     32: "MOVE_INSTRN_AVAILABLE_2",
-    33: "FPU_INSTRN_AVAILABLE_0",
-    34: "FPU_INSTRN_AVAILABLE_1",
-    35: "FPU_INSTRN_AVAILABLE_2",
+    33: "MATH_INSTRN_AVAILABLE_0",
+    34: "MATH_INSTRN_AVAILABLE_1",
+    35: "MATH_INSTRN_AVAILABLE_2",
     36: "UNPACK_INSTRN_AVAILABLE_0",
     37: "UNPACK_INSTRN_AVAILABLE_1",
     38: "UNPACK_INSTRN_AVAILABLE_2",
@@ -91,9 +91,9 @@ COUNTER_TYPE_NAMES = {
     67: "WAITING_FOR_MOVE_IDLE_0",
     68: "WAITING_FOR_MOVE_IDLE_1",
     69: "WAITING_FOR_MOVE_IDLE_2",
-    70: "WAITING_FOR_MMIO_IDLE_0",
-    71: "WAITING_FOR_MMIO_IDLE_1",
-    72: "WAITING_FOR_MMIO_IDLE_2",
+    70: "WAITING_FOR_CFG_IDLE_0",
+    71: "WAITING_FOR_CFG_IDLE_1",
+    72: "WAITING_FOR_CFG_IDLE_2",
     73: "WAITING_FOR_SFPU_IDLE_0",
     74: "WAITING_FOR_SFPU_IDLE_1",
     75: "WAITING_FOR_SFPU_IDLE_2",
@@ -141,9 +141,9 @@ COUNTER_TYPE_NAMES = {
     111: "THREAD_INSTRUCTIONS_1",
     112: "THREAD_INSTRUCTIONS_2",
     # TDMA_UNPACK grant counters
-    113: "SRCB_WRITE_ACTUAL",
+    113: "SRCB_WRITE_NOT_BLOCKED_OVR",
     114: "SRCA_WRITE_NOT_BLOCKED_OVR",
-    115: "SRCA_WRITE_ACTUAL",
+    115: "SRCA_WRITE_NOT_BLOCKED_PORT",
     116: "SRCB_WRITE_NOT_BLOCKED_PORT",
     117: "SRCA_WRITE_THREAD0",
     118: "SRCB_WRITE_THREAD0",
@@ -950,7 +950,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     fpu_ref_cnt = get_counter_ref_cnt("FPU_COUNTER")
     math_counter = get_counter_series("MATH_COUNTER")
     math_ref_cnt = get_counter_ref_cnt("MATH_COUNTER")
-    srca_write = get_counter_series("SRCA_WRITE_ACTUAL")
+    srca_write = get_counter_series("SRCA_WRITE_NOT_BLOCKED_PORT")
     srcb_write = get_counter_series("SRCB_WRITE_NOT_BLOCKED_PORT")
     unpack0_busy = get_counter_series("UNPACK0_BUSY_THREAD0")
     unpack1_busy = get_counter_series("UNPACK1_BUSY_THREAD0")
@@ -960,8 +960,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     packer_busy = get_counter_series("PACKER_BUSY")
     math_instrn_started = get_counter_series("MATH_INSTRN_STARTED")
     math_instrn_available = get_counter_series("MATH_INSTRN_AVAILABLE")
-    available_math = get_counter_series("AVAILABLE_MATH")
-    fpu_instrn_available_1 = get_counter_series("FPU_INSTRN_AVAILABLE_1")
+    available_math = get_counter_series("MATH_NOT_SCOREBOARD_STALLED")
+    fpu_instrn_available_1 = get_counter_series("MATH_INSTRN_AVAILABLE_1")
 
     sfpu_util = (sfpu_counter / sfpu_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
     fpu_util = (fpu_counter / fpu_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
@@ -999,11 +999,11 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     else:
         math_pipe_util = pd.Series(dtype=float)
 
-    # Falls back to AVAILABLE_MATH / ref_cnt when packer unused.
+    # Falls back to MATH_NOT_SCOREBOARD_STALLED / ref_cnt when packer unused.
     if packer_busy is not None and packer_busy.sum() > 0:
         math_pack_eff = (available_math / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
     elif available_math is not None:
-        avail_ref = get_counter_ref_cnt("AVAILABLE_MATH") if has_counter("AVAILABLE_MATH") else None
+        avail_ref = get_counter_ref_cnt("MATH_NOT_SCOREBOARD_STALLED") if has_counter("MATH_NOT_SCOREBOARD_STALLED") else None
         if avail_ref is not None:
             math_pack_eff = (available_math / avail_ref * 100).replace([float("inf"), -float("inf")], nan)
         else:
@@ -1059,9 +1059,9 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         if has_counter(full_name):
             per_op_stats[f"Semaphore Full Wait T{t}"] = compute_util_metric(full_name)
 
-    if has_counter("DATA_HAZARD_STALLS_MOVD2A") and has_counter("MATH_INSTRN_AVAILABLE"):
+    if has_counter("MATH_NOT_D2S_STALLED") and has_counter("MATH_INSTRN_AVAILABLE"):
         per_op_stats["Data Hazard Stall Rate"] = compute_complement_metric(
-            "DATA_HAZARD_STALLS_MOVD2A", "MATH_INSTRN_AVAILABLE"
+            "MATH_NOT_D2S_STALLED", "MATH_INSTRN_AVAILABLE"
         )
 
     if has_counter("MATH_FIDELITY_STALL") and has_counter("MATH_INSTRN_AVAILABLE"):
@@ -1119,17 +1119,17 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             "L1_0_NOC_RING0_INCOMING_1_GRANT",
         )
 
-    if has_counter("SRCA_WRITE_AVAILABLE") and has_counter("SRCA_WRITE_ACTUAL"):
+    if has_counter("SRCA_WRITE_AVAILABLE") and has_counter("SRCA_WRITE_NOT_BLOCKED_PORT"):
         per_op_stats["SrcA Write Port Blocked Rate"] = compute_complement_metric(
-            "SRCA_WRITE_ACTUAL", "SRCA_WRITE_AVAILABLE"
+            "SRCA_WRITE_NOT_BLOCKED_PORT", "SRCA_WRITE_AVAILABLE"
         )
     if has_counter("SRCA_WRITE_AVAILABLE") and has_counter("SRCA_WRITE_NOT_BLOCKED_OVR"):
         per_op_stats["SrcA Write Overwrite Blocked Rate"] = compute_complement_metric(
             "SRCA_WRITE_NOT_BLOCKED_OVR", "SRCA_WRITE_AVAILABLE"
         )
-    if has_counter("SRCB_WRITE_AVAILABLE") and has_counter("SRCB_WRITE_ACTUAL"):
+    if has_counter("SRCB_WRITE_AVAILABLE") and has_counter("SRCB_WRITE_NOT_BLOCKED_OVR"):
         per_op_stats["SrcB Write Overwrite Blocked Rate"] = compute_complement_metric(
-            "SRCB_WRITE_ACTUAL", "SRCB_WRITE_AVAILABLE"
+            "SRCB_WRITE_NOT_BLOCKED_OVR", "SRCB_WRITE_AVAILABLE"
         )
 
     dest_grant_name = "DEST_READ_GRANTED_0"
@@ -1146,9 +1146,9 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             avail = get_counter_series("MATH_INSTRN_AVAILABLE")
             ratio = ((avail - not_stalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
             per_op_stats["Math Dest Write Port Stall Rate"] = _group_to_stat_dict(ratio)
-    if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("AVAILABLE_MATH"):
+    if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("MATH_NOT_SCOREBOARD_STALLED"):
         avail = get_counter_series("MATH_INSTRN_AVAILABLE")
-        not_stalled = get_counter_series("AVAILABLE_MATH")
+        not_stalled = get_counter_series("MATH_NOT_SCOREBOARD_STALLED")
         ratio = ((avail - not_stalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
         per_op_stats["Math Scoreboard Stall Rate"] = _group_to_stat_dict(ratio)
 
@@ -1211,8 +1211,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["THCON Instrn Avail Rate T0"] = compute_util_metric("THCON_INSTRN_AVAILABLE_0")
     if has_counter("MOVE_INSTRN_AVAILABLE_0"):
         per_op_stats["MOVE Instrn Avail Rate T0"] = compute_util_metric("MOVE_INSTRN_AVAILABLE_0")
-    if has_counter("FPU_INSTRN_AVAILABLE_1"):
-        per_op_stats["MATH Instrn Avail Rate T1"] = compute_util_metric("FPU_INSTRN_AVAILABLE_1")
+    if has_counter("MATH_INSTRN_AVAILABLE_1"):
+        per_op_stats["MATH Instrn Avail Rate T1"] = compute_util_metric("MATH_INSTRN_AVAILABLE_1")
     if has_counter("UNPACK_INSTRN_AVAILABLE_0"):
         per_op_stats["UNPACK Instrn Avail Rate T0"] = compute_util_metric("UNPACK_INSTRN_AVAILABLE_0")
     if has_counter("PACK_INSTRN_AVAILABLE_2"):
@@ -1222,8 +1222,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["SrcB Write Port Blocked Rate"] = compute_complement_metric(
             "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_AVAILABLE"
         )
-    if has_counter("SRCA_WRITE_ACTUAL") and has_counter("SRCA_WRITE_AVAILABLE"):
-        per_op_stats["SrcA Write Actual Efficiency"] = compute_ratio_metric("SRCA_WRITE_ACTUAL", "SRCA_WRITE_AVAILABLE")
+    if has_counter("SRCA_WRITE_NOT_BLOCKED_PORT") and has_counter("SRCA_WRITE_AVAILABLE"):
+        per_op_stats["SrcA Write Actual Efficiency"] = compute_ratio_metric("SRCA_WRITE_NOT_BLOCKED_PORT", "SRCA_WRITE_AVAILABLE")
     if has_counter("SRCB_WRITE_NOT_BLOCKED_PORT") and has_counter("SRCB_WRITE_AVAILABLE"):
         per_op_stats["SrcB Write Actual Efficiency"] = compute_ratio_metric(
             "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_AVAILABLE"
@@ -1238,8 +1238,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["Packer Engine 2 Util"] = compute_util_metric("PACKER_BUSY_2")
 
     # === Low priority waits ===
-    if has_counter("WAITING_FOR_MMIO_IDLE_0"):
-        per_op_stats["MMIO Idle Wait T0"] = compute_util_metric("WAITING_FOR_MMIO_IDLE_0")
+    if has_counter("WAITING_FOR_CFG_IDLE_0"):
+        per_op_stats["MMIO Idle Wait T0"] = compute_util_metric("WAITING_FOR_CFG_IDLE_0")
     if has_counter("WAITING_FOR_SFPU_IDLE_1"):
         per_op_stats["SFPU Idle Wait T1"] = compute_util_metric("WAITING_FOR_SFPU_IDLE_1")
     if has_counter("WAITING_FOR_THCON_IDLE_0"):
@@ -1348,7 +1348,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             f"WAITING_FOR_NONZERO_SEM_{t}",
             f"WAITING_FOR_NONFULL_SEM_{t}",
             f"WAITING_FOR_MOVE_IDLE_{t}",
-            f"WAITING_FOR_MMIO_IDLE_{t}",
+            f"WAITING_FOR_CFG_IDLE_{t}",
             f"WAITING_FOR_SFPU_IDLE_{t}",
         ]
         if has_counter(stalls_name) and all(has_counter(r) for r in reason_names):
@@ -1434,14 +1434,14 @@ def compute_device_only_metrics(
         axis=1,
     )
     # Uses _ACTUAL counters, not _AVAILABLE.
-    if "value_SRCA_WRITE_ACTUAL" in eff_pivot.columns:
+    if "value_SRCA_WRITE_NOT_BLOCKED_PORT" in eff_pivot.columns:
         eff_pivot["Unpacker0 Write Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_SRCA_WRITE_ACTUAL", 0), x.get("value_UNPACK0_BUSY_THREAD0", 0)),
+            lambda x: safe_div(x.get("value_SRCA_WRITE_NOT_BLOCKED_PORT", 0), x.get("value_UNPACK0_BUSY_THREAD0", 0)),
             axis=1,
         )
-    if "value_SRCB_WRITE_ACTUAL" in eff_pivot.columns:
+    if "value_SRCB_WRITE_NOT_BLOCKED_OVR" in eff_pivot.columns:
         eff_pivot["Unpacker1 Write Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_SRCB_WRITE_ACTUAL", 0), x.get("value_UNPACK1_BUSY_THREAD0", 0)),
+            lambda x: safe_div(x.get("value_SRCB_WRITE_NOT_BLOCKED_OVR", 0), x.get("value_UNPACK1_BUSY_THREAD0", 0)),
             axis=1,
         )
     # Falls back to dest-read grant rate when packer unused.
@@ -1464,15 +1464,15 @@ def compute_device_only_metrics(
             axis=1,
         )
 
-    # Falls back to AVAILABLE_MATH / ref_cnt when packer unused.
+    # Falls back to MATH_NOT_SCOREBOARD_STALLED / ref_cnt when packer unused.
     if has_packer_busy:
         eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("value_PACKER_BUSY", 0)),
+            lambda x: safe_div(x.get("value_MATH_NOT_SCOREBOARD_STALLED", 0), x.get("value_PACKER_BUSY", 0)),
             axis=1,
         )
     elif "ref_cnt_AVAILABLE_MATH" in eff_pivot.columns:
         eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("ref_cnt_AVAILABLE_MATH", 0)),
+            lambda x: safe_div(x.get("value_MATH_NOT_SCOREBOARD_STALLED", 0), x.get("ref_cnt_AVAILABLE_MATH", 0)),
             axis=1,
         )
     eff_pivot["Unpacker-to-Math Data Flow"] = eff_pivot.apply(
@@ -1488,8 +1488,8 @@ def compute_device_only_metrics(
         ].mean(axis=1, skipna=True)
     eff_pivot["FPU Execution Efficiency"] = eff_pivot.apply(
         lambda x: (
-            (x.get("value_FPU_COUNTER", 0) / x.get("value_FPU_INSTRN_AVAILABLE_1", 1) * 100)
-            if x.get("value_FPU_INSTRN_AVAILABLE_1", 0) > 0
+            (x.get("value_FPU_COUNTER", 0) / x.get("value_MATH_INSTRN_AVAILABLE_1", 1) * 100)
+            if x.get("value_MATH_INSTRN_AVAILABLE_1", 0) > 0
             else nan
         ),
         axis=1,
@@ -1537,7 +1537,7 @@ def compute_device_only_metrics(
 
     def _d2a_stall_rate(x):
         valid = x.get("value_MATH_INSTRN_AVAILABLE", 0)
-        not_stalled = x.get("value_DATA_HAZARD_STALLS_MOVD2A", 0)
+        not_stalled = x.get("value_MATH_NOT_D2S_STALLED", 0)
         return max(0.0, (valid - not_stalled) / valid * 100) if valid > 0 else nan
 
     eff_pivot["Data Hazard Stall Rate"] = eff_pivot.apply(_d2a_stall_rate, axis=1)
@@ -1739,7 +1739,7 @@ def compute_device_only_metrics(
         axis=1,
     )
     eff_pivot["MATH Instrn Avail Rate T1"] = eff_pivot.apply(
-        safe_util("value_FPU_INSTRN_AVAILABLE_1", "ref_cnt_FPU_INSTRN_AVAILABLE_1"),
+        safe_util("value_MATH_INSTRN_AVAILABLE_1", "ref_cnt_MATH_INSTRN_AVAILABLE_1"),
         axis=1,
     )
     eff_pivot["UNPACK Instrn Avail Rate T0"] = eff_pivot.apply(
@@ -1752,7 +1752,7 @@ def compute_device_only_metrics(
     )
 
     eff_pivot["SrcA Write Port Blocked Rate"] = eff_pivot.apply(
-        safe_complement("value_SRCA_WRITE_ACTUAL", "value_SRCA_WRITE_AVAILABLE"),
+        safe_complement("value_SRCA_WRITE_NOT_BLOCKED_PORT", "value_SRCA_WRITE_AVAILABLE"),
         axis=1,
     )
     eff_pivot["SrcB Write Port Blocked Rate"] = eff_pivot.apply(
@@ -1764,11 +1764,11 @@ def compute_device_only_metrics(
         axis=1,
     )
     eff_pivot["SrcB Write Overwrite Blocked Rate"] = eff_pivot.apply(
-        safe_complement("value_SRCB_WRITE_ACTUAL", "value_SRCB_WRITE_AVAILABLE"),
+        safe_complement("value_SRCB_WRITE_NOT_BLOCKED_OVR", "value_SRCB_WRITE_AVAILABLE"),
         axis=1,
     )
     eff_pivot["SrcA Write Actual Efficiency"] = eff_pivot.apply(
-        safe_ratio("value_SRCA_WRITE_ACTUAL", "value_SRCA_WRITE_AVAILABLE"),
+        safe_ratio("value_SRCA_WRITE_NOT_BLOCKED_PORT", "value_SRCA_WRITE_AVAILABLE"),
         axis=1,
     )
     eff_pivot["SrcB Write Actual Efficiency"] = eff_pivot.apply(
@@ -1798,9 +1798,9 @@ def compute_device_only_metrics(
         )
     # Different capture groups (PACK, UNPACK), so either column can be absent; a missing numerator
     # reads as a flat 100%. Existence only, unlike the sum guard above: all-zero is a real reading.
-    if "value_AVAILABLE_MATH" in eff_pivot.columns and "value_MATH_INSTRN_AVAILABLE" in eff_pivot.columns:
+    if "value_MATH_NOT_SCOREBOARD_STALLED" in eff_pivot.columns and "value_MATH_INSTRN_AVAILABLE" in eff_pivot.columns:
         eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
-            safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"),
+            safe_complement("value_MATH_NOT_SCOREBOARD_STALLED", "value_MATH_INSTRN_AVAILABLE"),
             axis=1,
         )
 
@@ -1844,7 +1844,7 @@ def compute_device_only_metrics(
 
     # Low priority waits
     eff_pivot["MMIO Idle Wait T0"] = eff_pivot.apply(
-        safe_util("value_WAITING_FOR_MMIO_IDLE_0", "ref_cnt_WAITING_FOR_MMIO_IDLE_0"),
+        safe_util("value_WAITING_FOR_CFG_IDLE_0", "ref_cnt_WAITING_FOR_CFG_IDLE_0"),
         axis=1,
     )
     eff_pivot["SFPU Idle Wait T1"] = eff_pivot.apply(
@@ -1985,7 +1985,7 @@ def compute_device_only_metrics(
             f"value_WAITING_FOR_NONZERO_SEM_{t}",
             f"value_WAITING_FOR_NONFULL_SEM_{t}",
             f"value_WAITING_FOR_MOVE_IDLE_{t}",
-            f"value_WAITING_FOR_MMIO_IDLE_{t}",
+            f"value_WAITING_FOR_CFG_IDLE_{t}",
             f"value_WAITING_FOR_SFPU_IDLE_{t}",
         ]
         if stalls_col in eff_pivot.columns and all(c in eff_pivot.columns for c in reason_cols):

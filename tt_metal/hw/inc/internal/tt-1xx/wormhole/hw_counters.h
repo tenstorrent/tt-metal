@@ -17,7 +17,7 @@ constexpr size_t NUM_FPU_COUNTERS = 3;
 
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
-     {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
+     {PerfCounterType::MATH_NOT_D2S_STALLED, 1},
      {PerfCounterType::MATH_FIDELITY_STALL, 2},
      {PerfCounterType::MATH_INSTRN_STARTED, 3},
      {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
@@ -30,10 +30,10 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::MATH_INSTRN_HF_4_CYCLE, 256},
      {PerfCounterType::MATH_INSTRN_HF_2_CYCLE, 257},
      {PerfCounterType::MATH_INSTRN_HF_1_CYCLE, 258},
-     {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
+     {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_OVR, 259},
      {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
      {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},
-     {PerfCounterType::SRCA_WRITE_ACTUAL, 262},
+     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_PORT, 262},
      {PerfCounterType::SRCA_WRITE_THREAD0, 263},
      {PerfCounterType::SRCB_WRITE_THREAD0, 264},
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},
@@ -55,7 +55,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
      {PerfCounterType::DEST_READ_GRANTED_2, 269},
      {PerfCounterType::DEST_READ_GRANTED_3, 270},
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
-     {PerfCounterType::AVAILABLE_MATH, 272}}};
+     {PerfCounterType::MATH_NOT_SCOREBOARD_STALLED, 272}}};
 constexpr size_t NUM_PACK_COUNTERS = 14;
 
 // L1 bank 0 (MUX_CTRL[4] = 0): unpacker, TDMA bundles, ring0 NOC; port 1 = unpacker#1/ECC/pack1.
@@ -127,9 +127,9 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 59> instrn_counters =
      {PerfCounterType::MOVE_INSTRN_AVAILABLE_0, 12},
      {PerfCounterType::MOVE_INSTRN_AVAILABLE_1, 13},
      {PerfCounterType::MOVE_INSTRN_AVAILABLE_2, 14},
-     {PerfCounterType::FPU_INSTRN_AVAILABLE_0, 15},
-     {PerfCounterType::FPU_INSTRN_AVAILABLE_1, 16},
-     {PerfCounterType::FPU_INSTRN_AVAILABLE_2, 17},
+     {PerfCounterType::MATH_INSTRN_AVAILABLE_0, 15},
+     {PerfCounterType::MATH_INSTRN_AVAILABLE_1, 16},
+     {PerfCounterType::MATH_INSTRN_AVAILABLE_2, 17},
      {PerfCounterType::UNPACK_INSTRN_AVAILABLE_0, 18},
      {PerfCounterType::UNPACK_INSTRN_AVAILABLE_1, 19},
      {PerfCounterType::UNPACK_INSTRN_AVAILABLE_2, 20},
@@ -150,7 +150,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 59> instrn_counters =
      {PerfCounterType::WAITING_FOR_NONZERO_SEM_0, 43},
      {PerfCounterType::WAITING_FOR_NONFULL_SEM_0, 44},
      {PerfCounterType::WAITING_FOR_MOVE_IDLE_0, 45},
-     {PerfCounterType::WAITING_FOR_MMIO_IDLE_0, 46},
+     {PerfCounterType::WAITING_FOR_CFG_IDLE_0, 46},
      {PerfCounterType::WAITING_FOR_SFPU_IDLE_0, 47},
      {PerfCounterType::WAITING_FOR_THCON_IDLE_1, 48},
      {PerfCounterType::WAITING_FOR_UNPACK_IDLE_1, 49},
@@ -159,7 +159,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 59> instrn_counters =
      {PerfCounterType::WAITING_FOR_NONZERO_SEM_1, 52},
      {PerfCounterType::WAITING_FOR_NONFULL_SEM_1, 53},
      {PerfCounterType::WAITING_FOR_MOVE_IDLE_1, 54},
-     {PerfCounterType::WAITING_FOR_MMIO_IDLE_1, 55},
+     {PerfCounterType::WAITING_FOR_CFG_IDLE_1, 55},
      {PerfCounterType::WAITING_FOR_SFPU_IDLE_1, 56},
      {PerfCounterType::WAITING_FOR_THCON_IDLE_2, 57},
      {PerfCounterType::WAITING_FOR_UNPACK_IDLE_2, 58},
@@ -168,7 +168,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 59> instrn_counters =
      {PerfCounterType::WAITING_FOR_NONZERO_SEM_2, 61},
      {PerfCounterType::WAITING_FOR_NONFULL_SEM_2, 62},
      {PerfCounterType::WAITING_FOR_MOVE_IDLE_2, 63},
-     {PerfCounterType::WAITING_FOR_MMIO_IDLE_2, 64},
+     {PerfCounterType::WAITING_FOR_CFG_IDLE_2, 64},
      {PerfCounterType::WAITING_FOR_SFPU_IDLE_2, 65},
      {PerfCounterType::THREAD_INSTRUCTIONS_0, 256},
      {PerfCounterType::THREAD_INSTRUCTIONS_1, 264},
