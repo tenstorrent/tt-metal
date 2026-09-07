@@ -39,15 +39,15 @@ namespace msda_geometry {
 // fp32 1.0 as the bit pattern the *_unary_tile scalars are passed as.
 constexpr uint32_t ONE_BITS = 0x3F800000u;
 
-// DST slots. Three are live at once in either window shape.
+// DST slots. Three are live at once (px, floor, frac — or dx, dy, attn).
 constexpr uint32_t DST_A = 0;
 constexpr uint32_t DST_B = 1;
 constexpr uint32_t DST_C = 2;
 
-// One axis of one point: grid -> (floor, frac), both packed.
-//
-// floor and the subtraction share the window that produced px, so px never
-// needs a scratch CB of its own.
+// One axis of one point: grid -> (floor, frac), both packed from one window.
+// floor is in-place, so px is copied first; both stay in DST for the sub.
+// floor_cb and frac_cb are the same format, so pack_tile's per-call L1 address
+// is enough — packer format does not change between them.
 inline void axis_split(
     uint32_t grid_cb,
     uint32_t floor_cb,
@@ -60,11 +60,9 @@ inline void axis_split(
     CircularBuffer frac_out(frac_cb);
 
     grid.wait_front(1);
-
-    // Two windows, one pack each: the packer is configured per output CB, so a
-    // second pack_tile to a different CB in the same window would use the first
-    // one's configuration.
     floor_out.reserve_back(1);
+    frac_out.reserve_back(1);
+
     tile_regs_acquire();
     copy_tile_to_dst_init_short_with_dt(last_srca, grid_cb);
     last_srca = grid_cb;
@@ -77,35 +75,14 @@ inline void axis_split(
     copy_dest_values(DST_A, DST_B);
     rounding_op_tile_init();
     floor_tile(DST_B);  // DST_B = floor(px)
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(DST_B, floor_cb);
-    tile_regs_release();
-    floor_out.push_back(1);
-
-    // px is rebuilt rather than staged: three scalar ops cost less than a CB
-    // round trip, and the floor has to be read back as an operand regardless.
-    frac_out.reserve_back(1);
-    tile_regs_acquire();
-    copy_tile_to_dst_init_short_with_dt(last_srca, grid_cb);
-    last_srca = grid_cb;
-    copy_tile(grid_cb, 0, DST_A);
-    binop_with_scalar_tile_init();
-    add_unary_tile(DST_A, ONE_BITS);
-    mul_unary_tile(DST_A, scale_bits);
-    sub_unary_tile(DST_A, shift_bits);
-    // floor is recomputed rather than read back from floor_cb: that CB belongs to
-    // the reader, which pops it concurrently.
-    copy_dest_values_init();
-    copy_dest_values(DST_A, DST_B);
-    rounding_op_tile_init();
-    floor_tile(DST_B);
     sub_binary_tile_init();
     sub_binary_tile(DST_A, DST_B, DST_C);  // DST_C = frac
     tile_regs_commit();
     tile_regs_wait();
+    pack_tile(DST_B, floor_cb);
     pack_tile(DST_C, frac_cb);
     tile_regs_release();
+    floor_out.push_back(1);
     frac_out.push_back(1);
 
     grid.pop_front(1);
@@ -167,8 +144,8 @@ inline void corner_weight(
     scalar_out.push_back(1);
 }
 
-// Geometry for one point: two axis windows, then the four corners in the order
-// the reduction consumes them (NW, NE, SW, SE).
+// Geometry for one point: one window per axis, then the four corners in the
+// order the reduction consumes them (NW, NE, SW, SE).
 inline void point(
     uint32_t grid_x_cb,
     uint32_t grid_y_cb,
