@@ -472,6 +472,21 @@ class Attention(LightweightModule):
         self._fused_qkv = _local_fused_qkv  # local for TP>1; same as _fused_qkv for TP=1
         num_q_per_kv = self.num_heads // self.num_kv_heads  # same ratio for TP=1 and TP=2
 
+        # nlp_create_qkv_heads_decode reads the plain q|k|v concat order and lands its
+        # output in exactly the layout decode-mode RoPE and paged_update_cache want
+        # ([1, 1, heads, head_dim] HEIGHT_SHARDED (32, head_dim) on one core), so the
+        # KV-group permutation below is dropped and the two head norms stop running on
+        # 8x / 4x tile padding. Bit-exact with the KV-group route (q/k/v all
+        # torch.equal); measured -6.5 us per decoder layer in isolation.
+        # Only the *width-sharded* create_qkv_heads wants the interleaved order — the
+        # L1-interleaved one reads concat too, which is what the seq=32 prefill bucket
+        # falls back to when this is on (see _decode_head_split_ok).
+        self._decode_head_split = (
+            os.environ.get("QWEN3_TTS_DECODE_HEAD_SPLIT", "1") != "0"
+            and self.num_heads <= ttnn.TILE_SIZE
+            and self.num_kv_heads <= ttnn.TILE_SIZE
+        )
+
         # Build KV-group-interleaved row permutation (relative indices within local heads).
         row_perm_local = []
         for i in range(self.num_kv_heads):
@@ -483,6 +498,9 @@ class Attention(LightweightModule):
             v_off = (self.num_heads + self.num_kv_heads) * head_dim
             row_perm_local.extend(range(v_off + i * head_dim, v_off + (i + 1) * head_dim))
         perm_t = torch.tensor(row_perm_local, dtype=torch.long)
+        if self._decode_head_split:
+            # Identity: leave the fused QKV in q|k|v concat order.
+            perm_t = torch.arange(self._fused_qkv, dtype=torch.long)
 
         if self.tp_size == 1:
             # TP=1: permute the full fused QKV and upload as a single DRAM-sharded tensor.
@@ -641,6 +659,23 @@ class Attention(LightweightModule):
         # Backwards-compat alias for any callers still expecting the merged name.
         self.paged_input_mem_config = self.paged_k_input_mem_config
 
+        # === decode-layout head split (QWEN3_TTS_DECODE_HEAD_SPLIT) ===
+        # nlp_create_qkv_heads_decode always returns HEIGHT_SHARDED (TILE, head_dim) on
+        # one core, whatever memory_config it is handed, and decode-mode RoPE takes only
+        # that layout. rms_norm rejects HEIGHT_SHARDED outright and cannot write it, so
+        # the head norms are bridged out to L1 interleaved and back.
+        #
+        # The norm deliberately keeps running on the SAME interleaved kernel it uses
+        # today, not the sharded one: at this compute_kernel_config (LoFi with
+        # fp32_dest_acc_en) the sharded norm is NOT bit-equal to the interleaved one
+        # (measured rel 1.9e-2 on q, PCC 0.99998), and that difference reaches the codes.
+        # Feeding the same kernel one tile instead of num_heads tiles is bit-exact.
+        self._dhs_hs_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(_k_grid, [TILE, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
     def _decode_sdpa_program_config(self, k_len: int):
         """Cached decode SDPA program config for a ``k_len`` KV cache."""
         pc = self._decode_sdpa_progcfg_by_k.get(k_len)
@@ -722,7 +757,12 @@ class Attention(LightweightModule):
             else None
         )
         use_dram_shard_qkv = (is_decode and seq_len == 1) or seq_len <= self.short_seq_limit
-        sharded_qkv_split = use_dram_shard_qkv
+        # The decode-layout split needs seq==1 and the traced decode's cache write.
+        _decode_head_split = self._decode_head_split and _traced_decode and use_dram_shard_qkv
+        # The *width-sharded* create_qkv_heads reads the KV-group-interleaved order, which
+        # this weight no longer carries when _decode_head_split is on; the L1-interleaved
+        # route reads concat order correctly, so seq>1 (the 32 bucket) falls back to it.
+        sharded_qkv_split = use_dram_shard_qkv and not (self._decode_head_split and not _decode_head_split)
         _qkv_split_in_memcfg = self._decode_qkv_split_in_memcfg
         _qkv_split_q_out_memcfg = self._decode_qkv_split_q_out_memcfg
         _qkv_split_k_out_memcfg = self._decode_qkv_split_k_out_memcfg
@@ -752,6 +792,10 @@ class Attention(LightweightModule):
                 # Slice the padded QKV N (WH pads 4096->4224 / 2048->2304 for the 12
                 # DRAM banks) straight into the nlp_create_qkv_heads shard spec: drops
                 # both the S->I and the I->S the L1-interleaved route needs.
+                # When the split is going through the L1-interleaved kernel instead (the
+                # seq=32 bucket under QWEN3_TTS_DECODE_HEAD_SPLIT), land interleaved —
+                # the width-sharded kernel would read the wrong column convention.
+                _slice_memcfg = _qkv_split_in_memcfg if sharded_qkv_split else ttnn.L1_MEMORY_CONFIG
                 xqkv = ttnn.slice(
                     xqkv_sharded,
                     [0, 0, 0, 0],
@@ -761,10 +805,10 @@ class Attention(LightweightModule):
                         xqkv_sharded.shape[2],
                         self._fused_qkv,
                     ],
-                    memory_config=_qkv_split_in_memcfg,
+                    memory_config=_slice_memcfg,
                 )
                 ttnn.deallocate(xqkv_sharded)
-                xqkv_already_sharded_for_split = True
+                xqkv_already_sharded_for_split = sharded_qkv_split
             else:
                 xqkv_padded = ttnn.to_memory_config(xqkv_sharded, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(xqkv_sharded)
@@ -800,7 +844,24 @@ class Attention(LightweightModule):
             xqkv_already_sharded_for_split = False
 
         # Split: Q [b, num_heads, seq, head_dim], K/V [b, num_kv_heads, seq, head_dim]
-        if sharded_qkv_split:
+        if _decode_head_split:
+            # Straight to [1, 1, heads, head_dim] HEIGHT_SHARDED on one core — the layout
+            # decode RoPE and paged_update_cache both want, so no transpose either side.
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+                xqkv,
+                num_heads=self.num_heads,
+                num_kv_heads=self.num_kv_heads,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(xqkv)
+            # The split puts q, k and v all on core (0,0). Move V onto its own core now,
+            # before the q/k norms allocate and free around it — V is not touched again
+            # until the cache write, and leaving it in the middle of that churn lets a
+            # later intermediate land on its L1 address.
+            v_moved = ttnn.to_memory_config(v, self.paged_v_input_mem_config)
+            ttnn.deallocate(v)
+            v = v_moved
+        elif sharded_qkv_split:
             # xqkv may already be in the 8-core split layout (no extra reshard needed).
             if xqkv_already_sharded_for_split:
                 xqkv_for_split = xqkv
@@ -839,20 +900,45 @@ class Attention(LightweightModule):
             )
             ttnn.deallocate(xqkv)
 
-        q = ttnn.rms_norm(
-            q,
-            epsilon=self.rms_norm_eps,
-            weight=self.q_norm_weight,
-            compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        k = ttnn.rms_norm(
-            k,
-            epsilon=self.rms_norm_eps,
-            weight=self.k_norm_weight,
-            compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        if _decode_head_split:
+            # One tile per norm instead of num_heads / num_kv_heads tiles of padding:
+            # in the [1, heads, 1, head_dim] layout every head is its own 32-row tile
+            # with a single live row, and batch is 1.
+            def _head_norm(t, w):
+                t_il = ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(t)
+                # The norm writes RoPE's HEIGHT_SHARDED layout straight out: bit-exact
+                # with taking the interleaved output and resharding, one op cheaper.
+                # Its *input* must stay interleaved — a sharded input dispatches the
+                # sharded kernel even with no program_config, and that kernel is not
+                # bit-exact here (see test_qwen3_tts_decode_head_split.py).
+                out = ttnn.rms_norm(
+                    t_il,
+                    epsilon=self.rms_norm_eps,
+                    weight=w,
+                    compute_kernel_config=self.compute_kernel_config,
+                    memory_config=self._dhs_hs_memcfg,
+                )
+                ttnn.deallocate(t_il)
+                return out
+
+            q = _head_norm(q, self.q_norm_weight)
+            k = _head_norm(k, self.k_norm_weight)
+        else:
+            q = ttnn.rms_norm(
+                q,
+                epsilon=self.rms_norm_eps,
+                weight=self.q_norm_weight,
+                compute_kernel_config=self.compute_kernel_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            k = ttnn.rms_norm(
+                k,
+                epsilon=self.rms_norm_eps,
+                weight=self.k_norm_weight,
+                compute_kernel_config=self.compute_kernel_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
 
         if q.dtype != ttnn.bfloat16:
             q = ttnn.typecast(q, dtype=ttnn.bfloat16)
@@ -880,6 +966,7 @@ class Attention(LightweightModule):
             compute_kernel_config=self.rope_compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             k_keep_decode_layout=_k_in_cache_layout,
+            qk_already_decode_layout=_decode_head_split,
         )
         # Keep Q/K in interleaved layout after RoPE.
 
@@ -916,8 +1003,17 @@ class Attention(LightweightModule):
                     else:
                         k_paged_hs = ttnn.transpose(k, 1, 2, memory_config=self.paged_k_input_mem_config)
                         ttnn.deallocate(k)
-                    v_paged_hs = ttnn.transpose(v, 1, 2, memory_config=self.paged_v_input_mem_config)
-                    ttnn.deallocate(v)
+                    if _decode_head_split:
+                        # Already [1, 1, kv_heads, head_dim] on V's own core (moved at the
+                        # split), so this is a no-op; reshard only if that ever drifts.
+                        if v.memory_config() == self.paged_v_input_mem_config:
+                            v_paged_hs = v
+                        else:
+                            v_paged_hs = ttnn.to_memory_config(v, self.paged_v_input_mem_config)
+                    else:
+                        v_paged_hs = ttnn.transpose(v, 1, 2, memory_config=self.paged_v_input_mem_config)
+                    if v_paged_hs is not v:
+                        ttnn.deallocate(v)
                     # Typecast K/V to cache dtype if cache is higher precision (e.g. fp32).
                     # paged_fused_update_cache requires matching dtypes between input and cache.
                     if k_paged_hs.dtype != k_cache.dtype:
