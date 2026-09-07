@@ -135,7 +135,7 @@ class TTMSDeformableAttention:
     Based on the MMCV/BEVFormer approach.
     """
 
-    def __init__(self, config: DeformableAttentionConfig, device, params=None):
+    def __init__(self, config: DeformableAttentionConfig, device, params=None, spatial_shapes=None):
         """
         Initialize TTNN Multi-Scale Deformable Attention module.
 
@@ -149,6 +149,8 @@ class TTMSDeformableAttention:
             device: TTNN device for tensor operations
             params: Pre-computed TTNN parameters containing linear layer weights and biases.
                 Should include: value_proj, sampling_offsets, attention_weights, output_proj
+            spatial_shapes: Feature-map (H, W) per level. Fixed for the module; used to build the
+                offset normalizer once. Forward still receives the same tensor for sampling.
 
         Raises:
             ValueError: If embed_dims is not divisible by num_heads
@@ -165,10 +167,26 @@ class TTMSDeformableAttention:
         self.batch_first = config.batch_first
         self.device = device
         self.params = params
-        self._offset_normalizer_key = None
-        self._offset_normalizer = None
+        self._offset_normalizer = self._build_offset_normalizer(spatial_shapes) if spatial_shapes is not None else None
 
         self.head_dim = self.embed_dims // self.num_heads
+
+    def _build_offset_normalizer(self, spatial_shapes):
+        """Build the offset normalizer from pyramid spatial shapes."""
+        if not isinstance(spatial_shapes, torch.Tensor):
+            spatial_shapes = torch.tensor(spatial_shapes, dtype=torch.long)
+        spatial_shapes_tt = ttnn.from_torch(
+            spatial_shapes, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+
+        # Create offset normalizer to convert pixel-space offsets to normalized coordinates [0,1]
+        offset_normalizer = ttnn.stack([spatial_shapes_tt[..., 1], spatial_shapes_tt[..., 0]], dim=-1)
+
+        # sampling_offsets: [bs*num_queries*num_heads, num_levels, num_points, 2]
+        # offset_normalizer: [num_levels, 2] -> [1, num_levels, 1, 2] for broadcasting
+        offset_normalizer = ttnn.unsqueeze(offset_normalizer, 0)  # Add batch * query * head dimension
+        offset_normalizer = ttnn.unsqueeze(offset_normalizer, -2)  # Add point dimension
+        return offset_normalizer
 
     def forward(
         self,
@@ -281,24 +299,10 @@ class TTMSDeformableAttention:
             # D represents the number of depth levels in 3D point sampling (e.g., 4 points per pillar)
             D = reference_points.shape[2]
 
-            # The feature-pyramid shapes come from the config, so the normalizer is identical on
-            # every call; cached on its contents rather than rebuilt per layer.
-            normalizer_key = tuple(spatial_shapes.flatten().tolist())
-            if self._offset_normalizer_key != normalizer_key:
-                spatial_shapes_tt = ttnn.from_torch(
-                    spatial_shapes, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-                )
-
-                # Create offset normalizer to convert pixel-space offsets to normalized coordinates [0,1]
-                offset_normalizer = ttnn.stack([spatial_shapes_tt[..., 1], spatial_shapes_tt[..., 0]], dim=-1)
-
-                # sampling_offsets: [bs*num_queries*num_heads, num_levels, num_points, 2]
-                # offset_normalizer: [num_levels, 2] -> [1, num_levels, 1, 2] for broadcasting
-                offset_normalizer = ttnn.unsqueeze(offset_normalizer, 0)  # Add batch * query * head dimension
-                offset_normalizer = ttnn.unsqueeze(offset_normalizer, -2)  # Add point dimension
-                self._offset_normalizer = offset_normalizer
-                self._offset_normalizer_key = normalizer_key
             offset_normalizer = self._offset_normalizer
+            if offset_normalizer is None:
+                offset_normalizer = self._build_offset_normalizer(spatial_shapes)
+                self._offset_normalizer = offset_normalizer
 
             sampling_offsets = ttnn.div(sampling_offsets, offset_normalizer)
 
