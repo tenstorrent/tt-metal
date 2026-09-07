@@ -183,11 +183,17 @@ def run_inference_loop(
     seed: int = int(tc.get("seed", 0))
     rollout_queue_capacity: int = int(fa_cfg.get("rollout_queue_capacity", 2))
 
-    _log(f"opening parent mesh {tuple(rr['mesh_shape'])}...")
+    # ``num_command_queues=2`` is required by ``ThreadedWeightBridge``: the
+    # receiver thread issues ``ttnn.copy_host_to_device_tensor(..., cq_id=1)``
+    # while the main thread reads pads on CQ0. Opening with the default 1 CQ
+    # would trip ``TT_FATAL: cq_id 1 is out of range`` as soon as the first
+    # weight dict arrives from the peer.
+    _log(f"opening parent mesh {tuple(rr['mesh_shape'])} with num_command_queues=2...")
     _t0 = time.perf_counter()
     parent_mesh = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*rr["mesh_shape"]),
         offset=ttnn.MeshCoordinate(0, 0),
+        num_command_queues=2,
     )
     _log(f"parent mesh open ({time.perf_counter() - _t0:.1f}s)")
 

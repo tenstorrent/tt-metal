@@ -234,8 +234,13 @@ def _load_device_config():
 
 
 def _open_ttml_device(device_config) -> Any:
+    # ``num_command_queues=2`` is required by ``ThreadedWeightBridge``: the
+    # sender thread issues ``ttnn.to_torch(pad, cq_id=1)`` in parallel with the
+    # main thread's ``ttnn.copy`` / ``record_event`` on CQ0. Opening with the
+    # default 1 CQ trips ``TT_FATAL: cq_id 1 is out of range`` as soon as the
+    # first weight publish reaches the sender thread.
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
-    autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
+    autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids, num_command_queues=2)
     return autograd_ctx.get_device()
 
 
