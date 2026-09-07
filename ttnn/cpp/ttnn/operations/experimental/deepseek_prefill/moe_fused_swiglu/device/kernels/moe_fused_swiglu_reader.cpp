@@ -207,6 +207,7 @@ constexpr bool kHMcastPosted = (H_MCAST_POSTED != 0);
 inline bool h_round_on_writer(uint32_t r) { return ((H_ROUND_NOC1_MASK >> r) & 1u) != 0; }
 
 inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size, bool grouped = false) {
+    Noc noc;
     const auto hrect = grouped ? moe_fused_swiglu::McastRect<noc_index>(
                                      get_arg_val<uint32_t>(RT_HGROUP_RECT + 0),
                                      get_arg_val<uint32_t>(RT_HGROUP_RECT + 1),
@@ -222,8 +223,7 @@ inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size, bool g
     // so the fan-out is the rect area minus this core — the same count SenderPipe's
     // `num_dests_excl_` computes, and the same reason it is not a loopback (§4 trap 4).
     const uint32_t ndest = hrect.area() - 1;
-    const uint32_t hf_addr = static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + slot));
-    volatile tt_l1_ptr uint32_t* hf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hf_addr);
+    Semaphore<> hf(SEM_H_RDY_BASE + slot);
 
     // 1. the payload — LINKED, so the flag below cannot overtake it. POSTED (no return acks) only
     //    when kHMcastPosted; otherwise all `ndest` destinations ack, which is the conservative
@@ -242,13 +242,12 @@ inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size, bool g
         /*posted=*/kHMcastPosted);
     // 2. re-assert VALID locally: `set_multicast` broadcasts THIS core's own cell as the source, and
     //    a core that also receives on this cell left it INVALID after its last receive.
-    noc_semaphore_set(hf, VALID);
+    hf.set(VALID);
     // 3. the flag — NON-POSTED, on the same VC, terminating the link. This is the arrival proof.
-    noc_semaphore_set_multicast(
-        hf_addr, get_noc_multicast_addr(rb.sx, rb.sy, rb.ex, rb.ey, hf_addr), ndest, /*linked=*/false);
+    hf.set_multicast(noc, rb.sx, rb.sy, rb.ex, rb.ey, ndest, /*linked=*/false);
     // 4. SENT, so the flag cell is safe to rewrite; 5. rotating-sender reset.
-    noc_async_writes_flushed();
-    noc_semaphore_set(hf, INVALID);
+    noc.async_writes_flushed();
+    hf.set(INVALID);
 }
 
 constexpr uint32_t TA_BASE = CT_HMCAST + 5;
@@ -354,12 +353,10 @@ void kernel_main() {
         get_arg_val<uint32_t>(RT_XMCAST + 3));
     const auto& xbounds = xrect.bounds();
     const uint32_t x_mcast_dests = xrect.area() - 1;
-    volatile tt_l1_ptr uint32_t* x_ready =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(XMCAST_READY_SEM)));
-    volatile tt_l1_ptr uint32_t* x_free =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(XMCAST_FREE_SEM)));
+    Semaphore<> x_ready(XMCAST_READY_SEM);
+    Semaphore<> x_free(XMCAST_FREE_SEM);
     if constexpr (XMCAST_ACTIVE) {
-        noc_semaphore_set(x_ready, INVALID);
+        x_ready.set(INVALID);
     }
 
     Semaphore<> sem_data_obj(SEM_DATA);
@@ -733,8 +730,8 @@ void kernel_main() {
                         // value IS the sender's column, so the coord table needs no indirection.
                         const uint32_t round = t % HGROUPS;
                         if (round == my_col) {
-                            noc_semaphore_wait(x_free, XMCAST_CONSUMERS);
-                            noc_semaphore_set(x_free, 0);
+                            x_free.wait(XMCAST_CONSUMERS);
+                            x_free.set(0);
                             if (t == 0 && protect_x_stage) {
                                 // The normal round-0 free acknowledgements double as a row-wide
                                 // X-staged barrier. Release W_gate uniformly, then use a second free
@@ -742,21 +739,19 @@ void kernel_main() {
                                 // reusing x_ready for the payload-ready signal below.
                                 constexpr uint32_t X_STAGED = 2;
                                 issue_wg_chunk(0);
-                                noc_semaphore_set(x_ready, X_STAGED);
-                                noc_semaphore_set_multicast(
-                                    static_cast<uint32_t>(get_semaphore(XMCAST_READY_SEM)),
-                                    get_noc_multicast_addr(
-                                        xbounds.sx,
-                                        xbounds.sy,
-                                        xbounds.ex,
-                                        xbounds.ey,
-                                        static_cast<uint32_t>(get_semaphore(XMCAST_READY_SEM))),
+                                x_ready.set(X_STAGED);
+                                x_ready.set_multicast(
+                                    noc,
+                                    xbounds.sx,
+                                    xbounds.sy,
+                                    xbounds.ex,
+                                    xbounds.ey,
                                     x_mcast_dests,
                                     /*linked=*/false);
-                                noc_async_writes_flushed();
-                                noc_semaphore_set(x_ready, INVALID);
-                                noc_semaphore_wait(x_free, XMCAST_CONSUMERS);
-                                noc_semaphore_set(x_free, 0);
+                                noc.async_writes_flushed();
+                                x_ready.set(INVALID);
+                                x_free.wait(XMCAST_CONSUMERS);
+                                x_free.set(0);
                             }
                             const uint32_t src = x_base + t * X_ROW_BYTES;
                             ncrisc_noc_fast_write_any_len<noc_mode>(
@@ -771,33 +766,25 @@ void kernel_main() {
                                 x_mcast_dests,
                                 /*multicast_path_reserve=*/true,
                                 /*posted=*/false);
-                            noc_semaphore_set(x_ready, VALID);
-                            noc_semaphore_set_multicast(
-                                static_cast<uint32_t>(get_semaphore(XMCAST_READY_SEM)),
-                                get_noc_multicast_addr(
-                                    xbounds.sx,
-                                    xbounds.sy,
-                                    xbounds.ex,
-                                    xbounds.ey,
-                                    static_cast<uint32_t>(get_semaphore(XMCAST_READY_SEM))),
-                                x_mcast_dests,
-                                /*linked=*/false);
-                            noc_async_writes_flushed();
+                            x_ready.set(VALID);
+                            x_ready.set_multicast(
+                                noc, xbounds.sx, xbounds.sy, xbounds.ex, xbounds.ey, x_mcast_dests, /*linked=*/false);
+                            noc.async_writes_flushed();
                             // This core becomes a receiver in the next rotating round.
-                            noc_semaphore_set(x_ready, INVALID);
+                            x_ready.set(INVALID);
                         } else {
                             const uint32_t sx = get_arg_val<uint32_t>(RT_XMCAST + 4 + 2 * round + 0);
                             const uint32_t sy = get_arg_val<uint32_t>(RT_XMCAST + 4 + 2 * round + 1);
-                            Semaphore<>(XMCAST_FREE_SEM).up(noc, sx, sy, 1);
+                            x_free.up(noc, sx, sy, 1);
                             if (t == 0 && protect_x_stage) {
                                 constexpr uint32_t X_STAGED = 2;
-                                noc_semaphore_wait(x_ready, X_STAGED);
-                                noc_semaphore_set(x_ready, INVALID);
+                                x_ready.wait(X_STAGED);
+                                x_ready.set(INVALID);
                                 issue_wg_chunk(0);
-                                Semaphore<>(XMCAST_FREE_SEM).up(noc, sx, sy, 1);
+                                x_free.up(noc, sx, sy, 1);
                             }
-                            noc_semaphore_wait(x_ready, VALID);
-                            noc_semaphore_set(x_ready, INVALID);
+                            x_ready.wait(VALID);
+                            x_ready.set(INVALID);
                         }
                     }
                     if (m_eff == M_BLOCK) {
@@ -1084,11 +1071,10 @@ void kernel_main() {
                             }
                         } else {
                             if constexpr (HMCAST_ACTIVE) {
-                                volatile tt_l1_ptr uint32_t* hf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                    static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + slot)));
+                                Semaphore<> hf(SEM_H_RDY_BASE + slot);
                                 MaybeDeviceZoneScope("p2_hwait");
-                                noc_semaphore_wait(hf, VALID);
-                                noc_semaphore_set(hf, INVALID);
+                                hf.wait(VALID);
+                                hf.set(INVALID);
                             }
                         }
                         cb_push_back(cb_h, HROW_T);
@@ -1197,12 +1183,10 @@ void kernel_main() {
                             // ReceiverPipe because that class's ctor sets the cell INVALID and would clobber
                             // a VALID a sender running ahead had already broadcast.
                             if constexpr (HMCAST_ACTIVE) {
-                                volatile tt_l1_ptr uint32_t* hf =
-                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(
-                                        get_semaphore(SEM_H_RDY_BASE + ((gb * HGROUPS + r) % DEPTH_H))));
+                                Semaphore<> hf(SEM_H_RDY_BASE + ((gb * HGROUPS + r) % DEPTH_H));
                                 MaybeDeviceZoneScope("p2_hwait");
-                                noc_semaphore_wait(hf, VALID);
-                                noc_semaphore_set(hf, INVALID);
+                                hf.wait(VALID);
+                                hf.set(INVALID);
                             }
                             if (wd_pending) {
                                 // The REAL per-round W_down wait. `reader_wd_wait` covers only the
