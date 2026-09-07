@@ -19,6 +19,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/debug/assert.h"
@@ -175,6 +176,18 @@ using BRG = moe_fused_swiglu::WeightRuns<WG_SHARD_W>;
 // old and new numbers stay comparable; give any new fast path its own zone.
 
 void kernel_main() {
+    // Device-2.0 CircularBuffer views over the same compile-time ids. A view only wraps the index,
+    // so constructing them costs no L1 access and changes no ordering -- the free-function calls
+    // below become methods on these.
+    CircularBuffer wu_buf(cb_w_up);
+    CircularBuffer wd_buf(cb_w_down);
+    CircularBuffer out_buf(cb_out_tiles);
+    CircularBuffer gate_acc_buf(cb_gate_acc);
+    CircularBuffer gather_gate_buf(cb_gather_gate);
+    CircularBuffer h_slice_buf(cb_h_slice);
+    CircularBuffer h_local_buf(cb_h_local);
+    CircularBuffer h_buf(cb_h);
+    CircularBuffer mailbox_buf(cb_mailbox_writer);
     (void)get_arg_val<uint32_t>(0);  // retained runtime slot for cache-compatible argument layout
     const uint32_t out_addr = get_arg_val<uint32_t>(2);
     const uint32_t kr = get_arg_val<uint32_t>(4);
@@ -201,7 +214,7 @@ void kernel_main() {
     // (the reader is its single producer), so its local `cb_interface` copy never advances and
     // `get_write_ptr` is the CB BASE for the whole kernel. Residency forces the capacity to
     // exactly HGROUPS K-blocks, so K-block r lives at `base + r * WD_BLOCK_TILES * W_TILE`.
-    const uint32_t wd_base = get_write_ptr(cb_w_down);
+    const uint32_t wd_base = wd_buf.get_write_ptr();
 
     volatile tt_l1_ptr uint32_t* sem_go_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_GO)));
@@ -244,11 +257,11 @@ void kernel_main() {
         // The reader owns the device-resident count read and publishes it to the
         // program-local aliased mailbox CB. The FIFO event makes the raw payload
         // read safe even when L1 contains bytes from an earlier program.
-        cb_wait_front(cb_mailbox_writer, 1);
-        const uint32_t mailbox_addr = get_read_ptr(cb_mailbox_writer);
+        mailbox_buf.wait_front(1);
+        const uint32_t mailbox_addr = mailbox_buf.get_read_ptr();
         const auto mb = moe_fused_swiglu::mailbox_wait(
             mailbox_addr, MAILBOX_MAGIC + local_expert_id, [] { invalidate_l1_cache(); });
-        cb_pop_front(cb_mailbox_writer, 1);
+        mailbox_buf.pop_front(1);
         volatile tt_l1_ptr uint32_t* mailbox_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_addr);
         const uint32_t m_t = mb.m_t;
         const uint32_t m_blocks = mb.m_blocks;
@@ -296,7 +309,7 @@ void kernel_main() {
             if (out_pending) {
                 MaybeDeviceZoneScope("writer_out_drain");
                 noc_async_write_barrier();
-                cb_pop_front(cb_out_tiles, out_pending);
+                out_buf.pop_front(out_pending);
                 out_pending = 0;
                 // BFP8 phase alias: only after the DMA no longer reads cb_out_tiles may this core's
                 // reader invite peers to overwrite the same SRAM through cb_gather_gate. The value is
@@ -323,8 +336,8 @@ void kernel_main() {
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_XSTAGED)), gb + 1);
                 }
                 for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
-                    cb_reserve_back(cb_w_up, WU_CHUNK_TILES);
-                    const uint32_t wp = get_write_ptr(cb_w_up);
+                    wu_buf.reserve_back(WU_CHUNK_TILES);
+                    const uint32_t wp = wu_buf.get_write_ptr();
                     // Residency: M-block 0 only, because the read carries no `b`.
                     moe_fused_swiglu::read_weight_chunk<BRG>(
                         wu_acc,
@@ -339,7 +352,7 @@ void kernel_main() {
                         wp,
                         W_TILE);
                     noc_async_read_barrier();
-                    cb_push_back(cb_w_up, WU_CHUNK_TILES);
+                    wu_buf.push_back(WU_CHUNK_TILES);
                 }
             }
 
@@ -411,9 +424,9 @@ void kernel_main() {
                 invites += KGROUPS;
                 {
                     MaybeDeviceZoneScope("writer_scatter_gate_wait");
-                    cb_wait_front(cb_gate_acc, GU_FULL);
+                    gate_acc_buf.wait_front(GU_FULL);
                 }
-                uint32_t gate_dst = get_write_ptr(cb_gather_gate);
+                uint32_t gate_dst = gather_gate_buf.get_write_ptr();
                 if constexpr (PHASE_CB_ALIAS) {
                     // The three BFP8 phase views have the physical LCM capacity, which can exceed
                     // GATHER_PAGES (N=1024: 48 vs 24). The reader advances the logical gather cursor;
@@ -456,7 +469,7 @@ void kernel_main() {
                         moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, sl_w);
                     }
                 }
-                cb_pop_front(cb_gate_acc, GU_FULL);
+                gate_acc_buf.pop_front(GU_FULL);
             }
             // ---- my finished h slice, straight into the ROOT's cb_h_local at its tile offset ----
             // The gather IS the assembly. cb_h_local is never pushed or popped, so its write pointer
@@ -465,7 +478,7 @@ void kernel_main() {
             // gather, which is downstream of the root's invite for this block.
             if (my_row < sl_w) {
                 MaybeDeviceZoneScope("writer_hslice");
-                cb_wait_front(cb_h_slice, SLICE_FULL);
+                h_slice_buf.wait_front(SLICE_FULL);
                 uint32_t rvx;
                 uint32_t rvy;
                 uint32_t dst;
@@ -480,19 +493,19 @@ void kernel_main() {
                         hrow_seq);
                     rvx = row_agg_vx;
                     rvy = row_agg_vy;
-                    dst = get_write_ptr(cb_h_local) + hstart * H_TILE;
+                    dst = h_local_buf.get_write_ptr() + hstart * H_TILE;
                     bytes = hn * H_TILE;
                 } else {
                     rvx = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 0);
                     rvy = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 1);
-                    dst = get_write_ptr(cb_h_local) + my_row * slice_bytes;
+                    dst = h_local_buf.get_write_ptr() + my_row * slice_bytes;
                     bytes = slice_bytes;
                 }
-                noc_async_write(get_read_ptr(cb_h_slice), get_noc_addr(rvx, rvy, dst), bytes);
+                noc_async_write(h_slice_buf.get_read_ptr(), get_noc_addr(rvx, rvy, dst), bytes);
                 noc_async_write_barrier();
                 noc_semaphore_inc(get_noc_addr(rvx, rvy, static_cast<uint32_t>(get_semaphore(SEM_HSLICE))), 1);
                 noc_async_atomic_barrier();
-                cb_pop_front(cb_h_slice, SLICE_FULL);
+                h_slice_buf.pop_front(SLICE_FULL);
             }
 
             // Whole-round NoC1 ownership.  The receiver readers reserve/ack HACK_AHEAD slots, so this
@@ -508,8 +521,8 @@ void kernel_main() {
                 // The ordinary mrow path publishes one payload-free alignment slot after its eight
                 // rows, so every block's physical cb_h write pointer restarts at the base.  Round r's
                 // physical row is therefore r % DEPTH_H even though its VALID flag rotates globally.
-                const uint32_t hdst = get_write_ptr(cb_h) + (my_row % DEPTH_H) * HID_T * H_TILE;
-                noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, HID_T * H_TILE);
+                const uint32_t hdst = h_buf.get_write_ptr() + (my_row % DEPTH_H) * HID_T * H_TILE;
+                noc_async_read(get_noc_addr(h_local_buf.get_write_ptr()), hdst, HID_T * H_TILE);
                 noc_async_read_barrier();
                 h_slot_send_posted_noc1(flag_slot, hdst, HID_T * H_TILE);
 
@@ -523,13 +536,13 @@ void kernel_main() {
             {
                 MaybeDeviceZoneScope("writer_out_issue");
                 {
-                    const uint32_t rp = get_read_ptr(cb_out_tiles);
+                    const uint32_t rp = out_buf.get_read_ptr();
                     for (uint32_t t = 0; t < out_rows; ++t) {
                         // Full-M mrow compute publishes one row at a time; the ordinary/tail path
                         // publishes the whole block and therefore satisfies every cumulative wait at
                         // once. Do not pop here: issued DMAs still read this CB until the existing
                         // deferred barrier at the next block (or the epilogue) proves completion.
-                        cb_wait_front(cb_out_tiles, (t + 1) * out_ec_max);
+                        out_buf.wait_front((t + 1) * out_ec_max);
                         const uint32_t row = b * M_BLOCK + out_row_in_block + t;
                         if (row >= m_t) {
                             break;  // rows past ceil_tile(count) are never written
@@ -560,6 +573,6 @@ void kernel_main() {
 
     if (out_pending) {
         noc_async_write_barrier();
-        cb_pop_front(cb_out_tiles, out_pending);
+        out_buf.pop_front(out_pending);
     }
 }
