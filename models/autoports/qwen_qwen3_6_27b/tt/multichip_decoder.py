@@ -19,7 +19,7 @@ import torch
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedding
 
 import ttnn
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import ADVERTISED_CONTEXT, _require_tensor
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import ADVERTISED_CONTEXT, _require_tensor, _scan_matmul
 from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import (
     OptimizedDecoder,
     _decode_program,
@@ -1048,11 +1048,11 @@ class MultichipDecoder(OptimizedDecoder):
         identity = ttnn.repeat(self.weights["linear_identity"], ttnn.Shape([groups, sequence, 1, 1]))
         zero = ttnn.multiply(identity, 0.0)
         key_t = ttnn.transpose(key, -2, -1)
-        transform = ttnn.matmul(key_t, key)
+        transform = _scan_matmul(key_t, key)
         ttnn.multiply(beta, transform, output_tensor=transform)
         ttnn.subtract(identity, transform, output_tensor=transform)
         ttnn.multiply(decay, transform, output_tensor=transform)
-        bias = ttnn.matmul(key_t, value)
+        bias = _scan_matmul(key_t, value)
         ttnn.multiply(beta, bias, output_tensor=bias)
         ttnn.deallocate(key_t)
         ttnn.deallocate(key)
@@ -1074,10 +1074,10 @@ class MultichipDecoder(OptimizedDecoder):
             previous_transform = ttnn.concat([identity[:, :distance], transform[:, :-distance]], dim=1)
             old_transform = transform
             old_bias = bias
-            transform = ttnn.matmul(old_transform, previous_transform)
+            transform = _scan_matmul(old_transform, previous_transform)
             ttnn.deallocate(previous_transform)
             previous_bias = ttnn.concat([zero[:, :distance], bias[:, :-distance]], dim=1)
-            bias = ttnn.matmul(old_transform, previous_bias)
+            bias = _scan_matmul(old_transform, previous_bias)
             ttnn.add(bias, old_bias, output_tensor=bias)
             ttnn.deallocate(previous_bias)
             ttnn.deallocate(old_transform)
@@ -1086,11 +1086,11 @@ class MultichipDecoder(OptimizedDecoder):
 
         initial = ttnn.typecast(self.caches["recurrent"], ttnn.bfloat16)
         initial = ttnn.repeat(ttnn.reshape(initial, (groups, 1, value_dim, value_dim)), ttnn.Shape([1, sequence, 1, 1]))
-        states = ttnn.add(ttnn.matmul(transform, initial), bias)
+        states = ttnn.add(_scan_matmul(transform, initial), bias)
         final_state = ttnn.reshape(states[:, -1:], (self.batch, value_heads, value_dim, value_dim))
         ttnn.copy(ttnn.typecast(final_state, self.policy.linear_recurrent_state_dtype), self.caches["recurrent"])
 
-        output = ttnn.reshape(ttnn.matmul(query, states), (self.batch, value_heads, sequence, value_dim))
+        output = ttnn.reshape(_scan_matmul(query, states), (self.batch, value_heads, sequence, value_dim))
         output = ttnn.rms_norm(
             output, epsilon=self.eps, weight=self.weights["gated_norm"], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )

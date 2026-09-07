@@ -178,6 +178,103 @@ class _BalancedSequenceConcat:
         return chunks[0]
 
 
+_SCAN_MATMUL_GRID_ENV = "QWEN36_SCAN_MATMUL_GRID"
+
+
+def _scan_matmul(a, b, *, compute_kernel_config=None):
+    """Compose two affine transforms in the prefill scan.
+
+    A plain ``ttnn.matmul`` on these ``[groups, chunk, K, K]`` operands selects a
+    program that runs at ~1.45 TFLOP/s. An explicit batched-reuse config runs the
+    same shapes at ~19 TFLOP/s -- 13.2x measured in isolation at the TP4
+    per-device shape, and even a 16-core batched-reuse grid beats the default by
+    10.5x, so the win is the program class, not the core count. This is 77% of
+    prefill device time, and the optimize stage never swept it because its
+    core-grid checklist is scoped to decode-time consumers only.
+
+    Set QWEN36_SCAN_MATMUL_GRID="0" to fall back to the default program.
+    """
+    import os
+
+    grid = os.environ.get(_SCAN_MATMUL_GRID_ENV, "8x10")
+    kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG}
+    if compute_kernel_config is not None:
+        kwargs["compute_kernel_config"] = compute_kernel_config
+    k_tiles = a.padded_shape[-1] // ttnn.TILE_SIZE
+    m_tiles = a.padded_shape[-2] // ttnn.TILE_SIZE
+    n_tiles = b.padded_shape[-1] // ttnn.TILE_SIZE
+    if grid != "0" and a.layout == ttnn.TILE_LAYOUT and min(k_tiles, m_tiles, n_tiles) >= 1:
+        gx, gy = (int(v) for v in grid.split("x"))
+        kwargs["program_config"] = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(gx, gy),
+            in0_block_w=k_tiles,
+            out_subblock_h=min(2, m_tiles),
+            out_subblock_w=min(4, n_tiles),
+            per_core_M=m_tiles,
+            per_core_N=n_tiles,
+        )
+    return ttnn.matmul(a, b, **kwargs)
+
+
+_PREFILL_SCAN_ENV = "QWEN36_PREFILL_SCAN"
+
+
+def _prefill_scan_mode() -> str:
+    """``hillis`` (default) or ``sequential`` for the prefill state recurrence."""
+    import os
+
+    return os.environ.get(_PREFILL_SCAN_ENV, "hillis")
+
+
+def _sequential_recurrence(
+    query, key, value, beta, decay, *, initial_state, groups, sequence, value_dim, batch, value_heads
+):
+    """Apply the delta rule one token at a time instead of composing transforms.
+
+    The Hillis-Steele scan materialises a [K, K] transition per token and composes
+    them pairwise, costing O(K^3) per token per doubling step. The recurrence it
+    encodes is a rank-1 update, O(K*V): the same maths the decode path already
+    runs. Composing transforms buys parallel depth, which is only worth paying for
+    when the device is starved -- and it is not, since ``groups = batch *
+    value_heads`` already exceeds the core count by more than an order of
+    magnitude. So do the work-efficient thing and pay the sequential depth.
+
+    Returns ``(output[groups, sequence, 1, value_dim], final_state)``.
+    """
+    state = ttnn.typecast(initial_state, ttnn.bfloat16)
+    state = ttnn.reshape(state, (groups, 1, value_dim, value_dim))
+    outputs = []
+    for step in range(sequence):
+        k_t = key[:, step : step + 1]
+        v_t = value[:, step : step + 1]
+        q_t = query[:, step : step + 1]
+        d_t = decay[:, step : step + 1]
+        b_t = beta[:, step : step + 1]
+
+        decayed = ttnn.multiply(state, d_t)
+        ttnn.deallocate(state)
+        memory_value = _scan_matmul(k_t, decayed)
+        delta = ttnn.multiply(ttnn.subtract(v_t, memory_value), b_t)
+        ttnn.deallocate(memory_value)
+        update = _scan_matmul(ttnn.transpose(k_t, -2, -1), delta)
+        ttnn.deallocate(delta)
+        state = ttnn.add(decayed, update)
+        ttnn.deallocate(decayed)
+        ttnn.deallocate(update)
+        outputs.append(_scan_matmul(q_t, state))
+
+    if len(outputs) == 1:
+        # concat of a single tensor aliases it; deallocating the inputs would
+        # then free the result. A ragged tail chunk hits this at sequence 1.
+        output = outputs[0]
+    else:
+        output = ttnn.concat(outputs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for chunk_output in outputs:
+            ttnn.deallocate(chunk_output)
+    final_state = ttnn.reshape(state, (batch, value_heads, value_dim, value_dim))
+    return output, final_state
+
+
 class FunctionalDecoder(LightweightModule):
     """One Qwen3.6 text decoder layer on a single 1x1 TTNN mesh.
 
@@ -560,38 +657,56 @@ class FunctionalDecoder(LightweightModule):
         beta = ttnn.typecast(beta, ttnn.bfloat16)
         decay = ttnn.typecast(decay, ttnn.bfloat16)
 
-        identity = ttnn.repeat(self.weights["linear_identity"], ttnn.Shape([groups, sequence, 1, 1]))
-        zero = ttnn.multiply(identity, 0.0)
-        key_t = ttnn.transpose(key, -2, -1)
-        transform = ttnn.multiply(
-            decay,
-            ttnn.subtract(
-                identity,
-                ttnn.multiply(beta, ttnn.matmul(key_t, key)),
-            ),
-        )
-        bias = ttnn.multiply(beta, ttnn.matmul(key_t, value))
+        if _prefill_scan_mode() == "sequential":
+            output, final_state = _sequential_recurrence(
+                query,
+                key,
+                value,
+                beta,
+                decay,
+                initial_state=self.caches["recurrent"],
+                groups=groups,
+                sequence=sequence,
+                value_dim=value_dim,
+                batch=self.batch,
+                value_heads=value_heads,
+            )
+            ttnn.copy(ttnn.typecast(final_state, ttnn.float32), self.caches["recurrent"])
+            ttnn.deallocate(final_state)
+        else:
+            identity = ttnn.repeat(self.weights["linear_identity"], ttnn.Shape([groups, sequence, 1, 1]))
+            zero = ttnn.multiply(identity, 0.0)
+            key_t = ttnn.transpose(key, -2, -1)
+            transform = ttnn.multiply(
+                decay,
+                ttnn.subtract(
+                    identity,
+                    ttnn.multiply(beta, _scan_matmul(key_t, key)),
+                ),
+            )
+            bias = ttnn.multiply(beta, _scan_matmul(key_t, value))
 
-        distance = 1
-        while distance < sequence:
-            previous_transform = ttnn.concat([identity[:, :distance], transform[:, :-distance]], dim=1)
-            previous_bias = ttnn.concat([zero[:, :distance], bias[:, :-distance]], dim=1)
-            old_transform = transform
-            transform = ttnn.matmul(old_transform, previous_transform)
-            bias = ttnn.add(ttnn.matmul(old_transform, previous_bias), bias)
-            distance *= 2
+            distance = 1
+            while distance < sequence:
+                previous_transform = ttnn.concat([identity[:, :distance], transform[:, :-distance]], dim=1)
+                previous_bias = ttnn.concat([zero[:, :distance], bias[:, :-distance]], dim=1)
+                old_transform = transform
+                transform = _scan_matmul(old_transform, previous_transform)
+                bias = ttnn.add(_scan_matmul(old_transform, previous_bias), bias)
+                distance *= 2
 
-        initial = ttnn.typecast(self.caches["recurrent"], ttnn.bfloat16)
-        initial = ttnn.reshape(initial, (groups, 1, value_dim, value_dim))
-        initial = ttnn.repeat(initial, ttnn.Shape([1, sequence, 1, 1]))
-        states = ttnn.add(ttnn.matmul(transform, initial), bias)
-        final_state = ttnn.reshape(
-            states[:, -1:],
-            (self.batch, value_heads, value_dim, value_dim),
-        )
-        ttnn.copy(ttnn.typecast(final_state, ttnn.float32), self.caches["recurrent"])
+            initial = ttnn.typecast(self.caches["recurrent"], ttnn.bfloat16)
+            initial = ttnn.reshape(initial, (groups, 1, value_dim, value_dim))
+            initial = ttnn.repeat(initial, ttnn.Shape([1, sequence, 1, 1]))
+            states = ttnn.add(_scan_matmul(transform, initial), bias)
+            final_state = ttnn.reshape(
+                states[:, -1:],
+                (self.batch, value_heads, value_dim, value_dim),
+            )
+            ttnn.copy(ttnn.typecast(final_state, ttnn.float32), self.caches["recurrent"])
 
-        output = ttnn.matmul(query, states)
+        if _prefill_scan_mode() != "sequential":
+            output = _scan_matmul(query, states)
         output = ttnn.reshape(output, (self.batch, value_heads, sequence, value_dim))
         output = ttnn.rms_norm(
             output,
