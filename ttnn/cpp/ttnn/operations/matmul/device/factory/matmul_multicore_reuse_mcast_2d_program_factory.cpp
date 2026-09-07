@@ -3,11 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
-#include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
-#include <tuple>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -123,14 +121,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     const bool in1_is_height_sharded = in1_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool in1_is_sharded = in1_is_width_sharded || in1_is_height_sharded;
     const bool output_is_sharded = out_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    if (!in0_is_sharded && !output_is_sharded && M < per_core_M) {
-        per_core_M = M;
-        if (out_block_h > per_core_M || per_core_M % out_block_h != 0) {
-            out_block_h = per_core_M;
-        }
-        std::tie(out_subblock_h, out_subblock_w) = operations::matmul::bmm_op_utils::get_matmul_subblock_params(
-            out_block_h, out_block_w, false, false, fp32_dest_acc_en);
-    }
 
     // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on
     // Blackhole's 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at
@@ -1664,14 +1654,6 @@ create_program_mcast_in0_in1(
     const bool in1_is_height_sharded = in1_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool in1_is_sharded = in1_is_width_sharded || in1_is_height_sharded;
     const bool output_is_sharded = out_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    if (!in0_is_sharded && !output_is_sharded && M < per_core_M) {
-        per_core_M = M;
-        if (out_block_h > per_core_M || per_core_M % out_block_h != 0) {
-            out_block_h = per_core_M;
-        }
-        std::tie(out_subblock_h, out_subblock_w) = operations::matmul::bmm_op_utils::get_matmul_subblock_params(
-            out_block_h, out_block_w, false, false, fp32_dest_acc_en);
-    }
 
     TT_FATAL(
         !(output_is_sharded && B > 1),

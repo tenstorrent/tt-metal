@@ -779,6 +779,13 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                             Nt,
                             per_core_N,
                             num_blocks_x);
+                        TT_FATAL(
+                            per_core_M <= Mt,
+                            "{}: per_core_M ({}) exceeds Mt ({}). Computing more row tiles than are available "
+                            "overwrites memory beyond this tensor. Reduce per_core_M to at most Mt.",
+                            config_name,
+                            per_core_M,
+                            Mt);
                         const uint32_t logical_blocks_w = ((Nt - 1) / program_config.out_block_w) + 1;
                         const uint32_t physical_blocks_w = per_core_N / program_config.out_block_w;
                         TT_FATAL(
@@ -833,6 +840,13 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                     config_name,
                     Mt,
                     Nt);
+                TT_FATAL(
+                    program_config.per_core_M <= Mt,
+                    "{}: per_core_M ({}) exceeds Mt ({}). Computing more row tiles than are available overwrites "
+                    "memory beyond this tensor. Reduce per_core_M to at most Mt.",
+                    config_name,
+                    program_config.per_core_M,
+                    Mt);
                 uint32_t num_blocks_y = ((Mt - 1) / program_config.per_core_M) + 1;
                 uint32_t num_blocks_x = ((Nt - 1) / program_config.per_core_N) + 1;
                 if (program_config.transpose_mcast) {
