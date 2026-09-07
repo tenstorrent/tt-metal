@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import itertools
 import random
 import secrets
 from dataclasses import dataclass, fields, replace
@@ -89,6 +90,12 @@ class _TraceKey:
     log_probs_on: bool
     force_argmax: bool
     bucket: int | None = None
+
+
+# precompile(all_configs=True) enumerates every combination of the bool fields above. Derive the
+# count so a new flag breaks the unpacking there instead of silently leaving its programs
+# uncompiled -- which reopens TT_FATAL !is_capturing_trace on the first request needing it.
+_TRACE_KEY_FLAGS = sum(f.type in (bool, "bool") for f in fields(_TraceKey))
 
 
 class SamplingGenerator:
@@ -348,6 +355,7 @@ class SamplingGenerator:
         logits: ttnn.Tensor,
         *,
         tt_out_tok: Optional[ttnn.Tensor] = None,
+        all_configs: bool = False,
     ) -> None:
         """Run the sampling pipeline once without capturing, to compile it and size its scratch.
 
@@ -357,13 +365,50 @@ class SamplingGenerator:
         left inline, this pass allocates device buffers that a live trace can corrupt on replay.
 
         ``logits`` only has to match the spec of the tensor that will later be captured, not be it.
+
+        ``all_configs`` compiles every ``_TraceKey`` flag combination rather than just the one active
+        now. Traces are keyed on (penalties, log_probs, force_argmax), but warmup only ever runs one of
+        those, so a request asking for logprobs or penalties later finds an uncaptured slot and, because
+        callers pass ``skip_precompile=True``, executes its program for the first time inside a live
+        trace capture -- TT_FATAL !is_capturing_trace, which kills the engine rather than erroring.
         """
-        self._run_sampling(
-            logits,
-            penalties_on=self._penalties_active,
-            tt_out_tok=tt_out_tok,
-            count_tokens=False,
-        )
+        if not all_configs:
+            self._run_sampling(
+                logits,
+                penalties_on=self._penalties_active,
+                tt_out_tok=tt_out_tok,
+                count_tokens=False,
+            )
+            return
+
+        log_probs = self.tt_sampling.log_probs_calculator
+        saved_penalties = self._penalties_active
+        saved_force_argmax = self.tt_sampling._force_argmax_sampling
+        saved_enabled = list(log_probs.logprobs_enabled)
+        saved_num_logprobs = list(log_probs.num_logprobs)
+        try:
+            for penalties_on, log_probs_on, force_argmax in itertools.product((False, True), repeat=_TRACE_KEY_FLAGS):
+                # Models that disable force-argmax never reach that program, and it is not runnable
+                # under their sub-device config (untilize with sub_core_grids=None).
+                if force_argmax and not self.tt_sampling._allow_force_argmax_sampling:
+                    continue
+                self._penalties_active = penalties_on
+                # Set the flag directly: reset_params() would re-derive it from k/p/temp and overwrite
+                # the live request params, and only the flag selects the program being compiled.
+                self.tt_sampling._force_argmax_sampling = force_argmax
+                log_probs.set_log_probs_mode(log_probs_on, num_logprobs=0)
+                self._run_sampling(
+                    logits,
+                    penalties_on=penalties_on,
+                    tt_out_tok=tt_out_tok,
+                    count_tokens=False,
+                )
+        finally:
+            self._penalties_active = saved_penalties
+            self.tt_sampling._force_argmax_sampling = saved_force_argmax
+            # Restore through the setter that owns the derived flags rather than re-deriving them here.
+            log_probs.set_log_probs_mode(saved_enabled, num_logprobs=saved_num_logprobs)
+            self._log_probs_active = log_probs.enable_log_probs
 
     def capture_trace(
         self,
@@ -385,12 +430,17 @@ class SamplingGenerator:
             logger.debug(
                 f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
             )
+            # TTPenalties.apply() rewrites its input in place, so compiling on `logits` itself would
+            # leave the capture buffer already penalized and make the first replay penalize it twice.
+            scratch = ttnn.clone(logits) if penalties_on else logits
             self._run_sampling(
-                logits,
+                scratch,
                 penalties_on=penalties_on,
                 tt_out_tok=tt_out_tok,
                 count_tokens=False,
             )
+            if scratch is not logits:
+                ttnn.deallocate(scratch)
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
         sampled = self._run_sampling(
@@ -439,6 +489,9 @@ class SamplingGenerator:
         """
         Convenience wrapper that either runs the sampling module directly or
         replays a captured trace.
+
+        ``count_tokens`` only applies to the untraced path: the token-count update is recorded into
+        the trace at capture time, so a replay always performs it.
         """
 
         penalties_on = self._penalties_active
@@ -447,6 +500,8 @@ class SamplingGenerator:
         # Explicit request seeds update a persistent seed tensor every token;
         # run them directly so trace replay cannot observe stale seed state.
         use_internal_trace = enable_trace and not self.seed_manager.has_active_request_seed()
+        if use_internal_trace and not count_tokens:
+            raise ValueError("count_tokens=False cannot be honoured on a traced sample(); pass enable_trace=False.")
         if not use_internal_trace:
             tt_out = self._run_sampling(
                 logits,
@@ -457,11 +512,15 @@ class SamplingGenerator:
         else:
             key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
             if slot["id"] is None:
-                return self.capture_trace(
+                self.capture_trace(
                     logits,
                     tt_out_tok=tt_out_tok,
                     skip_precompile=skip_precompile,
                 )
+                # begin/end_trace_capture only records the ops, so the captured output buffer
+                # still holds the previous step's token; replay before returning it as this
+                # step's sample. Callers that only capture (warmup) must not pay for this.
+                return self._execute_trace(key)
 
             self._validate_trace_inputs(slot, logits, tt_out_tok)
             tt_out = self._execute_trace(key)
