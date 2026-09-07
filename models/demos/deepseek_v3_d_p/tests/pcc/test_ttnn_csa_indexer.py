@@ -82,6 +82,16 @@ def _assert_topk_overlap(actual, expected, minimum=0.9):
     assert overlaps and sum(overlaps) / len(overlaps) >= minimum
 
 
+# (slot_num, layer_num, cache_user_id, cache_layer_idx). The multi-slot case is the whole point of the
+# user-major layer-stacked layout: write_k and the ring scorer each compute the flat slot themselves, so
+# a disagreement makes the scorer read a zeroed slot and the top-k overlap collapses.
+_CACHE_SLOTS = [
+    pytest.param(1, 1, 0, 0, id="single-slot"),
+    pytest.param(2, 2, 1, 1, id="user1-layer1"),
+]
+
+
+@pytest.mark.parametrize("slot_num, layer_num, cache_user_id, cache_layer_idx", _CACHE_SLOTS)
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
@@ -94,7 +104,9 @@ def _assert_topk_overlap(actual, expected, minimum=0.9):
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_ttnn_csa_indexer_block_cyclic_two_chunks(mesh_device, device_params, tmp_path):
+def test_ttnn_csa_indexer_block_cyclic_two_chunks(
+    mesh_device, device_params, slot_num, layer_num, cache_user_id, cache_layer_idx, tmp_path
+):
     torch.manual_seed(17)
     sp_axis, tp_axis = 0, 1
     sp_factor = mesh_device.shape[sp_axis]
@@ -122,6 +134,8 @@ def test_ttnn_csa_indexer_block_cyclic_two_chunks(mesh_device, device_params, tm
         tp_ccl_topology=ttnn.Topology.Linear,
         seq_len=max_seq_len,
         active_seq_len=chunk_tokens,
+        slot_num=slot_num,
+        layer_num=layer_num,
     )
     index_cache = init_kvpe_cache(
         kvpe_cache_head_dim=config.index_head_dim,
@@ -129,7 +143,8 @@ def test_ttnn_csa_indexer_block_cyclic_two_chunks(mesh_device, device_params, tm
         seq_len=max_seq_len // 4,
         mesh_shape=list(mesh_device.shape),
         sp_axis=sp_axis,
-        num_kvpe_cache_layers=1,
+        num_kvpe_cache_layers=layer_num,
+        num_users=slot_num,
     )
 
     hidden_all = torch.randn(1, max_seq_len, config.hidden_size, dtype=torch.bfloat16)
@@ -153,6 +168,8 @@ def test_ttnn_csa_indexer_block_cyclic_two_chunks(mesh_device, device_params, tm
             _to_qr(mesh_device, qr),
             seq_len=local_chunk,
             start_pos=start,
+            cache_user_id=cache_user_id,
+            cache_layer_idx=cache_layer_idx,
             index_kv_cache=index_cache,
         )
         actual_mesh = ttnn.to_torch(actual_tt, mesh_composer=composer).to(torch.int64)

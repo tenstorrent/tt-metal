@@ -17,7 +17,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCompressorUtils
+from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCompressorUtils, resolve_per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
@@ -69,7 +69,9 @@ class TtV4AttentionBase(LightweightModule):
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
         self.sp_factor = device.shape[sp_axis] if self.is_mesh else 1
         self.tp_factor = device.shape[tp_axis] if self.is_mesh else 1
-        self.tp_ccl_topology = topology
+        # q/kv/o-proj collectives ride the TP axis; the sliding_kv all-gather rides SP. See
+        # resolve_per_axis_topology for why one topology cannot serve both.
+        self.sp_ccl_topology, self.tp_ccl_topology = resolve_per_axis_topology(topology, sp_axis, tp_axis)
         self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and (self.sp_factor > 1 or self.tp_factor > 1)) else None
         self.ccl_num_links = 2 if is_blackhole() else 1
         self.ops = TtCompressorUtils(
@@ -317,7 +319,7 @@ class TtV4AttentionBase(LightweightModule):
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.tp_ccl_topology,
+                topology=self.sp_ccl_topology,
                 cluster_axis=self.sp_axis,
             )
 

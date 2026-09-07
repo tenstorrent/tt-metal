@@ -24,18 +24,82 @@ def rope_table_tokens(max_seq_len: int, chunk_tokens: int) -> int:
 CSA_STATE_ROWS = 64
 
 
+def csa_state_rows(position: int, compress_rate: int) -> tuple[int, int]:
+    """The two rows of a CSA overlap state that token ``position`` writes, as ``(ca_row, cb_row)``.
+
+    This is the host-side statement of the ``csa_compressor`` / ``compressor_state_exchange`` state
+    layout, which Blaze decode also consumes. Nothing in the model path calls it -- the op owns the
+    write -- but the op's torch references live in ``tests/op_unit_tests`` and need the mapping, so it
+    belongs here next to the constant that sizes the slab rather than restated in each of them.
+
+    The slab is two tiles of ``TILE_SIZE`` rows, indexed by the window's parity. A window writes its Ca
+    half into the tile of the OPPOSITE parity, which is where its successor -- the next window, of
+    opposite parity -- looks for a predecessor Ca. Cb stays in the window's own tile, past the
+    ``compress_rate`` Ca slots. Consecutive windows therefore never write the same tile, which is what
+    lets one read a predecessor while the other is still being filled."""
+    slot = position % compress_rate
+    parity = (position // compress_rate) & 1
+    ca_row = (parity ^ 1) * ttnn.TILE_SIZE + slot
+    cb_row = parity * ttnn.TILE_SIZE + compress_rate + slot
+    return ca_row, cb_row
+
+
+def csa_state_predecessor_ca(position: int, compress_rate: int) -> int:
+    """First row of the predecessor Ca block that the window containing ``position`` reads; the block is
+    ``[result, result + compress_rate)``.
+
+    The same parity trick as ``csa_state_rows``, from the reading side: a window of parity p finds its
+    predecessor's Ca in tile p, because that predecessor had parity p^1 and wrote its Ca into the
+    opposite tile."""
+    parity = (position // compress_rate) & 1
+    return parity * ttnn.TILE_SIZE
+
+
 def csa_slab_align(compress_rate: int, sp_factor: int, tp_factor: int = 1) -> int:
     """The token granularity a CSA slab has to be a multiple of, which is everything CSA asks of a
     slab's width at once:
 
-    - ``compress_rate * sp_factor``: every SP shard owns whole compression windows,
-    - ``compress_rate * TILE_SIZE``: the entries one slab produces are a whole number of tiles, which
-      is what keeps the compressed append offset on a tile boundary,
+    - ``compress_rate * TILE_SIZE * sp_factor``: each CHIP's share of the entries one slab produces is a
+      whole number of tiles. The block-cyclic indexer score op is handed the local slab in tokens,
+      divides it by ``compress_rate`` to get its per-shard chunk in compressed rows, and rejects that
+      chunk unless it is tile-aligned. This subsumes the two constraints the compressor alone needs --
+      ``compress_rate * sp_factor`` (every SP shard owns whole compression windows) and
+      ``compress_rate * TILE_SIZE`` (the entries one slab produces are a whole number of tiles, which
+      keeps the compressed append offset on a tile boundary),
     - ``TILE_SIZE * sp_factor * tp_factor``: each chip's share of the slab is a whole number of tiles,
       which the indexer's TP gathers need.
 
+    The first term binds only when ``tp_factor < compress_rate``; at ``tp_factor == compress_rate`` the
+    second is exactly equal, which is why an 8x4 mesh at rate 4 never sees it.
+
     ``max`` stands in for the LCM because every factor here is a power of two."""
-    return max(compress_rate * ttnn.TILE_SIZE, compress_rate * sp_factor, ttnn.TILE_SIZE * sp_factor * tp_factor)
+    # The max-as-LCM shortcut above silently returns too small an alignment the moment a factor is not a
+    # power of two (rate 3 with sp 2 needs 6, but max gives 3), and callers only assert against the value
+    # this returns -- so the assumption is checked here, where the arithmetic is.
+    for name, factor in (("compress_rate", compress_rate), ("sp_factor", sp_factor), ("tp_factor", tp_factor)):
+        assert factor > 0 and factor & (factor - 1) == 0, (
+            f"csa_slab_align uses max as an LCM, which needs every factor to be a power of two; " f"{name} is {factor}"
+        )
+    return max(compress_rate * ttnn.TILE_SIZE * sp_factor, ttnn.TILE_SIZE * sp_factor * tp_factor)
+
+
+def resolve_per_axis_topology(topology, sp_axis: int, tp_axis: int):
+    """Split a ``topology`` argument into ``(sp_topology, tp_topology)``.
+
+    Ring is valid only on an axis the fabric physically wraps, so the two axes can legitimately differ:
+    under ``FABRIC_2D_TORUS_X`` the TP axis rings and the SP axis has no wrap (see
+    ``tt_ccl.per_axis_topology``). Handing one axis's topology to a collective on the other makes it wait
+    forever on a wrap link the fabric does not service, so a ``(dim0, dim1)`` tuple is unpacked per axis.
+    A scalar applies to both, which preserves non-torus and 1D-ring behavior. Mirrors ttMLA.
+    """
+    if isinstance(topology, tuple):
+        assert len(topology) == 2, f"a per-axis topology tuple must be (dim0, dim1), got {topology}"
+        # Unpacking the (dim0, dim1) tuple as (sp, tp) is only correct at sp_axis=0/tp_axis=1. Guard it so
+        # a future axis swap fails loudly here instead of cross-wiring Ring onto the wrong axis, which
+        # deadlocks at runtime rather than returning a wrong answer.
+        assert sp_axis == 0 and tp_axis == 1, "per-axis topology tuple assumes sp_axis=0, tp_axis=1"
+        return topology
+    return topology, topology
 
 
 class TtCompressorUtils:
@@ -170,7 +234,9 @@ class TtCompressorBase(LightweightModule):
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
         self.sp_factor = device.shape[sp_axis] if self.is_mesh else 1
         self.tp_factor = device.shape[tp_axis] if self.is_mesh else 1
-        self.ccl_topology = topology
+        # _project's reduce-scatter/all-gather ride the TP axis; the compressed-row gather, the terminal
+        # state hand-off, and the csa_compressor op ride SP. See resolve_per_axis_topology.
+        self.sp_ccl_topology, self.tp_ccl_topology = resolve_per_axis_topology(topology, sp_axis, tp_axis)
         self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and (self.sp_factor > 1 or self.tp_factor > 1)) else None
         self.ccl_num_links = 2 if is_blackhole() else 1
         self.ops = TtCompressorUtils(
@@ -236,7 +302,7 @@ class TtCompressorBase(LightweightModule):
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
+            topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
         )
         return ttnn.experimental.all_gather_async(
@@ -246,7 +312,7 @@ class TtCompressorBase(LightweightModule):
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
+            topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
         )
 
@@ -272,7 +338,7 @@ class TtCompressorBase(LightweightModule):
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
+                topology=self.sp_ccl_topology,
                 cluster_axis=self.sp_axis,
             )
         return compressed_kv
@@ -510,11 +576,19 @@ class TtCSACompressor(TtCompressorBase):
 
         Every chip emits the state for its own slab, but the chunk's last window lives on the last SP
         chip, so that is the only one the next chunk may start from. Gather and take it; the rest are
-        freed here."""
+        freed here.
+
+        An all-gather to keep one chip's rows is a broadcast written the long way, and it is deliberate
+        for now. The payload is small: at sp 8 each call moves 64 rows a chip, so 512 KB gathered at
+        ``head_dim`` 512 and 128 KB at ``index_head_dim`` 128, and a CSA layer makes four calls a chunk
+        (this compressor's KV and score states, plus the indexer's two) for about 1.3 MB against the 160
+        KB it keeps. Replacing it needs a broadcast primitive this module does not have today, so the
+        gate is measurement: the four programs have to show up in a per-program breakdown of a chunked
+        CSA forward first. HCA does not call this, so ``test_ttnn_hca_perf`` says nothing about it."""
         if self.sp_factor == 1:
             return state
         rows = state.shape[2]
-        gathered = ttnn.all_gather(state, dim=2, cluster_axis=self.sp_axis, topology=self.ccl_topology)
+        gathered = ttnn.all_gather(state, dim=2, cluster_axis=self.sp_axis, topology=self.sp_ccl_topology)
         start = (self.sp_factor - 1) * rows
         terminal = ttnn.slice(gathered, [0, 0, start, 0], [state.shape[0], 1, start + rows, self.head_dim])
         ttnn.deallocate(state)
@@ -587,7 +661,7 @@ class TtCSACompressor(TtCompressorBase):
             seq_len_actual=seq_len_actual,
             first_token_position=first_window_position,
             cluster_axis=self.sp_axis,
-            topology=self.ccl_topology,
+            topology=self.sp_ccl_topology,
         )
         pooled = ttnn.reshape(pooled, [batch, n_windows, self.head_dim])
         compressed_kv = self._normalize_rotate_and_gather(pooled, first_window_position, gather_sp=gather_sp)

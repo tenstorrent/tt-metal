@@ -600,6 +600,11 @@ class TtIndexerBase:
         entry point has to translate, not just forward()."""
         return self._index_layer_idx if self._is_index_compact else cache_layer_idx
 
+    @property
+    def index_cache_layers(self) -> int:
+        """Layer stride of the block-cyclic key cache, including compacted full-layer layouts."""
+        return self._index_cache_layers
+
     def _tp_replicate_index_kbuf(
         self,
         index_kbuf: ttnn.Tensor,
@@ -1038,7 +1043,12 @@ class TtIndexer(TtIndexerBase):
 
 
 class TtCsaIndexer(TtIndexerBase):
-    """DeepSeek-V4 ratio-4 indexer backed by compressed block-cyclic keys."""
+    """DeepSeek-V4 ratio-4 indexer backed by compressed block-cyclic keys.
+
+    ``seq_len`` and ``active_seq_len`` are global token counts at construction. ``self.seq_len`` and
+    ``index_entries`` are compressed-entry counts, while ``active_seq_len_local`` and forward's
+    ``seq_len`` remain token counts.
+    """
 
     WEIGHT_NAMES = (
         "compressor.indexer.q_b_proj",
@@ -1248,7 +1258,7 @@ class TtCsaIndexer(TtIndexerBase):
         assert (
             active_tokens // self.compress_rate
         ) % 16 == 0, "each compressed prefix increment must satisfy topk_large_indices alignment"
-        self.max_token_seq_len = seq_len
+        self.max_token_seq_len = seq_len  # tokens; self.seq_len below is compressed entries
         self.seq_len = seq_len // self.compress_rate
         self.index_topk_capacity = min(self.index_args.index_topk, self.seq_len)
         assert 16 <= self.index_topk_capacity <= 2048 and self.index_topk_capacity % 16 == 0
@@ -1298,7 +1308,7 @@ class TtCsaIndexer(TtIndexerBase):
             rms_norm_eps=config.rms_norm_eps,
             sp_axis=sp_axis,
             tp_axis=tp_axis,
-            topology=sp_ccl_topology,
+            topology=(sp_ccl_topology, tp_ccl_topology) if sp_ccl_topology != tp_ccl_topology else sp_ccl_topology,
             preloaded_weights={
                 "kv_proj": self._idx_kv_proj,
                 "gate_proj": self._idx_gate_proj,
@@ -1336,11 +1346,17 @@ class TtCsaIndexer(TtIndexerBase):
 
     def reset_overlap_state(self) -> None:
         """Start over from no predecessor window. The inner compressor owns the layout, since it is the
-        one that consumes and emits these."""
+        one that consumes and emits these. TtCSA.alloc_state resets this alongside the block compressor
+        so both states begin at the same token position."""
         if hasattr(self, "_overlap_kv_state"):
             ttnn.deallocate(self._overlap_kv_state)
             ttnn.deallocate(self._overlap_score_state)
         self._overlap_kv_state, self._overlap_score_state = self._compressor.alloc_overlap_state()
+
+    @property
+    def index_entries(self) -> int:
+        """Compressed-entry capacity, as opposed to the token counts accepted by forward."""
+        return self.seq_len
 
     def _apply_index_hadamard(self, tensor: ttnn.Tensor, *, dtype) -> ttnn.Tensor:
         return ttnn.matmul(
@@ -1501,10 +1517,13 @@ class TtCsaIndexer(TtIndexerBase):
         index_kv_cache: ttnn.Tensor = None,
         seq_len_actual: int | None = None,
     ) -> ttnn.Tensor:
-        """``seq_len`` is the padded LOCAL slab width, fixed for the whole prefill; ``seq_len_actual`` the
-        chunk's real global pre-pad length, which only the overlap state needs (see write_k)."""
+        """``seq_len`` is the padded local slab width in tokens; ``seq_len_actual`` is the chunk's real
+        global pre-pad token count, which only the overlap state needs (see write_k)."""
         assert index_kv_cache is not None, "CSA indexer requires a caller-owned block-cyclic index key cache"
-        assert seq_len == self.active_seq_len_local
+        assert seq_len == self.active_seq_len_local, (
+            f"forward(seq_len=) is the local slab width in tokens: got {seq_len}, expected "
+            f"{self.active_seq_len_local} ({self.active_seq_len_local // self.compress_rate} entries)"
+        )
         assert start_pos % self.compress_rate == 0
         cache_layer_idx = self._cache_slot(cache_layer_idx)
         cache_batch_idx = cache_user_id * self._index_cache_layers + cache_layer_idx
