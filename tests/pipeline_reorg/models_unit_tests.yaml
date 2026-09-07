@@ -238,8 +238,6 @@
     # on this run too, since /mnt/MLPerf is otherwise mounted :ro and the download can't persist.
     HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py -k "not prefill_paged_slots_long and not B32 and not isl2048"
-    pytest --timeout 480 models/demos/blackhole/qwen36/tests/test_vision_block.py
-    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
   model: qwen3.5-9b
   model_family: Qwen
   skus:

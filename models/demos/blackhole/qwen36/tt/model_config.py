@@ -143,21 +143,11 @@ class Qwen36ModelArgs(ModelArgs):
         # (Nv, state, conv1d, GQA ratio) changes; gap 0 restores the pre-gap width, which gdn/tp.py
         # handles with its enclosing-tile slice dance.
         #
-        # Two gates, one mechanism: the 9B and 27B were measured separately, on different hosts at
-        # different TP, so each keeps its own provenance rather than a shared "align whenever
-        # nv_tp % 32" rule that would silently re-tune the unmeasured one. Mutually exclusive by
-        # construction, asserted below. Blackhole is excluded: its decode grid (num_cores=44) is
-        # tuned against the unpadded width. Gate on dim, not model_name -- HF_MODEL is often a
-        # hashed snapshot dir (same reasoning as _qkv_l1_tuned_for_this_model in gdn/tp.py).
-        # if/elif, not two independent booleans summed: makes "both gates active" unrepresentable
-        # instead of merely asserted against, while keeping each model's gap on its own line (own
-        # provenance, independently editable) per the paragraph above.
+        # Wormhole: tile-align b. Blackhole keeps gap 0 (decode grid tuned to unpadded width).
         if tpc.is_blackhole():
             self.gdn_ab_gap = 0
-        elif self.dim <= 4096:
-            self.gdn_ab_gap = -(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp  # 9B, measured N300 TP=2
         else:
-            self.gdn_ab_gap = -(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp  # 27B, measured T3K TP=8
+            self.gdn_ab_gap = -(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp
         self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp + self.gdn_ab_gap
         # No pad: geometry, cache key and decode progcfgs all use the natural width.
         #
