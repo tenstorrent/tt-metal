@@ -19,6 +19,8 @@ using std::uint32_t;
 // matmul C=A*B using dims MK*KN = MN (row major order)
 //
 void kernel_main() {
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::in0, dfb::in1, dfb::out);
+
     constexpr int onetile = 1;
 
     uint32_t batch = get_arg(args::batch);
@@ -30,7 +32,6 @@ void kernel_main() {
     DataflowBuffer in1_dfb(dfb::in1);
     DataflowBuffer out_dfb(dfb::out);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::in0, dfb::in1, dfb::out);
     matmul_init(dfb::in0, dfb::in1);
 
     // the simplest possible version of outer product blocked matmul
