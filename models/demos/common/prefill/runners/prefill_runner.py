@@ -107,14 +107,10 @@ assert not (USE_TRACE and not KV_ONLY_LAST_LAYER), (
     "tracing (the kv-only last block still writes its KV cache)."
 )
 
-# Traced writes go through the metadata tensors, which cannot supply the host kv_actual_global the
-# TP-sharded reader needs to pick its 1/tp source window. Unreachable today (trace is already rejected for
-# every sparse/DSA model, and tp_shard_kv is sparse-only), so this is the tripwire for when that lifts.
-assert not (TP_SHARD_KV and USE_TRACE), (
-    "PREFILL_TP_SHARD_KV=1 is not supported with PREFILL_USE_TRACE=1: the traced metadata write path has "
-    "no host kv_actual_global, so the TP-sharded reader and the writer would disagree on the chunk start."
-)
-
+# TP-sharded writes and trace used to be mutually exclusive: update_padded_kv_cache's reader took the host
+# kv_actual_global to pick its 1/tp source window, and the metadata path leaves that scalar at 0 while the
+# writer reads the real value on-device, so the two disagreed on the chunk start. The reader now performs
+# the same on-device read, so the combination is supported and this leg is exercised by the glm52 CI leg.
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
 _shutdown = False
