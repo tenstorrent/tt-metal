@@ -66,6 +66,14 @@ inline constexpr uint32_t CB_OUT_INTERM = 19;
 // compute->reader tilization completion channel. No extra L1 allocation.
 inline constexpr uint32_t CB_MAILBOX_WRITER = 20;
 inline constexpr uint32_t CB_MAILBOX_COMPUTE = 21;
+// Optional per-expert projection biases (gpt-oss, FUSE_BIAS). The gate/up pair holds this COLUMN's
+// whole hn_pad-wide hidden bias rather than a per-core slice: after the reduce-scatter a core owns a
+// flat tile range of a block laid out `m * hn_pad + n`, so the bias it needs is indexed by
+// `idx % hn_pad` and is not a contiguous shard. Down bias is the core's own ec output columns, which
+// IS contiguous. Allocated only when fuse_bias.
+inline constexpr uint32_t CB_GATE_BIAS = 22;
+inline constexpr uint32_t CB_UP_BIAS = 23;
+inline constexpr uint32_t CB_DOWN_BIAS = 24;
 
 inline constexpr uint32_t SEM_X_BASE = 0;
 inline constexpr uint32_t SEM_H_BASE = 2;
@@ -119,7 +127,10 @@ public:
         uint32_t l1_budget_,
         uint32_t out_tile_,
         bool enable_phase_alias_,
-        bool x_is_rm_);
+        bool x_is_rm_,
+        // Defaulted so the bias-free callers -- every one of them today -- are unchanged, and so
+        // the constructor's L1-budget tuning sees the bias CBs like any other.
+        bool fuse_bias_ = false);
 
     std::vector<CbView> cb_layout(
         bool input_is_rm, uint32_t requested_out_tile, uint32_t idx_page, uint32_t counts_page) const;
@@ -134,6 +145,7 @@ public:
     uint32_t phase_cb_alias_pages(uint32_t requested_out_tile) const;
     std::string describe() const;
 
+    bool fuse_bias;
     uint32_t hgroups;
     uint32_t kgroups;
     uint32_t num_cores;

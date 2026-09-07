@@ -363,7 +363,8 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         l1_max - geo::L1_CB_RESERVE,
         output_tile,
         /*enable_phase_alias_=*/true,
-        activations_are_row_major);
+        activations_are_row_major,
+        operation_arguments.fuse_bias);
 
     const bool direct_write = tensor_arguments.expert_region_offsets.has_value();
     const Tensor& start_tensor = direct_write ? *tensor_arguments.expert_region_offsets : tensor_arguments.counts;
@@ -528,6 +529,9 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     compute_descriptor.defines.emplace_back("FP32_DEST_ACC_EN", compute_config.fp32_dest_acc_en ? "1" : "0");
     // Exactly one variant define, so each activation caches as its own program. The kernel #errors
     // if both ever arrive.
+    if (operation_arguments.fuse_bias) {
+        compute_descriptor.defines.emplace_back("FUSE_BIAS", "1");
+    }
     if (operation_arguments.activation == RoutedExpertActivation::SituGlu) {
         compute_descriptor.defines.emplace_back("SITU_GLU", "1");
     } else if (operation_arguments.activation == RoutedExpertActivation::SwiGluOai) {
