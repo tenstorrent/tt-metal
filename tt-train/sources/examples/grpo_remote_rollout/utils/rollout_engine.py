@@ -27,7 +27,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum, auto
 from threading import RLock
-from typing import Any, Callable, Final, Optional, final
+from typing import Any, Callable, Final, Optional, Sequence, final
 
 
 PolicyVersion = int
@@ -58,13 +58,49 @@ class PromptGroupLease:
 
 
 @dataclass(frozen=True)
+class RolloutOutput:
+    """Generated tokens and their behavior-policy log probabilities.
+
+    Log probabilities must describe the distribution that actually sampled
+    each token.  In particular, tt-transformers currently samples with a
+    top-k filter in some configurations.  Whether the resulting truncated
+    behavior policy has a material effect on importance sampling still needs
+    to be measured; callers must not silently substitute full-policy scores.
+    """
+
+    tokens: tuple[tuple[int, ...], ...]
+    logprobs: tuple[tuple[float, ...], ...]
+
+    @classmethod
+    def from_sequences(
+        cls,
+        tokens: Sequence[Sequence[int]],
+        logprobs: Sequence[Sequence[float]],
+    ) -> "RolloutOutput":
+        return cls(
+            tokens=tuple(tuple(int(token) for token in row) for row in tokens),
+            logprobs=tuple(tuple(float(logprob) for logprob in row) for row in logprobs),
+        )
+
+    def __post_init__(self) -> None:
+        if len(self.tokens) != len(self.logprobs):
+            raise ValueError("tokens and logprobs must have the same batch size")
+        for row, (tokens, logprobs) in enumerate(zip(self.tokens, self.logprobs)):
+            if len(tokens) != len(logprobs):
+                raise ValueError(
+                    f"tokens and logprobs must have the same length for row {row} "
+                    f"(got {len(tokens)} and {len(logprobs)})"
+                )
+
+
+@dataclass(frozen=True)
 class RolloutResult:
     engine_id: str
     lease_id: str
     group_id: str
     attempt_id: int
     behavior_version: PolicyVersion
-    payload: Any
+    output: RolloutOutput
 
 
 @dataclass(frozen=True)
@@ -219,7 +255,7 @@ class RolloutEngine(ABC):
         self._invoke_stage_action(version, source)
 
     @final
-    def rollout_completed(self, lease_id: str, payload: Any) -> None:
+    def rollout_completed(self, lease_id: str, output: RolloutOutput) -> None:
         """Report successful completion from ``_start_rollout_action``."""
         activation = None
         with self._lock:
@@ -236,7 +272,7 @@ class RolloutEngine(ABC):
                 group_id=lease.group_id,
                 attempt_id=lease.attempt_id,
                 behavior_version=lease.behavior_version,
-                payload=payload,
+                output=output,
             )
             self._active_lease = None
             if self._target_version is None:
@@ -452,5 +488,6 @@ __all__ = [
     "ResultReady",
     "RolloutEngine",
     "RolloutResult",
+    "RolloutOutput",
     "WeightsStaged",
 ]

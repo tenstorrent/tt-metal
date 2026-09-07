@@ -17,6 +17,7 @@ from utils.rollout_engine import (
     PromptGroupLease,
     ResultReady,
     RolloutEngine,
+    RolloutOutput,
     RolloutResult,
     WeightsStaged,
 )
@@ -53,6 +54,17 @@ def lease(version: int = 1, lease_id: str = "lease-1") -> PromptGroupLease:
     )
 
 
+def test_rollout_output_requires_one_logprob_per_generated_token(expect_error):
+    output = RolloutOutput.from_sequences([[3, 4], [5]], [[-0.1, -0.2], [-0.3]])
+
+    assert output.tokens == ((3, 4), (5,))
+    assert output.logprobs == ((-0.1, -0.2), (-0.3,))
+    with expect_error(ValueError, "same batch size"):
+        RolloutOutput.from_sequences([[3]], [])
+    with expect_error(ValueError, "same length for row 0"):
+        RolloutOutput.from_sequences([[3, 4]], [[-0.1]])
+
+
 def test_rollout_result_keeps_lease_identity_and_behavior_version():
     sink = Mock()
     engine = MockRolloutEngine(event_sink=sink)
@@ -60,7 +72,8 @@ def test_rollout_result_keeps_lease_identity_and_behavior_version():
 
     engine.start_rollout(active_lease)
     assert engine.snapshot().state is EngineState.GENERATING
-    engine.rollout_completed(active_lease.lease_id, {"tokens": [3]})
+    output = RolloutOutput.from_sequences([[3]], [[-0.25]])
+    engine.rollout_completed(active_lease.lease_id, output)
 
     assert engine.snapshot().state is EngineState.READY
     result = sink.call_args.args[0]
@@ -71,7 +84,7 @@ def test_rollout_result_keeps_lease_identity_and_behavior_version():
             group_id="group-1",
             attempt_id=2,
             behavior_version=1,
-            payload={"tokens": [3]},
+            output=output,
         )
     )
 
@@ -88,10 +101,10 @@ def test_activation_waits_for_both_rollout_completion_and_staging(stage_first):
         engine.stage_weights(2, weights)
         engine.weights_staged(2)
         assert engine.snapshot().state is EngineState.DRAINING
-        engine.rollout_completed(active_lease.lease_id, "result")
+        engine.rollout_completed(active_lease.lease_id, RolloutOutput.from_sequences([[3]], [[-0.25]]))
     else:
         engine.quiesce(2)
-        engine.rollout_completed(active_lease.lease_id, "result")
+        engine.rollout_completed(active_lease.lease_id, RolloutOutput.from_sequences([[3]], [[-0.25]]))
         assert engine.snapshot().state is EngineState.WAITING_FOR_STAGE
         engine.stage_weights(2, weights)
         engine.weights_staged(2)
@@ -231,7 +244,7 @@ def test_wrong_lease_completion_is_rejected_without_losing_active_lease(expect_e
     engine.start_rollout(lease())
 
     with expect_error(InvalidTransitionError, "does not match"):
-        engine.rollout_completed("another-lease", "result")
+        engine.rollout_completed("another-lease", RolloutOutput.from_sequences([[3]], [[-0.25]]))
 
     assert engine.snapshot().active_lease_id == "lease-1"
     assert engine.snapshot().state is EngineState.GENERATING

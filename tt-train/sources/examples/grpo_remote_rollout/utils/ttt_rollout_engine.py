@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from threading import RLock
 from typing import Any, Protocol, Sequence
 
-from .rollout_engine import EventSink, PolicyVersion, PromptGroupLease, RolloutEngine
+from .rollout_engine import EventSink, PolicyVersion, PromptGroupLease, RolloutEngine, RolloutOutput
 
 
 class _GenerationWorker(Protocol):
@@ -33,7 +33,7 @@ class _GenerationWorker(Protocol):
         max_new_tokens: int,
         enable_trace: bool,
         stop_at_eos: bool,
-    ) -> Any:
+    ) -> RolloutOutput:
         ...
 
     def update_weights(self, per_submesh: list[dict[str, Any]]) -> None:
@@ -111,6 +111,8 @@ class TttRolloutEngine(RolloutEngine):
             enable_trace=self._enable_trace,
             stop_at_eos=self._stop_at_eos,
         )
+        if not isinstance(payload, RolloutOutput):
+            raise TypeError("worker.generate must return RolloutOutput containing host tokens and logprobs")
         self.rollout_completed(lease.lease_id, payload)
 
     def _stage_weights_action(self, version: PolicyVersion, source: Any) -> None:

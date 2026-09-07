@@ -1,8 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Cross-rank rollout RPC (``MPIRolloutServer`` / ``MPIRolloutClient``) on top
-of :class:`~utils.weight_bridge.WeightBridge`.
+"""Legacy blocking rollout RPC on top of :class:`WeightBridge`.
+
+New asynchronous rollout code should use ``mpi_rollout_transport`` with
+``RolloutWorkerService``.  These classes remain temporarily for the existing
+training examples while their TT worker output is migrated to include
+rollout-side log probabilities.
 
 Gotchas:
 - Both classes require an explicit ``connect()`` call after construction, on

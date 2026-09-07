@@ -13,6 +13,7 @@ from utils.rollout_engine import (
     PolicyActivated,
     PromptGroupLease,
     ResultReady,
+    RolloutOutput,
     WeightsStaged,
 )
 from utils.ttt_rollout_engine import TttRolloutEngine
@@ -30,7 +31,10 @@ def _lease(*, version: int = 1, payload=None) -> object:
 def _dependencies(*, completions=None, weights=None):
     worker = Mock()
     worker.models = [object()]
-    worker.generate.return_value = completions if completions is not None else [[31], [41, 42]]
+    worker.generate.return_value = completions or RolloutOutput.from_sequences(
+        [[31], [41, 42]],
+        [[-0.1], [-0.2, -0.3]],
+    )
     bridge = Mock()
     bridge.receive_weights.return_value = weights if weights is not None else [{"weight": object()}]
     return worker, bridge
@@ -72,7 +76,7 @@ def test_generation_delegates_to_worker_and_publishes_versioned_result():
     assert len(events) == 1
     assert isinstance(events[0], ResultReady)
     assert events[0].result.behavior_version == 1
-    assert events[0].result.payload == worker.generate.return_value
+    assert events[0].result.output == worker.generate.return_value
 
 
 def test_idle_cutover_receives_fences_and_activates_one_staged_version():
@@ -100,7 +104,7 @@ def test_weight_receive_overlaps_final_rollout_but_activation_waits_for_it():
     def blocking_generate(*_args, **_kwargs):
         generation_started.set()
         assert finish_generation.wait(timeout=5)
-        return [[31], [41, 42]]
+        return RolloutOutput.from_sequences([[31], [41, 42]], [[-0.1], [-0.2, -0.3]])
 
     worker.generate.side_effect = blocking_generate
     engine = _engine(worker=worker, bridge=bridge, events=events)
@@ -135,7 +139,7 @@ def test_rollout_may_finish_while_weight_receive_is_still_in_progress():
     def blocking_generate(*_args, **_kwargs):
         generation_started.set()
         assert finish_generation.wait(timeout=5)
-        return [[31], [41, 42]]
+        return RolloutOutput.from_sequences([[31], [41, 42]], [[-0.1], [-0.2, -0.3]])
 
     def blocking_receive():
         receive_started.set()

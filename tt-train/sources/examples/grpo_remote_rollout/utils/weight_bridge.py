@@ -4,8 +4,8 @@
 """Cross-rank weight transport (``WeightBridge`` ABC + ``HostWeightBridge``).
 
 MPI tags here must stay disjoint from the rollout RPC tags in
-``utils.mpi_rollout`` (and from the fabric MPI tag range) so all protocols
-can share one MPI context without crosstalk.
+``utils.mpi_rollout`` / ``utils.mpi_rollout_transport`` (and from the fabric
+MPI tag range) so all protocols can share one MPI context without crosstalk.
 """
 
 from __future__ import annotations

@@ -248,6 +248,13 @@ inline void init_env(int& argc, char**& argv) {
         if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
         }
+        if (provided < MPI_THREAD_MULTIPLE) {
+            MPI_Finalize();
+            TT_THROW(
+                "MPI runtime does not provide MPI_THREAD_MULTIPLE (requested {}, provided {})",
+                MPI_THREAD_MULTIPLE,
+                provided);
+        }
 
         // Ensure MPI_Finalize is called when the program exits
         std::atexit([] { MPI_Finalize(); });
