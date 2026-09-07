@@ -229,6 +229,40 @@ void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
             operation_arguments.activation == RoutedExpertActivation::SwiGluOai,
         "moe_fused_swiglu: activation must be RoutedExpertActivation::Silu, "
         "RoutedExpertActivation::SituGlu or RoutedExpertActivation::SwiGluOai");
+    // All three or none: biasing some projections and not others is wrong numbers with no error.
+    const auto& gate_biases = tensor_arguments.gate_biases;
+    const auto& up_biases = tensor_arguments.up_biases;
+    const auto& down_biases = tensor_arguments.down_biases;
+    TT_FATAL(
+        gate_biases.empty() == up_biases.empty() && gate_biases.empty() == down_biases.empty(),
+        "moe_fused_swiglu: gate/up/down biases must all be supplied or all be omitted, got {}/{}/{}",
+        gate_biases.size(),
+        up_biases.size(),
+        down_biases.size());
+    if (!gate_biases.empty()) {
+        TT_FATAL(
+            gate_biases.size() == operation_arguments.experts_per_chip &&
+                up_biases.size() == operation_arguments.experts_per_chip &&
+                down_biases.size() == operation_arguments.experts_per_chip,
+            "moe_fused_swiglu: expected one bias per local expert ({}), got {}/{}/{}",
+            operation_arguments.experts_per_chip,
+            gate_biases.size(),
+            up_biases.size(),
+            down_biases.size());
+        // SiLU's kernel path has no bias branch: it applies the activation on the packer thread of
+        // the gate reduce, where there is no spare pass to add a bias into.
+        TT_FATAL(
+            operation_arguments.activation != RoutedExpertActivation::Silu,
+            "moe_fused_swiglu: expert biases require RoutedExpertActivation::SituGlu or "
+            "RoutedExpertActivation::SwiGluOai; the SiLU path has no bias branch");
+        // The plumbing above carries the tensors and hashes fuse_bias, but no kernel applies them
+        // yet. Reject rather than ignore: a silently bias-free result is wrong numbers with no
+        // signal. Lift this together with the kernels' bias adds.
+        TT_FATAL(
+            !operation_arguments.fuse_bias,
+            "moe_fused_swiglu: expert biases are accepted by the interface but not yet applied by "
+            "the kernels; pass them to unified_routed_expert_moe instead");
+    }
 
     TT_FATAL(
         operation_arguments.output_dtype == tt::tt_metal::DataType::BFLOAT8_B ||
@@ -392,6 +426,9 @@ ttnn::Tensor moe_fused_swiglu(
     const std::vector<ttnn::Tensor>& w_gates,
     const std::vector<ttnn::Tensor>& w_ups,
     const std::vector<ttnn::Tensor>& w_downs,
+    const std::vector<ttnn::Tensor>& gate_biases,
+    const std::vector<ttnn::Tensor>& up_biases,
+    const std::vector<ttnn::Tensor>& down_biases,
     const ttnn::Tensor& counts,
     const ttnn::Tensor& global_expert_idx_table,
     uint32_t experts_per_chip,
@@ -418,6 +455,9 @@ ttnn::Tensor moe_fused_swiglu(
             .min_active_tokens = min_active_tokens,
             .max_active_tokens = max_active_tokens,
             .activation = activation,
+            // One flag rather than three: the all-or-none invariant is validated below, so the
+            // kernels only need to know whether the bias adds are compiled in at all.
+            .fuse_bias = !gate_biases.empty(),
             .output_dtype = output_dtype,
             .output_memory_config = output_memory_config,
             .compute_kernel_config = compute_kernel_config},
@@ -426,6 +466,9 @@ ttnn::Tensor moe_fused_swiglu(
             .w_gates = w_gates,
             .w_ups = w_ups,
             .w_downs = w_downs,
+            .gate_biases = gate_biases,
+            .up_biases = up_biases,
+            .down_biases = down_biases,
             .counts = counts,
             .global_expert_idx_table = global_expert_idx_table,
             .optional_output = optional_output,

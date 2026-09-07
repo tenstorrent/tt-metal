@@ -25,7 +25,10 @@ void bind_moe_fused_swiglu(nb::module_& mod) {
         kernels loop the experts, computing a gated activation over
         ``activations @ w_gate`` and ``activations @ w_up``, followed by
         ``@ w_down``. ``activation`` selects plain SiLU SwiGLU (default),
-        Kimi K3 SiTU-GLU, or the clamped SwiGLU-OAI that MiniMax-M3 and GPT-OSS run. Each expert's valid token-row count is read on device
+        Kimi K3 SiTU-GLU, or the clamped SwiGLU-OAI that MiniMax-M3 and GPT-OSS run.
+        ``gate_biases``/``up_biases``/``down_biases`` are optional per-local-expert projection
+        biases (gpt-oss): all three or none, gate/up shaped (1, hidden) and down (1, emb), and
+        only on an activation whose kernel carries the bias branch. Each expert's valid token-row count is read on device
         from ``counts[global_expert_idx_table[e]]``; no host readback or host
         branch depends on the count, and no per-expert dispatch happens.
 
@@ -58,6 +61,9 @@ void bind_moe_fused_swiglu(nb::module_& mod) {
         nb::arg("expert_region_offsets") = nb::none(),
         nb::arg("read_x_at_offset") = false,
         nb::arg("activation") = RoutedExpertActivation::Silu,
+        nb::arg("gate_biases") = nb::none(),
+        nb::arg("up_biases") = nb::none(),
+        nb::arg("down_biases") = nb::none(),
         nb::arg("min_active_tokens") = 0,
         nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max());
 }

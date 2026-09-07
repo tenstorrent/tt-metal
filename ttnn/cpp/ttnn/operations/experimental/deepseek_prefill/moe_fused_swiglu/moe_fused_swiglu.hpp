@@ -43,6 +43,11 @@ ttnn::Tensor moe_fused_swiglu(
     const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
     bool read_x_at_offset = false,
     RoutedExpertActivation activation = RoutedExpertActivation::Silu,
+    // Per-local-expert gate/up/down biases (gpt-oss). All three or none; gate/up are (1, hidden)
+    // and down is (1, emb). Rejected on an activation whose kernel has no bias branch.
+    const std::optional<std::vector<ttnn::Tensor>>& gate_biases = std::nullopt,
+    const std::optional<std::vector<ttnn::Tensor>>& up_biases = std::nullopt,
+    const std::optional<std::vector<ttnn::Tensor>>& down_biases = std::nullopt,
     // Active-token band this op owns: an expert whose count falls outside [min, max] is
     // dropped like a zero count. Wide open by default; a hybrid dispatch narrows it so this
     // op and unified_routed_expert_moe split the experts by load over ONE counts vector.

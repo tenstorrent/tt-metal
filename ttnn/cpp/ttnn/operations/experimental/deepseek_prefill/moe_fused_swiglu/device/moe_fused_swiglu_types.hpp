@@ -34,6 +34,10 @@ struct OperationArguments {
     uint32_t min_active_tokens = 0;
     uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max();
     RoutedExpertActivation activation = RoutedExpertActivation::Silu;
+    // Whether the per-expert gate/up/down biases are fused. Derived from the presence of the bias
+    // tensors, and hashed below so a biased and a bias-free dispatch of the same shape cannot share
+    // a cached program -- the kernels select the bias adds with a compile-time FUSE_BIAS define.
+    bool fuse_bias = false;
     tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::BFLOAT8_B;
     tt::tt_metal::MemoryConfig output_memory_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
@@ -48,6 +52,7 @@ struct OperationArguments {
         "min_active_tokens",
         "max_active_tokens",
         "activation",
+        "fuse_bias",
         "output_dtype",
         "output_memory_config",
         "compute_kernel_config");
@@ -62,6 +67,7 @@ struct OperationArguments {
             min_active_tokens,
             max_active_tokens,
             activation,
+            fuse_bias,
             output_dtype,
             output_memory_config,
             compute_kernel_config);
@@ -76,6 +82,13 @@ struct TensorArguments {
     std::vector<Tensor> w_gates;
     std::vector<Tensor> w_ups;
     std::vector<Tensor> w_downs;
+    // Optional per-local-expert projection biases (gpt-oss). Either all three lists are populated
+    // -- one bias per local expert, same length and order as the weight lists -- or all three are
+    // empty: a partially biased dispatch would bias some projections and not others, which is wrong
+    // numbers with no error. gate/up bias is (1, hidden), down is (1, emb).
+    std::vector<Tensor> gate_biases;
+    std::vector<Tensor> up_biases;
+    std::vector<Tensor> down_biases;
     Tensor counts;
     Tensor global_expert_idx_table;
     std::optional<Tensor> optional_output;
