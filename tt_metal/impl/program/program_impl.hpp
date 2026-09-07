@@ -11,12 +11,13 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/hal_types.hpp"           // HalProgrammableCoreType
-#include "tt-metalium/kernel_types.hpp"        // KernelHandle
-#include "tt-metalium/program.hpp"             // KernelGroup
-#include "hostdev/cross_node_dfb_constants.h"  // CROSS_NODE_DFB_OFFSET_NONE
-#include "program_device_map.hpp"              // ProgramTransferInfo
+#include "tt-metalium/hal_types.hpp"       // HalProgrammableCoreType
+#include "tt-metalium/kernel_types.hpp"    // KernelHandle
+#include "tt-metalium/program.hpp"         // KernelGroup
+#include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
+#include "program_device_map.hpp"          // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
+#include "impl/allocator/persistent_l1_arena.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
@@ -61,6 +62,7 @@ class MeshWorkloadImpl;
 namespace experimental {
 class GlobalCircularBuffer;
 class CrossNodeDFB;
+class PrefetcherPipe;
 }  // namespace experimental
 
 namespace program_dispatch {
@@ -112,12 +114,15 @@ struct ProgramConfig {
     uint32_t dfb_size;
     uint32_t local_cb_size;
     // CrossNodeDFB dense index byte offset from kernel_config_base, or
-    // CROSS_NODE_DFB_OFFSET_NONE when no CrossNodeDFB participants are present.
+    // REMOTE_DFB_OFFSET_NONE when no CrossNodeDFB participants are present.
     // Dense region: word[0]=num_slots, then num_slots × fixed 3-word entries
     // [absolute_config_buffer_addr, entry_size, relay_dfb_id]. Full per-core pages
     // (fifo/NOC/credits) live in a dedicated program-owned L1 config Buffer rather than
     // inflating every worker-config ringbuffer slot.
-    uint32_t cross_node_dfb_offset = CROSS_NODE_DFB_OFFSET_NONE;
+    uint32_t cross_node_dfb_offset = REMOTE_DFB_OFFSET_NONE;
+    // PrefetcherPipe dense index byte offset from kernel_config_base, or
+    // REMOTE_DFB_OFFSET_NONE when no PrefetcherPipe attachments are present.
+    uint32_t prefetcher_pipe_offset = REMOTE_DFB_OFFSET_NONE;
     uint32_t kernel_text_offset;  // offset of first kernel bin
     uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
 };
@@ -148,8 +153,10 @@ struct ProgramOffsetsState {
     uint32_t local_cb_size = 0;
     uint32_t dfb_offset = 0;
     uint32_t dfb_size = 0;
-    // CrossNodeDFB offset from config base, or CROSS_NODE_DFB_OFFSET_NONE if none.
-    uint32_t cross_node_dfb_offset = CROSS_NODE_DFB_OFFSET_NONE;
+    // CrossNodeDFB offset from config base, or REMOTE_DFB_OFFSET_NONE if none.
+    uint32_t cross_node_dfb_offset = REMOTE_DFB_OFFSET_NONE;
+    // PrefetcherPipe offset from config base, or REMOTE_DFB_OFFSET_NONE if none.
+    uint32_t prefetcher_pipe_offset = REMOTE_DFB_OFFSET_NONE;
     // Kernel binary offsets and sizes.
     uint32_t kernel_text_offset = 0;
     uint32_t kernel_text_size = 0;
@@ -247,6 +254,7 @@ public:
     // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
     // and patch the base address into the CRTA buffer
     void allocate_scratchpads(const IDevice* device);
+    DeviceAddr reserve_program_local_l1(const IDevice* device, const CoreRangeSet& cores);
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
@@ -321,6 +329,14 @@ public:
         uint8_t relay_dfb_id;
     };
 
+    // Non-owning PrefetcherPipe attachment record.
+    struct PrefetcherPipeParticipant {
+        uint8_t prefetcher_pipe_id;
+        uint32_t config_page_addr;
+        uint32_t entry_size;
+        uint8_t relay_dfb_id;
+    };
+
     // Read-only accessor for dispatch to iterate CrossNodeDFB participant records.
     const std::unordered_map<CoreCoord, std::vector<CrossNodeDFBParticipant>>& get_per_core_cross_node_dfbs() const {
         return per_core_cross_node_dfbs_;
@@ -343,6 +359,24 @@ public:
 
     // Retarget the data ring of an existing CrossNodeDFB slot to `buffer`.
     void update_dynamic_cross_node_dfb_address(uint8_t remote_dfb_id, Buffer& buffer);
+
+    const std::unordered_map<CoreCoord, std::vector<PrefetcherPipeParticipant>>& get_per_core_prefetcher_pipes() const {
+        return per_core_prefetcher_pipes_;
+    }
+
+    uint8_t num_prefetcher_pipe_slots() const { return next_prefetcher_pipe_slot_; }
+
+    uint8_t add_prefetcher_pipe_attachment(
+        experimental::PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size);
+
+    const experimental::PrefetcherPipe& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id) const;
+    std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
+
+    // Mark a normal local DFB as the typed relay for a PrefetcherPipe this core participates in.
+    // The local DFB borrows the PrefetcherPipe data buffer; its device_slot is emitted
+    // only on receiver cores and consumed by PrefetcherPipe::bind_relay().
+    void register_prefetcher_pipe_relay_dfb(
+        const CoreRangeSet& receiver_cores, uint8_t prefetcher_pipe_id, uint32_t relay_dfb_host_id);
 
     // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
     // core require remapper being enabled
@@ -551,11 +585,18 @@ private:
     // Optional typed relay: remote_dfb_id → local DFB host id (from CreateCrossNodeRelayDataflowBuffer).
     std::unordered_map<uint8_t, uint32_t> cross_node_relay_host_ids_;
     uint8_t next_cross_node_dfb_slot_ = 0;
+
+    std::unordered_map<CoreCoord, std::vector<PrefetcherPipeParticipant>> per_core_prefetcher_pipes_;
+    std::unordered_map<uint8_t, experimental::PrefetcherPipe*> prefetcher_pipe_attachments_;
+    // Optional typed relay: prefetcher_pipe_id → local DFB host id (from CreatePrefetcherPipeRelayDataflowBuffer).
+    std::unordered_map<uint8_t, uint32_t> prefetcher_pipe_relay_host_ids_;
+    uint8_t next_prefetcher_pipe_slot_ = 0;
     tt::tt_metal::experimental::dfb::detail::TileCounterAllocator tile_counter_allocator_;
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
     tt::tt_metal::experimental::dfb::detail::TxnIdAllocator txn_id_allocator_;
     std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
     std::vector<CircularBufferAllocator> dfb_allocators_;
+    std::unordered_map<PersistentL1Arena*, std::unordered_map<CoreCoord, PersistentL1Arena::Seal>> persistent_l1_seals_;
 
     // Initial Metal 2.0 implementation uses a name registry to map names to handles.
     // This indirection is simple and non-invasive, but less efficient than a direct mapping.

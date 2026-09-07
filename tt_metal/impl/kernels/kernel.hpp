@@ -90,8 +90,17 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
 
-// Metal 2.0: DFB accessor names -> logical DFB ids
-using DataflowBufferBindingHandleMap = std::unordered_map<std::string, uint16_t>;
+// Metal 2.0: DFB accessor names -> device-slot binding (optionally typed as relay).
+// prefetcher_pipe_id is 0xFF (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for
+// PrefetcherPipe relays, where it names the persistent slot baked into the token so
+// the TRISC constructor can O(1)-align the borrowed iface to the durable checkpoint.
+struct DataflowBufferBindingHandle {
+    uint16_t logical_dfb_id = 0;
+    bool is_relay = false;
+    uint8_t prefetcher_pipe_id = 0xFF;
+};
+using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
+
 // Metal 2.0: per-binding semaphore handle -> id and the host-baked scope; kernel code sees only a uint32_t id.
 struct SemaphoreBindingHandle {
     uint16_t id = 0;
@@ -231,7 +240,9 @@ public:
     void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
     void process_dataflow_buffer_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
+        std::function<
+            void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_relay, uint8_t prefetcher_pipe_id)>)
+        const override;
     void process_semaphore_binding_handles(
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
