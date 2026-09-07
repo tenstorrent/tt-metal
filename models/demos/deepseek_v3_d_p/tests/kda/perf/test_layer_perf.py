@@ -344,6 +344,7 @@ def _trace_wall_samples_ms(
     hidden: ttnn.Tensor,
     repetitions: int,
     validate_first_replay: Callable[[KdaState, ttnn.Tensor], dict[str, float]] | None = None,
+    actual_start: int = 0,
 ) -> tuple[list[float], dict[str, float] | None]:
     state = None
     warm_output = None
@@ -353,7 +354,7 @@ def _trace_wall_samples_ms(
     next_state = None
     try:
         state = _allocate_state(layer)
-        warm_output, warm_state = layer.forward(hidden, state)
+        warm_output, warm_state = layer.forward(hidden, state, actual_start)
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(warm_output)
         warm_output = None
@@ -361,7 +362,7 @@ def _trace_wall_samples_ms(
         warm_state = None
 
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        output, next_state = layer.forward(hidden, state)
+        output, next_state = layer.forward(hidden, state, actual_start)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
