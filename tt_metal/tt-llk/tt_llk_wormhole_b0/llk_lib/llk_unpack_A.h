@@ -49,6 +49,11 @@ inline void _llk_unpack_A_mop_config_(
 {
     static_assert(
         !((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
+    // The broadcast arms publish SrcA once per call, which balances only a math consumer that also
+    // clears SrcA once per call -- the dest-reuse path. The standard path clears once per face.
+    static_assert(
+        !((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)),
+        "Broadcast with acc_to_dest requires dest reuse!");
     static_assert(
         !(((acc_to_dest) || (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)) && (unpack_to_dest)),
         "Not supported configuration when unpacking to dest!");
