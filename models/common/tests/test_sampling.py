@@ -451,6 +451,46 @@ def test_log_probs_calculation(shape, mesh_device):
     assert passing, f"Assertion failed, PCC={pcc}"
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_log_probs_calculation_single_device(mesh_device):
+    """The rollout worker uses one independent model on each 1x1 submesh."""
+    batch_size = 32
+    vocab_size = 4096
+    torch.manual_seed(1234)
+    logits_host = torch.randn(1, 1, batch_size, vocab_size, dtype=torch.bfloat16)
+    sampled_indices = torch.argmax(logits_host.float(), dim=-1, keepdim=True)
+    indices_host = sampled_indices.reshape(1, 1, 1, batch_size)
+
+    logits = ttnn.from_torch(
+        logits_host,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    indices = ttnn.from_torch(
+        indices_host,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    calculator = LogProbsCalculator(mesh_device, batch_size=batch_size)
+    calculator.set_log_probs_mode(True)
+    result = calculator.calculate_log_probs(logits, indices)
+
+    assert result is not None
+    actual = ttnn.to_torch(ttnn.get_device_tensors(result)[0])[:, :, :1, :batch_size]
+    expected = torch.gather(F.log_softmax(logits_host.float(), dim=-1), -1, sampled_indices).reshape(
+        1, 1, 1, batch_size
+    )
+    passing, pcc = comp_pcc(expected, actual, pcc=0.99)
+    assert passing, f"single-device logprobs PCC below threshold: {pcc}"
+
+
 def _shard_logits_2d_mesh(logits_host, mesh_device):
     """Shard vocab along mesh TP axis (matches test_sampling_1d._make_logits_tt)."""
     cluster_shape = tuple(mesh_device.shape)
@@ -582,7 +622,7 @@ def test_log_probs_returns_none_when_disabled(shape, mesh_device):
     log_probs_calculator.set_log_probs_mode(True)
     num_devices = mesh_device.get_num_devices()
     result = log_probs_calculator.calculate_log_probs(logits_tensor, ttnn_indices_tensor)
-    if num_devices in (8, 32) and log_probs_calculator.num_devices_for_sharding >= 2:
+    if num_devices == 1 or (num_devices in (8, 32) and log_probs_calculator.num_devices_for_sharding >= 2):
         assert result is not None, "Expected tensor when log_probs enabled on supported device"
     else:
         assert result is None, "Expected None on unsupported device count"

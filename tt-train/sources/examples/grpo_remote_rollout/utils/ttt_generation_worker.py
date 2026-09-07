@@ -24,6 +24,9 @@ from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import ModelArgs
 
+from .rollout_engine import RolloutOutput
+from .rollout_output_collector import RolloutOutputCollector, sampled_token_logprobs
+
 OptimizationsFn = Callable[[int, str], Any]
 
 
@@ -42,17 +45,19 @@ class TttGenerationWorker:
         stop_token_ids: Sequence[int],
         pad_token_id: int,
         temperature: float = 1.0,
-        top_k: int = 0,
+        top_k: int = 32,
         top_p: float = 1.0,
         seed: Optional[int] = None,
         paged_block_size: int = 32,
         min_num_blocks: int = 1024,
         dummy_weights: bool = True,
+        return_logprobs: bool = False,
     ) -> None:
         self.parent_mesh: Any = mesh_device
         self._dtype: Any = ttnn.bfloat16
         self._stop_token_ids: frozenset[int] = frozenset(int(t) for t in stop_token_ids)
         self._pad_token_id: int = int(pad_token_id)
+        self._return_logprobs = return_logprobs
 
         # one [1,1] submesh per device of the parent mesh
         self._data_parallel: int = mesh_device.get_num_devices()
@@ -133,6 +138,8 @@ class TttGenerationWorker:
             top_k=[int(top_k)] * n,
             top_p=[float(top_p)] * n,
             seed=[seed] * n if seed is not None else None,
+            enable_log_probs=[return_logprobs] * n,
+            num_logprobs=[0] * n,
         )
 
     def generate(
@@ -142,12 +149,13 @@ class TttGenerationWorker:
         max_new_tokens: int = 128,
         enable_trace: bool = True,
         stop_at_eos: bool = True,
-    ) -> List[List[int]]:
+    ) -> List[List[int]] | RolloutOutput:
         """Prefill + decode a token-ID prompt batch, data-parallel across submeshes. The
         batch is padded to the global size; sampling params were baked into
         ``self._sampling_params`` at construction and cannot vary per call."""
         if max_new_tokens == 0:
-            return [[] for _ in prompts]
+            empty = [[] for _ in prompts]
+            return RolloutOutput.from_sequences(empty, empty) if self._return_logprobs else empty
 
         _t_total = time.perf_counter()
 
@@ -179,6 +187,7 @@ class TttGenerationWorker:
             enable_trace=enable_trace,
         )
         prefilled_token = (prefill_out[0] if isinstance(prefill_out, tuple) else prefill_out).reshape(-1)
+        prefill_logprobs = self._extract_logprobs(prefilled_token, prefill_out)
         _prefill_s = time.perf_counter() - _t_prefill
         prefill_real_tokens = sum(prompt_lens[:active_batch_size])
         print(
@@ -186,30 +195,23 @@ class TttGenerationWorker:
             f"({batch_size} users, {prefill_real_tokens} real prompt tokens)",
         )
 
-        completions: List[List[int]] = [[] for _ in range(batch_size)]
-        user_done = [False] * batch_size
-        for u in range(active_batch_size, batch_size):
-            user_done[u] = True
-        stop_ids = self._stop_token_ids if stop_at_eos else frozenset()
+        collector = RolloutOutputCollector(
+            batch_size=batch_size,
+            active_batch_size=active_batch_size,
+            stop_token_ids=self._stop_token_ids,
+            stop_at_eos=stop_at_eos,
+        )
+        collector.add_step(
+            [int(token) for token in prefilled_token.tolist()],
+            prefill_logprobs,
+        )
 
-        def _collect_step(step_tokens: List[int]) -> None:
-            for u in range(batch_size):
-                if user_done[u]:
-                    continue
-                tok = step_tokens[u]
-                if stop_at_eos and tok in stop_ids:
-                    user_done[u] = True
-                else:
-                    completions[u].append(tok)
-
-        _collect_step([int(t) for t in prefilled_token.tolist()])  # first token came from prefill
-
-        if all(user_done) or max_new_tokens <= 1:
+        if collector.all_done or max_new_tokens <= 1:
             print(
                 f"[TttGenerationWorker] generate() done (no decode loop): "
                 f"total={time.perf_counter() - _t_total:.2f}s",
             )
-            return completions[:active_batch_size]
+            return self._finish_output(collector)
 
         current_pos = torch.tensor(prompt_lens, dtype=torch.int32)
         out_tok = prefilled_token.unsqueeze(1)  # stays on device; decoding continues on-device
@@ -224,7 +226,10 @@ class TttGenerationWorker:
             for step_reads in buffered_reads:
                 gathered = self.generator.process_decode_output_host(step_reads, is_tokens=True)
                 tokens = gathered[0] if isinstance(gathered, tuple) else gathered
-                _collect_step([int(t) for t in tokens.reshape(-1).tolist()])
+                collector.add_step(
+                    [int(token) for token in tokens.reshape(-1).tolist()],
+                    self._extract_logprobs(tokens, gathered, raw_reads=step_reads),
+                )
 
         _t_decode = time.perf_counter()
         steps_executed = 0
@@ -248,7 +253,7 @@ class TttGenerationWorker:
             if (step + 1) % READ_EVERY == 0:
                 _drain()
                 buffered_reads = []
-                if stop_at_eos and all(user_done):
+                if stop_at_eos and collector.all_done:
                     break
 
         if buffered_reads:
@@ -256,14 +261,40 @@ class TttGenerationWorker:
 
         _decode_s = time.perf_counter() - _t_decode
         total_s = time.perf_counter() - _t_total
-        decode_active_tokens = sum(len(c) for c in completions[:active_batch_size])
+        output = collector.finish()
+        decode_active_tokens = sum(len(completion) for completion in output.tokens)
         overall_tok_s = (decode_active_tokens / total_s) if total_s > 0 else 0.0
         print(
             f"[TttGenerationWorker] generate() done: total={total_s:.2f}s "
             f"(prefill={_prefill_s:.2f}s, decode={_decode_s:.2f}s over {steps_executed} steps), "
             f"completion_tokens={decode_active_tokens} -> {overall_tok_s:.1f} tok/s overall",
         )
-        return completions[:active_batch_size]
+        return output if self._return_logprobs else [list(completion) for completion in output.tokens]
+
+    def _extract_logprobs(self, tokens: Any, output: Any, *, raw_reads: Any = None) -> list[float]:
+        batch_size = int(tokens.reshape(-1).shape[0])
+        if not self._return_logprobs:
+            return [0.0] * batch_size
+        if raw_reads is not None and any(not isinstance(row, tuple) or row[1] is None for row in raw_reads):
+            raise RuntimeError("on-device decode sampling did not return behavior-policy logprobs")
+        if not isinstance(output, tuple) or output[1] is None:
+            raise RuntimeError("on-device sampling did not return behavior-policy logprobs")
+
+        sampled_tokens = [int(token) for token in tokens.reshape(-1).tolist()]
+        payload = output[1]
+        if isinstance(payload, tuple):
+            topk_logprobs, topk_indices = payload
+            host_payload = (
+                topk_logprobs.reshape(batch_size, -1).tolist(),
+                topk_indices.reshape(batch_size, -1).tolist(),
+            )
+        else:
+            host_payload = payload.reshape(-1).tolist()
+        return sampled_token_logprobs(sampled_tokens, host_payload)
+
+    def _finish_output(self, collector: RolloutOutputCollector) -> List[List[int]] | RolloutOutput:
+        output = collector.finish()
+        return output if self._return_logprobs else [list(completion) for completion in output.tokens]
 
     def update_weights(self, per_submesh: List[dict]) -> None:
         """Apply one received HF-keyed weight dict per submesh (order matches

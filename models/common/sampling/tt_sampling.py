@@ -888,9 +888,9 @@ class TTSampling(LightweightModule):
                 keepdim=False,
                 sub_core_grids=self._force_argmax_sub_core_grids,
             )
-            # Argmax fast-path does not compute logprobs (it never runs a softmax over
-            # the vocab). On single-chip, on-device logprobs are unsupported anyway
-            # (LogProbsCalculator._is_supported requires num_devices in (8, 32)).
+            # Argmax fast-path does not compute logprobs because it never runs
+            # the log-softmax path. Enabling logprobs disables force-argmax and
+            # routes even greedy rows through the top-k sampling path below.
             self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs
 

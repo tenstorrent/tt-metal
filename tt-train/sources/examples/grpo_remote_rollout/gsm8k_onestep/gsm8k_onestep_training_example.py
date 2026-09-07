@@ -46,11 +46,15 @@ import ttnn
 from datasets import load_dataset
 from ttml.common.config import DeviceConfig, get_model_config, load_config
 from ttml.trainers import OneStepAsyncGRPOTrainer, get_grpo_config
+from utils.coordinator_rollout_client import CoordinatorRolloutClient
 from utils.mesh_socket_bridge import MeshSocketWeightBridge
-from utils.mpi_rollout import MPIRolloutClient, MPIRolloutServer
+from utils.mpi_rollout_transport import MPIRolloutTrainerTransport, MPIRolloutWorkerTransport
 from utils.qwen3_grpo_completer import Qwen3CompleterRemoteRollout, Qwen3CompletionCtx
 from utils.qwen3_ttt_presets import bf16_attn_bfp8_mlp_optimizations, qwen3_stop_and_pad
+from utils.rollout_coordinator import SingleWorkerRolloutCoordinator
+from utils.rollout_service import RolloutWorkerService
 from utils.ttt_generation_worker import TttGenerationWorker
+from utils.ttt_rollout_engine import TttRolloutEngine
 from utils.weight_bridge import HostWeightBridge, TTML_RANK, TTT_RANK, WeightBridge
 
 CONFIG_REL = "tt-train/configs/training_configs/grpo_gsm8k_qwen3_p6b_remote_rollout.yaml"
@@ -58,6 +62,8 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 
 DATASET = "openai/gsm8k"
 DATASET_SPLIT = "train"
+ROLLOUT_ENGINE_ID = "ttt-rollout-0"
+INITIAL_POLICY_VERSION = 0
 
 THINK_OPEN, THINK_CLOSE = "<think>", "</think>"
 ANSWER_OPEN, ANSWER_CLOSE = "<answer>", "</answer>"
@@ -250,10 +256,11 @@ def _ttml_main() -> None:
 
     completer: Any = None
     client: Any = None
+    transport: Any = None
     try:
         weight_bridge_kind = _resolve_weight_bridge_kind(raw)
         bridge = _make_sender_bridge(weight_bridge_kind, mesh=mesh_device, peer_rank=TTT_RANK)
-        client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
+        transport = MPIRolloutTrainerTransport(peer_rank=TTT_RANK)
 
         dataset = build_dataset(seed=int(raw["training_config"].get("seed", 0)))
 
@@ -261,6 +268,16 @@ def _ttml_main() -> None:
         grpo_config = get_grpo_config(raw, output_dir=output_dir)
         optimizer_dict = raw["training_config"]["optimizer"]
         transformer_config = get_model_config(raw["training_config"]["model_config"])
+        coordinator = SingleWorkerRolloutCoordinator(
+            engine_id=ROLLOUT_ENGINE_ID,
+            active_version=INITIAL_POLICY_VERSION,
+            transport=transport,
+            weight_bridge=bridge,
+        )
+        client = CoordinatorRolloutClient(
+            coordinator=coordinator,
+            max_new_tokens=grpo_config.max_completion_length,
+        )
 
         completer = Qwen3CompleterRemoteRollout(
             ctx=Qwen3CompletionCtx(
@@ -275,10 +292,11 @@ def _ttml_main() -> None:
             enable_ddp=device_config.enable_ddp,
         )
 
-        # Async trainer owns all weight pushes -- no eager boot push, no
-        # WeightSyncCallback. The prime call inside train() pushes theta_0
-        # before submitting gen_0.
-        client.connect()
+        # Pair the weight bridge handshake only after both ranks finish their
+        # heavy model construction. Rollout MPI uses disjoint tags and starts
+        # its progress threads immediately afterwards.
+        bridge.connect()
+        transport.start()
 
         trainer = OneStepAsyncGRPOTrainer(
             completer=completer,
@@ -317,7 +335,8 @@ def _ttt_main() -> None:
     )
 
     worker: Any = None
-    server: Any = None
+    service: Any = None
+    transport: Any = None
     try:
         stop_token_ids, pad_token_id = qwen3_stop_and_pad(model_id)
 
@@ -331,9 +350,14 @@ def _ttt_main() -> None:
             stop_token_ids=stop_token_ids,
             pad_token_id=pad_token_id,
             temperature=grpo_temperature,
-            top_k=0,
+            # TEMPORARY LIMITATION: rollout samples through top-k=32 while the
+            # trainer continues to score its untruncated policy. The returned
+            # rollout logprobs therefore do not yet form an exact importance-
+            # sampling pair with trainer-side logprobs.
+            top_k=32,
             top_p=1.0,
             seed=None,
+            return_logprobs=True,
         )
 
         weight_bridge_kind = _resolve_weight_bridge_kind(raw)
@@ -344,17 +368,24 @@ def _ttt_main() -> None:
             submeshes=worker.submeshes,
         )
 
-        server = MPIRolloutServer(
-            peer_rank=TTML_RANK,
-            bridge=bridge,
-            generate_fn=worker.generate,
-            on_weights_received=worker.update_weights,
+        transport = MPIRolloutWorkerTransport(peer_rank=TTML_RANK)
+        service = RolloutWorkerService(transport)
+        engine = TttRolloutEngine(
+            engine_id=ROLLOUT_ENGINE_ID,
+            active_version=INITIAL_POLICY_VERSION,
+            worker=worker,
+            weight_bridge=bridge,
+            max_new_tokens=int(raw["training_config"]["grpo_config"]["max_completion_length"]),
+            event_sink=service.handle_event,
         )
-        server.connect()
-        server.serve_forever()
+        service.bind_engine(engine)
+        bridge.connect()
+        transport.start()
+        service.serve_forever()
     finally:
         worker = None
-        server = None
+        service = None
+        transport = None
         gc.collect()
         ttnn.close_mesh_device(parent_mesh)
 

@@ -373,15 +373,19 @@ class LogProbsCalculator:
         # Calculate local max
         local_max_tensor = ttnn.max(logits_tensor, dim=-1, keepdim=True, **self.common_args)
 
-        gathered_max_tensors = self._perform_all_gather(
-            local_max_tensor,
-            dim=1,
-            num_links=1,
-            buffer_key="LOGPROBS_MAX_REDUCTION",
-        )
+        if self.num_devices_for_sharding == 1:
+            gathered_max_tensors = local_max_tensor
+        else:
+            gathered_max_tensors = self._perform_all_gather(
+                local_max_tensor,
+                dim=1,
+                num_links=1,
+                buffer_key="LOGPROBS_MAX_REDUCTION",
+            )
         # Convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
         gathered_max_tensors = ttnn.to_layout(gathered_max_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        ttnn.deallocate(local_max_tensor)
+        if gathered_max_tensors is not local_max_tensor:
+            ttnn.deallocate(local_max_tensor)
         D = self.num_devices_for_sharding
         B = gathered_max_tensors.shape[2]
         gathered_max_tensors = ttnn.reshape(gathered_max_tensors, (1, 1, D, B), **self.common_args)
@@ -401,14 +405,18 @@ class LogProbsCalculator:
         sum_exp_tensor = ttnn.sum(exp_tensor, dim=-1, keepdim=True, **self.common_args)
         ttnn.deallocate(exp_tensor)
 
-        gathered_sum_exp_tensors = self._perform_all_gather(
-            sum_exp_tensor,
-            dim=1,
-            num_links=1,
-            buffer_key="LOGPROBS_SUM_EXP_REDUCTION",
-        )
+        if self.num_devices_for_sharding == 1:
+            gathered_sum_exp_tensors = sum_exp_tensor
+        else:
+            gathered_sum_exp_tensors = self._perform_all_gather(
+                sum_exp_tensor,
+                dim=1,
+                num_links=1,
+                buffer_key="LOGPROBS_SUM_EXP_REDUCTION",
+            )
         gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        ttnn.deallocate(sum_exp_tensor)
+        if gathered_sum_exp_tensors is not sum_exp_tensor:
+            ttnn.deallocate(sum_exp_tensor)
         B_sum = gathered_sum_exp_tensors.shape[2]
         gathered_sum_exp_tensors = ttnn.reshape(gathered_sum_exp_tensors, (1, 1, D, B_sum), **self.common_args)
         gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.TILE_LAYOUT, **self.common_args)
@@ -419,11 +427,9 @@ class LogProbsCalculator:
     def _is_supported(self):
         """Check if logprobs computation is supported on this device configuration."""
         num_devices = self.mesh_device.get_num_devices()
-        if num_devices not in (8, 32):
-            return False
-        if self.num_devices_for_sharding < 2:
-            return False
-        return True
+        if num_devices == 1:
+            return self.num_devices_for_sharding == 1
+        return num_devices in (8, 32) and self.num_devices_for_sharding >= 2
 
     # -----------------------------------------------------------------------
     # Old path (backward compat for non-gpt-oss models)
@@ -474,6 +480,13 @@ class LogProbsCalculator:
         batch_vol_s = selected_logits_tensor.shape[2] * selected_logits_tensor.shape[3]
         selected_logits_tensor = ttnn.reshape(selected_logits_tensor, (1, 1, 1, batch_vol_s), **self.common_args)
         selected_logits_tensor = ttnn.to_layout(selected_logits_tensor, ttnn.TILE_LAYOUT, **self.common_args)
+
+        # A single-device mesh owns the entire vocabulary. The gathered form
+        # above already has the [1, 1, 1, batch] shape consumed by
+        # _calculate_log_probs, so no chip mask or collective is necessary.
+        if self.num_devices_for_sharding == 1:
+            return selected_logits_tensor
+
         # Compare mask to chip_ids tensor and select correct positions for each user on all chips inplace
         ttnn.eq_(chip_ids_tensor, self.mask, **self.common_args)
 
@@ -516,8 +529,9 @@ class LogProbsCalculator:
     ):
         """
         Calculate log-probs for a given logits tensor and indices tensor.
-        Returns None if log-probs are not requested, not supported, or the device count is not 8 or 32.
-        (Old path — backward compat for non-gpt-oss models)
+        Returns None if log-probs are not requested or the mesh topology is
+        unsupported. The old path supports a complete vocabulary on one device
+        and tensor-parallel vocabularies on the established 8/32-device meshes.
         """
         if not self.enable_log_probs:
             return None

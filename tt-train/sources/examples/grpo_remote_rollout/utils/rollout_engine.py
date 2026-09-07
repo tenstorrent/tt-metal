@@ -61,11 +61,12 @@ class PromptGroupLease:
 class RolloutOutput:
     """Generated tokens and their behavior-policy log probabilities.
 
-    Log probabilities must describe the distribution that actually sampled
-    each token.  In particular, tt-transformers currently samples with a
-    top-k filter in some configurations.  Whether the resulting truncated
-    behavior policy has a material effect on importance sampling still needs
-    to be measured; callers must not silently substitute full-policy scores.
+    TEMPORARY LIMITATION: tt-transformers rollout generation samples through
+    its top-k=32 path, while the trainer continues to score the untruncated
+    policy as it did before asynchronous rollout.  Those distributions are not
+    an exact importance-sampling pair.  We intentionally preserve the rollout-
+    side scores and policy version here, but the effect of this mismatch must
+    be measured and corrected before relying on exact importance ratios.
     """
 
     tokens: tuple[tuple[int, ...], ...]

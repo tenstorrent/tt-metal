@@ -7,7 +7,7 @@
 Sibling to :mod:`utils.llama_grpo_completer`. Runs on the ttml rank:
 ``compute_nlog_probs`` runs locally against a full-forward ttml Qwen3 (gradient
 path); ``generate`` / ``generate_str`` proxy to the remote
-:class:`TttGenerationWorker` via :class:`MPIRolloutClient`; :meth:`push_weights`
+:class:`TttGenerationWorker` via a rollout client; :meth:`push_weights`
 exports the ttml Qwen3 model to an HF-keyed dict via
 :func:`qwen3_weights_ref_hf_dict` and ships it over the bridge.
 
@@ -21,7 +21,7 @@ import gc
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Protocol, Tuple
 
 import numpy as np
 import torch
@@ -37,8 +37,19 @@ from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
 from ttml.models.qwen3.weights import load_weights_from_hf
 from ttml.trainers.grpo_trainer import GRPOCompleter
 
-from .mpi_rollout import MPIRolloutClient
 from .qwen3_overrides import qwen3_weights_ref_hf_dict
+from .rollout_engine import RolloutResult
+
+
+class _RolloutClient(Protocol):
+    def submit_remote_generate(self, prompts, *, max_new_tokens: int) -> None:
+        ...
+
+    def await_remote_generate(self) -> List[List[int]]:
+        ...
+
+    def send_weights(self, weights: Any) -> Any:
+        ...
 
 
 @dataclass
@@ -76,7 +87,7 @@ class Qwen3CompleterRemoteRollout(GRPOCompleter):
         *,
         mesh_device: Any,
         model_source: str,
-        inference_client: Optional[MPIRolloutClient] = None,
+        inference_client: Optional[_RolloutClient] = None,
         enable_ddp: bool = False,
         memory_efficient: bool = True,
     ) -> None:
@@ -138,7 +149,7 @@ class Qwen3CompleterRemoteRollout(GRPOCompleter):
         self._config = qwen_config
         self.transformer_config = transformer_config
 
-        self._client: Optional[MPIRolloutClient] = inference_client
+        self._client: Optional[_RolloutClient] = inference_client
 
     @staticmethod
     def _load_hf_state_dict(model_source: str) -> dict:
@@ -164,6 +175,16 @@ class Qwen3CompleterRemoteRollout(GRPOCompleter):
     def model(self) -> Any:
         """The underlying ttml Qwen3 (NOT the remote tt-transformers worker)."""
         return self._model
+
+    @property
+    def last_rollout_result(self) -> Optional[RolloutResult]:
+        """Full async result retained by coordinator-backed clients.
+
+        The current trainer still computes its own full-policy scores and does
+        not consume these rollout-side top-k=32 scores. That mismatch is a
+        known limitation for future importance-sampling work.
+        """
+        return getattr(self._client, "last_result", None)
 
     def generate(self, prompts: List[List[int]]) -> List[List[int]]:
         """Generate remotely via the ttt worker.
