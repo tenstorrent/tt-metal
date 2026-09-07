@@ -1057,8 +1057,8 @@ def main() -> None:
     if cfg.verify and ack_channel is None:
         logger.error(
             "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
-            "prefill (H2D push return ≠ layers done). Set PREFILL_ENABLE_LAYER_ACK=1 on the runner "
-            "(Gate 1 mock defaults this on via run_prefill_migration_gate.sh)."
+            "prefill (H2D push return ≠ layers done). The master rank always owns this channel, so "
+            "either the runner is not up yet or it died before wiring acks."
         )
         sys.exit(1)
     if not cfg.verify:

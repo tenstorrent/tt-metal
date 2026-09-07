@@ -162,9 +162,8 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         migrates SEVERAL caches, or one whose layer numbering is not the model's global numbering."""
 
     def set_layer_completion_sink(self, sink) -> None:
-        """Register the per-layer completion sink. Required whenever the runner routes layer
-        completions -- always at num_ranks > 1, and at one rank under PREFILL_ENABLE_LAYER_ACK=1 --
-        unless it runs with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead.
+        """Register the per-layer completion sink. Required at any rank count, unless the runner runs
+        with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead.
 
         Call `sink(layer_idx, request_id)` once per layer, where `request_id` is the one
         `prefill_chunk` was given -- bind it per call rather than reading mutable state, since the
