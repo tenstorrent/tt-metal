@@ -131,6 +131,12 @@ def main():
             lines.append(f"ideal = a perfect {rb}-rank -> {rr}-rank pipeline, C chunks deep:")
             lines.append("        chunk_time x1 (latency is work, not width), ttft xC*R/(C+R-1), throughput xR")
         lines += _table(["metric", _BASE, _REF, f"{_REF} gain", "ideal", "of ideal"], _rows(base, ref, gain=not note))
+        occ = [(k, ref[k]) for k in ("balance", "bottleneck_saturation", "global_occupancy") if k in ref]
+        if occ:
+            lines.append("")
+            # Occupancy needs a pipeline, so only the multi-rank config reports it.
+            lines.append(f"{_REF} pipeline occupancy:")
+            lines += [f"  {k:<21} = {v:.4f}" for k, v in occ]
         lines.append("```")
         lines.append("")
         if args.gantt_url:
