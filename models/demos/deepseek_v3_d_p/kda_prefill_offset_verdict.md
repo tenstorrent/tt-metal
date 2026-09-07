@@ -5,41 +5,34 @@ whether a small activation exchange or a segment-aware scan gives the better
 latency -- with device evidence rather than argument. Implementation detail is
 in [`kda_prefill_offset_dev_spec.md`](kda_prefill_offset_dev_spec.md).
 
-**Recommendation: prototype A, the one-hop ring exchange -- but see the
-correction below before acting on it.**
+**Recommendation: it depends on the offset, and the production offset favours B.**
 
-> ## Correction: B's measured cost is its plumbing, not its strategy
->
-> A per-op profile taken after this report was written shows B's overhead is
-> almost entirely tensor plumbing that its design does not require, so the
-> comparison below is not a fair test of the two strategies.
->
-> At `o=C/2`, total `+2092 us` (+21.7%), op count 59 -> 115:
->
-> | op | base | n | split | n | delta | share |
-> | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-> | `data_movement` | 507 us | 21 | 1621 us | 55 | **+1114 us** | **53%** |
-> | `recurrent_chunk_scan` | 668 | 2 | 1065 | 4 | +397 | 19% |
-> | `data_movement+eltwise` | 271 | 5 | 662 | 11 | +391 | 19% |
-> | `qkv_causal_conv` | 1148 | 1 | 1192 | 2 | +44 | 2% |
-> | `ccl.all_gather` | 121 | 2 | 135 | 2 | +14 | 0.7% |
->
-> The genuinely doubled *compute* costs about 6% of the overhead. The doubled
-> summary payload costs 14 us, so the 91 us figure quoted later in this document
-> is seven times too pessimistic. The cost is `_slice_chunk_range` slicing all
-> seven prepared-chunk tensors per fragment, reshaping each, and concatenating
-> two scan outputs.
->
-> **When a group size divides both fragment chunk counts, none of that slicing is
-> needed.** At `o=C/2` both fragments are 40 chunks, so one reshape into 4 groups
-> of 20 is byte-identical to baseline and the split appears only in which entry
-> state each group receives -- one scan, not two. That plausibly takes B into
-> single digits and would reverse the recommendation.
->
-> Tracked as `tt-metal_tracker-6ls.7`. **Treat "A wins" as unproven for offsets
-> where a shared group size exists** (`o=C/2` among them). It still holds where
-> the fragment counts share no workable group size, such as `o=32`, since B is
-> forced into the slicing path there.
+Neither prototype dominates. Their cost shapes are complementary, and the split
+that production actually uses lands where B wins.
+
+| case | A (ring) | B (split scan) | winner |
+| --- | ---: | ---: | --- |
+| device boundary (`o=0`) | +1.7% | +1.6% | tie, both free |
+| smallest split (`o=32`) | **+14.7%** | +32.7% | A by 18 pp |
+| **`o=C/2`** | +29.7% | **+14.2%** | **B by 15.5 pp** |
+| largest split (`o=C-32`) | **+17.5%** | +35.7% | A by 18 pp |
+
+- **A** costs the bandwidth `min(o, C-o)` it moves, so it peaks at `o=C/2`.
+- **B** costs nothing extra when a group size divides both fragment lengths,
+  because then the fragment boundary already is a group boundary and one scan
+  serves both fragments. Otherwise it must slice the prepared chunks, which
+  dominates everything else.
+
+**The production case takes B's fast path.** Galaxy SP8xTP4, `T=5120`,
+`actual_start=960` gives `o=h=320` rows, so 10+10 chunks with a shared group
+size of 10. That offset is simultaneously A's worst case and B's best.
+
+**If only one path can be maintained, choose A**: its worst case (+29.7%) beats
+B's (+35.7%), and B's fast path covers only 3 of 19 Galaxy split offsets
+(tail 160, 320 or 480 rows) and 3 of 79 on LoudBox. **If the deployed offsets
+are known and land on B's fast path -- as `actual_start=960` does -- choose B.**
+
+Everything above is LoudBox SP2xTP4; the Galaxy run remains outstanding.
 
 ## The two prototypes
 
@@ -86,7 +79,7 @@ is normalised to its own `S=0` baseline (A 10.674 ms, B 10.543 ms).
 
 Program cache stays bounded: A 102 entries, B 148.
 
-### The shapes are opposites, and that is the whole result
+### The shapes are complementary, and that is the whole result
 
 **A is a tent peaking at `o = C/2`.** Its cost is the bandwidth it must move,
 `min(o, C-o)`, which is maximal at the midpoint and near zero at both extremes.
@@ -97,8 +90,9 @@ length factors, not how much data is displaced. At `o = C/2` both fragments are
 chunks, which is prime, so it collapses to a single group and loses group-level
 parallelism.
 
-A therefore wins by roughly 18 points at both extremes and the midpoint is a
-tie, leaving no offset where B is meaningfully ahead.
+A therefore wins by roughly 18 points at both extremes, while B wins the
+midpoint by 15.5 points once it stops slicing the prepared chunks. The two are
+complementary rather than ranked.
 
 Rotation alone is free on both (`+1.7%` / `+1.6%`, inside noise), as theory
 predicts: a device-boundary offset only reorders a carry list.
@@ -125,16 +119,22 @@ bandwidth win consumed by launch overhead; instead dispatch count is fine and
 per-byte throughput is the problem. The one condition that would revive it is
 Galaxy SP8, where the gather receives eight times the payload rather than twice.
 
-## Why A is the recommendation
+## Why A is the safer single choice
 
-- It is never meaningfully worse, and much better at two of three split cases.
+- Its worst case (+29.7% at `o=C/2`) beats B's (+35.7% at the extremes), so a
+  single-path deployment that must tolerate any offset is better off with A.
+- B's fast path covers only 3 of 19 Galaxy split offsets and 3 of 79 on LoudBox;
+  everywhere else B pays for slicing the prepared chunks.
 - Its cost is *bandwidth*, which the untried unicast rung
   (`tt-metal_tracker-6ls.3`) attacks directly: the current rung moves `P*o` rows
   through one collective, while a true one-hop unicast moves `o` -- up to 16x
   less. B has no comparable lever; its cost is launch count and lost
   parallelism.
 - It leaves the scan untouched, so KDA's most intricate machinery keeps one
-  code path.
+  code path. B needs two: slice-free and slicing.
+
+Against that, the production offset `actual_start=960` is exactly one of B's
+fast-path offsets, so a deployment with known offsets should prefer B there.
 - Smaller program cache footprint.
 
 ## What was not measured, and what would change the answer
