@@ -120,27 +120,47 @@ void kernel_main() {
         const uint32_t region_count = is_hub0 ? split_P : (num_producers - split_P);
         const uint32_t region_n_tiles = region_count * Nc_tiles;
         const uint32_t region_row_bytes = region_n_tiles * tile_size_bytes;
+        const uint32_t self_x = is_hub0 ? hub0_noc_x : hub1_noc_x;
+        const uint32_t self_y = is_hub0 ? hub0_noc_y : hub1_noc_y;
         if (region_count > 0) {
             stage_sem.wait(region_count);
             for (uint32_t mt = 0; mt < M_tiles; ++mt) {
                 const uint32_t off = (mt * N_tiles + region_first * Nc_tiles) * tile_size_bytes;
-                noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-                    use<CircularBuffer::AddrSelector::WRITE_PTR>(stage_cb),
-                    dest_cb,
-                    region_row_bytes,
-                    num_dest_cores,
-                    {.offset_bytes = off},
-                    {.noc_x_start = mcast_x_start,
-                     .noc_y_start = mcast_y_start,
-                     .noc_x_end = mcast_x_end,
-                     .noc_y_end = mcast_y_end,
-                     .offset_bytes = off});
+                if constexpr (num_dest_cores == 1) {
+                    // The hub is the entire dest grid, so there is nothing to broadcast to: a
+                    // multicast whose rectangle holds only the sender gets no receiver ack, and
+                    // the barrier below then spins forever (one core parked in NWBW). A unicast
+                    // to self moves the same bytes and is acked like any other write.
+                    UnicastEndpoint self;
+                    noc.async_write(
+                        use<CircularBuffer::AddrSelector::WRITE_PTR>(stage_cb),
+                        self,
+                        region_row_bytes,
+                        {.offset_bytes = off},
+                        {.noc_x = self_x, .noc_y = self_y, .addr = dest_cb.get_write_ptr() + off});
+                } else {
+                    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                        use<CircularBuffer::AddrSelector::WRITE_PTR>(stage_cb),
+                        dest_cb,
+                        region_row_bytes,
+                        num_dest_cores,
+                        {.offset_bytes = off},
+                        {.noc_x_start = mcast_x_start,
+                         .noc_y_start = mcast_y_start,
+                         .noc_x_end = mcast_x_end,
+                         .noc_y_end = mcast_y_end,
+                         .offset_bytes = off});
+                }
             }
             noc.async_write_barrier();
         }
-        const uint32_t self_x = is_hub0 ? hub0_noc_x : hub1_noc_x;
-        const uint32_t self_y = is_hub0 ? hub0_noc_y : hub1_noc_y;
-        done_sem.inc_multicast(noc, mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, 1, num_dest_cores - 1);
+        // With a one-core dest grid the hub is the only core waiting on done_sem, and it bumps
+        // itself just below. The multicast would carry zero destinations, which the atomic
+        // bookkeeping still counts as one expected ack -- another barrier that never drains.
+        if constexpr (num_dest_cores > 1) {
+            done_sem.inc_multicast(
+                noc, mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, 1, num_dest_cores - 1);
+        }
         done_sem.up(noc, self_x, self_y, 1);
         noc.async_atomic_barrier();
     }

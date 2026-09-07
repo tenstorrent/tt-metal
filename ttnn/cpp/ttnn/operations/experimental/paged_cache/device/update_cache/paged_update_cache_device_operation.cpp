@@ -39,7 +39,9 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         "Operands to update_cache need to be allocated in buffers on device!");
 
     // Layout and data type validation
-    TT_FATAL(input_tensor.layout() == Layout::TILE, "Input tensor in non-fused update_cache must be tilized");
+    TT_FATAL(
+        input_tensor.layout() == Layout::TILE || input_tensor.layout() == Layout::ROW_MAJOR,
+        "Input tensor in paged_update_cache must be TILE or ROW_MAJOR");
     TT_FATAL(cache_tensor.layout() == Layout::TILE, "Cache tensor in update_cache must be tilized");
     TT_FATAL(
         cache_tensor.dtype() == DataType::FLOAT32 || cache_tensor.dtype() == DataType::BFLOAT16 ||
@@ -288,6 +290,16 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
             "(or any CoreRangeSet whose num_cores == num_users).",
             input_num_shards,
             num_users);
+        if (input_tensor.layout() == Layout::ROW_MAJOR) {
+            const uint32_t num_heads =
+                operation_attributes.num_kv_heads_override.value_or(cache_tensor.padded_shape()[1]);
+            TT_FATAL(
+                input_tensor.shard_spec().value().shape[0] >= num_heads,
+                "Row-major input shard height ({}) must be >= num_kv_heads ({}) so the writer can copy one row per "
+                "head",
+                input_tensor.shard_spec().value().shape[0],
+                num_heads);
+        }
     }
 
     // Data type validation

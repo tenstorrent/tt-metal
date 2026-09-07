@@ -14,17 +14,18 @@ namespace ttnn::operations::experimental::transformer::fused_partial_rope {
 
 // Fused partial RoPE (deepseek_v4_flash `_apply_rope`) as a single device op.
 //
-// Applies interleaved RoPE to the trailing `rope_dim` channels of a height-sharded
-// `[1, 1, rows, D]` input and passes the leading `D - rope_dim` "nope" channels through
-// untouched:
+// Applies interleaved RoPE to the trailing `rope_dim` channels of a height- or
+// width-sharded `[1, 1, rows, D]` input (TILE or ROW_MAJOR) and passes the leading
+// `D - rope_dim` "nope" channels through untouched:
 //
 //   out[..., :D-Rd] = x[..., :D-Rd]
 //   out[..., D-Rd:] = x_rope * cos + (x_rope @ trans_mat) * sin   (HiFi4)
 //
-// `cos`/`sin` are `[1, 1, rows, rope_dim]` tables height-sharded on the same core grid as
-// `input`; `trans_mat` is a single [32, 32] `rotate_half` tile (replicated). One tile-row
-// (32 rows) is processed per core, so the op uses ceil(rows / 32) cores. Returns a new
-// tensor with the same (height-sharded) spec as `input`.
+// `cos`/`sin` are `[1, 1, rows, rope_dim]` (or a single broadcast row) DRAM-interleaved
+// TILE tables; `trans_mat` is a single [32, 32] `rotate_half` tile (replicated).
+// TILE X is processed as 32x32 tiles. ROW_MAJOR X is processed as 1x32 faces (one
+// row of 32 elements per tile) and requires the broadcast cos/sin row. Output
+// layout matches the input.
 ttnn::Tensor fused_partial_rope(
     const ttnn::Tensor& input,
     const ttnn::Tensor& cos,
