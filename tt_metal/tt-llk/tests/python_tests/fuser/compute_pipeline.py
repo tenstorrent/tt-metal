@@ -185,7 +185,7 @@ class ComputePipeline:
             )
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             init_code += unpack_ops[0].unpack_init(operation, config, None)
-        code = self._zone(config, "INIT", init_code)
+        code = self._zone(config, f"INIT{operation.stage_id}", init_code)
 
         code += unpack_common.sync_with_packer(config, operation)
 
@@ -217,14 +217,14 @@ class ComputePipeline:
 
         code += self._zone_loop(
             config,
-            "TILE_LOOP",
+            f"TILE_LOOP{operation.stage_id}",
             self._batch_loop(operation, config, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = ""
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             uninit_code += unpack_ops[0].unpack_uninit(operation, config, None)
-        code += self._zone(config, "INIT", uninit_code)
+        code += self._zone(config, f"INIT{operation.stage_id}", uninit_code)
 
         return code
 
@@ -243,7 +243,7 @@ class ComputePipeline:
             init_code += config.sentinel.configure_math(config, operation, fpu_ops[0])
         if hoist and not fpu_ops[0].fpu.per_block_init:
             init_code += fpu_ops[0].fpu_init(operation, config, None)
-        code += self._zone(config, "INIT", init_code)
+        code += self._zone(config, f"INIT{operation.stage_id}", init_code)
 
         init_fn = None
         uninit_fn = None
@@ -271,14 +271,14 @@ class ComputePipeline:
 
         code += self._zone_loop(
             config,
-            "TILE_LOOP",
+            f"TILE_LOOP{operation.stage_id}",
             self._batch_loop(operation, config, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = ""
         if hoist and not fpu_ops[0].fpu.per_block_init:
             uninit_code += fpu_ops[0].fpu_uninit(operation, config, None)
-        code += self._zone(config, "INIT", uninit_code)
+        code += self._zone(config, f"INIT{operation.stage_id}", uninit_code)
 
         return code
 
@@ -302,7 +302,7 @@ class ComputePipeline:
         init_code += pack_common.pack_dest_init(config, operation, pack_only[0])
         if hoist and not pack_only[0].packer.per_block_init:
             init_code += pack_only[0].init(operation, config, None)
-        code += self._zone(config, "INIT", init_code)
+        code += self._zone(config, f"INIT{operation.stage_id}", init_code)
 
         init_fn = None
         uninit_fn = None
@@ -339,7 +339,7 @@ class ComputePipeline:
 
         code += self._zone_loop(
             config,
-            "TILE_LOOP",
+            f"TILE_LOOP{operation.stage_id}",
             self._batch_loop(operation, config, batch_body, init_fn, uninit_fn),
         )
 
@@ -347,7 +347,7 @@ class ComputePipeline:
         if hoist and not pack_only[0].packer.per_block_init:
             uninit_code += pack_only[0].uninit(operation, config)
         uninit_code += pack_common.pack_reduce_mask_clear(operation)
-        code += self._zone(config, "INIT", uninit_code)
+        code += self._zone(config, f"INIT{operation.stage_id}", uninit_code)
 
         return code
 
