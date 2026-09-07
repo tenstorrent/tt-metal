@@ -45,6 +45,16 @@ print_usage() {
     echo "  $0 --image myimage --oversubscribe --timeout 300 --host host1,host2 ./myapp"
 }
 
+# Single-quote a bash -c payload for the eval below. A single-quoted string cannot
+# contain a single quote by any escaping, so each one is emitted as '\'' (close,
+# escaped quote, reopen). Without this a value like --docker-arg --env=X=it's
+# terminates the wrapper and the whole command fails to parse.
+sq_wrap() {
+    local payload="$1"
+    payload=${payload//\'/\'\\\'\'}
+    printf "'%s'" "$payload"
+}
+
 default() {
     local image="ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:latest"
     local empty_entrypoint=false
@@ -326,9 +336,9 @@ default() {
 
         # Single segment without per-rank args
         if [[ "$tag_host" == true ]]; then
-            mpirun_segments+=("bash -c 'set -o pipefail; $docker_cmd 2>&1 | $host_tag_pipe'")
+            mpirun_segments+=("bash -c $(sq_wrap "set -o pipefail; $docker_cmd 2>&1 | $host_tag_pipe")")
         else
-            mpirun_segments+=("bash -c '$docker_cmd'")
+            mpirun_segments+=("bash -c $(sq_wrap "$docker_cmd")")
         fi
     else
         # Multi-executable mode with per-rank specifications
@@ -403,9 +413,9 @@ default() {
 
             # Combine this group's MPI args with docker command
             if [[ "$tag_host" == true ]]; then
-                mpirun_segments+=("${mpi_args[*]} bash -c 'set -o pipefail; $docker_cmd 2>&1 | $host_tag_pipe'")
+                mpirun_segments+=("${mpi_args[*]} bash -c $(sq_wrap "set -o pipefail; $docker_cmd 2>&1 | $host_tag_pipe")")
             else
-                mpirun_segments+=("${mpi_args[*]} bash -c '$docker_cmd'")
+                mpirun_segments+=("${mpi_args[*]} bash -c $(sq_wrap "$docker_cmd")")
             fi
         done
     fi
