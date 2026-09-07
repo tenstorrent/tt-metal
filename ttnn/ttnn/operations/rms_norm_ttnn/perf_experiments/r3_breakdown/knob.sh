@@ -5,7 +5,12 @@ set -u
 R=/localdev/dnijemcevic/2026_09_04/1519_dnijemcevic_agent_eval_new/clones/rms_norm_ttnn_run1/tt-metal
 F=$R/ttnn/ttnn/operations/rms_norm_ttnn/rms_norm_ttnn_program_descriptor.py
 LABEL="$1"; shift
-restore() { cd "$R" && git checkout -- ttnn/ttnn/operations/rms_norm_ttnn/rms_norm_ttnn_program_descriptor.py; }
+# Restore from a byte COPY, never `git checkout` -- a checkout also reverts any
+# UNCOMMITTED work in the same file, which is how Perf 3 silently lost the
+# RMS_ABLATE plumbing mid-round.
+BK=$(mktemp)
+cp "$F" "$BK"
+restore() { cp "$BK" "$F"; rm -f "$BK"; }
 trap restore EXIT
 for a in "$@"; do
   name="${a%% =*}"

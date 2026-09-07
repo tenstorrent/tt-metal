@@ -1352,13 +1352,45 @@ WIDTH_SPLIT_MIN_GAIN = 4
 STAGE_ZONES = os.environ.get("RMS_STAGE_ZONES", "0") not in ("", "0")
 
 
+# Perf 3 -- THE ABLATION SWITCHES ARE DEFINES, NOT SOURCE EDITS.
+#
+# `RMS_ABLATE=READ_X,WRITE,COMPUTE,PER_CHANNEL,ROOT_SUM,ROOT_FINALIZE,RECONFIG,GATHER_ZERO`
+# stubs each named stage's PAYLOAD while leaving its CB reserve/push/wait/pop, its loop
+# trip counts and its zone in place -- the cumulative-peel instrument /perf-measure asks
+# for.  Names match the `RMS_ABLATE_<NAME>` guards in the three kernels.
+#
+# WHY A DEFINE AND NOT THE COMMENTED-OUT `#define` AT EACH KERNEL HEAD (measured):
+# the JIT kernel cache key does NOT include the kernel source's CONTENT, so editing a
+# .cpp in place and re-running is a CACHE HIT on the previously compiled binary.  Perf 3
+# lost two measurements to exactly that -- an "unablated baseline" reproduced twice at
+# 56,090 ns with pcc=nan against a true 84,510 ns, because it was still running the
+# all-stubbed build from the peel before it.  A DEFINE is part of the cache key, so every
+# configuration gets its own entry and no cache purge is needed.  Ablating by source edit
+# additionally re-rolls every zone's 16-bit hash (see perf_instrumentation.hpp).
+_ABLATE_NAMES = (
+    "READ_X",
+    "WRITE",
+    "COMPUTE",
+    "PER_CHANNEL",
+    "ROOT_SUM",
+    "ROOT_FINALIZE",
+    "RECONFIG",
+    "GATHER_ZERO",
+)
+ABLATE = tuple(
+    n for n in (t.strip().upper() for t in os.environ.get("RMS_ABLATE", "").split(",")) if n in _ABLATE_NAMES
+)
+
+
 def _kernel_defines():
     """Kernel `-D` defines shared by all three kernels.  ONE source of truth.
 
     Empty (the default) means the build key is exactly what it was before D34, so
     every non-profiled build stays byte-identical.
     """
-    return [("RMS_STAGE_ZONES", "1")] if STAGE_ZONES else []
+    defines = [("RMS_STAGE_ZONES", "1")] if STAGE_ZONES else []
+    defines += [(f"RMS_ABLATE_{n}", "1") for n in ABLATE]
+    return defines
 
 
 # Refinement 4 (D33) -- THE RAGGED (PADDED) WIDTH CHUNK.  1 = a chunked width may
