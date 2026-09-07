@@ -53,21 +53,44 @@ def _index_dtype(num_rows: int):
 
 @dataclass(frozen=True)
 class SCARebatchPlan:
-    """Frame-invariant SCA rebatch: indices, lengths, and rebatched reference points.
+    """Per-frame SCA rebatch plan shared by every encoder layer.
 
-    Camera projection is per-frame, so every encoder layer reuses one plan. Only the query gather is per-layer.
+    The plan is valid only for the reference points, visibility mask, tensor shapes, and device used to build it.
+    Tensor fields are ``None`` when ``is_empty`` is true.
+
+    Attributes:
+        rebatch_len: Tile-aligned number of query rows processed per camera.
+        query_index: Gather indices for query rows.
+        reference_points_batched: Rebatched camera reference points with shape
+            ``[batch_size * num_cams, rebatch_len, num_depth_levels, 2]``.
+        scatter_index: Expanded query indices used to accumulate camera outputs.
+        count: Camera-contributor count with shape ``[batch_size, num_queries, 1]``.
+        is_empty: Whether the visibility mask contains no valid query-camera pairs.
     """
 
     rebatch_len: int
-    query_index: ttnn.Tensor
-    reference_points_batched: ttnn.Tensor
-    scatter_index: ttnn.Tensor
-    count: ttnn.Tensor
+    query_index: Optional[ttnn.Tensor]
+    reference_points_batched: Optional[ttnn.Tensor]
+    scatter_index: Optional[ttnn.Tensor]
+    count: Optional[ttnn.Tensor]
     is_empty: bool = False
 
 
 def build_rebatch_plan(reference_points_cam, bev_mask, embed_dims: int, device) -> SCARebatchPlan:
-    """Build the per-frame rebatch plan. See :class:`SCARebatchPlan`."""
+    """Build a rebatch plan for one frame's camera projections.
+
+    Args:
+        reference_points_cam: Bfloat16 device tensor with shape
+            ``[num_cams, batch_size, num_queries, num_depth_levels, 2]``.
+        bev_mask: Device tensor with shape
+            ``[num_cams, batch_size, num_queries, num_depth_levels]``.
+        embed_dims: Query embedding width used to expand scatter indices.
+        device: Device on which plan tensors are allocated. It must match the input tensors.
+
+    Returns:
+        A plan owned by these frame inputs. If no query-camera pair is valid, ``is_empty`` is true,
+        ``rebatch_len`` is zero, and all tensor fields are ``None``.
+    """
     num_cams, bs, num_queries, num_depth_levels = bev_mask.shape
 
     # max_len sizes tensors, so it must be a Python int. Mask reduction, index construction and
@@ -79,7 +102,14 @@ def build_rebatch_plan(reference_points_cam, bev_mask, embed_dims: int, device) 
         logger.info(f"SCA Valid Queries: {valid_per_cam.sum(-1).flatten().tolist()}")
 
     if max_len == 0:
-        return SCARebatchPlan(0, None, None, None, None, is_empty=True)
+        return SCARebatchPlan(
+            rebatch_len=0,
+            query_index=None,
+            reference_points_batched=None,
+            scatter_index=None,
+            count=None,
+            is_empty=True,
+        )
 
     # Tile-align so folding num_cams into the row dim stays a view; unaligned would move data.
     # Costs up to TILE_SIZE - 1 padded rows per camera through MSDA, discarded afterwards.
