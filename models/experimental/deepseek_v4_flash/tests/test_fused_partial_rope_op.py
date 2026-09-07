@@ -48,9 +48,9 @@ def _torch_reference(x, cos, sin, rot, rope_dim):
     return torch.cat([nope, rotated], dim=-1)
 
 
-def _height_sharded_cfg(width: int, num_cores: int) -> ttnn.MemoryConfig:
+def _height_sharded_cfg(width: int, num_cores: int, shard_height: int = TILE) -> ttnn.MemoryConfig:
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
-    shard = ttnn.ShardSpec(grid, [TILE, width], ttnn.ShardOrientation.ROW_MAJOR)
+    shard = ttnn.ShardSpec(grid, [shard_height, width], ttnn.ShardOrientation.ROW_MAJOR)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard)
 
 
@@ -157,3 +157,79 @@ def test_fused_partial_rope_op_width_sharded(device, reset_seeds, D, Rd, rows, n
     logger.info(f"[fused_partial_rope width-sharded {tag}] {comp_allclose(ref, got)}")
     logger.info(f"[fused_partial_rope width-sharded {tag}] PCC: {pcc_message}")
     assert passing, f"fused_partial_rope width-sharded PCC < {PCC_THRESHOLD} ({tag}): {pcc_message}"
+
+
+def _trans_mat_tt(device):
+    trans_mat = _interleaved_rotate_matrix(TILE).reshape(1, 1, TILE, TILE)
+    return ttnn.from_torch(
+        trans_mat, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+
+def _cos_sin_tt(cos, sin, device):
+    kwargs = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.from_torch(cos, **kwargs), ttnn.from_torch(sin, **kwargs)
+
+
+# ROW_MAJOR X is consumed as 1x32 faces (one row of 32 BF16s per tile). cos/sin stay TILE and
+# must be a single broadcast row (decode). Output layout matches X.
+@pytest.mark.parametrize(
+    "D, Rd, rows",
+    (
+        (512, 64, 1),  # single decode row
+        (512, 64, 64),  # 64 heads, one row each as 1x32 faces
+        (64, 64, 1),  # D == Rd, one row
+    ),
+)
+def test_fused_partial_rope_op_row_major_height_sharded(device, reset_seeds, D, Rd, rows):
+    x = torch.randn(1, 1, rows, D, dtype=torch.float32)
+    cos = torch.randn(1, 1, 1, Rd, dtype=torch.float32)
+    sin = torch.randn(1, 1, 1, Rd, dtype=torch.float32)
+    rot = _interleaved_rotate_matrix(Rd)
+    ref = _torch_reference(x, cos, sin, rot, Rd)
+
+    x_tt = ttnn.to_memory_config(
+        ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
+        _height_sharded_cfg(D, num_cores=1, shard_height=rows),
+    )
+    cos_tt, sin_tt = _cos_sin_tt(cos, sin, device)
+    out_tt = ttnn.experimental.fused_partial_rope(x_tt, cos_tt, sin_tt, _trans_mat_tt(device), Rd)
+
+    assert out_tt.layout == ttnn.ROW_MAJOR_LAYOUT
+    got = ttnn.to_torch(out_tt).reshape(ref.shape).float()
+    passing, pcc_message = comp_pcc(ref, got, pcc=PCC_THRESHOLD)
+    tag = f"D={D} Rd={Rd} rows={rows}"
+    logger.info(f"[fused_partial_rope rm-hs {tag}] {comp_allclose(ref, got)}")
+    logger.info(f"[fused_partial_rope rm-hs {tag}] PCC: {pcc_message}")
+    assert passing, f"fused_partial_rope rm-hs PCC < {PCC_THRESHOLD} ({tag}): {pcc_message}"
+
+
+@pytest.mark.parametrize(
+    "D, Rd, rows, num_cores",
+    (
+        (512, 64, 1, 8),  # 1x32 faces, aligned nope/rope split
+        (512, 64, 64, 4),  # 64 heads, boundary straddles a shard
+        (64, 64, 1, 2),  # D == Rd
+    ),
+)
+def test_fused_partial_rope_op_row_major_width_sharded(device, reset_seeds, D, Rd, rows, num_cores):
+    x = torch.randn(1, 1, rows, D, dtype=torch.float32)
+    cos = torch.randn(1, 1, 1, Rd, dtype=torch.float32)
+    sin = torch.randn(1, 1, 1, Rd, dtype=torch.float32)
+    rot = _interleaved_rotate_matrix(Rd)
+    ref = _torch_reference(x, cos, sin, rot, Rd)
+
+    x_tt = ttnn.to_memory_config(
+        ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
+        _width_sharded_cfg(rows, D, num_cores),
+    )
+    cos_tt, sin_tt = _cos_sin_tt(cos, sin, device)
+    out_tt = ttnn.experimental.fused_partial_rope(x_tt, cos_tt, sin_tt, _trans_mat_tt(device), Rd)
+
+    assert out_tt.layout == ttnn.ROW_MAJOR_LAYOUT
+    got = ttnn.to_torch(out_tt).reshape(ref.shape).float()
+    passing, pcc_message = comp_pcc(ref, got, pcc=PCC_THRESHOLD)
+    tag = f"D={D} Rd={Rd} rows={rows} cores={num_cores}"
+    logger.info(f"[fused_partial_rope rm-ws {tag}] {comp_allclose(ref, got)}")
+    logger.info(f"[fused_partial_rope rm-ws {tag}] PCC: {pcc_message}")
+    assert passing, f"fused_partial_rope rm-ws PCC < {PCC_THRESHOLD} ({tag}): {pcc_message}"

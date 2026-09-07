@@ -3,12 +3,31 @@ from typing import Callable, Optional
 
 import ttnn
 
-from .common import DeepSeekV4Module, _HIFI4, width_sharded_l1_config
+from .common import SINGLE_USER_TILE, DeepSeekV4Module, _HIFI4, width_sharded_l1_config
 from .system_config import active_system_config
 from .weight_cache import _CachePath, _load_weight, _materialize
 import torch
 
 from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_gcb
+
+
+def fused_rms_norm_gamma_memory_config(n: int, core_grid: ttnn.CoreRangeSet) -> ttnn.MemoryConfig:
+    """WIDTH_SHARDED L1 layout ``matmul_decode`` requires for a vector RMSNorm gamma.
+
+    One ``[1, N/num_cores]`` shard per weight-grid core, TILE 1x32. The op multiplies
+    each output shard by the matching gamma shard in the epilogue, so the grids must
+    be identical.
+    """
+    num_cores = core_grid.num_cores()
+    if num_cores == 0 or n % num_cores != 0:
+        raise ValueError(f"fused RMSNorm gamma needs N ({n}) divisible by the weight core count ({num_cores})")
+    return ttnn.create_sharded_memory_config(
+        (1, n // num_cores),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
 
 
 def to_ttnn_device(
@@ -434,6 +453,7 @@ class LinearDecode(DeepSeekV4Module):
         self.ring_gather = ring_gather
         self.weights_memory_config = None
         self.fused_rms_norm_eps = None
+        self.fused_rms_norm_gamma = None
         self.output_core_grid = None
 
         if keep_weights_in_l1 and use_prefetcher:
@@ -580,29 +600,42 @@ class LinearDecode(DeepSeekV4Module):
         """
         return self._can_matmul_decode_rm_hs() and self.N % ttnn.TILE_SIZE == 0
 
-    def enable_fused_rms_norm(self, eps: float) -> bool:
+    def enable_fused_rms_norm(self, eps: float, gamma) -> bool:
         """Normalize this matmul's output in its epilogue. Returns whether it took effect.
 
-        Gamma is the op's scalar 1.0: a per-channel gamma has to be folded into whatever
-        consumes the result (see ``DeepSeekV4Attention.__init__``, which folds q_a_norm's
-        into q_b_proj).
+        ``gamma`` is the per-channel RMSNorm weight, width-sharded onto this layer's B
+        cores as a TILE 1x32 vector -- the layout ``matmul_decode`` reads in the
+        epilogue. ``gamma`` may be a torch tensor or a thunk, same as any other weight.
         """
         if not self.can_fuse_rms_norm():
             return False
+        g = gamma() if callable(gamma) else gamma
+        g = g.reshape(1, -1)
+        if g.shape[-1] != self.N:
+            raise ValueError(f"fused RMSNorm gamma last dim {g.shape[-1]} must equal N {self.N}")
+        # Gamma is already this rank's N. A ShardTensorToMesh mapper on the weight would
+        # cut it again; replicate the local vector onto the mesh instead.
+        mapper = self.mesh_mapper
+        if mapper is not None:
+            mapper = ttnn.ReplicateTensorToMesh(self.device)
+        self.fused_rms_norm_gamma = ttnn.from_torch(
+            g,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            tile=SINGLE_USER_TILE,
+            device=self.device,
+            memory_config=fused_rms_norm_gamma_memory_config(self.N, self.b_core_grid()),
+            mesh_mapper=mapper,
+        )
         self.fused_rms_norm_eps = eps
         return True
 
     def set_output_core_grid(self, grid: ttnn.CoreRangeSet) -> None:
         """Mcast the full ``[M, N]`` result to every core of ``grid``, not width-shard it.
 
-        Each destination core then holds a replica, which is exactly the A a following
-        full-width matmul_decode reads -- so pointing this at the next weight's B cores
-        hands that matmul its activation in place. All-core mcast requires this layer's own
-        B cores to sit on the destination grid.
-
-        Blocked on two matmul_decode defects, both written up in the op's
-        ``OUTPUT_CORE_GRID_GAPS.md``: the grid is ignored for a rank-4 activation, and the
-        replica comes back in a layout the next matmul refuses.
+        Each destination core then holds a replica of ``[M, N]``. Dest must be a filled
+        rectangle (NOC multicast). Producers may sit off that rectangle: the writer unicasts
+        into a staging CB on the dest bbox and hub0 multicasts from there.
         """
         if not self._can_matmul_decode_rm_hs():
             raise ValueError(
@@ -617,12 +650,6 @@ class LinearDecode(DeepSeekV4Module):
         ys = {y for _, y in dest}
         if len(dest) != len(xs) * len(ys) or len(xs) != max(xs) - min(xs) + 1 or len(ys) != max(ys) - min(ys) + 1:
             raise ValueError(f"output mcast needs a filled rectangle of cores, but got {sorted(dest)}")
-        b_cores = {(c.x, c.y) for c in _receiver_cores_in_order(self.b_core_grid())}
-        if not b_cores <= dest:
-            raise ValueError(
-                f"all-core output mcast needs this weight's B cores {sorted(b_cores)} to sit on the "
-                f"destination grid {sorted(dest)}"
-            )
         self.output_core_grid = grid
 
     def _epilogue_kwargs(self, output_memory_config: ttnn.MemoryConfig) -> dict:
@@ -633,7 +660,7 @@ class LinearDecode(DeepSeekV4Module):
             kwargs = {"output_mem_config": output_memory_config}
         if self.fused_rms_norm_eps is not None:
             kwargs["rms_norm"] = True
-            kwargs["rms_norm_gamma"] = 1.0
+            kwargs["rms_norm_gamma"] = self.fused_rms_norm_gamma
             kwargs["rms_norm_epsilon"] = self.fused_rms_norm_eps
         return kwargs
 
@@ -1331,6 +1358,12 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
             # rms_norm's own CBs reach ~2.8 MB against a 1.5 MB budget, and even below
             # that the interleaved path is measurably faster past one tile-row. So only
             # shard while the whole tensor is a single tile-row.
+            #
+            # Width-sharded and not height-sharded even when the input already arrives
+            # height-sharded (a ``matmul_decode`` mcast output): the sharded layernorm
+            # factory rejects HEIGHT_SHARDED inputs outright
+            # (``layernorm_device_operation.cpp``, "Height sharded inputs are not
+            # supported"), so that layout cannot reach ``ttnn.rms_norm`` at all.
             if rows <= ttnn.TILE_SIZE:
                 # A batched decode arrives one tile-row per user (``[B,1,1,D]``), so those
                 # ``rows`` sit in ``B`` separate tile-rows and a shard tall enough for the
