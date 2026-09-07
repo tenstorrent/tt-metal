@@ -183,7 +183,7 @@ The NC build emits per-zone wall-clock cycle counts in the same results DataFram
 | FPU slots | 3 | 3 |
 | TDMA_UNPACK slots | 22 | 22 |
 | TDMA_PACK slots | 14 | 5 |
-| L1 mux positions (Tensix) | 2 | 5 |
+| L1 mux positions (Tensix) | 2 | 6 (the harness captures 0 to 4) |
 | L1 slots in inventory | 32 (16 × 2 mux) | 80 (16 × 5 mux) |
 | Total slots in `BUILTIN_COUNTER_CONFIG` (one L1 mux group) | 114 | 105 |
 | Total config words in L1 | 200 (rest are zero-padded) | 200 |
@@ -286,13 +286,14 @@ Each L1 mux group exposes 8 client interfaces x 2 counters — request sels 0–
 
 | Mux | WH meaning | BH meaning |
 |-----|------------|------------|
-| 0 | unpacker, packer port 1, TDMA bundles 0/1, NoC Ring 0 | same |
-| 1 | TDMA packer 2, ext unpackers 1–3, NoC Ring 1 | RISC core, ext unpackers 1–3, NoC Ring 1 |
-| 2 | — | NoC Ring 2 |
-| 3 | — | NoC Ring 3 |
-| 4 | — | Misc L1 ports |
+| 0 | unpacker 0, packer port 1 (+ECC), TDMA bundles 0/1, NoC Ring 0 | unpacker 0, port 1 (unpacker 1 + ECC), TDMA bundles 0/1, NoC Ring 0 |
+| 1 | TDMA packer 2, ext unpackers 1–3, NoC Ring 1 | TDMA packer 2, ext unpackers 1–3, NoC Ring 1 |
+| 2 | — | ext unpackers 4–7, NoC Ring 0 secondary channels |
+| 3 | — | NoC Ring 1 secondary channels, ext packers 2–5 |
+| 4 | — | ext packers 6–7, tag search / packer 1, ext unpackers 8–12 |
+| 5 | — | ext unpackers 13–14 (only slots 0 and 1 are wired; slots 2–7 read 0) |
 
-These labels come from `hw_counters.h` and are unverified: because the mux routes interfaces at count time, they are labels on indices rather than confirmed client functions, and several Blackhole identities are known to be wrong (see the note in `counters.py`).
+The Blackhole column is taken from the A0 tapeout RTL (ws-tensix `BH_A0_RC6`, `tt_tensix.sv`) and was confirmed on silicon by reading every selector under real workloads; positions 6 and 7 have no decode case and fall back to position 0. The labels in `hw_counters.h` and in the harness `counters.py` predate that check and are being brought in line by PR #55162 (the old `NOC_RING2/3` and `MISC_PORT` names describe a 4-NOC build that never shipped).
 
 The mux routes interfaces into the counters while they count and is written once by BRISC before arming, so the freeze path cannot re-aim it. A zone snapshot therefore contains exactly one mux position: the group that was selected while the counters ran. Sweep it by exporting `LLK_PERF_L1_MUX_GROUP` before the producer phase (it is an environment variable, not a CLI flag, and is baked in at compile time, so each value needs its own `--compile-producer`). Sweep across runs to cover the other groups.
 
