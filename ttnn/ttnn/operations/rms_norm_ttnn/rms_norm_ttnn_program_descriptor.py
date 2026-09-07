@@ -1565,6 +1565,83 @@ def _residual_depth(depth_x: int) -> int:
 # legal.
 DEST_ACC_SQUARE_MAX_WT = 8
 
+# D43 (Perf 3) -- THE GROUPED FOLD.  `DEST_ACC_SQUARE_MAX_WT` above is a PRECISION
+# ceiling: it bounds how many x^2 tiles the fold accumulates SERIALLY inside a DEST
+# register that is 16-bit at fp32_dest_acc_en=False.  Because the shipped fold folds
+# the WHOLE chunk or nothing, that precision bound was also a PERF bound -- every
+# prefill profile (WT_CHUNK 32..80) sat on the packed path, paying WT_CHUNK packs and
+# WT_CHUNK unpacks per tile-row.
+#
+# The grouped fold DECOUPLES the two.  `SQ_FOLD_GROUP = G` folds in groups of at most
+# G width tiles: the serial accumulation depth stays <= G, while cb_x_squared holds
+# WT_CHUNK/G tiles per tile-row instead of WT_CHUNK, deleting (G-1)/G of the square's
+# packs and of the reduce's unpacks.
+#   0 or 1  the pre-D43 behaviour exactly: fold the whole chunk when it is <= the
+#           ceiling, otherwise pack every tile.
+#   G > 1   fold in groups of the LARGEST DIVISOR of WT_CHUNK that is <= G.  A divisor
+#           is required because the group must tile the chunk exactly -- a ragged last
+#           group needs a second iteration shape, which one `eltwise_chain` call cannot
+#           express (that is the ONE inexpressible case; it simply gets no fold).
+#
+# MEASURED at G = 16 (bf16 / HiFi2 / fp32_dest_acc_en=False unless the case says
+# otherwise; median of 9, against two identical-program controls that bound the noise
+# band at +-0.6%):
+#   TRISC-bound geometries WIN -- (1,1,32,5120) INT decode 1.033x, (1,1,32,7168) INT
+#   decode 1.036x, (1,1,128,4096) ROW_MAJOR-weight fp32_dest 1.041x, (1,1,256,512)
+#   WIDTH-auto ROW_MAJOR 1.061x, bfloat8_b (1,1,8192,1024) 1.006x / (1,1,8192,5120)
+#   1.014x.
+#   The ROOFLINE-GATED interleaved prefill band is FLAT and stays in the domain --
+#   focus (1,1,8192,1024) 1.005x, 8192x2304 0.998, 8192x5120 1.005, 8192x7168 0.999,
+#   the fp32_dest gbr pair 0.998/1.002, ROW_RESIDENT and STREAM 1.000.
+#   Every geometry where the fold ALREADY shipped (WT_CHUNK 4..8: all four WIDTH
+#   shards, both BLOCK shards) builds a program the grouped rule leaves BYTE-IDENTICAL,
+#   because a chunk <= the ceiling still folds whole.
+#
+# WHERE THE WIN COMES FROM, measured not assumed: the fold deletes exactly what it
+# promises -- `compute_reduce`'s summed-TRISC occupancy 3,710 -> 1,781 ns -- but on the
+# focus shape the TRISC span is 44.7 us against the writer's 54.5 us BRISC span, so
+# TRISC has ~10 us of slack and the deletion is invisible at the wall.  Stub only the
+# write payload (`RMS_ABLATE=WRITE`) and it appears: 56,113 -> 55,068 ns (1.019x).  So
+# the focus shape is an honest NULL for this idea and the win is real elsewhere.
+#
+# PRECISION, measured against a float64 reference on adversarial inputs (every summand
+# identical and non-dyadic -- the textbook serial-sum worst case).  The ceiling's worry
+# is REAL but it belongs to the FLAT fold only:
+#   W=1024 (chunk 32): base / G=4 / G=8 / G=16 all rel-RMS 0.00737;
+#                      an UNBOUNDED fold (depth 32) is 0.01862 -- 2.5x WORSE.
+#   W=2304 (chunk 72): base 0.01849; G=8 and G=16 both 0.00717 -- 2.6x BETTER than
+#                      what ships, because grouping bounds a depth the packed path
+#                      pays in bf16 anyway.
+# On randn inputs the fold is at least as accurate as base on every case measured
+# (focus 0.00667 -> 0.00630; (1,1,8192,7168) 0.00924 -> 0.00615).  So G = 16 is the
+# fastest option that meets the precision contract, and the UNBOUNDED fold -- which was
+# the obvious way to raise the ceiling and is ~1.001x on the focus shape anyway -- is
+# refused ON PRECISION, not on speed.  G = 8 is the conservative alternative (it pins
+# the depth at exactly today's vetted 8) and costs 0.5-2 points of the win.
+SQ_FOLD_GROUP = 16
+
+
+def _x_squared_wt(wt_chunk: int, partial_w: int) -> int:
+    """cb_x_squared's width tiles per tile-row == the reduce's per-call reduce-dim width.
+
+    ONE definition, read by the RESIDENT L1 solve, the CB table and the compute kernel's
+    CT arg -- they must agree page for page or the ring is sized against a layout that
+    does not exist.  Returns `wt_chunk` (no fold), 1 (the flat fold), or a divisor of
+    `wt_chunk` (D43's grouped fold).
+    """
+    if partial_w != 0:
+        # UNCHANGED, and it is a CORRECTNESS gate, not a perf one: the fold folds the
+        # row's last width tile INCLUDING its pad lanes before the reduce runs, so the
+        # reduce's partial scaler / 0-1 mask can no longer reach them.
+        return wt_chunk
+    if wt_chunk <= DEST_ACC_SQUARE_MAX_WT:
+        # Already inside the vetted serial depth: fold the whole chunk, exactly as
+        # pre-D43.  Keeping this branch is what makes every currently-folding geometry
+        # byte-identical for ANY setting of SQ_FOLD_GROUP.
+        return 1
+    g = max((d for d in range(2, min(int(SQ_FOLD_GROUP), wt_chunk) + 1) if wt_chunk % d == 0), default=1)
+    return wt_chunk // g
+
 # Faces of each fp32 partial tile that the cross-core width combine's GATHER ships from a
 # member into the group root -- see D13.  A tile is 2x2 faces of 16x16; a REDUCE_ROW partial
 # is a column vector, so only faces 0 and 2 can carry data.
@@ -3512,7 +3589,7 @@ def create_program_descriptor(
             # D12 fold's predicate is already decidable here; `mult` prices it at the
             # full width, so subtract the difference back off when the fold is on.
             # `CB_SQ_EXACT = 0` keeps the seed's conservative price exactly.
-            sq_wt = 1 if (CB_SQ_EXACT and kernel_partial_w == 0 and wt_core <= DEST_ACC_SQUARE_MAX_WT) else wt_core
+            sq_wt = _x_squared_wt(wt_core, kernel_partial_w) if CB_SQ_EXACT else wt_core
             per_tilerow = wt_core * bt * mult - (wt_core - sq_wt) * bt + per_row_bytes
             return max(0, (budget - fixed) // max(1, per_tilerow)), mult
 
@@ -3868,8 +3945,9 @@ def create_program_descriptor(
     # can no longer reach them.  A1 does not change that gate -- with a residual
     # the folded operand is `cb_x_sum`, whose pad lanes are `x_pad + r_pad`, and
     # the same gate excludes exactly the same builds.
-    square_dest_acc_per_row = kernel_partial_w == 0 and wt_chunk <= DEST_ACC_SQUARE_MAX_WT
-    x_squared_wt = 1 if square_dest_acc_per_row else wt_chunk
+    # D43: `_x_squared_wt` is the ONE definition; the fold is on whenever it narrows.
+    x_squared_wt = _x_squared_wt(wt_chunk, kernel_partial_w)
+    square_dest_acc_per_row = x_squared_wt != wt_chunk
 
     # ---- reduce datapath (D7, refined by D8, carve-out added by D20) -------
     # THREE floors, measuring THREE different quantities -- see the seed's D7/D8/D20
@@ -4315,7 +4393,9 @@ def create_program_descriptor(
         1 if pc_chunked else 0,
     ]
     assert len(compute_ct_args) == COMPUTE_CT_SCALARS, "compute CT-arg count drifted"
-    assert x_squared_wt in (1, wt_chunk), "rms_norm_ttnn: x_squared_wt must be 1 (DEST fold) or WT_CHUNK"
+    assert x_squared_wt >= 1 and wt_chunk % x_squared_wt == 0, (
+        "rms_norm_ttnn: x_squared_wt must divide WT_CHUNK (1 == the flat DEST fold, D43)"
+    )
 
     # ---- the SLOT TREE's ONE extra runtime fact: my level-0 gatherer's coords -------
     tree_parent = {}

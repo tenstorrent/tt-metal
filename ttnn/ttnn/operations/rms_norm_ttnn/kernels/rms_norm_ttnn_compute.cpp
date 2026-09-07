@@ -782,10 +782,21 @@ void kernel_main() {
     // cross-chunk carry still runs through the fp32 cb_row_stat, so the accumulation
     // DEST sees is bounded by WT_CHUNK, which is exactly what the descriptor's
     // DEST_ACC_SQUARE_MAX_WT ceiling bounds.
-    constexpr bool SQ_FOLD = (X_SQUARED_WT == 1) && (WT_CHUNK > 1);
+    // D43 (Perf 3) -- THE GROUPED FOLD.  `X_SQUARED_WT` is now any DIVISOR of
+    // WT_CHUNK, and `SQ_GROUP = WT_CHUNK / X_SQUARED_WT` is how many width tiles
+    // accumulate into ONE DEST slot before a pack.  SQ_GROUP is therefore BOTH the
+    // pack/unpack saving (SQ_GROUP : 1) AND the serial 16-bit accumulation depth that
+    // the descriptor's DEST_ACC_SQUARE_MAX_WT ceiling exists to bound -- and D43's
+    // whole point is that the two are now decoupled from WT_CHUNK.  A chunk of 32 can
+    // fold in groups of 16 and still delete 15 of every 16 packs.
+    //   X_SQUARED_WT == 1           the FLAT fold (SQ_GROUP == WT_CHUNK), pre-D43
+    //   1 < X_SQUARED_WT < WT_CHUNK the GROUPED fold
+    //   X_SQUARED_WT == WT_CHUNK    the PACKED path (SQ_GROUP == 1, no fold)
+    constexpr uint32_t SQ_GROUP = WT_CHUNK / X_SQUARED_WT;
+    constexpr bool SQ_FOLD = (SQ_GROUP > 1);
     static_assert(
-        X_SQUARED_WT == 1 || X_SQUARED_WT == WT_CHUNK,
-        "rms_norm_ttnn: X_SQUARED_WT must be 1 (the DEST fold) or WT_CHUNK (the packed path)");
+        X_SQUARED_WT >= 1 && WT_CHUNK % X_SQUARED_WT == 0,
+        "rms_norm_ttnn: X_SQUARED_WT must be a divisor of WT_CHUNK (1 == the flat DEST fold, D43)");
     static_assert(
         !SQ_FOLD || PARTIAL_W == 0,
         "rms_norm_ttnn: the DEST fold folds the last width tile's pad lanes in BEFORE the "
@@ -1260,16 +1271,24 @@ void kernel_main() {
                 // (D12).  `square` cannot carry the tile base, so the chain is spelled
                 // out; it is exactly what square<> expands to.
                 MaybeDeviceZoneScope("compute_square");
+                // D43: the fold's grid is (rows * X_SQUARED_WT) rows of SQ_GROUP tiles,
+                // so `DestAccumulation::PerRow` acquires / packs / clears DEST once per
+                // GROUP instead of once per chunk.  `OperandKind::Block` indexes
+                // `base + r * Wt + c`, so the walk over the (rows x WT_CHUNK) block is
+                // the flat shape's walk, tile for tile -- the reshape is the WHOLE
+                // mechanism and no helper is bypassed.  The PACKED branch keeps
+                // grid(rows, WT_CHUNK) AND its SQ_BLK DEST blocking, because
+                // `block_size` applies to the INNER extent: folding it into the reshaped
+                // grid would silently drop D21's blocking on the un-folded path.
+                const auto sq_shape = SQ_FOLD ? ckl::IterationShape::grid(rows * X_SQUARED_WT, SQ_GROUP)
+                                              : ckl::IterationShape::grid(rows, WT_CHUNK).block_size(SQ_BLK);
 #ifdef RMS_ABLATE_COMPUTE
                 // Payload stubbed: ONE unpack + ONE pack instead of the squaring
                 // FPU binary, with the identical CB lifecycle and trip count.
-                ckl::eltwise_chain(
-                    ckl::IterationShape::grid(rows, WT_CHUNK).block_size(SQ_BLK),
-                    ckl::CopyTile<X_IN_A>{hold_base},
-                    ckl::PackTile<SQ_OUT>{});
+                ckl::eltwise_chain(sq_shape, ckl::CopyTile<X_IN_A>{hold_base}, ckl::PackTile<SQ_OUT>{});
 #else
                 ckl::eltwise_chain(
-                    ckl::IterationShape::grid(rows, WT_CHUNK).block_size(SQ_BLK),
+                    sq_shape,
                     ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, X_IN_A, X_IN_A, ckl::Dst::D0, SQ_OUT.dest_accumulation>{
                         hold_base, hold_base},
                     ckl::PackTile<SQ_OUT>{});
