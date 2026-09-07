@@ -202,19 +202,27 @@ The recorded baseline is the vLLM serving sweep in
 `qwen38_checkpoint_swap/benchmarks_c1/sweep_summary.json`. Re-running the same
 ISL 65536 point under vLLM (`vllm_isl65536_result.json`):
 
-| | recorded (2026-08-31) | now | |
-| --- | --- | --- | --- |
-| `mean_ttft_ms` | 1837053.3 | **569324.7** | **3.23x** |
-| `mean_tpot_ms` | 69.67 | 56.36 | 1.24x |
-| completed / failed | 1 / 0 | 1 / 0 | |
+| ISL | metric | recorded (2026-08-31) | now | |
+| --- | --- | --- | --- | --- |
+| 65536 | `mean_ttft_ms` | 1837053.3 | **569324.7** | **3.23x** |
+| 65536 | `mean_tpot_ms` | 69.67 | 56.36 | 1.24x |
+| 65536 | completed / failed | 1 / 0 | 1 / 0 | |
+| 131072 | `mean_ttft_ms` | **TIMEOUT** (rc124, no number) | **1150441.5** | -- |
+| 131072 | `mean_tpot_ms` | -- | 57.96 | |
+| 131072 | completed / failed | never completed | 1 / 0 | |
+
+ISL 131072 is the point the recorded sweep could not finish at all; it now
+returns a number. Because the baseline is a timeout rather than a measurement,
+there is no ratio to quote for it.
 
 The TPOT change is **not** attributable to the prefill work, which cannot affect
 decode; it is most likely the fused KDA conv in the decode path, and possibly
 `max_num_seqs` (see the caveat below). Do not report it as a prefill result.
 
-A useful cross-check: the bare harness measured 573.907 s TTFT for this point
-and vLLM measures 569.325 s -- 0.8% apart. At this ISL vLLM serving overhead is
-negligible, so bare-harness prefill numbers can be read as serving numbers.
+A useful cross-check at both points: the bare harness measured 573.907 s and
+1151.208 s TTFT, vLLM measures 569.325 s and 1150.441 s -- 0.8% and 0.07% apart.
+At these ISLs vLLM serving overhead is negligible, so bare-harness prefill
+numbers can be read as serving numbers.
 
 **Caveat on the baseline.** The sweep artifacts never recorded the server's
 `max_num_seqs` (`benchmarks_c1` names the *client* concurrency, a different
