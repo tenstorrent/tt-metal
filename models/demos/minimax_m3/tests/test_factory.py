@@ -151,6 +151,13 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, linear_fabric=False):
         # Galaxy (no wrap-around links) can only do FABRIC_1D — pass linear_fabric=True
         # there (and use ttnn.Topology.Linear in the CCLManager). See galaxy_mesh_smoke.py.
         multidev_fabric = ttnn.FabricConfig.FABRIC_1D if linear_fabric else ttnn.FabricConfig.FABRIC_1D_RING
+        # Experiment override: M3_TEST_FABRIC=FABRIC_2D_TORUS_Y (any ttnn.FabricConfig name) runs the same
+        # tests under another fabric, e.g. to measure the high_bw_all_gather ring schedule on a torus. Pair
+        # it with an unset TT_MESH_GRAPH_DESC_PATH so the torus wrap is auto-discovered (see
+        # deepseek_v3_d_p/tests/fabric_profiles.py).
+        fabric_override = os.getenv("M3_TEST_FABRIC")
+        if fabric_override:
+            multidev_fabric = getattr(ttnn.FabricConfig, fabric_override)
         params = [
             pytest.param(
                 shape,
@@ -173,9 +180,11 @@ def parametrize_batch_seq(configs=None, ids=None):
     """Universal batch/seq parametrization"""
     configs = configs or [(1, 1), (1, 32)]
     ids = ids or [
-        f"prefill_{seq_len//1024 if seq_len > 1024 else seq_len}" + ("k" if seq_len > 1024 else "")
-        if seq_len > 1
-        else "decode_mode"
+        (
+            f"prefill_{seq_len//1024 if seq_len > 1024 else seq_len}" + ("k" if seq_len > 1024 else "")
+            if seq_len > 1
+            else "decode_mode"
+        )
         for batch_size, seq_len in configs
     ]
     return pytest.mark.parametrize("batch_size, seq_len", configs, ids=ids)

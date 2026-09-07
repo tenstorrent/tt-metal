@@ -9,7 +9,13 @@ from ..residual import use_sharded_residual
 from .config import AttentionConfig, ProgramConfig
 from .dense_sp import dense_sp_attention, dense_sp_attention_nocache
 from .kv_cache import write_index_k_chunk, write_kv_chunk
-from .msa import index_branch_forward, msa_sp_attention, msa_sp_attention_nocache
+from .msa import (
+    USE_HIGH_BW_GATHER,
+    index_branch_forward,
+    msa_sp_attention,
+    msa_sp_attention_cache_read,
+    msa_sp_attention_nocache,
+)
 from .operations import (
     apply_allgather_and_slice,
     apply_allreduce,
@@ -195,9 +201,32 @@ def attention_forward(
                     kv_actual=cached_len,
                     sp_axis=mesh_config.sp_axis,
                 )
-        if cached_len > 0:
-            # Cache-read: current chunk attends the ACCUMULATED prefix. Slice this (user, layer) slot's
-            # block-cyclic accumulated K/V/index_k out of the packed cache, then gather+reorder+sparse.
+        if cached_len > 0 and USE_HIGH_BW_GATHER:
+            # Cache-read: current chunk attends the ACCUMULATED prefix, gathered across SP straight from
+            # this (user, layer) slot of the packed ND-sharded cache by high_bw_all_gather (no whole-cache
+            # de-shard, no slot slice). See msa_sp_attention_cache_read.
+            sp = mesh_device.shape[mesh_config.sp_axis]
+            chunk_local = seq_len  # current chunk per-chip rows
+            n_chunks = cached_len // (seq_len * sp) + 1  # chunks now in the cache (incl. current)
+            slot = user_id * kv_cache.num_layers + layer_idx
+            tt_sdpa_out = msa_sp_attention_cache_read(
+                tt_q,
+                tt_iq,
+                kv_cache,
+                slot=slot,
+                n_chunks=n_chunks,
+                mesh_config=mesh_config,
+                ccl_manager=ccl_manager,
+                cached_len=cached_len,
+                chunk_local=chunk_local,
+                scale=config.head_dim**-0.5,
+                block_size=config.msa_block_size,
+                topk_blocks=config.msa_topk_blocks,
+                num_groups=num_local_kv_heads,
+            )
+        elif cached_len > 0:
+            # LEGACY cache-read (M3_MSA_GATHER=legacy): slice this (user, layer) slot's block-cyclic
+            # accumulated K/V/index_k out of the packed cache, then gather+reorder+sparse.
             sp = mesh_device.shape[mesh_config.sp_axis]
             chunk_local = seq_len  # current chunk per-chip rows
             n_chunks = cached_len // (seq_len * sp) + 1  # chunks now in the cache (incl. current)

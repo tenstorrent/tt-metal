@@ -7,6 +7,16 @@ import ttnn
 
 
 class CCLManager:
+    """Semaphores, topology and persistent scratch for M3's collectives.
+
+    ``topology`` is handed to the LEGACY CCLs (all_gather_async, reduce_scatter_minimal_async, ring_joint).
+    The galaxy prefill runtime passes Linear, also on the FABRIC_1D_RING fabric it now runs on: Ring on the
+    legacy CCLs has faster kernels but more dispatch overhead and was a net loss untraced (row 4 in
+    docs/ATTENTION_HIGH_BW_ALL_GATHER.md). Revisit together with FABRIC_2D_TORUS_XY once prefill runs under
+    trace and the 2D-optimised MoE dispatch/combine land. ``high_bw_all_gather`` ignores this topology: it
+    derives ring vs line from the fabric itself.
+    """
+
     def __init__(self, mesh_device, num_links, topology=ttnn.Topology.Ring):
         self.mesh_device = mesh_device
         self.num_links = num_links
@@ -19,6 +29,12 @@ class CCLManager:
         # Persistent ring-gather scratch buffers for ring_joint SDPA, allocated once and reused across
         # every layer/chunk (key -> tensor). See get_ring_gather_buffer.
         self._ring_gather_buffers = {}
+
+        # Persistent output buffers for ttnn.experimental.high_bw_all_gather (the MSA K/V/index_k SP
+        # gathers). The op writes a caller-owned, fixed worst-case-shape DRAM output; layers run serially,
+        # so one buffer per (key, shape, dtype) is shared across every layer/chunk. See
+        # get_high_bw_gather_buffer.
+        self._high_bw_gather_buffers = {}
 
         # Setup semaphores
         self._init_subdevice()
@@ -130,6 +146,31 @@ class CCLManager:
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=(rows, cols), dims=[None, 1]),
             )
         return self._ring_gather_buffers[cache_key]
+
+    def get_high_bw_gather_buffer(self, key, shape, dtype, layout=ttnn.TILE_LAYOUT):
+        """Persistent, REPLICATED, DRAM-interleaved output for ``ttnn.experimental.high_bw_all_gather``.
+
+        The op has no allocation of its own: it writes into a caller-provided output whose shape is the
+        WORST-CASE gathered shape (input dim x axis size), landing rank r's rows at the fixed slot
+        ``r * input_rows`` regardless of how much of the input is active (``gathered_dim_size``). The
+        buffer is therefore sized once for the full cache capacity and reused for every chunk/layer; the
+        never-written tail is scratch the consumers must not dereference (the MSA indexer is bounded by
+        ``kv_len``, sparse SDPA only reads selected blocks). ``key`` separates buffers that are live at the
+        same time (K vs V vs index_k in one attention call); ``shape``/``dtype`` key the rest. Zero-filled
+        once at allocation so an accidental read of the tail is finite rather than NaN garbage.
+        Mirrors DeepSeek's ``TT_CCL.get_mla_sparse_kv_gather_buffer``.
+        """
+        cache_key = (key, tuple(shape), str(dtype), str(layout))
+        if cache_key not in self._high_bw_gather_buffers:
+            self._high_bw_gather_buffers[cache_key] = ttnn.from_torch(
+                torch.zeros(*shape),
+                dtype=dtype,
+                layout=layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self._high_bw_gather_buffers[cache_key]
 
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""

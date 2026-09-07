@@ -256,3 +256,200 @@ def test_msa_sp_cache_read_ndshard_pcc(mesh_device, device_params, chunk_local, 
         f"NdShard ROUND_ROBIN_1D cache-read diverges from the contiguous golden ({pcc_msg}); "
         f"the to_memory_config NdShard->interleaved reorder scrambles token order."
     )
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
+@pytest.mark.parametrize(
+    "chunk_local,n_prior,capacity_chunks,slot",
+    [(640, 1, 2, 0), (640, 1, 4, 3), (640, 3, 6, 1)],
+    ids=["prior1_cap2_slot0", "prior1_cap4_slot3", "prior3_cap6_slot1"],
+)
+@pytest.mark.parametrize(
+    "cache_dtype,typecast_bf16",
+    [(ttnn.bfloat16, False), (ttnn.bfloat8_b, False), (ttnn.bfloat8_b, True)],
+    ids=["bf16cache", "bf8cache", "bf8cache_typecast"],
+)
+def test_msa_sp_cache_read_high_bw_pcc(
+    mesh_device,
+    device_params,
+    chunk_local,
+    n_prior,
+    capacity_chunks,
+    slot,
+    cache_dtype,
+    typecast_bf16,
+    reset_seeds,
+    monkeypatch,
+):
+    """The high_bw_all_gather cache-read path (``msa_sp_attention_cache_read``, the deployed default) vs the
+    legacy path, exact-PCC.
+
+    Both read the SAME real multi-slot ND-sharded cache (``allocate_kv_caches``, capacity ``capacity_chunks``
+    chunks, ``num_layers`` slots, every chunk written via ``write_kv_chunk``/``write_index_k_chunk``):
+      GOLDEN  — bf16 cache: the contiguous SP shard of the block-cyclic-permuted context through the legacy
+                ``msa_sp_attention`` gather (all_gather_async), as in test_msa_sp_cache_read_ndshard_pcc —
+                independent of the cache write. bf8 cache: the legacy prefill.py path over the same cache
+                (whole-tensor NdShard->interleaved + slot slice + all_gather_async + typecast bf16), so both
+                paths see the identical device-quantized bf8 values.
+      HIGH-BW — ``msa_sp_attention_cache_read``: high_bw_all_gather addresses slot ``slot`` in-op
+                (``input_batch_index``), moves only the written prefix (``gathered_dim_size``) into the
+                persistent worst-case buffer, and the consumers decode the fixed-slot block-cyclic layout with
+                T = capacity.
+
+    The three layouts pin what differs from the legacy path: capacity > written prefix (the fixed-slot stride
+    is seq_local, not n_rows), a non-zero slot in a multi-slot cache (in-op slot select), and a 4-chunk prefix.
+    ``bf8cache`` feeds the deployed bf8 cache to the consumers natively (the legacy path typecast to bf16);
+    ``bf8cache_typecast`` flips the M3_MSA_GATHER_BF16 debug typecast on, so a bf8-only PCC gap is
+    attributable to the kernels' native bf8 unpack rather than to the gather.
+    """
+    from models.common.utility_functions import comp_pcc
+    from models.demos.minimax_m3.tt.attention import msa as msa_mod
+    from models.demos.minimax_m3.tt.attention.kv_cache import allocate_kv_caches, write_index_k_chunk, write_kv_chunk
+    from models.demos.minimax_m3.tt.attention.msa import msa_sp_attention_cache_read
+
+    monkeypatch.setattr(msa_mod, "GATHER_TYPECAST_BF16", typecast_bf16)
+
+    rows, cols = mesh_device.shape
+    assert (rows, cols) == (8, 4)
+    sp, tp, sp_axis = rows, cols, 0
+    chunk = sp * chunk_local
+    cached_len = n_prior * chunk
+    n_chunks = n_prior + 1
+    T = n_chunks * chunk  # written prefix
+    capacity = capacity_chunks * chunk  # cache capacity (>= T)
+    assert capacity >= T
+    num_layers = slot + 1  # enough slots to place the tested one last
+    G = NQ // NKV
+    scale = HEAD_DIM**-0.5
+
+    torch.manual_seed(0)
+    q = torch.randn(1, NQ, chunk, HEAD_DIM, dtype=torch.bfloat16) * 0.1
+    iq = torch.randn(1, NIDX, chunk, HEAD_DIM, dtype=torch.bfloat16) * 0.1
+    k = torch.randn(1, NKV, T, HEAD_DIM, dtype=torch.bfloat16) * 0.1
+    v = torch.randn(1, NKV, T, HEAD_DIM, dtype=torch.bfloat16) * 0.1
+    ik = torch.randn(1, 1, T, HEAD_DIM, dtype=torch.bfloat16) * 0.1
+
+    mesh_config = MeshConfig((rows, cols), tp=tp)
+    ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
+
+    def shard(t, split_heads, dtype=ttnn.bfloat16):
+        dims = [None, None]
+        dims[sp_axis] = 2
+        dims[1] = 1 if split_heads else None
+        return ttnn.from_torch(
+            t,
+            device=mesh_device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=dims),
+        )
+
+    bc_idx = torch.tensor(
+        [
+            chunk_c * chunk + chip * chunk_local + c
+            for chip in range(sp)
+            for chunk_c in range(n_chunks)
+            for c in range(chunk_local)
+        ],
+        dtype=torch.long,
+    )
+
+    def shard_bc(t, split_heads):
+        return shard(t[:, :, bc_idx, :], split_heads)
+
+    def collect(out_t):
+        dts = ttnn.get_device_tensors(out_t)
+        groups = [
+            torch.cat([ttnn.to_torch(dts[r * cols + c]).float()[:, :G] for r in range(rows)], dim=2)
+            for c in range(cols)
+        ]
+        return torch.cat(groups, dim=1)  # [1, NQ, chunk, HD]
+
+    common = dict(mesh_config=mesh_config, ccl_manager=ccl, cached_len=cached_len, scale=scale, num_groups=1)
+    common.update(block_size=128, topk_blocks=16)
+
+    # The real multi-slot ND-sharded cache at capacity > prefix, tested slot last.
+    kv = allocate_kv_caches(
+        mesh_device,
+        num_layers=num_layers,
+        max_seq_len=capacity,
+        sp_axis=sp_axis,
+        head_dim=HEAD_DIM,
+        cache_dtype=cache_dtype,
+    )
+    # Poison the OTHER slots so a wrong slot select / stride shows up as a PCC failure, not a lucky zero.
+    for other in range(num_layers - 1):
+        for c in range(n_chunks):
+            sl = slice(c * chunk, (c + 1) * chunk)
+            noise_k = torch.randn_like(k[:, :, sl, :])
+            noise_v = torch.randn_like(v[:, :, sl, :])
+            noise_ik = torch.randn_like(ik[:, :, sl, :])
+            write_kv_chunk(
+                kv,
+                shard(noise_k, True),
+                shard(noise_v, True),
+                slot_idx=0,
+                layer_idx=other,
+                kv_actual=c * chunk,
+                sp_axis=sp_axis,
+            )
+            write_index_k_chunk(
+                kv, shard(noise_ik, False), slot_idx=0, layer_idx=other, kv_actual=c * chunk, sp_axis=sp_axis
+            )
+    for c in range(n_chunks):
+        sl = slice(c * chunk, (c + 1) * chunk)
+        write_kv_chunk(
+            kv,
+            shard(k[:, :, sl, :], True),
+            shard(v[:, :, sl, :], True),
+            slot_idx=0,
+            layer_idx=slot,
+            kv_actual=c * chunk,
+            sp_axis=sp_axis,
+        )
+        write_index_k_chunk(
+            kv, shard(ik[:, :, sl, :], False), slot_idx=0, layer_idx=slot, kv_actual=c * chunk, sp_axis=sp_axis
+        )
+
+    if cache_dtype == ttnn.bfloat16:
+        # GOLDEN (bf16): contiguous block-cyclic shard through the legacy gather, independent of the cache.
+        golden_in = (shard_bc(k, True), shard_bc(v, True), shard_bc(ik, False))
+    else:
+        # GOLDEN (bf8): the legacy prefill.py cache read over the SAME cache — whole-tensor de-shard first
+        # (slicing the NdShard tensor directly scrambles the round-robin banks), then the slot slice. The
+        # legacy gather typecasts the bf8 result to bf16 before the consumers.
+        n_rows = n_chunks * chunk_local
+        ints = [ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for t in (kv.k, kv.v, kv.index_k)]
+        golden_in = tuple(ttnn.slice(t, (slot, 0, 0, 0), (slot + 1, 1, n_rows, HEAD_DIM)) for t in ints)
+    out_golden = collect(
+        msa_sp_attention(
+            shard(q, True),
+            golden_in[0],
+            golden_in[1],
+            shard(iq, True),
+            golden_in[2],
+            s_local=chunk_local,
+            chunk_local=chunk_local,
+            **common,
+        )
+    )
+
+    # HIGH-BW: gathered in-op straight from the cache slot.
+    out_hbw = collect(
+        msa_sp_attention_cache_read(
+            shard(q, True),
+            shard(iq, True),
+            kv,
+            slot=slot,
+            n_chunks=n_chunks,
+            chunk_local=chunk_local,
+            **common,
+        )
+    )
+
+    passing, pcc_msg = comp_pcc(out_golden, out_hbw, 0.99)
+    logger.info(
+        f"[cache-read-high-bw-pcc] {cache_dtype} typecast={typecast_bf16} capacity={capacity} prefix={T} "
+        f"slot={slot}/{num_layers}: {pcc_msg}"
+    )
+    assert passing, f"high_bw_all_gather cache-read diverges from the legacy-path golden ({pcc_msg})"

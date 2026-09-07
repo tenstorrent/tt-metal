@@ -50,6 +50,9 @@ class TtPrefillRuntimeConfig:
     num_users: int = 1  # independent cache slots (user-major batch)
     sp_axis: int = 0
     tp_axis: int = 1
+    # Topology for the LEGACY CCLs only (high_bw_all_gather derives its own from the fabric). Linear also on the
+    # FABRIC_1D_RING fabric the galaxy runs on; Ring and FABRIC_2D_TORUS_XY are measured + tracked in
+    # docs/ATTENTION_HIGH_BW_ALL_GATHER.md (revisit under trace / 2D-optimised MoE dispatch+combine).
     topology: ttnn.Topology = ttnn.Topology.Linear
     use_ep_moe: bool = True
     expert_weight_dtype: ttnn.DataType = ttnn.bfloat4_b

@@ -216,9 +216,18 @@ def main():
             flush=True,
         )
 
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    # M3_FABRIC / M3_CCL_TOPOLOGY: fabric config and legacy-CCL topology (see tt_prefill_runtime). Default is
+    # the deployed pair: FABRIC_1D_RING fabric (with the torus_xy mesh graph descriptor the wrapper scripts set)
+    # so high_bw_all_gather rings, while the legacy CCLs stay Linear. Ring for the legacy CCLs and
+    # FABRIC_2D_TORUS_XY are measured and tracked in docs/ATTENTION_HIGH_BW_ALL_GATHER.md.
+    ccl_topology = getattr(ttnn.Topology, os.getenv("M3_CCL_TOPOLOGY", "Linear"))
+    ttnn.set_fabric_config(getattr(ttnn.FabricConfig, os.getenv("M3_FABRIC", "FABRIC_1D_RING")))
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols))
-    print(f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
+    print(
+        f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()} "
+        f"fabric={ttnn.get_fabric_config()} ccl_topology={ccl_topology}",
+        flush=True,
+    )
     try:
         model_args = ModelArgs(mesh_device=mesh)  # HF_MODEL
         hf_config = model_args.hf_config
@@ -285,6 +294,7 @@ def main():
             num_users=1,
             expert_weight_dtype=expert_dtype,
             weight_cache_path=cache_path,
+            topology=ccl_topology,
         )
         runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
         del state_dict

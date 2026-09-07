@@ -25,10 +25,12 @@ down_proj,tp_allreduce}. Sparse layer: the same front end plus attn/{index_branc
 cache_read/{deshard,slice},ag_kv,ag_index_k,indexer,sparse_sdpa} and mlp/{shared_expert,router_topk,
 routing_setup,dispatch,experts_mm,combine,reduce_ws_rs,tp_allgather,add_shared}.
 
-`cache_read/deshard` is the one to watch: the MSA cache-read path converts the ENTIRE packed cache
-(num_users*num_layers slots x3 tensors) from NdShard to DRAM-interleaved on EVERY sparse layer to work
-around the round-robin slice corruption (see attention/prefill.py). That is ~60x more traffic than the
-layer needs; this zone measures the real cost.
+`cache_read/{deshard,slice}` exist only under M3_MSA_GATHER=legacy: that path converts the ENTIRE packed
+cache (num_users*num_layers slots x3 tensors) from NdShard to DRAM-interleaved on EVERY sparse layer to
+work around the round-robin slice corruption (see attention/prefill.py) -- ~60x more traffic than the
+layer needs. The default path (ttnn.experimental.high_bw_all_gather, attention/msa.py
+msa_sp_attention_cache_read) gathers the slot straight out of the ND-sharded cache, so its whole
+cache-read cost is `ag_kv` + `ag_index_k`. Run both modes to A/B them.
 
 Tokens come from a REAL golden trace's metadata.json (tiled to length, exactly like
 scripts/run_prefill_perf.sh's make_trace): MoE expert routing is content-dependent, so random token ids would
@@ -60,7 +62,7 @@ way run_prefill_perf.sh does:
 Manual equivalent:
   cd $TT_METAL_HOME && source python_env/bin/activate && export PYTHONPATH=$TT_METAL_HOME
   export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref
-  export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+  export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
   PROFILE_CACHE=25600 PREFILL_TRACE_DIR=<golden> \
     python3 -m tracy -v -r -p models/demos/minimax_m3/tests/perf/profile_prefill.py
 
@@ -202,6 +204,7 @@ def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None):
         expert_weight_dtype=expert_dtype,
         weight_cache_path=cache_path,
         layer_indices=layer_ids,
+        topology=getattr(ttnn.Topology, os.getenv("M3_CCL_TOPOLOGY", "Linear")),
     )
     runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
     del state_dict
@@ -256,8 +259,16 @@ def main():
         print("[zone-prof] PROFILE_DRY_RUN=1 -> chunk math + tokens only, exiting before device open", flush=True)
         return 0
 
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    # M3_FABRIC / M3_CCL_TOPOLOGY: fabric config and legacy-CCL topology (see tt_prefill_runtime). Default is
+    # the deployed pair: FABRIC_1D_RING fabric (with the torus_xy mesh graph descriptor the wrapper scripts set)
+    # so high_bw_all_gather rings, while the legacy CCLs stay Linear. Ring for the legacy CCLs and
+    # FABRIC_2D_TORUS_XY are measured and tracked in docs/ATTENTION_HIGH_BW_ALL_GATHER.md.
+    ttnn.set_fabric_config(getattr(ttnn.FabricConfig, os.getenv("M3_FABRIC", "FABRIC_1D_RING")))
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(8, 4))
+    print(
+        f"[zone-prof] fabric={ttnn.get_fabric_config()} ccl_topology={os.getenv('M3_CCL_TOPOLOGY', 'Linear')}",
+        flush=True,
+    )
     print(f"[zone-prof] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
     try:
         from models.demos.minimax_m3.utils.profiler_utils import COARSE, ZONES_ENABLED, read_profiler, zone
