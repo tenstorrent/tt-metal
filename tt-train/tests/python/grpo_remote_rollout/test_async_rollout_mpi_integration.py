@@ -44,6 +44,10 @@ UPDATED_VERSION = 1
 MESH_SHAPE = (1, 1)
 
 
+def _trace(message: str) -> None:
+    print(f"[rank {_MPI_RANK}] {message}", flush=True)
+
+
 def _ensure_distributed_context() -> None:
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
@@ -139,9 +143,12 @@ def _lease(lease_id: str, version: int) -> PromptGroupLease:
 
 
 def _trainer_side(mesh) -> None:
+    _trace("initializing trainer bridge and transport")
     bridge = HostWeightBridge.init_sender(mesh=mesh, peer_rank=RECEIVER_RANK)
     transport = MPIRolloutTrainerTransport(peer_rank=RECEIVER_RANK, capacity=2)
+    _trace("connecting trainer bridge")
     bridge.connect()
+    _trace("starting trainer transport")
     transport.start()
     coordinator = SingleWorkerRolloutCoordinator(
         engine_id=ENGINE_ID,
@@ -151,25 +158,33 @@ def _trainer_side(mesh) -> None:
     )
 
     first = _lease("lease-0", INITIAL_VERSION)
+    _trace("submitting initial lease")
     coordinator.submit(first, timeout=10)
+    _trace("beginning policy cutover")
     coordinator.begin_policy_cutover(UPDATED_VERSION, _version_weights(mesh, UPDATED_VERSION), timeout=30)
+    _trace("awaiting policy activation")
     coordinator.await_policy_activation(UPDATED_VERSION, timeout=30)
 
+    _trace("receiving initial result")
     old_result = coordinator.receive_result(timeout=10)
     assert old_result.behavior_version == INITIAL_VERSION
     assert old_result.output == _expected_output(INITIAL_VERSION, 2)
 
     second = _lease("lease-1", UPDATED_VERSION)
+    _trace("submitting updated lease")
     coordinator.submit(second, timeout=10)
+    _trace("receiving updated result")
     new_result = coordinator.receive_result(timeout=10)
     assert new_result.behavior_version == UPDATED_VERSION
     assert new_result.output == _expected_output(UPDATED_VERSION, 2)
     assert coordinator.active_version == UPDATED_VERSION
     assert coordinator.outstanding_count == 0
+    _trace("closing coordinator")
     coordinator.close()
 
 
 def _worker_side(mesh) -> None:
+    _trace("initializing worker bridge, transport, and engine")
     worker = _DeterministicGenerationWorker()
     raw_bridge = HostWeightBridge.init_receiver(mesh=mesh, peer_rank=SENDER_RANK, submeshes=[mesh])
     bridge = _RecordingReceiverBridge(raw_bridge, worker.generation_inflight)
@@ -185,9 +200,13 @@ def _worker_side(mesh) -> None:
         event_sink=service.handle_event,
     )
     service.bind_engine(engine)
+    _trace("connecting worker bridge")
     raw_bridge.connect()
+    _trace("starting worker transport")
     transport.start()
+    _trace("serving rollout commands")
     service.serve_forever()
+    _trace("worker service stopped")
 
     assert bridge.received_during_generation, "weight receipt did not overlap the old-policy rollout"
     assert engine.snapshot().active_version == UPDATED_VERSION
@@ -196,8 +215,11 @@ def _worker_side(mesh) -> None:
 @pytest.mark.timeout(120)
 def test_async_rollout_mpi_cutover() -> None:
     """Exercise rollout, overlapped staging, activation, and clean shutdown."""
+    _trace("initializing distributed context")
     _ensure_distributed_context()
+    _trace("opening mesh")
     mesh = _open_mesh()
+    _trace("mesh opened")
     try:
         if _MPI_RANK == SENDER_RANK:
             _trainer_side(mesh)
@@ -206,5 +228,7 @@ def test_async_rollout_mpi_cutover() -> None:
         else:
             raise RuntimeError(f"unexpected MPI rank {_MPI_RANK}")
     finally:
+        _trace("closing mesh")
         gc.collect()
         ttnn.close_mesh_device(mesh)
+        _trace("mesh closed")
