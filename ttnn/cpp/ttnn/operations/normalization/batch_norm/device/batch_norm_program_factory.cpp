@@ -465,13 +465,14 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
         // Re-key of the legacy unpack_to_dest_mode vector, which was indexed by CB id. Every DFB the
         // compute kernel consumes is listed; the writer-facing output is producer-only, so it gets no
         // entry. An omitted DFB keeps the UnpackToSrc default.
-        auto& unpack_modes = std::get<ComputeGen1Config>(compute_hw_config).unpack_modes;
+        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+        auto& dfb_unpack_modes = unpack_modes(compute_hw_config);
         for (const auto& dfb_name :
              {INPUT_DFB, BATCH_MEAN_DFB, BATCH_VAR_DFB, EPS_DFB, DEN_DFB, WEIGHT_DFB, TEMP_1_DFB, BIAS_DFB}) {
-            unpack_modes[dfb_name] = UnpackMode::UnpackToDest;
+            dfb_unpack_modes[dfb_name] = UnpackMode::UnpackToDest;
         }
         if (needs_output_typecast) {
-            unpack_modes[OUT_DFB] = UnpackMode::UnpackToDest;
+            dfb_unpack_modes[OUT_DFB] = UnpackMode::UnpackToDest;
         }
     }
 
