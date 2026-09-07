@@ -15,7 +15,6 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include <cstdint>
 
 namespace ttnn {
 
@@ -30,7 +29,7 @@ namespace ttnn {
  */
 Tensor pow(
     const Tensor& input,
-    std::int32_t exponent,
+    int32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt);
 

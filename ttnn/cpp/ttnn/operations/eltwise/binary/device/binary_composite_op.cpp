@@ -925,22 +925,22 @@ Tensor bias_gelu(
 
 // At/below this width the intermediates are worth keeping in L1: it skips the DRAM round-trip
 // between the composed ops. 3072 is the K3 routed-expert moe_intermediate_size.
-constexpr std::uint32_t SITU_GLU_L1_MAX_HIDDEN = 3072;
+constexpr uint32_t SITU_GLU_L1_MAX_HIDDEN = 3072;
 
 // Width alone does not bound the intermediates -- their size is the whole volume. Three are
 // live at the peak (softcap(gate) and sigmoid(gate) are still alive when their multiply
 // allocates situ_a), and an interleaved-L1 buffer that does not fit is a hard allocator
 // failure rather than a DRAM fallback, so the token count has to be checked too.
-constexpr std::uint64_t SITU_GLU_L1_PEAK_INTERMEDIATES = 3;
+constexpr uint64_t SITU_GLU_L1_PEAK_INTERMEDIATES = 3;
 // Fraction of total L1 the intermediates may claim, leaving room for the ops' CBs.
-constexpr std::uint64_t SITU_GLU_L1_BUDGET_NUM = 3;
-constexpr std::uint64_t SITU_GLU_L1_BUDGET_DEN = 4;
+constexpr uint64_t SITU_GLU_L1_BUDGET_NUM = 3;
+constexpr uint64_t SITU_GLU_L1_BUDGET_DEN = 4;
 
 static bool situ_glu_intermediates_fit_l1(const Tensor& gate) {
     const auto& allocator = gate.device()->allocator();
-    const std::uint64_t l1_total = static_cast<std::uint64_t>(allocator->get_bank_size(tt::tt_metal::BufferType::L1)) *
-                                   allocator->get_num_banks(tt::tt_metal::BufferType::L1);
-    const std::uint64_t peak = SITU_GLU_L1_PEAK_INTERMEDIATES * gate.buffer()->size();
+    const uint64_t l1_total = static_cast<uint64_t>(allocator->get_bank_size(tt::tt_metal::BufferType::L1)) *
+                              allocator->get_num_banks(tt::tt_metal::BufferType::L1);
+    const uint64_t peak = SITU_GLU_L1_PEAK_INTERMEDIATES * gate.buffer()->size();
     return peak * SITU_GLU_L1_BUDGET_DEN <= l1_total * SITU_GLU_L1_BUDGET_NUM;
 }
 

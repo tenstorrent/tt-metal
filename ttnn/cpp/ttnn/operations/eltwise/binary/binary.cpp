@@ -9,7 +9,6 @@
 
 #include <cmath>
 #include <limits>
-#include <cstdint>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
@@ -401,7 +400,7 @@
 #define TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(NAME, OP_TYPE)                                            \
     Tensor NAME(                                                                                           \
         const Tensor& lhs,                                                                                 \
-        std::int32_t rhs,                                                                                  \
+        int32_t rhs,                                                                                       \
         const std::optional<MemoryConfig>& memory_config,                                                  \
         const std::optional<Tensor>& output,                                                               \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,                       \
@@ -536,14 +535,14 @@ inline auto preprocess_inputs(BinaryOpType binary_op_type, Tensor a, Tensor b) {
         // repeats second if it is smaller
         if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[0] > second_shape[0]) {
             TT_FATAL(second_shape[0] == 1, "Dimension trying to broadcast is not equal to 1");
-            Shape repeats(std::array<std::uint32_t, 4>{first_shape[0], 1, 1, 1});
+            Shape repeats(std::array<uint32_t, 4>{first_shape[0], 1, 1, 1});
             second = ttnn::repeat(second, repeats);
         }
         // repeats second if it is smaller
         if (first_shape.rank() >= 3 and second_shape.rank() >= 3 and first_shape[-3] > second_shape[-3]) {
             TT_FATAL(second_shape[-3] == 1, "Dimension trying to broadcast is not equal to 1");
             int rank_a = first_shape.rank();
-            std::vector<std::uint32_t> repeat_dim(rank_a, 1);
+            std::vector<uint32_t> repeat_dim(rank_a, 1);
             repeat_dim[rank_a - 3] = first_shape[rank_a - 3];
             Shape repeats(repeat_dim);
             second = ttnn::repeat(second, repeats);

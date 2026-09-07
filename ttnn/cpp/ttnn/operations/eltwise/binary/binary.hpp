@@ -8,7 +8,6 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include <cstdint>
 
 // Macros for binary operations with identical argument signatures and implementation.
 // Each macro generates function declaration(s). Use the corresponding TTNN_*_IMPL macro in .cpp.
@@ -150,7 +149,7 @@
 #define TTNN_BINARY_OP_TENSOR_INT32_BITWISE(NAME, OP_TYPE)                                \
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
-        std::int32_t rhs,                                                                 \
+        int32_t rhs,                                                                      \
         const std::optional<MemoryConfig>& memory_config = std::nullopt,                  \
         const std::optional<Tensor>& output = std::nullopt,                               \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
