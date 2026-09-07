@@ -81,7 +81,9 @@ TINY_TILES_MATMUL_COMBINATIONS = sweep_tiny_tiles_matmul(
 )
 
 
-TINY_TILE_THROTTLE_LEVELS = [0, 1] if get_chip_architecture() == ChipArchitecture.BLACKHOLE else [0]
+TINY_TILE_THROTTLE_LEVELS = (
+    [0, 1] if get_chip_architecture() == ChipArchitecture.BLACKHOLE else [0]
+)
 
 ALL_TEST_PARAMS = list(
     chain(
@@ -98,7 +100,9 @@ ALL_TEST_PARAMS = list(
         (
             (fidelity, combinations, throttle)
             for fidelity, combinations, throttle in product(
-                MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS, TINY_TILE_THROTTLE_LEVELS
+                MATH_FIDELITIES,
+                TINY_TILES_MATMUL_COMBINATIONS,
+                TINY_TILE_THROTTLE_LEVELS,
             )
         ),
     )
