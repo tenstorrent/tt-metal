@@ -573,6 +573,11 @@ class CodePredictor(LightweightModule):
                     for i in range(self.tp_size)
                 ]
                 _stacked = torch.stack(_per_chip, dim=0).transpose(-2, -1).unsqueeze(0).contiguous()
+                # bf16 on purpose, NOT an oversight that QWEN3_TTS_BF8_WEIGHTS missed:
+                # bfp8_b here is measured to buy exactly nothing (PERF_NOTES 5). This
+                # matmul is interleaved on 64 cores at M=1 tile and is latency-bound, not
+                # bandwidth-bound -- halving the weight bytes moved its DRAM figure
+                # 59.4 % -> 29.7 % and its time 24.5 -> 24.6 us.
                 lw["wqkv_kvgi"] = ttnn.from_torch(
                     _stacked,
                     device=device,
@@ -1390,16 +1395,50 @@ class CodePredictor(LightweightModule):
             if updated_kvs is not None:
                 updated_kvs.append(updated_kv)
 
-        # Layers return the input-LN shard spec; final RMSNorm is interleaved.
-        if h.is_sharded():
-            h_il = ttnn.to_memory_config(h, ttnn.L1_MEMORY_CONFIG)
+        if self._use_sharded_ln:
+            # Run the final norm on the same width-sharded kernel the per-layer norms use,
+            # on the shard spec the layer stack already returns, then bridge out once for
+            # the lm_head. Same op count as the interleaved route (which paid an S2I on the
+            # way IN instead), but the norm parallelises over the hidden dim instead of
+            # landing on one core: 24.2 -> ~11 us, 14 calls/frame, -0.235 ms/frame on N300
+            # and -0.24 ms on N150 (PERF_NOTES 3.z).
+            #
+            # The `else` below is not dead: it serves the SKUs that never build the sharded
+            # RMSNorm configs (_use_sharded_ln is N150 or the N300 CP fast path only), so
+            # T3K / Blackhole have no _ln_attn_progcfg to run this on.
+            if h.memory_config() != self._ln_attn_memcfg:
+                h_s = ttnn.to_memory_config(h, self._ln_attn_memcfg)
+                if own_h:
+                    ttnn.deallocate(h)
+                h = h_s
+                own_h = True
+            h_norm_s = ttnn.rms_norm(
+                h,
+                epsilon=self.rms_norm_eps,
+                weight=self.final_norm_w,
+                compute_kernel_config=self.kcfg,
+                program_config=self._ln_attn_progcfg,
+                memory_config=self._ln_attn_memcfg,
+            )
             if own_h:
                 ttnn.deallocate(h)
-            h = h_il
-            own_h = True
-        h_norm = ttnn.rms_norm(h, epsilon=self.rms_norm_eps, weight=self.final_norm_w, compute_kernel_config=self.kcfg)
-        if own_h:
-            ttnn.deallocate(h)
+            # lm_head is a plain interleaved matmul, and return_hidden_state callers
+            # expect interleaved too, so bridge back here rather than at either use.
+            h_norm = ttnn.to_memory_config(h_norm_s, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(h_norm_s)
+        else:
+            # Layers return the input-LN shard spec; final RMSNorm is interleaved.
+            if h.is_sharded():
+                h_il = ttnn.to_memory_config(h, ttnn.L1_MEMORY_CONFIG)
+                if own_h:
+                    ttnn.deallocate(h)
+                h = h_il
+                own_h = True
+            h_norm = ttnn.rms_norm(
+                h, epsilon=self.rms_norm_eps, weight=self.final_norm_w, compute_kernel_config=self.kcfg
+            )
+            if own_h:
+                ttnn.deallocate(h)
         if _own_rope:
             ttnn.deallocate(cos)
             ttnn.deallocate(sin)
