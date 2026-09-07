@@ -106,3 +106,20 @@ def test_topology_depends_only_on_start_modulo_global_chunk():
 def test_misaligned_or_negative_starts_are_rejected(bad_start, message, expect_error):
     with expect_error(ValueError, message):
         offset_topology(bad_start, SP_SIZE, LOCAL_ROWS)
+
+
+def test_unsplit_topologies_do_not_require_chunk_aligned_local_rows():
+    """Rank rotation alone is valid for any local row count, as no segment splits.
+
+    Component-level callers exercise small synthetic partitions; only a split
+    imposes the chunk-alignment requirement.
+    """
+    topology = offset_topology(32, SP_SIZE, 8)
+    assert not topology.is_split
+    assert topology.boundary_chip == 4
+
+
+def test_split_that_would_straddle_a_chunk_is_rejected(expect_error):
+    """A split must leave whole KDA chunks on both sides of the boundary."""
+    with expect_error(ValueError, "not both multiples"):
+        offset_topology(32, SP_SIZE, 48)
