@@ -295,10 +295,13 @@ class SFPU_UNARY_THRESHOLD(TemplateParameter):
     threshold is the value relu_min is supposed to clamp to.
     """
 
-    value_bits: int = 0x40A00000  # 5.0f
+    # Field name is deliberately not `value_bits`: test_perf_header_gate requires every
+    # parameter field name in the tree to be unique, because the perf CSV takes its column
+    # headers from them and SFPU_UNARY_SCALAR already owns `value_bits`.
+    threshold_bits: int = 0x40A00000  # 5.0f
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t SFPU_UNARY_THRESHOLD = {self.value_bits}u;"
+        return f"constexpr std::uint32_t SFPU_UNARY_THRESHOLD = {self.threshold_bits}u;"
 
 
 @dataclass
