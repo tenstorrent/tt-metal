@@ -174,17 +174,19 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 }
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
+    auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
     if (!logical_cores_for_previous_workload_.empty()) {
         // In emulated mode this map is always empty (LaunchProgram is synchronous),
         // so this block is effectively a no-op for emulated devices.
         for (const auto& [device_id, logical_cores] : logical_cores_for_previous_workload_) {
-            tt::llrt::internal_::wait_for_idle(device_id, logical_cores);
+            tt::llrt::internal_::wait_for_idle(context, device_id, logical_cores);
         }
         logical_cores_for_previous_workload_.clear();
     }
 }
 
 void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking) {
+    auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
     const auto& program_cores = program.impl().logical_cores();
 
     // Collect local devices for this program, handling async idle checks
@@ -217,7 +219,7 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
         }
 
         if (need_wait) {
-            tt::llrt::internal_::wait_for_idle(device_id, cores_to_wait);
+            tt::llrt::internal_::wait_for_idle(context, device_id, cores_to_wait);
         }
 
         local_devices.push_back(device);

@@ -24,7 +24,7 @@ _CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq5k and max_s
 # MLA_START signpost, so only the single forward is timed.
 _CHUNKED_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill"
 _CMD_CHUNKED_8X4 = (
-    f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and k2_6 and func and torus-xy-8x4' --wrapper-invocation"
+    f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and k2_7 and func and torus-xy-8x4' --wrapper-invocation"
 )
 
 
@@ -41,8 +41,8 @@ def _require_certified_torus_xy():
         pytest.fail("TorusXY perf requires a certified Galaxy and explicit mesh graph descriptor")
 
 
-# Kimi K3 (NoPE + output gate, 96 heads): same scenario/mesh as the K2.6 command above. 'k3' not
-# 'k2_6' in the -k -- the ids are disjoint so the two selectors cannot cross-match.
+# Kimi K3 (NoPE + output gate, 96 heads): same scenario/mesh as the K2.7 command above. 'k3' not
+# 'k2_7' in the -k -- the ids are disjoint so the two selectors cannot cross-match.
 #
 # 'scalar' is load-bearing, not cosmetic: run_device_perf profiles the whole -k selection into one
 # CSV and the signpost filter keeps every MLA_START/MLA_END region, so a selector matching both the

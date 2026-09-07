@@ -12,6 +12,17 @@ from math import isnan
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_equal
 
 
+def test_where_golden_treats_negative_predicates_as_true():
+    predicate = torch.tensor([-2, 0, 3, -1], dtype=torch.int32)
+    true_values = torch.tensor([10, 20, 30, 40], dtype=torch.int32)
+    false_values = torch.tensor([1, 2, 3, 4], dtype=torch.int32)
+    golden_function = ttnn.get_golden_function(ttnn.where)
+
+    output = golden_function(predicate, true_values, false_values)
+
+    assert torch.equal(output, torch.tensor([10, 2, 30, 40], dtype=torch.int32))
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_mac_all_tensors(device, h, w):
