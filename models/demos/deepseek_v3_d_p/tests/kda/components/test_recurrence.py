@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Blackhole contract tests for the KDA recurrence component."""
 
+import os
 import time
+from pathlib import Path
 from typing import Literal
 
 import pytest
@@ -359,3 +361,31 @@ def test_distributed_recurrence_trace_replay_matches_eager(
 
     assert_bit_identical(eager_output, traced_output, name=f"tp_axis={tensor_parallel_axis} traced output")
     assert_bit_identical(eager_state, traced_state, name=f"tp_axis={tensor_parallel_axis} traced state")
+
+
+@pytest.mark.use_module_device
+@pytest.mark.skipif(
+    not os.getenv("KDA_REAL_TRACE_ROOT"), reason="set KDA_REAL_TRACE_ROOT for captured recurrence replay"
+)
+def test_recurrence_captured_inputs_and_outputs(device: ttnn.Device) -> None:
+    """Close the captured recurrence boundary through its first 640-token state snapshot."""
+    from models.demos.deepseek_v3_d_p.tests.kda.trace_utils import load_trace_rows
+
+    root = Path(os.environ["KDA_REAL_TRACE_ROOT"]) / "kda"
+    sequence, heads, dim = 640, 96, 128
+    host = [
+        load_trace_rows(root / f"kda_{name}_layer_0.safetensors", 0, sequence).unsqueeze(0)
+        for name in ("q", "k", "v", "gate", "beta")
+    ]
+    inputs = [
+        _to_device(value, device, ttnn.float32 if index == 4 else ttnn.bfloat16) for index, value in enumerate(host)
+    ]
+    state = _to_device(torch.zeros(1, heads, dim, dim), device, ttnn.float32)
+    with ttnn.manage_config("throw_exception_on_fallback", True):
+        final_state, output = _run_recurrence(device, *inputs, state)
+    got = ttnn.to_torch(output).reshape(1, heads, sequence, dim).permute(0, 2, 1, 3).reshape(sequence, heads * dim)
+    want = load_trace_rows(root / "kda_attn_out_pre_layer_0.safetensors", 0, sequence)
+    # The captured FLA state is [V,K]; the TT recurrence owns [K,V].
+    want_state = load_trace_rows(root / "kda_recurrent_state_layer_0.safetensors", 0, 1).transpose(-1, -2)
+    assert_accurate(want, got, name="captured recurrence output", pcc_threshold=0.999)
+    assert_accurate(want_state, ttnn.to_torch(final_state), name="captured recurrent state", pcc_threshold=0.999)

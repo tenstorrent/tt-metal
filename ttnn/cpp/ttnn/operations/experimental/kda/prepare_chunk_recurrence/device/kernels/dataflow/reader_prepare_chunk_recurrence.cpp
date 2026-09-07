@@ -50,11 +50,18 @@ inline void fill_constant_tiles(
         noc.async_read(self, ones, face_bytes, ones_face, {.offset_bytes = face * face_bytes});
     }
     noc.async_read(self, tril, face_bytes, ones_face, {.offset_bytes = 2 * face_bytes});
-    // Tile 0 selects the two diagonal 16x16 faces; tile 1 selects the bottom-left face.
-    noc.async_read(self, block_masks, face_bytes, ones_face, {.offset_bytes = 0});
-    noc.async_read(self, block_masks, face_bytes, ones_face, {.offset_bytes = 3 * face_bytes});
-    noc.async_read(
-        self, block_masks, face_bytes, ones_face, {.offset_bytes = block_masks.get_entry_size() + 2 * face_bytes});
+    // Four diagonal 8x8 blocks and their strict block-lower complement.
+    volatile tt_l1_ptr uint32_t* masks = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(block_masks.get_write_ptr());
+    for (uint32_t row = 0; row < 32; ++row) {
+        for (uint32_t column = 0; column < 32; ++column) {
+            const uint32_t index = ((row / 16) * 2 + column / 16) * 256 + (row % 16) * 16 + column % 16;
+            if (row / 8 == column / 8) {
+                masks[index] = fp32_one_bits;
+            } else if (row / 8 > column / 8) {
+                masks[1024 + index] = fp32_one_bits;
+            }
+        }
+    }
 
     noc.async_read_barrier();
 
