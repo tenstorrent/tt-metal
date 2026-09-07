@@ -58,27 +58,25 @@ bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfi
 // Blackhole. Keep Wormhole on the existing dataflow-RISC combiner until it is profiled separately.
 bool groupnorm_use_sfpu_local_combine(bool use_welford, tt::ARCH arch, bool fp32_dest_acc_en, uint32_t tile_width);
 
+// Two-pass interleaved replay footprint; tile-reduction-only buffers are not allocated.
 struct GroupNormInterleavedCbFootprint {
     std::uint64_t output = 0;
     std::uint64_t input_staging = 0;
     std::uint64_t untilize_output = 0;
-    std::uint64_t scaler = 0;
     std::uint64_t epsilon = 0;
-    std::uint64_t column_scaler = 0;
     std::uint64_t gamma = 0;
     std::uint64_t beta = 0;
     std::uint64_t input_mask = 0;
     std::uint64_t repack = 0;
     std::uint64_t x = 0;
     std::uint64_t xmm = 0;
-    std::uint64_t xmm2 = 0;
     std::uint64_t xmm3 = 0;
     std::uint64_t partial_stats = 0;
     std::uint64_t global_stats = 0;
     std::uint64_t normalisation_stats = 0;
     constexpr std::uint64_t total_with_input(std::uint64_t input) const {
-        return input + output + input_staging + untilize_output + scaler + epsilon + column_scaler + gamma + beta +
-               input_mask + repack + x + xmm + xmm2 + xmm3 + partial_stats + global_stats + normalisation_stats;
+        return input + output + input_staging + untilize_output + epsilon + gamma + beta + input_mask + repack + x +
+               xmm + xmm3 + partial_stats + global_stats + normalisation_stats;
     }
 };
 

@@ -171,6 +171,14 @@ def test_group_norm_interleaved_l1_replay_respects_occupied_l1(device, enabled_p
     assert device.num_program_cache_entries() == entries_with_replay + 1
     assert l1_pressure.is_allocated()
 
+    # Releasing the allocation must select the original replay program, not create another entry.
+    output.deallocate(force=True)
+    l1_pressure.deallocate(force=True)
+    restored_output = run_group_norm()
+    restored_actual = ttnn.to_torch(ttnn.from_device(restored_output))
+    assert_numeric_metrics(reference, restored_actual, atol=0.043, frobenius_threshold=0.01)
+    assert device.num_program_cache_entries() == entries_with_replay + 1
+
 
 GROUP_NORM_DRAM_SHAPES = [
     (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)

@@ -1201,16 +1201,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         }
     }
 
-    constexpr uint32_t in2_cb_index = tt::CBIndex::c_2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in2_CB_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(in2_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-    });
+    if (!use_welford) {
+        constexpr uint32_t in2_cb_index = tt::CBIndex::c_2;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in2_CB_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in2_cb_index),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
+    }
 
     constexpr uint32_t in3_cb_index = tt::CBIndex::c_3;
     desc.cbs.push_back(CBDescriptor{
@@ -1223,16 +1225,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         }}},
     });
 
-    constexpr uint32_t in4_cb_index = tt::CBIndex::c_4;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in2_CB_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(in4_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-    });
+    if (!use_welford) {
+        constexpr uint32_t in4_cb_index = tt::CBIndex::c_4;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in2_CB_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in4_cb_index),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
+    }
 
     if (gamma.has_value()) {
         constexpr uint32_t in5_cb_index = tt::CBIndex::c_5;
@@ -1330,25 +1334,27 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         }}},
     });
 
-    constexpr uint32_t xmm2_cb_index = tt::CBIndex::c_23;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = xmm2_CB_size_group_1,
-        .core_ranges = all_cores_group_1,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(xmm2_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = xmm2_CB_size_group_2,
-        .core_ranges = all_cores_group_2,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(xmm2_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-    });
+    if (!use_welford) {
+        constexpr uint32_t xmm2_cb_index = tt::CBIndex::c_23;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = xmm2_CB_size_group_1,
+            .core_ranges = all_cores_group_1,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(xmm2_cb_index),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = xmm2_CB_size_group_2,
+            .core_ranges = all_cores_group_2,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(xmm2_cb_index),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
+    }
 
     constexpr uint32_t xmm3_cb_index = tt::CBIndex::c_22;
     desc.cbs.push_back(CBDescriptor{
