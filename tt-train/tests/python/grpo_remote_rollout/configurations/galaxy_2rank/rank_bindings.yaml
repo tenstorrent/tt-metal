@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Two adjacent physical rows of one Blackhole Galaxy. This follows the
+# intrahost pipeline-parallel Galaxy binding and gives each MPI rank a disjoint
+# eight-device mesh through TT_VISIBLE_DEVICES.
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3,11,10,9,8"
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "4,5,6,7,15,14,13,12"
+
+mesh_graph_desc_path: "configurations/galaxy_2rank/mgd.textproto"

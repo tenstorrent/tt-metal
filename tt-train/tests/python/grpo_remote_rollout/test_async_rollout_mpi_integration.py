@@ -40,7 +40,9 @@ from utils.weight_bridge import RECEIVER_RANK, SENDER_RANK, HostWeightBridge  # 
 ENGINE_ID = "mpi-integration-engine"
 INITIAL_VERSION = 0
 UPDATED_VERSION = 1
-MESH_SHAPE = (1, 1)
+# Each rank owns one physical Galaxy row. Keeping the declared and opened mesh
+# shapes aligned lets FABRIC_2D initialize against the native 32-device graph.
+MESH_SHAPE = (1, 8)
 
 
 def _ensure_distributed_context() -> None:
