@@ -78,6 +78,23 @@ def test_std_var_hw_compact_lane_combine(device, enabled_program_cache, dtype, c
             torch.testing.assert_close(actual, expected, rtol=rtol, atol=1e-7)
 
 
+@pytest.mark.parametrize("height", [32, 65])
+@pytest.mark.parametrize("pattern", ["alternating", "ramp"])
+@pytest.mark.parametrize("offset", [0.0, 1024.0])
+def test_std_var_hw_compact_lane_mean_variance(device, enabled_program_cache, height, pattern, offset):
+    # Each column is constant over H, so its local variance is zero. The HW
+    # result comes entirely from the variance of lane means, isolating the
+    # horizontal sum's dependent add/move stages (Wormhole requires spacing).
+    columns = torch.arange(128) % (2 if pattern == "alternating" else 32)
+    values = (columns.float() + offset).expand(1, 1, height, 128).contiguous()
+    tt_input = ttnn.from_torch(values, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
+        expected = torch_op(values.double(), dim=(-2, -1), keepdim=True, correction=0)
+        for _ in range(3):
+            actual = ttnn.to_torch(ttnn_op(tt_input, dim=(-2, -1), keepdim=True, correction=False)).double()
+            torch.testing.assert_close(actual, expected, rtol=2e-4, atol=1e-7)
+
+
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])

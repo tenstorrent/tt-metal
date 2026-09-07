@@ -1003,11 +1003,15 @@ sfpi_inline void _two_pass_horizontal_sum_mean_()
     TWO_PASS_REDUCE_ROTATE_MEAN();
     TWO_PASS_REDUCE_ROTATE_MEAN();
     TWO_PASS_REDUCE_ADD_MEAN();
+    // The next stage copies the updated sum. Unlike the paired reduction,
+    // no independent add separates this SFPADD from its dependent SFPMOV.
+    WELFORD_SFPU_ONLINE_HAZARD_NOP();
 
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 0);
     TWO_PASS_REDUCE_ROTATE_MEAN();
     TWO_PASS_REDUCE_ROTATE_MEAN();
     TWO_PASS_REDUCE_ADD_MEAN();
+    WELFORD_SFPU_ONLINE_HAZARD_NOP();
 
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 0);
     TWO_PASS_REDUCE_ROTATE_MEAN();
