@@ -11,6 +11,7 @@ multiple camera views using deformable attention.
 
 import ttnn
 import torch
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -48,6 +49,103 @@ def _flat_row_index(row_ids: torch.Tensor, device) -> ttnn.Tensor:
 def _index_dtype(num_rows: int):
     """Use the narrowest scatter index that covers all rows."""
     return ttnn.uint16 if num_rows <= 0xFFFF else ttnn.uint32
+
+
+@dataclass(frozen=True)
+class SCARebatchPlan:
+    """Frame-invariant SCA rebatch: indices, lengths, and rebatched reference points.
+
+    Camera projection is per-frame, so every encoder layer reuses one plan. Only the query gather is per-layer.
+    """
+
+    rebatch_len: int
+    query_index: ttnn.Tensor
+    reference_points_batched: ttnn.Tensor
+    scatter_index: ttnn.Tensor
+    count: ttnn.Tensor
+    is_empty: bool = False
+
+
+def build_rebatch_plan(reference_points_cam, bev_mask, embed_dims: int, device) -> SCARebatchPlan:
+    """Build the per-frame rebatch plan. See :class:`SCARebatchPlan`."""
+    num_cams, bs, num_queries, num_depth_levels = bev_mask.shape
+
+    # max_len sizes tensors, so it must be a Python int. Mask reduction, index construction and
+    # the contributor count stay on the host; the gathers and the scatter run on device.
+    valid_per_cam = ttnn.to_torch(bev_mask).sum(-1) > 0  # [num_cams, B, num_queries]
+    max_len = int(valid_per_cam.sum(-1).max().item())
+
+    if ENABLE_LOGGING:
+        logger.info(f"SCA Valid Queries: {valid_per_cam.sum(-1).flatten().tolist()}")
+
+    if max_len == 0:
+        return SCARebatchPlan(0, None, None, None, None, is_empty=True)
+
+    # Tile-align so folding num_cams into the row dim stays a view; unaligned would move data.
+    # Costs up to TILE_SIZE - 1 padded rows per camera through MSDA, discarded afterwards.
+    rebatch_len = ((max_len + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+    # Compact each camera to the queries it sees, so MSDA runs on rebatch_len rows, not all of
+    # them. IDs are batch-local; num_queries is the padding sentinel — scatter_ids keeps it to
+    # dump padding in a sink row sliced off later, gather_ids clamps it since embedding rejects
+    # out-of-range indices.
+    # TODO: vectorize this index construction off the host
+    scatter_ids = torch.full((bs, num_cams, rebatch_len), num_queries, dtype=torch.int32)
+    for j in range(bs):
+        for i in range(num_cams):
+            valid_indices = torch.nonzero(valid_per_cam[i, j], as_tuple=False).squeeze(-1)
+            scatter_ids[j, i, : valid_indices.numel()] = valid_indices.to(torch.int32)
+    gather_ids = scatter_ids.clamp(max=num_queries - 1)
+
+    reference_points_cam = ttnn.clamp(reference_points_cam, -10.0, 10.0)
+    assert (
+        reference_points_cam.dtype == ttnn.bfloat16
+    ), f"SCA rebatch gathers reference_points_cam, so it must be bfloat16, got {reference_points_cam.dtype}."
+
+    # Reference points are camera-major, so their row IDs include camera and batch offsets.
+    ref_rows = ttnn.reshape(
+        ttnn.to_layout(reference_points_cam, ttnn.ROW_MAJOR_LAYOUT),
+        (1, 1, num_cams * bs * num_queries, num_depth_levels * 2),
+    )
+    ref_index = _flat_row_index(
+        gather_ids
+        + _batch_offsets(bs, num_queries)
+        + torch.arange(num_cams, dtype=torch.int32).reshape(1, num_cams, 1) * (bs * num_queries),
+        device,
+    )
+    # Split the gathered row back into MSDA's [.., rebatch_len, num_depth_levels, 2], the last
+    # dim being each depth level's (x, y) camera coordinate. Changing the row width from
+    # num_depth_levels * 2 to 2 requires a data-moving reshape before conversion to TILE layout.
+    # TODO: profile whether tilizing first is cheaper.
+    reference_points_batched = ttnn.to_layout(
+        ttnn.reshape(
+            ttnn.embedding(ref_index, ref_rows),
+            (bs * num_cams, rebatch_len, num_depth_levels, 2),
+        ),
+        ttnn.TILE_LAYOUT,
+    )
+
+    # Expand row IDs on device to avoid transferring a full-width index.
+    scatter_index = ttnn.repeat(
+        ttnn.from_torch(
+            scatter_ids.reshape(bs, num_cams * rebatch_len, 1),
+            device=device,
+            dtype=_index_dtype(num_queries + 1),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        ),
+        ttnn.Shape((1, 1, embed_dims)),
+    )
+
+    count = torch.clamp(valid_per_cam.permute(1, 2, 0).sum(-1), min=1.0)
+    count = ttnn.unsqueeze(ttnn.from_torch(count, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), -1)
+
+    return SCARebatchPlan(
+        rebatch_len=rebatch_len,
+        query_index=_flat_row_index(gather_ids + _batch_offsets(bs, num_queries), device),
+        reference_points_batched=reference_points_batched,
+        scatter_index=scatter_index,
+        count=count,
+    )
 
 
 class TTSpatialCrossAttention:
@@ -117,6 +215,7 @@ class TTSpatialCrossAttention:
         key_padding_mask=None,
         spatial_shapes=None,
         level_start_index=None,
+        rebatch_plan=None,
         **kwargs,
     ):
         """
@@ -133,6 +232,7 @@ class TTSpatialCrossAttention:
             key_padding_mask: Key padding mask.
             spatial_shapes: Spatial shapes of multi-scale features.
             level_start_index: Start index of each level.
+            rebatch_plan: Prebuilt :class:`SCARebatchPlan`. Shared by every encoder layer; built here if absent.
             **kwargs: Additional arguments.
 
         Returns:
@@ -140,9 +240,6 @@ class TTSpatialCrossAttention:
         """
         if use_signpost:
             signpost(header="TTNN SCA Forward Start")
-
-        # Clamp reference points between -10 and 10 to avoid NaNs
-        reference_points_cam = ttnn.clamp(reference_points_cam, -10.0, 10.0)
 
         # Handle input defaults
         if key is None:
@@ -172,87 +269,32 @@ class TTSpatialCrossAttention:
             f"This is required for proper reshaping in deformable attention. Consider adjusting num_points in config."
         )
 
-        # Find valid queries for each camera
-        # Many BEV queries don't have valid projections to all cameras (due to occlusion, field of view, etc.)
-        # max_len sizes tensors, so it must be a Python int. Mask reduction, index construction and
-        # the contributor count stay on the host; the gathers and the scatter run on device.
-        bev_mask_torch = ttnn.to_torch(bev_mask)
+        # Every encoder layer in a forward shares one plan; building it here is the standalone path.
+        if rebatch_plan is None:
+            rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.embed_dims, self.device)
 
-        valid_per_cam = bev_mask_torch.sum(-1) > 0  # [num_cams, B, num_queries]
-        max_len = int(valid_per_cam.sum(-1).max().item())
-
-        if ENABLE_LOGGING:
-            logger.info(f"SCA Valid Queries: {valid_per_cam.sum(-1).flatten().tolist()}")
-
-        if max_len == 0:
-            # No valid points, return original query
+        if rebatch_plan.is_empty:
             if ENABLE_LOGGING:
                 logger.warning("No valid points found in SCA, returning residual")
             return inp_residual
 
-        # Tile-align so folding num_cams into the row dim stays a view; unaligned would move data.
-        # Costs up to TILE_SIZE - 1 padded rows per camera through MSDA, discarded afterwards.
-        rebatch_len = ((max_len + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-
-        if ENABLE_LOGGING:
-            logger.info("SCA Valid Query Detection Complete")
+        rebatch_len = rebatch_plan.rebatch_len
 
         if ENABLE_LOGGING:
             logger.info("SCA Rebatching Start")
 
-        # Compact each camera to the queries it sees, so MSDA runs on rebatch_len rows, not all of
-        # them. IDs are batch-local; num_queries is the padding sentinel — scatter_ids keeps it to
-        # dump padding in a sink row sliced off later, gather_ids clamps it since embedding rejects
-        # out-of-range indices.
-        # TODO: vectorize this index construction off the host
-        scatter_ids = torch.full((bs, self.num_cams, rebatch_len), num_queries, dtype=torch.int32)
-        for j in range(bs):
-            for i in range(self.num_cams):
-                valid_indices = torch.nonzero(valid_per_cam[i, j], as_tuple=False).squeeze(-1)
-                scatter_ids[j, i, : valid_indices.numel()] = valid_indices.to(torch.int32)
-        gather_ids = scatter_ids.clamp(max=num_queries - 1)
-
-        # TODO: Extract the coupled rebatch/unbatch sentinel handling into helpers to keep
-        # the padding-sentinel contract local and prevent gather/scatter ID misuse.
-
-        # Both gathers below use these as ttnn.embedding weight tables, which must be bfloat16.
         assert query.dtype == ttnn.bfloat16, f"SCA rebatch gathers query, so it must be bfloat16, got {query.dtype}."
-        assert (
-            reference_points_cam.dtype == ttnn.bfloat16
-        ), f"SCA rebatch gathers reference_points_cam, so it must be bfloat16, got {reference_points_cam.dtype}."
 
         # Fold batch and camera into row IDs to gather all valid queries in one embedding call.
+        # Reference points come from the plan — they do not depend on query.
         query_rows = ttnn.reshape(
             ttnn.to_layout(query, ttnn.ROW_MAJOR_LAYOUT), (1, 1, bs * num_queries, self.embed_dims)
         )
-        query_index = _flat_row_index(gather_ids + _batch_offsets(bs, num_queries), self.device)
         queries_batched = ttnn.reshape(
-            ttnn.embedding(query_index, query_rows, layout=ttnn.TILE_LAYOUT),
+            ttnn.embedding(rebatch_plan.query_index, query_rows, layout=ttnn.TILE_LAYOUT),
             (bs * self.num_cams, rebatch_len, self.embed_dims),
         )
-
-        # Reference points are camera-major, so their row IDs include camera and batch offsets.
-        ref_rows = ttnn.reshape(
-            ttnn.to_layout(reference_points_cam, ttnn.ROW_MAJOR_LAYOUT),
-            (1, 1, self.num_cams * bs * num_queries, num_depth_levels * 2),
-        )
-        ref_index = _flat_row_index(
-            gather_ids
-            + _batch_offsets(bs, num_queries)
-            + torch.arange(self.num_cams, dtype=torch.int32).reshape(1, self.num_cams, 1) * (bs * num_queries),
-            self.device,
-        )
-        # Split the gathered row back into MSDA's [.., rebatch_len, num_depth_levels, 2], the last
-        # dim being each depth level's (x, y) camera coordinate. Changing the row width from
-        # num_depth_levels * 2 to 2 requires a data-moving reshape before conversion to TILE layout.
-        # TODO: profile whether tilizing first is cheaper.
-        reference_points_batched = ttnn.to_layout(
-            ttnn.reshape(
-                ttnn.embedding(ref_index, ref_rows),
-                (bs * self.num_cams, rebatch_len, num_depth_levels, 2),
-            ),
-            ttnn.TILE_LAYOUT,
-        )
+        reference_points_batched = rebatch_plan.reference_points_batched
 
         if ENABLE_LOGGING:
             logger.info("SCA Rebatching Complete")
@@ -306,16 +348,6 @@ class TTSpatialCrossAttention:
             ttnn.reshape(queries_output, (bs, self.num_cams * rebatch_len, self.embed_dims)),
             ttnn.ROW_MAJOR_LAYOUT,
         )
-        # Expand row IDs on device to avoid transferring a full-width index.
-        scatter_index = ttnn.repeat(
-            ttnn.from_torch(
-                scatter_ids.reshape(bs, self.num_cams * rebatch_len, 1),
-                device=self.device,
-                dtype=_index_dtype(num_queries + 1),
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            ),
-            ttnn.Shape((1, 1, self.embed_dims)),
-        )
         slots = ttnn.scatter_add(
             ttnn.zeros(
                 (bs, num_queries + 1, self.embed_dims),
@@ -324,7 +356,7 @@ class TTSpatialCrossAttention:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             ),
             dim=1,
-            index=scatter_index,
+            index=rebatch_plan.scatter_index,
             src=scatter_src,
         )
         slots = ttnn.to_layout(ttnn.slice(slots, (0, 0, 0), (bs, num_queries, self.embed_dims)), ttnn.TILE_LAYOUT)
@@ -332,17 +364,7 @@ class TTSpatialCrossAttention:
         if ENABLE_LOGGING:
             logger.info("SCA Feature Aggregation Complete")
 
-        # Count how many cameras contributed valid features for each query
-        # Since queries accumulate features from multiple cameras, we need to normalize by the number of contributors
-        count = valid_per_cam.permute(1, 2, 0).sum(-1)  # Sum across cameras: [B, num_queries]
-        count = torch.clamp(count, min=1.0)
-
-        count_ttnn = ttnn.from_torch(count, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        count_expanded = ttnn.unsqueeze(count_ttnn, -1)  # [bs, num_queries, 1]
-
-        # Normalize accumulated features by the number of contributing cameras
-        # This gives us the average feature across all valid camera views for each query
-        slots = ttnn.div(slots, count_expanded)
+        slots = ttnn.div(slots, rebatch_plan.count)
 
         # Output projection
         if hasattr(self.params, "output_proj") and self.params.output_proj is not None:
