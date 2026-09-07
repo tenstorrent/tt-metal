@@ -321,6 +321,14 @@ jobs:
           docker run --rm --entrypoint sh "$FULL" -c 'test -d /work/build && test -d /work/tests'
           # Proves the .dockerignore worked; otherwise .git rides along unnoticed.
           test -z "$(docker run --rm --entrypoint sh "$FULL" -c 'ls -d /work/.git 2>/dev/null')"
+          # Same reasoning as the wheel image below: the directory shape says nothing
+          # about whether in-place import works. It needs deps the base image may not
+          # carry, so this fails here on a GitHub runner rather than on a hardware leg.
+          docker run --rm \
+            -e PYTHONPATH=/work:/work/ttnn \
+            -e TT_METAL_HOME=/work \
+            -e LD_LIBRARY_PATH=/work/build/lib \
+            --entrypoint python3 "$FULL" -c 'import ttnn; print("ttnn imported from", ttnn.__file__)'
           echo "::endgroup::"
           echo "::group::${WHEEL}"
           docker run --rm --entrypoint cat "$WHEEL" /etc/prebuilt-tests-env-manifest | grep -q '^profile=wheel$'
