@@ -112,8 +112,8 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
                 tt::tt_metal::experimental::TensorBinding{tap2_tensor_name, "tap2"},
                 tt::tt_metal::experimental::TensorBinding{tap3_tensor_name, "tap3"},
             },
-        .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}, {"wrap_row", attrs.wrap_row}},
-        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
+        .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
+        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count", "wrap_row"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
 
@@ -169,7 +169,9 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     for (uint32_t i = 0; i < dist.cores.size(); ++i) {
         const auto& core = dist.cores[i];
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}, {"wrap_row", attrs.wrap_row}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
