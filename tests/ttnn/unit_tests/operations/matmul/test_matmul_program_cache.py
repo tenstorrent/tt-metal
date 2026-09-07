@@ -103,3 +103,76 @@ def test_matmul_cache_miss_different_dtype(device, isolate_program_cache):
     assert (
         count == 2
     ), f"different dtype (bfloat16 vs float32) must produce 2 distinct cache entries, got {count} (dtype not keyed)"
+
+
+@pytest.mark.parametrize("explicit_config", [False, True])
+@pytest.mark.parametrize("transpose_a,transpose_b", [(False, False), (True, False), (False, True), (True, True)])
+@pytest.mark.parametrize("preallocated_output", [False, True])
+def test_matmul_attribute_reuse(
+    device, isolate_program_cache, explicit_config, transpose_a, transpose_b, preallocated_output
+):
+    """Attribute reuse preserves transpose handling and output inference on fresh-buffer cache hits."""
+    config = (
+        ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(2, 2),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=2,
+            per_core_N=4,
+        )
+        if explicit_config
+        else None
+    )
+    live_buffers = []
+    entries = None
+    for seed in (11, 29):
+        generator = torch.Generator().manual_seed(seed)
+        a = torch.randn((1, 1, 64, 96), generator=generator, dtype=torch.bfloat16)
+        b = torch.randn((1, 1, 96, 128), generator=generator, dtype=torch.bfloat16)
+        a_dev = ttnn.from_torch(a.transpose(-1, -2) if transpose_a else a, device=device, layout=ttnn.TILE_LAYOUT)
+        b_dev = ttnn.from_torch(b.transpose(-1, -2) if transpose_b else b, device=device, layout=ttnn.TILE_LAYOUT)
+        output = (
+            ttnn.from_torch(torch.zeros((1, 1, 64, 128), dtype=torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT)
+            if preallocated_output
+            else None
+        )
+        result = ttnn.matmul(
+            a_dev,
+            b_dev,
+            transpose_a=transpose_a,
+            transpose_b=transpose_b,
+            program_config=config,
+            optional_output_tensor=output,
+        )
+        live_buffers.append((a_dev, b_dev, output, result))
+        assert_with_pcc(torch.matmul(a, b), ttnn.to_torch(result), 0.99)
+        if output is not None:
+            assert result.buffer_address() == output.buffer_address()
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "fresh buffers recompiled"
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+def test_matmul_attribute_reuse_trace(device, isolate_program_cache):
+    """A warmed, captured matmul reads updated inputs into a preallocated output."""
+    torch.manual_seed(17)
+    a = torch.randn((1, 1, 64, 96), dtype=torch.bfloat16)
+    b = torch.randn((1, 1, 96, 128), dtype=torch.bfloat16)
+    a_dev = ttnn.from_torch(a, device=device, layout=ttnn.TILE_LAYOUT)
+    b_dev = ttnn.from_torch(b, device=device, layout=ttnn.TILE_LAYOUT)
+    output = ttnn.from_torch(torch.zeros((1, 1, 64, 128), dtype=torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn.matmul(a_dev, b_dev, optional_output_tensor=output)
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    ttnn.matmul(a_dev, b_dev, optional_output_tensor=output)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    try:
+        for _ in range(2):
+            a = torch.randn_like(a)
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT), a_dev, cq_id=0)
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            assert_with_pcc(torch.matmul(a, b), ttnn.to_torch(output), 0.99)
+    finally:
+        ttnn.release_trace(device, trace_id)
