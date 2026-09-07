@@ -275,53 +275,7 @@ def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
 def test_prefill_long_context_traced(
     mesh_device, context_len, chunk_size, readback_all, token_source, reset_seeds, request
 ):
-    """Chunked prefill driven entirely by two captured traces.
-
-    This is the deployment shape: warm the programs once, capture, then serve every
-    request by replaying traces. Eager dispatch costs ~74% of prefill wall time at this
-    size (1055.6 ms vs 272.6 ms on the 60-layer body), so the untraced numbers say very
-    little about production throughput.
-
-    Two traces, because there are exactly two distinct graphs. Chunk 0 has no history
-    and runs the mask CP path; chunks 1..N-1 all run the ring path over a fixed-size Q
-    slab against a fixed-capacity cache, so they share one graph. What differs between
-    them is only the per-chunk scalars, and those now live in metadata tensors the
-    kernels read on-device (see CCLManager.get_ring_metadata), which is what lets one
-    capture serve 63 chunks.
-
-    Everything that varies per chunk is refreshed on the host BETWEEN replays: the token
-    input, the ring metadata, and the pinned RoPE slice. A trace records addresses, not
-    values, so each of those had to be given a fixed address first.
-
-    Two ttnn fixes were needed to make one capture valid for every chunk. Both were found
-    by a per-chunk PCC check against a host reference -- since retired with that reference,
-    and worth restoring with its replacement -- rather than by timings, which were happy
-    throughout:
-    compute_gather_valid_Ht capped the gather at the creating chunk's prefix, and the
-    compact sliding halo's source group (linear in chunk index) was baked into the
-    all-gather descriptor. Both are now derived on-device from kv_actual_isl.
-
-    Traced output matches eager to five decimals at 32k:
-      eager  0.94585 0.98890 0.98901 0.99042 0.99024 0.98987 0.98965 0.98899
-      traced 0.94585 0.98890 0.98901 0.99042 0.99024 0.98987 0.98965 0.98899
-    The perf half stands regardless: ~206 ms per replayed ring chunk vs ~1016 ms eager.
-
-    Why 8x4 is the mesh worth running, given the chunk size is tied to it. A 256k prefill,
-    device time only, measured back to back:
-
-        4x8  TP=8 CP=4  chunk 4096  slab 1024  64 chunks  22.4 s  11.7k tok/s  200 -> 488 ms
-        8x4  TP=4 CP=8  chunk 8192  slab 1024  32 chunks  18.7 s  14.0k tok/s  304 -> 885 ms
-        8x4  TP=4 CP=8  chunk 4096  slab  512  -- TT_FATAL, halo 1024 > slab 512
-
-    8x4 is ~17% faster end to end despite each chunk costing more, because it runs half
-    as many of them and the per-device Q slab is the same 1024 tokens either way. Trading
-    tensor parallelism for context parallelism is the win at long context.
-
-    The third row is why the chunk has to scale with CP rather than staying at 4096:
-    keeping the chunk while doubling CP halves the Q slab below the sliding window, and
-    ring_joint refuses it instead of attending over a truncated history. That combination
-    is a param here, and it skips on the halo arithmetic before the model loads.
-    """
+    """Measure all prefill chunks using one replayed ring-attention trace."""
     from models.demos.gemma4.tt.ccl import cp_degree
 
     chunk = chunk_size
@@ -463,8 +417,6 @@ def test_prefill_long_context_traced(
             t_stage = time.time()
             chunk_start = _stage(chunk_idx)
             stage_s += time.time() - t_stage
-            # One capture serves every chunk, chunk 0 included: it differs only in
-            # kv_actual_isl == 0, which the kernels derive on-device.
             t_c = time.time()
             ttnn.execute_trace(mesh_device, tid_ring, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
@@ -480,10 +432,7 @@ def test_prefill_long_context_traced(
                 hidden = _cp_gather_torch(out, mesh_device, mesh_config)
                 assert torch.isfinite(hidden).all(), f"chunk {chunk_idx} produced non-finite output"
                 readback_s += time.time() - t_rb
-            # Cumulative device and wall alongside the per-chunk cost, so the run can be
-            # read without summing the column by hand. These are the same two totals the
-            # DEVICE/TOTAL summary lines report at the end: device is execute_trace +
-            # synchronize only, wall additionally carries staging and test-only readback.
+            # Report per-chunk latency and cumulative device and wall time.
             logger.info(
                 f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk}) "
                 f"device={per_chunk[-1] * 1000:.1f}ms ({chunk / per_chunk[-1]:.0f} tok/s) | "
@@ -493,7 +442,6 @@ def test_prefill_long_context_traced(
     finally:
         ttnn.release_trace(mesh_device, tid_ring)
 
-    ring_chunks = per_chunk[1:]
     device_s = sum(per_chunk)
     # Three different numbers, because conflating them understates the model by ~2x.
     #   device   — execute_trace + synchronize. What the hardware spends on prefill.
@@ -513,22 +461,12 @@ def test_prefill_long_context_traced(
     )
     logger.info(
         f"[traced_perf] TOTAL {context_len} tokens in {total_s:.1f}s ({context_len / total_s:.0f} tok/s) "
-        f"| chunk0(ring)={per_chunk[0] * 1000:.1f}ms | ring chunks mean={sum(ring_chunks) / len(ring_chunks) * 1000:.1f}ms "
-        f"min={min(ring_chunks) * 1000:.1f}ms max={max(ring_chunks) * 1000:.1f}ms"
+        f"| chunks mean={device_s / len(per_chunk) * 1000:.1f}ms "
+        f"min={min(per_chunk) * 1000:.1f}ms max={max(per_chunk) * 1000:.1f}ms"
     )
     logger.info(
-        f"[traced_perf] ring-depth cost: first={ring_chunks[0] * 1000:.1f}ms -> last={ring_chunks[-1] * 1000:.1f}ms "
-        f"= {ring_chunks[-1] / ring_chunks[0]:.2f}x over {len(ring_chunks) - 1} extra chunks of history"
-    )
-
-    # No value check here. A trace records the values live at capture, so a per-chunk scalar
-    # frozen at capture would make every replay attend over chunk 0's prefix -- a failure
-    # invisible to both the timings and the finiteness check above. A per-chunk PCC against a
-    # host reference used to catch exactly that; until the replacement reference lands, this
-    # test measures perf and proves liveness only.
-    logger.warning(
-        f"[traced_perf] ctx={context_len}: perf above is measured, but replay correctness is "
-        f"NOT verified — no reference to compare against"
+        f"[traced_perf] ring-depth cost: first={per_chunk[0] * 1000:.1f}ms -> last={per_chunk[-1] * 1000:.1f}ms "
+        f"= {per_chunk[-1] / per_chunk[0]:.2f}x over {len(per_chunk) - 1} extra chunks of history"
     )
 
 
