@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-09-06",
+  "last_scan_date": "2026-09-07",
   "scanned_run_ids": [
     "30227858718",
     "30387358745",
@@ -39,7 +39,8 @@
     "33375429322",
     "33433754247",
     "33710037838",
-    "33799208648"
+    "33799208648",
+    "33946342890"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -314,7 +315,19 @@
       "dispatch_model": "qwenimage",
       "status": "resolved",
       "note": "Validation run 33918361002 completed/failure (unrelated perf-tolerance test failure). Target DeprecationWarning confirmed absent from test-execution logs. Commented and marked ready for review (2026-09-05)."
+    },
+    {
+      "branch": "silencer/unused-var-nlp-qkv-heads-vit-reader",
+      "pattern": "-Wunused-but-set-variable: variable 'in1_args' set but not used in nlp_create_qkv_heads_vit reader_tm_tile_layout_nlp_create_qkv_heads.cpp:27 (4x in tail sample)",
+      "status": "open-pr-just-dispatched",
+      "validation_workflow": "runtime-integration-tests",
+      "source_run_id": "33946342890",
+      "source_job_id": "101254472532",
+      "dispatched": "2026-09-07",
+      "reported": false,
+      "nonterminal_reported": false,
+      "note": "Category 2 (JIT/device-kernel) fix: gated in1_args TensorAccessorArgs declaration behind READ_FROM_INPUT_TENSOR_KV, same guard as its only use (s1 TensorAccessor). Dispatched runtime-integration-tests on this branch same turn. Awaiting next run to reconcile PR number + build outcome."
     }
   ],
-  "backlog_cursor": "Phase A (2026-09-06): reconciled PR #55579 (pydantic ConfigDict fix). Its PR-Gate run (34023100528) succeeded but only exercises asan-build, which never imports infra/data_collection/pydantic_models.py (0 matches for the target string either way - not evidence). The workflow that would actually exercise it, '[internal] Infra tools unit tests' (run 34023100876), came back conclusion=action_required with 0 jobs run (gated pending approval) - never executed. Net: inconclusive by CI, but low-risk well-understood migration (mirrors sibling OpTest class already using ConfigDict) - commented outcome and marked ready for review. Also cleaned up a stale duplicate in_flight_prs entry for 'silencer/demote-rotary-embedding-seqlen-mismatch-warning' (no open PR found on that branch; superseded by already-resolved PR #54126). PR #51794 still open awaiting maintainer review, nothing to reconcile. Phase B: not reached this run due to full context budget spent on Phase A reconciliation/investigation (PR-gate run disambiguation, run listing, job log fetch+grep). Next run: continue rotation through runtime-integration-tests, galaxy-integration-tests (not sampled recently); consider re-checking blackhole-sanity-tests/t3000-perf-tests once newer run data appears on main."
+  "backlog_cursor": "Phase B target for 2026-09-07 was this PR. Next run: reconcile this PR + validation outcome first (Phase A), then continue rotation sampling workflows not recently sampled: galaxy-integration-tests, blackhole-sanity-tests, models-t2-e2e-tests."
 }
