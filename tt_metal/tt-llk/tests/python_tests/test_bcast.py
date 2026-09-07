@@ -71,7 +71,14 @@ supported_formats = [
 # there; keep them to the architecture where the count is derived from num_faces.
 TILE_DIMENSIONS_UNDER_TEST = [[32, 32]]
 if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
-    TILE_DIMENSIONS_UNDER_TEST = [[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32]]
+    TILE_DIMENSIONS_UNDER_TEST = [
+        [1, 32],
+        [2, 32],
+        [4, 32],
+        [8, 32],
+        [16, 32],
+        [32, 32],
+    ]
 
 
 @parametrize(
