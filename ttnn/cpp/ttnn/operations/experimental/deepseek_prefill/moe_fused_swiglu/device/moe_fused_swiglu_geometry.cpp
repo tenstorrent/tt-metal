@@ -83,7 +83,9 @@ Blocking::Blocking(
     uint32_t l1_budget_,
     uint32_t out_tile_,
     bool enable_phase_alias_,
-    bool x_is_rm_) :
+    bool x_is_rm_,
+    bool fuse_bias_) :
+    fuse_bias(fuse_bias_),
     hgroups(hgroups_),
     kgroups(kgroups_),
     num_cores(hgroups_ * kgroups_),
@@ -314,7 +316,7 @@ std::vector<CbView> Blocking::cb_layout(
     const uint32_t h_fast = wd_mrow_rounds ? hid_t : gu;
     const uint32_t out_block = std::max(M_BLOCK * ec_max, wd_mgroups ? mgroup_rows * ec_group_max : 0u);
     const uint32_t out_interm = (wd_mrow_rounds ? M_BLOCK / 2 : M_BLOCK) * ec_max;
-    return {
+    std::vector<CbView> views = {
         {CB_X_IN, input_is_rm ? XSTICK_ROWS * TILE : 1, x_stick, FormatKey::XIn},
         {CB_X_TILES, depth_x * M_BLOCK * kr_pad, bfp8_tile, FormatKey::Bfp8},
         {CB_X_STAGE, 1, 64, FormatKey::U32},
@@ -338,6 +340,18 @@ std::vector<CbView> Blocking::cb_layout(
         {CB_H_LOCAL, std::max(gu, h_fast), bfp8_tile, FormatKey::Bfp8},
         {CB_OUT_INTERM, out_interm, bf16_tile, FormatKey::Bf16},
     };
+
+    // Bias CBs sized by the fused op's own sharding rather than the composite's contiguous per-core
+    // N shard: the gate/up pair holds the column's whole hn_pad-wide bias, because a scattered
+    // slice indexes it as `idx % hn_pad` and so is not a contiguous range; the down bias is the
+    // core's own ec output columns, which is. bf16 is enforced by validation, so these reuse the
+    // bf16 tile instead of carrying a bias format through the layout.
+    if (fuse_bias) {
+        views.push_back({CB_GATE_BIAS, hn_pad, bf16_tile, FormatKey::Bf16});
+        views.push_back({CB_UP_BIAS, hn_pad, bf16_tile, FormatKey::Bf16});
+        views.push_back({CB_DOWN_BIAS, ec_max, bf16_tile, FormatKey::Bf16});
+    }
+    return views;
 }
 
 uint32_t Blocking::phase_cb_alias_pages(uint32_t requested_out_tile) const {

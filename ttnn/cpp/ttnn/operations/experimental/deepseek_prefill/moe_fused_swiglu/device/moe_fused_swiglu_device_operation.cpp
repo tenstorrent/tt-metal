@@ -255,6 +255,16 @@ void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
             operation_arguments.activation != RoutedExpertActivation::Silu,
             "moe_fused_swiglu: expert biases require RoutedExpertActivation::SituGlu or "
             "RoutedExpertActivation::SwiGluOai; the SiLU path has no bias branch");
+        // The CB layout reuses the bf16 tile for all three bias CBs rather than threading a bias
+        // format through it, so the tensors have to actually be bf16.
+        for (const auto& bias : {std::cref(gate_biases), std::cref(up_biases), std::cref(down_biases)}) {
+            for (const auto& tensor : bias.get()) {
+                TT_FATAL(
+                    tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
+                    "moe_fused_swiglu: expert biases must be BFLOAT16, got {}",
+                    tensor.dtype());
+            }
+        }
         // The plumbing above carries the tensors and hashes fuse_bias, but no kernel applies them
         // yet. Reject rather than ignore: a silently bias-free result is wrong numbers with no
         // signal. Lift this together with the kernels' bias adds.
