@@ -22,7 +22,6 @@
 //   * the reduce-scatter transport is raw unicast + counting semaphores: mcast_pipe's SenderPipe is
 //     a rectangle multicast, while a gather leg is point-to-point with a different destination per
 //     peer, and the fan-in needs counting.
-//   * the h multicast is raw because `noc.h` blocks POSTED multicast at the library level.
 //   * the token-count publish is a raw L1 mailbox because compute needs a scalar loop bound on ALL
 //     THREE TRISCs and `cb_wait_front` in a compute kernel is UNPACK-only.
 //
@@ -198,10 +197,12 @@ constexpr uint32_t RT_HGROUP_RECT = RT_HMCAST + 4 + 2 * HGROUPS * KGROUPS;
 // W_down addresses. Appended AFTER every mcast block, so none of the offsets above moved.
 constexpr uint32_t RT_WEIGHTS = RT_HGROUP_RECT + 4;
 
-// POSTED (default) drops the NUM_CORES-1 payload write-acks and changes nothing else: the VALID
-// flag stays non-posted and LINKED on the same VC, so it cannot overtake the payload. Keep 0
-// reachable — if that ordering ever fails a receiver reads a half-written slot, silently.
+// The h payload send is non-posted, so it pays `ndest` write-acks and the VALID flag behind it is
+// LINKED on the same VC and cannot overtake it. POSTED would drop those acks, but
+// Noc::async_write_multicast rejects POSTED at compile time, so the geometry flag stays false until
+// the library grows one — an un-LINKED flag lets a receiver read a half-written slot, silently.
 constexpr bool kHMcastPosted = (H_MCAST_POSTED != 0);
+static_assert(!kHMcastPosted, "POSTED multicast is not expressible through Noc::async_write_multicast");
 
 inline bool h_round_on_writer(uint32_t r) { return ((H_ROUND_NOC1_MASK >> r) & 1u) != 0; }
 
@@ -224,21 +225,16 @@ inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size, bool g
     const uint32_t ndest = hrect.area() - 1;
     Semaphore<> hf(SEM_H_RDY_BASE + slot);
 
-    // 1. the payload — LINKED, so the flag below cannot overtake it. POSTED (no return acks) only
-    //    when kHMcastPosted; otherwise all `ndest` destinations ack, which is the conservative
-    //    variant. Identical in every other argument.
-    ncrisc_noc_fast_write_any_len<noc_mode>(
-        noc_index,
-        write_cmd_buf,
-        l1,
-        get_noc_multicast_addr(rb.sx, rb.sy, rb.ex, rb.ey, l1),
+    // 1. the payload — LINKED, so the flag below cannot overtake it. `src == dst` on every
+    //    destination, which is why one address serves as both the local source and the mcast offset.
+    noc.async_write_multicast(
+        CoreLocalMem<uint32_t>(l1),
+        MulticastEndpoint{},
         size,
-        NOC_MULTICAST_WRITE_VC,
-        /*mcast=*/true,
-        /*linked=*/true,
         ndest,
-        /*multicast_path_reserve=*/true,
-        /*posted=*/kHMcastPosted);
+        {},
+        {.noc_x_start = rb.sx, .noc_y_start = rb.sy, .noc_x_end = rb.ex, .noc_y_end = rb.ey, .addr = l1},
+        /*linked=*/true);
     // 2. re-assert VALID locally: `set_multicast` broadcasts THIS core's own cell as the source, and
     //    a core that also receives on this cell left it INVALID after its last receive.
     hf.set(VALID);
@@ -753,18 +749,18 @@ void kernel_main() {
                                 x_free.set(0);
                             }
                             const uint32_t src = x_base + t * X_ROW_BYTES;
-                            ncrisc_noc_fast_write_any_len<noc_mode>(
-                                noc_index,
-                                write_cmd_buf,
-                                src,
-                                get_noc_multicast_addr(xbounds.sx, xbounds.sy, xbounds.ex, xbounds.ey, src),
+                            noc.async_write_multicast(
+                                CoreLocalMem<uint32_t>(src),
+                                MulticastEndpoint{},
                                 X_ROW_BYTES,
-                                NOC_MULTICAST_WRITE_VC,
-                                /*mcast=*/true,
-                                /*linked=*/true,
                                 x_mcast_dests,
-                                /*multicast_path_reserve=*/true,
-                                /*posted=*/false);
+                                {},
+                                {.noc_x_start = xbounds.sx,
+                                 .noc_y_start = xbounds.sy,
+                                 .noc_x_end = xbounds.ex,
+                                 .noc_y_end = xbounds.ey,
+                                 .addr = src},
+                                /*linked=*/true);
                             x_ready.set(VALID);
                             x_ready.set_multicast(
                                 noc, xbounds.sx, xbounds.sy, xbounds.ex, xbounds.ey, x_mcast_dests, /*linked=*/false);
