@@ -1077,6 +1077,11 @@ PC_MCAST_LATE = True
 # to line.  Index 0 is the line's first core (leftmost / topmost); a middle index halves
 # the worst-case broadcast distance; `Diagonal` advances the index per line so the
 # injectors do not all sit in one grid column and start their DRAM reads together.
+# The smallest LINE the broadcast is allowed to engage; see the carve-out note at the
+# `live` filter for the measurement that set it.  2 is the measured loser (one receiver
+# pays the whole fixed handshake); 3 is untested and included.
+PC_MCAST_MIN_GROUP = 3
+
 PC_MCAST_SENDER_INDEX = 0
 PC_MCAST_DIAGONAL = True  # ~0.5% on the focus shape, neutral on STREAM
 
@@ -3954,7 +3959,21 @@ def create_program_descriptor(
                 blocks = 0 if x_resident else -(-a.row_count // block_rows)
                 return (a.w_start, a.w_real, blocks)
 
-            live = [g for g in groups if len(g) > 1 and len({_key(k) for k in g}) == 1]
+            # D40's ONE MEASURED CARVE-OUT.  What the broadcast SAVES is one DRAM read
+            # per RECEIVER -- it scales with `len(g) - 1` -- while what it COSTS is a
+            # handshake plus a multicast round, which is essentially fixed.  A line of
+            # TWO has exactly ONE receiver, so it removes one core's read and pays the
+            # whole fixed cost for it.  MEASURED: `(1,1,64,128)` ROW_MAJOR with a TILE
+            # weight (Rt=2 -> a 2-core line) is 5,164 -> 5,540 ns, 0.932x, reproducible
+            # on min AND median and far outside that cell's noise.
+            # `PC_MCAST_MIN_GROUP` is the narrow carve-out around exactly that, and no
+            # wider: a line of THREE is UNTESTED and therefore INCLUDED, because the
+            # saving doubles while the cost does not.  Lines of 4, 7, 8 and 11 all
+            # measured at or above parity (`(1,1,128,4096)` 4 cores 1.030-1.049x, the
+            # 64-core HEIGHT shard's 8-core lines 1.592x, the focus shape's 11-core
+            # lines 1.073x), so the constant is at the edge of the bracket it was
+            # measured in and shrinks if a 3-core line is ever measured to win.
+            live = [g for g in groups if len(g) >= PC_MCAST_MIN_GROUP and len({_key(k) for k in g}) == 1]
             pc_lines, pc_lines_on = len(groups), len(live)
             ok = pc_lines_on > 0
         if ok:
