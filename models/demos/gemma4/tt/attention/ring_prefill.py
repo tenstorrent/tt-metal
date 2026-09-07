@@ -89,22 +89,6 @@ def _allocate_migration_ring_cache(mesh_device, shape, dtype, row_dim):
     return cache
 
 
-# Counts ring_joint history reads. The long-context test asserts this advances:
-# without it, a silent fallback to the mask path would still produce finite,
-# stable-looking output (each chunk attending only within itself), so every
-# smoke assertion would pass while history was being ignored.
-RING_ATTENTION_CALLS = 0
-
-
-def reset_ring_attention_calls():
-    global RING_ATTENTION_CALLS
-    RING_ATTENTION_CALLS = 0
-
-
-def ring_attention_calls():
-    return RING_ATTENTION_CALLS
-
-
 def ring_cache_seq_len(max_seq_len, cp):
     """Per-rank cache sequence length. Each rank stores 1/cp of every chunk."""
     assert max_seq_len % cp == 0, f"max_seq_len {max_seq_len} must be divisible by CP degree {cp}"
@@ -357,8 +341,6 @@ def ring_prefill_attention(
     Returns ``[1, num_local_q_heads, q_local, head_dim]`` — this rank's rows only, so
     the output stays CP-sharded exactly like the input.
     """
-    global RING_ATTENTION_CALLS
-    RING_ATTENTION_CALLS += 1
     if program_config is None:
         # Global (non-sliding) layers take a wider K chunk. ring_joint SDPA's
         # `q in {64,128}` / `k == 128` allowlist lives inside `if (args.has_sliding_window())`

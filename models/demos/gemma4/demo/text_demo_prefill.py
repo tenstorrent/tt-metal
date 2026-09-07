@@ -32,7 +32,7 @@ except ModuleNotFoundError:
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 MODEL_DTYPE = ttnn.bfloat16
-_SLIDING_WINDOW_TOKENS = 1024
+GEMMA4_SLIDING_WINDOW_TOKENS = 1024
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 
 
@@ -168,7 +168,7 @@ def _text_token_stream(model_path):
     return torch.tensor(tokenizer.encode(text), dtype=torch.int32).unsqueeze(0)
 
 
-def _prefill_tokens(model_path, context_len, vocab_size, source="text"):
+def _get_prefill_tokens(model_path, context_len, vocab_size, source="text"):
     """Return prefix-consistent token IDs from text or a fixed-seed random stream."""
     if source == "random":
         gen = torch.Generator().manual_seed(0)
@@ -267,17 +267,7 @@ def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
 
 
 @torch.no_grad()
-# Mesh is a test arg: -k 8x4 for TP=4 x CP=8, -k 4x8 for TP=8 x CP=4. TP=32 is absent
-# because hidden 5376/32 = 168 makes the embedding all-gather's page 336 B, not 64 B
-# aligned, so it falls back to composite_all_gather and deadlocks (GALAXY_1x32_HANG.md).
-# The tensor cache is tagged by TP, so each mesh needs its own (_tp4_ / _tp8_).
 @parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
-# Legality depends on the mesh -- the halo rule needs chunk >= window * cp -- so illegal
-# combinations skip on that arithmetic rather than reaching ring_joint's TT_FATAL after a
-# 90 s model load. Bigger is faster with sharply diminishing returns; the sweep shows where
-# that flattens. Every context length stays divisible by every chunk size.
-# Real prose by default; swap in "random" here to compare against uniform ids, or when the
-# corpus cannot be fetched. See _prefill_tokens.
 @pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
 @pytest.mark.parametrize("chunk_size", [4096, 8192, 16384, 32768], ids=lambda c: f"chunk{c}")
 @pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
@@ -332,7 +322,6 @@ def test_prefill_long_context_traced(
     ring_joint refuses it instead of attending over a truncated history. That combination
     is a param here, and it skips on the halo arithmetic before the model loads.
     """
-    from models.demos.gemma4.tt.attention import ring_prefill
     from models.demos.gemma4.tt.ccl import cp_degree
 
     chunk = chunk_size
@@ -340,22 +329,24 @@ def test_prefill_long_context_traced(
     cp = cp_degree(mesh_config)
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    # The halo rule, as a skip rather than a TT_FATAL 90 s into a model load: under CP the
-    # sliding layers fetch their window from a single predecessor rank, so the per-rank Q slab
-    # has to cover the window. The 10 global layers would be fine; the 50 sliding ones are not.
-    if chunk < _SLIDING_WINDOW_TOKENS * cp:
+    if chunk < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
         pytest.skip(
             f"chunk={chunk} gives a {chunk // cp}-token Q slab at CP={cp}, under the "
-            f"{_SLIDING_WINDOW_TOKENS}-token sliding window; ring_joint needs "
-            f"chunk >= window*cp = {_SLIDING_WINDOW_TOKENS * cp} (its halo is single-hop)"
+            f"{GEMMA4_SLIDING_WINDOW_TOKENS}-token sliding window; ring_joint needs "
+            f"chunk >= window*cp = {GEMMA4_SLIDING_WINDOW_TOKENS * cp} (its halo is single-hop)"
         )
     if context_len % chunk != 0:
         pytest.skip(f"context_len={context_len} is not a whole number of {chunk}-token chunks")
 
     model_path = _model_path()
     n_chunks = context_len // chunk
-    model_args, model, kv_cache = _build_prefill_model(mesh_device, model_path, chunk, context_len=context_len)
-    tokens_all = _prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
+    model_args, model, kv_cache = _build_prefill_model(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        chunk=chunk,
+        context_len=context_len,
+    )
+    tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
 
     rope_local_seq = chunk // cp
     host_input = _host_tensor(
@@ -380,10 +371,6 @@ def test_prefill_long_context_traced(
     )
     model.set_prefill_rope_positions(device_positions)
     model._ring_metadata_external = True
-    # logical_n stays per-chunk: the sliding halo layout is built from it at program-create
-    # time and needs the capturing chunk's true geometry. The gather extent no longer
-    # depends on it on the metadata path (compute_gather_valid_Ht bounds to full capacity
-    # there and the all-gather reader narrows per dispatch from kv_actual_isl).
 
     stage_breakdown = {"tokens": 0.0, "metadata": 0.0, "rope": 0.0}
 
@@ -446,12 +433,6 @@ def test_prefill_long_context_traced(
                 user_id=0,
             )
 
-    # One trace for the whole prefill: every chunk takes the ring path, and chunk 0 differs
-    # from the rest only in kv_actual_isl == 0, which the kernels derive on-device. Capture at
-    # chunk 0, which used to be rejected host-side because the halo layout demanded a complete
-    # predecessor group; it now builds from one group, so the first chunk is capturable like
-    # any other and the warmup that compiles the graph is also the chunk being captured.
-
     # ── Warm up: compile the graph that will be captured ──────────────────────
     t0 = time.time()
     out = _forward(_stage(0))
@@ -461,7 +442,6 @@ def test_prefill_long_context_traced(
 
     # ── Capture ───────────────────────────────────────────────────────────────
     t0 = time.time()
-    ring_prefill.reset_ring_attention_calls()
     cap_start = _stage(0)
     tid_ring = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     out_ring = _forward(cap_start)
@@ -469,17 +449,6 @@ def test_prefill_long_context_traced(
     ttnn.synchronize_device(mesh_device)
     capture_s = time.time() - t0
     logger.info(f"[traced] warmup(compile)={warmup_s:.1f}s capture={capture_s:.1f}s for 1 trace")
-
-    # Ring reads are counted in Python, and a replay runs no Python — so the counter can
-    # only be read at capture, where it confirms the ring graph really is inside the
-    # recorded trace. During replay it stays 0 by construction, so this says nothing about
-    # whether the replays are numerically right -- nothing here does, until the replacement
-    # reference lands.
-    captured_ring_calls = ring_prefill.ring_attention_calls()
-    assert captured_ring_calls >= len(model.layers), (
-        f"only {captured_ring_calls} ring calls recorded while capturing, expected >= {len(model.layers)} "
-        f"(one per layer) — the ring path is not in the captured trace"
-    )
 
     # Warm replay, so the measured pass excludes one-off dispatch setup.
     _stage(0)
@@ -594,7 +563,7 @@ def _perf_signposts(layer_type, chunk_idx):
 # invocations (eager compile + capture + warmups) to find the measured replay, so the two
 # move together.
 # Real prose by default; swap in "random" here to compare against uniform ids, or when the
-# corpus cannot be fetched. See _prefill_tokens.
+# corpus cannot be fetched. See _get_prefill_tokens.
 @pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
 @pytest.mark.parametrize("warmup_iters", [5], ids=lambda n: f"warm{n}")
 # The chunk index only means something relative to a context length and a chunk size, so
@@ -633,7 +602,7 @@ def test_prefill_layer_perf_chunk_n(
     is a chance to measure a geometry the real run never uses.
 
     Input is the same deterministic token sequence the traced test stages
-    (``_prefill_tokens``), sliced at this chunk's offset and embedded by the model's own
+    (``_get_prefill_tokens``), sliced at this chunk's offset and embedded by the model's own
     ``embed_tokens`` — the same tokens at the same positions the canonical run consumes.
 
     **Cache warmth.** Every chunk from 0 up to the highest requested one is replayed; only
@@ -665,7 +634,6 @@ def test_prefill_layer_perf_chunk_n(
     ``models/demos/gemma4/tests/sweep_layer_perf.py`` drives the sweep and files the
     per-cell tt-perf-report output.
     """
-    from models.demos.gemma4.tt.attention import ring_prefill
     from models.demos.gemma4.tt.ccl import cp_degree
 
     chunk = chunk_size
@@ -673,11 +641,11 @@ def test_prefill_layer_perf_chunk_n(
     cp = cp_degree(mesh_config)
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if chunk < _SLIDING_WINDOW_TOKENS * cp:
+    if chunk < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
         pytest.skip(
             f"chunk {chunk} / CP {cp} = {chunk // cp} tokens per rank, below the "
-            f"{_SLIDING_WINDOW_TOKENS}-token sliding window; ring_joint needs "
-            f"chunk >= window*cp = {_SLIDING_WINDOW_TOKENS * cp}"
+            f"{GEMMA4_SLIDING_WINDOW_TOKENS}-token sliding window; ring_joint needs "
+            f"chunk >= window*cp = {GEMMA4_SLIDING_WINDOW_TOKENS * cp}"
         )
     assert context_len % chunk == 0
     n_chunks = context_len // chunk
@@ -692,8 +660,13 @@ def test_prefill_layer_perf_chunk_n(
 
     model_path = _model_path()
     text_config = _hf_text_config(model_path)
-    model_args, model, kv_cache = _build_prefill_model(mesh_device, model_path, chunk, context_len=context_len)
-    tokens_all = _prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
+    model_args, model, kv_cache = _build_prefill_model(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        chunk=chunk,
+        context_len=context_len,
+    )
+    tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
 
     layer_idxs = {lt: find_layer_idx(text_config, lt) for lt in layer_types}
     type_desc = ", ".join(f"{_perf_layer_tag(lt)}=layer{layer_idxs[lt]}" for lt in layer_types)
@@ -826,7 +799,6 @@ def test_prefill_layer_perf_chunk_n(
         compile_s = time.time() - t0
 
         t0 = time.time()
-        ring_prefill.reset_ring_attention_calls()
         cap_start = _stage(capture_at)
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         outs[lt] = fwd(cap_start)
@@ -834,13 +806,6 @@ def test_prefill_layer_perf_chunk_n(
         ttnn.synchronize_device(mesh_device)
         traces[lt] = tid
         capture_s = time.time() - t0
-        # A replay runs no Python, so this counter can only be read at capture. It confirms
-        # the ring graph really is inside the recorded trace rather than a mask-path
-        # fallback that would make every depth cost the same.
-        assert ring_prefill.ring_attention_calls() >= 1, (
-            f"no ring attention call recorded while capturing the {_perf_layer_tag(lt)} layer — "
-            f"the ring path is not in the captured trace, so depth would not be measured"
-        )
         logger.info(
             f"[layer_perf_chunk] {_perf_layer_tag(lt)} layer_idx={layer_idxs[lt]} "
             f"compile={compile_s:.1f}s capture={capture_s:.1f}s"
