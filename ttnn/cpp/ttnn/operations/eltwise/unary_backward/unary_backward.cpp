@@ -251,11 +251,17 @@ std::vector<std::optional<Tensor>> pow_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
-    const float ZERO_THRESHOLD = std::numeric_limits<float>::epsilon() * 10.0f;
     TT_FATAL(exponent >= 0.0, "negative exponents are not supported; use recip(pow(input,abs(exponent)))");
+    // Not value_or: its argument is evaluated even when input_grad already holds a
+    // tensor, which would allocate and immediately discard a device tensor.
+    if (!input_grad.has_value()) {
+        input_grad = ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
+    }
+    const float ZERO_THRESHOLD = std::numeric_limits<float>::epsilon() * 10.0f;
     if (std::abs(exponent) < ZERO_THRESHOLD) {
-        input_grad = ttnn::zeros_like(input);
+        // Write through input_grad so a caller-supplied tensor is filled, matching the
+        // non-zero-exponent path below and fill_bw.
+        input_grad = ttnn::zeros_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config, input_grad);
         grad_tensor.emplace_back(input_grad);
         return grad_tensor;
     }
@@ -529,14 +535,16 @@ std::vector<Tensor> relu_bw(
 // result: at::fill(self_t, 0)
 std::vector<std::optional<Tensor>> fill_bw(
     const Tensor& grad,
-    const Tensor& input,
+    const Tensor& /*input*/,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& input_grad) {
-    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    // The gradient of fill does not depend on the input value, only its shape, which grad
+    // already has. Pass output_mem_config rather than value_or(input.memory_config()): the
+    // tensor is created from grad, so an unset config must keep inheriting grad's placement.
     std::vector<std::optional<Tensor>> result = {std::nullopt};
     result[0] = input_grad.has_value()
-                    ? ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, std::nullopt, input_grad)
-                    : ttnn::zeros_like(grad);
+                    ? ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config, input_grad)
+                    : ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     return result;
 }
 
@@ -811,17 +819,17 @@ std::vector<Tensor> rpow_bw(
 }
 
 std::vector<Tensor> floor_bw(
-    const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_zero = ttnn::zeros_like(grad);
+    Tensor t_zero = ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(t_zero);
     return grad_tensor;
 }
 
 std::vector<Tensor> round_bw(
-    const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_zero = ttnn::zeros_like(grad);
+    Tensor t_zero = ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(t_zero);
     return grad_tensor;
 }
@@ -1151,9 +1159,9 @@ std::vector<Tensor> erfc_bw(
 }
 
 std::vector<Tensor> ceil_bw(
-    const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = ttnn::zeros_like(grad);
+    Tensor zero_grad = ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(zero_grad);
     return grad_tensor;
 }

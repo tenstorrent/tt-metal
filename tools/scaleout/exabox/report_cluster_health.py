@@ -34,6 +34,11 @@ from resolve_host_ring_order import (
 )
 
 STORE_ROOT_ENV = "CLUSTER_HEALTH_STORE_ROOT"
+# setgid + sticky + owner/group rwx. mkdir is umask-masked (often 0755), so the
+# first writer of the day would otherwise lock out the store's group. Sticky
+# keeps non-owner writers from unlinking each other's records; as usual, the
+# directory owner can still unlink any entry. No other-write.
+STORE_DIR_MODE = 0o3770
 
 
 def dumps_compact(obj: dict[str, Any]) -> str:
@@ -539,16 +544,63 @@ def _payload_matches(existing: bytes, payload_bytes: bytes) -> bool:
 
 
 def _existing_or_conflict(
+    date_dir_fd: int,
+    dest_name: str,
     dest: Path,
     payload_bytes: bytes,
     record: dict[str, Any],
     published: dict[str, Any],
 ) -> dict[str, Any]:
-    existing = dest.read_bytes()
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    existing_fd = os.open(dest_name, flags, dir_fd=date_dir_fd)
+    with os.fdopen(existing_fd, "rb") as handle:
+        existing = handle.read()
     if _payload_matches(existing, payload_bytes):
         return published
     _warn(f"refusing to overwrite different content at {dest}")
     return record
+
+
+def _ensure_date_dir(root: Path, date_name: str) -> int:
+    """Open today's directory securely and return a caller-owned descriptor.
+
+    Only the date directory gets STORE_DIR_MODE. It is the one directory this
+    tool owns per day, so a mistyped --store-root cannot loosen an unrelated
+    tree. ``mkdir`` cannot do this itself: its mode applies to the leaf only
+    and is masked by umask, which is how the first writer of the day used to
+    leave a 0755 directory owned by their uid.
+
+    Descriptor-relative operations prevent a shared-root writer from replacing
+    the date path with a symlink or swapping it while a record is published.
+    chown runs before chmod because a non-privileged chown may drop setgid.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    root_fd = os.open(root, directory_flags)
+    try:
+        root_gid = os.fstat(root_fd).st_gid
+        try:
+            os.mkdir(date_name, mode=STORE_DIR_MODE, dir_fd=root_fd)
+        except FileExistsError:
+            pass
+        date_dir_fd = os.open(date_name, directory_flags, dir_fd=root_fd)
+    finally:
+        os.close(root_fd)
+
+    try:
+        try:
+            os.fchown(date_dir_fd, -1, root_gid)
+        except OSError:
+            if os.fstat(date_dir_fd).st_gid != root_gid:
+                _warn(f"date directory group does not match store root group ({root_gid})")
+        try:
+            os.fchmod(date_dir_fd, STORE_DIR_MODE)
+        except OSError:
+            pass
+        return date_dir_fd
+    except BaseException:
+        os.close(date_dir_fd)
+        raise
 
 
 def publish_record(record: dict[str, Any], store_root: str) -> dict[str, Any]:
@@ -557,7 +609,10 @@ def publish_record(record: dict[str, Any], store_root: str) -> dict[str, Any]:
     Uses an exclusive link (no-clobber). If dest already exists, identical
     content is treated as success; different content is left in place and the
     stdout-only record is returned. On I/O failure, warns and returns the
-    stdout-only record (no record_id).
+    stdout-only record (no record_id). The date directory is chmod'd to
+    STORE_DIR_MODE (setgid + sticky + group write) so a shared store stays
+    writable for the store root's group; record files themselves follow the
+    caller's umask.
     """
     record_id = compute_record_id(
         record["test_type"],
@@ -577,25 +632,36 @@ def publish_record(record: dict[str, Any], store_root: str) -> dict[str, Any]:
         validate_record(published, file_written=True)
         payload = dumps_compact(published) + "\n"
         payload_bytes = payload.encode("utf-8")
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        if dest.exists():
-            return _existing_or_conflict(dest, payload_bytes, record, published)
-        tmp = dest_dir / f".{record_id}.{os.getpid()}.tmp"
+        date_dir_fd = _ensure_date_dir(root, date_dir)
+        dest_name = f"{record_id}.json"
+        tmp_name = f".{record_id}.{os.getpid()}.tmp"
         try:
-            with open(tmp, "wb") as handle:
+            tmp_fd = os.open(
+                tmp_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o666,
+                dir_fd=date_dir_fd,
+            )
+            with os.fdopen(tmp_fd, "wb") as handle:
                 handle.write(payload_bytes)
                 handle.flush()
                 os.fsync(handle.fileno())
             try:
-                os.link(tmp, dest)
+                os.link(
+                    tmp_name,
+                    dest_name,
+                    src_dir_fd=date_dir_fd,
+                    dst_dir_fd=date_dir_fd,
+                    follow_symlinks=False,
+                )
             except FileExistsError:
-                return _existing_or_conflict(dest, payload_bytes, record, published)
+                return _existing_or_conflict(date_dir_fd, dest_name, dest, payload_bytes, record, published)
         finally:
-            if tmp.exists():
-                try:
-                    tmp.unlink()
-                except OSError:
-                    pass
+            try:
+                os.unlink(tmp_name, dir_fd=date_dir_fd)
+            except OSError:
+                pass
+            os.close(date_dir_fd)
         return published
     except (OSError, ValueError) as exc:
         _warn(f"store write failed: {exc}")

@@ -261,6 +261,20 @@ class TtDistributedRmsNorm(LightweightModule):
             x = ttnn.to_memory_config(x, memory_config=self.input_memcfg)
             logger.debug("Moved input to specified memory config")
 
+        # TP=1: the cluster axis has length 1, so every device already holds the full hidden dim and
+        # there is nothing to distribute. Take the plain fused op. This is not just an optimisation --
+        # BOTH gathers below abort on a singleton axis rather than degenerating to a copy
+        # (all_gather: "num_devices > 1, got 1"; high_bw_all_gather: "selects a singleton mesh axis"),
+        # so which one you hit only depends on whether the tensor's topology supports the high-bw
+        # path. Verified bit-identical to the TP>1 path's output on an (8,1) stage submesh.
+        if self.mesh_device.shape[self.cluster_axis] == 1:
+            return ttnn.rms_norm(
+                x,
+                epsilon=self.epsilon,
+                weight=self.weight,
+                program_config=self.sharded_progcfg,
+            )
+
         # Step 1: Pre-all-gather - each device computes local sum(x^2)
         tt_stats = ttnn.rms_norm_pre_all_gather(
             x,

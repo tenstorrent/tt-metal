@@ -9,6 +9,14 @@ on:
       package-artifact-name:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Image with the packages already installed. When set it replaces
+          docker-image and the download and install steps are skipped. Empty
+          means the artifact path, which is what forks always get.
       enabled-skus:
         required: false
         type: string
@@ -90,7 +98,8 @@ jobs:
     timeout-minutes: ${{ matrix.test-group.timeout }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      # A prebuilt image already carries the packages and needs no Harbor prefix.
+      image: ${{ inputs.prebuilt-image || inputs.docker-image || 'docker-image-unresolved!' }}
       volumes:
         - /work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -111,12 +120,14 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - uses: ./.github/actions/download-artifact-with-retry
+        if: ${{ inputs.prebuilt-image == '' }}
         timeout-minutes: 15
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
 
       - name: Install packages
+        if: ${{ inputs.prebuilt-image == '' }}
         timeout-minutes: 10
         run: |
           set -euo pipefail
