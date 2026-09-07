@@ -103,9 +103,13 @@ public:
 
     [[nodiscard]] tt::tt_metal::distributed::MeshShape get_mesh_shape() const;
 
+    // ``num_command_queues`` is forwarded to ``ttml::core::MeshDevice`` and ultimately to
+    // ``ttnn::distributed::open_mesh_device``. Default 1 preserves historical behavior; set to 2
+    // for workflows that need cross-CQ overlap (e.g. ``ThreadedWeightBridge``).
     void open_device(
         const tt::tt_metal::distributed::MeshShape& mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1),
-        const std::vector<int>& device_ids = std::vector<int>{});
+        const std::vector<int>& device_ids = std::vector<int>{},
+        std::size_t num_command_queues = 1);
 
     void close_device();
 

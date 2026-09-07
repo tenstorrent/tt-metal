@@ -11,7 +11,14 @@ namespace ttml::core {
 // should I implement pimpl or its fine
 class MeshDevice {
 public:
-    explicit MeshDevice(const tt::tt_metal::distributed::MeshShape& shape, const std::vector<int>& device_ids);
+    // ``num_command_queues`` is forwarded to ``ttnn::distributed::open_mesh_device``. Default 1 to
+    // match the historical behavior; set to 2 for workflows that need cross-CQ overlap (e.g.
+    // ``ThreadedWeightBridge``: main-thread CQ0 for ``ttnn.copy`` + ``record_event``, background
+    // thread CQ1 for ``ttnn.to_torch`` / ``ttnn.copy_host_to_device_tensor``).
+    explicit MeshDevice(
+        const tt::tt_metal::distributed::MeshShape& shape,
+        const std::vector<int>& device_ids,
+        std::size_t num_command_queues = 1);
     MeshDevice(MeshDevice&& device) = default;
     MeshDevice(const MeshDevice&) = delete;
 
