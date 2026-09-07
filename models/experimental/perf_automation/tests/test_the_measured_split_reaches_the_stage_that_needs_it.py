@@ -40,6 +40,14 @@ sys.path.insert(0, str(_PA))
 # machine without the weights. Stubbing the one call that reaches the cache keeps them running.
 _ANY_ID = "org/some-model"
 
+# NAMES THIS TEST INVENTED. The merge is about MAPPING, not about which model is being mapped, and
+# stage/root names typed in a case are the same defect as stage names typed in the tool: a join that
+# quietly special-cased a real tower would pass a case written in that tower's vocabulary. Nothing
+# here appears in any model.
+_TOWER_A, _TOWER_B = "tower_alpha", "tower_beta"
+_STAGE_1, _STAGE_2, _STAGE_3 = "stage_one", "stage_two", "stage_three"
+_BLOCKS_A, _BLOCKS_B = 32, 30
+
 
 def _a_cached_model():
     """SOME model the local cache holds, whichever it is, or "" when it holds none.
@@ -94,14 +102,14 @@ def _stub_sections(monkeypatch, R):
     """
     from agent import checkpoint_sections
 
-    # {path: block count}, shaped so the COUNT JOIN can actually answer: _stack_paths gives s0 a
-    # count of 32, and exactly one section has 32, so that stack resolves to audio_tower. A stub
-    # without a unique 32 leaves the count join empty and the cases stop testing the merge they are
-    # about -- which is what a first attempt here did.
+    # {path: block count}, shaped so the COUNT JOIN can actually answer: the stack below carries
+    # _BLOCKS_A, and exactly one section has that count, so it resolves to _TOWER_A. A stub whose
+    # counts are not unique leaves the count join empty and the cases stop testing the merge they
+    # exist for -- which is what a first attempt here did.
     monkeypatch.setattr(
         checkpoint_sections,
         "declared_sections",
-        lambda root, model_id="": {"audio_tower.layers": 32, "language_model.layers": 30},
+        lambda root, model_id="": {"%s.layers" % _TOWER_A: _BLOCKS_A, "%s.layers" % _TOWER_B: _BLOCKS_B},
     )
 
 
@@ -110,19 +118,19 @@ def test_the_two_joins_merge_per_stage(monkeypatch):
     import cc_optimize.run as R
 
     _stub_sections(monkeypatch, R)
-    monkeypatch.setattr(R, "stacks_by_stage", lambda seq: {"encode": ["s0"]})
-    monkeypatch.setattr(R, "_stack_paths", lambda seq: [("s0", 32, "k")])
+    monkeypatch.setattr(R, "stacks_by_stage", lambda seq: {_STAGE_1: ["s0"]})
+    monkeypatch.setattr(R, "_stack_paths", lambda seq: [("s0", _BLOCKS_A, "k")])
     monkeypatch.setattr(
         R,
         "_stage_roots_from_generated",
         lambda secs, perf_test, model_root=None: {
-            "encode": "audio_tower",
-            "prefill": "language_model",
-            "decode": "language_model",
+            _STAGE_1: _TOWER_A,
+            _STAGE_2: _TOWER_B,
+            _STAGE_3: _TOWER_B,
         },
     )
     got = R.stage_roots(None, "/nonexistent", _ANY_ID, None)
-    assert got == {"encode": "audio_tower", "prefill": "language_model", "decode": "language_model"}
+    assert got == {_STAGE_1: _TOWER_A, _STAGE_2: _TOWER_B, _STAGE_3: _TOWER_B}
 
 
 def test_the_count_join_keeps_its_answer_where_it_has_one(monkeypatch):
@@ -130,16 +138,16 @@ def test_the_count_join_keeps_its_answer_where_it_has_one(monkeypatch):
     import cc_optimize.run as R
 
     _stub_sections(monkeypatch, R)
-    monkeypatch.setattr(R, "stacks_by_stage", lambda seq: {"encode": ["s0"]})
-    monkeypatch.setattr(R, "_stack_paths", lambda seq: [("s0", 32, "k")])
+    monkeypatch.setattr(R, "stacks_by_stage", lambda seq: {_STAGE_1: ["s0"]})
+    monkeypatch.setattr(R, "_stack_paths", lambda seq: [("s0", _BLOCKS_A, "k")])
     monkeypatch.setattr(
         R,
         "_stage_roots_from_generated",
-        lambda secs, perf_test, model_root=None: {"encode": "SOMETHING_ELSE", "decode": "language_model"},
+        lambda secs, perf_test, model_root=None: {_STAGE_1: "SOMETHING_ELSE", _STAGE_3: _TOWER_B},
     )
     got = R.stage_roots(None, "/nonexistent", _ANY_ID, None)
-    assert got["encode"] != "SOMETHING_ELSE" or got["encode"] == "audio_tower"
-    assert got["decode"] == "language_model"
+    assert got[_STAGE_1] == _TOWER_A, "the count join's answer was overwritten by the generated one"
+    assert got[_STAGE_3] == _TOWER_B, "a stage the count join could not reach must take the fallback"
 
 
 # ------------------------------------------------------------- the checkpoint readers take an id

@@ -42,40 +42,47 @@ def _order(short, rows):
     ]
 
 
+# STAGES THIS TEST INVENTED. The ordering is about a stack being short or not, never about which
+# stack it is, and a real stage name typed into a case is the same defect as one typed into the tool:
+# an ordering that quietly special-cased a stage would pass a case written in that stage's
+# vocabulary. `_DONE_BIG` is the finished stack with the largest gap -- the row that used to be
+# offered first.
+_SHORT, _DONE, _OTHER_DONE = "stack_short", "stack_done", "stack_also_done"
+
 _ROWS = [
-    {"op": "enc_big", "stage": "encode", "eff_gap_ms": 30.0},
-    {"op": "dec_big", "stage": "decode", "eff_gap_ms": 26.0},
-    {"op": "pre_mid", "stage": "prefill", "eff_gap_ms": 14.0},
+    {"op": "done_big", "stage": _DONE, "eff_gap_ms": 30.0},
+    {"op": "other_done_big", "stage": _OTHER_DONE, "eff_gap_ms": 26.0},
+    {"op": "short_mid", "stage": _SHORT, "eff_gap_ms": 14.0},
     {"op": "unplaced", "stage": "", "eff_gap_ms": 9.0},
-    {"op": "pre_small", "stage": "prefill", "eff_gap_ms": 5.0},
+    {"op": "short_small", "stage": _SHORT, "eff_gap_ms": 5.0},
 ]
 
 
 def test_the_one_stage_still_short_is_offered_first():
     """The voxtral case: a 14 ms gap in the unfinished stack beats a 30 ms gap in a finished one."""
-    assert _order({"prefill"}, _ROWS)[0] == "pre_mid"
+    assert _order({_SHORT}, _ROWS)[0] == "short_mid"
 
 
 def test_finished_stages_go_to_the_back_but_are_still_offered():
     """Dropping them could empty `blocking`, and empty is what ends the run."""
-    out = _order({"prefill"}, _ROWS)
+    out = _order({_SHORT}, _ROWS)
     assert set(out) == {r["op"] for r in _ROWS}
-    assert out.index("pre_small") < out.index("enc_big")
+    assert out.index("short_small") < out.index("done_big")
 
 
 def test_with_nothing_short_the_order_is_untouched():
     """No bar to read means no reordering -- the run behaves exactly as before."""
-    assert _order(set(), _ROWS) == ["enc_big", "dec_big", "pre_mid", "unplaced", "pre_small"]
+    assert _order(set(), _ROWS) == ["done_big", "other_done_big", "short_mid", "unplaced", "short_small"]
 
 
 def test_with_every_stage_short_the_order_is_untouched():
-    assert _order({"encode", "prefill", "decode"}, _ROWS) == _order(set(), _ROWS)
+    assert _order({_SHORT, _DONE, _OTHER_DONE}, _ROWS) == _order(set(), _ROWS)
 
 
 def test_an_op_the_capture_could_not_place_keeps_its_position():
     """ "" is not a finished stage. Demoting unplaced work buries whatever the marks missed."""
-    out = _order({"prefill"}, _ROWS)
-    assert out.index("unplaced") < out.index("enc_big")
+    out = _order({_SHORT}, _ROWS)
+    assert out.index("unplaced") < out.index("done_big")
 
 
 def test_the_stage_is_resolved_once_and_carried():
