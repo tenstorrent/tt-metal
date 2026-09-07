@@ -792,7 +792,7 @@ does not gate perf. Run it manually (see [Running the demo](#running-the-demo)).
 > the **tiled device-weight cache** lands there too. Without it, `resolve_weight_cache` falls back to
 > `generated/ttnn/vibevoice/weight_cache` inside the ephemeral checkout, and all 1135 tensors
 > (~4.2 GB) are re-tilized on every run and thrown away at job end — a per-run cost no other model in
-> the pipeline pays, and what timed the e2e job out at 22 min on its first CI run.
+> the pipeline pays.
 >
 > **The cache is per-Kubernetes-node**, so a job scheduled onto a node that has not run VibeVoice
 > before still pays the ~9.5 GB download inside the job timeout. That is what the timeout headroom
