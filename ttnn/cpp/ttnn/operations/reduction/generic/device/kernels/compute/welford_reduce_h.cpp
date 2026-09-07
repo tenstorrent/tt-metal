@@ -135,7 +135,6 @@ void kernel_main() {
         // the desired output layout (one row of results per column of input).
         dfb_out.reserve_back(onetile);
         tile_regs_wait();
-        pack_reconfig_data_format(dfb::out);
         pack_tile(var_dst, dfb::out);
         tile_regs_release();
         dfb_out.push_back(onetile);

@@ -70,7 +70,6 @@ void kernel_main() {
     constexpr std::uint32_t last_tile_rows = ((H % tile_height) == 0) ? tile_height : (H % tile_height);
 
     compute_kernel_hw_startup(dfb::in, dfb::partial);
-    pack_reconfig_data_format(dfb::partial);
 
     std::uint32_t num_outputs = NC_per_core / reduce_batch_size;
 
@@ -79,6 +78,8 @@ void kernel_main() {
         // Restore unpacker to dfb::in's format after Phase 2 set it to
         // dfb::combined (Float32).
         reconfig_data_format_srca(dfb::in);
+        // Phase 2 packs dfb::out; all partials below share one packer format.
+        pack_reconfig_data_format(dfb::partial);
         for (std::uint32_t b = 0; b < reduce_batch_size; ++b) {
             for (std::uint32_t wt = 0; wt < Wt; ++wt) {
                 copy_init(dfb::in);
@@ -147,7 +148,6 @@ void kernel_main() {
                 // Pack mean (DST[1]) and var (DST[2]) tiles to dfb_partial.
                 dfb_partial.reserve_back(2);
                 tile_regs_wait();
-                pack_reconfig_data_format(dfb::partial);
                 pack_block(mean_dst, dfb::partial, 2);
                 tile_regs_release();
                 dfb_partial.push_back(2);

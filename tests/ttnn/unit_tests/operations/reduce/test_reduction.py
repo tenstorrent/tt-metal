@@ -145,11 +145,12 @@ def test_std_w_streaming_output_padding_is_finite(device):
     ],
     ids=["bf16", "fp32", "bfp8"],
 )
-def test_std_var_hw_output_padding_is_zero(device, torch_dtype, ttnn_dtype, ttnn_op):
+@pytest.mark.parametrize("width", [96, 128], ids=["scalar_combine", "compact_combine"])
+def test_std_var_hw_output_padding_is_zero(device, torch_dtype, ttnn_dtype, ttnn_op, width):
     torch.manual_seed(0)
     # More outputs than either supported Gen1 compute grid ensures that the
-    # one-entry combined buffer is reused after its write pointer wraps.
-    torch_input = -torch.rand((1, 256, 32, 96), dtype=torch_dtype)
+    # one-entry combined buffer and partial/output packer formats are reused.
+    torch_input = -torch.rand((1, 256, 32, width), dtype=torch_dtype)
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn_op(input_tensor, dim=(-2, -1), keepdim=True, correction=False)
