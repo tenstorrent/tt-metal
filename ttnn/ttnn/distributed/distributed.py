@@ -2,16 +2,294 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import contextlib
+import dataclasses
 import functools
 
-from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable, Union, List
+from typing import TYPE_CHECKING, List, Dict, Optional, Callable, Tuple, Optional, Callable, Union, List
 
 import ttnn
 
-
 MeshDevice = ttnn._ttnn.multi_device.MeshDevice
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
+
+
+def _mesh_coordinate_key(mesh_coord):
+    return tuple(int(value) for value in mesh_coord)
+
+
+def _topology_value(topology, name):
+    value = getattr(topology, name)
+    return value() if callable(value) else value
+
+
+@dataclasses.dataclass(frozen=True)
+class TensorTopologySnapshot:
+    distribution_shape: tuple[int, ...]
+    placements: tuple[object, ...]
+    mesh_coords: tuple[ttnn.MeshCoordinate, ...]
+
+    @classmethod
+    def from_topology(cls, topology):
+        if isinstance(topology, cls):
+            return topology
+        return cls(
+            distribution_shape=tuple(int(dimension) for dimension in _topology_value(topology, "distribution_shape")),
+            placements=tuple(_topology_value(topology, "placements")),
+            mesh_coords=tuple(_topology_value(topology, "mesh_coords")),
+        )
+
+    def with_placements(self, placements):
+        return dataclasses.replace(self, placements=tuple(placements))
+
+
+@dataclasses.dataclass
+class DistributedGolden:
+    topology: TensorTopologySnapshot
+    global_value: torch.Tensor | None = None
+    shards: dict[ttnn.MeshCoordinate, torch.Tensor] | None = None
+    compare_coords: frozenset[ttnn.MeshCoordinate] | None = None
+
+    def __post_init__(self):
+        import torch
+
+        self.topology = TensorTopologySnapshot.from_topology(self.topology)
+        if self.global_value is None and self.shards is None:
+            raise ValueError("DistributedGolden requires a global value or coordinate-keyed shards")
+        if self.global_value is not None and not isinstance(self.global_value, torch.Tensor):
+            raise TypeError(
+                f"Expected DistributedGolden.global_value to be a torch.Tensor, got {type(self.global_value)}"
+            )
+
+        topology_coords_by_key = {
+            _mesh_coordinate_key(mesh_coord): mesh_coord for mesh_coord in self.topology.mesh_coords
+        }
+        if self.shards is not None:
+            normalized_shards = {}
+            for mesh_coord, shard in self.shards.items():
+                mesh_coord_key = _mesh_coordinate_key(mesh_coord)
+                if mesh_coord_key not in topology_coords_by_key:
+                    raise ValueError(f"Mesh coordinate {mesh_coord_key} is not present in the golden topology")
+                if not isinstance(shard, torch.Tensor):
+                    raise TypeError(f"Expected a torch.Tensor shard at coordinate {mesh_coord_key}, got {type(shard)}")
+                normalized_shards[topology_coords_by_key[mesh_coord_key]] = shard
+            self.shards = normalized_shards
+            if self.global_value is None and not self.shards:
+                raise ValueError("DistributedGolden requires at least one coordinate-keyed shard")
+
+        if self.compare_coords is not None:
+            normalized_compare_coords = set()
+            for mesh_coord in self.compare_coords:
+                mesh_coord_key = _mesh_coordinate_key(mesh_coord)
+                if mesh_coord_key not in topology_coords_by_key:
+                    raise ValueError(f"Comparison coordinate {mesh_coord_key} is not present in the golden topology")
+                normalized_compare_coords.add(topology_coords_by_key[mesh_coord_key])
+            self.compare_coords = frozenset(normalized_compare_coords)
+            if self.global_value is None and not self.compare_coords.issubset(self.shards):
+                raise ValueError("DistributedGolden comparison coordinates require corresponding shards")
+
+
+def mesh_coords_for_shards(topology, shard_count, mesh_device=None):
+    """Return the topology coordinates corresponding to an ordered local shard sequence."""
+
+    mesh_coords = list(_topology_value(topology, "mesh_coords"))
+    if len(mesh_coords) == shard_count:
+        return mesh_coords
+
+    if mesh_device is not None:
+        try:
+            mesh_view = mesh_device.get_view()
+            local_mesh_coords = [mesh_coord for mesh_coord in mesh_coords if mesh_view.is_local(mesh_coord)]
+            if len(local_mesh_coords) == shard_count:
+                return local_mesh_coords
+        except Exception:
+            pass
+
+    raise ValueError(f"Cannot map {shard_count} mesh shards to {len(mesh_coords)} coordinates from the tensor topology")
+
+
+def _compute_mesh_value_layout(*, topology, shard_shapes_by_mesh_coord):
+    import itertools
+    import math
+
+    distribution_shape = tuple(int(dimension) for dimension in _topology_value(topology, "distribution_shape"))
+    placements = tuple(_topology_value(topology, "placements"))
+    mesh_coords = tuple(_topology_value(topology, "mesh_coords"))
+
+    if not distribution_shape:
+        raise ValueError("Tensor topology must have a non-empty distribution shape")
+    if len(placements) != len(distribution_shape):
+        raise ValueError("Tensor topology placement count must match its distribution rank")
+    if len(mesh_coords) != math.prod(distribution_shape):
+        raise ValueError("Tensor topology mesh-coordinate count must match its distribution volume")
+
+    topology_coords_by_key = {_mesh_coordinate_key(mesh_coord): mesh_coord for mesh_coord in mesh_coords}
+    if len(topology_coords_by_key) != len(mesh_coords):
+        raise ValueError("Tensor topology contains duplicate mesh coordinates")
+
+    normalized_shapes = {}
+    for mesh_coord, shard_shape in shard_shapes_by_mesh_coord.items():
+        mesh_coord_key = _mesh_coordinate_key(mesh_coord)
+        if mesh_coord_key not in topology_coords_by_key:
+            raise ValueError(f"Mesh coordinate {mesh_coord_key} is not present in the tensor topology")
+        normalized_shapes[mesh_coord_key] = tuple(int(dimension) for dimension in shard_shape)
+    if not normalized_shapes:
+        raise ValueError("At least one mesh shard shape is required")
+
+    shard_ranks = {len(shard_shape) for shard_shape in normalized_shapes.values()}
+    if len(shard_ranks) != 1:
+        raise ValueError("All mesh shards must have the same rank")
+    shard_rank = shard_ranks.pop()
+
+    shard_axes_by_tensor_dim = {}
+    for axis, placement in enumerate(placements):
+        if not isinstance(placement, ttnn.PlacementShard):
+            continue
+        tensor_dim = int(placement.dim)
+        if tensor_dim < 0:
+            tensor_dim += shard_rank
+        if tensor_dim < 0 or tensor_dim >= shard_rank:
+            raise ValueError(f"Mesh axis {axis} shards invalid tensor dimension {placement.dim}")
+        shard_axes_by_tensor_dim.setdefault(tensor_dim, []).append(axis)
+
+    distribution_coords = tuple(itertools.product(*(range(dimension) for dimension in distribution_shape)))
+    distribution_coord_by_mesh_key = {
+        _mesh_coordinate_key(mesh_coord): distribution_coord
+        for distribution_coord, mesh_coord in zip(distribution_coords, mesh_coords)
+    }
+
+    partition_offsets_by_tensor_dim = {}
+    global_shape = []
+    for tensor_dim in range(shard_rank):
+        shard_axes = shard_axes_by_tensor_dim.get(tensor_dim, ())
+        if not shard_axes:
+            dimension_sizes = {shard_shape[tensor_dim] for shard_shape in normalized_shapes.values()}
+            if len(dimension_sizes) != 1:
+                raise ValueError(f"Replicated tensor dimension {tensor_dim} has inconsistent shard extents")
+            global_shape.append(dimension_sizes.pop())
+            continue
+
+        partition_sizes = {}
+        for mesh_coord_key, shard_shape in normalized_shapes.items():
+            distribution_coord = distribution_coord_by_mesh_key[mesh_coord_key]
+            partition_coord = tuple(distribution_coord[axis] for axis in shard_axes)
+            partition_size = shard_shape[tensor_dim]
+            previous_size = partition_sizes.setdefault(partition_coord, partition_size)
+            if previous_size != partition_size:
+                raise ValueError(
+                    f"Tensor dimension {tensor_dim} partition {partition_coord} has inconsistent shard extents"
+                )
+
+        partition_coords = tuple(itertools.product(*(range(distribution_shape[axis]) for axis in shard_axes)))
+        missing_partitions = set(partition_coords) - partition_sizes.keys()
+        if missing_partitions:
+            raise ValueError(
+                f"Cannot reconstruct tensor dimension {tensor_dim}; missing mesh partitions {sorted(missing_partitions)}"
+            )
+
+        offsets = {}
+        offset = 0
+        for partition_coord in partition_coords:
+            partition_size = partition_sizes[partition_coord]
+            offsets[partition_coord] = (offset, partition_size)
+            offset += partition_size
+        partition_offsets_by_tensor_dim[tensor_dim] = (shard_axes, offsets)
+        global_shape.append(offset)
+
+    slices_by_mesh_key = {}
+    for mesh_coord_key, distribution_coord in distribution_coord_by_mesh_key.items():
+        shard_slices = []
+        for tensor_dim, global_extent in enumerate(global_shape):
+            if tensor_dim not in partition_offsets_by_tensor_dim:
+                shard_slices.append(slice(0, global_extent))
+                continue
+            shard_axes, offsets = partition_offsets_by_tensor_dim[tensor_dim]
+            partition_coord = tuple(distribution_coord[axis] for axis in shard_axes)
+            offset, extent = offsets[partition_coord]
+            shard_slices.append(slice(offset, offset + extent))
+        slices_by_mesh_key[mesh_coord_key] = tuple(shard_slices)
+
+    def slice_key(shard_slices):
+        return tuple((shard_slice.start, shard_slice.stop) for shard_slice in shard_slices)
+
+    represented_slices = {slice_key(slices_by_mesh_key[mesh_coord_key]) for mesh_coord_key in normalized_shapes}
+    required_slices = {slice_key(shard_slices) for shard_slices in slices_by_mesh_key.values()}
+    if represented_slices != required_slices:
+        raise ValueError("Mesh shards do not cover every sharded region of the global tensor")
+
+    return tuple(global_shape), slices_by_mesh_key, topology_coords_by_key
+
+
+def compose_mesh_value(*, shards_by_mesh_coord, topology):
+    """Compose coordinate-keyed Torch shards according to an explicit tensor topology."""
+
+    import torch
+
+    shard_shapes = {mesh_coord: tuple(shard.shape) for mesh_coord, shard in shards_by_mesh_coord.items()}
+    global_shape, slices_by_mesh_key, _ = _compute_mesh_value_layout(
+        topology=topology, shard_shapes_by_mesh_coord=shard_shapes
+    )
+
+    first_shard = next(iter(shards_by_mesh_coord.values()))
+    if not isinstance(first_shard, torch.Tensor):
+        raise TypeError(f"Expected torch.Tensor mesh shards, got {type(first_shard)}")
+    global_value = torch.empty(global_shape, dtype=first_shard.dtype, device=first_shard.device)
+
+    representative_by_slices = {}
+    for mesh_coord, shard in shards_by_mesh_coord.items():
+        if not isinstance(shard, torch.Tensor):
+            raise TypeError(f"Expected torch.Tensor mesh shards, got {type(shard)}")
+        mesh_coord_key = _mesh_coordinate_key(mesh_coord)
+        if shard.dtype != first_shard.dtype or shard.device != first_shard.device:
+            raise ValueError(
+                f"Mesh shard at coordinate {mesh_coord_key} has dtype/device {shard.dtype}/{shard.device}, "
+                f"expected {first_shard.dtype}/{first_shard.device}"
+            )
+        shard_slices = slices_by_mesh_key[mesh_coord_key]
+        expected_shape = tuple(shard_slice.stop - shard_slice.start for shard_slice in shard_slices)
+        if tuple(shard.shape) != expected_shape:
+            raise ValueError(
+                f"Mesh shard at coordinate {mesh_coord_key} has shape {tuple(shard.shape)}, "
+                f"expected {expected_shape}"
+            )
+
+        shard_slice_key = tuple((shard_slice.start, shard_slice.stop) for shard_slice in shard_slices)
+        representative = representative_by_slices.get(shard_slice_key)
+        if representative is not None:
+            try:
+                torch.testing.assert_close(shard, representative, rtol=0.0, atol=0.0, equal_nan=True)
+            except AssertionError as error:
+                raise ValueError(
+                    f"Replicated mesh shard at coordinate {mesh_coord_key} differs from its replica group"
+                ) from error
+            continue
+
+        representative_by_slices[shard_slice_key] = shard
+        global_value[shard_slices] = shard
+
+    return global_value
+
+
+def decompose_mesh_value(global_value, *, topology, shard_shapes_by_mesh_coord):
+    """Decompose a global Torch value into coordinate-keyed views using exact shard extents."""
+
+    import torch
+
+    if not isinstance(global_value, torch.Tensor):
+        raise TypeError(f"Expected a torch.Tensor global value, got {type(global_value)}")
+
+    global_shape, slices_by_mesh_key, topology_coords_by_key = _compute_mesh_value_layout(
+        topology=topology, shard_shapes_by_mesh_coord=shard_shapes_by_mesh_coord
+    )
+    if tuple(global_value.shape) != global_shape:
+        raise ValueError(f"Global value has shape {tuple(global_value.shape)}, expected {global_shape}")
+
+    return {
+        topology_coords_by_key[mesh_coord_key]: global_value[slices_by_mesh_key[mesh_coord_key]]
+        for mesh_coord_key in (_mesh_coordinate_key(mesh_coord) for mesh_coord in shard_shapes_by_mesh_coord)
+    }
 
 
 # ====================================================================
