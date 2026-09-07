@@ -996,10 +996,17 @@ def _relu_min_int_stimuli_spec(threshold: int) -> StimuliSpec:
     which is the same way the float domain used to be vacuous.
 
     Negatives are required here -- max(x, -5) only clamps for x < -5 -- so unlike
-    _int_unary_stimuli_spec this cannot stay positive-only. That is safe for this op
-    because the kernel loads and stores under InstrModLoadStore::INT32_2S_COMP, which
-    converts DEST's two's complement to sign+magnitude and back around the SFPSWAP; the
-    positive-only rule there exists for the max/min ops that are also read as unsigned.
+    _int_unary_stimuli_spec this cannot stay positive-only. (The positive-only rule over
+    there is about ops that are also read as unsigned, which is a different constraint.)
+
+    Negative *inputs* are fine on their own: SFPSWAP orders operands as sign+magnitude, and
+    for a non-negative threshold that misreading cannot change the outcome, because any
+    negative input is below the threshold under either encoding. What negative inputs do
+    expose, once the *threshold* is also negative, is that the kernel loads them under
+    InstrModLoadStore::INT32_2S_COMP, which loads **raw** rather than converting -- so the
+    compare sees a two's-complement input against a sign+magnitude threshold. That is the
+    unsupported path this sweep deliberately drives, and why the negative-threshold cases
+    below are xfailed. See https://github.com/tenstorrent/tt-metal/issues/55643.
     """
     straddle = [float(threshold + d) for d in (-2, -1, 0, 1, 2)]
     # A decade either side, so the comparison is exercised well away from the boundary too.
@@ -1058,8 +1065,8 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
                 reason="Wormhole _relu_min_ vInt branch mishandles a negative threshold: the "
                 "sign+magnitude re-encoding wins every comparison and is stored raw "
                 "(threshold -5 returns 0x80000005). Unreached before this test; no shipping "
-                "op passes a negative integer threshold. See tt-metal issue #55643, which "
-                "carries the measurements for both encodings.",
+                "op passes a negative integer threshold. Measurements for both encodings: "
+                "https://github.com/tenstorrent/tt-metal/issues/55643",
                 strict=False,
             )
         )
