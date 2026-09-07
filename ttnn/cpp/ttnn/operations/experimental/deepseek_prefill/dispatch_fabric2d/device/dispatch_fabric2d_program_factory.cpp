@@ -39,6 +39,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             stream_count(operation_attributes.num_links));
         (void)generate_assignments(ring_chip_ids, coord[operation_attributes.axis], operation_attributes.num_links);
     }
+    validate_chunk_agreement(extent, operation_attributes.num_links);
 
     TT_THROW("dispatch_fabric2d: kernels are not implemented yet");
 }
