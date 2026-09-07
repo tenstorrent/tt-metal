@@ -87,28 +87,33 @@ constexpr uint32_t FORWARDING_METADATA_SIZE = 64;
 // Dispatch writes each token to TWO tensors at one page index, so both destination addresses travel with
 // it; combine needs only one. All uint64_t so a sender needs no sub-word loads.
 struct FwdMetadata {
+    // First, because the last hop sends these words straight out of the slot to the metadata page and a
+    // fabric write's L1 source has to be aligned. The tail starts at slot_base + token_size, and a token
+    // page is 64-byte aligned, so offset 0 of the tail is the only place in it that is.
+    uint32_t meta[3];             // (src chip, token index, top-k slot), the metadata this token carries
+    uint32_t pad;                 // makes the addresses below 8-byte aligned
     uint64_t final_payload_addr;  // token page address on the FINAL destination chip
     uint64_t final_meta_addr;     // metadata page address on that same chip
     uint64_t dst_chip;            // final destination chip id
-    uint32_t meta[3];             // (src chip, token index, top-k slot), the metadata this token carries
-    uint32_t pad;                 // keeps the forwarded prefix 8-byte aligned
     uint64_t cmd;
     uint64_t this_addr;  // the address THIS hop writes to
 };
 
-// A forwarded packet is the token plus everything up to and including `pad`, sent as one contiguous run,
-// so this bound is wire format between chips rather than a private convenience.
-constexpr uint32_t FWD_EXTRA_BYTES = 3 * sizeof(uint64_t) + 4 * sizeof(uint32_t);
+// A forwarded packet is the token plus everything up to and including `dst_chip`, sent as one contiguous
+// run, so this bound is wire format between chips rather than a private convenience.
+constexpr uint32_t FWD_EXTRA_BYTES = 4 * sizeof(uint32_t) + 3 * sizeof(uint64_t);
+
+// Bytes the last hop writes to the metadata page: the three words rounded up to a NoC-friendly size.
+constexpr uint32_t METADATA_WIRE_BYTES = 16;
 
 // Asserted so that whoever changes this layout has to acknowledge they need some other means of ensuring
 // every device runs kernels built from the same metadata format.
 static_assert(sizeof(FwdMetadata) <= FORWARDING_METADATA_SIZE);
-static_assert(offsetof(FwdMetadata, final_payload_addr) == 0);
-static_assert(offsetof(FwdMetadata, final_meta_addr) == sizeof(uint64_t));
-static_assert(offsetof(FwdMetadata, dst_chip) == 2 * sizeof(uint64_t));
-static_assert(offsetof(FwdMetadata, meta) == 3 * sizeof(uint64_t));
+static_assert(offsetof(FwdMetadata, meta) == 0);
+static_assert(offsetof(FwdMetadata, final_payload_addr) == 4 * sizeof(uint32_t));
 static_assert(offsetof(FwdMetadata, cmd) == FWD_EXTRA_BYTES);
 static_assert(FWD_EXTRA_BYTES == 40);
+static_assert(METADATA_WIRE_BYTES <= FORWARDING_METADATA_SIZE);
 
 constexpr uint64_t CMD_END = 0;          // end of stream; the slot carries no token
 constexpr uint64_t CMD_FINAL_WRITE = 1;  // this hop is the last: write payload and metadata to their pages

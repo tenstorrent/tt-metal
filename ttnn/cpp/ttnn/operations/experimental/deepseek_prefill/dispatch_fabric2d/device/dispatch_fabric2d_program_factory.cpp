@@ -62,12 +62,12 @@ uint32_t control_region_bytes(const DispatchFabric2dParams& args, uint32_t exten
     const uint32_t pad_stride =
         dspf2d::META_PAD_STRIDE *
         ((args.num_experts_per_tok * 2 + dspf2d::META_PAD_STRIDE - 1) / dspf2d::META_PAD_STRIDE);
-    const uint32_t words = (extent + 2) * w  // expert_offsets rows, counts, region offsets
-                           + (w + 1)         // dispatch table, with its trailing sentinel column
-                           + w               // the running per-expert allocator
-                           +
-                           3 * extent * args.experts_per_chip  // chip -> experts inverse, bucket lengths, bucket starts
-                           + 2 * args.seq_len_per_chip * args.num_experts_per_tok;  // (token, page) per entry
+    const uint32_t words =
+        (extent + 2) * w                      // expert_offsets rows, counts, region offsets
+        + (w + 1)                             // dispatch table, with its trailing sentinel column
+        + w                                   // the running per-expert allocator
+        + 3 * extent * args.experts_per_chip  // chip -> experts inverse, bucket lengths, bucket starts
+        + 3 * args.seq_len_per_chip * args.num_experts_per_tok;  // (token, page, top-k slot) per entry
     return args.seq_len_per_chip * pad_stride + words * static_cast<uint32_t>(sizeof(uint32_t));
 }
 
@@ -171,6 +171,11 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     const uint32_t extent = ring_extent_of(args);
     const uint32_t token_bytes = token_size_bytes(tensor_args);
     const uint32_t meta_bytes = static_cast<uint32_t>(tensor_return_value[1].buffer()->aligned_page_size());
+    TT_FATAL(
+        meta_bytes >= dspf2d::METADATA_WIRE_BYTES,
+        "dispatch_fabric2d: metadata page is {} B but the last hop writes {} B into it",
+        meta_bytes,
+        dspf2d::METADATA_WIRE_BYTES);
 
     validate_chunk_agreement(extent, args.num_links);
     const auto placement = decide_placement(mesh, args.axis, args.num_links);
