@@ -105,8 +105,10 @@ struct MatmulDecodeDeviceOperation {
         // dest grid).
         bool output_mcast_two_hub = false;
         // Full-width only: normalize each output row using stats reduced over the producer
-        // shards. Vector gamma is a separate WIDTH_SHARDED tensor on the weight grid.
+        // shards. Scalar gamma is folded into the multicast scale; vector gamma is a
+        // WIDTH_SHARDED tensor on the weight grid (tensor_args.rms_norm_gamma).
         bool rms_norm = false;
+        std::optional<float> rms_norm_gamma = std::nullopt;
         float rms_norm_epsilon = 1.0e-6F;
     };
 
@@ -187,6 +189,6 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     const std::optional<tt::tt_metal::CoreRangeSet>& output_core_grid = std::nullopt,
     bool output_mcast_two_hub = false,
     bool rms_norm = false,
-    const std::optional<Tensor>& rms_norm_gamma = std::nullopt,
+    const std::optional<std::variant<float, Tensor>>& rms_norm_gamma = std::nullopt,
     float rms_norm_epsilon = 1.0e-6F);
 }  // namespace ttnn::prim

@@ -14,6 +14,8 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 #include <cmath>
+#include <type_traits>
+#include <variant>
 
 namespace ttnn::operations::experimental::matmul_decode {
 
@@ -105,12 +107,11 @@ void validate_in0_row_major_height_sharded(
         "Input tensor A must have the same K dimension as the operation attributes");
 }
 
-void validate_rms_norm_gamma(
+void validate_rms_norm_gamma_tensor(
     const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
-    const MatmulDecodeDeviceOperation::tensor_args_t& tensor_args) {
-    TT_FATAL(tensor_args.rms_norm_gamma.has_value(), "matmul_decode rms_norm requires rms_norm_gamma");
-    const auto& gamma = *tensor_args.rms_norm_gamma;
-    const auto b_grid = weight_core_grid(operation_attributes, tensor_args.input_tensor_b);
+    const Tensor& gamma,
+    const Tensor& input_tensor_b) {
+    const auto b_grid = weight_core_grid(operation_attributes, input_tensor_b);
     TT_FATAL(
         gamma.layout() == Layout::TILE, "matmul_decode rms_norm_gamma must be TILE layout, but got {}", gamma.layout());
     TT_FATAL(
@@ -155,6 +156,23 @@ void validate_rms_norm_gamma(
         "matmul_decode rms_norm_gamma requires a 1x32 tile, but got {}x{}",
         gamma_tile.get_height(),
         gamma_tile.get_width());
+}
+
+void validate_rms_norm_gamma(
+    const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
+    const MatmulDecodeDeviceOperation::tensor_args_t& tensor_args) {
+    const bool has_scalar = operation_attributes.rms_norm_gamma.has_value();
+    const bool has_tensor = tensor_args.rms_norm_gamma.has_value();
+    TT_FATAL(has_scalar || has_tensor, "matmul_decode rms_norm requires rms_norm_gamma");
+    TT_FATAL(!(has_scalar && has_tensor), "matmul_decode rms_norm_gamma cannot be both a scalar and a tensor");
+    if (has_scalar) {
+        TT_FATAL(
+            std::isfinite(*operation_attributes.rms_norm_gamma),
+            "matmul_decode rms_norm_gamma must be finite, but got {}",
+            *operation_attributes.rms_norm_gamma);
+    } else {
+        validate_rms_norm_gamma_tensor(operation_attributes, *tensor_args.rms_norm_gamma, tensor_args.input_tensor_b);
+    }
 }
 }  // namespace
 
@@ -211,7 +229,9 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
             "tile needs a per-row reduction, which the narrow decode tile does not support.",
             tile_height);
     } else {
-        TT_FATAL(!tensor_args.rms_norm_gamma.has_value(), "matmul_decode rms_norm_gamma requires rms_norm");
+        TT_FATAL(
+            !operation_attributes.rms_norm_gamma.has_value() && !tensor_args.rms_norm_gamma.has_value(),
+            "matmul_decode rms_norm_gamma requires rms_norm");
     }
 
     if (operation_attributes.mesh_coords.has_value()) {
@@ -301,10 +321,16 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
                 "ROW_MAJOR width-sharded input A requires a shard spec");
             const auto& a_shard = input_tensor_a.memory_config().shard_spec().value();
             TT_FATAL(
-                a_shard.shape[0] == static_cast<uint32_t>(operation_attributes.M) && operation_attributes.M == 1,
-                "ROW_MAJOR width-sharded input A is only supported with M = shard height = 1 (1x32 faces), but got "
-                "M={} shard height {}",
-                operation_attributes.M,
+                operation_attributes.M == 1,
+                "ROW_MAJOR width-sharded input A is only supported with M = 1 (1x32 faces), but got M={}",
+                operation_attributes.M);
+            const uint32_t expected_shard_h = batched ? static_cast<uint32_t>(operation_attributes.batch)
+                                                      : static_cast<uint32_t>(operation_attributes.M);
+            TT_FATAL(
+                a_shard.shape[0] == expected_shard_h,
+                "ROW_MAJOR width-sharded input A shard height {} must equal {}, but got {}",
+                batched ? "batch * M" : "M",
+                expected_shard_h,
                 a_shard.shape[0]);
             TT_FATAL(
                 a_shard.shape[1] % tt::constants::TILE_WIDTH == 0,
@@ -778,18 +804,41 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     const auto dtype = operation_attributes.output_dtype.value_or(input_tensor_a.dtype());
     const tt::tt_metal::Tile output_tile = in0_tile_for_compute(input_tensor_a);
 
-    // Batched (rank-4 and batch > 1) lands interleaved in DRAM. Rank-4 with batch == 1 is the
-    // full-width path with an extra leading 1,1 -- same placement as rank-2, including
-    // output_core_grid. Do not take this return when the grid is set; validate already forbids
-    // pairing it with batch > 1.
-    if (input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1 &&
-        !operation_attributes.output_core_grid.has_value()) {
+    const bool batched_out = input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1 &&
+                             !operation_attributes.output_core_grid.has_value();
+    // TILE batched output stays DRAM-interleaved. Rank-4 with batch == 1 is the full-width path.
+    // ROW_MAJOR batched output is width-sharded on the weight grid in the same folded
+    // [Bc*M, b_blocks*N] layout as the weights.
+    if (batched_out && input_tensor_a.layout() != Layout::ROW_MAJOR) {
         const auto memory_config = operation_attributes.output_mem_config.value_or(
             MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM));
         return tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, output_tile), memory_config));
+    }
+    if (batched_out && input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        const bool is_packed_rm = operation_attributes.packed_weight.has_value();
+        CoreRangeSet rm_out_grid = operation_attributes.global_cb.has_value()
+                                       ? operation_attributes.global_cb->receiver_cores()
+                                   : is_packed_rm ? operation_attributes.packed_weight->cores
+                                                  : input_tensor_b.memory_config().shard_spec().value().grid;
+        const uint32_t bc = static_cast<uint32_t>(operation_attributes.batch / operation_attributes.b_blocks);
+        const uint32_t nc = static_cast<uint32_t>(operation_attributes.N / operation_attributes.n_blocks);
+        const uint32_t shard_height = tt::round_up(operation_attributes.M, output_tile.get_height()) * bc;
+        output_shape[-2] = static_cast<int>(shard_height);
+        output_shape[-1] = operation_attributes.b_blocks * operation_attributes.N;
+        for (int i = 0; i < static_cast<int>(output_shape.rank()) - 2; ++i) {
+            output_shape[i] = 1;
+        }
+        auto shard_spec =
+            tt::tt_metal::ShardSpec(rm_out_grid, {shard_height, nc}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        auto memory_config = operation_attributes.output_mem_config.value_or(
+            MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, shard_spec));
+        return tt::tt_metal::TensorSpec(
+            output_shape,
+            tt::tt_metal::TensorLayout(
+                dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), memory_config));
     }
 
     // Neither a prefetcher-fed weight (ND-sharded in DRAM) nor a packed weight (a region of the
@@ -870,10 +919,25 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     const std::optional<CoreRangeSet>& output_core_grid,
     bool output_mcast_two_hub,
     bool rms_norm,
-    const std::optional<Tensor>& rms_norm_gamma,
+    const std::optional<std::variant<float, Tensor>>& rms_norm_gamma,
     float rms_norm_epsilon) {
     using OperationType = ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation;
     using ttnn::operations::experimental::matmul_decode::gcb_num_receivers;
+
+    std::optional<float> rms_norm_gamma_scalar;
+    std::optional<Tensor> rms_norm_gamma_tensor;
+    if (rms_norm_gamma.has_value()) {
+        std::visit(
+            [&](const auto& value) {
+                using T = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<T, float>) {
+                    rms_norm_gamma_scalar = value;
+                } else {
+                    rms_norm_gamma_tensor = value;
+                }
+            },
+            *rms_norm_gamma);
+    }
 
     auto with_all_gather = [&](OperationType::operation_attributes_t attrs) {
         attrs.all_gather = all_gather;
@@ -882,6 +946,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         attrs.output_core_grid = output_core_grid;
         attrs.output_mcast_two_hub = output_mcast_two_hub;
         attrs.rms_norm = rms_norm;
+        attrs.rms_norm_gamma = rms_norm_gamma_scalar;
         attrs.rms_norm_epsilon = rms_norm_epsilon;
         attrs.in0_row_major_height_sharded =
             input_tensor_a.layout() == Layout::ROW_MAJOR &&
@@ -983,7 +1048,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
             /*global_cb_k_blocks=*/1,
             packed_weight,
         });
-        auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, rms_norm_gamma};
+        auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, rms_norm_gamma_tensor};
         return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
     }
 
@@ -1058,7 +1123,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
                 global_cb,
                 global_cb_k_blocks,
             });
-            auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, rms_norm_gamma};
+            auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, rms_norm_gamma_tensor};
             return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
         }
     }
@@ -1098,7 +1163,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         global_cb,
         global_cb_k_blocks,
     });
-    auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, rms_norm_gamma};
+    auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, rms_norm_gamma_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
