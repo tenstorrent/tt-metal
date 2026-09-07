@@ -24,6 +24,8 @@
 
 #include <chrono>
 #include <thread>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -64,8 +66,7 @@ void sync_debug_servers_before_teardown() {
 }  // namespace
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
-    auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = this->device().get_devices()[0];
     TT_FATAL(device->is_mmio_capable(), "Host hugepage test requires an MMIO-capable device");
 
     auto& cluster = MetalContext::instance().get_cluster();
@@ -101,10 +102,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
     tt_driver_atomics::sfence();
 
     // Step 2-4: Kernel reads host src -> L1, then L1 -> host dst (via compile-time args).
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-
     const experimental::KernelSpecName DM_KERNEL{"device_pcie_loopback"};
 
     experimental::KernelSpec dm_kernel_spec{
@@ -131,10 +128,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     // Step 5: Host verifies dst hugepage region matches src.
     std::vector<uint32_t> host_dst_readback(expected.size());
@@ -143,7 +139,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
 
     // Step 6: Host verifies L1 staging matches src.
     std::vector<uint32_t> l1_readback;
-    detail::ReadFromDeviceL1(device, node, l1_staging_addr, kTransferSizeBytes, l1_readback);
+    slow_dispatch::ReadFromL1(this->device(), node, l1_staging_addr, kTransferSizeBytes, l1_readback);
     EXPECT_EQ(l1_readback, expected) << "L1 staging mismatch after device PCIe read";
 
     sync_debug_servers_before_teardown();

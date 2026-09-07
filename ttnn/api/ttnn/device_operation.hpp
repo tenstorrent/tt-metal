@@ -75,7 +75,7 @@ auto compute_program_hash(
 // Helper to create a mesh workload from a WorkloadFactory that may or may not
 // provide create_mesh_workload. If missing, synthesize it from create_at.
 template <typename WorkloadFactory, typename device_operation_t>
-static auto create_mesh_workload_from_workload_factory(
+auto create_mesh_workload_from_workload_factory(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const typename device_operation_t::tensor_args_t& tensor_args,
@@ -224,7 +224,7 @@ void enqueue_mesh_workload(
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
 // path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `ProgramSpecFactoryConcept` /
-// `CustomProgramSpecFactoryConcept` factories.
+// `CustomProgramSpecFactoryConcept` / `MeshWorkloadSpecFactoryConcept` factories.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename ProgramFactory, typename Fn>
 void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, const Fn& fn) {
     std::visit(
@@ -246,6 +246,10 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
             [&]<CustomProgramSpecFactoryConcept T>(const T&) {
                 using AdaptedMeshWorkloadFactory =
                     mesh_device_operation_t::template CustomProgramSpecMeshWorkloadFactoryAdapter<T>;
+                fn.template operator()<AdaptedMeshWorkloadFactory>();
+            },
+            [&]<MeshWorkloadSpecFactoryConcept T>(const T&) {
+                using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template MeshWorkloadSpecFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
             [&]<MeshWorkloadFactoryConcept WorkloadFactory>(const WorkloadFactory&) {

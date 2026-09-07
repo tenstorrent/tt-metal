@@ -42,6 +42,7 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/buffers/semaphore.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -365,8 +366,8 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
             // Skip L1 readback validation for mock devices (L1 memory not populated)
             if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
                 tt::TargetDevice::Mock) {
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    device,
+                slow_dispatch::ReadFromL1(
+                    *mesh_device,
                     core_coord,
                     program_.impl().get_cb_base_addr(device, core_coord, CoreType::WORKER),
                     cb_config_buffer_size,
@@ -499,10 +500,7 @@ std::optional<CoreCoord> quasar_dispatch_s_virtual_core(IDevice* device) {
 }
 
 Program create_quasar_l1_write_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const experimental::NodeCoord& node,
-    uint32_t l1_address,
-    uint32_t value) {
+    distributed::MeshDevice& mesh_device, const experimental::NodeCoord& node, uint32_t l1_address, uint32_t value) {
     const experimental::KernelSpecName dm_kernel_name{"dispatch_s_test_dm"};
     experimental::KernelSpec dm_kernel_spec{
         .unique_id = dm_kernel_name,
@@ -523,7 +521,7 @@ Program create_quasar_l1_write_program(
             }},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = dm_kernel_name,
@@ -542,8 +540,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning)
     }
 
     const bool use_tensix_fallback = MetalContext::instance().rtoptions().get_use_quasar_tensix_dispatch_cores();
-    auto mesh_device = devices_.front();
-    IDevice* device = mesh_device->get_devices().front();
+    IDevice* device = this->device().get_devices().front();
     if (!use_tensix_fallback && detail::sd_cq_kernel_tests_should_skip(device)) {
         GTEST_SKIP() << "No dispatch-engine cores in soc descriptor";
     }
@@ -577,20 +574,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning)
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     constexpr uint32_t test_value = 0xdeadbeef;
     std::vector<uint32_t> cleared_l1(1, 0);
-    detail::WriteToDeviceL1(device, worker_node, l1_address, cleared_l1);
+    slow_dispatch::WriteToL1(this->device(), worker_node, l1_address, cleared_l1);
 
-    auto& cq = mesh_device->mesh_command_queue();
-    const distributed::MeshCoordinateRange device_range =
-        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
-
-    distributed::MeshWorkload workload;
-    workload.add_program(
-        device_range, create_quasar_l1_write_program(mesh_device, worker_node, l1_address, test_value));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    auto program = create_quasar_l1_write_program(this->device(), worker_node, l1_address, test_value);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result(1, 0);
-    detail::ReadFromDeviceL1(device, worker_node, l1_address, sizeof(uint32_t), result);
+    slow_dispatch::ReadFromL1(this->device(), worker_node, l1_address, sizeof(uint32_t), result);
     // End-to-end proof dispatch_s ran: dispatch_hd notifies dispatch_s to multicast the worker go
     // signal; without a functioning dispatch_s the worker kernel never writes L1.
     ASSERT_EQ(result[0], test_value);

@@ -11,6 +11,32 @@
  * LLK UNPACK TILIZE
  *************************************************************************/
 
+// Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/). They take
+// already-resolved scalar format/geometry (+ the runtime base address for the op); the per-source
+// prologue (resolving these from a CB id, or from an MemDescriptor) lives in the callers.
+inline void llk_unpack_tilize_init_impl(
+    const std::uint32_t src_format,
+    const std::uint32_t dst_format,
+    const std::uint32_t ct_dim,
+    const std::uint32_t face_r_dim,
+    const bool narrow_tile,
+    const std::uint32_t num_faces) {
+    _llk_unpack_tilize_init_(src_format, dst_format, ct_dim, face_r_dim, narrow_tile, num_faces);
+}
+
+inline void llk_unpack_tilize_impl(
+    const std::uint32_t base_address,
+    const std::uint32_t tile_index,
+    const std::uint32_t src_format,
+    const std::uint32_t dst_format,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t num_faces,
+    const bool narrow_tile) {
+    WAYPOINT("UPTW");
+    _llk_unpack_tilize_(base_address, tile_index, src_format, dst_format, face_r_dim, num_faces, narrow_tile);
+    WAYPOINT("UPTD");
+}
+
 /**
  * Initialize the unpacker for a single-operand tilize operation.
  *
@@ -21,11 +47,13 @@
  */
 inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint32_t ct_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-    const bool narrow_tile = get_operand_narrow_tile(operand_id);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-    _llk_unpack_tilize_init_(
-        unpack_src_format[operand_id], unpack_dst_format[operand_id], ct_dim, face_r_dim, narrow_tile, num_faces);
+    llk_unpack_tilize_init_impl(
+        unpack_src_format[operand_id],
+        unpack_dst_format[operand_id],
+        ct_dim,
+        get_operand_face_r_dim(operand_id),
+        get_operand_narrow_tile(operand_id),
+        get_operand_num_faces(operand_id));
 }
 
 /**
@@ -39,11 +67,15 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
  *
  * @param operand Input circular buffer / operand index.
  */
+inline void llk_unpack_tilize_uninit_impl(const std::uint32_t dst_format, const ckernel::TensorShape tensor_shape) {
+    _llk_unpack_tilize_uninit_(dst_format, tensor_shape);
+}
+
 inline void llk_unpack_tilize_uninit(const std::uint32_t operand) {
     std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-    _llk_unpack_tilize_uninit_(
+    llk_unpack_tilize_uninit_impl(
         (std::uint32_t)unpack_dst_format[operand_id], ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
 }
 
@@ -58,23 +90,17 @@ inline void llk_unpack_tilize_uninit(const std::uint32_t operand) {
  */
 inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index) {
     std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-    const bool narrow_tile = get_operand_narrow_tile(operand_id);
-
     std::uint32_t base_address =
         get_local_cb_interface(operand_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
 
-    WAYPOINT("UPTW");
-    _llk_unpack_tilize_(
+    llk_unpack_tilize_impl(
         base_address,
         tile_index,
         unpack_src_format[operand_id],
         unpack_dst_format[operand_id],
-        face_r_dim,
-        num_faces,
-        narrow_tile);
-    WAYPOINT("UPTD");
+        get_operand_face_r_dim(operand_id),
+        get_operand_num_faces(operand_id),
+        get_operand_narrow_tile(operand_id));
 }
 
 /**

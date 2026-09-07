@@ -24,11 +24,12 @@ from models.common.utility_functions import is_blackhole
 # Fabric packet payload limits (conservative round values below hardware maximums).
 MAX_PAYLOAD_SIZE_BH = 14 * 1024  # Blackhole hardware max ~15232 B
 MAX_PAYLOAD_SIZE_WH = 7 * 1024  # Wormhole hardware max ~7616 B
+CMB_FABRIC2D_ROUTING_INFO_BYTES = 64
 
 
 def get_max_payload_size() -> int:
     """Return the arch-appropriate fabric payload size. Deferred to avoid probing hardware at import time."""
-    return MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH
+    return (MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH) + CMB_FABRIC2D_ROUTING_INFO_BYTES
 
 
 @dataclass
@@ -775,6 +776,7 @@ def load_captured_routing(
         # Lazy import: transformer_helpers imports from this module in places.
         from models.demos.deepseek_v3_d_p.utils.transformer_helpers import CODE_DEBUG_5K_CHUNKED
 
+        # "kimi26" not "kimi27": https://github.com/tenstorrent/tt-metal/issues/54972
         if model not in {"dsv3", "kimi26", "glm52"}:
             raise ValueError(f"Unknown model {model!r}; expected one of dsv3, kimi26, glm52")
 

@@ -19,7 +19,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_y_device_params
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
@@ -153,6 +153,66 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     assert pcc_passed, f"Distributed RMSNorm PCC test failed: {pcc_message}"
 
     logger.debug("PCC test passed!")
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
+@pytest.mark.parametrize("isl_per_chip, emb_dim, epsilon", [(640, 4096, 1e-6)], ids=["640"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (8, 1),
+            torus_y_device_params(fabric_payload_size=7 * 1024),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="torus-y-8x1",
+        ),
+    ],
+    indirect=True,
+)
+def test_rmsnorm_tp1(mesh_device, device_params, isl_per_chip, emb_dim, epsilon):
+    """
+    Regression: the module must survive a cluster axis of length 1.
+
+    ``ttnn.all_gather`` aborts at ``num_devices == 1`` rather than degenerating to a copy, so before
+    the TP=1 guard this module died on any single-column mesh. Runs on LoudBox as a native ``(8,1)``
+    mesh -- the same single-column shape a PP=4 x TP=1 x SP=8 galaxy stage uses -- so it needs no
+    galaxy time. A bare ``(1,1)`` mesh is not feasible on this hardware and would only skip.
+    """
+    torch.manual_seed(42)
+
+    sm = mesh_device
+    mesh_shape = sm.shape
+    assert mesh_shape[1] == 1, f"expected a single-column mesh, got {tuple(mesh_shape)}"
+
+    torch_input = torch.randn((1, 1, isl_per_chip, emb_dim), dtype=torch.bfloat16).float()
+    rmsnorm = torch.nn.RMSNorm(emb_dim, eps=epsilon)
+    rmsnorm.weight.data.uniform_(-1, 1)
+    torch_reference = rmsnorm(torch_input).expand(mesh_shape[0], -1, -1, -1)
+
+    signpost(f"RMSNorm PCC test - TP=1 {tuple(mesh_shape)=} {isl_per_chip=} {emb_dim=}")
+
+    norm = TtDistributedRmsNorm(
+        mesh_device=sm,
+        emb_dim=emb_dim,
+        epsilon=epsilon,
+        torch_weight=rmsnorm.weight,
+        cluster_axis=1,
+        num_links=1,
+        topology=ttnn.Topology.Linear,
+    )
+    tt_input = ttnn.from_torch(
+        torch_input,
+        mesh_mapper=ttnn.ShardTensor2dMesh(sm, mesh_shape=mesh_shape, dims=(None, 3)),
+        layout=ttnn.TILE_LAYOUT,
+        device=sm,
+        dtype=ttnn.bfloat16,
+    )
+    tt_output = ttnn.to_torch(
+        norm(tt_input), mesh_composer=ttnn.ConcatMesh2dToTensor(sm, mesh_shape=mesh_shape, dims=(0, 3))
+    )
+
+    pcc_passed, pcc_message = assert_with_pcc(torch_reference.to(torch.float32), tt_output.to(torch.float32), pcc=0.99)
+    assert pcc_passed, f"TP=1 RMSNorm PCC test failed: {pcc_message}"
 
 
 @pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)

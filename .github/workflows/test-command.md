@@ -456,7 +456,7 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 
 | Pipeline | Hardware | Reach for it when |
 |---|---|---|
-| `sanity-tests` | WH + BH + simulator | First-line signal on core `tt_metal/` or `ttnn/` changes. Bundles eight independent suites — select them, do not take the default of all eight |
+| `sanity-tests` | WH + BH + simulator | First-line signal on core `tt_metal/` or `ttnn/` changes. Bundles nine independent suites, eight of them on by default (the LLK leg is opt-in) — select them, do not take the default of all eight |
 | `blackhole-e2e-tests` | Blackhole (P150/P300/BH QuietBox) | Anything under a `blackhole/` path or BH-specific HAL/SoC descriptor |
 | `galaxy-sanity`, `galaxy-health` | Galaxy (WH/BH) | Quick Galaxy-reachability check before committing to the heavier Galaxy suites |
 | `galaxy-unit-tests`, `galaxy-integration-tests`, `galaxy-e2e-tests` | Galaxy | Fabric, CCL, multi-device, or large-mesh code paths |
@@ -518,12 +518,13 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   pipelines, both defaulting to `all`. If the change touches one model, name it. SKU
   values carry a human-readable suffix — use the option string exactly as written
   (e.g. `wh_n150 (N150)`, `bh_p150 (P150)`).
-- **Suite and board toggles: `run-<something>` booleans that default to `true`.** Three
-  pipelines bundle independent suites this way, and taking the defaults runs all of them:
+- **Suite and board toggles: `run-<something>` booleans, defaulting to `true` unless marked
+  otherwise below.** Three pipelines bundle independent suites this way, and taking the
+  defaults runs all of them:
 
-  | Pipeline | Toggles (all default `true`) |
+  | Pipeline | Toggles (default `true` unless noted) |
   |---|---|
-  | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests`, `run-models-sanity-tests` |
+  | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests`, `run-models-sanity-tests`, `run-llk-sanity-tests` (default `false`) |
   | `single-card-profiler-tests` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler` |
   | `pipeline-select-profiler` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler`, `run-t3k-profiler` |
 
@@ -532,6 +533,11 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   and does **not** reach fabric, T3000, UMD, or multi-card. Set the ones it cannot reach to
   `false`. Leaving all seven on is the same mistake as dispatching seven pipelines when one
   would do — it is just hidden inside a single dispatch.
+
+  A toggle marked default `false` works the other way round: it is off unless you ask for
+  it. Pass `run-llk-sanity-tests: true` when the change reaches `tt_metal/tt-llk/**` (it
+  runs the tt-llk python_tests on WH + BH and the Quasar compile check), and leave it out
+  otherwise — the same reasoning as above, just inverted.
 
 - **Do not touch inputs that change behaviour rather than scope.** `mlperf-read-only`,
   `mlperf-write-access`, `upload_results`, `skip_on_timeout`, `build-inplace-wheel`,

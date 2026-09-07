@@ -16,7 +16,7 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from tests.ttnn.utils_for_testing import comp_pcc, assert_equal
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
@@ -378,7 +378,7 @@ def _pack_scale_metadata(input_scale):
 @pytest.mark.parametrize("label, counts", TOKEN_COUNT_AWARE_CASES, ids=[c[0] for c in TOKEN_COUNT_AWARE_CASES])
 def test_token_count_aware_cast_back(device, label, counts, scales_from_metadata, output_dtype):
     torch.manual_seed(0)
-    H = KimiK26Config.EMB_SIZE
+    H = KimiK27Config.EMB_SIZE
 
     experts_per_chip = len(counts)
     # This chip owns non-contiguous global ids (odd slots) out of a wider routed-expert space.

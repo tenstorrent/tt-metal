@@ -3,6 +3,7 @@
 
 #include <cstdint>
 
+#include "tt-metalium/constants.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
@@ -10,19 +11,22 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-inline void fill_constant_tiles(DataflowBuffer& eye, DataflowBuffer& tril, DataflowBuffer& ones) {
+inline void fill_constant_tiles(
+    DataflowBuffer& eye, DataflowBuffer& tril, DataflowBuffer& ones, DataflowBuffer& block_masks) {
     constexpr uint32_t fp32_one_bits = __builtin_bit_cast(uint32_t, 1.0F);
-    constexpr uint32_t face_width = 16;
-    constexpr uint32_t face_elements = face_width * face_width;
+    constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
+    constexpr uint32_t face_elements = tt::constants::FACE_HW;
     constexpr uint32_t row_bytes = face_width * sizeof(uint32_t);
     constexpr uint32_t face_bytes = face_elements * sizeof(uint32_t);
 
     eye.reserve_back(1);
     tril.reserve_back(1);
     ones.reserve_back(1);
+    block_masks.reserve_back(2);
     Noc noc;
     noc.async_write_zeros(eye, eye.get_entry_size());
     noc.async_write_zeros(tril, tril.get_entry_size());
+    noc.async_write_zeros(block_masks, 2 * block_masks.get_entry_size());
     noc.write_zeros_l1_barrier();
 
     volatile tt_l1_ptr uint32_t* eye_tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eye.get_write_ptr());
@@ -46,6 +50,12 @@ inline void fill_constant_tiles(DataflowBuffer& eye, DataflowBuffer& tril, Dataf
         noc.async_read(self, ones, face_bytes, ones_face, {.offset_bytes = face * face_bytes});
     }
     noc.async_read(self, tril, face_bytes, ones_face, {.offset_bytes = 2 * face_bytes});
+    // Tile 0 selects the two diagonal 16x16 faces; tile 1 selects the bottom-left face.
+    noc.async_read(self, block_masks, face_bytes, ones_face, {.offset_bytes = 0});
+    noc.async_read(self, block_masks, face_bytes, ones_face, {.offset_bytes = 3 * face_bytes});
+    noc.async_read(
+        self, block_masks, face_bytes, ones_face, {.offset_bytes = block_masks.get_entry_size() + 2 * face_bytes});
+
     noc.async_read_barrier();
 
     for (uint32_t row = 0; row < face_width; ++row) {
@@ -65,6 +75,7 @@ inline void fill_constant_tiles(DataflowBuffer& eye, DataflowBuffer& tril, Dataf
     eye.push_back(1);
     tril.push_back(1);
     ones.push_back(1);
+    block_masks.push_back(2);
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
@@ -85,6 +96,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
     DataflowBuffer eye(dfb::eye);
     DataflowBuffer tril(dfb::tril);
     DataflowBuffer ones(dfb::ones);
+    DataflowBuffer block_masks(dfb::block_masks);
     Noc noc;
 
     auto enqueue_contiguous_read = [&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
@@ -98,7 +110,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
                 {.offset_bytes = tile * buffer.get_entry_size()});
         }
     };
-    fill_constant_tiles(eye, tril, ones);
+    fill_constant_tiles(eye, tril, ones, block_masks);
 
     auto enqueue_value_read = [&](uint32_t head_chunk_index) {
         const uint32_t head = head_chunk_index / num_chunks;
@@ -134,30 +146,13 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
             }
         }
     };
-    auto enqueue_gate_read = [&](uint32_t head_chunk_index) {
-        const uint32_t head = head_chunk_index / num_chunks;
-        const uint32_t chunk = head_chunk_index % num_chunks;
-        const uint32_t row_stride = num_heads * Kt;
-        g.reserve_back(chunk_key_tiles);
-        for (uint32_t row = 0; row < Ct; ++row) {
-            for (uint32_t col = 0; col < Kt; ++col) {
-                const uint32_t page = (chunk * Ct + row) * row_stride + head * Kt + col;
-                noc.async_read(
-                    g_accessor,
-                    g,
-                    g.get_entry_size(),
-                    {.page_id = page},
-                    {.offset_bytes = (row * Kt + col) * g.get_entry_size()});
-            }
-        }
-    };
 
     for (uint32_t index = 0; index < work_item_count; ++index) {
         const uint32_t head_chunk_index = work_item_start + index;
         enqueue_key_width_read(q_accessor, q, head_chunk_index);
         enqueue_key_width_read(k_accessor, k, head_chunk_index);
         enqueue_value_read(head_chunk_index);
-        enqueue_gate_read(head_chunk_index);
+        enqueue_key_width_read(g_accessor, g, head_chunk_index);
         enqueue_contiguous_read(beta_accessor, beta, head_chunk_index * Ct, Ct);
         // All five inputs are independent reads on the same NoC. One barrier lets them overlap, then publishes
         // the complete work item atomically to compute.
