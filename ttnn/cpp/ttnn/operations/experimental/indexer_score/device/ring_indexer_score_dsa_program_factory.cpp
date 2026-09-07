@@ -580,6 +580,8 @@ ProgramDescriptor build_ring_program_descriptor(
             .mesh_cols = fused.mesh_cols,
             .ring_size = ring_size,
             .num_links = fused.num_links,
+            // Load-bearing: get_mesh_ring_position reads closure off this, and the struct defaults to Linear.
+            .topology = fused.topology,
             .route_plan_hash = fused.route_plan_hash};
         const auto position = ttnn::operations::ccl::common::get_mesh_ring_position(q, coord, mesh_ring_plan);
         TT_FATAL(
