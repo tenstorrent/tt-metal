@@ -194,13 +194,28 @@ So a dedup is forced before Qwen3.8 can resolve at all. Which copy to keep:
 
 ## Long-ISL evals that used to time out
 
-The two points the recorded sweep could not finish, rerun on this branch
-(batch 1, single cold iteration):
+Both points were **measured on device**, not estimated: `full_model_perf_batch.py`
+on the 4-chip mesh, batch 1, one cold prefill iteration plus 4 decode tokens.
+Raw output in `longisl_65536.json` / `longisl_131072.json`.
 
-| ISL | recorded | now | TTFT |
+Read the comparison carefully -- the two sides are **not the same harness**. The
+recorded column is the vLLM serving sweep in
+`qwen38_checkpoint_swap/benchmarks_c1/sweep_summary.json` (`max_concurrency: 1`,
+`num_prompts: 1`, `mean_ttft_ms`); the rerun is the bare harness, which carries
+no vLLM serving overhead. The ratio below is therefore an upper bound on what a
+vLLM eval would show, not a like-for-like speedup.
+
+| ISL | recorded TTFT (vLLM sweep) | rerun TTFT (bare) | rerun wall |
 | --- | --- | --- | --- |
-| 65536 | 1837 s | **740.1 s** (2.48x) | 573.9 s |
-| 131072 | **TIMEOUT** (rc124) | **1341.8 s** | 1151.2 s |
+| 65536 | 1837.1 s | **573.9 s** (3.20x) | 740.1 s |
+| 131072 | **TIMEOUT** (rc124, no number) | **1151.2 s** | 1341.8 s |
 
-ISL 131072 now completes rather than timing out. Decode is unchanged as
-expected: 52.1 ms/token at 65536, 53.7 ms/token at 131072.
+ISL 131072 produces a number where the recorded sweep produced only a timeout.
+That timeout was the sweep harness hitting its own budget, so this shows the
+work now fits in the time available to the bare harness -- it is not by itself
+proof that the vLLM eval would finish inside its timeout. Confirming that needs
+the vLLM sweep rerun, which the CI runs will provide.
+
+Decode is unchanged, as expected for prefill work: 52.1 ms/token at ISL 65536
+and 53.7 ms/token at 131072, against a recorded `mean_tpot_ms` of 69.7 at 65536
+(again bare vs vLLM, so not directly comparable).
