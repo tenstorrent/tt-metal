@@ -7,7 +7,7 @@
 #include <cstdint>
 constexpr std::uint16_t PERF_COUNTER_PROFILER_ID = 9090;
 
-enum PerfCounterGroup : std::uint8_t { FPU, PACK, UNPACK, L1_0, L1_1, INSTRN, L1_2, L1_3, L1_4 };
+enum PerfCounterGroup : std::uint8_t { FPU, PACK, UNPACK, L1_0, L1_1, INSTRN, L1_2, L1_3, L1_4, L1_5 };
 enum PerfCounterType : std::uint16_t {
     UNDEF = 0,
     // FPU Group
@@ -151,24 +151,25 @@ enum PerfCounterType : std::uint16_t {
     DEST_READ_GRANTED_2,
     DEST_READ_GRANTED_3,
     MATH_NOT_STALLED_DEST_WR_PORT,
-    // L1 Bank 4 (BH only, mux=4, ports 32-39: extended packers 6-7 and tag search; 35-39 are tied off)
+    // L1 Bank 4 (BH only, mux=4, ports 32-39: extended packers 6-7, tag search, extended unpacker read
+    // interfaces 8-12). The tapeout RTL (ws-tensix BH_A0_RC6) wires ports 35-41 to the unpacker read
+    // interfaces 8-14; a 2022 snapshot had them tied off, which is why these used to be MISC_PORT_3-7.
     L1_4_EXT_PACKER_6,
     L1_4_EXT_PACKER_7,
     L1_4_TAG_SEARCH_PACKER_1,
-    L1_4_MISC_PORT_3,  // ports 35-39 are tied off in hardware and no longer captured; kept so the ordinals below do not
-                       // shift
-    L1_4_MISC_PORT_4,
-    L1_4_MISC_PORT_5,
-    L1_4_MISC_PORT_6,
-    L1_4_MISC_PORT_7,
+    L1_4_EXT_UNPACKER_8,
+    L1_4_EXT_UNPACKER_9,
+    L1_4_EXT_UNPACKER_10,
+    L1_4_EXT_UNPACKER_11,
+    L1_4_EXT_UNPACKER_12,
     L1_4_EXT_PACKER_6_GRANT,
     L1_4_EXT_PACKER_7_GRANT,
     L1_4_TAG_SEARCH_PACKER_1_GRANT,
-    L1_4_MISC_PORT_3_GRANT,
-    L1_4_MISC_PORT_4_GRANT,
-    L1_4_MISC_PORT_5_GRANT,
-    L1_4_MISC_PORT_6_GRANT,
-    L1_4_MISC_PORT_7_GRANT,
+    L1_4_EXT_UNPACKER_8_GRANT,
+    L1_4_EXT_UNPACKER_9_GRANT,
+    L1_4_EXT_UNPACKER_10_GRANT,
+    L1_4_EXT_UNPACKER_11_GRANT,
+    L1_4_EXT_UNPACKER_12_GRANT,
     // L1 Bank 2 (BH only, mux=2, ports 16-23: extended unpackers 4-7 and NOC ring 0 ports 2-3)
     L1_2_EXT_UNPACKER_4,
     L1_2_EXT_UNPACKER_5,
@@ -204,9 +205,15 @@ enum PerfCounterType : std::uint16_t {
     L1_3_EXT_PACKER_4_GRANT,
     L1_3_EXT_PACKER_5_GRANT,
     ANY_THREAD_STALL,
+    // L1 Bank 5 (BH only, mux=5, ports 40-41: extended unpacker read interfaces 13-14). The mux decode wires
+    // only slots 0 and 1 at this position; slots 2-7 are forced to zero. Appended here so no ordinal above moves.
+    L1_5_EXT_UNPACKER_13,
+    L1_5_EXT_UNPACKER_14,
+    L1_5_EXT_UNPACKER_13_GRANT,
+    L1_5_EXT_UNPACKER_14_GRANT,
     // counter_type is a uint32_t:8 bitfield — keep all values below 256.
 };
-static_assert(ANY_THREAD_STALL <= 255, "PerfCounterType enum exceeds 8-bit counter_type field");
+static_assert(L1_5_EXT_UNPACKER_14_GRANT <= 255, "PerfCounterType enum exceeds 8-bit counter_type field");
 
 union PerfCounter {
     struct {
@@ -237,7 +244,7 @@ static_assert(sizeof(PerfCounter) == sizeof(std::uint64_t) * 2, "PerfCounter mus
 
 namespace kernel_profiler {
 
-// Architecture-specific counter arrays (fpu, unpack, pack, l1_0-l1_4, instrn)
+// Architecture-specific counter arrays (fpu, unpack, pack, l1_0-l1_5, instrn)
 #if defined(ARCH_BLACKHOLE)
 #include "tt_metal/hw/inc/internal/tt-1xx/blackhole/hw_counters.h"
 #else
@@ -254,6 +261,7 @@ namespace kernel_profiler {
 #define PROFILE_PERF_COUNTERS_L1_2 (1 << 6)
 #define PROFILE_PERF_COUNTERS_L1_3 (1 << 7)
 #define PROFILE_PERF_COUNTERS_L1_4 (1 << 8)
+#define PROFILE_PERF_COUNTERS_L1_5 (1 << 9)
 
 #define PERF_CNT_CONTINUOUS_MODE 0
 #define PERF_CNT_BANK_SELECT_SHIFT 8
@@ -272,12 +280,13 @@ constexpr std::pair<PerfCounterGroup, std::uint32_t> counter_group_flags[] = {
     {PerfCounterGroup::L1_2, PROFILE_PERF_COUNTERS_L1_2},
     {PerfCounterGroup::L1_3, PROFILE_PERF_COUNTERS_L1_3},
     {PerfCounterGroup::L1_4, PROFILE_PERF_COUNTERS_L1_4},
+    {PerfCounterGroup::L1_5, PROFILE_PERF_COUNTERS_L1_5},
 };
 constexpr std::uint32_t NUM_COUNTER_GROUPS = sizeof(counter_group_flags) / sizeof(counter_group_flags[0]);
 
-// Lookup table indexed by PerfCounterGroup. Smaller than a 9-case switch.
-// Keep ordered to match the enum (FPU, PACK, UNPACK, L1_0, L1_1, INSTRN, L1_2, L1_3, L1_4).
-constexpr std::uint32_t cntl_reg_for_group[9] = {
+// Lookup table indexed by PerfCounterGroup. Smaller than a 10-case switch.
+// Keep ordered to match the enum (FPU, PACK, UNPACK, L1_0, L1_1, INSTRN, L1_2, L1_3, L1_4, L1_5).
+constexpr std::uint32_t cntl_reg_for_group[10] = {
     RISCV_DEBUG_REG_PERF_CNT_FPU0,            // FPU
     RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0,      // PACK
     RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0,    // UNPACK
@@ -287,14 +296,15 @@ constexpr std::uint32_t cntl_reg_for_group[9] = {
     RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_2
     RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_3
     RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_4
+    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_5
 };
 
 FORCE_INLINE std::uint32_t get_cntl_register_for_counter_group(PerfCounterGroup counter_group) {
     return cntl_reg_for_group[static_cast<std::uint32_t>(counter_group)];
 }
 
-// Shared: sets the L1 mux select (bank 0..4) for the given group. 0 for non-L1 groups (unused).
-constexpr std::uint32_t mux_sel_for_group[9] = {
+// Shared: sets the L1 mux select (bank 0..5) for the given group. 0 for non-L1 groups (unused).
+constexpr std::uint32_t mux_sel_for_group[10] = {
     0,  // FPU (unused)
     0,  // PACK (unused)
     0,  // UNPACK (unused)
@@ -304,6 +314,7 @@ constexpr std::uint32_t mux_sel_for_group[9] = {
     2,  // L1_2 → bank 2
     3,  // L1_3 → bank 3
     4,  // L1_4 → bank 4
+    5,  // L1_5 → bank 5
 };
 
 FORCE_INLINE void set_l1_mux_ctrl(PerfCounterGroup counter_group) {
@@ -362,7 +373,7 @@ struct PerfCounterWrapper {
 // --- BRISC-only: counter readout and DRAM push -----------------------------
 
 // Lookup tables indexed by PerfCounterGroup (same ordering as cntl_reg_for_group).
-constexpr std::uint32_t read_reg_for_group[9] = {
+constexpr std::uint32_t read_reg_for_group[10] = {
     RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU,            // FPU
     RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK,      // PACK
     RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK,    // UNPACK
@@ -372,9 +383,10 @@ constexpr std::uint32_t read_reg_for_group[9] = {
     RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_2
     RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_3
     RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_4
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_5
 };
 
-constexpr std::uint32_t num_counters_for_group[9] = {
+constexpr std::uint32_t num_counters_for_group[10] = {
     NUM_FPU_COUNTERS,     // FPU
     NUM_PACK_COUNTERS,    // PACK
     NUM_UNPACK_COUNTERS,  // UNPACK
@@ -384,9 +396,10 @@ constexpr std::uint32_t num_counters_for_group[9] = {
     NUM_L1_2_COUNTERS,    // L1_2
     NUM_L1_3_COUNTERS,    // L1_3
     NUM_L1_4_COUNTERS,    // L1_4
+    NUM_L1_5_COUNTERS,    // L1_5
 };
 
-constexpr const std::pair<PerfCounterType, std::uint16_t>* counters_for_group[9] = {
+constexpr const std::pair<PerfCounterType, std::uint16_t>* counters_for_group[10] = {
     fpu_counters.data(),     // FPU
     pack_counters.data(),    // PACK
     unpack_counters.data(),  // UNPACK
@@ -396,6 +409,7 @@ constexpr const std::pair<PerfCounterType, std::uint16_t>* counters_for_group[9]
     l1_2_counters.data(),    // L1_2
     l1_3_counters.data(),    // L1_3
     l1_4_counters.data(),    // L1_4
+    l1_5_counters.data(),    // L1_5
 };
 
 FORCE_INLINE std::uint32_t get_read_register_for_counter_group(PerfCounterGroup g) {
@@ -471,6 +485,9 @@ void read_perf_counters() {
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_4
     read_single_group(PerfCounterGroup::L1_4);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_5
+    read_single_group(PerfCounterGroup::L1_5);
 #endif
 }
 

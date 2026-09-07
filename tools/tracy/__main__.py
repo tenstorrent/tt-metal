@@ -268,7 +268,7 @@ def main():
         )
 
     if options.perf_counter_groups:
-        # Bit positions match PROFILE_PERF_COUNTERS_* in perf_counters.hpp. l1_2/3/4 are BH-only.
+        # Bit positions match PROFILE_PERF_COUNTERS_* in perf_counters.hpp. l1_2 to l1_5 are BH-only.
         counter_group_bits = {
             "fpu": 0,
             "pack": 1,
@@ -279,6 +279,7 @@ def main():
             "l1_2": 6,
             "l1_3": 7,
             "l1_4": 8,
+            "l1_5": 9,
         }
 
         bitfield = 0
@@ -293,13 +294,13 @@ def main():
             else:
                 logger.warning(
                     f"Unknown counter group '{group}'. "
-                    f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
+                    f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, l1_5, instrn, all"
                 )
 
         # L1 bank mutual exclusion (one mux, one active bank) is enforced in rtoptions.cpp.
 
         # Reject BH-only groups on non-BH architectures.
-        bh_only_groups = {"l1_2", "l1_3", "l1_4"}
+        bh_only_groups = {"l1_2", "l1_3", "l1_4", "l1_5"}
         requested_groups = {group.lower() for group in options.perf_counter_groups}
         requested_bh_only = sorted(requested_groups & bh_only_groups)
         if requested_bh_only:

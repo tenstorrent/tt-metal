@@ -34,7 +34,7 @@ python -m tracy --profiler-capture-perf-counters=all \
     -m "pytest your_test.py -x -v"
 ```
 
-Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for details.
+Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`, `l1_5`. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for details.
 
 ### Environment Variable
 
@@ -48,9 +48,10 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 | `1 << 3` | 8 | L1 bank 0 (ring0 NOC, L1 arbitration) |
 | `1 << 4` | 16 | L1 bank 1 (ring1 NOC, TDMA extended) |
 | `1 << 5` | 32 | INSTRN (instruction thread) |
-| `1 << 6` | 64 | L1 bank 2 (BH only: NOC Ring 2) |
-| `1 << 7` | 128 | L1 bank 3 (BH only: NOC Ring 3) |
-| `1 << 8` | 256 | L1 bank 4 (BH only: misc ports) |
+| `1 << 6` | 64 | L1 bank 2 (BH only: extended unpackers 4-7, ring0 NOC ports 2-3) |
+| `1 << 7` | 128 | L1 bank 3 (BH only: ring1 NOC ports 2-3, extended packers 2-5) |
+| `1 << 8` | 256 | L1 bank 4 (BH only: extended packers 6-7, tag search, extended unpackers 8-12) |
+| `1 << 9` | 512 | L1 bank 5 (BH only: extended unpackers 13-14; the mux wires only two slots here) |
 
 Recommended value for a broad capture: `47` (`0x2F`) — FPU | PACK | UNPACK | L1_0 | INSTRN.
 
@@ -64,7 +65,7 @@ export TT_METAL_PROFILE_PERF_COUNTERS=47
 
 | | Wormhole | Blackhole |
 |---|---|---|
-| Tensix counters read | 135 | 154 |
+| Tensix counters read (sum of the per-group tables) | 130 | 173 |
 | Derived metrics | 60+ | 60+ |
 
 **Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).

@@ -110,6 +110,8 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 0> l1_3_counters = {}
 constexpr size_t NUM_L1_3_COUNTERS = 0;
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 0> l1_4_counters = {};
 constexpr size_t NUM_L1_4_COUNTERS = 0;
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 0> l1_5_counters = {};
+constexpr size_t NUM_L1_5_COUNTERS = 0;
 
 // WH INSTRN_THREAD: sel gaps at 9-11, replicated stall conditions at 27/30/33/36.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 59> instrn_counters = {
