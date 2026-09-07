@@ -218,9 +218,7 @@ class TestConfig:
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
     # One run observes one group of 8 L1 interfaces; sweep this to cover all of them.
     PERF_L1_MUX_GROUP: ClassVar[int] = int(os.environ.get("LLK_PERF_L1_MUX_GROUP", "0"))
-    DUMP_RAW_COUNTERS: ClassVar[bool] = False
-    DUMP_RAW_METRICS: ClassVar[bool] = False
-    DUMP_CSV_COUNTERS: ClassVar[bool] = False
+    DUMP_PERF_COUNTERS: ClassVar[bool] = False
 
     # === Addresses ===
     RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000

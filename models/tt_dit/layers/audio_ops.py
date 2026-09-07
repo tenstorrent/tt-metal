@@ -645,10 +645,11 @@ def _tpad_mask_suffix(mesh_device, parallel_config, dtype, global_T, tpad_image,
     return cached
 
 
-def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache):
+def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache, ccl_manager=None):
     """Set the trailing ``tpad_image`` tail rows: ``mode="zeros"`` zeros them, ``mode="replicate"`` fills the last real row.
 
-    CCL-free via a cached validity mask (body rows multiply by 1.0, staying bit-identical).
+    Uses a cached validity mask (body rows multiply by 1.0, staying bit-identical). CCL-free except when the
+    pad image spans several shards in replicate mode, where one 32-row gather fetches the holder shard's row.
     """
     if tpad_image <= 0 or parallel_config is None or getattr(parallel_config, "factor", 0) <= 1:
         return x_BTC
@@ -667,11 +668,28 @@ def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cac
         return xm
     if mode != "replicate":
         raise ValueError(f"unknown mode {mode!r}")
-    # Local index of the real-last row, uniform across shards (mod local_T handles a multi-shard pad image).
+    # The real-last row's LOCAL offset is uniform across shards, but only the holder shard's row at that
+    # offset is real -- on a fully-padded shard it is a pad row. Gather a tile-aligned 32-row window holding
+    # that offset along the shard axis and take the holder's row, so every shard replicates the true last
+    # real row. (A 1-row gather, tile-padded or row-major, hangs on a 32-chip axis; a full-tile window works.)
     global_T = local_T * parallel_config.factor
     assert tpad_image < global_T, f"pad image ({tpad_image}) leaves no real rows (global T {global_T})"
-    idx = (global_T - tpad_image - 1) % local_T
-    last = ttnn.slice(x_BTC, [0, idx, 0], [x_BTC.shape[0], idx + 1, x_BTC.shape[2]])
+    assert ccl_manager is not None, "multi-shard replicate tail needs ccl_manager to fetch the holder shard's row"
+    tile = ttnn.TILE_SIZE
+    assert local_T >= tile, f"multi-shard replicate tail needs >= {tile} rows per shard, got {local_T}"
+    last_global = global_T - tpad_image - 1
+    idx, holder = last_global % local_T, last_global // local_T
+    start = min(idx, local_T - tile)
+    B, C = x_BTC.shape[0], x_BTC.shape[2]
+    window = ttnn.slice(x_BTC, [0, start, 0], [B, start + tile, C])
+    window_t = ttnn.to_layout(window, ttnn.TILE_LAYOUT)
+    ttnn.deallocate(window)
+    # `_all_gather_t` hands back the CCL manager's persistent buffer -- convert, never deallocate it.
+    gathered = ttnn.to_layout(_all_gather_t(ccl_manager, window_t, parallel_config), ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(window_t)
+    row = holder * tile + (idx - start)
+    last = ttnn.slice(gathered, [0, row, 0], [B, row + 1, C])
+    ttnn.deallocate(gathered)
     fill = ttnn.multiply(last, inv)
     ttnn.deallocate(last)
     out = ttnn.add(xm, fill)

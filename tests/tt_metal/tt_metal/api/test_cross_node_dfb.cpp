@@ -1265,14 +1265,14 @@ TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFB_BorrowedMismatch_PageSize) {
     const CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
     CoreRangeSet all_cores = CoreRangeSet(CoreRange({0, 0}, {0, 0})).merge(receiver_cores);
 
-    auto bad = CreateBuffer(ShardedBufferConfig{
-        .device = &device,
-        .size = 128 * 2,
-        .page_size = 128,  // should be entry_size * num_entries = 256 * 4
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {2, 1}),
-    });
+    auto bad = Buffer::create(
+        &device,
+        128 * 2,
+        128,  // should be entry_size * num_entries = 256 * 4
+        BufferType::L1,
+        BufferShardingArgs(
+            ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {2, 1}),
+            TensorMemoryLayout::HEIGHT_SHARDED));
     EXPECT_THROW(experimental::CrossNodeDFB(&device, sender_core, receiver_cores, 256, 4, *bad), std::exception);
 }
 
@@ -1283,14 +1283,14 @@ TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFB_BorrowedMismatch_Cores) {
     const CoreCoord sender_core(0, 0);
     const CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
     CoreRangeSet wrong_cores = CoreRangeSet(CoreRange({2, 0}, {2, 0})).merge(CoreRangeSet(CoreRange({3, 0}, {3, 0})));
-    auto bad = CreateBuffer(ShardedBufferConfig{
-        .device = &device,
-        .size = 256 * 4 * 2,
-        .page_size = 256 * 4,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = ShardSpecBuffer(wrong_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {2, 1}),
-    });
+    auto bad = Buffer::create(
+        &device,
+        256 * 4 * 2,
+        256 * 4,
+        BufferType::L1,
+        BufferShardingArgs(
+            ShardSpecBuffer(wrong_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {2, 1}),
+            TensorMemoryLayout::HEIGHT_SHARDED));
     EXPECT_THROW(experimental::CrossNodeDFB(&device, sender_core, receiver_cores, 256, 4, *bad), std::exception);
 }
 
@@ -1300,12 +1300,7 @@ TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFB_BorrowedMismatch_BufferType) {
     const CoreCoord sender_core(0, 0);
     const CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
 
-    auto bad = CreateBuffer(InterleavedBufferConfig{
-        .device = &device,
-        .size = 256 * 4,
-        .page_size = 256 * 4,
-        .buffer_type = BufferType::DRAM,
-    });
+    auto bad = Buffer::create(&device, 256 * 4, 256 * 4, BufferType::DRAM);
     EXPECT_THROW(experimental::CrossNodeDFB(&device, sender_core, receiver_cores, 256, 4, *bad), std::exception);
 }
 
@@ -1318,14 +1313,14 @@ TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFB_BorrowedMismatch_Size) {
 
     // page_size and grid match, but size is larger than page_size * num_all_cores.
     const uint32_t ring_size = 256 * 4;
-    auto bad = CreateBuffer(ShardedBufferConfig{
-        .device = &device,
-        .size = ring_size * 4,
-        .page_size = ring_size,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {2, 1}),
-    });
+    auto bad = Buffer::create(
+        &device,
+        ring_size * 4,
+        ring_size,
+        BufferType::L1,
+        BufferShardingArgs(
+            ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {2, 1}),
+            TensorMemoryLayout::HEIGHT_SHARDED));
     EXPECT_THROW(experimental::CrossNodeDFB(&device, sender_core, receiver_cores, 256, 4, *bad), std::exception);
 }
 
