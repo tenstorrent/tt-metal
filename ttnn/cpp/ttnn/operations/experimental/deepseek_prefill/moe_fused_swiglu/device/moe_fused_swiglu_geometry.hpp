@@ -28,6 +28,12 @@ inline constexpr bool WD_MGROUPS = false;
 inline constexpr uint32_t WD_MGROUP_MIN_BLOCKS = 4;
 inline constexpr bool W_RESIDENT = true;
 inline constexpr bool WD_RESIDENT = true;
+// Gate/up N-chunks. The cross-expert W_gate prefetch refills one chunk per pop, so FEWER and larger
+// chunks give each refill a longer window: 2 measures 1.2-2.5% faster than 3, and 6 is enough to make
+// the prefetch lose outright (WORKLOG 8.4). 3 is nevertheless the default because 2 pushes the program
+// past the 70,656 B TENSIX kernel-config buffer on the INTERLEAVED-weight path at kimi dims (70,688
+// and 70,896 B on the ragged multi-expert configs), making legal inputs undispatchable. It fits with
+// ND-sharded weights, where MOE_FUSED_SWIGLU_GU_CHUNKS=2 is worth taking.
 inline constexpr uint32_t GU_CHUNKS = 3;
 inline constexpr bool XPRIO = true;
 inline constexpr uint32_t HACK_AHEAD = 2;
@@ -129,20 +135,15 @@ struct Knobs {
     // Full blocks: scatter, fold and SiLU each gate/up N-chunk as it is produced (chunk-major
     // accumulator/landing layout) instead of the whole block after the last chunk. MOE_FUSED_SWIGLU_CHUNKED
     bool chunked_scatter = true;
-    // Uneven K split across the grid rows. NoC0 read returns are served unfairly by grid row on
-    // Blackhole (at 11x8, kimi: x sticks land after 5 us on the bottom rows and 16 us on the top rows,
-    // W_gate after 28 vs 64 us), and the column reduce waits for the slowest row. Giving the top rows
-    // fewer K tiles and the bottom rows more (24,24,26,28,28,30,32,32 at emb 7168) measured -4% at
-    // M=256 and -5% at M=1024/5120 in both regimes, neutral at M<=128. `kr_taper` is the tile shift of
-    // the outermost rows (0 = even split); `kr_split` overrides with an explicit per-row list.
-    // MOE_FUSED_SWIGLU_KR_TAPER, MOE_FUSED_SWIGLU_KR_SPLIT="24,26,28,..."
-    uint32_t kr_taper = 4;
-    std::vector<uint32_t> kr_split;
     // Issue W_gate chunk 0 after the x row-multicast loop instead of before it. MOE_FUSED_SWIGLU_WG_AFTER_X
     bool wg_after_xmcast = false;
     // Issue the resident W_down batch (both NoCs) at the very start of block 0 instead of after the
     // gate/up streams, so DRAM is busy from the first microsecond. MOE_FUSED_SWIGLU_WD_EARLY
     bool wd_early = false;  // measured: +6..+16% at every M (the batch competes with x and gate/up)
+    // Eighths of each W_down K-block's rows the WRITER reads on NoC1 (the reader takes the rest on
+    // NoC0). 8 gives the whole stream to NoC1, which is interesting once gate/up are prefetched: the
+    // only thing left on NoC0 in phase 1 is x. MOE_FUSED_SWIGLU_WD_SPLIT
+    uint32_t wd_split_eighths = WD_SPLIT;
     static Knobs from_env();
 };
 

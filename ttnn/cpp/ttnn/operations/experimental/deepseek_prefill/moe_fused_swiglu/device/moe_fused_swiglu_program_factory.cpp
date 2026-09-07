@@ -398,15 +398,8 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     if (std::getenv("MOE_FUSED_SWIGLU_ACC_BF16") == nullptr) {
         knobs.acc_bf16 = operation_arguments.intermediate_dtype == tt::tt_metal::DataType::BFLOAT16;
     }
-    // The widest K slot any row can get: the even split, the taper's heaviest row, or the explicit list.
-    uint32_t kr_pad = ((emb / geo::TILE) + kgroups - 1) / kgroups;
-    if (knobs.kr_split.empty() && kgroups == geo::M_BLOCK && (emb / geo::TILE) % kgroups == 0 &&
-        (emb / geo::TILE) / kgroups > 2 * knobs.kr_taper) {
-        kr_pad += knobs.kr_taper;
-    }
-    for (const uint32_t rows : knobs.kr_split) {
-        kr_pad = std::max(kr_pad, rows);
-    }
+    // The widest K slot any row can get; the split is even, so this is just the ceiling.
+    const uint32_t kr_pad = ((emb / geo::TILE) + kgroups - 1) / kgroups;
     const uint32_t activation_slice =
         activations_are_row_major ? kr_pad * geo::TILE * tensor_arguments.activations.element_size() : bfp8_tile;
     const uint32_t l1_max = hal::get_max_worker_l1_unreserved_size();

@@ -54,6 +54,15 @@
 // Set MOE_FUSED_SWIGLU_STAGE_PROFILE=1 before process start for detailed bottleneck runs. Budget:
 // 8 records per M-block against a 125-per-core cap, so a run resolves stages for m_blocks <= 15.
 
+// A FOUR-zone probe for the cross-expert prefetch, separate from the full stage set because that set
+// pushes the program past the 70,656 B TENSIX kernel-config buffer at EXPERTS_PER_CHIP >= 2 -- which
+// is exactly the configuration the prefetch needs. -D MOE_PF_PROFILE=1.
+#ifdef MOE_PF_PROFILE
+#define PfZoneScope(name) DeviceZoneScopedN(name)
+#else
+#define PfZoneScope(name)
+#endif
+
 // Compile-time block model. Every trip count and CB increment below is derived
 // from these; none is a literal.
 MOE_DECLARE_CT_ENUM(MOE_READER_CT_ARGS);
@@ -129,6 +138,25 @@ constexpr uint32_t M_EFF_MIN = CT(M_EFF_MIN);
 // reserve/push handshake is untouched; only the DRAM read loops are skipped.
 constexpr uint32_t W_RESIDENT = CT(W_RESIDENT);
 constexpr uint32_t WD_RESIDENT = CT(WD_RESIDENT);
+
+// CROSS-EXPERT W_gate PREFETCH. Issues the NEXT local expert's W_gate during THIS expert, into this
+// expert's own slot -- no second slot and no extra L1, because residency keeps bytes alive by NOT
+// rewriting them, so a chunk's storage is free the moment compute has popped it. Hence W_RESIDENT.
+//
+// It is PIPELINED against compute's chunk pops rather than issued in a batch at phase 2: gate/up need
+// ~48 us of DRAM per expert but phase 2 is only ~40 us, so a batch at phase 2 cannot finish inside its
+// window and spills into the next expert's phase 1. Instead chunk c is refilled the moment COMPUTE
+// POPS chunk c of the current expert -- a cumulative `cb_reserve_back` is exactly that signal -- so the
+// read starts in phase 1 and has the rest of the expert to land. Chunk 0 blocks (it is the one that
+// gates the next expert's first matmul); the rest are polled non-blockingly, so a slot that is not free
+// yet costs nothing. Issued after this expert's W_down batch so that batch, needed at phase 2 entry,
+// gets DRAM first. The writer runs the twin W_up prefetch on NoC1; prefetching only one of the pair
+// loses, because the un-prefetched stream then owns the critical path (WORKLOG 8.2).
+//
+// W_down is deliberately NOT prefetched: its shard is read all the way through phase 2, so no point in
+// the expert has a free slot to overwrite, and the second slot it would need costs L1 that the gate/up
+// prefetch does not (WORKLOG 8.2).
+constexpr bool kWgPrefetch = (W_RESIDENT != 0);
 constexpr uint32_t WD_MROW_ROUNDS = CT(WD_MROW_ROUNDS);
 constexpr uint32_t WD_MGROUPS = CT(WD_MGROUPS);
 constexpr uint32_t WD_MGROUP_MIN_BLOCKS = CT(WD_MGROUP_MIN_BLOCKS);
@@ -190,6 +218,7 @@ constexpr uint32_t P2_READ_TRID = 14;
 constexpr uint32_t NEXT_X_TRID = 15;
 constexpr uint32_t X_STAGE_TRID = 13;  // this block's own x sticks/tiles
 constexpr uint32_t WG_TRID = 1;        // W_gate chunks (one in flight)
+constexpr uint32_t IDX_TRID = 2;       // phase 0's idx/counts pair, so its wait can be SCOPED
 
 // Runtime-arg layout: the 17-word scalar block, then the COLUMN as KGROUPS (vx, vy) pairs in ROW
 // order — the invite fan-out and up-gather destinations. Row r at index r on every core is what
@@ -325,6 +354,8 @@ void kernel_main() {
     const auto cnt_acc = TensorAccessor(cnt_args, counts_addr, COUNTS_PAGE);
     const auto idx_acc = TensorAccessor(idx_args, idx_addr, IDX_PAGE);
     const auto start_acc = TensorAccessor(start_args, start_addr, START_PAGE);
+    // One resident W_down shard, so this is the same address at every expert: the write pointer
+    // returns to the base once the shard is pushed.
     const uint32_t wd_base = get_write_ptr(cb_w_down);
     const uint32_t wg_cb_base = get_write_ptr(cb_w_gate);  // CB base: nothing pushed yet
 
@@ -414,6 +445,9 @@ void kernel_main() {
     // reset and the writer derives the identical value from the same per-expert m_blocks.
     // `block_idx` stays expert-relative — it selects token rows and the residency gate.
     uint32_t gb = 0;
+    // Set by the previous expert's prefetch: cb_w_gate already holds THIS expert's weights, so its
+    // block 0 must publish them without a DRAM read (the mirror of the block > 0 residency skip).
+    bool wg_prefetched = false;
     for (uint32_t local_expert_id = 0; local_expert_id < EXPERTS_PER_CHIP; ++local_expert_id) {
         const auto wg_acc = TensorAccessor(wg_args, get_arg_val<uint32_t>(RT_WEIGHTS + local_expert_id), W_TILE);
         const auto wd_acc =
@@ -426,9 +460,19 @@ void kernel_main() {
         // depends on `global_expert_id`; the counts PAGE address does not, so issue the two independent DRAM reads
         // together and pay one completion round-trip.  The optional region-start read remains later:
         // it deliberately reuses l1_cnt after `count` is extracted.
+        // TAGGED, and waited on by TRID rather than globally: a plain `noc_async_read_barrier()` here
+        // drains EVERY outstanding read, which force-completes a cross-expert weight prefetch at the
+        // next expert's first instruction and throws away the overlap it was issued for. The two
+        // scoped waits below cover exactly what the global one covered except WG_TRID (the prefetch);
+        // P2_READ_TRID is included so a phase-2 read left in flight is still retired here.
+        noc_async_read_set_trid(IDX_TRID);
         noc_async_read(idx_acc.get_noc_addr(0), l1_idx, IDX_PAGE);
         noc_async_read(cnt_acc.get_noc_addr(0), l1_cnt, COUNTS_PAGE);
-        noc_async_read_barrier();
+        {
+            PfZoneScope("pf_ph0_barrier");
+            noc_async_read_barrier_with_trid(IDX_TRID);
+            noc_async_read_barrier_with_trid(P2_READ_TRID);
+        }
         invalidate_l1_cache();
         const uint32_t global_expert_id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_idx)[local_expert_id];
         // The routing table lives on device, so the host can size it but never bound its VALUES. An
@@ -457,8 +501,9 @@ void kernel_main() {
             // Same bound as the count: this lookup is the one that becomes the writer's NOC base.
             if (expert_in_range) {
                 const uint32_t l1_start = get_write_ptr(cb_counts_scratch);
+                noc_async_read_set_trid(IDX_TRID);
                 noc_async_read(start_acc.get_noc_addr(0), l1_start, START_PAGE);
-                noc_async_read_barrier();
+                noc_async_read_barrier_with_trid(IDX_TRID);
                 invalidate_l1_cache();
                 start_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_start)[global_expert_id];
                 // The offsets are device-produced too, so the host sizes the table and cannot bound
@@ -481,6 +526,16 @@ void kernel_main() {
         }
 
         const uint32_t m_blocks = (m_t + M_BLOCK - 1) / M_BLOCK;
+        // An expert the band, the id bound or a rejected region zeroed never enters the block loop, so
+        // a prefetch issued for it is never consumed. Retire it here: leaving the reads outstanding
+        // would let them land in cb_w_gate AFTER the next expert's real read of the same address, in
+        // whatever order the NoC returns them.
+        if constexpr (kWgPrefetch) {
+            if (wg_prefetched && m_blocks == 0) {
+                noc_async_read_barrier_with_trid(WG_TRID);
+                wg_prefetched = false;
+            }
+        }
         // One dispatch owns one resident W_down payload layout. Group only when every block is full,
         // so a ragged tail can never switch out_col_start/ec underneath the weights loaded at block_idx == 0.
         const bool wd_mgroup = WD_MGROUPS && (m_blocks >= WD_MGROUP_MIN_BLOCKS) && (m_t != 0) && ((m_t % M_BLOCK) == 0);
@@ -589,16 +644,34 @@ void kernel_main() {
             // Resident weights read DRAM on M-block 0 only: `cb_pop_front` advances a read pointer
             // without touching bytes, and each weight CB has a single producer, so a later block's slot
             // still holds block 0's data. Reserve/push/barrier/trip counts are unchanged.
-#ifdef MOE_ABL_NO_WG
-            const bool read_wg = false;  // PERF ABLATION: no W_gate DRAM traffic (wrong data)
-#else
-            const bool read_wg = (block_idx == 0) || (W_RESIDENT == 0);
-#endif
-#ifdef MOE_ABL_NO_WD
-            const bool read_wd = false;  // PERF ABLATION: no W_down DRAM traffic on this NoC (wrong data)
-#else
+            // Block 0 of a prefetched expert is exactly the block > 0 residency case: reserve and
+            // publish the slot, read nothing, and let the publish barrier drain the prefetch.
+            const bool wg_from_prefetch = kWgPrefetch && (block_idx == 0) && wg_prefetched;
+            const bool read_wg = !wg_from_prefetch && ((block_idx == 0) || (W_RESIDENT == 0));
+            uint32_t wg_pf_issued = 0;
+            // Issue chunk `c` of the NEXT expert's W_gate. The trid is restored to P2_READ_TRID on the
+            // way out because phase 2's own reads and its scoped barrier both depend on it.
+            auto wg_pf_issue = [&](uint32_t c) {
+                const auto wg_next =
+                    TensorAccessor(wg_args, get_arg_val<uint32_t>(RT_WEIGHTS + local_expert_id + 1), W_TILE);
+                noc_async_read_set_trid(WG_TRID);
+                moe_fused_swiglu::read_weight_chunk<BRG>(
+                    wg_next,
+                    true,
+                    c,
+                    GU_CHUNK_W,
+                    0,
+                    kr_rows,
+                    kstart,
+                    hstart,
+                    hn_cols,
+                    HID_T,
+                    wg_cb_base + c * WG_CHUNK_TILES * W_TILE,
+                    W_TILE);
+                noc_async_read_set_trid(P2_READ_TRID);
+            };
+
             const bool read_wd = (block_idx == 0) || (WD_RESIDENT == 0);
-#endif
 
             // Phase 1b' — W_down for ALL WD_AHEAD phase-2 K-blocks (the whole resident shard under
             // wd_mrow), ISSUED as one batch under P2_READ_TRID. Block 0 issues it HERE, before x
@@ -688,11 +761,21 @@ void kernel_main() {
                         if (!staged_early) {
                             {
                                 MaybeDeviceZoneScope("reader_x_read");
-                                cb_reserve_back(cb_x_in, TILE_H);
+                                // Split out so the two halves are separable: `pf_x_reserve` is a wait
+                                // for COMPUTE to finish tilizing the previous row, `pf_x_barrier` is the
+                                // actual DRAM read return. Measuring them together is what produced the
+                                // bogus "NoC0 is unfair by grid row" reading (WORKLOG 8.8).
+                                {
+                                    PfZoneScope("pf_x_reserve");
+                                    cb_reserve_back(cb_x_in, TILE_H);
+                                }
                                 noc_async_read_set_trid(X_STAGE_TRID);
                                 const bool split = X_SPLIT && (block_idx == 0);
                                 issue_x_row(row, get_write_ptr(cb_x_in), split ? 2u : 1u);
-                                noc_async_read_barrier_with_trid(X_STAGE_TRID);
+                                {
+                                    PfZoneScope("pf_x_barrier");
+                                    noc_async_read_barrier_with_trid(X_STAGE_TRID);
+                                }
                                 if (split) {
                                     // ...and the writer's odd sticks, landed on NoC1.
                                     while (mailbox_words[moe_fused_swiglu::MBOX_X_HALF_DONE] < gb + 1) {
@@ -845,6 +928,7 @@ void kernel_main() {
             // the reader sits in DRAM while compute chews c. Only chunk c is ever outstanding at a
             // barrier, so the all-or-nothing drain is exact here.
             {
+                PfZoneScope("pf_publish");
                 MaybeDeviceZoneScope("reader_wg_wait");
                 for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
                     noc_async_read_barrier_with_trid(WG_TRID);  // this chunk only, never the W_down batch
@@ -856,6 +940,9 @@ void kernel_main() {
                     }
                 }
             }
+            if (wg_from_prefetch) {
+                wg_prefetched = false;  // drained by the barrier above and published
+            }
 
             // Tiled x prefetches INTO cb_x_tiles (row-major stages via cb_x_in instead), so at
             // DEPTH_X == 1 there is no second slot to aim at: reserving the sole slot ahead of phase 2
@@ -866,6 +953,37 @@ void kernel_main() {
             if (!wd_early) {
                 issue_wd_batch();
             }
+            // ---- Cross-expert W_gate prefetch ----
+            // Chunk c's slot frees as soon as compute pops chunk c, and it pops them in order, so a
+            // CUMULATIVE reserve of (c+1) chunks is a wait for exactly that. Overwrite each slot as it
+            // frees; the reads then run concurrently with the rest of the gate/up matmuls, the reduce
+            // and phase 2 instead of being crammed into phase 2 alone.
+            // Chunk 0 BLOCKS on its reserve: compute pops it early in the gate/up matmuls so the wait
+            // is short, and it guarantees the one chunk that gates the next expert's first matmul gets
+            // the whole remaining expert as its window instead of depending on when a poll lands.
+            // Every later chunk is OPPORTUNISTIC (`cb_pages_reservable_at_back`) -- take a slot that is
+            // already free, never wait for one, because past chunk 0 the reader is on the reduce's
+            // critical path. `wg_pf_poll` is called again at the reduce and at phase 2, so a slot that
+            // frees later is still picked up, and anything left over falls through to the tail loop.
+            const bool wg_pf_pipe_armed =
+                kWgPrefetch && (block_idx + 1 == m_blocks) && (local_expert_id + 1 < EXPERTS_PER_CHIP);
+            auto wg_pf_poll = [&]() {
+                if (!wg_pf_pipe_armed) {
+                    return;
+                }
+                PfZoneScope("pf_issue");
+                while (wg_pf_issued < GU_CHUNKS) {
+                    const uint32_t want = (wg_pf_issued + 1) * WG_CHUNK_TILES;
+                    if (wg_pf_issued == 0) {
+                        cb_reserve_back(cb_w_gate, want);
+                    } else if (!cb_pages_reservable_at_back(cb_w_gate, static_cast<int32_t>(want))) {
+                        return;  // compute has not freed this chunk yet; come back later
+                    }
+                    wg_pf_issue(wg_pf_issued++);
+                    wg_prefetched = true;
+                }
+            };
+            wg_pf_poll();
             noc_async_read_set_trid(P2_READ_TRID);
 
             // Start block_idx+1's activation read before block_idx's reduce + phase 2. At the supported
@@ -985,6 +1103,13 @@ void kernel_main() {
                         cb_push_back(cb_gather_gate, CHUNK_PAGES);
                         cb_push_back(cb_gather_up, CHUNK_PAGES);
                     }
+                    // Poll ONCE PER REDUCE CHUNK, not just once after the reduce: at a full M-block
+                    // compute frees the gate/up slots across the whole reduce, and a slot found here
+                    // gets the rest of the reduce plus all of phase 2 as its window instead of only
+                    // phase 2. This is inside the loop the reader already spins in
+                    // (reader_reduce_up_wait / _data_wait), so the poll costs nothing when it misses.
+                    // Never blocks: chunk 0 was placed by the phase-1 poll long before this point.
+                    wg_pf_poll();
                 }
             } else {
                 {
@@ -1058,6 +1183,11 @@ void kernel_main() {
             } else if (is_root) {
                 h_arrivals += slice_worker_count;
             }
+            wg_pf_poll();  // slots compute freed during the reduce
+
+            // ---- Cross-expert W_gate prefetch ----
+            // The next expert's W_gate lands in THIS expert's slot. That needs no second buffer and no
+            // extra L1: `matmul_row_major<retain_in1=false>` popped every chunk during phase 1, and
             // Every read issued from here to the end of phase 2 is either a W_down head or the
             // sender's local h copy. Scoped barriers drain these without touching NEXT_X_TRID.
             noc_async_read_set_trid(P2_READ_TRID);
@@ -1291,6 +1421,15 @@ void kernel_main() {
                         cb_push_back(cb_w_down, WD_BLOCK_TILES);
                     }
                 }
+            }
+            wg_pf_poll();  // last chance for a pipelined chunk before the expert ends
+            if (wg_pf_pipe_armed) {
+                // Whatever the polls could not place: the bytes must be there before the next expert.
+                for (; wg_pf_issued < GU_CHUNKS; ++wg_pf_issued) {
+                    cb_reserve_back(cb_w_gate, (wg_pf_issued + 1) * WG_CHUNK_TILES);
+                    wg_pf_issue(wg_pf_issued);
+                }
+                wg_prefetched = true;
             }
             if (prefetch_next_x) {
                 noc_async_read_set_trid(0);

@@ -91,6 +91,22 @@ constexpr uint32_t M_EFF_MIN = CT(M_EFF_MIN);
 // block after the first re-reads bytes still resident in cb_w_up's slot.
 constexpr uint32_t W_RESIDENT = CT(W_RESIDENT);
 constexpr uint32_t WD_RESIDENT = CT(WD_RESIDENT);
+
+// CROSS-EXPERT W_up PREFETCH. The NoC1 twin of the reader's W_gate prefetch. The PAIR matters, not
+// either half: with one stream prefetched the other owns the critical path (one stream measures 4-9 us
+// against 27-36 for both), and the reader's prefetch ISSUE cost alone is 6-8 us, so gate-only can never
+// clear its own overhead. This half runs on a DIFFERENT RISC and a DIFFERENT NoC, so the two issue
+// costs are paid in parallel rather than added.
+//
+// Unlike W_gate this is a SINGLE SHOT on the last M-block rather than pipelined against compute's pops:
+// it lands under the output write issue and the deferred write barrier, the stretch where this RISC
+// gates nobody, and pipelining it measured neutral (WORKLOG 8.6).
+constexpr bool kWuPrefetch = (W_RESIDENT != 0);
+#ifdef MOE_PF_PROFILE
+#define PfZoneScope(name) DeviceZoneScopedN(name)
+#else
+#define PfZoneScope(name)
+#endif
 constexpr bool WD_PACKED = WD_RESIDENT && moe_fused_swiglu::hidden_blocks_are_balanced(HID_T, HGROUPS, HN_PAD);
 constexpr uint32_t GU_CHUNKS = CT(GU_CHUNKS);
 constexpr uint32_t XPRIO = CT(XPRIO);
@@ -224,8 +240,9 @@ void kernel_main() {
     const auto out_acc = TensorAccessor(out_args, out_addr, OUT_TILE);
     // THE ADDRESS DERIVATION, and why it needs no CB state. This RISC-V never pushes cb_w_down
     // (the reader is its single producer), so its local `cb_interface` copy never advances and
-    // `get_write_ptr` is the CB BASE for the whole kernel. Residency forces the capacity to
-    // exactly HGROUPS K-blocks, so K-block r lives at `base + r * WD_BLOCK_TILES * W_TILE`.
+    // `get_write_ptr` is the CB BASE for the whole kernel -- the same address at every expert.
+    // Residency forces the capacity to exactly HGROUPS K-blocks, so K-block r lives at
+    // `base + r * WD_BLOCK_TILES * W_TILE`.
     const uint32_t wd_base = get_write_ptr(cb_w_down);
     // cb_x_in is one whole-slot page group: never pushed here, so this is its base, and the reader's
     // reservation of the whole slot always lands at the base too.
@@ -252,6 +269,11 @@ void kernel_main() {
     // The N-chunk width of the gate/up weight stream. 1 is the whole block.
     constexpr uint32_t GU_CHUNK_W = HN_PAD / GU_CHUNKS;
     constexpr uint32_t WU_CHUNK_TILES = KR_PAD * GU_CHUNK_W;
+    // CB base, captured before anything is pushed: the prefetch addresses the slot directly, exactly
+    // as the resident W_down payload does, instead of going through the write pointer.
+    const uint32_t wu_cb_base = get_write_ptr(cb_w_up);
+    // Set by the previous expert's prefetch: cb_w_up already holds THIS expert's weights.
+    bool wu_prefetched = false;
     constexpr uint32_t SLOT_TILES = M_BLOCK * HN_PAD;  // one child's landing slot in the parent
     // A CB's pushes must sum to EXACTLY its capacity per cycle, or the pointer advances out of
     // bounds (dataflow_api.h, cb_wait_front). These three are sized for a full M_BLOCK, so a ragged
@@ -282,6 +304,15 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* mailbox_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_addr);
         const uint32_t m_t = mb.m_t;
         const uint32_t m_blocks = mb.m_blocks;
+        // An expert with no work never enters the block loop, so a prefetch issued FOR it is never
+        // consumed and never barriered. Retire it here, or its reads race the next real read into
+        // the same slot and the expert after it silently runs on the skipped expert's weights.
+        if constexpr (kWuPrefetch) {
+            if (wu_prefetched && m_blocks == 0) {
+                noc_async_read_barrier_with_trid(WU_TRID);
+                wu_prefetched = false;
+            }
+        }
         const bool wd_mgroup = WD_MGROUPS && (m_blocks >= WD_MGROUP_MIN_BLOCKS) && (m_t != 0) && ((m_t % M_BLOCK) == 0);
         const uint32_t wd_ec = wd_mgroup ? ec_group : ec;
         const uint32_t wd_jstart = wd_mgroup ? jstart_group : jstart;
@@ -375,11 +406,7 @@ void kernel_main() {
             // M-blocks and needs no reset — the same discipline as every other counter in this op.
             volatile tt_l1_ptr uint32_t* wd_pub =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_WDSPLIT));
-#ifdef MOE_ABL_NO_WD
-            const bool wd_read_this_block = false;  // PERF ABLATION (wrong data)
-#else
             const bool wd_read_this_block = (b == 0) || (WD_RESIDENT == 0);
-#endif
             // ISSUE (tagged r+1 per K-block) and DRAIN (per-trid barrier + publish) are separate so
             // block 0 can issue before the W_up stream (WD_EARLY) and drain after it.
             auto issue_wd_share = [&]() {
@@ -445,13 +472,18 @@ void kernel_main() {
                 for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
                     cb_reserve_back(cb_w_up, WU_CHUNK_TILES);
                     const uint32_t wp = get_write_ptr(cb_w_up);
-                    // Residency: M-block 0 only, because the read carries no `b`.
-                    const bool read_w = (b == 0) || (W_RESIDENT == 0);
+                    // Residency: M-block 0 only, because the read carries no `b`. A prefetched expert
+                    // treats its block 0 like a block > 0: publish the slot, read nothing, and let
+                    // the per-chunk WU_TRID barrier below drain the prefetch.
+                    const bool read_w = !(kWuPrefetch && (b == 0) && wu_prefetched) && ((b == 0) || (W_RESIDENT == 0));
                     noc_async_read_set_trid(WU_TRID);
                     moe_fused_swiglu::read_weight_chunk<BRG>(
                         wu_acc, read_w, c, GU_CHUNK_W, 0, kr, kstart, hstart, hn, HID_T, wp, W_TILE);
                     noc_async_read_barrier_with_trid(WU_TRID);  // this chunk only, never the W_down batch
                     cb_push_back(cb_w_up, WU_CHUNK_TILES);
+                }
+                if (b == 0) {
+                    wu_prefetched = false;  // consumed (or never set)
                 }
             }
 
@@ -641,6 +673,40 @@ void kernel_main() {
 
                 asm volatile("fence" ::: "memory");
                 mailbox_words[moe_fused_swiglu::MBOX_HSEND_DONE] = hsend_seq;
+            }
+
+            // ---- Cross-expert W_up prefetch, the NoC1 half ----
+            // Same inversion as the reader's: on the LAST M-block the next expert's W_up overwrites
+            // this expert's slot, which compute has already popped. Issued here so it lands under the
+            // output write issue and the deferred write barrier that follows, the stretch where this
+            // RISC is not gating anyone.
+            if constexpr (kWuPrefetch) {
+                if ((b + 1 == m_blocks) && (local_expert_id + 1 < EXPERTS_PER_CHIP)) {
+                    {
+                        PfZoneScope("pf_wu_reserve");
+                        cb_reserve_back(cb_w_up, WU_BLOCK_TILES);
+                    }
+                    PfZoneScope("pf_wu_issue");
+                    const auto wu_next =
+                        TensorAccessor(wu_args, get_arg_val<uint32_t>(RT_WEIGHTS + local_expert_id + 1), W_TILE);
+                    noc_async_read_set_trid(WU_TRID);
+                    for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
+                        moe_fused_swiglu::read_weight_chunk<BRG>(
+                            wu_next,
+                            true,
+                            c,
+                            GU_CHUNK_W,
+                            0,
+                            kr,
+                            kstart,
+                            hstart,
+                            hn,
+                            HID_T,
+                            wu_cb_base + c * WU_CHUNK_TILES * W_TILE,
+                            W_TILE);
+                    }
+                    wu_prefetched = true;
+                }
             }
 
             // ---- output write-back, coalesced over the emb axis ----
