@@ -37,8 +37,8 @@ TRIALS = 4096
 
 
 @pytest.mark.skipif(
-    get_chip_architecture() != ChipArchitecture.BLACKHOLE,
-    reason="_llk_set_fp32_dest_acc_ is Blackhole/Wormhole only; this test is written for Blackhole.",
+    get_chip_architecture() not in (ChipArchitecture.BLACKHOLE, ChipArchitecture.WORMHOLE),
+    reason="_llk_set_fp32_dest_acc_ exists on Blackhole and Wormhole only.",
 )
 def test_fp32_dest_acc_cfg_occupancy():
     formats = input_output_formats([DataFormat.Int32])[0]
