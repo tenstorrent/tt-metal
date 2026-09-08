@@ -101,7 +101,7 @@ changes behaviour.
 
 | # | setting | value | where it is set | worth |
 |---|---|---|---|---|
-| 1 | `sdpa_decode_k_chunk_size` | 256 | `_set_model_specific_params()`, gated on `model_type == "qwen3"` | 4.1% of attention |
+| 1 | `sdpa_decode_k_chunk_size` | 256 | `_set_model_specific_params()`, gated on `base_model_name == "Qwen3-8B"` | 4.1% of attention |
 | 2 | `use_tuned_decode_grids` | True | same gate; selects 8-core decode grids for the matmul inputs | 2.34 ms/token, with #3 |
 | 3 | feed-forward result placement | produced directly into the next matmul's layout | `mlp.py`, gated on #2 | included above |
 | 4 | decode attention accumulation | `HIFI2_NOFP32` on the three decode attention operators | `ModelOptimizations.performance()`, gated on `Qwen3-8B` | 0.139 ms/token |

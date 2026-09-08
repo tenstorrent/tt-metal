@@ -312,8 +312,8 @@ class MLP(LightweightModule):
         # Producing directly into w2's layout decouples them and costs nothing extra: the
         # to_memory_config below wanted that layout anyway, so it becomes the no-op its comment
         # already describes rather than a real redistribution.
-        # Gated on the same per-architecture flag as the 8-core decode grids
-        # (use_tuned_decode_grids, set in ModelArgs._set_model_specific_params): this
+        # Gated on the same per-model flag as the 8-core decode grids
+        # (use_tuned_decode_grids, set for Qwen3-8B in ModelArgs._set_model_specific_params): this
         # change exists to decouple the multiply from ff1/ff3's placement, and it only
         # matters when those matmuls have been moved off the dimension-derived grid.
         # Models on the default grids keep inheriting w1_out's layout, as before.

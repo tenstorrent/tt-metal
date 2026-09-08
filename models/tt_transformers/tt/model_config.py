@@ -603,8 +603,8 @@ class ModelArgs:
         self.sdpa_decode_q_chunk_size = 0
         self.sdpa_decode_k_chunk_size = 0
         self.sdpa_decode_use_default_compute_config = False
-        # Opt-in for the decode grid/placement tuning measured on Qwen3-8B; set per
-        # architecture in _set_model_specific_params(), read where the grids are chosen
+        # Opt-in for the decode grid/placement tuning measured on Qwen3-8B; set for that
+        # model only in _set_model_specific_params(), read where the grids are chosen
         # below. Default False keeps every other model on the dimension-derived grids.
         self.use_tuned_decode_grids = False
         self.use_hf_rope = use_hf_rope
@@ -823,7 +823,7 @@ class ModelArgs:
             # Measured, 128 rounds: this norm shape (32 x 4096) costs 46.07 us on 32 cores and
             # 39.33 us on 8, and the QKV matmul 0.0666 ms on 32 cores against 0.0600 ms on 8 --
             # both operations get faster, so lowering the count is not a trade.
-            # Gated on use_tuned_decode_grids (set per architecture in
+            # Gated on use_tuned_decode_grids (set for Qwen3-8B only in
             # _set_model_specific_params). The fixed constant is faster on the one shape it
             # was measured on but drops an invariant: dram_shard_core_grid_for_k picks a
             # core count that divides the tensor evenly, and x=8 does not guarantee that.
@@ -1478,16 +1478,18 @@ class ModelArgs:
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
                     )
                 else:
-                    # Input on mlp_core_grid (8 cores) so in0_block_w reaches 8; result spread
-                    # over mlp2_core_grid instead, which is where ff2 wants it anyway -- so the
-                    # elementwise SiLU(ff1)*ff3 both reads and writes on that grid and nothing
-                    # is redistributed anywhere in the chain.
+                    # On the tuned grids (Qwen3-8B): input on mlp_core_grid (8 cores) so
+                    # in0_block_w reaches 8; result spread over mlp2_core_grid instead, which is
+                    # where ff2 wants it anyway -- so the elementwise SiLU(ff1)*ff3 both reads and
+                    # writes on that grid and nothing is redistributed anywhere in the chain.
+                    # Every other model passes None, which dram_matmul_config treats as
+                    # "same as num_cores": the pre-tuning per_core_N.
                     return self.dram_matmul_config(
                         m=self.tile_padded_batch_rows,
                         k=self.dim,
                         n=self.hidden_dim // self.cluster_shape[1],
                         num_cores=self.mlp_core_grid.num_cores,
-                        out_num_cores=self.mlp2_core_grid.num_cores,
+                        out_num_cores=self.mlp2_core_grid.num_cores if self.use_tuned_decode_grids else None,
                     )
         elif mode == Mode.PREFILL:
             return self.matmul_config(
@@ -1579,11 +1581,13 @@ class ModelArgs:
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                     use_height_and_width_as_shard_shape=True,
                 )
-            else:
-                # Named explicitly rather than left to the generic width-sharded config, which
-                # would place the result on the same cores as the activation. The program config
-                # above spreads it over mlp2_core_grid, and the two must agree: the factory reads
-                # the output's core set straight off this tensor's shard spec.
+            elif self.use_tuned_decode_grids:
+                # Tuned grids only (Qwen3-8B). Named explicitly rather than left to the generic
+                # width-sharded config, which would place the result on the same cores as the
+                # activation. The program config above spreads it over mlp2_core_grid, and the
+                # two must agree: the factory reads the output's core set straight off this
+                # tensor's shard spec. Every other model keeps the generic config below, as
+                # before the tuning.
                 return ttnn.create_sharded_memory_config(
                     (
                         self.tile_padded_batch_rows,
@@ -1594,6 +1598,8 @@ class ModelArgs:
                     ttnn.ShardOrientation.ROW_MAJOR,
                     use_height_and_width_as_shard_shape=True,
                 )
+            else:
+                return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
             return ttnn.DRAM_MEMORY_CONFIG
         else:
@@ -2898,11 +2904,15 @@ class ModelArgs:
             self.sdpa_decode_k_chunk_size = 64
             self.sdpa_decode_use_default_compute_config = True
 
-        # Qwen3 decode tuning, measured only on Qwen3-8B / Wormhole N300 / 32k context.
+        # Qwen3-8B decode tuning, measured only on Qwen3-8B / Wormhole N300 / 32k context.
         # Scoped here rather than left in the shared defaults because the whole campaign
         # ran on one model and one board (22 invocations, all HF_MODEL=Qwen/Qwen3-8B,
-        # MESH_DEVICE=N300) and nothing establishes it helps anything else.
-        if self.model_type is not None and str(self.model_type).lower() in ("qwen3",):
+        # MESH_DEVICE=N300) and nothing establishes it helps anything else. Keyed on the
+        # normalised model name, not on model_type: "qwen3" is declared by every dense
+        # Qwen3 checkpoint (0.6B through 32B), none of which was measured. base_model_name
+        # maps both Qwen3-8B and Qwen3-8B-Instruct to "Qwen3-8B", the same key the
+        # performance preset and non_galaxy_ccl_configs use.
+        if self.base_model_name == "Qwen3-8B":
             # KV chunk of 256: the op's automatic choice runs 0.2408 ms against 0.2309 at
             # 256, 4.1% faster, over 36 calls per token. Every legal value (0/32/64/128/
             # 256/512) was measured 25 times and every one that ran agreed to 4 decimal
