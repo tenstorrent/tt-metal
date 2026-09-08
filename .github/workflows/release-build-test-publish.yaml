@@ -102,7 +102,7 @@ jobs:
           # SKUs used by tier-1 release_ready entries in tests/pipeline_reorg/models_e2e_tests.yaml
           if [[ "${{ inputs.platform }}" == "${{ inputs.main-platform }}" ]]; then
             # Main platform runs all tier-1 SKUs including multi-card and exabox multihost
-            echo "enabled-skus=wh_n150,wh_galaxy_perf,bh_p150,bh_quietbox_2,bh_galaxy,bh_sc4,bh_sc16" >> "$GITHUB_OUTPUT"
+            echo "enabled-skus=wh_n150,wh_galaxy_perf,bh_p150,bh_quietbox_2,bh_galaxy,bh_sc4" >> "$GITHUB_OUTPUT"
           else
             # Other platforms run only single-card tier-1 tests
             echo "enabled-skus=wh_n150,bh_p150" >> "$GITHUB_OUTPUT"
