@@ -121,7 +121,7 @@ template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
     bool is_fp32_dest_acc_en,
-    [[maybe_unused]] MathFidelity math_fidelity,
+    MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary(
     const std::uint32_t operand_A,

@@ -29,9 +29,9 @@ inline constexpr PackMode llk_test_pack_mode_v = untilize ? PackMode::Untilize
 template <
     DataCopyType type,
     bool is_fp32_dest_acc_en,
-    BroadcastType src_b_bcast_type      = BroadcastType::NONE,
-    bool is_int_fpu_en                  = false,
-    [[maybe_unused]] PackMode pack_mode = PackMode::Default>
+    BroadcastType src_b_bcast_type = BroadcastType::NONE,
+    bool is_int_fpu_en             = false,
+    PackMode pack_mode             = PackMode::Default>
 inline void _llk_math_eltwise_unary_datacopy_init_wrapper_(const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255)
 {
     static_assert(

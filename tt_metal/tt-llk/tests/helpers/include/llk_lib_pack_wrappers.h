@@ -116,7 +116,7 @@ template <
     bool diagonal                = false,
     bool narrow_row              = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    [[maybe_unused]] bool dense  = false>
+    bool dense                   = false>
 inline void _llk_pack_untilize_init_wrapper_(
     [[maybe_unused]] const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -133,7 +133,7 @@ template <
     bool narrow_row                  = false,
     std::uint32_t row_num_datums     = TILE_C_DIM,
     std::uint32_t tile_dst_ct_offset = 0,
-    [[maybe_unused]] bool dense      = false>
+    bool dense                       = false>
 inline void _llk_pack_untilize_wrapper_(
     const std::uint32_t address,
     const std::uint32_t pack_dst_format,
@@ -254,12 +254,12 @@ inline void _llk_pack_untilize_init_wrapper_(
 
 template <
     std::uint32_t block_ct_dim,
-    std::uint32_t full_ct_dim                     = block_ct_dim,
-    bool diagonal                                 = false,
-    bool narrow_row                               = false,
-    [[maybe_unused]] std::uint32_t row_num_datums = TILE_C_DIM,
-    std::uint32_t tile_dst_ct_offset              = 0,
-    bool dense                                    = false>
+    std::uint32_t full_ct_dim        = block_ct_dim,
+    bool diagonal                    = false,
+    bool narrow_row                  = false,
+    std::uint32_t row_num_datums     = TILE_C_DIM,
+    std::uint32_t tile_dst_ct_offset = 0,
+    bool dense                       = false>
 inline void _llk_pack_untilize_wrapper_(
     const std::uint32_t address,
     [[maybe_unused]] const std::uint32_t pack_dst_format,

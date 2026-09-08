@@ -62,7 +62,7 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
  * @tparam TILE_SHAPE: destination tile shape used to calculate operand offsets
  */
 template <
-    [[maybe_unused]] bool APPROXIMATION_MODE,
+    bool APPROXIMATION_MODE,
     BinaryOp BINOP,
     bool is_fp32_dest_acc_en,
     DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,

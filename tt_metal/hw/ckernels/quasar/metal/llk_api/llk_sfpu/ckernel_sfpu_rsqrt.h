@@ -95,8 +95,8 @@ template <
     bool APPROXIMATION_MODE,
     int ITERATIONS = SFPU_ITERATIONS,
     bool EN_32BIT_DEST = false,
-    [[maybe_unused]] bool FAST_APPROX = false,
-    [[maybe_unused]] bool legacy_compat = false>
+    bool FAST_APPROX = false,
+    bool legacy_compat = false>
 inline void calculate_rsqrt() {
     static_assert(!FAST_APPROX, "Non-default FAST_APPROX (true) not supported in Quasar rsqrt");
     static_assert(!legacy_compat, "Non-default legacy_compat (true) not supported in Quasar rsqrt");

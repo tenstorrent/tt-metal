@@ -20,8 +20,8 @@ inline void llk_math_eltwise_unary_sfpu_rsqrt_init() {
 template <
     bool APPROXIMATE,
     bool is_fp32_dest_acc_en,
-    [[maybe_unused]] bool FAST_APPROX = false,
-    [[maybe_unused]] bool legacy_compat = false,
+    bool FAST_APPROX = false,
+    bool legacy_compat = false,
     int ITERATIONS = SFPU_ITERATIONS>
 inline void llk_math_eltwise_unary_sfpu_rsqrt(uint dst_index) {
     static_assert(FAST_APPROX == false, "Non-default FAST_APPROX (true) not supported in Quasar rsqrt");

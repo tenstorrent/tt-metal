@@ -79,11 +79,7 @@ inline void _init_reciprocal_() {
  * @note Call @ref recip_init with matching template args first — it programs the Newton-Raphson
  *       constant (vConstFloatPrgm0) that @ref _sfpu_reciprocal_ refines with.
  */
-template <
-    bool APPROXIMATION_MODE,
-    bool EN_32BIT_DEST,
-    int ITERATIONS = SFPU_ITERATIONS,
-    [[maybe_unused]] bool legacy_compat = true>
+template <bool APPROXIMATION_MODE, bool EN_32BIT_DEST, int ITERATIONS = SFPU_ITERATIONS, bool legacy_compat = true>
 inline void calculate_reciprocal() {
     static_assert(legacy_compat == true, "Non-default legacy_compat (false) not supported in Quasar reciprocal");
     constexpr int max_iter = (!EN_32BIT_DEST || APPROXIMATION_MODE) ? 0 : 2;
