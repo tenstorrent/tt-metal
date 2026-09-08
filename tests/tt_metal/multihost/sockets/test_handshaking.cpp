@@ -6,7 +6,10 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
+#include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tests/tt_metal/multihost/common/multihost_test_tools.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_accessor.hpp"
 #include <random>
 
 using namespace tt::tt_metal::distributed::multihost;
@@ -27,6 +30,7 @@ TEST(MultiHostSocketTest, MultiProcessHandshaking) {
 
     EXPECT_EQ(size, 2);  // Ensure a world size of 2 for this test
 
+    auto& metal_env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
     std::unordered_map<Rank, Rank> rank_translation_table = {
         {Rank{0}, Rank{0}},
         {Rank{1}, Rank{1}},
@@ -109,25 +113,27 @@ TEST(MultiHostSocketTest, MultiProcessHandshaking) {
         };
         // Handshake on L1 Socket
         // SocketConfig validated here
-        forward_descriptor_to_peer(send_peer_descriptor_l1, SocketEndpoint::SENDER, context, rank_translation_table);
+        forward_descriptor_to_peer(
+            send_peer_descriptor_l1, SocketEndpoint::SENDER, context, rank_translation_table, metal_env);
         auto peer_desc = receive_and_verify_descriptor_from_peer(
-            send_peer_descriptor_l1, SocketEndpoint::SENDER, context, rank_translation_table);
+            send_peer_descriptor_l1, SocketEndpoint::SENDER, context, rank_translation_table, metal_env);
         // Validate all other fields in the peer descriptor
         EXPECT_EQ(peer_desc.config_buffer_address, l1_receiver_config_buffer_address);
         EXPECT_EQ(peer_desc.data_buffer_address, l1_receiver_data_buffer_address);
         // Handshake on DRAM Socket
-        forward_descriptor_to_peer(send_peer_descriptor_dram, SocketEndpoint::SENDER, context, rank_translation_table);
+        forward_descriptor_to_peer(
+            send_peer_descriptor_dram, SocketEndpoint::SENDER, context, rank_translation_table, metal_env);
         peer_desc = receive_and_verify_descriptor_from_peer(
-            send_peer_descriptor_dram, SocketEndpoint::SENDER, context, rank_translation_table);
+            send_peer_descriptor_dram, SocketEndpoint::SENDER, context, rank_translation_table, metal_env);
         // Validate all other fields in the peer descriptor
         EXPECT_EQ(peer_desc.config_buffer_address, dram_receiver_config_buffer_address);
         EXPECT_EQ(peer_desc.data_buffer_address, dram_receiver_data_buffer_address);
         forward_descriptor_to_peer(
-            incorrect_socket_descriptor, SocketEndpoint::SENDER, context, rank_translation_table);
+            incorrect_socket_descriptor, SocketEndpoint::SENDER, context, rank_translation_table, metal_env);
         // Validate that the incorrect socket descriptor is rejected
         EXPECT_THROW(
             receive_and_verify_descriptor_from_peer(
-                incorrect_socket_descriptor, SocketEndpoint::SENDER, context, rank_translation_table),
+                incorrect_socket_descriptor, SocketEndpoint::SENDER, context, rank_translation_table, metal_env),
             std::runtime_error);
 
     } else {
@@ -153,25 +159,26 @@ TEST(MultiHostSocketTest, MultiProcessHandshaking) {
         // Handshake on L1 Socket
         // SocketConfig validated here
         auto peer_desc = receive_and_verify_descriptor_from_peer(
-            recv_peer_descriptor_l1, SocketEndpoint::RECEIVER, context, rank_translation_table);
-        forward_descriptor_to_peer(recv_peer_descriptor_l1, SocketEndpoint::RECEIVER, context, rank_translation_table);
+            recv_peer_descriptor_l1, SocketEndpoint::RECEIVER, context, rank_translation_table, metal_env);
+        forward_descriptor_to_peer(
+            recv_peer_descriptor_l1, SocketEndpoint::RECEIVER, context, rank_translation_table, metal_env);
         // Validate all other fields in the peer descriptor
         EXPECT_EQ(peer_desc.config_buffer_address, l1_sender_config_buffer_address);
         EXPECT_EQ(peer_desc.data_buffer_address, 0);  // Sender does not have a data buffer
         // Handshake on DRAM Socket
         peer_desc = receive_and_verify_descriptor_from_peer(
-            recv_peer_descriptor_dram, SocketEndpoint::RECEIVER, context, rank_translation_table);
+            recv_peer_descriptor_dram, SocketEndpoint::RECEIVER, context, rank_translation_table, metal_env);
         forward_descriptor_to_peer(
-            recv_peer_descriptor_dram, SocketEndpoint::RECEIVER, context, rank_translation_table);
+            recv_peer_descriptor_dram, SocketEndpoint::RECEIVER, context, rank_translation_table, metal_env);
         // Validate all other fields in the peer descriptor
         EXPECT_EQ(peer_desc.config_buffer_address, dram_sender_config_buffer_address);
         EXPECT_EQ(peer_desc.data_buffer_address, 0);  // Sender does not have a data buffer
         // Validate that the incorrect socket descriptor is rejected
         EXPECT_THROW(
             receive_and_verify_descriptor_from_peer(
-                incorrect_socket_descriptor, SocketEndpoint::RECEIVER, context, rank_translation_table),
+                incorrect_socket_descriptor, SocketEndpoint::RECEIVER, context, rank_translation_table, metal_env),
             std::runtime_error);
         forward_descriptor_to_peer(
-            incorrect_socket_descriptor, SocketEndpoint::RECEIVER, context, rank_translation_table);
+            incorrect_socket_descriptor, SocketEndpoint::RECEIVER, context, rank_translation_table, metal_env);
     }
 }
