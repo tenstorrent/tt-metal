@@ -10,6 +10,7 @@ for temporal, height, and width dimensions.
 Standard RoPE is used by the CodePredictor model.
 """
 
+import os
 from typing import Optional, Tuple
 
 import torch
@@ -345,7 +346,38 @@ def apply_rope_qk(
     mc = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
 
     def _prefill(t):
-        return ttnn.experimental.rotary_embedding_llama(
+        # Move the head axis into dim 0 before the call. The prefill factory splits work
+        # as `batch_parallel_factor = min(batch, num_cores)` and
+        # `seq_parallel_factor = min(num_cores/batch_parallel_factor, seq_len_t)`
+        # (rotary_embedding_llama_multi_core_program_factory.cpp:86) — heads appear ONLY
+        # as a multiplier on `num_rows_per_core`, never as a parallel axis. So Q
+        # [1, 16, 64, 128] gets batch=1, seq_len_t=2 -> 1 x 2 = TWO busy cores, each
+        # rotating 16 head-rows, and `num_rows_per_core = 16 > 8` additionally selects
+        # `use_reload_impl`, which re-reads cos/sin per row. That is why the op measured
+        # the same 42.8 us at seq=64 and seq=128: per-core work never changed.
+        #
+        # [nh, 1, S, D] gives batch=nh -> nh x seq_len_t cores and one row per core:
+        #
+        #   Q (16 heads)  42.8 us -> 14.8 us (seq 64) | 42.8 -> 18.1 (seq 128)
+        #   K ( 8 heads)  26.5 us -> 13.3 us (seq 64) | 26.5 -> 14.3 (seq 128)
+        #   Q+K per layer 69.3 -> 28.0 us, i.e. -1.16 ms over 28 Talker layers
+        #
+        # Prefill validation only asks for `cos.shape[0] == 1` and
+        # `cos.shape[1] in (input.shape[1], 1)`, and Qwen3-TTS cos/sin are head-broadcast
+        # (shape[1] == 1), so both forms are legal. [1,nh,S,D] and [nh,1,S,D] have the
+        # same linear tile order, so the reshape is metadata only — and the outputs are
+        # BIT-EXACT, max|diff| == 0 on all four (heads, seq) the demo runs
+        # (test_qwen3_tts_rope_prefill_probe.py). QWEN3_TTS_ROPE_HEAD_BATCH=0 reverts.
+        _shape = tuple(int(d) for d in t.shape)
+        _fold = (
+            _shape[0] == 1
+            and _shape[1] > 1
+            and int(cos.shape[1]) == 1
+            and os.environ.get("QWEN3_TTS_ROPE_HEAD_BATCH", "1") != "0"
+        )
+        if _fold:
+            t = ttnn.reshape(t, [_shape[1], 1, _shape[2], _shape[3]])
+        out = ttnn.experimental.rotary_embedding_llama(
             t,
             cos,
             sin,
@@ -354,6 +386,7 @@ def apply_rope_qk(
             memory_config=mc,
             compute_kernel_config=compute_kernel_config,
         )
+        return ttnn.reshape(out, list(_shape)) if _fold else out
 
     # Every head must land in one 32-row tile after the transpose.
     if qk_already_decode_layout:
