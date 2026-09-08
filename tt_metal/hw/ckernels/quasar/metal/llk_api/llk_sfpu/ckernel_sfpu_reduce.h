@@ -172,10 +172,12 @@ inline void reduce_int_average_col() {
     // Keep the original - its sign decides whether to negate again after the shift.
     TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0 /* instr_mod1: plain copy */);
 
+    TTI_SFPENCC(1 /* imm12: enable */, 2 /* mod1: enable <- imm12[0] */);
+
     // Negate the negative lanes, so every lane holds |x|.
     TTI_SFPSETCC(REDUCE_SETCC_IMM12_INT32, p_sfpu::LREG0, REDUCE_SETCC_MOD_NEGATIVE);
     TTI_SFPIADD(0 /* imm12 */, p_sfpu::LCONST_0, p_sfpu::LREG0, REDUCE_IADD_MOD_NEGATE_KEEP_CC);
-    TTI_SFPENCC(0 /* imm12 */, 0 /* mod1: clear CC */);
+    TTI_SFPENCC(0 /* imm12 */, 0 /* mod1: result <- all lanes, enable kept */);
 
     // |x| / 32.
     TTI_SFPSHFT(REDUCE_AVG_SHIFT_IMM12, p_sfpu::LREG0, p_sfpu::LREG0, REDUCE_AVG_SHFT_MOD_LOGICAL_IMM);
@@ -183,7 +185,7 @@ inline void reduce_int_average_col() {
     // Put the sign back where the original had one.
     TTI_SFPSETCC(REDUCE_SETCC_IMM12_INT32, p_sfpu::LREG1, REDUCE_SETCC_MOD_NEGATIVE);
     TTI_SFPIADD(0 /* imm12 */, p_sfpu::LCONST_0, p_sfpu::LREG0, REDUCE_IADD_MOD_NEGATE_KEEP_CC);
-    TTI_SFPENCC(0 /* imm12 */, 0 /* mod1: clear CC */);
+    TTI_SFPENCC(0 /* imm12 */, 0 /* mod1: result <- all lanes, enable kept */);
 }
 
 // ============================================================================
@@ -501,6 +503,9 @@ inline void calculate_reduce(
         "column-only; reduce as a float format if you need the row axis.");
 
     if constexpr (REDUCE_DIM == ReduceDim::REDUCE_COL) {
+        LLK_ASSERT(
+            block_ct_dim == 1 && block_rt_dim == 1,
+            "column reduce works a single tile (block_ct_dim == block_rt_dim == 1); call it once per tile");
         reduce_col_tile<POOL_TYPE, FORMAT>();
     } else {
         constexpr std::uint32_t MAX_DEST_TILES =
