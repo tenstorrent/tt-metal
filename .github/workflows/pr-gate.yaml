@@ -190,6 +190,26 @@ jobs:
       - id: find-changes
         uses: ./.github/actions/find-changed-files
 
+  # The ONE place team time budgets are enforced. It has to see every tests yaml
+  # at once: several yamls charge the same (team, budget_type, sku) budget, so the
+  # allowance is the sum across all of them. The per-pipeline checks this replaced
+  # each saw a single yaml, which let every yaml claim the full budget on its own.
+  verify-time-budgets:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 5
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against team time budgets
+        run: python3 .github/scripts/utils/verify_time_budget.py
+
   build-runtime-smoke-image:
     needs: [asan-build, build-docker-images, find-changed-files]
     if: ${{
@@ -236,7 +256,6 @@ jobs:
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-metalium
       test-category: pr_gate
-      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       upload-coverage: false
       enable-kernel-ccache: true
   # A second image because the tag reflects build-args, and smoke installs a
@@ -286,7 +305,6 @@ jobs:
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-nn
       test-category: pr_gate
-      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       upload-coverage: false
       enable-kernel-ccache: true
 
@@ -343,7 +361,6 @@ jobs:
       product: tt-metalium
       build-type: 'ASan'
       enable-kernel-ccache: true
-      per-test-timeout: 15
     secrets: inherit
 
   build-ttnn-examples-image:
@@ -387,7 +404,6 @@ jobs:
       product: tt-nn
       build-type: 'ASan'
       enable-kernel-ccache: true
-      per-test-timeout: 15
     secrets: inherit
 
   # A quick check that parses the models charts in README.md and models/README.md
@@ -534,7 +550,6 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-      per-test-timeout: 15
       enabled-skus: ALL_SKUS_IN_TESTS
       # "*" = no allowlist filter; empty = skip all; else CSV of logical SKUs.
       sku-allowlist: ${{
@@ -598,6 +613,7 @@ jobs:
       - build-docs
       - llk-smoke-tests
       - llk-build-quasar
+      - verify-time-budgets
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -607,7 +623,9 @@ jobs:
       - name: Check if all jobs passed
         uses: ./.github/actions/workflow-status
         with:
-          required-jobs: ""
+          # verify-time-budgets is required, not optional: it has no build dependency
+          # and never skips, so a skip would mean it silently stopped gating.
+          required-jobs: "verify-time-budgets"
           optional-jobs: >-
             asan-build, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,

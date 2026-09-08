@@ -25,6 +25,7 @@
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: sanity
 
 # --- Dispatch: randomized tensix programs (package-and-release health check) ---
 - name: runtime_release_sanity_dispatch
@@ -36,6 +37,7 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: sanity
 
 # --- Device: init, cluster API, mock API (excluding NIGHTLY) ---
 - name: runtime_sanity_device
@@ -47,6 +49,7 @@
       timeout: 3
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: sanity
 
 # --- API: DRAM R/W + L1 R/W + kernel compile (core API health check) ---
 - name: runtime_sanity_api
@@ -58,6 +61,7 @@
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: sanity
 
 # --- BH Multi-Card: System Health ---
 - name: bh_multicard_system_health
@@ -67,6 +71,7 @@
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: sanity
 
 # =============================================================================
 # TTSim simulator coverage for runtime C++ unit tests (sim_* SKUs only, no HW).
@@ -98,6 +103,7 @@
       timeout: 30
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: sanity
 
 # Quasar simulator coverage (ttsim-owned list, full set as originally requested by Matt
 # Craighead). Some of these may fail today due to a known libttsim_qsr.so NOC_API_V2 gap
@@ -129,6 +135,7 @@
       timeout: 30
   owner_id: U08PR765YJ1 # Matt Craighead
   team: ttsim
+  budget_type: sanity
 
 - name: runtime_sim_galaxy_cpp_unit_tests (wormhole_b0)
   cmd: >-
@@ -141,6 +148,7 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: sanity
 
 - name: runtime_sim_galaxy_cpp_unit_tests (blackhole)
   cmd: >-
@@ -153,3 +161,4 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: sanity

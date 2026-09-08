@@ -48,6 +48,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U08BH66EXAL # Radoica Draskic
   team: models
+  budget_type: vllm
 
 - name: "Gemma3-27B DP=4"
   model: google/gemma-3-27b-it
@@ -67,6 +68,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U08BH66EXAL # Radoica Draskic
   team: models
+  budget_type: vllm
 
 # ── Gemma 4 ────────────────────────────────────────────────────────
 
@@ -85,6 +87,7 @@
       tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
 
 # Product path on QB2: 256k + chunked prefill + B=32.
 - name: "Gemma4-12B"
@@ -103,6 +106,7 @@
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
 
 # tp=8 coverage on the 8-chip BH LoudBox (P150x8) — the flagship 12B config.
 # Serving knobs mirror the QB2 leg; the impl workflow additionally exports the
@@ -169,6 +173,7 @@
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
 
 # Serve 16k with chunked prefill=2048 (12 GB/ASIC); do not mirror BH 256k.
 #
@@ -223,6 +228,7 @@
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
 
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
@@ -240,6 +246,7 @@
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
 
 # ── Qwen 3.6 ───────────────────────────────────────────────────────
 
@@ -260,6 +267,7 @@
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: vllm
 
 - name: "Qwen3.6-27B (batch=8)"
   model: Qwen/Qwen3.6-27B
@@ -278,6 +286,7 @@
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: vllm
 
 # ── GPT-OSS ────────────────────────────────────────────────────────
 
@@ -304,6 +313,7 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   co-owner-2-id: U06F3ER8X9A # Stuti Raizada
   team: models
+  budget_type: vllm
 
 - name: "GPT-OSS-120B (high-throughput)"
   model: openai/gpt-oss-120b
@@ -327,6 +337,7 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   co-owner-2-id: U06F3ER8X9A # Stuti Raizada
   team: models
+  budget_type: vllm
 
 # ── Llama ──────────────────────────────────────────────────────────
 
@@ -350,6 +361,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.1-8B-Instruct (prefix caching)"
   model: meta-llama/Llama-3.1-8B-Instruct
@@ -373,6 +385,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.1-8B-Instruct"
   model: meta-llama/Llama-3.1-8B-Instruct
@@ -391,6 +404,7 @@
       tier: 2
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.1-8B-Instruct with sampling-tests"
   model: meta-llama/Llama-3.1-8B-Instruct
@@ -415,6 +429,7 @@
       tier: 2
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.1-8B-Instruct (chunked prefill)"
   model: meta-llama/Llama-3.1-8B-Instruct
@@ -444,6 +459,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.1-8B-Instruct DP=4"
   model: meta-llama/Llama-3.1-8B-Instruct
@@ -468,6 +484,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U08BH66EXAL # Radoica Draskic
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.3-70B-Instruct device with sampling-tests (prefix caching)"
   model: meta-llama/Llama-3.3-70B-Instruct
@@ -488,6 +505,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 # ── Qwen 3 ─────────────────────────────────────────────────────────
 
@@ -508,6 +526,7 @@
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
+  budget_type: vllm
 
 - name: "Qwen3-32B device (BH Galaxy)"
   model: Qwen/Qwen3-32B
@@ -531,6 +550,7 @@
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
+  budget_type: vllm
 
 # ── Qwen VL ────────────────────────────────────────────────────────
 
@@ -551,6 +571,7 @@
       tier: 2
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: vllm
 
 - name: "Qwen3-VL-32B-Instruct"
   model: Qwen/Qwen3-VL-32B-Instruct
@@ -570,6 +591,7 @@
       tier: 2
   owner_id: U08H31YMN4Q # Sarva Sanjay
   team: models
+  budget_type: vllm
 
 # ── Infra / overhead ───────────────────────────────────────────────
 
@@ -589,6 +611,7 @@
       tier: 1
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 # ── Disabled entries (preserved for re-enable) ─────────────────────
 #

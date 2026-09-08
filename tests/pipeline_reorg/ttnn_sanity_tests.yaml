@@ -54,6 +54,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U05ACKAJTHS # Naif Tarafdar
 
 - name: "ttnn eltwise group 1"
@@ -70,6 +71,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U09BX3N0N95 # Mateusz Nowak
 
 - name: "ttnn eltwise group 2"
@@ -86,6 +88,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U09BX3N0N95 # Mateusz Nowak
 
 - name: "ttnn eltwise group 3"
@@ -102,6 +105,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U09BX3N0N95 # Mateusz Nowak
 
 - name: "ttnn eltwise group 4"
@@ -118,6 +122,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U09BX3N0N95 # Mateusz Nowak
 
 - name: "ttnn conv group"
@@ -134,6 +139,7 @@
     sim_bh_p150:
       timeout: 60
   team: ttnn
+  budget_type: sanity
   owner_id: U085GDCAZTN # Pavle Josipovic
 
 - name: "ttnn pool group"
@@ -150,6 +156,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U085GDCAZTN # Pavle Josipovic
 
 - name: "ttnn matmul group"
@@ -166,6 +173,7 @@
     sim_bh_p150:
       timeout: 60
   team: ttnn
+  budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
 
 - name: "ttnn fused group 1"
@@ -182,6 +190,7 @@
     sim_bh_p150:
       timeout: 60
   team: ttnn
+  budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
 
 - name: "ttnn fused group 2"
@@ -198,6 +207,7 @@
     sim_bh_p150:
       timeout: 60
   team: ttnn
+  budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
 
 - name: "ttnn misc ops group"
@@ -214,6 +224,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U08JFM3CFA4 # Gongyu Wang
 
 - name: "ttnn sdpa group"
@@ -230,6 +241,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U085GDCAZTN # Pavle Josipovic
 
 # indexer_score is Blackhole-only (the nightly suite has the full coverage); this reuses the accuracy
@@ -249,6 +261,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U085GDCAZTN # Pavle Josipovic
 
 - name: "ttnn reduce group"
@@ -265,6 +278,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
 
 - name: "ttnn llk helper library tests"
@@ -282,6 +296,7 @@
     bh_p150b_civ2:
       timeout: 20
   team: ttnn
+  budget_type: sanity
   owner_id: U0BCCPS862F # Milan Alimpic
 
 - name: "core ttnn unit test group"
@@ -304,6 +319,7 @@
     sim_bh_p150:
       timeout: 40
   team: ttnn
+  budget_type: sanity
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
 
 - name: "trace allocation tracker"
@@ -317,4 +333,5 @@
     sim_wh_n150:
       timeout: 15
   team: ttnn
+  budget_type: sanity
   owner_id: U076Z1JJUQZ # Artem Yerofieiev

@@ -18,6 +18,7 @@
       timeout: 8
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
+  budget_type: profiler
 
 - name: T3000 CCL AllGather profiling
   cmd: run_ccl_T3000_test
@@ -26,6 +27,7 @@
       timeout: 10
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+  budget_type: profiler
 
 - name: T3000 multi-host tracy smoke
   cmd: run_multi_host_tracy_smoke
@@ -34,6 +36,7 @@
       timeout: 10
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
+  budget_type: profiler
 
 - name: T3000 device profiler regressions
   cmd: run_device_profiler_test
@@ -42,6 +45,7 @@
       timeout: 25
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
+  budget_type: profiler
 
 - name: T3000 perf op report
   cmd: run_perf_op_report_test
@@ -50,6 +54,7 @@
       timeout: 8
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+  budget_type: profiler
 
 - name: T3000 process_ops_logs
   cmd: run_process_ops_logs_test
@@ -58,6 +63,7 @@
       timeout: 5
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+  budget_type: profiler
 
 - name: T3000 tracy wasm gui HTTP integration
   cmd: run_tracy_wasm_gui_http_integration
@@ -66,3 +72,4 @@
       timeout: 8
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
+  budget_type: profiler

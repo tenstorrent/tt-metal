@@ -23,6 +23,7 @@
       timeout: 30
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
 
 - id: galaxy-fabric-2d-torus-nightly
   name: Galaxy Fabric 2D Torus Nightly Tests
@@ -34,6 +35,7 @@
       timeout: 45
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
 
 - id: galaxy-fabric-multi-mesh-4x4-2x4s
   name: Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests
@@ -49,6 +51,7 @@
       mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x4_2x4_3_mesh.textproto
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
 
 - id: galaxy-fabric-multi-mesh-2x8-2x4s
   name: Galaxy Fabric Multi-mesh 2x8 and 2x4s stability tests
@@ -64,6 +67,7 @@
       mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_2x8_2x4_3_mesh.textproto
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
 
 # Blackhole Galaxy e2e tests
 - id: bh-galaxy-fabric-torus-stability
@@ -74,6 +78,7 @@
       timeout: 20
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
 
 - id: bh-galaxy-socket-pipeline
   name: BH Galaxy Socket Pipeline Single Galaxy
@@ -85,3 +90,4 @@
       timeout: 10
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e

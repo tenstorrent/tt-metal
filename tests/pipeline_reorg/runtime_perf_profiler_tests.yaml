@@ -47,6 +47,7 @@
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: perf_profiler
 
 # --- Data movement regressions ---
 - name: runtime_perf_data_movement
@@ -68,3 +69,4 @@
       timeout: 20
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: perf_profiler

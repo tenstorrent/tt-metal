@@ -69,7 +69,7 @@ metal_infra:
 
 ttnn:
   pr_gate:
-    wh_n150_civ2: 15
+    wh_n150_civ2: 30
   merge_gate:
     wh_n150_civ2: 45
     wh_n300_civ2: 55
@@ -88,11 +88,11 @@ ttnn:
     sim_bh_p150: 680
   unit:
     wh_llmbox: 50
-    wh_galaxy: 120
+    wh_galaxy: 125
     bh_galaxy: 40
     bh_p100: 815
     bh_p150b_civ2: 850
-    wh_n150_civ2: 1020
+    wh_n150_civ2: 1040
     wh_n300_civ2: 1190
     bh_p150b_civ2_viommu: 117
     bh_p300: 60
@@ -243,7 +243,7 @@ scaleout:
 
 runtime:
   pr_gate:
-    wh_n150_civ2: 15
+    wh_n150_civ2: 30
     github_hosted_cpu: 15
   merge_gate:
     wh_n150_civ2: 45

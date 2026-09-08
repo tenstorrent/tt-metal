@@ -24,6 +24,7 @@
       timeout: 5
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
+  budget_type: profiler
 
 - name: Device profiler regressions
   cmd: run_device_profiler_test
@@ -38,6 +39,7 @@
       timeout: 25
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
+  budget_type: profiler
 
 - name: Perf op report
   cmd: run_perf_op_report_test
@@ -52,6 +54,7 @@
       timeout: 8
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn
+  budget_type: profiler
 
 - name: Realtime profiler suite
   cmd: run_realtime_profiler_test
@@ -66,6 +69,7 @@
       timeout: 15
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
+  budget_type: profiler
 
 - name: L1 accumulate profiler
   cmd: run_accumulate_profiler_test
@@ -80,3 +84,4 @@
       timeout: 6
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
+  budget_type: profiler

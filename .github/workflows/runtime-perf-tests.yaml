@@ -109,7 +109,6 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       tests-yaml-path: ./tests/pipeline_reorg/runtime_perf_profiler_tests.yaml
-      budget-subheading: "perf_profiler"
       enabled-skus: >-
         ${{
           github.event_name == 'schedule'

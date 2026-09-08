@@ -42,6 +42,7 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Llama 3.2-1B unit tests
   cmd: |
@@ -57,6 +58,7 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Llama 3.2-3B unit tests
   cmd: |
@@ -72,6 +74,7 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Llama 3.2-11B Vision unit tests
   cmd: |
@@ -87,6 +90,7 @@
       tier: 3
   owner_id: U06UEFWB4P9 # Colman Glagovich
   team: models
+  budget_type: unit
 
 - name: Llama 3.2-90B-Vision unit tests
   cmd: |
@@ -113,6 +117,7 @@
       tier: 2
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: unit
 
 - name: Llama 3.3-70B unit tests
   cmd: |
@@ -133,6 +138,7 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Qwen3-32B unit tests
   cmd: |
@@ -152,6 +158,7 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Qwen2.5-32B unit tests
   cmd: |
@@ -171,6 +178,7 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Qwen2.5-Coder-32B unit tests
   cmd: |
@@ -190,6 +198,7 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Qwen3.6 unit tests
   cmd: |
@@ -221,6 +230,7 @@
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: unit
 
 - name: Mistral-7B unit tests
   cmd: |
@@ -243,6 +253,7 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Mistral-Small-3.1-24B vision unit tests
   cmd: |
@@ -272,6 +283,7 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: ViT unit tests
   cmd: |
@@ -291,6 +303,7 @@
       tier: 2
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
+  budget_type: unit
 
 - name: BERT-Large unit tests
   cmd: |
@@ -305,6 +318,7 @@
       tier: 3
   owner_id: U024A4EFV6U # Brian Liu
   team: ttnn
+  budget_type: unit
 
 - name: ResNet-50 unit tests
   cmd: |
@@ -323,6 +337,7 @@
       tier: 1
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
+  budget_type: unit
 
 - name: Gemma-3-4B unit tests
   cmd: |
@@ -336,6 +351,7 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Gemma-3-27B unit tests
   cmd: |
@@ -349,6 +365,7 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 # Janus Pro unit tests: Blackhole only (P150).
 - name: Janus Pro-7B unit tests
@@ -363,6 +380,7 @@
       tier: 3
   owner_id: U0B25UFEEAX # Milos Micic
   team: shield
+  budget_type: unit
 
 # Gemma-4 unit tests: one entry per model variant, multiple SKUs per entry.
 # parametrize_mesh_with_fabric() picks the largest mesh shape that fits on each
@@ -388,6 +406,7 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Gemma-2-9B unit tests
   cmd: |
@@ -403,6 +422,7 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Gemma-4-E2B unit tests
   cmd: |
@@ -453,6 +473,7 @@
       tier: 3
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
+  budget_type: unit
 
 - name: Gemma-4-E4B unit tests
   cmd: |
@@ -484,6 +505,7 @@
       tier: 3
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
+  budget_type: unit
 
 - name: Gemma-4-26B-A4B unit tests
   cmd: |
@@ -519,6 +541,7 @@
     #   tier: 2
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
+  budget_type: unit
 
 - name: Gemma-4-31B unit tests
   cmd: |
@@ -552,6 +575,7 @@
     #   tier: 2
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
+  budget_type: unit
 
 - name: Gemma-4-12B unit tests
   cmd: |
@@ -576,6 +600,7 @@
       tier: 1
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
+  budget_type: unit
 
 - name: Shallow UNet unit tests
   cmd: |
@@ -595,6 +620,7 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Mixtral-8x7B unit tests
   cmd: |
@@ -615,6 +641,7 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Llama 3.3-70B unit tests (Galaxy)
   cmd: |
@@ -637,6 +664,7 @@
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
+  budget_type: unit
 
 - name: Qwen3-32B unit tests (Galaxy)
   cmd: |
@@ -663,6 +691,7 @@
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
+  budget_type: unit
 
 # MiniMax-M3 unit tests — random-weight module PCC only (no HF_MODEL / M3_CKPT).
 # test_msa_layer_vs_ref is real-weights and opt-in locally; excluded from CI so Tier-1
@@ -678,6 +707,7 @@
       tier: 1
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
+  budget_type: unit
 
 - name: MiniMax-M3 unit tests (BH Galaxy 8x4)
   cmd: |
@@ -692,6 +722,7 @@
       tier: 1
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
+  budget_type: unit
 
 # GPT-OSS unit tests: uses HF config only (no weights). parametrize_mesh_with_fabric()
 # picks the largest fitting mesh shape per SKU when CI=true, so one yaml entry
@@ -717,6 +748,7 @@
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: unit
 
 - name: GPT-OSS 120B unit tests
   cmd: |
@@ -762,6 +794,7 @@
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: unit
 
 - name: DeepSeek-V3 unit tests
   cmd: |
@@ -782,6 +815,7 @@
       tier: 1
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
+  budget_type: unit
 
 - name: DeepSeek-V3 module unit tests (host-side)
   cmd: |
@@ -798,6 +832,7 @@
       tier: 1
   owner_id: U04N3GWH8F9 # Kartik Paigwar
   team: models
+  budget_type: unit
 
 - name: GPT-OSS-120B (disaggregated prefill) unit tests
   # Single-card PCC units for the gpt_oss_d_p prefill package (standalone: random weights +
@@ -817,6 +852,7 @@
       tier: 2
   owner_id: U08HM8SL5U4 # Maciek Dragula
   team: models
+  budget_type: unit
 
 - name: Whisper unit tests
   cmd: |
@@ -838,6 +874,7 @@
     #   tier: 1
   owner_id: U0491KT8MNY # Mohamed Bahnas
   team: models
+  budget_type: unit
 
 - name: QwQ-32B unit tests
   cmd: |
@@ -853,6 +890,7 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Falcon-7B unit tests
   cmd: |
@@ -866,6 +904,7 @@
       tier: 3
   owner_id: U07D5N7QL4U # Joseph Chu
   team: models
+  budget_type: unit
 
 - name: Falcon-40B unit tests
   cmd: |
@@ -879,6 +918,7 @@
       tier: 3
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
+  budget_type: unit
 
 - name: Qwen2.5-7B unit tests
   cmd: |
@@ -894,6 +934,7 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: Qwen2.5-72B unit tests
   cmd: |
@@ -909,6 +950,7 @@
       tier: 3
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
+  budget_type: unit
 
 - name: Qwen2.5-VL-72B unit tests
   cmd: |
@@ -924,6 +966,7 @@
       tier: 2
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: unit
 
 - name: Qwen2.5-VL-32B unit tests
   cmd: |
@@ -939,6 +982,7 @@
       tier: 3
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: unit
 
 - name: Qwen3-VL-32B unit tests
   cmd: |
@@ -954,6 +998,7 @@
       tier: 2
   owner_id: U08H31YMN4Q # Sanjay Sanjay
   team: models
+  budget_type: unit
 
 - name: Phi-3-mini unit tests
   cmd: |
@@ -969,6 +1014,7 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: TT-DiT common unit tests, shared amongst all models.
   cmd: |
@@ -984,6 +1030,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 - name: TT-DiT encoder unit tests, shared amongst all models.
   cmd: |
@@ -1018,6 +1065,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 # Phi-4-mini: disabled, asserting with 'assert freqs.shape[-1] == ext_factors.shape[-1]'
 # - name: Phi-4-mini unit tests
@@ -1063,6 +1111,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 - name: TT-DiT Flux.1-dev unit tests
   cmd: |
@@ -1081,6 +1130,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 - name: TT-DiT Flux.2-dev unit tests
   cmd: |
@@ -1144,6 +1194,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 - name: Stable Diffusion XL LoRA unit tests
   cmd: |
@@ -1168,6 +1219,7 @@
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+  budget_type: unit
 
 - name: Stable Diffusion XL refiner unit tests
   cmd: |
@@ -1188,6 +1240,7 @@
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+  budget_type: unit
 
 - name: Stable Diffusion XL VAE unit tests
   cmd: |
@@ -1208,6 +1261,7 @@
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+  budget_type: unit
 
 - name: Stable Diffusion XL base unit tests
   cmd: |
@@ -1228,6 +1282,7 @@
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+  budget_type: unit
 
 - name: Stable Diffusion XL base unet-loop unit tests
   cmd: |
@@ -1251,6 +1306,7 @@
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+  budget_type: unit
 
 - name: Stable Diffusion XL refiner unet-loop unit tests
   cmd: |
@@ -1274,6 +1330,7 @@
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+  budget_type: unit
 
 - name: TT-DiT Stable Diffusion 3.5 Large unit tests
   cmd: |
@@ -1290,6 +1347,7 @@
       tier: 3
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 # ── Mochi (TT-DiT) ─────────────────────────────────────────────────
 - name: TT-DiT Mochi unit tests
@@ -1310,6 +1368,7 @@
       tier: 3
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 # ── Qwen-Image (TT-DiT) ────────────────────────────────────────────
 - name: TT-DiT Qwen-Image unit tests
@@ -1327,6 +1386,7 @@
       tier: 2
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 - name: TT-DiT Motif-Image-6B unit tests
   cmd: |
@@ -1343,6 +1403,7 @@
       tier: 2
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 # ============================================================================
 # Multihost (exabox) model-unit tests
@@ -1377,6 +1438,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 - name: TT-DiT Wan2.2-T2V-A14B unit tests
   cmd: |
@@ -1400,6 +1462,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 - name: TT-DiT Wan2.2-I2V-A14B unit tests
   cmd: |
@@ -1417,6 +1480,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 # ----------------------------------------------------------------------------
 # LTX-2.3 component unit tests (Black Hole single galaxy, bh_sc1)
@@ -1459,6 +1523,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 # ----------------------------------------------------------------------------
 # WAN 2.2 single-galaxy multihost tests (bh_sc1 / exabox-multihost-ci-sc1)
@@ -1558,6 +1623,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 - name: panoptic-deeplab unit tests
   cmd: TT_METAL_WATCHER=30 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/ --timeout=420
@@ -1569,6 +1635,7 @@
       tier: 3
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
+  budget_type: unit
 
 - name: bevformer unit tests
   cmd: TT_METAL_WATCHER=30 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/bevformer/tests/pcc/ --timeout=660
@@ -1580,6 +1647,7 @@
       tier: 3
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
+  budget_type: unit
 
 - name: EfficientDet-D0 unit tests
   cmd: TT_METAL_WATCHER=30 pytest --timeout 600 models/experimental/efficientdetd0/tests/pcc/test_efficient_det.py
@@ -1591,6 +1659,7 @@
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
+  budget_type: unit
 
 - name: MobileNetV3 unit tests
   cmd: TT_METAL_WATCHER=30 pytest --timeout 360 models/experimental/mobileNetV3/tests/pcc/test_mobilenetv3.py
@@ -1602,6 +1671,7 @@
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
+  budget_type: unit
 
 - name: RetinaNet unit tests
   cmd: TT_METAL_WATCHER=30 pytest --timeout 360 models/experimental/retinanet/tests/pcc/test_retinanet.py
@@ -1613,6 +1683,7 @@
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
+  budget_type: unit
 
 - name: SSD512 unit tests
   cmd: TT_METAL_WATCHER=30 pytest --timeout 300 models/experimental/SSD512/tests/pcc/test_ssd.py
@@ -1624,6 +1695,7 @@
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
+  budget_type: unit
 
 - name: VAD v2 unit tests
   cmd: TT_METAL_WATCHER=30 pytest --timeout 600 models/experimental/vadv2/tests/pcc/test_tt_vad.py
@@ -1635,6 +1707,7 @@
       tier: 3
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
+  budget_type: unit
 
 - name: OpenPDN-MNIST unit tests
   cmd: TT_METAL_WATCHER=30 pytest --timeout 300 tests/ttnn/integration_tests/openpdn_mnist/test_ttnn_openpdn_mnist.py
@@ -1646,6 +1719,7 @@
       tier: 3
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
+  budget_type: unit
 
 - name: YuNet unit tests
   cmd: TT_METAL_WATCHER=30 pytest --timeout 300 models/experimental/yunet/tests/pcc/test_pcc.py
@@ -1657,6 +1731,7 @@
       tier: 3
   owner_id: U0978501V8B # CODEOWNERS @tvardhineniTT
   team: models
+  budget_type: unit
 
 - name: BGE-M3 unit tests
   cmd: |
@@ -1678,6 +1753,7 @@
       tier: 2
   owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
   team: models
+  budget_type: unit
 
 - name: On-device sampling unit tests
   cmd: |
@@ -1692,6 +1768,7 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: TT-Transformers common unit tests
   cmd: |
@@ -1706,6 +1783,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: unit
 
 - name: TT-Transformers MLP module unit tests
   cmd: |
@@ -1728,6 +1806,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: unit
 
 - name: TT-Transformers RMSNorm module unit tests
   cmd: |
@@ -1750,6 +1829,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: unit
 
 - name: TT-Transformers RoPE module unit tests
   cmd: |
@@ -1772,6 +1852,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: unit
 
 - name: TT-Transformers LM head module unit tests
   cmd: |
@@ -1794,6 +1875,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: unit
 
 - name: TT-Transformers attention module unit tests
   cmd: |
@@ -1815,6 +1897,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: unit
 
 - name: TT-Transformers embedding module unit tests
   cmd: |
@@ -1837,6 +1920,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: unit
 
 - name: TT-Transformers sampling module unit tests
   cmd: |
@@ -1871,6 +1955,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: unit
 
 - name: TT-Transformers RMSNorm 2D module unit tests
   cmd: |
@@ -1892,6 +1977,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: unit
 
 - name: TT-Transformers MLP 2D module unit tests
   cmd: |
@@ -1913,6 +1999,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: unit
 
 - name: TT-Transformers auto-compose 2D unit tests
   cmd: |
@@ -1933,6 +2020,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: unit
 
 - name: DeepSeek-V3 unit tests (Galaxy)
   cmd: |
@@ -1949,6 +2037,7 @@
       tier: 2
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
+  budget_type: unit
 
 - name: DeepSeek-V3 module tests (Galaxy)
   cmd: |
@@ -1969,6 +2058,7 @@
       tier: 2
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
+  budget_type: unit
 
 - name: DeepSeek-V3 TG MoE tests (Galaxy)
   cmd: |
@@ -1986,3 +2076,4 @@
       tier: 2
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
+  budget_type: unit

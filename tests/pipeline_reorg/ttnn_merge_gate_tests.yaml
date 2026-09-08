@@ -17,6 +17,7 @@
     sim_bh_p150:
       timeout: 15
   team: ttnn
+  budget_type: merge_gate
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
 
 # Codegen-path coverage for every op that has one (untilize, repeat, repeat_interleave and gather
@@ -48,6 +49,7 @@
     wh_n300_civ2:
       timeout: 5
   team: ttnn
+  budget_type: merge_gate
   owner_id: U07M7QZ0BQA # Camilo Vega -- Slack member ID
 
 # Eltwise infra coverage: broadcast classes, tensor-scalar variants and op-dispatch liveness.

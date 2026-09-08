@@ -18,6 +18,7 @@
       timeout: 30
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
+  budget_type: profiler
 
 - name: Galaxy realtime profiler cross-reference (TG)
   cmd: run_realtime_profiler_cross_reference_tg_test
@@ -26,3 +27,4 @@
       timeout: 15
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
+  budget_type: profiler

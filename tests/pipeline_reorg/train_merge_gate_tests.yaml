@@ -25,6 +25,7 @@
       timeout: 15
   owner_id: U07K00A281X # Kevin Wu
   team: train
+  budget_type: merge_gate
 
 - name: tt-train cpp merge gate tests (id 1)
   cmd: |
@@ -37,3 +38,4 @@
       timeout: 15
   owner_id: U07K00A281X # Kevin Wu
   team: train
+  budget_type: merge_gate

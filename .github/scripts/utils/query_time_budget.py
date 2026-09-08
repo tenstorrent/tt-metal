@@ -20,8 +20,9 @@ Key conventions
 ---------------
 * Owner is the entry's `team:` field, not the file name. One file may hold
   several teams' entries, so all files of a test type are scanned and filtered.
-* A file's "test type" is the workflow_name passed to verify_time_budget.py by
-  the workflow that runs it.
+* A test's "test type" is its own `budget_type:` field. An entry may declare a
+  list of them, in which case it is charged to each independently and matches a
+  query for any of them.
 * The models unit/e2e/sweep budgets are tier-split: the plain key covers the
   non-tiered pipelines, while unit_tier<n>/e2e_tier<n>/sweep_tier<n> cover
   models_<testtype>_tests.yaml. Pass --tier to target a tiered budget.
@@ -31,35 +32,37 @@ Key conventions
 
 Usage
 -----
-  query_time_budget.py --team <team> --testtype <type> --machine <sku> [--tier N] [-v]
+  query_time_budget.py --team <team> --budget-type <type> --machine <sku> [--tier N] [-v]
 
 Example
 -------
-  $ query_time_budget.py --team models --testtype unit --machine wh_n150 --tier 1 -v
+  $ query_time_budget.py --team models --budget-type unit --machine wh_n150 --tier 1 -v
   Team 'models' / test type 'unit' / machine 'wh_n150', tier 1
     Files scanned: 1
-         30 min  models_unit_tests.yaml: Llama 3.1-8B unit tests (tier 1)
+         40 min  models_unit_tests.yaml: Llama 3.1-8B unit tests (tier 1)
+          8 min  models_unit_tests.yaml: DeepSeek-V3 module unit tests (host-side) (tier 1)
          10 min  models_unit_tests.yaml: Whisper unit tests (tier 1)
-    Tests matched: 2
-    Allocated:     40 min
-    Budget:        47 min
+         60 min  models_unit_tests.yaml: TT-DiT common unit tests, shared amongst all models. (tier 1)
+    Tests matched: 4
+    Allocated:     118 min
+    Budget:        118 min
     Scheduled pipelines (cron):
          14 runs/wk  models-t1-unit-tests.yaml
-    Est. machine-hours/week: 11.0 h  (47 min x 14 runs/wk / 60)
+    Est. machine-hours/week: 27.5 h  (118 min x 14 runs/wk / 60)
     Note: estimate uses cron schedules only; manual workflow_dispatch runs are NOT counted.
-    [OK] Within budget (7 min headroom).
+    [OK] Within budget (0 min headroom).
 
 
-  $ query_time_budget.py --team runtime --testtype unit --machine wh_n150_civ2
+  $ query_time_budget.py --team runtime --budget-type unit --machine wh_n150_civ2
   Team 'runtime' / test type 'unit' / machine 'wh_n150_civ2'
-    Files scanned: 5
-    Tests matched: 20
-    Allocated:     222 min
-    Budget:        222 min
+    Files scanned: 1
+    Tests matched: 21
+    Allocated:     232 min
+    Budget:        232 min
     Scheduled pipelines (cron):
           7 runs/wk  code-coverage.yaml
           7 runs/wk  runtime-unit-tests.yaml
-    Est. machine-hours/week: 51.8 h  (222 min x 14 runs/wk / 60)
+    Est. machine-hours/week: 54.1 h  (232 min x 14 runs/wk / 60)
     Note: estimate uses cron schedules only; manual workflow_dispatch runs are NOT counted.
     [OK] Within budget (0 min headroom).
 """
@@ -67,7 +70,6 @@ Example
 import argparse
 import glob
 import os
-import re
 import sys
 
 import yaml
@@ -75,126 +77,61 @@ import yaml
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 TESTS_DIR = os.path.join(REPO_ROOT, "tests", "pipeline_reorg")
 DEFAULT_BUDGET_FILE = os.path.join(REPO_ROOT, ".github", "time_budget.yaml")
-TIERED_MODEL_TESTTYPES = {"unit", "e2e", "sweep"}
 WORKFLOWS_DIR = os.path.join(REPO_ROOT, ".github", "workflows")
 
+# Share the bucket-resolution rule with the CI check so the two cannot diverge.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from verify_time_budget import load_tests, resolve_budget_key  # noqa: E402
 
-_TESTS_YAML_RE = re.compile(r"TESTS_YAML_PATH:\s*\S*?([A-Za-z0-9_]+_tests\.yaml)")
+
+def target_budget_key(budgets, team, budget_type, tier):
+    """The budget key this query is asking about."""
+    return resolve_budget_key(budgets, team, budget_type, tier)
 
 
-def build_testtype_map(workflows_dir):
-    """Map each tests YAML (basename) to its budget test type, parsed from workflows.
+def collect_allocations(tests_dir, budgets, team, budget_type, machine, tier=None):
+    """Return (total_minutes, breakdown) for entries charged to this bucket.
 
-    The authoritative test type for a tests YAML is the workflow_name argument
-    passed to verify_time_budget.py in the workflow that runs it -- NOT the file
-    name. We read it live so the mapping tracks pipeline changes (and handles
-    cases where the file name differs from the budget key, e.g. release_tests.yaml
-    -> 'demo').
+    An entry contributes when its team matches, it has a timeout on `machine`,
+    and one of its declared `budget_type` values resolves to the same budget key
+    the query is targeting. breakdown is a list of
+    (file_basename, test_name, timeout, tier) tuples.
     """
-    mapping = {}
-    for path in glob.glob(os.path.join(workflows_dir, "*.y*ml")):
-        try:
-            with open(path, "r") as f:
-                lines = f.read().splitlines()
-        except OSError:
-            continue
-
-        test_files = {m.group(1) for line in lines for m in [_TESTS_YAML_RE.search(line)] if m}
-        if not test_files:
-            continue
-
-        # The workflow_name is the 3rd positional arg to verify_time_budget.py:
-        # the first literal token following the time_budget.yaml path argument.
-        workflow_name = None
-        for i, line in enumerate(lines):
-            if "verify_time_budget.py" not in line:
-                continue
-            for j in range(i + 1, min(i + 8, len(lines))):
-                if "time_budget.yaml" not in lines[j]:
-                    continue
-                for k in range(j + 1, min(j + 4, len(lines))):
-                    arg = lines[k].strip().rstrip("\\").strip().strip("\"'")
-                    if arg and not arg.startswith("${{"):
-                        workflow_name = arg
-                        break
-                break
-            if workflow_name:
-                break
-        if not workflow_name:
-            continue
-
-        for test_file in test_files:
-            mapping[test_file] = workflow_name
-    return mapping
-
-
-def find_test_files(tests_dir, testtype, testtype_map):
-    """Tests YAML paths in tests_dir whose budget test type equals `testtype`."""
-    return sorted(
-        path
-        for path in glob.glob(os.path.join(tests_dir, "*_tests.yaml"))
-        if testtype_map.get(os.path.basename(path)) == testtype
-    )
-
-
-def uses_tiered_model_budget(team, testtype):
-    """Whether this query should use the models-specific tiered budget split."""
-    return team == "models" and testtype in TIERED_MODEL_TESTTYPES
-
-
-def select_files_for_budget(files, team, testtype, tier):
-    """Return the files that correspond to the budget key being queried.
-
-    The models unit/e2e/sweep budgets are split: the plain keys cover non-tiered
-    pipelines, while the <testtype>_tier<n> keys cover models_<testtype>_tests.yaml.
-    """
-    if not uses_tiered_model_budget(team, testtype):
-        return files
-
-    tiered_filename = f"models_{testtype}_tests.yaml"
-    if tier is not None:
-        return [f for f in files if os.path.basename(f) == tiered_filename]
-    return [f for f in files if os.path.basename(f) != tiered_filename]
-
-
-def collect_allocations(files, team, machine, tier=None):
-    """Return (total_minutes, breakdown) for entries matching team/machine.
-
-    breakdown is a list of (file_basename, test_name, timeout, tier) tuples.
-    """
+    wanted = target_budget_key(budgets, team, budget_type, tier)
     total = 0
     breakdown = []
-    for path in files:
-        with open(path, "r") as f:
-            entries = yaml.safe_load(f) or []
+    for basename, entries in load_tests(tests_dir):
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
             if entry.get("team") != team:
                 continue
-            skus = entry.get("skus") or {}
-            sku_cfg = skus.get(machine)
+
+            declared = entry.get("budget_type")
+            budget_types = declared if isinstance(declared, list) else [declared]
+            if budget_type not in budget_types:
+                continue
+
+            sku_cfg = (entry.get("skus") or {}).get(machine)
             if not isinstance(sku_cfg, dict) or "timeout" not in sku_cfg:
                 continue
+
             entry_tier = sku_cfg.get("tier")
             if tier is not None and entry_tier != tier:
                 continue
+            if resolve_budget_key(budgets, team, budget_type, entry_tier) != wanted:
+                continue
+
             timeout = sku_cfg["timeout"]
             total += timeout
-            breakdown.append((os.path.basename(path), entry.get("name", "Unnamed"), timeout, entry_tier))
+            breakdown.append((basename, entry.get("name", "Unnamed"), timeout, entry_tier))
     return total, breakdown
 
 
-def lookup_budget(budget_file, team, testtype, machine, tier=None):
+def lookup_budget(budgets, team, budget_type, machine, tier=None):
     """Return the declared budget, or None if not present."""
-    with open(budget_file, "r") as f:
-        budgets = yaml.safe_load(f) or {}
     try:
-        team_budgets = budgets[team]
-        tiered_key = f"{testtype}_tier{tier}"
-        if tier is not None and tiered_key in team_budgets:
-            return team_budgets[tiered_key][machine]
-        return team_budgets[testtype][machine]
+        return budgets[team][target_budget_key(budgets, team, budget_type, tier)][machine]
     except (KeyError, TypeError):
         return None
 
@@ -321,7 +258,14 @@ def discover_scheduled_runs(workflow_index, test_file, tier):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--team", required=True, help="Team name, e.g. models, llk, runtime")
-    parser.add_argument("--testtype", required=True, help="Test type, e.g. unit, sanity, stress, e2e")
+    # --budget-type matches the tests yaml field; --testtype is the original spelling.
+    parser.add_argument(
+        "--budget-type",
+        "--testtype",
+        dest="testtype",
+        required=True,
+        help="Budget type, e.g. unit, sanity, stress, e2e",
+    )
     parser.add_argument("--machine", required=True, help="SKU/machine name, e.g. wh_n150, wh_llmbox")
     parser.add_argument(
         "--tier", type=int, choices=(1, 2, 3), default=None, help="Optional: only sum entries of this tier"
@@ -334,20 +278,19 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Print per-test breakdown")
     args = parser.parse_args()
 
-    testtype_map = build_testtype_map(args.workflows_dir)
-    matching_files = find_test_files(args.tests_dir, args.testtype, testtype_map)
-    files = select_files_for_budget(matching_files, args.team, args.testtype, args.tier)
-    if not matching_files:
-        print(f"[WARN] No tests files map to budget test type '{args.testtype}' (checked {args.workflows_dir})")
-    elif not files:
-        print("[WARN] No files correspond to this budget key after applying model tier split rules")
+    with open(args.budget_file, "r") as f:
+        budgets = yaml.safe_load(f) or {}
 
-    total, breakdown = collect_allocations(files, args.team, args.machine, args.tier)
-    budget = lookup_budget(args.budget_file, args.team, args.testtype, args.machine, args.tier)
+    total, breakdown = collect_allocations(
+        args.tests_dir, budgets, args.team, args.testtype, args.machine, args.tier
+    )
+    budget = lookup_budget(budgets, args.team, args.testtype, args.machine, args.tier)
+    if not breakdown:
+        print(f"[WARN] No tests declare budget_type '{args.testtype}' for team '{args.team}' on '{args.machine}'")
 
     tier_note = f", tier {args.tier}" if args.tier is not None else ""
     print(f"Team '{args.team}' / test type '{args.testtype}' / machine '{args.machine}'{tier_note}")
-    print(f"  Files scanned: {len(files)}")
+    print(f"  Files scanned: {len({fname for fname, _, _, _ in breakdown})}")
     if args.verbose:
         for fname, name, timeout, etier in breakdown:
             tlabel = f" (tier {etier})" if etier is not None else ""

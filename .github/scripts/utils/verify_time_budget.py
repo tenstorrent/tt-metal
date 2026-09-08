@@ -1,158 +1,245 @@
+#!/usr/bin/env python3
+
+"""Verify every test yaml's timeouts against the team time budgets, repo-wide.
+
+This runs ONCE per PR (the verify-time-budgets job in pr-gate.yaml) over every
+tests/pipeline_reorg/*.yaml at the same time. Seeing all of them together is the
+whole point: several yamls charge the same (team, budget_type, sku) bucket, and
+the budget for that bucket is the sum across all of them. Checking one yaml at a
+time -- which is what this script used to do, with the budget key passed in as a
+CLI argument by each individual workflow -- let every yaml claim the full budget
+independently, so a shared bucket could be spent two or three times over.
+
+Bucket resolution
+-----------------
+Each test entry declares its own bucket coordinates:
+
+    team:        <team>   # which team's allowance to charge
+    budget_type: <key>    # which allowance under that team
+    skus:
+      <sku>:
+        timeout: <min>    # minutes charged to (team, budget_type, sku)
+        tier: <n>         # optional, see below
+
+The budget is budgets[team][budget_type][sku] in .github/time_budget.yaml.
+
+`budget_type` may also be a LIST, for a tests yaml that one pipeline runs against
+one allowance and another pipeline runs against a different one. The timeouts are
+charged to every listed allowance, and each must cover them on its own, because
+each pipeline spends its own budget when it runs. llk_pr_gate_tests.yaml is the
+live case: the PR gate charges llk.pr_gate and sanity-tests charges llk.sanity for
+the same tests, deliberately, so that widening one pipeline's pytest markers cannot
+silently eat the other's allowance.
+
+Tiers: when a sku entry carries `tier: n`, the key becomes "<budget_type>_tier<n>"
+IF the team declares that key, otherwise the plain "<budget_type>" key is used and
+the tiers are pooled. That keeps the split a property of the budget file: to break
+a pooled budget out per tier, add the tiered keys to time_budget.yaml and nothing
+in the test yamls has to change.
+
+Per-test ceiling
+----------------
+The gates additionally cap how long any ONE test may take, so that a single entry
+cannot hold up the whole gate no matter how much budget its team has left. That
+applies to the gate budget types below and is checked here rather than passed in
+per workflow, which is what the old `per-test-timeout` workflow input did.
+"""
+
 import argparse
-import yaml
+import glob
+import os
 import sys
 from collections import defaultdict
 
+import yaml
 
-def verify_timeouts(tests_file, time_budget_file, workflow_name, tier=None, max_per_test_timeout=None):
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+DEFAULT_TESTS_DIR = os.path.join(REPO_ROOT, "tests", "pipeline_reorg")
+DEFAULT_BUDGET_FILE = os.path.join(REPO_ROOT, ".github", "time_budget.yaml")
+
+# Budget types that gate a merge, and the ceiling on any single test entry in them.
+GATE_BUDGET_TYPES = {"pr_gate", "merge_gate"}
+GATE_PER_TEST_CEILING_MINUTES = 15
+
+
+def resolve_budget_key(budgets, team, budget_type, tier):
+    """Bucket key for a sku entry: tiered when the team declares it, else plain."""
+    if tier is None:
+        return budget_type
+    tiered = f"{budget_type}_tier{tier}"
+    team_budgets = budgets.get(team)
+    if isinstance(team_budgets, dict) and tiered in team_budgets:
+        return tiered
+    return budget_type
+
+
+def load_tests(tests_dir):
+    """Yield (basename, entries) for each test-list yaml under tests_dir.
+
+    Files whose top level is not a list (e.g. ttsim-skip-list.yaml) are not test
+    lists and are skipped.
     """
-    Verifies that the SUM of all test timeouts for each (Team, SKU) pair in tests_file
-    is within the total time budget defined in time_budget_file for the given workflow.
-
-    When `tier` is provided, only the SKU entries whose `tier` matches are summed, and
-    the budget is looked up under the per-tier key "<workflow_name>_tier<tier>" (e.g.
-    "unit_tier1"). When `tier` is None the behaviour is unchanged: every SKU entry is
-    summed and the budget is looked up under the plain "<workflow_name>" key.
-
-    When `max_per_test_timeout` is provided, every individual SKU timeout in the tests
-    file must be <= that limit (minutes). Used by smoke/basic to enforce a per-entry
-    ceiling for a given pipeline (e.g. merge_gate).
-    """
-    budget_workflow = workflow_name if tier is None else f"{workflow_name}_tier{tier}"
-
-    print(f"Loading time budgets from: {time_budget_file}")
-    with open(time_budget_file, "r") as f:
-        budgets = yaml.safe_load(f)
-
-    print(f"Loading tests from: {tests_file}")
-    with open(tests_file, "r") as f:
-        tests = yaml.safe_load(f) or []
-
-    if tier is not None:
-        print(f"Filtering tests to tier '{tier}'; budgets looked up under workflow key '{budget_workflow}'.")
-
-    if max_per_test_timeout is not None:
-        print(f"Enforcing max per-test timeout of {max_per_test_timeout} min " f"for pipeline '{workflow_name}'.")
-
-    errors_found = False
-
-    # --- Part 1: Validate test file format and sum timeouts per (Team, SKU) pair ---
-    print("\n--- Summing Test Timeouts per Team and SKU ---")
-
-    # The key will now be a tuple: (team, sku)
-    # e.g., {('ops', 'N300'): 20, ('models', 'N300'): 15}
-    budget_totals = defaultdict(int)
-
-    for test in tests:
-        test_name = test.get("name", "Unnamed Test")
-
-        # Validate that all mandatory keys exist for this test
-        required_keys = ["skus", "team"]
-        missing_keys = [key for key in required_keys if key not in test]
-        if missing_keys:
-            print(
-                f"  [ERROR] Validation FAILED! Test '{test_name}' is missing mandatory keys: {', '.join(missing_keys)}."
-            )
-            errors_found = True
-            continue  # Skip this invalid test
-
-        test_skus = test["skus"]
-        test_team = test["team"]
-
-        if not isinstance(test_skus, dict) or not test_skus:
-            print(
-                f"  [ERROR] Validation FAILED! Test '{test_name}' has invalid 'skus' field. "
-                f"Expected a non-empty mapping of SKU names to their config."
-            )
-            errors_found = True
+    for path in sorted(glob.glob(os.path.join(tests_dir, "*.yaml"))):
+        with open(path, "r") as f:
+            data = yaml.safe_load(f)
+        if not isinstance(data, list):
             continue
+        yield os.path.basename(path), data
 
-        for sku_name, sku_config in test_skus.items():
-            if not isinstance(sku_config, dict) or "timeout" not in sku_config:
-                print(f"  [ERROR] Validation FAILED! Test '{test_name}', SKU '{sku_name}' is missing 'timeout'.")
-                errors_found = True
+
+def collect(tests_dir, budgets, errors):
+    """Sum every test's timeouts into its bucket.
+
+    Returns {(team, budget_key, sku): {yaml_basename: minutes}}.
+    """
+    buckets = defaultdict(lambda: defaultdict(int))
+
+    for basename, entries in load_tests(tests_dir):
+        for index, test in enumerate(entries):
+            if not isinstance(test, dict):
+                errors.append(f"{basename}: entry #{index} is not a mapping.")
                 continue
 
-            # When verifying a specific tier, only count SKU entries belonging to it.
-            if tier is not None and str(sku_config.get("tier")) != str(tier):
+            label = f"{basename}: '{test.get('name', f'entry #{index}')}'"
+            missing = [key for key in ("team", "budget_type", "skus") if key not in test]
+            if missing:
+                errors.append(f"{label} is missing mandatory key(s): {', '.join(missing)}.")
                 continue
 
-            test_timeout = sku_config["timeout"]
+            team, skus = test["team"], test["skus"]
+            if not isinstance(skus, dict) or not skus:
+                errors.append(f"{label} has an invalid 'skus' field; expected a non-empty mapping.")
+                continue
 
-            if max_per_test_timeout is not None and float(test_timeout) > float(max_per_test_timeout):
-                print(
-                    f"  [ERROR] Per-test timeout FAILED! Test '{test_name}', SKU '{sku_name}' "
-                    f"has timeout {test_timeout} min, which exceeds the max per-test timeout of "
-                    f"{max_per_test_timeout} min for pipeline '{workflow_name}'."
-                )
-                errors_found = True
+            # A single key or a list of them; charged to each independently.
+            declared = test["budget_type"]
+            budget_types = declared if isinstance(declared, list) else [declared]
+            if not budget_types or not all(isinstance(b, str) for b in budget_types):
+                errors.append(f"{label} has an invalid 'budget_type'; expected a string or list of strings.")
+                continue
+            gated = [b for b in budget_types if b in GATE_BUDGET_TYPES]
 
-            # Use a tuple (team, sku) as the key for summation
-            budget_key = (test_team, sku_name)
-            budget_totals[budget_key] += test_timeout
-            print(f"  Test '{test_name}' (Team: {test_team}, SKU: {sku_name}) adds {test_timeout} min.")
+            for sku, config in skus.items():
+                if not isinstance(config, dict) or "timeout" not in config:
+                    errors.append(f"{label}, SKU '{sku}' is missing 'timeout'.")
+                    continue
 
-    if errors_found:
-        print(f"\nValidation errors in {tests_file}. Please fix the entries above.")
-        sys.exit(1)
+                timeout = config["timeout"]
+                if gated and timeout > GATE_PER_TEST_CEILING_MINUTES:
+                    errors.append(
+                        f"{label}, SKU '{sku}' has timeout {timeout} min, over the "
+                        f"{GATE_PER_TEST_CEILING_MINUTES} min per-test ceiling for "
+                        f"{' and '.join(repr(b) for b in gated)}."
+                    )
 
-    # --- Part 2: Verify Total Time Budget for each (Team, SKU) pair ---
-    print("\n--- Verifying Total Time Budgets ---")
+                for budget_type in budget_types:
+                    key = (team, resolve_budget_key(budgets, team, budget_type, config.get("tier")), sku)
+                    buckets[key][basename] += timeout
 
-    for (team, sku), total_time_requested in budget_totals.items():
+    return buckets
+
+
+def declared_buckets(budgets):
+    """Every (team, budget_type, sku) triple that has a budget declared."""
+    declared = set()
+    for team, budget_types in budgets.items():
+        if not isinstance(budget_types, dict):
+            continue
+        for budget_type, skus in budget_types.items():
+            if isinstance(skus, dict):
+                declared.update((team, budget_type, sku) for sku in skus)
+    return declared
+
+
+def check(buckets, budgets, errors):
+    """Compare each bucket's total against its budget. Returns report rows."""
+    rows = []
+    for key in sorted(buckets, key=lambda k: (k[0] or "", k[1], k[2])):
+        team, budget_type, sku = key
+        contributors = buckets[key]
+        total = sum(contributors.values())
         try:
-            # Navigate the budgets config using team, workflow (or per-tier key), and sku
-            total_time_budget = budgets[team][budget_workflow][sku]
-
-            print(
-                f"Checking total for Team '{team}', SKU '{sku}': Requested = {total_time_requested} min, Budget = {total_time_budget} min"
-            )
-
-            if total_time_requested > total_time_budget:
-                print(
-                    f"  [ERROR] Total Time Budget FAILED for Team '{team}', SKU '{sku}'! "
-                    f"The sum of test timeouts ({total_time_requested} min) exceeds the allocated budget of {total_time_budget} min."
-                )
-                errors_found = True
-            else:
-                print(f"  [OK] Total time for Team '{team}', SKU '{sku}' is within the budget.")
-
+            budget = budgets[team][budget_type][sku]
         except (KeyError, TypeError):
-            print(
-                f"  [ERROR] Configuration FAILED! Could not find a 'time_budget' for Team '{team}', Workflow '{budget_workflow}', SKU '{sku}' in {time_budget_file}."
+            errors.append(
+                f"No budget declared for team '{team}', budget_type '{budget_type}', SKU '{sku}' "
+                f"(charged {total} min by {', '.join(sorted(contributors))})."
             )
-            errors_found = True
+            rows.append((team, budget_type, sku, total, None, contributors))
             continue
 
-    # --- Final Verdict ---
-    if errors_found:
-        print("\nVerification failed.")
-        sys.exit(1)
-    else:
-        print("\nVerification successful.")
-        sys.exit(0)
+        if total > budget:
+            errors.append(
+                f"Over budget: team '{team}', budget_type '{budget_type}', SKU '{sku}' "
+                f"sums to {total} min against a budget of {budget} min (over by {total - budget}). "
+                f"Contributors: {', '.join(f'{f} {m} min' for f, m in sorted(contributors.items()))}."
+            )
+        rows.append((team, budget_type, sku, total, budget, contributors))
+    return rows
+
+
+def render(rows, unused, errors):
+    """Write the full allocation table to stdout and the GitHub step summary."""
+    lines = ["# Time budget report", ""]
+    lines.append(f"{len(rows)} buckets charged. " + ("**FAILED**" if errors else "All within budget."))
+    lines.append("")
+    lines.append("| Team | Budget type | SKU | Allocated | Budget | Headroom | Test yamls |")
+    lines.append("|---|---|---|---|---|---:|---|")
+    for team, budget_type, sku, total, budget, contributors in rows:
+        headroom = "n/a" if budget is None else str(budget - total)
+        flag = " :warning:" if budget is not None and total > budget else ""
+        files = ", ".join(f"{f} ({m})" for f, m in sorted(contributors.items(), key=lambda x: -x[1]))
+        lines.append(
+            f"| {team} | {budget_type} | {sku} | {total} | {'none' if budget is None else budget} "
+            f"| {headroom}{flag} | {files} |"
+        )
+
+    if unused:
+        lines.append("")
+        lines.append(f"## Unused budget entries ({len(unused)})")
+        lines.append("")
+        lines.append("No test charges these, so the capacity they reserve is idle:")
+        lines.append("")
+        for team, budget_type, sku in sorted(unused):
+            lines.append(f"- `{team}` / `{budget_type}` / `{sku}`")
+
+    if errors:
+        lines.append("")
+        lines.append(f"## Errors ({len(errors)})")
+        lines.append("")
+        lines.extend(f"- {error}" for error in errors)
+
+    report = "\n".join(lines)
+    print(report)
+
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as f:
+            f.write(report + "\n")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--tests-dir", default=DEFAULT_TESTS_DIR, help="Directory of test yamls")
+    parser.add_argument("--budget-file", default=DEFAULT_BUDGET_FILE, help="Path to time_budget.yaml")
+    args = parser.parse_args()
+
+    with open(args.budget_file, "r") as f:
+        budgets = yaml.safe_load(f) or {}
+
+    errors = []
+    buckets = collect(args.tests_dir, budgets, errors)
+    rows = check(buckets, budgets, errors)
+    unused = declared_buckets(budgets) - set(buckets)
+
+    render(rows, unused, errors)
+
+    if errors:
+        for error in errors:
+            print(f"::error::{error}")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Verify test yaml timeouts against team time budgets (and optional per-test ceiling)."
-    )
-    parser.add_argument("tests_file", help="Path to pipeline_reorg tests yaml")
-    parser.add_argument("time_budget_file", help="Path to time_budget.yaml")
-    parser.add_argument("workflow_name", help="Budget workflow key (e.g. merge_gate, pr_gate, unit)")
-    parser.add_argument(
-        "tier",
-        nargs="?",
-        default=None,
-        help="Optional tier; budgets looked up under <workflow_name>_tier<tier>",
-    )
-    parser.add_argument(
-        "--max-per-test-timeout",
-        type=float,
-        default=None,
-        help="Optional max allowed timeout (minutes) for any individual test SKU entry",
-    )
-    args = parser.parse_args()
-
-    tier_arg = args.tier.strip() if args.tier and args.tier.strip() else None
-    verify_timeouts(args.tests_file, args.time_budget_file, args.workflow_name, tier_arg, args.max_per_test_timeout)
+    sys.exit(main())

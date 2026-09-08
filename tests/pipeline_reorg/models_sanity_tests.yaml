@@ -22,4 +22,5 @@
       timeout: 7
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
+  budget_type: sanity
   arch: wormhole_b0

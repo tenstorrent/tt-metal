@@ -705,11 +705,6 @@ jobs:
       # team already keeps green. Widening it here (dropping `not nightly` / `not accuracy`)
       # is a separate call about sanity's time budget, not a side effect of wiring it up.
       pytest-markers: "not perf and not nightly and not quasar and not accuracy"
-      per-test-timeout: 15
-      # Charge this run against sanity's own allowance (llk.sanity in time_budget.yaml),
-      # as every other sanity impl does, rather than the PR gate's — otherwise widening
-      # one pipeline's markers would silently eat into the other's budget.
-      test-category: sanity
       ref: ${{ needs.resolve-ref.outputs.sha }}
 
   # LLK Quasar build check (compile-only, no hardware). Mirrors pr-gate's llk-build-quasar.

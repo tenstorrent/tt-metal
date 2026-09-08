@@ -32,6 +32,7 @@
       timeout: 150
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
+  budget_type: unit
   category: conv
 
 - name: ttnn nightly matmul tests
@@ -45,6 +46,7 @@
       timeout: 50
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
+  budget_type: unit
   category: matmul
 
 - name: ttnn nightly fused tests
@@ -56,6 +58,7 @@
       timeout: 65
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
+  budget_type: unit
   category: fused
 
 - name: ttnn nightly reduction tests
@@ -69,6 +72,7 @@
       timeout: 45
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
+  budget_type: unit
   category: reduction
 
 - name: ttnn nightly experimental tests (wormhole)
@@ -83,6 +87,7 @@
       timeout: 65
   owner_id: U080FKG7KEU # Utku Aydonat
   team: ttnn
+  budget_type: unit
   category: experimental
 
 - name: ttnn nightly experimental tests (blackhole)
@@ -95,6 +100,7 @@
       timeout: 40
   owner_id: U080FKG7KEU # Utku Aydonat
   team: ttnn
+  budget_type: unit
   category: experimental
 
 - name: ttnn attn_res_weighted_reduce_nc unit tests
@@ -111,6 +117,7 @@
       timeout: 3
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: ttnn
+  budget_type: unit
   category: experimental
 
 - name: ttnn nightly experimental tests (blackhole - viommu)
@@ -127,6 +134,7 @@
       timeout: 7
   owner_id: U09L76N1MAT  # Nenad Babin
   team: ttnn
+  budget_type: unit
   category: experimental
 
 - name: ttnn nightly experimental generalized MoE gate op tests
@@ -138,6 +146,7 @@
       timeout: 10
   owner_id: U07M7QZ0BQA # Camilo Vega
   team: ttnn
+  budget_type: unit
   category: experimental
 
 - name: ttnn nightly pool tests
@@ -153,6 +162,7 @@
       timeout: 90
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
+  budget_type: unit
   category: pool
 
 - name: ttnn kernel-lib eltwise chain tests
@@ -172,6 +182,7 @@
       timeout: 10
   owner_id: U08ADLJ4PLP # Aleksandar Stancov
   team: ttnn
+  budget_type: unit
   category: kernel_lib
 
 - name: ttnn nightly eltwise tests group 1
@@ -185,6 +196,7 @@
       timeout: 75
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
+  budget_type: unit
   category: eltwise
 
 - name: ttnn nightly eltwise tests group 2
@@ -198,6 +210,7 @@
       timeout: 45
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
+  budget_type: unit
   category: eltwise
 
 - name: ttnn nightly eltwise tests group 3
@@ -211,6 +224,7 @@
       timeout: 45
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
+  budget_type: unit
   category: eltwise
 
 - name: ttnn nightly eltwise tests group 4
@@ -224,6 +238,7 @@
       timeout: 55
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
+  budget_type: unit
   category: eltwise
 
 - name: ttnn nightly transformers tests
@@ -239,6 +254,7 @@
       timeout: 30
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: ttnn
+  budget_type: unit
   category: transformers
 
 - name: ttnn nightly moreh tests
@@ -250,6 +266,7 @@
       timeout: 45
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
+  budget_type: unit
   category: moreh
 
 - name: ttnn nightly misc (rand and ssm) tests
@@ -265,6 +282,7 @@
       timeout: 15
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
+  budget_type: unit
   category: misc
 
 - name: ttnn nightly sdpa tests
@@ -284,6 +302,7 @@
       timeout: 90
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
+  budget_type: unit
   category: sdpa
 
 - name: ttnn nightly sdpa stress tests
@@ -300,6 +319,7 @@
       timeout: 55
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
+  budget_type: unit
   category: sdpa
 
 - name: ttnn nightly data_movement tests
@@ -317,6 +337,7 @@
       timeout: 40
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
+  budget_type: unit
   category: data_movement
 
 # The post-commit data_movement / ccl / point_to_point suites are re-run nightly
@@ -346,6 +367,7 @@
       timeout: 80
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
+  budget_type: unit
   category: data_movement
 
 - name: ttnn n300 ccl tests
@@ -359,6 +381,7 @@
       timeout: 10
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
+  budget_type: unit
   category: data_movement
 
 - name: blackhole host to device smoke tests
@@ -370,6 +393,7 @@
       timeout: 10
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
+  budget_type: unit
   category: data_movement
 
 - name: ttnn nightly point_to_point tests (post-commit suite)
@@ -386,6 +410,7 @@
       timeout: 5
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
+  budget_type: unit
   category: data_movement
 
 - name: ccl nightly tests
@@ -406,6 +431,7 @@
       timeout: 60
   owner_id: U07M7QZ0BQA # Camilo Vega
   team: ttnn
+  budget_type: unit
   category: ccl
 
 - name: Galaxy CCL tests
@@ -415,6 +441,7 @@
       timeout: 60
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
+  budget_type: unit
   category: ccl
 
 - name: Galaxy MoE tests
@@ -426,6 +453,7 @@
       timeout: 60
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
+  budget_type: unit
   category: ccl
 
 - name: BH Galaxy CCL tests
@@ -435,6 +463,7 @@
       timeout: 40
   owner_id: U07M7QZ0BQA # Camilo Vega
   team: ttnn
+  budget_type: unit
   category: ccl
 
 - name: ttnn nightly docs examples tests
@@ -451,6 +480,7 @@
       timeout: 20
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
+  budget_type: unit
   category: docs_examples
 
 # --- C++ ttnn unit tests ---
@@ -468,6 +498,7 @@
       timeout: 45
   owner_id: U024A4EFV6U # Brian Liu
   team: ttnn
+  budget_type: unit
   category: cpp_accessor
 
 - name: Nightly TTNN university lab examples
@@ -483,4 +514,5 @@
       timeout: 45
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
+  budget_type: unit
   category: cpp_lab_examples

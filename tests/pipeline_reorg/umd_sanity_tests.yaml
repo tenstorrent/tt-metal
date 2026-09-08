@@ -19,4 +19,5 @@
     bh_p150b_civ2_viommu:
       timeout: 15
   team: umd
+  budget_type: sanity
   owner_id: U09769N29BN # Aleksa Marković
