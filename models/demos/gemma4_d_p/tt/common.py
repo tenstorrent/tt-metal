@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
-from models.demos.gemma4_d_p.config import MeshConfig, ModeConfig, validate_galaxy_mesh
+from models.demos.gemma4_d_p.config import MeshConfig, validate_galaxy_mesh
 from models.demos.gemma4_d_p.tt.ccl import CCLManager
 from models.demos.gemma4_d_p.tt.model import Gemma4Model
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
@@ -42,11 +42,7 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
     mesh_config=None,
-    paged_attention_config=None,
-    create_kv_cache=False,
     model_path=None,
-    bounded_sliding_kv_cache: bool = False,
-    bounded_sliding_cache_slots: int | None = None,
     prefill_chunk_size=None,
     ring_kv_caches=None,
 ):
@@ -56,9 +52,7 @@ def create_tt_model(
     Returns:
         (model_args, model, tt_kv_cache, state_dict)
     """
-    if create_kv_cache or paged_attention_config is not None or bounded_sliding_kv_cache:
-        raise ValueError("Galaxy prefill uses ring caches, not paged caches")
-    mesh_config = mesh_config or MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
+    mesh_config = mesh_config or MeshConfig(mesh_device.shape)
     validate_galaxy_mesh(mesh_device.shape)
     if tuple(mesh_device.shape) != mesh_config.mesh_shape:
         raise ValueError("mesh_config must match the device mesh")
@@ -143,11 +137,7 @@ def create_tt_model(
         prefill_chunk_size=prefill_chunk_size,
         max_local_batch_size=max_batch_size,
         num_layers=num_layers,
-        paged_attention_config=paged_attention_config,
-        create_kv_cache=create_kv_cache,
         precision=precision,
-        bounded_sliding_kv_cache=bounded_sliding_kv_cache,
-        bounded_sliding_cache_slots=bounded_sliding_cache_slots,
         ring_kv_caches=ring_kv_caches,
     )
 

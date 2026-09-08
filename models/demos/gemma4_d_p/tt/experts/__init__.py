@@ -32,7 +32,6 @@ class Gemma4Experts:
         state_dict,
         ccl_manager,
         mesh_config,
-        program_config,
         weight_dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
     ):

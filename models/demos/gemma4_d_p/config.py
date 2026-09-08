@@ -4,7 +4,6 @@
 """Parallelism configuration for Gemma4 prefill on one Galaxy."""
 
 from dataclasses import dataclass
-from enum import Enum
 
 import ttnn
 
@@ -17,82 +16,34 @@ def validate_galaxy_mesh(mesh_shape):
         raise ValueError(f"Gemma4 P/D requires a Galaxy mesh {GALAXY_MESH_SHAPES}, got {tuple(mesh_shape)}")
 
 
-class Mode(Enum):
-    """Execution mode for model forward pass"""
-
-    DECODE = "decode"
-    PREFILL = "prefill"
-
-
-@dataclass
+@dataclass(frozen=True)
 class ModeConfig:
-    """Per-mode parallelization configuration"""
+    """Prefill parallelism across Galaxy rows and columns."""
 
-    tp: int  # Tensor parallel size
-    ep: int = 1  # Expert parallel size
-    sp: int = 1  # Sequence parallel size
-
-    def __post_init__(self):
-        if self.tp < 1 or self.ep < 1 or self.sp < 1:
-            raise ValueError(f"Parallelism values must be >= 1: tp={self.tp}, ep={self.ep}, sp={self.sp}")
+    tp: int
+    sp: int
+    ep: int = 1
 
 
 class MeshConfig:
-    """Mode-aware mesh parallelization with dataclass-based mode configs"""
+    """Use all Galaxy rows for CP and columns for TP."""
 
-    def __init__(
-        self,
-        mesh_shape,
-        decode: ModeConfig,
-        prefill: ModeConfig = None,
-        tp_axis: int = 1,
-    ):
+    def __init__(self, mesh_shape, prefill=None):
         validate_galaxy_mesh(mesh_shape)
-        if tp_axis != 1:
-            raise ValueError("Galaxy prefill uses CP on rows and TP on columns")
         self.mesh_shape = tuple(mesh_shape)
-        self.tp_axis = tp_axis
-        self.ep_axis = 0 if tp_axis == 1 else 1
-        self.sp_axis = self.ep_axis
-
-        self.total_devices = mesh_shape[0] * mesh_shape[1]
-
-        self.decode = decode
-        # Rows carry sequence-parallel (context-parallel) prefill by default
-        self.prefill = prefill or ModeConfig(tp=decode.tp, sp=mesh_shape[0], ep=1)
-
-        if self.prefill.sp != mesh_shape[0] or self.prefill.tp != mesh_shape[1] or self.prefill.ep != 1:
+        self.tp_axis = 1
+        self.sp_axis = 0
+        self.ep_axis = 0
+        self.total_devices = 32
+        self.tp = mesh_shape[1]
+        self.prefill = prefill or ModeConfig(tp=self.tp, sp=mesh_shape[0])
+        if self.prefill != ModeConfig(tp=self.tp, sp=mesh_shape[0]):
             raise ValueError("Prefill must use all Galaxy rows for CP and columns for TP")
-        if decode.tp != mesh_shape[1] or decode.ep != 1:
-            raise ValueError("Weight TP must match Galaxy columns")
 
-        self._validate_config(self.decode, Mode.DECODE)
-        self._validate_config(self.prefill, Mode.PREFILL)
-
-        self.tp = self.decode.tp
-        self.ep = self.decode.ep
-        self.sp = self.decode.sp
-        self.dp = self.total_devices // (self.decode.tp * self.decode.ep)
-
-    def _validate_config(self, config: ModeConfig, mode: Mode):
-        dp = self.total_devices // (config.tp * config.ep)
-        if config.tp * dp * config.ep != self.total_devices:
-            raise ValueError(
-                f"{mode.value}: TP({config.tp}) x DP({dp}) x EP({config.ep}) != total_devices({self.total_devices})"
-            )
-
-        tp_dim_size = self.mesh_shape[self.tp_axis]
-        if config.tp > tp_dim_size:
-            raise ValueError(f"{mode.value}: TP({config.tp}) > mesh_{self.tp_axis}_size({tp_dim_size})")
-
-    def get_config(self, mode: Mode) -> ModeConfig:
-        return self.decode if mode == Mode.DECODE else self.prefill
-
-    def shard_mapper(self, mesh_device, tensor_dim=None, mesh_dims=None, mode: Mode = Mode.DECODE):
-        if mesh_dims is None:
-            mesh_dims = (None, tensor_dim) if self.tp_axis == 1 else (tensor_dim, None)
-
-        return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=mesh_dims)
+    def shard_mapper(self, mesh_device, tensor_dim=None, mesh_dims=None):
+        return ttnn.ShardTensor2dMesh(
+            mesh_device, mesh_device.shape, dims=mesh_dims if mesh_dims is not None else (None, tensor_dim)
+        )
 
     def column_parallel(self, mesh_device):
         return self.shard_mapper(mesh_device, tensor_dim=-1)
@@ -100,70 +51,5 @@ class MeshConfig:
     def row_parallel(self, mesh_device):
         return self.shard_mapper(mesh_device, tensor_dim=-2)
 
-    def sequence_parallel(self, mesh_device):
-        return self.shard_mapper(mesh_device, tensor_dim=-3)
-
-    def shard_size(self, total_size, mode: Mode = Mode.DECODE):
-        config = self.get_config(mode)
-        return total_size // config.tp
-
-    def allreduce(self, tensor, ccl_manager, memory_config=None, pad_size=None, axis=0):
-        memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
-
-        padded = False
-        if pad_size and tensor.shape[-2] >= 32:
-            tensor_padded = ttnn.pad(tensor, [(0, 0), (0, 0), (0, 0), (0, pad_size)], 0)
-            tensor.deallocate(True)
-            tensor = tensor_padded
-            padded = True
-
-        scattered = ttnn.experimental.reduce_scatter_minimal_async(
-            tensor,
-            dim=3,
-            multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
-            num_links=ccl_manager.num_links,
-            memory_config=memory_config,
-            topology=ccl_manager.topology,
-            cluster_axis=axis,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-        )
-
-        gathered = ttnn.experimental.all_gather_async(
-            scattered,
-            dim=3,
-            cluster_axis=axis,
-            mesh_device=ccl_manager.mesh_device,
-            topology=ccl_manager.topology,
-            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
-            num_links=ccl_manager.num_links,
-            memory_config=memory_config,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-        )
-
-        if padded:
-            gathered_sliced = gathered[:, :, :, :-pad_size]
-            gathered.deallocate(True)
-            gathered = gathered_sliced
-        return gathered
-
-    def allgather(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3, linear=False):
-        memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
-
-        return ttnn.experimental.all_gather_async(
-            tensor,
-            dim=dim,
-            cluster_axis=axis,
-            mesh_device=ccl_manager.mesh_device,
-            topology=ttnn.Topology.Linear if linear else ccl_manager.topology,
-            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
-            num_links=ccl_manager.num_links,
-            memory_config=memory_config,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-        )
-
     def __repr__(self):
-        decode_dp = self.total_devices // (self.decode.tp * self.decode.ep)
-        prefill_dp = self.total_devices // (self.prefill.tp * self.prefill.ep)
-        decode_str = f"decode[TP={self.decode.tp}, EP={self.decode.ep}, SP={self.decode.sp}, DP={decode_dp}]"
-        prefill_str = f"prefill[TP={self.prefill.tp}, EP={self.prefill.ep}, SP={self.prefill.sp}, DP={prefill_dp}]"
-        return f"MeshConfig({self.mesh_shape}, {decode_str}, {prefill_str})"
+        return f"MeshConfig({self.mesh_shape}, CP={self.prefill.sp}, TP={self.tp})"

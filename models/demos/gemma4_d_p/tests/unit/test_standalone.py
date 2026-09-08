@@ -18,7 +18,7 @@ from models.demos.gemma4_d_p.tt.model import _cp_chunk_major_row_order
 
 @pytest.mark.parametrize("shape", GALAXY_MESH_SHAPES)
 def test_galaxy_parallelism_uses_all_rows_and_columns(shape):
-    config = MeshConfig(shape, decode=ModeConfig(tp=shape[1]))
+    config = MeshConfig(shape)
     assert config.prefill.sp == shape[0]
     assert config.prefill.tp == shape[1]
     assert config.total_devices == 32
@@ -27,12 +27,12 @@ def test_galaxy_parallelism_uses_all_rows_and_columns(shape):
 @pytest.mark.parametrize("shape", [(1, 1), (1, 2), (2, 4), (1, 8), (1, 32), (8, 8)])
 def test_smaller_or_multiple_galaxies_are_rejected(shape, expect_error):
     with expect_error(ValueError, "requires a Galaxy mesh"):
-        MeshConfig(shape, decode=ModeConfig(tp=shape[1]))
+        MeshConfig(shape)
 
 
 def test_disabling_cp_is_rejected(expect_error):
     with expect_error(ValueError, "must use all Galaxy rows"):
-        MeshConfig((8, 4), decode=ModeConfig(tp=4), prefill=ModeConfig(tp=4, sp=1))
+        MeshConfig((8, 4), prefill=ModeConfig(tp=4, sp=1))
 
 
 @pytest.mark.parametrize("chunk_size", [0, -8192, 4096, 8193])

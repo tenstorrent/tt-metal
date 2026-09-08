@@ -46,7 +46,6 @@ class MoEBlock:
             state_dict=substate(state_dict, "experts") if state_dict else {},
             ccl_manager=ccl_manager,
             mesh_config=mesh_config,
-            program_config=None,
             weight_dtype=dtype,
             tensor_cache_path=f"{tensor_cache_path}/experts" if tensor_cache_path else None,
         )

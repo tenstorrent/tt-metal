@@ -8,14 +8,13 @@ import hashlib
 import os
 import pathlib
 import time
-from contextlib import contextmanager
 
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma4_d_p.config import MeshConfig, ModeConfig
+from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.tests.test_factory import find_layer_idx, parametrize_mesh_with_fabric
 from models.demos.gemma4_d_p.tt.common import create_tt_model
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
@@ -99,7 +98,7 @@ def _cache_completion_state(model_path):
 
 def _mesh_config(mesh_device):
     tp = mesh_device.shape[1]
-    return MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    return MeshConfig(mesh_device.shape)
 
 
 # ── Prefill inputs ────────────────────────────────────────────────────────────
@@ -210,17 +209,6 @@ def _cp_gather_torch(tensor, mesh_device, mesh_config):
 # ── Eager / traced execution ──────────────────────────────────────────────────
 
 
-@contextmanager
-def _lm_head_deferred(model):
-    """Temporarily skip the LM head and return post-norm hidden states."""
-    previous = getattr(model, "_prefill_trace_mode", False)
-    model._prefill_trace_mode = True
-    try:
-        yield
-    finally:
-        model._prefill_trace_mode = previous
-
-
 def _hf_text_config(model_path):
     from transformers import AutoConfig
 
@@ -257,7 +245,6 @@ def _build_prefill_model(mesh_device, model_path, chunk_size, context_len=None):
         state_dict=_cache_completion_state(model_path),
         model_path=model_path,
         mesh_config=mesh_config,
-        create_kv_cache=False,
         prefill_chunk_size=chunk_size,
     )
     logger.info(f"Model ready in {time.time() - t0:.1f}s")
@@ -374,26 +361,15 @@ def test_prefill_long_context_traced(
         return chunk_start
 
     def _forward(chunk_start):
-        with _lm_head_deferred(model):
-            embeds, page_table, chunk_page_table, _ = model.transform_and_embed_prefill_inputs_device(
-                device_input, None, None, None
-            )
-            return model.ttnn_prefill_forward(
-                x=embeds,
-                page_table=page_table,
-                chunk_page_table=chunk_page_table,
-                chunk_start_idx=chunk_start,
-                kv_cache=kv_cache,
-                get_last_token=-1,
-                user_id=0,
-            )
+        embeds = model.transform_and_embed_prefill_inputs_device(device_input)
+        return model(hidden_states=embeds, chunk_start_idx=chunk_start, user_id=0)
 
-    # ── Warm up: compile the graph that will be captured ──────────────────────
+    # ── Compile the graph that will be captured ──────────────────────
     t0 = time.time()
     out = _forward(_stage(0))
     ttnn.synchronize_device(mesh_device)
     out.deallocate(True)
-    warmup_s = time.time() - t0
+    compile_s = time.time() - t0
 
     # ── Capture ───────────────────────────────────────────────────────────────
     t0 = time.time()
@@ -403,12 +379,7 @@ def test_prefill_long_context_traced(
     ttnn.end_trace_capture(mesh_device, tid_ring, cq_id=0)
     ttnn.synchronize_device(mesh_device)
     capture_s = time.time() - t0
-    logger.info(f"[traced] warmup(compile)={warmup_s:.1f}s capture={capture_s:.1f}s for 1 trace")
-
-    # Warm replay, so the measured pass excludes one-off dispatch setup.
-    _stage(0)
-    ttnn.execute_trace(mesh_device, tid_ring, cq_id=0, blocking=False)
-    ttnn.synchronize_device(mesh_device)
+    logger.info(f"[traced] compile={compile_s:.1f}s capture={capture_s:.1f}s for 1 trace")
 
     try:
         per_chunk = []
@@ -607,19 +578,13 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         pack_rope = pack_global_rope_device if lt == "global" else pack_sliding_rope_device
 
         def forward(chunk_start):
-            embeds, _, _, _ = model.transform_and_embed_prefill_inputs_device(device_input, None, None, None)
+            embeds = model.transform_and_embed_prefill_inputs_device(device_input)
             cos = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, cos_2d, layout=ttnn.TILE_LAYOUT))
             sin = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, sin_2d, layout=ttnn.TILE_LAYOUT))
             packed_rope = (*pack_rope(cos, sin), model._packed_global_rope_trans_mat)
             return layer(
                 hidden_states=embeds,
                 rope_mats=(cos, sin),
-                position_idx=None,
-                page_table=None,
-                kv_cache=None,
-                is_decode=False,
-                batch_size=1,
-                user_id=0,
                 chunk_start_idx=chunk_start,
                 packed_global_rope=packed_rope if lt == "global" else None,
                 packed_sliding_rope=packed_rope if lt == "local" else None,

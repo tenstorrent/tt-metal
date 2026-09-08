@@ -8,7 +8,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.gemma4_d_p.config import Mode
 
 
 def default_num_links():
@@ -160,16 +159,8 @@ class CCLManager:
         self._ag_idx = 0
         self._barrier_idx = 0
         # shape_key -> ttnn.Tensor (DRAM interleaved zeros)
-        self._persistent_ag: dict = {}
         self._persistent_rs_out: dict = {}
         self._persistent_rs_inter: dict = {}
-
-        # CP prefill masks, shared by every layer on this mesh and keyed by
-        # (local_seq_len, sliding_window). This lives here rather than on each
-        # attention module because the mask depends only on the sequence geometry
-        # and the layer's window, so a 60-layer stack needs exactly two entries
-        # (sliding, global) — not 60 copies of an 8 MiB tensor.
-        self._cp_mask_cache = {}
 
         # ── Ring attention (cross-chunk prefill under CP) ─────────────────────
         # ring_joint SDPA reads the CP-sharded KV cache and gathers the prefix
@@ -311,37 +302,6 @@ class CCLManager:
     def _shape_key(self, shape, dtype, memory_config):
         return (tuple(int(x) for x in shape), str(dtype), str(memory_config))
 
-    def _alloc_like(self, ref_tensor, memory_config):
-        return ttnn.zeros_like(ref_tensor, device=self.mesh_device, memory_config=memory_config)
-
-    def get_persistent_ag_buffer(self, scattered, memory_config, tp):
-        """Allocate a persistent AG destination sized by TP group width.
-
-        Disabled by default in ``ccl_allreduce`` / ``ccl_allgather``: the gathered
-        result is returned as a normal activation and Gemma4 force-deallocates
-        those, which would free a manager-cached buffer. Kept for opt-in / tests.
-        """
-        if not ccl_persistent_buffers_enabled():
-            return None
-        if tp <= 1:
-            return None
-        # All-gather expands dim=3 by the TP group size (cluster_axis width).
-        out_shape = list(scattered.shape)
-        out_shape[3] = int(out_shape[3]) * tp
-        key = self._shape_key(out_shape, scattered.dtype, memory_config)
-        buf = self._persistent_ag.get(key)
-        if buf is None:
-            buf = ttnn.zeros(
-                out_shape,
-                dtype=scattered.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=memory_config,
-            )
-            self._persistent_ag[key] = buf
-            logger.debug(f"CCL persistent AG buffer allocated shape={out_shape}")
-        return buf
-
     def get_persistent_rs_buffers(self, tensor, memory_config, tp):
         if not ccl_persistent_buffers_enabled():
             return None
@@ -380,43 +340,9 @@ class CCLManager:
         return [inter, out]
 
 
-def cp_degree(mesh_config, mode=Mode.PREFILL):
-    """Context-parallel degree along ``mesh_config.sp_axis``; 1 when CP is off.
-
-    CP splits the token dimension across a second mesh axis, so every rank holds
-    ``seq_len / cp`` tokens. The degree lives in the ``sp`` field of the mode
-    config (named for gpt_oss's sequence parallelism, which is the same idea
-    applied to one block).
-    """
-    if mesh_config is None:
-        return 1
-    return max(1, mesh_config.get_config(mode).sp)
-
-
-def ccl_cp_allgather(tensor, mesh_config, ccl_manager, dim, memory_config=None):
-    """All-gather along the context-parallel axis.
-
-    Used to rebuild the whole chunk's K/V from the per-rank sequence shards, so
-    every rank can attend over all keys while owning only its slice of queries.
-
-    The input must be TILE layout. Tile pages are always 64 B aligned, so this
-    takes ttnn's native all_gather; a row-major input whose page is unaligned
-    would silently fall back to composite_all_gather, which deadlocks at high
-    device counts (see docs/superpowers/specs/2026-08-03-gemma4-context-parallel-prefill-design.md).
-    """
-    if cp_degree(mesh_config) <= 1:
-        return tensor
-    assert (
-        tensor.layout == ttnn.TILE_LAYOUT
-    ), f"ccl_cp_allgather requires TILE layout to stay on the native all_gather path, got {tensor.layout}"
-    gathered = ttnn.all_gather(
-        tensor,
-        dim=dim,
-        cluster_axis=mesh_config.sp_axis,
-        memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
-    )
-    tensor.deallocate(True)
-    return gathered
+def cp_degree(mesh_config):
+    """Number of context-parallel ranks in the Galaxy mesh."""
+    return mesh_config.prefill.sp
 
 
 def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):

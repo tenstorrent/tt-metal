@@ -17,30 +17,23 @@ TP sharding (following gpt-oss pattern):
 import os
 import pathlib
 from dataclasses import dataclass
-from typing import Union
 
 import torch
 from loguru import logger
 
 import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
-from models.demos.gemma4_d_p.tt.dram_sharded import DramShardedLinear, can_dram_shard
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 from .global_kv_cache import GLOBAL_ROTARY_DIM, global_kv_indices, sliding_kv_indices
-
-# DRAM-width-sharded QKV / O-proj decode matmuls (same size as the interleaved
-# weight → no memory cost). On by default for tp>1; GEMMA4_ATTN_DRAM_SHARD=0
-# falls back to plain interleaved matmuls.
-_DRAM_SHARD_ATTN = os.environ.get("GEMMA4_ATTN_DRAM_SHARD", "1") != "0"
 
 
 @dataclass(frozen=True)
 class AttentionWeights:
     """Container for attention weight tensors — immutable after creation."""
 
-    wqkv: Union[ttnn.Tensor, DramShardedLinear]  # Fused Q+K+V, column-parallel
-    o_proj: Union[ttnn.Tensor, DramShardedLinear]  # Row-parallel sharded
+    wqkv: ttnn.Tensor | None  # Fused Q+K+V for untied projection
+    o_proj: ttnn.Tensor  # Row-parallel sharded
     q_norm_weight: ttnn.Tensor  # Replicated across devices
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     # Only the rotary quarter needs a separate K gamma in packed global prefill.
@@ -73,21 +66,7 @@ def load_attention_weights(
     weight_dtype=ttnn.bfloat16,
     tensor_cache_path=None,
 ) -> AttentionWeights:
-    """
-    Load and fuse attention weights with tensor parallelism.
-
-    No Meta-format conversion needed — uses HF-style rotary_embedding.
-
-    Global layers tie K and V to one projection (``attention_k_eq_v``), so the fused wqkv
-    holds the same K columns twice and the projection matmul computes them twice: 3072 of
-    5376x3072 output columns per device at TP=8, of which 512 are the duplicate. Those
-    layers additionally get ``wqk`` -- the same weight without the V section -- which prefill
-    uses together with the split op's tied mode. Decode keeps using wqkv, because its split
-    (``nlp_create_qkv_heads_decode``) reads Q/K/V across input cores with mcast address
-    state and has no tied mode; carrying both is 13.9 MB per device per global layer, which
-    is the price of leaving the decode path untouched. Set GEMMA4_TIED_QKV=0 to skip
-    building wqk and put prefill back on the wqkv path.
-    """
+    """Load TP-sharded QKV or tied QK weights with the packed-cache permutations."""
     is_global = config.use_kv_tying
     tied_qkv = is_global and os.environ.get("GEMMA4_TIED_QKV", "1") == "1"
     q_size = config.num_attention_heads * config.head_dim
@@ -116,10 +95,10 @@ def load_attention_weights(
             k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, value_order)
             k_w = k_w.reshape(kv_size, -1)
         elif is_context_parallel:
-            decode_order = sliding_kv_indices(config.head_dim)
-            q_w = q_w.reshape(config.num_attention_heads, config.head_dim, -1).index_select(1, decode_order)
+            adjacent_order = sliding_kv_indices(config.head_dim)
+            q_w = q_w.reshape(config.num_attention_heads, config.head_dim, -1).index_select(1, adjacent_order)
             q_w = q_w.reshape(q_size, -1)
-            k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, decode_order)
+            k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, adjacent_order)
             k_w = k_w.reshape(kv_size, -1)
 
         if not is_global:
@@ -201,9 +180,9 @@ def load_attention_weights(
         else:
             k_norm_rotary_w = None
             if is_context_parallel:
-                decode_order = sliding_kv_indices(config.head_dim)
-                q_norm_flat = q_norm_flat.index_select(0, decode_order)
-                k_norm_w = k_norm_flat.index_select(0, decode_order).reshape(1, 1, -1, ttnn.TILE_SIZE)
+                adjacent_order = sliding_kv_indices(config.head_dim)
+                q_norm_flat = q_norm_flat.index_select(0, adjacent_order)
+                k_norm_w = k_norm_flat.index_select(0, adjacent_order).reshape(1, 1, -1, ttnn.TILE_SIZE)
         q_norm_w = q_norm_flat.reshape(1, 1, -1, ttnn.TILE_SIZE)
     else:
         qkv = None
@@ -249,30 +228,11 @@ def load_attention_weights(
         )
         tied_qkv = False
 
-    num_local_heads = config.num_attention_heads // tp
-    head_dim = config.head_dim
-    q_per_dev = num_local_heads * head_dim
-    kv_per_dev = head_dim if kv_replicated else (config.num_key_value_heads // tp) * head_dim
-    qkv_n = q_per_dev + 2 * kv_per_dev
-    oproj_k = q_per_dev
-    oproj_n = hidden_size
-
-    # Main's DRAM-width-sharded full-QKV remains the decode path.
-    is_moe = bool(getattr(config, "enable_moe_block", False))
-    # Context-parallel prefill keeps the pre-rebase interleaved representation.
-    # Besides avoiding decode-only DRAM-sharding machinery, this preserves the
-    # established tensor-cache names used by the long-context service.
-    dram_shard = _DRAM_SHARD_ATTN and tp > 1 and not is_moe and not is_context_parallel
     qkv_cache = get_cache_file_name(tensor_cache_path, f"wqkv{packed_cache_suffix}{tp_suffix}{dtype_suffix}")
     oproj_cache = get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{tp_suffix}{dtype_suffix}")
-    qkv_cache_ws = (qkv_cache + ".ws") if qkv_cache else None
-    oproj_cache_ws = (oproj_cache + ".ws") if oproj_cache else None
 
-    if dram_shard and can_dram_shard(hidden_size, qkv_n, dtype=weight_dtype):
-        wqkv = DramShardedLinear(
-            qkv, mesh_device, col_mapper, k=hidden_size, n=qkv_n, dtype=weight_dtype, cache_file_name=qkv_cache_ws
-        )
-    else:
+    wqkv = None
+    if not tied_qkv:
         wqkv = ttnn.as_tensor(
             qkv,
             device=mesh_device,
@@ -283,8 +243,6 @@ def load_attention_weights(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    # Prefill-only narrow Q+K projection. Keep it interleaved; unlike the full
-    # QKV tensor it is not consumed by the DRAM-sharded decode path.
     wqk = (
         ttnn.as_tensor(
             qk,
@@ -299,20 +257,15 @@ def load_attention_weights(
         else None
     )
 
-    if dram_shard and o_proj_pad_size == 0 and can_dram_shard(oproj_k, oproj_n, dtype=weight_dtype):
-        o_proj = DramShardedLinear(
-            o_w, mesh_device, row_mapper, k=oproj_k, n=oproj_n, dtype=weight_dtype, cache_file_name=oproj_cache_ws
-        )
-    else:
-        o_proj = ttnn.as_tensor(
-            o_w,
-            device=mesh_device,
-            dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=row_mapper,
-            cache_file_name=oproj_cache,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+    o_proj = ttnn.as_tensor(
+        o_w,
+        device=mesh_device,
+        dtype=weight_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=row_mapper,
+        cache_file_name=oproj_cache,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     q_norm_weight = ttnn.as_tensor(
         q_norm_w,
         device=mesh_device,

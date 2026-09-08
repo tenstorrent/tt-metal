@@ -1,45 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cross-chunk prefill attention under context parallelism, via ring_joint SDPA.
+"""Context-parallel prefill over chunk-major ring caches.
 
-Why this exists
----------------
-Gemma4's CP-sharded KV cache holds only the tokens each rank computed, which is
-what makes the fill free (no gather, no per-device write offset — see
-``Gemma4Model._cp_block_pool_override``). The cost is that at chunk > 0 a rank
-cannot read history from its own shard: it owns a strided subset of the prefix.
+Each rank stores its local slab of every chunk:
+    local row (chunk * L + j) on rank r -> global token (chunk * C + r * L + j)
+where C is the global chunk size and L = C / CP.
 
-``ring_joint_scaled_dot_product_attention`` resolves that. It reads the CP-sharded
-cache and gathers the accumulated prefix around the CP ring *internally*, with
-online softmax, so no explicit AllGather materializes the full history. That is
-the same mechanism minimax_m3 uses for its dense GQA layers.
-
-Layout
-------
-The cache is contiguous per rank and chunk-major, matching both
-``update_padded_kv_cache``'s write offset and the layout ring_joint reads:
-
-    local row (chunk*L + j) on rank r  <->  global token (chunk*C + r*L + j)
-
-with ``C`` the global chunk size and ``L = C / cp`` the per-rank slab. At a
-chunk-aligned boundary the writer's offset math reduces to ``chunk * L`` on every
-rank, so no per-device scalar is needed. This is the same permutation Gemma4's
-contiguous CP sharding already produces, so activations need no reordering.
-
-Scope
------
-Chunk 0 does not go through here. The chunked path needs a complete predecessor Q
-group (``logical_n >= 2 * cp * L``) because the sliding halo wraps onto it, and at
-chunk 0 there is none — the op rejects it. Gemma4 keeps using its mask-based CP
-path there, which handles a lone windowed chunk directly.
-
-Sliding layers pass ``sliding_window_size``; full-attention layers omit it and get
-plain causal attention over the whole prefix. Both otherwise share this path.
-
-The sliding case needs the generalized validation in
-``ring_joint_sdpa_device_operation.cpp``: upstream gated the window / head counts /
-head_dim to GPT-OSS's values, which Gemma4 does not match.
+Ring SDPA gathers the cached prefix internally and applies causal attention.
+Local layers also apply the sliding window. Every chunk uses this path.
 """
 
 from dataclasses import dataclass

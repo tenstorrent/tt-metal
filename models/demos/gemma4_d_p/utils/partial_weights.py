@@ -1,28 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Read a subset of tensors out of a HuggingFace checkpoint.
-
-Gemma4's device weights are cached under ``TT_CACHE_PATH``, and ``ttnn.as_tensor``
-ignores its host-tensor argument entirely whenever the cache file already exists
-(see ``ttnn/ttnn/operations/core.py``). A model can therefore be rebuilt from the
-on-disk cache with an almost-empty state dict — which for the 31B variant skips a
-~59 GB checkpoint read and ~62 GB of host RAM.
-
-Two pieces still have to come from the checkpoint:
-
-* ``layer_scalar`` — ``Gemma4DecoderLayer`` reads it as a *Python float*, so it is
-  never written to the tensor cache. It silently defaults to 1.0 when absent,
-  while the real 31B values are 0.089, 0.065, 0.992, ... — i.e. wrong numerics
-  with no other failure signal.
-* ``embed_tokens.weight`` — ``Gemma4Model`` only *constructs* its embedding and
-  lm_head tensors when that key is present in the state dict, even though both
-  cache files exist.
-
-``load_cache_completion_state`` returns exactly those two. ``load_layer_state``
-additionally pulls one decoder layer's full weights, which is enough to build a
-host-side HuggingFace reference layer without loading the rest of the model.
-"""
+"""Load embedding and layer-scalar tensors needed to construct a model from its device weight cache."""
 
 from __future__ import annotations
 
@@ -159,25 +138,3 @@ def load_cache_completion_state(model_path) -> dict[str, torch.Tensor]:
         f"{embed[0]} ({embed_gib:.1f} GiB); everything else loads from the tensor cache"
     )
     return state
-
-
-def load_layer_state(model_path, layer_idx) -> dict[str, torch.Tensor]:
-    """One decoder layer's full weights, keyed by HF module name.
-
-    Keys come back relative to the layer (``self_attn.q_proj.weight``,
-    ``mlp.gate_proj.weight``, ``layer_scalar``, ...), which is exactly what
-    ``Gemma4TextDecoderLayer.load_state_dict`` expects.
-    """
-    prefixes = tuple(f"{p}{layer_idx}." for p in _LAYER_PREFIXES)
-    state = load_state_dict_subset(model_path, lambda k: k.startswith(prefixes))
-
-    stripped: dict[str, torch.Tensor] = {}
-    for key, tensor in state.items():
-        for prefix in prefixes:
-            if key.startswith(prefix):
-                stripped[key[len(prefix) :]] = tensor
-                break
-
-    if not stripped:
-        raise ValueError(f"No weights for decoder layer {layer_idx} in {model_path}")
-    return stripped

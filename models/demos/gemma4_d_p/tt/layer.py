@@ -39,11 +39,9 @@ Forward flow (matching HF exactly):
   x *= layer_scalar
 """
 
-import torch
 
 import ttnn
 from models.demos.gemma4_d_p.tt.attention import Gemma4Attention, Gemma4AttentionConfig
-from models.demos.gemma4_d_p.tt.gemma4_attention_config import get_attention_program_config
 from models.demos.gemma4_d_p.tt.moe import MoEBlock
 from models.demos.gemma4_d_p.tt.rms_norm import RMSNorm
 from models.demos.gemma4_d_p.tt.shared_mlp import SharedMLP
@@ -68,12 +66,9 @@ class Gemma4DecoderLayer:
         attention_dtype=None,
         experts_dtype=None,
         router_dtype=None,
-        bounded_sliding_kv_cache: bool = False,
-        ring_prefill_chunk_size=None,
         ring_kv_cache=None,
         ring_layer_idx=0,
         ring_num_layers=1,
-        transformation_mats=None,  # Legacy — ignored (HF-style RoPE needs no transformation mats)
     ):
         # Per-module dtype overrides default to the model-wide ``dtype`` so
         # callers that don't care about precision config see no change.
@@ -130,23 +125,20 @@ class Gemma4DecoderLayer:
 
         # Attention
         attn_config = Gemma4AttentionConfig(hf_config, layer_idx)
-        attn_program_config = get_attention_program_config(attn_config, mesh_config, is_decode=True)
         self.self_attn = Gemma4Attention(
             mesh_device=mesh_device,
             config=attn_config,
             state_dict=substate(layer_state, "self_attn") if layer_state else {},
             ccl_manager=ccl_manager,
             mesh_config=mesh_config,
-            program_config=attn_program_config,
             layer_idx=layer_idx,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/self_attn" if tensor_cache_path else None,
             weight_dtype=attention_dtype,
-            bounded_sliding_kv_cache=bounded_sliding_kv_cache,
-            ring_prefill_chunk_size=ring_prefill_chunk_size,
             ring_kv_cache=ring_kv_cache,
             ring_layer_idx=ring_layer_idx,
             ring_num_layers=ring_num_layers,
             max_seq_len=max_seq_len,
+            max_batch_size=max_local_batch_size,
         )
 
         # Shared/dense MLP (HF key: "mlp")
@@ -207,86 +199,31 @@ class Gemma4DecoderLayer:
         self,
         hidden_states,
         rope_mats,
-        position_idx,
-        page_table,
-        kv_cache,
-        is_decode,
-        token_index=None,
         per_layer_input=None,
         shared_kv=None,
         keep_kv=False,
-        is_kv_shared=False,
-        position_idx_cache=None,
-        batch_size=1,
-        user_id=0,
-        valid_seq_len=None,
-        sequential_kv_write=False,
-        rope_presliced=False,
-        packed=None,
-        chunk_start_idx=None,
-        chunk_page_table=None,
+        chunk_start_idx=0,
         packed_global_rope=None,
         packed_sliding_rope=None,
     ):
-        """
-        Decoder layer forward pass.
-
-        Args:
-            hidden_states: [1, 1, seq_len, hidden_size] on device
-            rope_mats: precomputed RoPE matrices
-            position_idx: current position index
-            page_table: paged attention page table
-            kv_cache: KV cache for this layer
-            is_decode: True for decode mode
-            shared_kv: optional (tt_k, tt_v) from source layer for KV sharing (prefill only)
-            keep_kv: if True, keep K/V alive for sharing with later layers (prefill only)
-            is_kv_shared: if True, this layer shares KV from source (skip K/V proj + cache update)
-
-        Returns:
-            hidden_states: [1, 1, seq_len, hidden_size] on device
-        """
+        """Prefill a CP-sharded chunk and optionally retain KV for later layers."""
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
         residual = hidden_states
         normed = self.input_layernorm.forward(hidden_states)
-        if not is_decode and batch_size > 1:
-            attn_in = ttnn.reshape(normed, [batch_size, 1, normed.shape[-2] // batch_size, -1])
-        else:
-            attn_in = normed
         attn_output = self.self_attn(
-            attn_in,
+            normed,
             rope_mats=rope_mats,
-            position_idx=position_idx,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            is_decode=is_decode,
-            token_index=token_index,
             shared_kv=shared_kv,
             keep_kv=keep_kv,
-            is_kv_shared=is_kv_shared,
-            position_idx_cache=position_idx_cache,
-            batch_size=batch_size,
-            user_id=user_id,
-            valid_seq_len=valid_seq_len,
-            sequential_kv_write=sequential_kv_write,
-            rope_presliced=rope_presliced,
-            packed=packed,
             chunk_start_idx=chunk_start_idx,
-            chunk_page_table=chunk_page_table,
             packed_global_rope=packed_global_rope,
             packed_sliding_rope=packed_sliding_rope,
         )
 
-        if isinstance(attn_output, torch.Tensor):
-            hidden_states = residual
-        else:
-            attn_output = self.post_attention_layernorm.forward(attn_output)
-            if not is_decode and batch_size > 1:
-                residual = ttnn.reshape(
-                    residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1]
-                )
-            hidden_states = ttnn.add(residual, attn_output)
-            residual.deallocate(True)
-            attn_output.deallocate(True)
+        attn_output = self.post_attention_layernorm.forward(attn_output)
+        hidden_states = ttnn.add(residual, attn_output)
+        residual.deallocate(True)
+        attn_output.deallocate(True)
 
         # 2. MLP + MoE block
         residual = hidden_states
