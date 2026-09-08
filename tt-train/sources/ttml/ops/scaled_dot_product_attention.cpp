@@ -246,6 +246,50 @@ autograd::TensorPtr scaled_dot_product_attention(
     float dropout_probability) {
     validate_qkv_shapes(query, key, value);
 
+    const auto& query_shape = query->get_value().logical_shape();
+    const auto& key_shape = key->get_value().logical_shape();
+    const uint32_t query_seq_len = query_shape[-2];
+    const uint32_t key_seq_len = key_shape[-2];
+    const bool rectangular_attention = query_seq_len != key_seq_len;
+
+    if (rectangular_attention && (!mask.has_value() || !mask.value())) {
+        throw std::invalid_argument(
+            "Rectangular scaled dot product attention requires an explicit mask because the composite fallback does "
+            "not generate an offset-aware causal mask.");
+    }
+
+    bool fused_mask_supported = true;
+    if (mask.has_value() && mask.value()) {
+        const auto& mask_shape = mask.value()->get_value().logical_shape();
+        if (mask_shape.rank() != 4U) {
+            throw std::invalid_argument(fmt::format("Attention mask must have rank 4, got shape {}", mask_shape));
+        }
+
+        const auto [mask_batch, mask_heads, mask_query_len, mask_key_len] = mask_shape.to_array_4D();
+        const bool composite_mask_supported = (mask_batch == 1U || mask_batch == query_shape[0]) &&
+                                              (mask_heads == 1U || mask_heads == query_shape[1]) &&
+                                              mask_query_len == query_seq_len && mask_key_len == key_seq_len;
+        if (!composite_mask_supported) {
+            throw std::invalid_argument(fmt::format(
+                "Attention mask shape {} is not broadcastable to attention scores [{}, {}, {}, {}]",
+                mask_shape,
+                query_shape[0],
+                query_shape[1],
+                query_seq_len,
+                key_seq_len));
+        }
+
+        fused_mask_supported =
+            mask_batch == 1U && mask_heads == 1U && mask_query_len == query_seq_len && mask_key_len == query_seq_len;
+    }
+
+    if (rectangular_attention || !fused_mask_supported) {
+        if (dropout_probability != 0.0F) {
+            throw std::invalid_argument("The composite SDPA fallback does not support dropout.");
+        }
+        return scaled_dot_product_attention_composite(query, key, value, mask);
+    }
+
     // Kernels support (1, 1, S, S) mask shape - same mask for all batches/heads
     std::optional<ttnn::Tensor> mask_tensor = std::nullopt;
     ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal;
