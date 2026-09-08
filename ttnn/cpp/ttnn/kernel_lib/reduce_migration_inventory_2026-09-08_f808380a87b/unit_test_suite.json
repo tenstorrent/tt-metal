@@ -3467,11 +3467,39 @@
       "notes": [
         "Verify the complete helper matrix, including exact physical-output padding zeros needed by fused statistics consumers."
       ]
+    },
+    {
+      "id": "T176",
+      "kind": "pytest",
+      "source": "tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py",
+      "family": "Reduce migration cross-op compilation",
+      "factories": [],
+      "tests": [
+        "TestCrossOpCompilation::test_cross_op_compilation[rms_ln]"
+      ],
+      "notes": [
+        "Use the active fused RMSNorm kernel after removal of an unreferenced legacy copy."
+      ]
+    },
+    {
+      "id": "T177",
+      "kind": "pytest",
+      "source": "tests/ttnn/unit_tests/operations/sdpa/test_bge_encoder_sdpa_reduce_migration.py",
+      "family": "BGE model-local SDPA auxiliary migration",
+      "factories": [
+        "DH001"
+      ],
+      "tests": [
+        "test_bge_encoder_sdpa_reduce_auxiliary"
+      ],
+      "notes": [
+        "Four cases cover standard/streaming compute with/without partial runtime KV masks."
+      ]
     }
   ],
   "migration_regressions": {
-    "added_test_definitions": 11,
-    "added_collected_cases": 345,
+    "added_test_definitions": 13,
+    "added_collected_cases": 350,
     "note": "The original report describes the base inventory; current runner also includes these migration regressions."
   }
 }

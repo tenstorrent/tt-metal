@@ -136,11 +136,17 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_prop_ro("owns_l1", &host::ReduceCbRequirement::owns_l1);
 
     nb::class_<host::ReduceAuxiliaryTileSpec>(planner, "ReduceAuxiliaryTileSpec")
+        .def(
+            nb::init<float, host::ReduceAuxiliaryTileType, uint32_t>(),
+            nb::arg("value"),
+            nb::arg("type"),
+            nb::arg("num_valid_elements"))
         .def_ro("value", &host::ReduceAuxiliaryTileSpec::value)
         .def_ro("type", &host::ReduceAuxiliaryTileSpec::type)
         .def_ro("num_valid_elements", &host::ReduceAuxiliaryTileSpec::num_valid_elements);
 
     nb::class_<host::ReduceAuxiliaryPlan>(planner, "ReduceAuxiliaryPlan")
+        .def(nb::init<uint32_t, std::vector<host::ReduceAuxiliaryTileSpec>>(), nb::arg("cb_id"), nb::arg("tiles"))
         .def_ro("cb_id", &host::ReduceAuxiliaryPlan::cb_id)
         .def_ro("tiles", &host::ReduceAuxiliaryPlan::tiles)
         .def_prop_ro(

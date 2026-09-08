@@ -8,8 +8,7 @@
  *   E(x**2) is contained in a one tile wide tensor containing E(x**2) in the left most column.
  *
  * Metal 2.0 fork of rmsnorm_post_allgather.cpp: same computation, with named kernel arguments and
- * named dataflow-buffer bindings instead of positional compile-time args and CB indices. The legacy
- * file beside this one still serves consumers that have not migrated.
+ * named dataflow-buffer bindings instead of positional compile-time args and CB indices.
  */
 
 #include <cstdint>

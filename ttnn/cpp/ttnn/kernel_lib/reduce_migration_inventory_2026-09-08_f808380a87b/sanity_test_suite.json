@@ -4,20 +4,20 @@
   "scope": "Numerical sanity subset of unit_test_suite.json. One primary case per coverable kernel, deduplicated across shared coverage. Includes compute, dataflow helper callers and the 17 manual auxiliary readers.",
   "exact_cases": true,
   "counting": {
-    "test_cases": 74,
-    "python_cases": 58,
+    "test_cases": 75,
+    "python_cases": 59,
     "cpp_cases": 16,
     "kernel_entries": 144,
-    "covered_kernel_entries": 129,
-    "uncovered_kernel_entries": 15,
+    "covered_kernel_entries": 130,
+    "uncovered_kernel_entries": 14,
     "covered_by_kind": {
       "compute": 51,
-      "dataflow": 61,
+      "dataflow": 62,
       "manual auxiliary reader": 17
     },
     "cases_by_lane": {
       "common": 56,
-      "wormhole": 3,
+      "wormhole": 4,
       "blackhole": 5,
       "quasar": 2,
       "fabric-1x4": 2,
@@ -62,12 +62,6 @@
         "DF017"
       ],
       "reason": "No direct unit test found for experimental Quasar joint SDPA."
-    },
-    {
-      "kernels": [
-        "DF001"
-      ],
-      "reason": "No unit test found for the BGE custom encoder SDPA descriptor; BGE attention PCC tests use the stock path."
     },
     {
       "kernels": [
@@ -1906,6 +1900,27 @@
       ],
       "test_line": 389,
       "test_evidence": "models/tt_dit/tests/unit/test_exp_ring_joint_attention.py:389"
+    },
+    {
+      "id": "SM075",
+      "kind": "pytest",
+      "source": "tests/ttnn/unit_tests/operations/sdpa/test_bge_encoder_sdpa_reduce_migration.py",
+      "family": "BGE model-local SDPA",
+      "factories": [
+        "DH001"
+      ],
+      "tests": [
+        "test_bge_encoder_sdpa_reduce_auxiliary[runtime_lengths=False-streaming=False]"
+      ],
+      "kernel_ids": [
+        "DF001"
+      ],
+      "selection": "Small standard SDPA with two query heads and 128 KV tokens.",
+      "lane": "wormhole",
+      "hardware": "One Wormhole device.",
+      "expected_cases": 1,
+      "require_pass": true,
+      "full_suite_group": "T177"
     }
   ],
   "kernels": [
@@ -2689,10 +2704,10 @@
         "DH001"
       ],
       "evidence": "; models/demos/wormhole/bge_m3/tt/custom_ops/encoder_sdpa/op.py:26",
-      "status": "gap",
-      "case": "",
-      "selection": "No unit test found for the BGE custom encoder SDPA descriptor; BGE attention PCC tests use the stock path.",
-      "test_evidence": ""
+      "status": "covered",
+      "case": "SM075",
+      "selection": "Small standard SDPA with two query heads and 128 KV tokens.",
+      "test_evidence": "tests/ttnn/unit_tests/operations/sdpa/test_bge_encoder_sdpa_reduce_migration.py"
     },
     {
       "id": "DF002",

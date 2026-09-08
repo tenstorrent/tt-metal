@@ -28,6 +28,7 @@
 #include "tests/ttnn/unit_tests/gtests/udm/nd_iter_args.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "api/debug/dprint.h"
 
 void kernel_main() {
@@ -69,11 +70,8 @@ void kernel_main() {
 
     // ==================== Initialize Scaler CB ====================
     // Generate scaler tile for reduction (1.0 for SUM, 1/W for MEAN)
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_scaler,
-        ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<decltype(output_args)::next_compile_time_args_offset()>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     // ==================== Compute Initial Page IDs ====================
     uint32_t input_page_id = iter_args.initial_page_id();
