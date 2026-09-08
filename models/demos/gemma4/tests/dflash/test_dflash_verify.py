@@ -31,7 +31,7 @@ from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.dflash.config import Gemma4DFlashDrafterConfig
 from models.demos.gemma4.tt.dflash.context import compute_context
-from models.demos.gemma4.tt.dflash.drafter import dflash_drafter_forward
+from models.demos.gemma4.tt.dflash.drafter import dflash_drafter_forward, dflash_drafter_update_kv_caches
 from models.demos.gemma4.tt.dflash.lm_head import compute_dflash_logits, load_gemma4_lm_head_weight
 from models.demos.gemma4.tt.dflash.verify import dflash_verify, greedy_accept_from_posterior, make_verify_buffers
 from models.demos.gemma4.tt.dflash.weights import load_gemma4_dflash_weights
@@ -140,18 +140,46 @@ def test_dflash_verify_t3k(mesh_device, device_params, model_path):
         return ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype, mesh_mapper=replicate)
 
     noise_tt = to_tt(noise_torch.unsqueeze(0))
-    cos_tt = to_tt(cos_torch.unsqueeze(0))
-    sin_tt = to_tt(sin_torch.unsqueeze(0))
+    cos_full_tt = to_tt(cos_torch.unsqueeze(0))
+    sin_full_tt = to_tt(sin_torch.unsqueeze(0))
+    head_dim = config.head_dim
+    cos_ctx_tt = ttnn.slice(cos_full_tt, [0, 0, 0, 0], [1, 1, ctx_len, head_dim])
+    sin_ctx_tt = ttnn.slice(sin_full_tt, [0, 0, 0, 0], [1, 1, ctx_len, head_dim])
+    cos_noise_tt = ttnn.slice(cos_full_tt, [0, 0, ctx_len, 0], [1, 1, ctx_len + block_size, head_dim])
+    sin_noise_tt = ttnn.slice(sin_full_tt, [0, 0, ctx_len, 0], [1, 1, ctx_len + block_size, head_dim])
 
     num_local_heads = config.num_attention_heads // mesh_config.tp
     num_local_kv_heads = config.num_key_value_heads // mesh_config.tp
 
-    drafter_out = dflash_drafter_forward(
+    # One-shot (k_cache, v_cache) pair per layer, EXACTLY ctx_len-wide -- see
+    # test_dflash_drafter.py.
+    kv_caches = [
+        (
+            to_tt(torch.zeros(1, num_local_kv_heads, ctx_len, head_dim)),
+            to_tt(torch.zeros(1, num_local_kv_heads, ctx_len, head_dim)),
+        )
+        for _ in weights.layers
+    ]
+    dflash_drafter_update_kv_caches(
         context_tt,
+        ctx_len,
+        weights,
+        cos_ctx_tt,
+        sin_ctx_tt,
+        kv_caches,
+        offset=0,
+        num_local_heads=num_local_heads,
+        num_local_kv_heads=num_local_kv_heads,
+        head_dim=head_dim,
+        eps=config.rms_norm_eps,
+    )
+
+    drafter_out = dflash_drafter_forward(
+        kv_caches,
         noise_tt,
         weights,
-        cos_tt,
-        sin_tt,
+        cos_noise_tt,
+        sin_noise_tt,
         mesh_device,
         mesh_config,
         ccl_manager,
@@ -160,6 +188,7 @@ def test_dflash_verify_t3k(mesh_device, device_params, model_path):
         config.head_dim,
         config.rms_norm_eps,
         layer_configs,
+        ctx_len,
     )
     final_out = weights.norm(drafter_out)
     logits = compute_dflash_logits(final_out, lm_head_weight, mesh_device, config.final_logit_softcapping)

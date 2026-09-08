@@ -4,8 +4,8 @@
 """One DFlash drafter decoder layer: input_layernorm -> attention -> residual ->
 post_attention_layernorm -> MLP -> residual. Mirrors Qwen3DFlashDecoderLayer (dflash.py)
 exactly -- input_layernorm normalizes ONLY the noise/draft block, never the context (the
-context was already normalized once, in compute_context, and re-read unchanged by every
-layer's own k_proj/v_proj)."""
+context was already normalized once, in compute_context, and projected+cached once per
+layer by ``project_and_cache_context_delta``, not re-read raw by k_proj/v_proj here)."""
 
 from __future__ import annotations
 
@@ -16,11 +16,12 @@ from models.demos.gemma4.tt.dflash.weights import DFlashLayerWeights
 
 
 def dflash_layer_forward(
-    context: ttnn.Tensor,
+    k_cache: ttnn.Tensor,
+    v_cache: ttnn.Tensor,
     noise: ttnn.Tensor,
     layer_weights: DFlashLayerWeights,
-    cos_full: ttnn.Tensor,
-    sin_full: ttnn.Tensor,
+    cos_noise: ttnn.Tensor,
+    sin_noise: ttnn.Tensor,
     attn_mask: ttnn.Tensor,
     mesh_config,
     ccl_manager,
@@ -32,11 +33,12 @@ def dflash_layer_forward(
     residual = noise
     normed = layer_weights.input_layernorm(noise)
     attn_out = dflash_attention_forward(
-        context,
+        k_cache,
+        v_cache,
         normed,
         layer_weights.attn,
-        cos_full,
-        sin_full,
+        cos_noise,
+        sin_noise,
         attn_mask,
         mesh_config,
         ccl_manager,

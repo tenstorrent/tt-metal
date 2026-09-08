@@ -78,6 +78,19 @@ class ContextAccumulator:
     def tap(self, hidden_states: ttnn.Tensor, layer_idx: int) -> None:
         if layer_idx not in self.fc_slices:
             return
+        # model.py's own layer_probe docstring requires any snapshot of the live
+        # mid-graph hidden state to land in DRAM ("holding a sharded L1 copy starves
+        # later programs' circular buffers") -- the earlier, validated dict-based probe
+        # (test_dflash_verify.py's _probe) did this via ttnn.to_memory_config before
+        # storing the tap; this accumulate-as-you-go version omitted it, silently
+        # feeding a possibly-L1-sharded tensor straight into ttnn.linear. Root-caused as
+        # the source of an intermittent (worse over longer generations), non-traced-AND
+        # -traced correctness divergence: confirmed via extensive real-hardware testing
+        # that ruled out the drafter's own K/V cache, Metal trace capture itself, and
+        # general hardware/CCL non-determinism (plain decode, which never installs
+        # layer_probe, was perfectly stable across repeated long runs) before landing
+        # here.
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         partial = ttnn.linear(hidden_states, self.fc_slices[layer_idx])
         if self._accum is None:
             self._accum = partial

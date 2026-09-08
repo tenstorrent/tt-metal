@@ -318,7 +318,8 @@ class Transformer(LightweightModule):
                 f"Showing up to 10: {sample}"
             )
 
-    def process_logits_after_prefill_trace(self, logits, last_token_idx):
+    def process_logits_after_prefill_trace(self, logits, last_token_idx, allow_sharded=False):
+        del allow_sharded  # Gemma4-only opt-in; API parity with Generator callers
         get_last_token = (last_token_idx // 32) * 32
         seq_len = int(logits.shape[-2])
         # Pass the offset as a runtime argument rather than a compile-time attribute. With literal
