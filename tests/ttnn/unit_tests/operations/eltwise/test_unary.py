@@ -10,7 +10,14 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp, assert_allclose
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    assert_equal,
+    assert_with_ulp,
+    assert_allclose,
+    flush_subnormal_values_to_zero,
+    generate_all_bfloat16_bitpatterns,
+)
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_dtype,
@@ -2747,6 +2754,35 @@ def test_softcap_bfloat16_full_domain(device):
 
     tiny_max = result[~mask].to(torch.float32).abs().max().item()
     assert tiny_max <= 4.0 * SOFTCAP_FLUSH_FLOOR, f"negligible-reference region returned {tiny_max:.4e}"
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
+@pytest.mark.parametrize("beta", [SOFTCAP_BETA, 30.0, 50.0, 3.0, 1.0])
+def test_softcap_small_magnitude_all_bitpatterns(beta, device):
+    """Every representable bfloat16 value, checking that small inputs survive the rescale.
+
+    The kernel evaluates beta * tanh(x * (1/beta)). x * (1/beta) flushes to zero for
+    |x| < beta * 2**-126 and beta * tanh(0) is exactly 0, so the whole input was discarded
+    over a band that grows with beta (1250 of the 65,536 bfloat16 patterns at beta = 30),
+    although softcap(x) = x there. tanh(y) = y to under half an fp32 ULP for |y| <= 2**-12,
+    so the result must be the input itself over that range.
+    """
+    input_tensor = flush_subnormal_values_to_zero(generate_all_bfloat16_bitpatterns(torch.bfloat16))
+    # NaN does not propagate through min(., 1.0); see test_softcap_bfloat16_full_domain.
+    input_tensor = torch.where(torch.isnan(input_tensor), torch.zeros_like(input_tensor), input_tensor)
+
+    tt_in = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.softcap(tt_in, beta))
+    golden = ttnn.get_golden_function(ttnn.softcap)(input_tensor, beta=beta, device=device)
+
+    linear = input_tensor.abs() <= beta * 2.0**-13
+    assert torch.equal(result[linear], input_tensor[linear])
+
+    # no normal reference value may come back as exactly zero
+    normal = (golden.abs() >= 2.0**-126) & torch.isfinite(golden)
+    assert not (result[normal] == 0).any()
+
+    assert_with_ulp(golden[normal], result[normal], ulp_threshold=SOFTCAP_ULP)
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
