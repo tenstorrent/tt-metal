@@ -16,7 +16,6 @@ check:
 
 check-hang:
 	python3 tests/ttnop_check.py --hang
-
 .PHONY: clean check check-hang
 
 # --- Metal backend (TTNOP_METAL=1) -------------------------------------------
@@ -28,14 +27,21 @@ TT_METAL_CACHE ?= $(if $(wildcard $(HOME)),$(HOME)/.cache/tt-metal-cache,/tmp/tt
 # The build_Release/lib/ copy is often left stale after a rebuild.
 TT_METAL_LIB ?= $(TT_METAL_HOME)/build_Release/tt_metal
 
-.PHONY: metal_shim
+.PHONY: metal_shim gtest_shim
 metal_shim: libttnop_metal.so
+gtest_shim: libttnop_gtest.so
 
 # Only tt_memory.h is needed, so keep the include root thin rather than pulling
 # in the rest of metal's header tree.
 libttnop_metal.so: metal_shim.cpp
 	$(CXX) -std=c++20 -O2 -Wall -Wextra -fPIC -shared -I$(TT_METAL_HOME)/tt_metal \
 		-o $@ metal_shim.cpp -L$(TT_METAL_LIB) -ltt_metal -Wl,-rpath,$(TT_METAL_LIB)
+
+# LD_PRELOAD interceptor for native gtests. Do not link libtt_metal: the
+# interpose is the point, and RTLD_NEXT finds the real get_risc_binary.
+libttnop_gtest.so: gtest_shim.cpp
+	$(CXX) -std=c++20 -O2 -Wall -Wextra -fPIC -shared -I$(TT_METAL_HOME)/tt_metal \
+		-o $@ gtest_shim.cpp -ldl
 
 # 512B = 128 words against the 105 the cave needs (100 fillers, one extra slot,
 # the displaced instruction, the jump back, and the two-word PACR trampoline).
