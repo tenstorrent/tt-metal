@@ -956,6 +956,32 @@
 # weights' device addresses and dynamic_load evicts them. The 4x8 galaxy rows need neither: 32
 # chips hold the whole pipeline resident. They also run Ring topology, the path the
 # ColParallelLinear addcmul bug does not affect. Add a bh_quietbox_2 leg once that fix lands.
+# Confirmed on run 33889272485: bh_qb (2,2), 1024x1024, PASS, 92.3s/image, 31m cold (most of
+# which was the one-time converted-weight build now cached on the mount). Viable only since
+# #55364 -- the perf test's bh_qb row is dynamic_load=True + trace_warmup, which OOMs or replays
+# freed weights without that fix.
+- name: TT-DiT Flux.2-dev e2e tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
+    # bh_qb is the (2,2) row and the only one a 4-chip box matches, since the perf rows carry
+    # require_exact_physical_num_devices. 1024x1024 only -- the resolutions run to 8192.
+    pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_performance_flux2.py \
+      -k "bh_qb and 1024x1024"
+  model: flux.2-dev
+  model_family: Flux
+  skus:
+    bh_quietbox_2:
+      # 45 min: the 31m cold run included the one-time converted-weight build, now persisted on
+      # the mount, so warm runs are well under this. Above the pytest --timeout (40 min).
+      timeout: 45
+      tier: 1
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 - name: TT-DiT Flux.2-dev multihost e2e tests
   # BLOCKED as of run 33690418331: the FLUX.2-dev snapshot pre-staged on this SKU's
   # /mnt/models/huggingface is incomplete -- it has transformer, text_encoder, tokenizer and vae
