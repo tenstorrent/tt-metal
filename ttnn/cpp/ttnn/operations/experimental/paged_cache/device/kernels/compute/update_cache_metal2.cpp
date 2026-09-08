@@ -10,6 +10,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "experimental/kernel_args.h"
+#include "api/compute/pack.h"
 
 // Helper constexpr function to compute num_blocks_per_col
 constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) {
@@ -47,6 +48,14 @@ void kernel_main() {
         compute_kernel_lib::untilize<Wt, dfb::cache, dfb::untilized_cache>(1);
 
         // Wait on writer to update block, then tilize back
+#ifdef ARCH_QUASAR
+        // Quasar: tilize_init programs unpack+math only and pack_reconfig_data_format is gasket-only, so
+        // the packer's L1 destination (BFD) still points at dfb::untilized_cache from pack_untilize_init
+        // above -> the re-tilized block would land in the untilize ring and dfb::out would never be
+        // written (all-zero cache block). Retarget the packer (quasar_porting.md s7; same idiom as
+        // experimental/quasar/pool_generic compute_pool_2d.cpp and conv2d conv_bmm_tilize_metal2.cpp).
+        pack_init(dfb::out);
+#endif
         compute_kernel_lib::tilize<Wt, dfb::untilized_cache2, dfb::out>(1);
     }
 }

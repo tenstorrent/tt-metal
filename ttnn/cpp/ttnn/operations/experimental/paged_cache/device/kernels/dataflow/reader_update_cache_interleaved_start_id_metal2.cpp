@@ -134,7 +134,9 @@ void kernel_main() {
 
     if (wait_to_start_signal) {
         // wait for signal from writer that it has finished using the input DFB
-        Semaphore<> receiver_sem(sem::receiver);
+        // Let the binding token pick the host-resolved mechanism (Semaphore<> hardcodes LOCAL_NONATOMIC,
+        // which the Quasar build rejects when the host selected another mechanism).
+        Semaphore receiver_sem(sem::receiver);
         receiver_sem.wait(1);
         receiver_sem.set(0);
     }

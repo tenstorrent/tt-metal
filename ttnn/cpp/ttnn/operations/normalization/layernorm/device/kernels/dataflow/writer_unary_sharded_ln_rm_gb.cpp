@@ -94,7 +94,9 @@ void kernel_main() {
         constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
 
-        UnicastEndpoint local_ep;
+#ifndef ARCH_QUASAR
+        UnicastEndpoint local_ep;  // Gen1 loopback source; Quasar copies with the RISC below
+#endif
         dfb_gamma_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = width_shard_tile_start_id + w;
@@ -105,6 +107,19 @@ void kernel_main() {
                 {.page_id = tile_id},
                 {.offset_bytes = w * gamma_tile_bytes});
             noc.async_read_barrier();
+#ifdef ARCH_QUASAR
+            {
+                // Quasar: local L1->L1 self-copy. get_write_ptr() is the UNCACHED alias (not a valid NoC
+                // source) and a loopback read can spin/drop on the emulator (recipe s6) -> RISC word copy.
+                // The DRAM read above is barriered, so the source half-row has landed.
+                const uint32_t base = dfb_gamma_obj.get_write_ptr() + w * gamma_tile_bytes;
+                auto* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + mask_read_tile_face_bytes);
+                auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + mask_read_tile_offset_bytes);
+                for (uint32_t i = 0; i < mask_read_tile_face_bytes / sizeof(uint32_t); ++i) {
+                    dst[i] = src[i];
+                }
+            }
+#else
             noc.async_read(
                 local_ep,
                 dfb_gamma_obj,
@@ -113,6 +128,7 @@ void kernel_main() {
                  .noc_y = my_y[noc.get_noc_id()],
                  .addr = dfb_gamma_obj.get_write_ptr() + w * gamma_tile_bytes + mask_read_tile_face_bytes},
                 {.offset_bytes = w * gamma_tile_bytes + mask_read_tile_offset_bytes});
+#endif
         }
         noc.async_read_barrier();
         dfb_gamma_obj.push_back(block_w);
@@ -127,7 +143,9 @@ void kernel_main() {
         uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_BETA ? 64 : 32;
         uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_BETA ? 1024 : 512;
 
-        UnicastEndpoint local_ep;
+#ifndef ARCH_QUASAR
+        UnicastEndpoint local_ep;  // Gen1 loopback source; Quasar copies with the RISC below
+#endif
         dfb_beta_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = width_shard_tile_start_id + w;
@@ -138,6 +156,19 @@ void kernel_main() {
                 {.page_id = tile_id},
                 {.offset_bytes = w * beta_tile_bytes});
             noc.async_read_barrier();
+#ifdef ARCH_QUASAR
+            {
+                // Quasar: local L1->L1 self-copy. get_write_ptr() is the UNCACHED alias (not a valid NoC
+                // source) and a loopback read can spin/drop on the emulator (recipe s6) -> RISC word copy.
+                // The DRAM read above is barriered, so the source half-row has landed.
+                const uint32_t base = dfb_beta_obj.get_write_ptr() + w * beta_tile_bytes;
+                auto* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + mask_read_tile_face_bytes);
+                auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + mask_read_tile_offset_bytes);
+                for (uint32_t i = 0; i < mask_read_tile_face_bytes / sizeof(uint32_t); ++i) {
+                    dst[i] = src[i];
+                }
+            }
+#else
             noc.async_read(
                 local_ep,
                 dfb_beta_obj,
@@ -146,6 +177,7 @@ void kernel_main() {
                  .noc_y = my_y[noc.get_noc_id()],
                  .addr = dfb_beta_obj.get_write_ptr() + w * beta_tile_bytes + mask_read_tile_face_bytes},
                 {.offset_bytes = w * beta_tile_bytes + mask_read_tile_offset_bytes});
+#endif
         }
         noc.async_read_barrier();
         dfb_beta_obj.push_back(block_w);

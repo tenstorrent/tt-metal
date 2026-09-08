@@ -179,13 +179,136 @@ _PAGED_UPDATE_CACHE_BF16 = {
     "outs": [None],
 }
 
+
+def _ws_l1_1core(shard_shape):
+    return {
+        "layout": "WIDTH_SHARDED",
+        "buffer": "L1",
+        "shard": {"grid": [[0, 0, 0, 0]], "shape": list(shard_shape), "orientation": "ROW_MAJOR"},
+    }
+
+
+def _t(shape, mem, dtype="BFLOAT16"):
+    return {"k": "t", "shape": list(shape), "dtype": dtype, "layout": "TILE", "mem": mem}
+
+
+# ---- experimental.quasar binary_ng fork (what llama uses for add/multiply) ----
+# add case 00 [1,1,32,2048] bf16 dram+dram -> ProgramFactoryQuasarNative; one tile row.
+_QADD_INT = {
+    "id": "quasar_add_32x64_bf16_int-dram",
+    "op": "ttnn.add",
+    "_call": "ttnn.experimental.quasar.add",
+    "count": 1,
+    "args": [_t([1, 1, 32, 64], _DRAM_INT), _t([1, 1, 32, 64], _DRAM_INT)],
+    "kwargs": {"memory_config": dict(_DRAM_INT, k="mem")},
+    "outs": [_t([1, 1, 32, 64], _DRAM_INT)],
+}
+# add case 01: b width-sharded L1 over 32 cores -> 1 core (mixed interleaved/sharded, MetalV2 path).
+_QADD_MIXED = {
+    "id": "quasar_add_32x64_bf16_int-dram_b-ws-l1-1core",
+    "op": "ttnn.add",
+    "_call": "ttnn.experimental.quasar.add",
+    "count": 1,
+    "args": [_t([1, 1, 32, 64], _DRAM_INT), _t([1, 1, 32, 64], _ws_l1_1core([32, 64]))],
+    "kwargs": {"memory_config": dict(_DRAM_INT, k="mem"), "dtype": {"k": "dtype", "v": "BFLOAT16"}},
+    "outs": [_t([1, 1, 32, 64], _DRAM_INT)],
+}
+# multiply case 00: all width-sharded L1 (64 cores -> 1), SILU on a, bf8 out -> bf16 (no bf8 on Quasar).
+_QMUL_WS_SILU = {
+    "id": "quasar_multiply_32x64_bf16_ws-l1-1core_silu",
+    "op": "ttnn.multiply",
+    "_call": "ttnn.experimental.quasar.multiply",
+    "count": 1,
+    "args": [_t([1, 1, 32, 64], _ws_l1_1core([32, 64])), _t([1, 1, 32, 64], _ws_l1_1core([32, 64]))],
+    "kwargs": {
+        "input_tensor_a_activations": {"k": "acts", "v": ["SILU"]},
+        "dtype": {"k": "dtype", "v": "BFLOAT16"},
+        "memory_config": dict(_ws_l1_1core([32, 64]), k="mem"),
+    },
+    "outs": [_t([1, 1, 32, 64], _ws_l1_1core([32, 64]))],
+}
+# multiply case 01: interleaved + SILU, bf8 out -> bf16.
+_QMUL_INT_SILU = {
+    "id": "quasar_multiply_32x64_bf16_int-dram_silu",
+    "op": "ttnn.multiply",
+    "_call": "ttnn.experimental.quasar.multiply",
+    "count": 1,
+    "args": [_t([1, 1, 32, 64], _DRAM_INT), _t([1, 1, 32, 64], _DRAM_INT)],
+    "kwargs": {
+        "input_tensor_a_activations": {"k": "acts", "v": ["SILU"]},
+        "dtype": {"k": "dtype", "v": "BFLOAT16"},
+        "memory_config": dict(_DRAM_INT, k="mem"),
+    },
+    "outs": [_t([1, 1, 32, 64], _DRAM_INT)],
+}
+
+# ---- experimental.quasar.to_memory_config fork (i2s / s2i / reshard backends) ----
+def _tmc(id_, in_mem, out_mem):
+    return {
+        "id": id_,
+        "op": "ttnn.to_memory_config",
+        "_call": "ttnn.experimental.quasar.to_memory_config",
+        "count": 1,
+        "args": [_t([1, 1, 32, 64], in_mem), dict(out_mem, k="mem")],
+        "kwargs": {},
+        "outs": [_t([1, 1, 32, 64], out_mem)],
+    }
+
+
+_QTMC_I2S_HS = _tmc("quasar_tmc_i2s_dram-int_to_hs-l1", _DRAM_INT, _hs_l1_1core([32, 64]))
+_QTMC_I2S_WS = _tmc("quasar_tmc_i2s_dram-int_to_ws-l1", _DRAM_INT, _ws_l1_1core([32, 64]))
+_QTMC_S2I = _tmc("quasar_tmc_s2i_hs-l1_to_dram-int", _hs_l1_1core([32, 64]), _DRAM_INT)
+_QTMC_RESHARD = _tmc("quasar_tmc_reshard_hs-l1_to_ws-l1", _hs_l1_1core([32, 64]), _ws_l1_1core([32, 64]))
+_QTMC_L1INT_TO_DRAM = _tmc("quasar_tmc_copy_l1-int_to_dram-int", _L1_INT, _DRAM_INT)
+
+# ---- mainline typecast, extra paths (bf16->bf16 = captured case 01 dtype-wise; sharded factory) ----
+_TYPECAST_BF16_BF16 = {
+    "id": "typecast_32x64_bf16_to_bf16_int-dram",
+    "op": "ttnn.typecast",
+    "count": 1,
+    "args": [_t([1, 1, 32, 64], _DRAM_INT)],
+    "kwargs": {"dtype": {"k": "dtype", "v": "BFLOAT16"}},
+    "outs": [_t([1, 1, 32, 64], _DRAM_INT)],
+}
+_TYPECAST_SHARDED = {
+    "id": "typecast_32x64_bf16_to_bf16_hs-l1-1core",
+    "op": "ttnn.typecast",
+    "count": 1,
+    "args": [_t([1, 1, 32, 64], _hs_l1_1core([32, 64]))],
+    "kwargs": {"dtype": {"k": "dtype", "v": "BFLOAT16"}},
+    "outs": [_t([1, 1, 32, 64], _hs_l1_1core([32, 64]))],
+}
+# experimental.quasar.typecast fork: still a legacy ProgramDescriptor port (KernelDescriptor ->
+# DataMovementKernel), which Quasar rejects. Kept to record that on the emulator.
+_QTYPECAST_FORK = {
+    "id": "quasar_typecast_fork_32x64_bf16_to_fp32_int-dram",
+    "op": "ttnn.typecast",
+    "_call": "ttnn.experimental.quasar.typecast",
+    "count": 1,
+    "args": [_t([1, 1, 32, 64], _DRAM_INT)],
+    "kwargs": {"dtype": {"k": "dtype", "v": "FLOAT32"}},
+    "outs": [_t([1, 1, 32, 64], _DRAM_INT, dtype="FLOAT32")],
+}
+
 CASES = [
     _NLP_CONCAT_HEADS_DECODE_1HEAD,
     _PAGED_UPDATE_CACHE_BF16,
     _TYPECAST_1TILE,
+    _TYPECAST_BF16_BF16,
+    _TYPECAST_SHARDED,
+    _QTYPECAST_FORK,
     _S2I_1SHARD,
     _NLP_CONCAT_HEADS_4HEADS,
     _PAGED_SDPA_DECODE_1CORE,
+    _QADD_INT,
+    _QADD_MIXED,
+    _QMUL_WS_SILU,
+    _QMUL_INT_SILU,
+    _QTMC_I2S_HS,
+    _QTMC_I2S_WS,
+    _QTMC_S2I,
+    _QTMC_RESHARD,
+    _QTMC_L1INT_TO_DRAM,
 ]
 
 
@@ -201,6 +324,10 @@ def _resolve(dotted):
 # cases normally (they pass); on Quasar they xfail, strictly — a fix shows up as a failure
 # telling you to drop the entry.
 _XFAIL = {
+    _QTYPECAST_FORK["id"]: (
+        "experimental.quasar.typecast is a legacy ProgramDescriptor port (KernelDescriptor -> "
+        "DataMovementKernel); Quasar only builds Metal 2.0 ProgramSpec kernels"
+    ),
     _PAGED_SDPA_DECODE_1CORE["id"]: (
         "sdpa_decode quasar fork: DFB 'out_o' sets allow_instance_multi_binding (tree-reduction "
         "writer P+C / compute P+C); ValidateProgramSpec rejects the flag on Gen2 (program_spec.cpp:1288)"

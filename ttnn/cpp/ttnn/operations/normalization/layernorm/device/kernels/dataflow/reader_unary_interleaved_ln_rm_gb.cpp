@@ -149,7 +149,9 @@ void kernel_main() {
 #ifdef FUSE_GAMMA
                 {
                     dfb_gamma.reserve_back(block.full_block_size());
-                    UnicastEndpoint local_ep;
+#ifndef ARCH_QUASAR
+                    UnicastEndpoint local_ep;  // Gen1 loopback source; Quasar copies with the RISC below
+#endif
                     uint32_t idx = 0;
                     for (auto r : block.local()) {
                         noc.async_read(
@@ -159,6 +161,20 @@ void kernel_main() {
                             {.page_id = block.start() + r},
                             {.offset_bytes = idx * gamma_tile_bytes});
                         noc.async_read_barrier();
+#ifdef ARCH_QUASAR
+                        {
+                            // Quasar: this is a local L1->L1 self-copy. get_write_ptr() is the UNCACHED alias, which
+                            // the NoC cannot take as a source, and a loopback read can spin/drop on the emulator
+                            // (recipe s6) -- copy the second half-row into face 1 with the RISC instead. The DRAM
+                            // read above is already barriered, so the source bytes have landed.
+                            const uint32_t base = dfb_gamma.get_write_ptr() + idx * gamma_tile_bytes;
+                            auto* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + gamma_half_row_bytes);
+                            auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + gamma_face_bytes);
+                            for (uint32_t w = 0; w < gamma_half_row_bytes / sizeof(uint32_t); ++w) {
+                                dst[w] = src[w];
+                            }
+                        }
+#else
                         noc.async_read(
                             local_ep,
                             dfb_gamma,
@@ -167,6 +183,7 @@ void kernel_main() {
                              .noc_y = my_y[noc.get_noc_id()],
                              .addr = dfb_gamma.get_write_ptr() + idx * gamma_tile_bytes + gamma_half_row_bytes},
                             {.offset_bytes = idx * gamma_tile_bytes + gamma_face_bytes});
+#endif
                         idx++;
                     }
                     noc.async_read_barrier();
@@ -177,7 +194,9 @@ void kernel_main() {
 #ifdef FUSE_BETA
                 {
                     dfb_beta.reserve_back(block.full_block_size());
-                    UnicastEndpoint local_ep;
+#ifndef ARCH_QUASAR
+                    UnicastEndpoint local_ep;  // Gen1 loopback source; Quasar copies with the RISC below
+#endif
                     uint32_t idx = 0;
                     for (auto r : block.local()) {
                         noc.async_read(
@@ -187,6 +206,20 @@ void kernel_main() {
                             {.page_id = block.start() + r},
                             {.offset_bytes = idx * beta_tile_bytes});
                         noc.async_read_barrier();
+#ifdef ARCH_QUASAR
+                        {
+                            // Quasar: this is a local L1->L1 self-copy. get_write_ptr() is the UNCACHED alias, which
+                            // the NoC cannot take as a source, and a loopback read can spin/drop on the emulator
+                            // (recipe s6) -- copy the second half-row into face 1 with the RISC instead. The DRAM
+                            // read above is already barriered, so the source bytes have landed.
+                            const uint32_t base = dfb_beta.get_write_ptr() + idx * beta_tile_bytes;
+                            auto* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + beta_half_row_bytes);
+                            auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + beta_face_bytes);
+                            for (uint32_t w = 0; w < beta_half_row_bytes / sizeof(uint32_t); ++w) {
+                                dst[w] = src[w];
+                            }
+                        }
+#else
                         noc.async_read(
                             local_ep,
                             dfb_beta,
@@ -195,6 +228,7 @@ void kernel_main() {
                              .noc_y = my_y[noc.get_noc_id()],
                              .addr = dfb_beta.get_write_ptr() + idx * beta_tile_bytes + beta_half_row_bytes},
                             {.offset_bytes = idx * beta_tile_bytes + beta_face_bytes});
+#endif
                         idx++;
                     }
                     noc.async_read_barrier();

@@ -163,3 +163,24 @@ writer_unary_interleaved_start_id_blocked.cpp, compute layernorm.cpp). Silent wr
 gamma self-read remains the first suspect (same class as paged_update_cache's writer self-read), with the
 recipe §8.5 intra-tensix tile-counter aliasing (LayerNorm is a listed candidate) second. Repro:
 `pytest models/experimental/llama32_1b_quasar/tests/graph_ops/test_rms_norm.py -m emulator`.
+
+## 2026-09-08 — root cause of the all-zero output: Quasar packer BFD not retargeted (fixed, pending emu confirmation)
+
+On Quasar the packer's L1 destination (buffer descriptor, BFD) is programmed by `pack_init` (via
+`compute_kernel_hw_startup` -> `llk_pack_init(ocb)`), and `pack_reconfig_data_format` only reprograms the format
+gasket (`llk_pack_common_api.h`: "L1 format stays in buffer descriptors"; recipe §7 "BFDs live in the init").
+`compute/layernorm.cpp` starts with `compute_kernel_hw_startup(xmm, xmm, xmm2)` and then switches pack targets
+(ex2 / ex2pe / fusion / out) with `pack_reconfig_data_format` only, so every `pack_tile` lands in xmm2's ring
+and `dfb::out` is never written; the writer ships pristine (zero) L1 to DRAM. DFB credits balance, so no assert
+or stall. WH/BH resolve the CB per `llk_pack` call and are unaffected. Precedent: experimental/quasar/binary_ng
+`eltwise_utils_dfb.hpp` (`pack_init` after `pack_reconfig_data_format` under `ARCH_QUASAR`).
+
+Fix: `#ifdef ARCH_QUASAR pack_init(<dfb>) #endif` after each of the 7 `pack_reconfig_data_format` calls in
+`compute/layernorm.cpp` and in the shared `kernel_util/compute/numeric.h` helper. Second (independent) Quasar
+bug fixed in the same pass: the RM gamma/beta loader's face-1 half-row was a NoC loopback self-read whose source
+was the uncached `get_write_ptr()` alias (`reader_unary_interleaved_ln_rm_gb.cpp`) -> replaced by a RISC word
+copy under `ARCH_QUASAR`. The sharded writer (`writer_unary_sharded_ln_rm_gb.cpp`) has the same loopback and
+still needs the same treatment (not on the llama interleaved path).
+
+**emu-quasar-2x3 PASS 2026-09-08**: with the packer retarget + loopback fixes, rms_norm [1,1,32,2048] bf16 interleaved passes
+PCC on the emulator (watcher + LLK asserts on, NoC sanitizer off). WH graph_ops rms_norm cases all pass. GREEN.

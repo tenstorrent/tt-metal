@@ -179,6 +179,12 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
         reconfig_data_format(dfb_in_id, dfb_inb_id);
         pack_reconfig_data_format(dfb_x_id);
+#ifdef ARCH_QUASAR
+        // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+        // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+        // hw_startup output ring and this DFB is never written (all-zero output).
+        pack_init(dfb_x_id);
+#endif
         add_init(dfb_in_id, dfb_inb_id);
         for (auto block : generic::blocks(Wt, block_size)) {
             // In/inb come from the reader and need to be
@@ -217,6 +223,12 @@ void kernel_main() {
 #ifdef RMSNORM
         reconfig_data_format(dfb_in_id, dfb_in_id);
         pack_reconfig_data_format(dfb_xmm2_id);
+#ifdef ARCH_QUASAR
+        // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+        // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+        // hw_startup output ring and this DFB is never written (all-zero output).
+        pack_init(dfb_xmm2_id);
+#endif
 #endif
 #endif
 
@@ -305,6 +317,12 @@ void kernel_main() {
 
         dfb_ex2pe.reserve_back(1);
         pack_reconfig_data_format(dfb_ex2pe_id);
+#ifdef ARCH_QUASAR
+        // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+        // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+        // hw_startup output ring and this DFB is never written (all-zero output).
+        pack_init(dfb_ex2pe_id);
+#endif
 
         tile_regs_wait();
         pack_tile(dst0, dfb_ex2pe_id);
@@ -318,8 +336,20 @@ void kernel_main() {
             reconfig_data_format(dfb_xmm_id, dfb_ex2pe_id);
 #if !defined(FUSE_GAMMA) && !defined(FUSE_BETA)
             pack_reconfig_data_format(dfb_out_id);
+#ifdef ARCH_QUASAR
+            // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+            // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+            // hw_startup output ring and this DFB is never written (all-zero output).
+            pack_init(dfb_out_id);
+#endif
 #else
             pack_reconfig_data_format(dfb_fusion_id);
+#ifdef ARCH_QUASAR
+            // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+            // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+            // hw_startup output ring and this DFB is never written (all-zero output).
+            pack_init(dfb_fusion_id);
+#endif
 #endif
             dfb_im_or_out.reserve_back(block.full_block_size());
             // Restore SrcA to the deviation buffer's format after the previous iteration's
@@ -365,6 +395,12 @@ void kernel_main() {
             {
 #ifndef FUSE_BETA
                 pack_reconfig_data_format(dfb_out_id);
+#ifdef ARCH_QUASAR
+                // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+                // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+                // hw_startup output ring and this DFB is never written (all-zero output).
+                pack_init(dfb_out_id);
+#endif
 #endif
                 reconfig_data_format_srcb(dfb_ex2pe_id, dfb_gamma_id);
                 // gamma's product goes to the streaming intermediate when beta still has to be
@@ -414,6 +450,12 @@ void kernel_main() {
 #ifdef FUSE_BETA
             {
                 pack_reconfig_data_format(dfb_out_id);
+#ifdef ARCH_QUASAR
+                // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
+                // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
+                // hw_startup output ring and this DFB is never written (all-zero output).
+                pack_init(dfb_out_id);
+#endif
 #ifdef FUSE_GAMMA
                 reconfig_data_format_srcb(dfb_gamma_id, dfb_beta_id);
 #else

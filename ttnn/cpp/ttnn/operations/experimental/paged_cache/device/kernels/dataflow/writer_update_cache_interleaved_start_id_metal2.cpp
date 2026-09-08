@@ -192,7 +192,7 @@ void kernel_main() {
 
     if (send_signal) {
         // send signal to receiver core that we are done using the input DFB
-        Semaphore<>(sem::receiver).up(noc, send_core_x, send_core_y, 1);
+        Semaphore(sem::receiver).up(noc, send_core_x, send_core_y, 1);  // token picks the mechanism (see reader)
         noc.async_atomic_barrier();
     }
 }

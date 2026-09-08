@@ -127,3 +127,19 @@ Start with `TT_METAL_LLK_ASSERTS` **on**; re-run with it unset. DPRINT needs `un
   intra-tensix tile-counter aliasing (LayerNorm is a listed candidate). Repro:
   `tests/graph_ops/test_emu_small_grid.py::...paged_update_cache_128x8x32x64_bf16...`. Still RED on Quasar.
 - **2026-09-04**: re-run on emu-quasar-2x3 with watcher + LLK asserts + lightweight kernel asserts: still the all-zero block, no assert, no stall (657 s under watcher). Config-independent (1x3 and 2x3).
+
+- **2026-09-08 root cause (fixed, pending emu confirmation)**: same Quasar **packer BFD** class as rms_norm. In
+  `compute/update_cache_metal2.cpp` `pack_untilize_init` (inside `compute_kernel_lib::untilize`) bakes the packer's
+  L1 destination to `dfb::untilized_cache`; Quasar `tilize_init` programs unpack+math only and
+  `pack_reconfig_data_format` is gasket-only, so the re-tilized tiles are packed into the untilize ring and
+  `dfb::out` is never written -> the writer ships zero L1 to exactly the right cache block. Fix:
+  `#ifdef ARCH_QUASAR pack_init(dfb::out); #endif` before the `tilize` call (precedent: quasar pool_generic
+  `compute_pool_2d.cpp`, conv2d `conv_bmm_tilize_metal2.cpp`). `alias_with` was checked and is honored on Gen2
+  (address-only, same as WH). Root fix to file: Quasar `tilize_init` (tt_metal/hw/inc/api/compute/tilize.h) should
+  program the packer like the BH branch does.
+
+- **2026-09-08, second blocker after merging main**: both DM kernels spelled `Semaphore<>` (= LOCAL_NONATOMIC) for the
+  `sem::receiver` binding token; since #53687 the host resolves the mechanism and the Quasar kernel build static-asserts
+  (`noc_semaphore.h:80` "semaphore binding token's mechanism does not match this Semaphore's"). Fixed by constructing
+  `Semaphore receiver_sem(sem::receiver)` / `Semaphore(sem::receiver).up(...)` and letting the token pick the type
+  (unguarded; WH resolves the same LOCAL_NONATOMIC as before).
