@@ -90,7 +90,7 @@ runs:
         name: ${{ inputs.wheel-artifact-name }}
         path: ${{ github.workspace }}
 
-    - name: Install rsync 
+    - name: Install rsync
       shell: bash
       run: |
         set -euo pipefail
