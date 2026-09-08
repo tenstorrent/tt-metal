@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.tt_dit.layers.linear import _FUSED_GELU_VARIANTS
 from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
 
@@ -37,11 +38,9 @@ def assert_quality(torch_output, tt_output):
 def _resolve_fused_activation(activation):
     if activation is None:
         return None
-    if activation == "gelu":
-        return (ttnn.UnaryOpType.GELU, False)
-    if activation == "gelu_tanh":
-        return ttnn.UnaryOpType.GELU_TANH
-    raise AssertionError(f"Unsupported activation: {activation}")
+    # Resolve through the production map so the device tests exercise the exact same fused-activation
+    # variants as models.tt_dit.layers.linear; a private copy here silently under-tests the op.
+    return _FUSED_GELU_VARIANTS[activation]
 
 
 def _apply_torch_activation(torch_output, activation):
@@ -54,8 +53,15 @@ def _apply_torch_activation(torch_output, activation):
     raise AssertionError(f"Unsupported activation: {activation}")
 
 
-def test_gelu_tanh_activation_helper_uses_production_variant():
-    assert _resolve_fused_activation("gelu_tanh") == ttnn.UnaryOpType.GELU_TANH
+def test_fused_activation_helper_matches_production_variants():
+    # Lock the production fused-activation contract and that the helper resolves through it, so the
+    # device tests exercise the real mapping; gelu_fast: (GELU, True) was previously dropped.
+    assert _FUSED_GELU_VARIANTS["gelu"] == (ttnn.UnaryOpType.GELU, False)
+    assert _FUSED_GELU_VARIANTS["gelu_fast"] == (ttnn.UnaryOpType.GELU, True)
+    assert _FUSED_GELU_VARIANTS["gelu_tanh"] == ttnn.UnaryOpType.GELU_TANH
+    assert _resolve_fused_activation(None) is None
+    for name, expected in _FUSED_GELU_VARIANTS.items():
+        assert _resolve_fused_activation(name) == expected
 
 
 def run_test_linear_impl(
