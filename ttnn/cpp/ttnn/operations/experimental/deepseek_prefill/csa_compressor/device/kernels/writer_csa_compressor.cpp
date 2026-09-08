@@ -9,6 +9,7 @@
 void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t output_tiles = get_arg_val<uint32_t>(1);
+    const uint32_t first_output_tile = get_arg_val<uint32_t>(2);
     constexpr uint32_t pooled_cb = get_compile_time_arg_val(0);
     constexpr auto output_args = TensorAccessorArgs<1>();
 
@@ -16,7 +17,8 @@ void kernel_main() {
     CircularBuffer pooled(pooled_cb);
     Noc noc;
     constexpr uint32_t tile_bytes = 2048;
-    for (uint32_t tile = 0; tile < output_tiles; ++tile) {
+    const uint32_t tile_end = first_output_tile + output_tiles;
+    for (uint32_t tile = first_output_tile; tile < tile_end; ++tile) {
         pooled.wait_front(1);
         noc.async_write(use<CircularBuffer::AddrSelector::READ_PTR>(pooled), output, tile_bytes, {}, {.page_id = tile});
         noc.async_write_barrier();

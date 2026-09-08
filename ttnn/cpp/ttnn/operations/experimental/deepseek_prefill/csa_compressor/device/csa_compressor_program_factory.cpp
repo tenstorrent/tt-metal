@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::experimental::prim {
 namespace {
@@ -19,8 +20,10 @@ constexpr uint32_t kCandidateKvCb = tt::CBIndex::c_0;
 constexpr uint32_t kCandidateScoreCb = tt::CBIndex::c_1;
 constexpr uint32_t kPooledCb = tt::CBIndex::c_2;
 constexpr uint32_t kScratchCb = tt::CBIndex::c_3;
-constexpr CoreCoord kCompressionCore{0, 0};
-constexpr CoreCoord kStateCore{1, 0};
+constexpr uint32_t kMaxCb = tt::CBIndex::c_4;
+constexpr uint32_t kCaBiasCb = tt::CBIndex::c_5;
+constexpr uint32_t kCbBiasCb = tt::CBIndex::c_6;
+constexpr CoreCoord kStatePreparationCore{0, 0};
 
 constexpr auto kStateKernel =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/csa_compressor/device/kernels/"
@@ -113,9 +116,9 @@ ProgramDescriptor CsaStatePreparationProgramFactory::create_descriptor(
         local_runtime(params, args.kv.logical_shape()[-2], *mesh_dispatch_coordinate);
 
     ProgramDescriptor desc;
-    const CoreRangeSet state_cores(CoreRange(kCompressionCore, kCompressionCore));
+    const CoreRangeSet state_cores(CoreRange(kStatePreparationCore, kStatePreparationCore));
     desc.cbs.push_back(cb_descriptor(kScratchCb, 7, state_cores));
-    desc.kernels.push_back(state_kernel_descriptor(args, outputs, kCompressionCore, local_valid, absolute_start));
+    desc.kernels.push_back(state_kernel_descriptor(args, outputs, kStatePreparationCore, local_valid, absolute_start));
     return desc;
 }
 
@@ -126,7 +129,8 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     const std::optional<MeshCoordinate>& mesh_dispatch_coordinate) {
     TT_FATAL(mesh_dispatch_coordinate.has_value(), "CSA compression requires a mesh coordinate");
     const auto grid = args.kv.device()->compute_with_storage_grid_size();
-    TT_FATAL(grid.x > 1, "CSA compression requires at least two worker cores");
+    const uint32_t grid_cores = grid.x * grid.y;
+    TT_FATAL(grid_cores > 1, "CSA compression requires at least two worker cores");
     const uint32_t local_seq = args.kv.logical_shape()[-2];
     const auto [local_valid, absolute_start] = local_runtime(params, local_seq, *mesh_dispatch_coordinate);
     const uint32_t head_dim = factory_head_dim_of(args.kv);
@@ -135,20 +139,27 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     const uint32_t output_height_tiles = (local_seq / 4 + 31) / 32;
     const uint32_t output_tiles = output_height_tiles * state_width_tiles;
 
+    // Output tiles are independent -- the softmax runs per feature column and windows never interact --
+    // so they split across the grid with no cross-core traffic. The state kernel needs a core of its
+    // own because it is a RISCV_0 data movement kernel, which the reader already occupies.
+    const uint32_t num_cores = std::min(output_tiles, grid_cores - 1);
+    const CoreRangeSet compression_cores = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
+    const std::vector<CoreCoord> cores = corerange_to_cores(compression_cores, num_cores, /*row_wise=*/true);
+    const CoreCoord state_core = grid_to_cores(grid_cores, grid.x, grid.y, /*row_wise=*/true).back();
+
     ProgramDescriptor desc;
-    const CoreRangeSet compression_cores(CoreRange(kCompressionCore, kCompressionCore));
-    const CoreRangeSet state_cores(CoreRange(kStateCore, kStateCore));
+    const CoreRangeSet state_cores(CoreRange(state_core, state_core));
     desc.cbs.push_back(cb_descriptor(kCandidateKvCb, 8, compression_cores));
     desc.cbs.push_back(cb_descriptor(kCandidateScoreCb, 8, compression_cores));
     desc.cbs.push_back(cb_descriptor(kPooledCb, 1, compression_cores));
-    desc.cbs.push_back(cb_descriptor(kScratchCb, 5, compression_cores));
-    for (uint32_t cb = tt::CBIndex::c_4; cb <= tt::CBIndex::c_10; ++cb) {
-        desc.cbs.push_back(cb_descriptor(cb, 1, compression_cores));
-    }
+    desc.cbs.push_back(cb_descriptor(kScratchCb, 4, compression_cores));
+    desc.cbs.push_back(cb_descriptor(kMaxCb, 1, compression_cores));
+    desc.cbs.push_back(cb_descriptor(kCaBiasCb, 1, compression_cores));
+    desc.cbs.push_back(cb_descriptor(kCbBiasCb, 1, compression_cores));
     desc.cbs.push_back(cb_descriptor(kScratchCb, 7, state_cores));
 
     std::vector<uint32_t> reader_compile_args = {
-        kCandidateKvCb, kCandidateScoreCb, kScratchCb, local_seq / 32, input_width_tiles, state_width_tiles};
+        kCandidateKvCb, kCandidateScoreCb, kScratchCb, input_width_tiles, state_width_tiles, kCaBiasCb, kCbBiasCb};
     TensorAccessorArgs(args.kv.buffer()).append_to(reader_compile_args);
     TensorAccessorArgs(args.gate.buffer()).append_to(reader_compile_args);
     TensorAccessorArgs(args.position_bias.buffer()).append_to(reader_compile_args);
@@ -162,26 +173,13 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     reader.compile_time_args = std::move(reader_compile_args);
     reader.config =
         DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
-    KernelDescriptor::RTArgList reader_runtime_args;
-    reader_runtime_args.reserve(8);
-    reader_runtime_args.push_back(args.kv.buffer());
-    reader_runtime_args.push_back(args.gate.buffer());
-    reader_runtime_args.push_back(args.position_bias.buffer());
-    reader_runtime_args.push_back(args.predecessor_kv_state.buffer());
-    reader_runtime_args.push_back(args.predecessor_score_state.buffer());
-    reader_runtime_args.push_back(output_tiles);
-    reader_runtime_args.push_back(local_valid / 4);
-    reader_runtime_args.push_back(absolute_start);
-    reader.emplace_runtime_args(kCompressionCore, reader_runtime_args);
-    desc.kernels.push_back(std::move(reader));
 
     KernelDescriptor compute;
     compute.kernel_source = kComputeKernel;
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = compression_cores;
-    compute.compile_time_args = {kCandidateKvCb, kCandidateScoreCb, kPooledCb, output_tiles};
+    compute.compile_time_args = {kCandidateKvCb, kCandidateScoreCb, kPooledCb, kCaBiasCb, kCbBiasCb};
     compute.config = ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true};
-    desc.kernels.push_back(std::move(compute));
 
     std::vector<uint32_t> writer_compile_args = {kPooledCb};
     TensorAccessorArgs(outputs[0].buffer()).append_to(writer_compile_args);
@@ -192,17 +190,49 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     writer.compile_time_args = std::move(writer_compile_args);
     writer.config =
         DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default};
-    KernelDescriptor::RTArgList writer_runtime_args;
-    writer_runtime_args.reserve(2);
-    writer_runtime_args.push_back(outputs[0].buffer());
-    writer_runtime_args.push_back(output_tiles);
-    writer.emplace_runtime_args(kCompressionCore, writer_runtime_args);
+
+    reader.runtime_args.reserve(num_cores);
+    compute.runtime_args.reserve(num_cores);
+    writer.runtime_args.reserve(num_cores);
+    const uint32_t base_tiles = output_tiles / num_cores;
+    const uint32_t extra_tiles = output_tiles % num_cores;
+    uint32_t first_tile = 0;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const CoreCoord& core = cores[i];
+        const uint32_t core_tiles = base_tiles + (i < extra_tiles ? 1 : 0);
+
+        KernelDescriptor::RTArgList reader_runtime_args;
+        reader_runtime_args.reserve(9);
+        reader_runtime_args.push_back(args.kv.buffer());
+        reader_runtime_args.push_back(args.gate.buffer());
+        reader_runtime_args.push_back(args.position_bias.buffer());
+        reader_runtime_args.push_back(args.predecessor_kv_state.buffer());
+        reader_runtime_args.push_back(args.predecessor_score_state.buffer());
+        reader_runtime_args.push_back(core_tiles);
+        reader_runtime_args.push_back(local_valid / 4);
+        reader_runtime_args.push_back(absolute_start);
+        reader_runtime_args.push_back(first_tile);
+        reader.emplace_runtime_args(core, reader_runtime_args);
+
+        compute.emplace_runtime_args(core, {core_tiles});
+
+        KernelDescriptor::RTArgList writer_runtime_args;
+        writer_runtime_args.reserve(3);
+        writer_runtime_args.push_back(outputs[0].buffer());
+        writer_runtime_args.push_back(core_tiles);
+        writer_runtime_args.push_back(first_tile);
+        writer.emplace_runtime_args(core, writer_runtime_args);
+
+        first_tile += core_tiles;
+    }
+    desc.kernels.push_back(std::move(reader));
+    desc.kernels.push_back(std::move(compute));
     desc.kernels.push_back(std::move(writer));
 
     CsaStateInputs state_args{
         args.kv, args.gate, args.position_bias, args.predecessor_kv_state, args.predecessor_score_state};
     std::array<Tensor, 2> state_outputs{outputs[1], outputs[2]};
-    desc.kernels.push_back(state_kernel_descriptor(state_args, state_outputs, kStateCore, local_valid, absolute_start));
+    desc.kernels.push_back(state_kernel_descriptor(state_args, state_outputs, state_core, local_valid, absolute_start));
     return desc;
 }
 
