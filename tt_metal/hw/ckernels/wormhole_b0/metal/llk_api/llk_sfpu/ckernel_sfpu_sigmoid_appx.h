@@ -16,10 +16,17 @@ namespace sfpu {
 
 // Six-segment piecewise-linear sigmoid via SFPLUTFP32 (FP16_6ENTRY_TABLE2 | SGN_RETAIN),
 // replacing the legacy three-segment SFPLUT table (0x3DFF/0x21D8/0xFF10), whose 4-bit-mantissa
-// coefficients saturated to 1.0 for every |x| >= 2. Max |absolute error| 0.1192 -> 0.0177 and
-// max relative error 0.1353 -> 0.0182, at 4 issue slots per datum instead of 7. The residual is
-// set by the |x| >= 4 tail, whose slope must be exactly 0 or the fit diverges, which pins the
-// error there at 1 - sigmoid(4).
+// coefficients saturated to 1.0 for every |x| >= 2. Measured over all 65279 finite bf16 inputs
+// (on Blackhole silicon; the table and the rounding are identical here, only the schedule
+// differs), scored against exact sigmoid over |x| <= 8:
+//
+//                          max |err|   max rel err        rms        mean (bias)
+//   three-segment table     0.119203      0.135335   0.007086         -2.150e-04
+//   this table              0.017986      0.020028   0.000844         -2.743e-06
+//
+// at 4 issue slots per datum with a 32-bit Dest and 5 with a bf16 one, against the
+// three-segment body's 7. The residual is set by the |x| >= 4 tail, whose slope must be
+// exactly 0 or the fit diverges, which pins max |err| there at 1 - sigmoid(4) = 0.017986.
 //
 // The table is tt-llk's own (common/inc/sfpu/ckernel_sfpu_sigmoid.h) with one deliberate change:
 // B0, the first segment's intercept, is pinned to exactly 0 instead of -0.0004997, because
@@ -68,10 +75,18 @@ constexpr std::uint32_t SIGMOID_APPX_HALF_BF16 = 0x3F00;
 // (33,494 -> 25,326 whole-loop MATH_ISOLATE, bf16, ITERATIONS=32, n300), and bit-identical to it
 // on all 65,279 finite bf16 inputs and all 256 non-finite ones.
 //
+// UNMEASURED WITH ROUNDING. The figures above are the 32-bit-Dest schedule, which the bf16 path
+// no longer is: the two SFP_STOCH_RNDs below each land adjacent to the SFPSTORE they feed, and
+// LReg[7] is the only staging register there is, so nothing independent can cover them. That
+// costs at least the two slots and plausibly two more in stalls -- 10 to 12 per pair against 8,
+// where Blackhole pays exactly one extra slot per datum. Whether the 1.32x survives on a bf16
+// Dest has not been put on silicon; it needs an n300. The 32-bit-Dest path is unaffected,
+// because the rounding compiles out of it entirely.
+//
 // Argument order, since none of it is named at the call site: TTI_SFPLOAD / TTI_SFPSTORE take
 // (VD, Mod0, AddrMod, dest_reg_addr), TTI_SFPLUTFP32 takes (VD, instr_mod1), and the trailing 0
 // on TTI_SFPADDI and TTI_SFPMAD is instr_mod1.
-template <int K, int ITERATIONS>
+template <int K, int ITERATIONS, bool is_fp32_dest_acc_en>
 sfpi_inline void _sigmoid_appx_lut6_pair_() {
     constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
 
@@ -79,6 +94,15 @@ sfpi_inline void _sigmoid_appx_lut6_pair_() {
     TTI_SFPLOAD(p_sfpu::LREG3, IM, ADDR_MOD_3, 2 * (K + 1));
     TTI_SFPADDI(SIGMOID_APPX_HALF_BF16, p_sfpu::LREG7, 0);
     TTI_SFPLUTFP32(p_sfpu::LREG3, SIGMOID_APPX_LUT6_MOD);
+    if constexpr (!is_fp32_dest_acc_en) {
+        TTI_SFP_STOCH_RND(
+            sfpi::SFPSTOCHRND_RND_EVEN,
+            0,
+            p_sfpu::LREG7,
+            p_sfpu::LREG7,
+            p_sfpu::LREG7,
+            sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    }
     TTI_SFPSTORE(p_sfpu::LREG7, IM, ADDR_MOD_3, 2 * K);
     TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG12, p_sfpu::LREG7, 0);
 
@@ -90,12 +114,21 @@ sfpi_inline void _sigmoid_appx_lut6_pair_() {
         TTI_SFPNOP;
     }
 
+    if constexpr (!is_fp32_dest_acc_en) {
+        TTI_SFP_STOCH_RND(
+            sfpi::SFPSTOCHRND_RND_EVEN,
+            0,
+            p_sfpu::LREG7,
+            p_sfpu::LREG7,
+            p_sfpu::LREG7,
+            sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    }
     TTI_SFPSTORE(p_sfpu::LREG7, IM, ADDR_MOD_3, 2 * (K + 1));
 }
 
 // Odd tail: one datum on its own, at 5 slots because there is no second datum to interleave with.
 // Only reachable for odd ITERATIONS; every caller in metal passes 8.
-template <int K, int ITERATIONS>
+template <int K, int ITERATIONS, bool is_fp32_dest_acc_en>
 sfpi_inline void _sigmoid_appx_lut6_last_() {
     constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
 
@@ -103,28 +136,37 @@ sfpi_inline void _sigmoid_appx_lut6_last_() {
     TTI_SFPNOP;
     TTI_SFPADDI(SIGMOID_APPX_HALF_BF16, p_sfpu::LREG7, 0);
     TTI_SFPNOP;
+    if constexpr (!is_fp32_dest_acc_en) {
+        TTI_SFP_STOCH_RND(
+            sfpi::SFPSTOCHRND_RND_EVEN,
+            0,
+            p_sfpu::LREG7,
+            p_sfpu::LREG7,
+            p_sfpu::LREG7,
+            sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    }
     TTI_SFPSTORE(p_sfpu::LREG7, IM, ADDR_MOD_3, 2 * K);
 }
 
 // The unroll: a fold over the block indices. Not a self-call at the end of each block, but the
 // same instruction stream -- every dest offset stays an immediate, which it has to be, because
 // TTI_* assembles the instruction word under an "n" asm constraint.
-template <int ITERATIONS, int... P>
+template <int ITERATIONS, bool is_fp32_dest_acc_en, int... P>
 sfpi_inline void _sigmoid_appx_lut6_unroll_(std::integer_sequence<int, P...>) {
-    (_sigmoid_appx_lut6_pair_<2 * P, ITERATIONS>(), ...);
+    (_sigmoid_appx_lut6_pair_<2 * P, ITERATIONS, is_fp32_dest_acc_en>(), ...);
 
     if constexpr (ITERATIONS % 2 != 0) {
-        _sigmoid_appx_lut6_last_<ITERATIONS - 1, ITERATIONS>();
+        _sigmoid_appx_lut6_last_<ITERATIONS - 1, ITERATIONS, is_fp32_dest_acc_en>();
     }
 }
 
-template <int ITERATIONS = 8>
+template <int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_sigmoid_appx() {
     constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
 
     // Prologue load; every later load is issued inside a previous datum's latency slot.
     TTI_SFPLOAD(p_sfpu::LREG3, IM, ADDR_MOD_3, 0);
-    _sigmoid_appx_lut6_unroll_<ITERATIONS>(std::make_integer_sequence<int, ITERATIONS / 2>{});
+    _sigmoid_appx_lut6_unroll_<ITERATIONS, is_fp32_dest_acc_en>(std::make_integer_sequence<int, ITERATIONS / 2>{});
 }
 
 inline void sigmoid_appx_init() {

@@ -1531,7 +1531,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::sigmoid_appx)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sigmoid_appx, (ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sigmoid_appx, (ITERATIONS, DST_ACCUM_MODE), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::sqrt_custom)
     {
