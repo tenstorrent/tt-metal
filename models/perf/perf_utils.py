@@ -31,10 +31,16 @@ def get_branch_and_hash():
         # under test: GITHUB_SHA is the ref the workflow ran on, which is not the
         # tested commit when the caller passes an explicit ref, and attributing a
         # perf result to the wrong revision is worse than having no metadata.
-        return (
-            environ.get("GITHUB_REF_NAME", "unknown"),
-            environ.get("TT_METAL_TESTED_SHA") or environ.get("GITHUB_SHA", "unknown"),
-        )
+        #
+        # It is reported as a detached HEAD rather than against GITHUB_REF_NAME,
+        # because that is what git said before the tree lost its `.git`: a caller
+        # passing an explicit commit checks it out detached, and the event's branch
+        # need not even contain it. Naming that branch beside another commit's hash
+        # would be a more confident claim than the data supports.
+        tested_sha = environ.get("TT_METAL_TESTED_SHA")
+        if tested_sha:
+            return "detached HEAD", tested_sha
+        return environ.get("GITHUB_REF_NAME", "unknown"), environ.get("GITHUB_SHA", "unknown")
 
     branch = "detached HEAD" if repo.head.is_detached else str(repo.active_branch)
     return branch, repo.head.object.hexsha
