@@ -434,12 +434,15 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
     // Ideally use a 64-bit addresses through the NOC, but otherwise use the iATU to translate 36-bit addresses to 64
     // bit addresses.
     params.can_map_to_noc = true;
-    // Device-read-only pinning is disabled pending a driver-side fix. KMD 2.9.0 -- the version that
-    // introduced the mode, and so far the only one that advertises it -- can wedge inside
-    // tt_pin_pages() when TT_DMA_FLAG_READ_ONLY is set: the ioctl never returns, so the calling
-    // thread sits at 100% CPU with essentially all of it in system time and its
-    // voluntary_ctxt_switches frozen. There is no error, no timeout and no log line, so a caller
-    // that hits it simply hangs until something outside kills it.
+    // Device-read-only pinning is disabled pending a driver-side fix. The mode arrived in KMD 2.9.0;
+    // both 2.9.0 and 2.10.0 can wedge inside tt_pin_pages() when TT_DMA_FLAG_READ_ONLY is set. The
+    // ioctl never returns, so the calling thread sits at 100% CPU with essentially all of it in
+    // system time and its voluntary_ctxt_switches frozen. There is no error, no timeout and no log
+    // line, so a caller that hits it simply hangs until something outside kills it.
+    //
+    // Every KMD version that advertises the mode is affected as far as we have measured, so there is
+    // no known-good version to gate on -- hence disabling the capability rather than raising UMD's
+    // KMD_READ_ONLY_PAGE_PINNING minimum.
     //
     // Reporting the capability as unavailable routes callers through the widening path that already
     // exists for older KMDs: PinnedMemoryCache::try_pin() downgrades the request to ReadWrite, and a
@@ -448,8 +451,8 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
     // read-only pinning landed. It also makes the TT_FATAL in PinnedMemory::Create() reject any
     // direct ReadOnly request, so no path can reach the wedge.
     //
-    // Re-enabling is a one-line revert once a known-good KMD version is identified; the version gate
-    // then belongs in UMD's KMD_READ_ONLY_PAGE_PINNING minimum rather than here.
+    // Re-enabling is a one-line revert once a known-good KMD version exists; the version gate then
+    // belongs in UMD's KMD_READ_ONLY_PAGE_PINNING minimum rather than here.
     params.supports_read_only = false;
     return params;
 }
