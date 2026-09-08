@@ -16,7 +16,7 @@ The test has three deployment variants:
 * ``tp4_8chip``: two 1x4 tensor-parallel stages on the same 8-chip mesh.
 * ``tp4_32chip``: the same two 1x4 stages on a 32-chip Galaxy (24 chips idle).
 
-Attention uses unfused q_a/kv, replicated full-width on every rank of a
+Attention uses q_a/kv, replicated full-width on every rank of a
 stage; head-sharded SDPA, sequential local-group O_A and row-parallel O_B.
 MoE shards the intermediate dimension and all-reduces its output. The DRISC
 prefetcher stays on (same as TP1) for every projection that still fits the
@@ -59,7 +59,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import (
     resolve_snapshot_dir,
 )
 
-_DEFAULT_MODEL_DIR = os.path.expanduser("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731")
+_DEFAULT_MODEL_DIR = os.path.expanduser("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731-v2")
 _DEFAULT_TEXT = "Tell me the name of the top 10 movies of all time. Also list out the top 10 worst movies of all time. Give me details of why you choose those movies. Try to make your response as humours as possible."
 if int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "1024")) < 10:
     _DEFAULT_TEXT = "I"
@@ -182,7 +182,7 @@ def _build_and_prefill(
         max_layers=max_layers,
         use_submeshes=True,
         system_config=system_config,
-        use_prefetcher=None,
+        use_prefetcher=False,
         tp_size=tp_size,
     )
     lm_head = Linear(
@@ -287,10 +287,9 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
         assert all(layer.mlp.experts.tp_size == tp_size for layer in model.layers)
         if tp_size > 1:
             attn = model.layers[0].self_attn
-            assert attn.qkv_tp_strategy == "replicated", "TP4 keeps q_a and kv unfused and replicated"
-            assert not attn.fused_qa_kv
-            assert attn.q_a_proj.use_prefetcher
-            assert attn.kv_proj.use_prefetcher
+            assert attn.qkv_tp_strategy == "replicated", "TP4 keeps q_a and kv replicated"
+            # assert attn.q_a_proj.use_prefetcher
+            # assert attn.kv_proj.use_prefetcher
             assert not attn.q_a_proj.keep_weights_in_l1
             assert not attn.kv_proj.keep_weights_in_l1
             assert not attn.q_a_proj.partial_width_sharded

@@ -273,25 +273,21 @@ void kernel_main() {
     // partial mean-squares and forms rsqrt(mean + epsilon) (times scalar gamma, when gamma is not
     // a per-column tensor), then publishes it to BRISC for multicast.
     if (rms_is_hub) {
-        compute_kernel_lib::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_SCALAR,
-            rms_gathered_cb_id,
-            rms_reduce_scaler_cb_id,
-            rms_reduced_cb_id,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-            compute_kernel_lib::ReduceInputBlockShape::of(1, rms_packed_tiles_per_row, M_tiles));
-
-        CircularBuffer rms_reduced_cb(rms_reduced_cb_id);
+        CircularBuffer rms_gathered_cb(rms_gathered_cb_id);
         CircularBuffer rms_scale_src_cb(rms_scale_src_cb_id);
-        rms_reduced_cb.wait_front(M_tiles);
+        rms_gathered_cb.wait_front(M_tiles * rms_packed_tiles_per_row);
         rms_scale_src_cb.reserve_back(M_tiles);
-        reconfig_data_format(rms_reduced_cb_id, rms_reduced_cb_id);
+        reconfig_data_format(rms_gathered_cb_id, rms_gathered_cb_id);
         pack_reconfig_data_format(rms_scale_src_cb_id);
-        copy_init(rms_reduced_cb_id);
         for (uint32_t mt = 0; mt < M_tiles; ++mt) {
             tile_regs_acquire();
-            copy_tile(rms_reduced_cb_id, mt, 0);
+            const uint32_t row_start = mt * rms_packed_tiles_per_row;
+            binary_tiles_init<true, EltwiseBinaryType::ELWADD>(rms_gathered_cb_id, rms_gathered_cb_id, false);
+            add_tiles(rms_gathered_cb_id, rms_gathered_cb_id, row_start, row_start + 1, 0);
+            binary_tiles_init<false, EltwiseBinaryType::ELWADD>(rms_gathered_cb_id, rms_gathered_cb_id, true);
+            for (uint32_t p = 2; p < rms_packed_tiles_per_row; p += 2) {
+                add_tiles(rms_gathered_cb_id, rms_gathered_cb_id, row_start + p, row_start + p + 1, 0);
+            }
             // The producers contribute raw sums of squares, so the mean is formed here.
             binop_with_scalar_tile_init();
             mul_unary_tile(0, rms_inv_n_bits);
@@ -308,7 +304,7 @@ void kernel_main() {
         }
         // Handed off to the writer RISC, which is this CB's only consumer and pops it after the mcast.
         rms_scale_src_cb.push_back(M_tiles);
-        rms_reduced_cb.pop_front(M_tiles);
+        rms_gathered_cb.pop_front(M_tiles * rms_packed_tiles_per_row);
     }
 
     // The writer RISC pushes cb_rms_scale on every producer, hub included, once the multicast payload

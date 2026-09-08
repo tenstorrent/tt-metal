@@ -68,7 +68,8 @@ void kernel_main() {
             get_arg_val<uint32_t>(9),
             get_arg_val<uint32_t>(10),
             get_arg_val<uint32_t>(11),
-            get_arg_val<uint32_t>(12));
+            get_arg_val<uint32_t>(12),
+            13);
     }
 #endif
 
