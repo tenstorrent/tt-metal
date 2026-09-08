@@ -318,7 +318,7 @@ void kernel_main() {
             // Wait to receive in0 block
             if (block == 0) {
                 input0_cb.reserve_back(in0_block_num_tiles);
-                // TEN-4746 pack-side drain (dummy_pack helper pending).
+                // Requires Quasar pack-side drain
                 dummy_pack(input0_cb_id);
                 input0_cb.push_back(in0_block_num_tiles);
             }
@@ -457,7 +457,7 @@ void kernel_main() {
             // Last iteration does spill and reload to output buffer
             if (block < num_blocks - 2 && spill) {
                 mm_partials_cb.wait_front(out_block_num_tiles);
-                // TEN-4746 (#48552): a bare wait_front->pop_front traps the Quasar unpacker (POP_TILES can
+                // a bare wait_front->pop_front traps the Quasar unpacker (POP_TILES can
                 // retire before the WAIT_TILES it follows). dummy_unpack() orders POP after WAIT via an
                 // UNPACR_NOP (required on Quasar, no-op on WH/BH); it reads nothing.
                 dummy_unpack(mm_partials_cb_id);
@@ -485,8 +485,7 @@ void kernel_main() {
 #ifdef ENABLE_GLOBAL_CB
         // Release in1
         sync_buf.reserve_back(1);
-        // TEN-4746 pack-side drain (dummy_pack helper pending). NOTE: sync_buf is a pure-signalling /
-        // credit-only buffer (no tile data) -- confirm with the LLK team whether the hazard even applies here.
+        // Requires Quasar pack-side drain
         dummy_pack(sync_cb);
         sync_buf.push_back(1);
         UNPACK((update_local_cb_rd_ptr(in1_cb_id, in1_rd_ptr_start_addr)));  // reset rd_ptr back to the initial addr

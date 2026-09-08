@@ -714,9 +714,6 @@ Result conv2d_L1(
         // Program A's resident output = per-core tilized activation [per_core_M, full_K] tiles.
         const uint64_t tilized_act_bytes =
             static_cast<uint64_t>(per_core_m_ntiles) * full_inner_dim_k_ntiles * out_tile_bytes;
-        // [#54488] Use the REAL allocator L1 bank, NOT l1_size_per_core(): the latter reports the nominal arch
-        // L1 (>= 4 MB) even on the reduced-SRAM Quasar variant (~2.68 MB bank), so this guard never fired there
-        // and the split-program tilized activation OOMed at create_output_tensors.
         const uint64_t l1_bank = device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
         // Ceiling on the per-core tilized activation: L1 fit. The tilized-activation output alone crowds the
         // bank, so reserve ~20 % for the resident halo input, weights, matmul CBs and allocator fragmentation.
@@ -1062,7 +1059,7 @@ Result conv2d_L1(
                     // K-spill when full-K weights EXCEED 512 tiles, and when spilling keep the resident block well
                     // under (<=256 tiles) by picking the largest divisor of full_K with in0_block_w*N <= 256.
                     uint32_t in0_blk_w_mm = full_k_ntiles_mm;
-                    // [#54488] On a small-L1 bank (e.g. the 3 MB Quasar SRAM variant, ~2.68 MB) the matmul's
+                    // If have less memory to use per L1 bank (e.g. ~2.68 MB) the matmul's
                     // weights + activation CBs, sized by in0_block_w, alongside the resident tilized activation
                     // overflow / clash with L1 (validate_dataflow_buffer_region: static DFBs overlap an L1
                     // buffer). Spill harder there -- lower single-block ceiling AND smaller resident K-block --

@@ -476,7 +476,7 @@ Tensor fold(
             real_c = static_cast<uint32_t>(input_tensor.logical_shape()[3]);
             in_grid = input_tensor.is_sharded() ? input_tensor.shard_spec().value().grid
                                                 : core_grid.value();  // caller must pass grid_size when interleaved
-            // [#54488] Spill the transient L1-interleaved copy of the fold input to DRAM. The sharded input
+            // Spill the transient L1-interleaved copy of the fold input to DRAM. The sharded input
             // (~800 KB) plus a second L1-interleaved copy of it did not co-fit the small (e.g. 3 MB/core,
             // ~2.68 MB usable) Quasar bank on the 2-core grid -> OOM here at the fold. The very next step,
             // interleaved_to_sharded below, re-shards this into L1 anyway, so DRAM only removes the redundant

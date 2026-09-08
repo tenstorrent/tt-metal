@@ -289,8 +289,8 @@ class ResNet50TestInfra:
             # input_is_nhwc=True)); it has no on-device NCHW->NHWC transpose kernel, so upload the image
             # CHANNELS-LAST, host-padded to the 16B-aligned width (C -> nearest_y(c, 8)). Upload to DRAM
             # (interleaved): the fold reshards onto its compute grid internally (see run()), so it reads the
-            # input from DRAM and does NOT need it resident in L1. On a small-L1 device (e.g. the 3 MB/core
-            # Quasar SRAM variant, ~2.68 MB usable bank) keeping this ~846 KB channels-last input in L1 leaves
+            # input from DRAM and does NOT need it resident in L1. On a small-L1 device (e.g. if have3 MB/core,
+            # ~2.68 MB usable bank) keeping this ~846 KB channels-last input in L1 leaves
             # too little room for the fold's own sharded intermediate on the 2-core grid -> OOM at the fold.
             # DRAM frees that bank; the cost on a full-size bank is only a one-time DRAM read for the stem input.
             c_aligned = _nearest_y(c, 8)

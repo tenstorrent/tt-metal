@@ -51,8 +51,8 @@ def run_resnet_50(
 # far exceeds pytest-timeout's 300s default; bump it (>= 4h) so the batch-1 simulator run isn't killed
 # mid-sweep. Set to 0 to disable.
 @pytest.mark.timeout(14400)
-# [#54488] Emulate the target SRAM: 2 compute nodes x 3 MB each = 6 MB TOTAL, i.e. 3 MB PER CORE.
-# worker_l1_size is the per-core L1 partition, so set it to 3 MB so the e2e fit is validated against real
+# Emulate smaller target SRAM: 2 compute nodes x 3 MB each = 6 MB TOTAL, i.e. 3 MB PER CORE.
+# worker_l1_size is the per-core L1 partition, so set it to 3 MB so the e2e fit is validated against a smaller
 # Quasar SRAM rather than the 4 MB nominal descriptor. Flows through device_params -> ttnn.CreateDevice.
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "worker_l1_size": 3 * 1024 * 1024}], indirect=True)
 @pytest.mark.parametrize(

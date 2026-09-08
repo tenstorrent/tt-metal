@@ -245,7 +245,7 @@ const m2::KernelSpecName KERNEL_OUT_DRAIN{"out_drain"};  // Program A: credit-on
 // that the orchestration function then moves into ProgramRunArgs; no logic changes. Namespace scope here
 // (ttnn::prim::qsr, with `using namespace tt::tt_metal` and `namespace m2 = ...experimental` active) so all
 // types resolve.
-// [#48552 / #55076] Multicast destination rectangle. Mirrors the fix already applied to the Quasar
+// Multicast destination rectangle. Mirrors the fix already applied to the Quasar
 // matmul factories (matmul_multicore_reuse_mcast_2d_program_factory.cpp):
 //   * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so start/end are swapped.
 //   * Quasar (single NOC, non-torus): the rectangle must be ASCENDING regardless of NOC. reader_noc /
