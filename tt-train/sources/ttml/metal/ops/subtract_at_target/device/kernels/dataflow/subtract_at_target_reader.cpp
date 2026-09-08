@@ -37,7 +37,7 @@ void kernel_main() {
     constexpr auto input_accessor_args = TensorAccessorArgs<4>();
     constexpr auto target_accessor_args = TensorAccessorArgs<input_accessor_args.next_compile_time_args_offset()>();
     const auto input_addr_gen = TensorAccessor(input_accessor_args, input_address, tile_bytes);
-    const auto target_addr_gen = TensorAccessor(target_accessor_args, target_address, target_page_size);
+    const auto target_addr_gen = TensorAccessor(target_accessor_args, target_address);
 
     const float subtract_value = generic::bit_cast<float>(subtract_bits);
 
