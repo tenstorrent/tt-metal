@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fused_rmsnorm_pre_all_gather_device_operation.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -53,8 +54,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
 
     tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat reduce_scalar_data_format =
-        (input_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat reduce_scalar_data_format = tt::DataFormat::Float32;
     tt::DataFormat intermediate_data_format = tt::DataFormat::Float32;
     uint32_t input_tile_size = tt::tile_size(input_data_format);
     uint32_t output_tile_size = tt::tile_size(output_data_format);
@@ -83,8 +83,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
 
     const uint32_t double_buffer_constant = 2;
     const uint32_t input_cb_num_tiles = dst_reg_count * double_buffer_constant;
-    const uint32_t reduce_scalar_cb_num_tiles = 1;
-    const uint32_t intermediate_cb_num_tiles = 1;
+    const uint32_t intermediate_cb_num_tiles = dst_reg_count;
     const uint32_t output_cb_num_tiles = output_tiles_per_row * double_buffer_constant;
 
     const uint32_t num_tile_rows_per_core = tt::div_up(num_tile_rows, num_cores);
@@ -98,6 +97,38 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
     const uint32_t reduce_scalar_cb_id = tt::CBIndex::c_1;
     const uint32_t intermediate_cb_id = tt::CBIndex::c_2;
     const uint32_t output_cb_id = tt::CBIndex::c_3;
+    const uint32_t accumulator_cb_id = tt::CBIndex::c_4;
+    namespace rh = ttnn::kernel_lib::host;
+    const TensorLayout intermediate_layout(DataType::FLOAT32, PageConfig(Layout::TILE), MemoryConfig{});
+    const TensorLayout result_layout(output_tensor.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    const uint32_t num_reduce_calls = tt::div_up(num_tile_cols, dst_reg_count);
+    std::vector<rh::ReduceCbConfig> reductions;
+    for (uint32_t i = 0; i < std::min(3u, num_reduce_calls); ++i) {
+        const bool is_last = i + 1 == std::min(3u, num_reduce_calls);
+        const uint32_t columns =
+            is_last ? input_tensor.logical_shape()[-1] - (num_reduce_calls - 1) * dst_reg_count * TILE_WIDTH
+                    : dst_reg_count * TILE_WIDTH;
+        reductions.emplace_back(
+            intermediate_cb_id,
+            rh::ReduceCallConfig{
+                TensorSpec(Shape{TILE_HEIGHT, columns}, intermediate_layout),
+                TensorSpec(Shape{TILE_HEIGHT, 1}, result_layout),
+                ReduceOpMath::SUM,
+                ReduceOpDim::W,
+                1.0F,
+                ReduceFp32Mode::Fast,
+                dst_reg_count * intermediate_tile_size});
+    }
+    // The sequence planner keeps one accumulation representation for every
+    // block, including short tails which cannot use AccumulateViaAdd.
+    auto reduce_sequence = rh::make_reduce_sequence_plan(
+        reductions,
+        {reduce_scalar_cb_id, accumulator_cb_id, output_cb_id},
+        {device->arch(), fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()});
+    for (auto& call : reduce_sequence.calls) {
+        call.plan.input_policy = compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop;
+    }
+    reduce_sequence.calls.back().accumulation_index = num_reduce_calls - 1;
 
     std::vector<uint32_t> reader_compile_time_args = {
         input_cb_id,
@@ -106,6 +137,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
         dst_reg_count,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    reduce_sequence.append_auxiliary_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_id, output_tiles_per_row};
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -118,6 +150,8 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
         num_tile_cols,
         dst_reg_count,
     };
+
+    reduce_sequence.append_to(compute_args);
 
     const auto* compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/"
@@ -156,6 +190,8 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = core_grid_set;
     compute_kernel_desc.compile_time_args = std::move(compute_args);
+    compute_kernel_desc.named_compile_time_args = {
+        {"reduce_auxiliary_tiles", static_cast<uint32_t>(reduce_sequence.auxiliary.tiles.size())}};
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -197,13 +233,20 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
             .page_size = input_tile_size}}}});
 
     program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = reduce_scalar_cb_num_tiles * reduce_scalar_tile_size,
+        .total_size = static_cast<uint32_t>(reduce_sequence.auxiliary.tiles.size()) * reduce_scalar_tile_size,
         .core_ranges = core_grid_set,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(reduce_scalar_cb_id),
             .data_format = reduce_scalar_data_format,
             .page_size = reduce_scalar_tile_size}}}});
 
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = intermediate_tile_size,
+        .core_ranges = core_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(accumulator_cb_id),
+            .data_format = intermediate_data_format,
+            .page_size = intermediate_tile_size}}}});
     program_descriptor.cbs.push_back(CBDescriptor{
         .total_size = intermediate_cb_num_tiles * intermediate_tile_size,
         .core_ranges = core_grid_set,
