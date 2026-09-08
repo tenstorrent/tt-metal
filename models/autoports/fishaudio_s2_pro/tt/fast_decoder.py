@@ -82,7 +82,17 @@ class TTFastDecoder:
         cache_dir: Optional[str] = None,
         use_trace: bool = True,
         log: Callable[[str], None] = print,
+        single_device: Optional[bool] = None,
     ):
+        # The fast tower is small (~430 MB bfp8) and runs 10 dependent steps per frame: tensor parallelism costs
+        # more in collectives than it saves (49 ms on 1 chip vs 129/181 ms on 2/4 chips), so on a multi-chip mesh
+        # it runs on ONE device (a 1x1 submesh) by default; FISH_S2_FAST_SUBMESH=0 forces TP over the mesh.
+        if single_device is None:
+            single_device = os.environ.get("FISH_S2_FAST_SUBMESH", "1") == "1"
+        self.parent = mesh_device
+        if single_device and mesh_device.get_num_devices() > 1:
+            mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 1))
+            log(f"fast decoder: using a 1x1 submesh of the {tuple(self.parent.shape)} mesh")
         self.mesh, self.cfg, self.log = mesh_device, cfg, log
         fc = cfg.fast
         nd = self.nd = mesh_device.get_num_devices()
@@ -213,7 +223,9 @@ class TTFastDecoder:
         # Embedding1D's output and the reduce-scattered attention/MLP outputs), so the step-0 hidden input is
         # sharded on its last dim; on one device this degenerates to a replicate.
         rep = ttnn.ReplicateTensorToMesh(mesh_device)
-        self._x_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=tuple(mesh_device.shape))
+        self._x_mapper = (
+            ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=tuple(mesh_device.shape)) if nd > 1 else rep
+        )
         self.x0_dev = ttnn.from_torch(
             torch.zeros(1, 1, 32, fc.dim, dtype=torch.bfloat16),
             device=mesh_device,
