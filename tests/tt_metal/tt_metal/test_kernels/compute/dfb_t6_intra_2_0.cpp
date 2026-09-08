@@ -39,6 +39,8 @@ void kernel_main() {
             for (std::uint32_t w = 0; w < words_per_entry; ++w) {
                 entry[w] += 1;
             }
+            // Publish these scalar stores before the credit that releases the entry to unpack.
+            asm volatile("fence w, w" ::: "memory");
         }
 #endif
         // TEN-4746: the pack thread wrote L1 directly (no PACR) since reserve_back; a no-write dummy pack
@@ -47,17 +49,19 @@ void kernel_main() {
         dfb.push_back(1);
 
         dfb.wait_front(1);
+        // TEN-4746: a real UNPACR must sit between wait_front and pop_front. dummy_unpack also
+        // gates the unpacker on WAIT_TILES; tensix_sync then blocks this RISC until that UNPACR
+        // retires, so the scalar increments below cannot race an unwritten slot.
+        ckernel::dummy_unpack(dfb::out);
 #ifdef UCK_CHLKC_UNPACK
         if (trisc_id == 0) {
+            ckernel::tensix_sync();
             volatile std::uint32_t* entry = reinterpret_cast<volatile std::uint32_t*>(dfb.get_read_ptr() << 4);
             for (std::uint32_t w = 0; w < words_per_entry; ++w) {
                 entry[w] += 1;
             }
         }
 #endif
-        // TEN-4746: the unpack thread read/modified L1 directly (no UNPACR) since wait_front; a dummy
-        // unpack issues a real UNPACR to order pop_front after wait_front. Reads nothing from L1.
-        ckernel::dummy_unpack(dfb::out);
         dfb.pop_front(1);
     }
     dfb.finish();

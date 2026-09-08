@@ -17,28 +17,9 @@ namespace tt::tt_metal {
 // legacy intra-Tensix self-loop harness + test
 static void run_intra_tensix_dfb_program(
     distributed::MeshDevice& mesh_device, uint32_t entry_size, uint32_t num_entries, uint32_t num_threads) {
-    TT_FATAL(
-        num_entries % num_threads == 0,
-        "num_entries ({}) must be divisible by num_threads ({}) for intra-tensix block partitioning",
-        num_entries,
-        num_threads);
-    const uint32_t entries_per_neo = num_entries / num_threads;
-
-    // The kernel's producer fills each entry with scalar stores, which leaves no PACR between
-    // reserve_back and push_back and so violates TEN-4746. It issues a real pack for the PACR alone;
-    // that pack has to name this same DFB to disarm the guard, so every Neo gets one extra trailing
-    // ring slot for it to land in. Those slots hold packed DEST garbage and are not compared.
-    //
-    // STRIDED puts Neo n on slots n, n + stride, n + 2*stride, ... with stride = num_threads, so the
-    // per-Neo trailing slot is n + entries_per_neo*num_threads. Across all Neos that is exactly the
-    // last num_threads slots of the ring, leaving the first num_entries slots as the data region.
-    const uint32_t ring_entries_per_neo = entries_per_neo + 1;
-    const uint32_t ring_num_entries = ring_entries_per_neo * num_threads;
-    const uint32_t data_words = num_entries * (entry_size / sizeof(uint32_t));
-
     experimental::dfb::DataflowBufferConfig dfb_config{
         .entry_size = entry_size,
-        .num_entries = ring_num_entries,
+        .num_entries = num_entries,
         .num_producers = num_threads,
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = num_threads,
@@ -52,13 +33,20 @@ static void run_intra_tensix_dfb_program(
 
     const uint32_t words_per_entry = entry_size / sizeof(uint32_t);
 
+    TT_FATAL(
+        num_entries % num_threads == 0,
+        "num_entries ({}) must be divisible by num_threads ({}) for intra-tensix block partitioning",
+        num_entries,
+        num_threads);
+    const uint32_t entries_per_neo = num_entries / num_threads;
+
     const experimental::DFBSpecName INTRA_DFB{"intra_dfb"};
     const experimental::KernelSpecName COMPUTE{"compute"};
 
     experimental::DataflowBufferSpec intra_dfb_spec{
         .unique_id = INTRA_DFB,
         .entry_size = entry_size,
-        .num_entries = ring_num_entries,
+        .num_entries = num_entries,
         .data_format_metadata = dfb_config.data_format,
     };
 
@@ -89,8 +77,6 @@ static void run_intra_tensix_dfb_program(
             {
                 {"entries_per_neo", entries_per_neo},
                 {"words_per_entry", words_per_entry},
-                {"ring_entries_per_neo", ring_entries_per_neo},
-                {"neo_stride_entries", num_threads},
             },
         .hw_config = experimental::ComputeGen2Config{},
     };
@@ -114,7 +100,7 @@ static void run_intra_tensix_dfb_program(
     run_params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE}};
     experimental::SetProgramRunArgs(program, run_params);
 
-    const uint32_t total_size = ring_num_entries * entry_size;
+    const uint32_t total_size = num_entries * entry_size;
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_size / sizeof(uint32_t));
 
     const uint32_t dfb_l1_addr =
@@ -124,19 +110,16 @@ static void run_intra_tensix_dfb_program(
 
     LaunchProgram(mesh_device, std::move(program));
 
-    std::vector<uint32_t> l1_data;
-    slow_dispatch::ReadFromL1(mesh_device, logical_core, dfb_l1_addr, total_size, l1_data);
-    ASSERT_EQ(l1_data.size(), input.size());
-
-    // Packer increments each word by 1, then unpacker increments it by 1 → +2 per word, for every
-    // Neo's ring independently. Compare only the data region: the trailing num_threads slots are the
-    // TEN-4746 pack's scratch targets and hold packed DEST bytes.
-    std::vector<uint32_t> expected(data_words);
-    for (uint32_t i = 0; i < data_words; i++) {
+    // Packer increments each word by 1, then unpacker increments it by 1 → +2 per word.
+    // This holds for every Neo's ring independently, so the entire L1 region is input + 2.
+    std::vector<uint32_t> expected(input.size());
+    for (size_t i = 0; i < input.size(); i++) {
         expected[i] = input[i] + 2;
     }
-    std::vector<uint32_t> actual(l1_data.begin(), l1_data.begin() + data_words);
-    EXPECT_EQ(expected, actual) << "Intra-tensix DFB L1 mismatch";
+
+    std::vector<uint32_t> l1_data;
+    slow_dispatch::ReadFromL1(mesh_device, logical_core, dfb_l1_addr, total_size, l1_data);
+    EXPECT_EQ(expected, l1_data) << "Intra-tensix DFB L1 mismatch";
 }
 
 TEST_F(UnitMeshFixture, TensixIntraTest1xDFB4Sx4S) {

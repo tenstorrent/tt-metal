@@ -9,6 +9,7 @@
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -396,8 +397,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     } else {
         // WH/BH: Gen1 config (Gen1 has no implicit sync, so no disable knob needed).
         if (p.producer_type == M2PorCType::DM) {
-            producer.hw_config =
-                m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
+            producer.hw_config = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
         } else {
             producer.hw_config = m2::ComputeGen1Config{};
         }
