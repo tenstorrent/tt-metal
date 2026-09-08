@@ -252,6 +252,24 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     };
     const auto partial_sequence = make_reduce_sequence_plan(
         partial_reductions, {.auxiliary_cb_id = 2U, .accumulator_cb_id = 4U, .output_cb_id = 3U}, hardware);
+    // An explicit algorithm must replan the physical auxiliary recipe as well
+    // as the compute flags: native partial reduction uses scalers, not a mask.
+    const auto native_sequence = make_reduce_sequence_plan(
+        partial_reductions, {2U, 4U, 3U}, hardware, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
+    ASSERT_EQ(native_sequence.auxiliary.tiles.size(), 2U);
+    EXPECT_EQ(native_sequence.auxiliary.tiles[0].num_valid_elements, 32U);
+    EXPECT_EQ(native_sequence.auxiliary.tiles[1].num_valid_elements, 7U);
+    for (const auto& call : native_sequence.calls) {
+        EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
+        EXPECT_EQ(call.plan.partial_mode, compute_kernel_lib::ReducePartialMode::Scaler);
+        EXPECT_NO_THROW(ReduceCallArgs(call).get_compile_time_args());
+    }
+    auto max_reductions = partial_reductions;
+    for (auto& reduction : max_reductions) {
+        reduction.second.reduce_math = ReduceOpMath::MAX;
+    }
+    EXPECT_ANY_THROW(make_reduce_sequence_plan(
+        max_reductions, {2U, 4U, 3U}, hardware, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd));
     ASSERT_EQ(partial_sequence.calls.size(), 2U);
     ASSERT_EQ(partial_sequence.auxiliary.tiles.size(), 2U);
     EXPECT_EQ(partial_sequence.auxiliary.tiles[0].type, ReduceAuxiliaryTileType::FirstRow);

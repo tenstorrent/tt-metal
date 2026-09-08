@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "softmax_device_operation.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -88,9 +89,48 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralHSmall::create_program_artif
     const DFBSpecName RECIP{"recip_sum_exps"};
     const DFBSpecName MAX{"max"};
     const DFBSpecName X_MINUS_MAX{"x_minus_max"};
-    const DFBSpecName TMP{"tmp"};
 
     // Circular buffers
+    namespace reduce_host = ttnn::kernel_lib::host;
+    const TensorLayout input_layout(input.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    const TensorLayout intermediate_layout(
+        fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{});
+    const reduce_host::ReduceHardwareConfig reduce_hardware{
+        .arch = arch,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .available_l1_bytes = (Ht + 8) * intermed_tile_size};
+    auto max_plan = reduce_host::make_reduce_plan(
+        TensorSpec(Shape{input.logical_shape()[-2], 32}, input_layout),
+        TensorSpec(Shape{1, 32}, intermediate_layout),
+        ReduceOpMath::MAX,
+        ReduceOpDim::H,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        reduce_hardware,
+        Ht * in_tile_size);
+    max_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+    // The exponentials retain their output-padding mask, so their padded
+    // extent is a complete reduction input with zero-valued padding.
+    auto sum_plan = reduce_host::make_reduce_plan(
+        TensorSpec(Shape{Ht * 32, 32}, intermediate_layout),
+        TensorSpec(Shape{1, 32}, intermediate_layout),
+        ReduceOpMath::SUM,
+        ReduceOpDim::H,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        reduce_hardware,
+        Ht * intermed_tile_size);
+    sum_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+    std::vector<uint32_t> compute_reduce_args;
+    reduce_host::ReduceCallArgs(max_plan, {0, 1, 2}).append_to(compute_reduce_args);
+    reduce_host::ReduceCallArgs(sum_plan, {0, 1, 2}).append_to(compute_reduce_args);
+    std::vector<uint32_t> reader_reduce_args;
+    reduce_host::ReduceAuxiliaryArgs({1, max_plan.auxiliary_tiles}).append_to(reader_reduce_args);
+    reduce_host::ReduceAuxiliaryArgs({1, sum_plan.auxiliary_tiles}).append_to(reader_reduce_args);
+    const auto* max_auxiliary = max_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const auto* sum_auxiliary = sum_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+
     Group<DataflowBufferSpec> dfbs = {
         DataflowBufferSpec{
             .unique_id = IN, .entry_size = in_tile_size, .num_entries = Ht, .data_format_metadata = data_format},
@@ -101,14 +141,14 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralHSmall::create_program_artif
             .data_format_metadata = mask_scaler_format},
         DataflowBufferSpec{
             .unique_id = MAX_SCALER,
-            .entry_size = mask_scaler_tile_size,
-            .num_entries = 1,
-            .data_format_metadata = mask_scaler_format},
+            .entry_size = max_auxiliary->page_size,
+            .num_entries = max_auxiliary->page_count,
+            .data_format_metadata = max_auxiliary->data_format},
         DataflowBufferSpec{
             .unique_id = SUM_SCALER,
-            .entry_size = mask_scaler_tile_size,
-            .num_entries = 1,
-            .data_format_metadata = mask_scaler_format},
+            .entry_size = sum_auxiliary->page_size,
+            .num_entries = sum_auxiliary->page_count,
+            .data_format_metadata = sum_auxiliary->data_format},
         DataflowBufferSpec{
             .unique_id = OUT, .entry_size = in_tile_size, .num_entries = Ht, .data_format_metadata = data_format},
         DataflowBufferSpec{
@@ -132,11 +172,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralHSmall::create_program_artif
             .entry_size = intermed_tile_size,
             .num_entries = Ht,
             .data_format_metadata = intermed_data_format},
-        DataflowBufferSpec{
-            .unique_id = TMP,
-            .entry_size = intermed_tile_size,
-            .num_entries = 1,
-            .data_format_metadata = intermed_data_format},
     };
 
     // Data movement kernel
@@ -158,6 +193,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralHSmall::create_program_artif
         .compile_time_args = {{"is_fp32", static_cast<std::uint32_t>(input.dtype() == DataType::FLOAT32)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Ht", "Wt", "mask_h"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = reader_reduce_args},
     };
 
     KernelSpec writer{
@@ -191,7 +227,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralHSmall::create_program_artif
                 {RECIP, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {MAX, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {X_MINUS_MAX, tt::tt_metal::UnpackMode::UnpackToSrc},
-                {TMP, tt::tt_metal::UnpackMode::UnpackToSrc},
+
             };
         }
         return hw;
@@ -222,8 +258,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralHSmall::create_program_artif
                 .dfb_spec_name = X_MINUS_MAX,
                 .accessor_name = "x_minus_max",
                 .endpoint_type = DFBEndpointType::CONSUMER},
-            DFBBinding{.dfb_spec_name = TMP, .accessor_name = "tmp", .endpoint_type = DFBEndpointType::PRODUCER},
-            DFBBinding{.dfb_spec_name = TMP, .accessor_name = "tmp", .endpoint_type = DFBEndpointType::CONSUMER},
         };
     };
 
@@ -235,6 +269,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralHSmall::create_program_artif
             .dfb_bindings = compute_dfb_bindings(),
             .compile_time_args = {{"N", N}, {"Ht", Ht}},
             .hw_config = make_compute_hw(),
+            .advanced_options = {.compile_time_varargs = compute_reduce_args},
         };
     };
 

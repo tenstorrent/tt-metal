@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "softmax_device_operation.hpp"
+#include "softmax_reduce.hpp"
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -116,7 +117,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         small_kernel_numeric_stable_uses_cb_in0_at_wt ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
     std::uint32_t out0_t = block_size * 2;
     std::uint32_t im1_t = 1;  // 1/sum(exp(x))
-    std::uint32_t in2_t = 1;  // scaler for reduce coming from reader
     std::uint32_t in3_t = 1;  // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
     std::uint32_t in4_t =
         tt::div_up(Wt, block_size) * block_size;  // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
@@ -193,6 +193,17 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
     // ---- Resource names (program-scope; local to avoid unity-build symbol clashes) ----
+    const auto reduce_plans = make_softmax_reduce_plans(
+        Wt,
+        use_large_kernel ? dfb_length : Wt,
+        input_tensor.dtype(),
+        fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
+        {arch, fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()},
+        (use_large_kernel ? compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile
+                          : compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop));
+    const auto reduce_compute_args = reduce_plans.compute_args();
+    const auto reduce_auxiliary_args = reduce_plans.auxiliary_args();
+
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
     const KernelSpecName COMPUTE{"compute"};
@@ -254,12 +265,12 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = MAX_SCALER,
         .entry_size = max_scaler_tile_size,
-        .num_entries = in2_t,
+        .num_entries = static_cast<uint32_t>(reduce_plans.max.auxiliary.tiles.size()),
         .data_format_metadata = max_scaler_cb_data_format});
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = SUM_SCALER,
         .entry_size = sum_scaler_tile_size,
-        .num_entries = in2_t,
+        .num_entries = static_cast<uint32_t>(reduce_plans.sum.auxiliary.tiles.size()),
         .data_format_metadata = sum_scaler_cb_data_format});
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = EXPS,
@@ -378,6 +389,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
     };
 
     // ---- Writer kernel ----
@@ -505,6 +517,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .compile_time_args = compute_cta,
         .runtime_arg_schema = {.runtime_arg_names = compute_rta_names},
         .hw_config = compute_hw,
+        .advanced_options = {.compile_time_varargs = reduce_compute_args},
     };
 
     // ---- Assemble spec ----

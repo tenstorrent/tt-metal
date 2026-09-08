@@ -10,7 +10,7 @@
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "softmax_reduce.hpp"
 #include "experimental/kernel_args.h"
 
 template <
@@ -28,13 +28,8 @@ ALWI void calc_numeric_stable() {
 
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
-    compute_kernel_lib::reduce<
-        PoolType::MAX,
-        ReduceDim::REDUCE_ROW,
-        dfb_in_id,
-        dfb_max_scaler_id,
-        dfb_max_id,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(compute_kernel_lib::ReduceInputBlockShape::row(block_w));
+    using MaxCall = SoftmaxReduceCall<PoolType::MAX, 0, dfb_in_id, dfb_max_scaler_id, dfb_max_id>;
+    compute_kernel_lib::reduce<MaxCall>();
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -236,20 +231,11 @@ void kernel_main() {
         // PRELOADED is correct for sharded - all tiles loaded at once
         // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
         dfb_exps_obj.wait_front(block_w);
-        compute_kernel_lib::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            dfb_exps,
-            dfb_sum_scaler,
-            dfb_recipsumexps,
-            compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
-            compute_kernel_lib::ReduceInputBlockShape::row(block_w),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
-            [](std::uint32_t) {
-                recip_tile_init();
-                recip_tile(0);
-            });
+        using SumCall = SoftmaxReduceCall<PoolType::SUM, 0, dfb_exps, dfb_sum_scaler, dfb_recipsumexps>;
+        compute_kernel_lib::reduce<SumCall>([](std::uint32_t) {
+            recip_tile_init();
+            recip_tile(0);
+        });
 
         // exp(x) / (sum(exp(x)))
         reconfig_data_format(dfb_exps, dfb_recipsumexps);

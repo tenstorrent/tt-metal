@@ -14,7 +14,7 @@
 #include "api/compute/eltwise_unary/sfpu_int_sum.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/compute_kernel_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "softmax_reduce.hpp"
 
 #include "api/debug/assert.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -61,8 +61,6 @@ void apply_fused_attn_mask(
 void pad_input(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_length_t, std::uint32_t blk);
 void exp_cb(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_max, std::uint32_t dfb_length_t, std::uint32_t blk);
 
-template <PoolType reduce_type, std::uint32_t dfb_in_id, std::uint32_t dfb_scaler_id, std::uint32_t dfb_prev_out_id, std::uint32_t dfb_out_id>
-void reduce_cb(bool use_prev_reduce, std::uint32_t dfb_length_t);
 void apply_recip(std::uint32_t dfb_in, std::uint32_t dfb_recip, std::uint32_t dfb_out, std::uint32_t dfb_length_t, std::uint32_t blk);
 
 // CB consumers cannot wrap mid-fifo: pops in one cycle must land exactly on fifo_limit.
@@ -254,46 +252,53 @@ void exp_cb(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_max, 
     }
 }
 
-template <PoolType reduce_type, std::uint32_t dfb_in_id, std::uint32_t dfb_scaler_id, std::uint32_t dfb_prev_out_id, std::uint32_t dfb_out_id>
-void reduce_cb(bool use_prev_reduce, std::uint32_t dfb_length_t) {
-    // Single reduce call with lambda that conditionally accumulates
-    compute_kernel_lib::reduce<reduce_type, ReduceDim::REDUCE_ROW, dfb_in_id, dfb_scaler_id, dfb_out_id>(
-        compute_kernel_lib::ReduceInputBlockShape::row(dfb_length_t),
-        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-        compute_kernel_lib::NoAccumulation{},
-        // PostReduceOp: conditionally accumulate with previous result
-        [use_prev_reduce](std::uint32_t) {
-            if (use_prev_reduce) {
-                // At this point, DST[0] contains the current reduce result
-                // Load previous result into DST[1] and accumulate
-                DataflowBuffer(dfb_prev_out_id).wait_front(1);
-                reconfig_data_format_srca(dfb_prev_out_id);
-                copy_init(dfb_prev_out_id);
-                copy_tile(dfb_prev_out_id, 0, 1);
-
-                // Accumulate based on reduce type
-                if constexpr (reduce_type == PoolType::MAX) {
-                    binary_max_tile_init();
-                    binary_max_tile(0, 1, 0);  // max(DST[0], DST[1]) -> DST[0]
-                } else {
-                    // SUM reduction
-                    add_binary_tile_init();
-                    add_binary_tile(0, 1, 0);  // add(DST[0], DST[1]) -> DST[0]
-                }
-
-                DataflowBuffer(dfb_prev_out_id).pop_front(1);
+template <PoolType Math, uint32_t Index, uint32_t Input, uint32_t Auxiliary, uint32_t Output, uint32_t Accumulator>
+ALWI void reduce_dfb_call(bool use_previous) {
+    using Call = SoftmaxReduceCall<Math, Index, Input, Auxiliary, Output, Accumulator>;
+    if constexpr (Math == PoolType::SUM && !compute_kernel_lib::get_fp32_dest_acc_enabled()) {
+        compute_kernel_lib::reduce<Call>([use_previous](uint32_t dst) {
+            if (use_previous) {
+                DataflowBuffer previous(Accumulator);
+                previous.wait_front(1);
+                reconfig_data_format_srca(Accumulator);
+                copy_init(Accumulator);
+                copy_tile(Accumulator, 0, dst + 1);
+                add_binary_tile_init();
+                add_binary_tile(dst, dst + 1, dst);
+                previous.pop_front(1);
             }
-            // If !use_prev_reduce, lambda is no-op (compiles away)
         });
+    } else {
+        compute_kernel_lib::reduce<Call>();
+    }
 }
 
-template <PoolType reduce_type, std::uint32_t dfb_in_id, std::uint32_t dfb_scaler_id, std::uint32_t dfb_ping_a, std::uint32_t dfb_ping_b>
-ALWI void reduce_dfb_pass(std::uint32_t cur_pass, bool use_prev_reduce, std::uint32_t dfb_length_t) {
-    if ((cur_pass & 1) == 0) {
-        reduce_cb<reduce_type, dfb_in_id, dfb_scaler_id, dfb_ping_b, dfb_ping_a>(use_prev_reduce, dfb_length_t);
+template <PoolType Math, uint32_t Input, uint32_t Auxiliary, uint32_t Output, uint32_t Accumulator>
+ALWI void reduce_dfb_pass_impl(uint32_t cur_pass, uint32_t num_passes) {
+    constexpr uint32_t call_count = Math == PoolType::MAX ? softmax_max_call_count : get_compile_time_arg_val(softmax_sum_offset);
+    if constexpr (call_count == 1) {
+        reduce_dfb_call<Math, 0, Input, Auxiliary, Output, Accumulator>(false);
     } else {
-        reduce_cb<reduce_type, dfb_in_id, dfb_scaler_id, dfb_ping_a, dfb_ping_b>(use_prev_reduce, dfb_length_t);
+        if (cur_pass == 0) {
+            reduce_dfb_call<Math, 0, Input, Auxiliary, Output, Accumulator>(false);
+        } else if (cur_pass + 1 == num_passes) {
+            reduce_dfb_call<Math, call_count - 1, Input, Auxiliary, Output, Accumulator>(true);
+        } else {
+            reduce_dfb_call<Math, 1, Input, Auxiliary, Output, Accumulator>(true);
+        }
     }
+}
+
+template <PoolType Math, uint32_t Input, uint32_t Auxiliary, uint32_t Output, uint32_t Accumulator>
+ALWI void reduce_dfb_pass(uint32_t cur_pass, uint32_t num_passes) {
+    if constexpr (Math == PoolType::SUM && !compute_kernel_lib::get_fp32_dest_acc_enabled()) {
+        // Separate pass outputs preserve BF16 precision before their SFPU sum.
+        if ((cur_pass & 1) != 0) {
+            reduce_dfb_pass_impl<Math, Input, Auxiliary, Accumulator, Output>(cur_pass, num_passes);
+            return;
+        }
+    }
+    reduce_dfb_pass_impl<Math, Input, Auxiliary, Output, Accumulator>(cur_pass, num_passes);
 }
 
 void apply_recip(std::uint32_t dfb_in, std::uint32_t dfb_recip, std::uint32_t dfb_out, std::uint32_t dfb_length_t, std::uint32_t blk) {
@@ -369,16 +374,17 @@ void kernel_main() {
 #endif
 
     std::uint32_t num_dfb_passes = 1 + ((Wt - 1) / dfb_length_t);  // ceiling divide
-    // Ping-pong reduce outputs: odd num_dfb_passes -> dfb_max/dfb_sumexps, even -> dfb_prev_max/dfb_prev_reduce
+    // Planned sequences always publish their final tile to the output buffer.
 #ifdef NUMERIC_STABLE
     constexpr auto dfb_max = dfb::max;
-    const std::uint32_t dfb_max_final = (num_dfb_passes & 1) ? (std::uint32_t)dfb_max : (std::uint32_t)dfb_prev_max;
+    constexpr std::uint32_t dfb_max_final = dfb_max;
 #else
     // dfb_max is only consumed on the numeric-stable path; exp_cb ignores its dfb_max argument otherwise. Bind
     // the unused slot to a valid DFB (dfb_exps) so the handle resolves without dfb_max (c_8) being allocated.
     const std::uint32_t dfb_max_final = dfb_exps;
 #endif
-    const std::uint32_t dfb_sum_final = (num_dfb_passes & 1) ? (std::uint32_t)dfb_sumexps : (std::uint32_t)dfb_prev_reduce;
+    const std::uint32_t dfb_sum_final =
+        compute_kernel_lib::get_fp32_dest_acc_enabled() || (num_dfb_passes & 1) ? dfb_sumexps : dfb_prev_reduce;
     // Tiles needed after Wt to finish each CB's cycle, named for the capacity they align.
     // The streamed CBs all share dfb_length_t; the reader pushes dfb_in0/dfb_fused_attn's pad.
     const std::uint32_t stream_pad = (dfb_length_t - (Wt % dfb_length_t)) % dfb_length_t;
@@ -393,7 +399,6 @@ void kernel_main() {
         // This and all inner loops are for parsing the length of Wt in terms of chunks of the width that can fit in the
         // cb This specific loop is for generaating the sum
         // reads through and finds the max value
-        bool use_prev_reduce = false;
         std::uint32_t length_left_t = Wt;
         std::uint32_t cur_dfb_length_t = dfb_length_t;
 #ifdef NUMERIC_STABLE
@@ -410,18 +415,17 @@ void kernel_main() {
             apply_fused_scale_mask(dfb_in0, dfb_fused_scale, dfb_scale_mask, cur_dfb_length_t, blk);
             apply_fused_attn_mask(dfb_scale_mask, dfb_fused_attn, dfb_x, cur_dfb_length_t, blk, do_mask);
             reduce_dfb_pass<PoolType::MAX, dfb_x, dfb_max_scaler, dfb_max, dfb_prev_max>(
-                cur_pass, use_prev_reduce, cur_dfb_length_t);
+                cur_pass, num_dfb_passes);
 #else
             if (do_mask && cur_pass == num_dfb_passes - 1) {
                 pad_input(dfb_in0, dfb_x, cur_dfb_length_t, blk);
                 reduce_dfb_pass<PoolType::MAX, dfb_x, dfb_max_scaler, dfb_max, dfb_prev_max>(
-                    cur_pass, use_prev_reduce, cur_dfb_length_t);
+                    cur_pass, num_dfb_passes);
             } else {
                 reduce_dfb_pass<PoolType::MAX, dfb_in0, dfb_max_scaler, dfb_max, dfb_prev_max>(
-                    cur_pass, use_prev_reduce, cur_dfb_length_t);
+                    cur_pass, num_dfb_passes);
             }
 #endif
-            use_prev_reduce = true;
             length_left_t -= cur_dfb_length_t;
             cur_dfb_length_t = std::min(cur_dfb_length_t, length_left_t);
         }
@@ -436,7 +440,6 @@ void kernel_main() {
             cycle_dfb_pad(dfb_x, stream_pad);
         }
 #endif
-        use_prev_reduce = false;
         length_left_t = Wt;
         cur_dfb_length_t = dfb_length_t;
 #endif
@@ -458,20 +461,19 @@ void kernel_main() {
             apply_fused_attn_mask(dfb_scale_mask, dfb_fused_attn, dfb_x, cur_dfb_length_t, blk, do_mask);
             exp_cb(dfb_x, dfb_exps, dfb_max_final, cur_dfb_length_t, blk);
             reduce_dfb_pass<PoolType::SUM, dfb_exps, dfb_sum_scaler, dfb_sumexps, dfb_prev_reduce>(
-                cur_pass, use_prev_reduce, cur_dfb_length_t);
+                cur_pass, num_dfb_passes);
 #else
             if (do_mask && cur_pass == num_dfb_passes - 1) {
                 pad_input(dfb_in0, dfb_x, cur_dfb_length_t, blk);
                 exp_cb(dfb_x, dfb_exps, dfb_max_final, cur_dfb_length_t, blk);
                 reduce_dfb_pass<PoolType::SUM, dfb_exps, dfb_sum_scaler, dfb_sumexps, dfb_prev_reduce>(
-                    cur_pass, use_prev_reduce, cur_dfb_length_t);
+                    cur_pass, num_dfb_passes);
             } else {
                 exp_cb(dfb_in0, dfb_exps, dfb_max_final, cur_dfb_length_t, blk);
                 reduce_dfb_pass<PoolType::SUM, dfb_exps, dfb_sum_scaler, dfb_sumexps, dfb_prev_reduce>(
-                    cur_pass, use_prev_reduce, cur_dfb_length_t);
+                    cur_pass, num_dfb_passes);
             }
 #endif
-            use_prev_reduce = true;  // We want to accumulate the previous cb reductions
             length_left_t -= cur_dfb_length_t;
             cur_dfb_length_t = std::min(cur_dfb_length_t, length_left_t);
         }

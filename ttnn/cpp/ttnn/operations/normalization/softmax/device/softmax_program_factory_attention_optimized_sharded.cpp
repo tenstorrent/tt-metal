@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "softmax_device_operation.hpp"
+#include "softmax_reduce.hpp"
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -131,6 +132,16 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     const CoreRangeSet all_device_cores{CoreRange({0, 0}, {num_cores_c - 1, num_cores_r - 1})};
 
     // ---- Resource names (program-scope; local to avoid unity-build symbol clashes) ----
+    const auto reduce_plans = make_softmax_reduce_plans(
+        program_config.block_w,
+        program_config.block_w,
+        input_tensor.dtype(),
+        fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
+        {arch, fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()},
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
+    const auto reduce_compute_args = reduce_plans.compute_args();
+    const auto reduce_auxiliary_args = reduce_plans.auxiliary_args();
+
     const KernelSpecName READER{"reader"};
     const KernelSpecName COMPUTE{"compute"};
 
@@ -161,12 +172,12 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = MAX_SCALER,
         .entry_size = max_scaler_tile_size,
-        .num_entries = 1,
+        .num_entries = static_cast<uint32_t>(reduce_plans.max.auxiliary.tiles.size()),
         .data_format_metadata = max_scaler_cb_data_format});
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = SUM_SCALER,
         .entry_size = sum_scaler_tile_size,
-        .num_entries = 1,
+        .num_entries = static_cast<uint32_t>(reduce_plans.sum.auxiliary.tiles.size()),
         .data_format_metadata = sum_scaler_cb_data_format});
     if (has_mask) {
         dfbs.push_back(DataflowBufferSpec{
@@ -293,6 +304,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
     };
 
     // ---- Compute kernel ----
@@ -379,6 +391,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
              {"subblock_w", program_config.subblock_w},
              {"num_subblocks_w", num_subblocks_w}},
         .hw_config = compute_hw,
+        .advanced_options = {.compile_time_varargs = reduce_compute_args},
     };
 
     // ---- Assemble spec ----

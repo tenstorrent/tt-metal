@@ -3439,11 +3439,25 @@
       "notes": [
         "Narrow H reductions exercise the SFPU work-register boundary for INT32 and accurate FLOAT32."
       ]
+    },
+    {
+      "id": "T174",
+      "kind": "gtest",
+      "source": "tests/ttnn/unit_tests/gtests/test_reduction.cpp",
+      "family": "Reduce helper migration regressions",
+      "factories": [],
+      "binary": "build/test/ttnn/unit_tests_ttnn",
+      "tests": [
+        "ReduceHostPlanner.BasicAlgorithmAndChunkSanity"
+      ],
+      "notes": [
+        "Host algorithm override must replan auxiliary recipes and reject unsupported algorithms."
+      ]
     }
   ],
   "migration_regressions": {
-    "added_test_definitions": 8,
-    "added_collected_cases": 233,
+    "added_test_definitions": 9,
+    "added_collected_cases": 234,
     "note": "The original report describes the base inventory; current runner also includes these migration regressions."
   }
 }

@@ -176,3 +176,11 @@ Validation: native build passed (`cmake --build build --target ttnn unit_tests_t
 The normalization SUM now uses a host-planned call with the selected-expert count as its logical width. The writer creates the plan's auxiliary tiles, including the partial-tile recipe. Existing gather, sorting, epsilon, and route scaling remain unchanged.
 
 Validation: native build passed, SM018 passed (`reduce-migration-0f0kavqf`), and full T022 passed all 6 cases (`reduce-migration-_3qcre6w`).
+
+## Attention and general softmax
+
+Migrated the attention MAX/SUM calls, their five readers, and both attention factories. The large FP32 path uses planned cross-call accumulation; the BF16 path keeps each pass reduced from zero and combines pass results in an SFPU callback. Carrying a large BF16 sum through either native per-tile reduction or an unreduced cross-call add lost small contributions, caught by the wide softmax tests. Added an optional sequence-planner algorithm selection so this numerical requirement is planned together with its physical auxiliary recipe; extended the host regression and Python binding (T174).
+
+Also migrated the four general H/W factories which reuse the Moreh compute/readers. The Falcon sanity test had an obsolete model configuration lookup; it now specifies the small sharded softmax configuration it exercises.
+
+Validation: native build passed. All five attention sanity selections passed (`wfu3dlkz`, with corrected SM049 in `fvr4t6tk`). Full T034/T035/T046/T047/T048 completed **677 passed, 1 upstream skip** across 678 cases: general and ULP results `5hw4h99z`, interleaved/sharded nightly results `6ow2r_al`, and final wide/partial BF16 correction `7l8rdcz7`. The host planner regression T174 passed (`w961j4ud`). All device runs used the safe wrapper. The local Python binding was refreshed from `build/ttnn/_ttnn.so` after its signature changed.

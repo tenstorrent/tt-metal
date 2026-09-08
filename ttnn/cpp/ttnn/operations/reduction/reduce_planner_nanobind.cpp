@@ -349,10 +349,12 @@ void bind_reduce_planner(nb::module_& mod) {
         nb::overload_cast<
             const std::vector<host::ReduceCbConfig>&,
             const host::ReduceSequenceCbIds&,
-            const host::ReduceHardwareConfig&>(&host::make_reduce_sequence_plan),
+            const host::ReduceHardwareConfig&,
+            std::optional<compute_kernel_lib::ReduceAlgorithm>>(&host::make_reduce_sequence_plan),
         nb::arg("reductions"),
         nb::arg("cb_ids"),
         nb::arg("hardware"),
+        nb::arg("algorithm") = nb::none(),
         "Plan an explicitly ordered sequence of reductions; input descriptions may reuse a CB ID.");
 }
 

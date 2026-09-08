@@ -927,7 +927,8 @@ std::uint32_t append_auxiliary_recipe(
 ReduceSequencePlan make_reduce_sequence_plan(
     const std::vector<ReduceCbConfig>& reductions,
     const ReduceSequenceCbIds& cb_ids,
-    const ReduceHardwareConfig& hardware) {
+    const ReduceHardwareConfig& hardware,
+    std::optional<ReduceAlgorithm> algorithm) {
     TT_FATAL(!reductions.empty(), "Reduce sequence planner: at least one input CB is required");
     TT_FATAL(
         reductions.size() <= std::numeric_limits<std::uint32_t>::max(),
@@ -986,7 +987,7 @@ ReduceSequencePlan make_reduce_sequence_plan(
             config.fp32_mode,
             hardware,
             config.max_input_cb_bytes,
-            std::nullopt,
+            algorithm,
             threshold_axis_tiles));
     }
 
