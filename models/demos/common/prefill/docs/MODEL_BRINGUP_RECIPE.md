@@ -7,12 +7,10 @@ End-to-end path from a HuggingFace checkpoint to a model served by the
 `models/demos/common/prefill` engine.
 
 **Scope:** first working implementation — package scaffold, torch oracle, module-by-module PCC
-bring-up, full model, KV cache, runtime, adapter, migration table.
-**Not in scope:** perf tuning, sharding/memory optimization, dtype accuracy trade-offs, new C++
+bring-up, full model, KV cache, real weights, chunked prefill. Bring-up **ends at P2**.
+**Not in scope:** serving (adapter, manifest, the two-process runner) and KV migration, which are a
+separate follow-on; perf tuning, sharding/memory optimization, dtype accuracy trade-offs, new C++
 kernels, decode.
-
-Companion: [`ADDING_A_PREFILL_MODEL.md`](ADDING_A_PREFILL_MODEL.md) — the serving contract this
-recipe exists to make satisfiable.
 
 > **Status: outline.** Sections marked `TODO` are stubs to be filled in one at a time.
 
@@ -26,7 +24,7 @@ Two JSON files. Everything the agent needs comes from one of them; nothing is in
 
 *How this repo builds a prefill model.* For each part that is copied rather than written fresh, it
 names the existing file to copy from: weight loading, dense MLP, MoE wrapper, attention, rope, the
-runtime, migration hooks, and the KV cache cluster (one donor package resolving seven coupled roles).
+runtime, and the KV cache cluster (one donor package resolving five coupled roles).
 Every entry is copy-and-adapt — see §2.1 for how far that goes.
 
 Pointers that never vary by model are **not** in this file — they live in
@@ -90,9 +88,8 @@ bring-up, one pointer per part whose donor depends on the model:
 | `compute.moe_wrapper` | thin wrapper over the imported EP substrate: router, activation, shared expert |
 | `compute.attention` | head split, projection sharding, program configs, output-proj CCL tail — **not** the attention math |
 | `compute.rope` | variant plumbing, and the whole-cache indexed rope built once |
-| `kv_cache` | one donor package resolving seven coupled roles — see §5 |
+| `kv_cache` | one donor package resolving five coupled roles — see §5 |
 | `serving.runtime` | `compile` / `make_chunk_input` / `prefill_chunk` and its chunk-range assertions |
-| `migration.hooks` | `kv_migration_base_address` / `kv_migration_stages` / `set_layer_ack_channel` |
 
 Parts whose pointer never varies by model — norm, embedding, MoE substrate, MeshConfig, CCLManager,
 weight cache, test scaffolds, golden cache — are not in the donor map. They are fixed, and listed
@@ -139,7 +136,7 @@ Per-module goldens are cheap to regenerate and are deliberately not cached.
 ## 4. Stages and order
 
 Three ladders, run in order and one at a time: the decoder (D1-D3), then the whole model around it
-(M1-M3), then the prefill pipeline (P1-P4). D and M have the same three-step shape — torch golden,
+(M1-M3), then the prefill pipeline (P1-P2). D and M have the same three-step shape — torch golden,
 then a mock outline plus PCC tests, then implement in ttnn, with a torch CPU fallback only where
 ttnn genuinely cannot.
 
@@ -209,7 +206,7 @@ New at model scale (did not appear in decoder bringup, define in M1/M2):
 
 Prefill pipeline stages:
 
-The decoder and the model now run; what is left is real weights, chunking, and the serving contract.
+The decoder and the model now run; what is left is real weights and chunking.
 
 - **P1 — Real weights**
 
@@ -219,27 +216,17 @@ The decoder and the model now run; what is left is real weights, chunking, and t
 
   KV cache read-back path (ring SDPA over the block-cyclic cache) and the runtime that drives it: compile, make_chunk_input, prefill_chunk with actual_start/actual_end.
 
-- **P3 — Serving**
-
-  KvCaches handle, adapter, ADAPTER_PATHS line, manifest. Runner + producer in two terminals, both local: no inference server and no decode side needed.
-
-- **P4 — Migration**
-
-  KV chunk address table, kv_migration_base_address / kv_migration_stages, layer acks.
-
 
 When each stage is finished - goals:
 - P1 goal → Model runs with real checkpoint weights on target mesh, one-shot. Per-layer KV PCC vs golden trace passes. Random-weight tests from D3/M3 still pass.
 - P2 goal → Multi-chunk prefill produces the same KV as an equal-length one-shot run. Chunked per-layer KV PCC vs golden passes.
-- P3 goal → `prefill_runner` serves chunks pushed by `prefill_producer`; `PREFILL_PRODUCER_CHECK_PCC=1` passes (runner with `PREFILL_MOCK_MIGRATION=1`).
-- P4 goal → Host-only KV address-table test passes; table + device map export to file (`PREFILL_MIGRATION_EXPORT_TO_FILE=1`) and validate offline; mock/loopback migration manifests run.
 
 We switch from one stage to next only when the goal is reached.
 
 
-Where the KV cache lands: the **layout is decided in D2** (both the attention read path and the
-address-table math encode it), **allocation + write** are implemented in D3 (the layer writes K/V
-even one-shot), and the **cache read** arrives in P2. GPT-OSS shipped it the same way — KV cache at
+Where the KV cache lands: the **layout is decided in D2** (the attention read path encodes it),
+**allocation + write** are implemented in D3 (the layer writes K/V even one-shot), and the
+**cache read** arrives in P2. GPT-OSS shipped it the same way — KV cache at
 P2 of its stack, chunked ring SDPA at P6.
 
 ## 5. KV cache allocation (the critical decision)
@@ -250,7 +237,7 @@ split, DRAM bank geometry, and the migration address walk.
 ### 5.1 Do not invent a layout
 
 The layout is already **canonical by convention** across the prefill packages, because the chunked
-ring SDPA and the migration address-table walk both read it. `gpt_oss_d_p/tt/attention/kv_cache.py`
+ring SDPA reads it. `gpt_oss_d_p/tt/attention/kv_cache.py`
 and `minimax_m3/tt/attention/kv_cache.py` are near-identical for this reason.
 
 Fixed — copy verbatim:
@@ -317,10 +304,6 @@ One subsection per stage. Fill in individually.
 
 Each stage below ends in a **Testing** table. The first column references an existing test that the
 agent implements an equivalent of for this model — copy its structure, not its content.
-
-Rows marked **SHARED** are the exception: those tests are already model-agnostic and live in
-`common/prefill`. Do **not** rewrite them per model — select the model with env and run them as they
-are.
 
 **A stage is complete when, and only when, every test in its Testing table passes** and the
 stage's log lines are written (§7). No stage is entered before the previous stage's table is green.
@@ -505,56 +488,6 @@ threshold — with the D3 and M3 random-weight tables still green.
 
 ---
 
-### P3 — Serving
-
-**Steps**
-1. Write the `KvCaches` subclass and `allocate_kv_cache`.
-2. Write the adapter: `load_hf_config`, `weight_cache_path`, `allocate_kv_cache`, `build_runtime`.
-   Keep imports lazy — the producers import this module too.
-3. Add the `ADAPTER_PATHS` line and the manifest JSON.
-4. Add a KV read-back branch for your cache layout in
-   `prefill_producer.py::_read_slot_kv_and_check_pcc`. It dispatches on `ADAPTER.name` and is
-   deliberately **not** adapter-pluggable, so a new layout needs a branch there and its own decode.
-   Without it the shared test below cannot validate anything.
-
-**Testing** — no tests to author.
-
-| Reference for the test to implement | What it compares |
-|---|---|
-| **SHARED — do not rewrite:** `models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc` | Spawns the runner and producer itself. The producer pushes token chunks over the H2D socket, then reads the KV back **device-lessly over UMD through the published address table** and PCCs it against the golden trace. Select the model with `PREFILL_MODEL` / `PREFILL_TRACE_DIR`. Scenarios cover full-depth single user, deterministic round-robin over 4 users, and seeded random interleave over 8 users with slot recycling. |
-| **SHARED — do not rewrite:** `models/demos/common/prefill/tests/test_prefill_producer_kv_decode.py` | Decoding of a KV chunk's raw bytes for each supported cache format (row-major, FP8 with page padding, packed scaled FP8), and that an unknown format is rejected rather than silently misread. |
-
-**Goal** P3 passes when the shared e2e test passes for this model on every scenario that applies to
-it, and the decode test passes. No inference server and no decode side are involved.
-
----
-
-### P4 — Migration
-
-**Steps**
-1. Write the KV chunk address table for your cache layout (bank walk, config ordering).
-2. Implement `kv_migration_base_address` (or `kv_migration_stages` for several caches) and
-   `set_layer_ack_channel`.
-3. Create the tests in the Testing table.
-
-**Testing**
-
-| Reference for the test to implement | What it compares |
-|---|---|
-| `deepseek_v3_d_p/tests/test_kv_cache_table.py` — **port this one, not gpt_oss's** | Allocates a real cache on the target mesh, writes it, then reads raw bytes back **from device DRAM at the addresses the table computed** and compares **bit-exactly**. Proves the address arithmetic, the DRAM bank walk, the packed-byte decode, and that a protobuf round-trip preserves lookups. Runs no model and moves nothing over fabric. |
-| `minimax_m3/tests/test_kv_chunk_table_merge.py` | The multi-stage (pipeline-parallel) table merge, driven with synthetic per-stage layouts. Device-free. Only if the model runs across multiple pipeline ranks. |
-| Manual — Gate 2 in [`PREFILL_MIGRATION_TESTING.md`](PREFILL_MIGRATION_TESTING.md) | The real DRAM → transport → DRAM copy, source and destination sharing one table via loopback. The only gate needing external binaries (`migration_endpoint`, `migration_worker`). |
-
-`gpt_oss_d_p/tests/test_kv_cache_table.py` is parametrized only for a `(2,4)` submesh, which cannot
-bring up fabric on a Galaxy — port the deepseek variant, which uses the full mesh and has a
-no-weights `random` case.
-
-**Goal** P4 passes when the ported address-table test passes (plus the merge test if
-pipeline-parallel). Gate 2 is the sign-off that bytes actually move, and is tracked separately
-because of its external dependency.
-
----
-
 ## 7. Logging
 
 The bring-up writes an append-only log so the *process* can be measured, not just the result: which
@@ -582,7 +515,7 @@ already record that the stage was fighting back, and how many times.
 
 ### 7.2 Records
 
-`t` is ISO-8601 UTC to the minute. `stage` is one of `D1 D2 D3 M1 M2 M3 P1 P2 P3 P4`.
+`t` is ISO-8601 UTC to the minute. `stage` is one of `D1 D2 D3 M1 M2 M3 P1 P2`.
 
 | Event | Fields | Notes |
 |---|---|---|
@@ -668,12 +601,10 @@ aimed at the inputs instead of the stages.
 
 - [ ] Every module has a `*_vs_ref` test at or above its `unit_pcc` threshold
 - [ ] Full model runs at target mesh shape with real weights; per-layer KV PCC recorded in `README.md`
-- [ ] Adapter implements all four abstract methods; registered in `ADAPTER_PATHS`; manifest exists
-- [ ] Runtime satisfies `ADDING_A_PREFILL_MODEL.md` §2 and asserts on out-of-contract chunk ranges
-- [ ] Two-terminal producer PCC passes
+- [ ] Runtime asserts on out-of-contract chunk ranges
 - [ ] `README.md` records architecture, reuse-vs-fresh, PCC status, run commands, and known gaps
 - [ ] `bringup_log.jsonl` is committed and `bringup_digest.py --lint` is clean
 
-Explicitly **not** required to call bring-up done: perf numbers, registration in a CI tier, and
-top-1 / logits agreement with HF. KV-cache PCC is a proxy for correctness, not a substitute for that
+Explicitly **not** required to call bring-up done: serving and migration (a separate follow-on),
+perf numbers, registration in a CI tier, and top-1 / logits agreement with HF. KV-cache PCC is a proxy for correctness, not a substitute for that
 last one — track it as follow-on work, not as a blocker.
