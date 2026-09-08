@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-09-07",
+  "last_scan_date": "2026-09-08",
   "scanned_run_ids": [
     "30227858718",
     "30387358745",
@@ -40,7 +40,8 @@
     "33433754247",
     "33710037838",
     "33799208648",
-    "33946342890"
+    "33946342890",
+    "34085742089"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -69,7 +70,8 @@
     "models-t2-e2e-tests.yaml",
     "blackhole-e2e-tests.yaml",
     "galaxy-sanity.yaml",
-    "tt-metal-l2-nightly.yaml"
+    "tt-metal-l2-nightly.yaml",
+    "models-t3-e2e-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -329,7 +331,21 @@
       "note": "PR #55611 opened, commented, marked ready for review. Dispatched run 34103459793 concluded 'failure' but the failing job (galaxy_eth wh_galaxy) is an unrelated infra error (missing /proc/1/cgroup, null ContainerId/network) not the code fix. Sampled ~5 other completed jobs' logs (runtime_fd_python_*, bh_multicard_sockets, bh_multicard_eth, load-test-matrix, galaxy_eth bh_galaxy) for nlp_create_qkv_heads_vit/in1_args: 0 hits in all - kernel not JIT-compiled by any sampled job, so warning-absence is inconclusive per category-2 rule, not confirmed fixed. Reported this caveat in PR comment for maintainer follow-up. Reconciliation complete for this workflow's purposes.",
       "pr_number": 55611,
       "run_id_checked": "34103459793"
+    },
+    {
+      "pr_title": "Register gemma4 pytest markers in parent conftest to silence demo warnings",
+      "branch": "silencer/gemma4-register-batched-prefill-marker",
+      "category": 6,
+      "channel": "diagnostic",
+      "run_id": "34085742089",
+      "job_id": "101632226384",
+      "workflow": "models-t3-e2e-tests.yaml",
+      "dispatched_validation_workflow": "models-t3-e2e-tests.yaml",
+      "dispatched_ref": "silencer/gemma4-register-batched-prefill-marker",
+      "status": "dispatched",
+      "reported": false,
+      "note": "PytestUnknownMarkWarning for gemma4_batched_prefill (and sibling markers) fixed by moving pytest_configure marker registration from tests/conftest.py to parent conftest.py so demo/text_demo.py collection also sees it. Awaiting validation run before commenting/marking ready for review."
     }
   ],
-  "backlog_cursor": "Phase B target for 2026-09-07 was this PR. Next run: reconcile this PR + validation outcome first (Phase A), then continue rotation sampling workflows not recently sampled: galaxy-integration-tests, blackhole-sanity-tests, models-t2-e2e-tests."
+  "backlog_cursor": "Phase B target for 2026-09-08 was PR 'Register gemma4 pytest markers in parent conftest' (branch silencer/gemma4-register-batched-prefill-marker), sourced from models-t3-e2e-tests run 34085742089 (job 101632226384, category 6: demote/fix unknown-mark warning). Next run: reconcile this PR + its dispatched validation run first (Phase A), then continue rotation sampling workflows not recently sampled: galaxy-integration-tests, blackhole-sanity-tests, models-t2-e2e-tests. Also noted but not yet actioned this run (candidates for future targets): 'Active test combo model=X, sku=Y is missing in centralized targets' GHA warning (.github/scripts/utils/validate_perf_targets.py, 96 occurrences across residue/gha channel in run 34085742089 \u2014 likely needs a data fix in models/model_targets.yaml rather than a code fix, or batching into one aggregated warning instead of one per combo); '-Wunused-but-set-variable' in matmul reader/writer kernels (reader_writer_bmm_tile_layout_in1.cpp / reader_bmm_tile_layout_in0.cpp, in0_args/out_args) already tracked in noise_ledger (PR #54732, reported-inconclusive) so not re-targeted."
 }
