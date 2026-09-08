@@ -629,18 +629,31 @@ class MLP(LightweightModule):
         if _gu_in0 is not None and x.memory_config() != _gu_in0:
             x = ttnn.to_memory_config(x, _gu_in0)
             _own_x = True
+        # gate/up's N is exactly down's K, so the width shard built for down's in0 is
+        # also a legal output layout for gate/up — and writing into it is 3.8 us cheaper
+        # per matmul than writing L1-interleaved. The SiLU-mul then READS sharded and
+        # still writes interleaved at the same cost, so the win is free of any op change
+        # (probed at m=64: gate/up 71.8 -> 68.0 us each, mul 19.7 -> 19.5 us):
+        #
+        #   gu sharded + mul interleaved   m=64  167.4 -> 159.5 us  (-7.8 us/layer)
+        #                                  m=128 279.9 -> 266.8 us  (-13.1 us/layer)
+        #
+        # Asking the MUL to write sharded instead loses: it nearly doubles (19.7 -> 32.6),
+        # which costs more than the reshard it would remove. So the reshard below stays.
+        _gu_out = self._prefill_down_in0_memcfg.get(seq_len) if not is_decode else None
+        _gu_mem = _gu_out if _gu_out is not None else mem_cfg
         gate_out = ttnn.linear(
             x,
             self.gate_proj,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=mem_cfg,
+            memory_config=_gu_mem,
             program_config=gate_up_progcfg,
         )
         up_out = ttnn.linear(
             x,
             self.up_proj,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=mem_cfg,
+            memory_config=_gu_mem,
             program_config=gate_up_progcfg,
         )
         if _own_x:
