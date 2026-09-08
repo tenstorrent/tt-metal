@@ -723,7 +723,8 @@ jobs:
                         "description": "Select model to test (filters rows strictly by model-name in tests/pipeline_reorg/blackhole_e2e_tests.yaml; use \"all\" to run every row including untagged)",
                         "enum": [
                           "all",
-                          "disaggregated_prefill"
+                          "disaggregated_prefill",
+                          "kimi_k3"
                         ],
                         "type": "string"
                       },
@@ -1725,6 +1726,7 @@ jobs:
                           "llama3.3-70b",
                           "llama3.2-90b-vision",
                           "qwen3-32b",
+                          "qwen3.6-27b",
                           "qwen2.5-32b",
                           "qwen2.5-coder-32b",
                           "qwen2.5-vl-72b",
@@ -1822,6 +1824,7 @@ jobs:
                           "llama3.3-70b",
                           "llama3.2-90b-vision",
                           "qwen3-32b",
+                          "qwen3.6-27b",
                           "qwen2.5-32b",
                           "qwen2.5-coder-32b",
                           "qwen2.5-vl-72b",
@@ -1926,6 +1929,8 @@ jobs:
                           "qwen2.5-vl-32b",
                           "qwen3-0.6b",
                           "qwen3-1.7b",
+                          "qwen3.5-9b",
+                          "qwen3.6-27b",
                           "qwq-32b",
                           "phi-3-mini",
                           "mamba-2.8b",
@@ -2035,6 +2040,7 @@ jobs:
                           "qwen2.5-7b",
                           "qwen2.5-72b",
                           "qwen2.5-vl-32b",
+                          "qwen3.5-9b",
                           "qwq-32b",
                           "phi-3-mini",
                           "janus-pro-7b",
@@ -2867,6 +2873,7 @@ jobs:
                           "embedding_bw.embedding_bw",
                           "fused.layer_norm_traces",
                           "fused.softmax_traces",
+                          "indexed_fused_update_cache",
                           "losses.l1_loss",
                           "losses.mse_loss",
                           "matmul.full.matmul_default_block_sharded",

@@ -13,9 +13,7 @@ Run batched:  MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/demo/text_
 GDN prefill runs the fast fused path by DEFAULT — no env vars needed: chunk-parallel phase-split
 (PREP fanned across the grid + V-block SCAN), fp32 o output, fp32 state, and flat token-major q/k/v
 with in-kernel L2-norm (eliminates the head-split relayouts + host l2_norm — the bulk of the
-preprocessing cost). Two opt-out flags exist only for benchmarking/debug:
-  QWEN_GDN_PHASED=0    fall back to the monolithic single-kernel fused op (no phase split).
-  QWEN_GDN_FLAT_QKV=0  fall back to head-split q/k/v + host l2_norm (no flat token-major reads).
+preprocessing cost).
 """
 
 import hashlib
@@ -31,14 +29,25 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import determine_device_name
 
-_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+_MESH_SHAPE = {
+    "P150": (1, 1),
+    "P150x4": (1, 4),
+    "P150x8": (1, 8),
+    # Wormhole: N300 is the 2-chip mesh the 9B needs (one N150 cannot hold it:
+    # ~12GB DRAM/chip vs BH P150's ~32GB). Listing these matters: the old dict
+    # fell through to (1,4) for any WH name, wrong shape and _MULTI flipped on.
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
 _TP_TRACE_REGION_SIZE = 1024 * 1024 * 1024
 DEVICE_PARAMS = [
@@ -193,7 +202,7 @@ def _blocks_for(seqlen, max_generated_tokens):
     return min(MAX_BLOCK_BUDGET, blocks)
 
 
-@run_for_blackhole()
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
@@ -291,6 +300,7 @@ def test_demo_text(
             assert len(rows[u]) == max_generated_tokens, f"row {u}: {len(rows[u])} != {max_generated_tokens}"
             assert rows[u] == rows[0], f"row {u} diverged from row 0 (identical prompts must decode identically)"
         assert len(set(rows[0])) > 1, f"degenerate generation: {rows[0]}"
+        _assert_output_quality(text0, len(rows[0]), seqlen)
         return
 
     if model.num_devices > 1:
@@ -306,13 +316,16 @@ def test_demo_text(
                     f"Non-deterministic output between run 0 and run {i}.\n"
                     f"Run 0: {results[0]}\nRun {i}: {results[i]}"
                 )
+            _assert_output_quality(tokenizer.decode(results[0], skip_special_tokens=True), len(results[0]), seqlen)
             return
         generated, perf = _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
         text = tokenizer.decode(generated, skip_special_tokens=True)
         logger.info(f"[TP {model.num_devices}-dev] ttft={perf['ttft_s']:.2f}s decode={perf['decode_tok_s']:.2f} tok/s")
         logger.info(f"[TP] GENERATED: {text!r}")
         assert len(generated) == max_generated_tokens, f"{len(generated)} != {max_generated_tokens}"
-        # assert len(set(generated)) > 1, f"degenerate generation: {generated}"
+        # The degeneracy assert below was commented out; _assert_output_quality supersedes it with
+        # checks that also catch fluent-looking loops, which len(set(...)) > 1 never did.
+        _assert_output_quality(text, len(generated), seqlen)
         # Perf JSON for CI target check (validate_perf_targets.py)
         _save_tp_benchmark(perf, model, seqlen=seqlen, prompt_len=actual_len, num_generated=len(generated))
         return
@@ -363,6 +376,7 @@ def test_demo_text(
     text = tokenizer.decode(generated, skip_special_tokens=True)
     _log_results(perf, actual_len, len(generated), text)
     _assert_results(perf, actual_len, len(generated))
+    _assert_output_quality(text, len(generated), seqlen)
 
 
 def _should_use_chunked_trace(model):
@@ -785,7 +799,13 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     #            all-gather; measured slower overall than "shard" — kept for comparison.
     #   "host"  - legacy: full [B,1,vocab] logits to host, then torch.argmax. Baseline.
     _mode = os.environ.get("QWEN36_BATCHED_DECODE_MODE", "shard")
-    if _mode == "sample" and model.sampling is None:
+    # Both "shard" and "sample" ask ttnn_decode_forward for on_device_logits, which asserts on
+    # model.sampling -- so BOTH must fall back, not just "sample". model.sampling is None whenever
+    # vocab/num_devices > 64K (model.py:44): a P150x4 gets 248320/4 = 62080 and keeps the sampler,
+    # but an N300 gets 248320/2 = 124160 and does not, so the default "shard" hit
+    # "on_device_logits=True but self.sampling is None". "host" is the universal path (the implicit
+    # else of every _mode branch below), so downgrading is always safe.
+    if _mode in ("shard", "sample") and model.sampling is None:
         _mode = "host"
     if _mode == "shard":
         _per_shard = vocab // model.num_devices
@@ -1103,6 +1123,111 @@ def _log_results(perf, prompt_len, num_generated, text):
     logger.info(f"  Generated {num_generated} tokens in {perf['decode_steps']} steps")
     logger.info(f"  Text: {text[:6000]}")
     logger.info("=" * 70)
+
+
+# Expected content terms per source book, keyed by the Gutenberg epub id in the entry's context URL
+# so this cannot desync from eval_frankenstein_long.json.
+#
+# WHY THIS IS NOT ONE HARDCODED FRANKENSTEIN LIST (it was, and it produced false failures on 4 of the
+# 6 long-context configs):
+#   * entry 4 (seqlen 262144) is epub 2600 = WAR AND PEACE, not Frankenstein at all, so a
+#     Frankenstein term list can never match a correct summary of it.
+#   * the short configs truncate the context to their own token budget, so 8k/16k/32k stop inside
+#     Walton's letters / the first chapters -- BEFORE Victor, the creature, Elizabeth or Geneva are
+#     named. A correct summary of that excerpt legitimately contains none of those words. Hence the
+#     opening-section terms (walton/margaret/arctic/...) for epub 84.
+# Both failure modes were observed: 8k summarised "Robert Walton's four letters and the beginning of
+# Chapter 1" and 256k summarised "Leo Tolstoy's War and Peace (Books One through Five)", and both were
+# reported as long-prefill regressions.
+_CONTEXT_TERMS = {
+    "84": (
+        (
+            "frankenstein",
+            "victor",
+            "creature",
+            "monster",
+            "elizabeth",
+            "geneva",
+            "shelley",
+            "walton",
+            "margaret",
+            "arctic",
+            "expedition",
+            "ingolstadt",
+        ),
+        "Frankenstein",
+    ),
+    "2600": (
+        (
+            "tolstoy",
+            "pierre",
+            "natasha",
+            "andrei",
+            "bolkonski",
+            "rostov",
+            "napoleon",
+            "moscow",
+            "kuragin",
+            "borodino",
+            "war and peace",
+        ),
+        "War and Peace",
+    ),
+}
+
+
+def _context_terms(entry_idx):
+    """(terms, book_name) for one eval_frankenstein_long.json entry, chosen by its epub id."""
+    with open(f"{SAMPLE_PROMPTS_DIR}/eval_frankenstein_long.json") as f:
+        url = json.load(f)[entry_idx].get("context", "")
+    for epub, (terms, book) in _CONTEXT_TERMS.items():
+        if f"epub/{epub}/" in url:
+            return terms, book
+    raise AssertionError(f"no content terms registered for context {url!r} (entry {entry_idx})")
+
+
+def _assert_output_quality(text, num_generated, seqlen=None):
+    """Reject output that is present but degenerate.
+
+    ``len(set(tokens)) > 1`` only catches a single token repeated forever; a broken numerics path
+    more often emits fluent-looking loops or one word at high frequency, which passes that check.
+    These are content checks with no semantic expectation, so they are safe across prompts:
+
+      * non-empty after stripping,
+      * no single token taking more than 60% of the output,
+      * no 8-gram repeated more than 10 times (a catastrophic loop repeats a phrase dozens of
+        times; the bound is loose so structured output with recurring phrasing still passes).
+
+    For the Frankenstein long-context configs the prompt asks for a summary of a specific text, so
+    when enough tokens were generated to have gotten past any <think> preamble, require at least one
+    term from that text. Gated on length so a short budget spent thinking cannot fail the run.
+    """
+    stripped = text.strip()
+    assert stripped, f"generated {num_generated} tokens but the decoded text is empty/whitespace"
+
+    words = stripped.split()
+    if len(words) >= 20:
+        top = max(set(words), key=words.count)
+        frac = words.count(top) / len(words)
+        assert frac <= 0.6, f"degenerate output: {top!r} is {frac:.0%} of {len(words)} words. TEXT: {stripped[:300]!r}"
+
+    if len(words) >= 40:
+        grams = {}
+        for i in range(len(words) - 7):
+            g = " ".join(words[i : i + 8])
+            grams[g] = grams.get(g, 0) + 1
+        worst, count = max(grams.items(), key=lambda kv: kv[1])
+        assert count <= 10, f"looping output: 8-gram {worst!r} repeats {count}x. TEXT: {stripped[:300]!r}"
+
+    if seqlen in _FRANKENSTEIN_CONFIGS and num_generated >= 100:
+        terms, book = _context_terms(_FRANKENSTEIN_CONFIGS[seqlen])
+        low = stripped.lower()
+        hits = [t for t in terms if t in low]
+        assert hits, (
+            f"long-context output does not reference the {book} context at all "
+            f"(expected any of {list(terms)}) — suspect the long-prefill path. TEXT: {stripped[:300]!r}"
+        )
+        logger.info(f"  output content check OK ({book}, matched {hits})")
 
 
 def _assert_results(perf, prompt_len, num_generated):

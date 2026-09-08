@@ -20,5 +20,7 @@
   "test_deltanet_pcc": 0.99,
   "test_mlp_pcc": 0.98,
   "test_lm_head_precision": 0.999,
-  "test_embedding_pcc": 0.999
+  "test_embedding_pcc": 0.999,
+  "test_full_depth_prefill_logits_pcc": 0.98,
+  "test_full_depth_decode_logits_pcc": 0.95
 }
