@@ -10,6 +10,8 @@
 // sender reads DRAM + mcasts; receiver takes the L1->L1 copy; none is a plain DRAM read. q/w (row) and k
 // (column) mcast are independent; either may be off.
 
+#include <tt-metalium/constants.hpp>
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -70,6 +72,7 @@ constexpr auto snake_orientation =
 constexpr uint32_t rank_mapping_mesh_rows = get_compile_time_arg_val(bc_ct_base + 7);
 constexpr uint32_t rank_mapping_mesh_cols = get_compile_time_arg_val(bc_ct_base + 8);
 constexpr bool partial_readiness_enabled = get_compile_time_arg_val(bc_ct_base + 9) != 0;
+constexpr uint32_t fused_physical_sp = get_compile_time_arg_val(bc_ct_base + 10);
 
 FORCE_INLINE constexpr uint32_t tensor_rank_from_transport_rank(uint32_t transport_rank) {
     return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
@@ -236,6 +239,50 @@ inline void fill_w_group_const() {
     cb.push_back(w_group_tiles);
 }
 
+// Prepare gate columns after the first K read so their local preparation overlaps QK matmul.
+// The weight row multicast must still complete before any column multicast or fabric wait.
+inline void expand_w_group() {
+    constexpr uint32_t head_tiles = (num_heads + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+    using namespace tt::constants;
+    constexpr uint32_t bf16_per_word = sizeof(uint32_t) / sizeof(uint16_t);
+    constexpr uint32_t face_row_words = FACE_WIDTH / bf16_per_word;
+    constexpr uint32_t face_words = FACE_HW / bf16_per_word;
+    constexpr uint32_t tile_words = TILE_HW / bf16_per_word;
+    constexpr uint32_t bf16_bits = sizeof(uint16_t) * 8;
+    // read_w_group reserved the output group; compute waits until expansion finishes.
+    // Walk input tiles and head pairs backward: expanded destinations are at or after their
+    // source tile. The final head-0 store aliases its original column without changing it.
+    CircularBuffer gates(cb_w);
+    const uint32_t addr = gates.get_write_ptr();
+    for (uint32_t row_end = q_tiles_per_unit; row_end > 0; --row_end) {
+        const uint32_t q_row = row_end - 1;
+        for (uint32_t tile_end = head_tiles; tile_end > 0; --tile_end) {
+            const uint32_t ht = tile_end - 1;
+            auto* src =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr + (q_row * head_tiles + ht) * bf16_tile_bytes);
+            const uint32_t heads_in_tile = std::min<uint32_t>(TILE_WIDTH, num_heads - ht * TILE_WIDTH);
+            for (uint32_t pair_end = (heads_in_tile + bf16_per_word - 1) / bf16_per_word; pair_end > 0; --pair_end) {
+                const uint32_t h = bf16_per_word * (pair_end - 1);
+                auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    addr + (q_row * num_heads + ht * TILE_WIDTH + h) * bf16_tile_bytes);
+                // Extract two BF16 heads per word. Word stores also set the unused column 1;
+                // this avoids narrow L1 accesses.
+                for (uint32_t r = 0; r < TILE_HEIGHT; ++r) {
+                    const uint32_t row_offset =
+                        (r / FACE_HEIGHT) * (TILE_WIDTH / FACE_WIDTH) * face_words + (r % FACE_HEIGHT) * face_row_words;
+                    const uint32_t pair =
+                        src[row_offset + (h / FACE_WIDTH) * face_words + (h % FACE_WIDTH) / bf16_per_word];
+                    dst[row_offset] = pair;
+                    if (ht * TILE_WIDTH + h + 1 < num_heads) {
+                        dst[tile_words + row_offset] = pair >> bf16_bits;
+                    }
+                }
+            }
+        }
+    }
+    gates.push_back(w_group_tiles);
+}
+
 /** resident w (gates) group [q_tiles_per_unit][num_heads], role-aware (q row mcast). MSA fills a constant
  *  scale in L1 instead (no weights tensor); the q placeholder accessor is then unused. */
 template <typename WAcc>
@@ -244,21 +291,32 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
         fill_w_group_const();
         return;
     }
-    read_block_or_mcast<cb_w, q_mcast_on, q_send_sem, q_recv_sem, q_valid_sem>(
-        noc, w_group_tiles, w_group_tiles * bf16_tile_bytes, q_dir, [&](uint32_t addr) {
-            uint32_t ptr = addr;
-            for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
-                for (uint32_t head = 0; head < num_heads; ++head) {
-                    noc.async_read(
-                        w_acc,
-                        CoreLocalMem<uint32_t>(ptr),
-                        bf16_tile_bytes,
-                        {.page_id = head * q_len_tiles + q_row_start + q_row},
-                        {});
-                    ptr += bf16_tile_bytes;
-                }
-            }
-        });
+    // Transport [query, head] weight tiles, then prepare each core's resident gate columns.
+    // Multicasting before expansion avoids broadcasting 31 padding columns per head.
+    constexpr uint32_t head_tiles = (num_heads + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+    constexpr uint32_t input_tiles = q_tiles_per_unit * head_tiles;
+    CircularBuffer cb(cb_w);
+    cb.reserve_back(w_group_tiles);
+    const uint32_t addr = cb.get_write_ptr();
+    if (q_mcast_on && q_dir.role == iscore::mcast_role_receiver) {
+        mcast_recv<q_send_sem, q_recv_sem>(noc, q_dir);
+    } else {
+        for (uint32_t tile = 0; tile < input_tiles; ++tile) {
+            noc.async_read(
+                w_acc,
+                CoreLocalMem<uint32_t>(addr + tile * bf16_tile_bytes),
+                bf16_tile_bytes,
+                {.page_id = q_row_start * head_tiles + tile},
+                {});
+        }
+        noc.async_read_barrier();
+        if (q_mcast_on && q_dir.role == iscore::mcast_role_sender) {
+            mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, addr, input_tiles * bf16_tile_bytes);
+        }
+    }
+    if constexpr (stream_heads || fuse_single) {
+        expand_w_group();
+    }
 }
 
 /** Read one k tile's head_dim_tiles pages [base, base+head_dim_tiles) from `acc` into the CB at `ptr`,
@@ -515,7 +573,7 @@ void kernel_main() {
 
         WorkUnitSpan span;
         span.set_valid_k_len_tiles(kv_len_tiles);
-        ShardMajorWorkUnitSpan<block_cyclic, bc_chunk_local, bc_sp> shard_span;
+        ShardMajorWorkUnitSpan<block_cyclic, bc_chunk_local, bc_sp, fused_physical_sp> shard_span;
         shard_span.set_valid_k_len_tiles(kv_len_tiles);
         const uint32_t band_iters = stream_heads ? max_bands : num_bands;
         for (uint32_t phase = 0; phase < num_groups; ++phase) {
@@ -537,23 +595,32 @@ void kernel_main() {
                 if constexpr (fused_ring_enabled) {
                     const uint32_t physical_start = gate->physical_start(band_i);
                     shard_span.set(group, physical_start, gate->tiles_per_shard);
+                    const uint32_t k_tiles_in_unit = shard_span.k_tiles();
                     // q/w were multicasted before this loop. Every row of this K-mcast column has
                     // the same work list, so skipping an empty runtime-prefix unit preserves both
                     // the fabric gate and the local CB protocol.
-                    if (shard_span.k_tiles() == 0) {
+                    if (k_tiles_in_unit == 0) {
+                        if (band_i == 0) {
+                            expand_w_group();
+                        }
                         continue;
                     }
                     uint32_t gathered_shard_tiles = gate->tiles_per_shard;
                     if constexpr (block_cyclic) {
-                        const uint32_t global_slab_tiles = bc_chunk_local * bc_sp;
-                        const uint32_t valid_slabs = (kv_len_tiles + global_slab_tiles - 1) / global_slab_tiles;
-                        gathered_shard_tiles = std::min(valid_slabs * bc_chunk_local, gate->tiles_per_shard);
+                        // Partial-height gathers are enabled only for the ordinary SP-only layout. A
+                        // TP-inner reconstructed cache (bc_sp > ring_size) gathers the full physical
+                        // shard, so its midpoint must stay at half that shard as well.
+                        if (bc_sp == gate->ring_size) {
+                            const uint32_t global_slab_tiles = bc_chunk_local * bc_sp;
+                            const uint32_t valid_slabs = (kv_len_tiles + global_slab_tiles - 1) / global_slab_tiles;
+                            gathered_shard_tiles = std::min(valid_slabs * bc_chunk_local, gate->tiles_per_shard);
+                        }
                     }
                     // KEEP IN SYNC with the AG writer's row-aligned midpoint_prefix_pages() and the host's
                     // gather_valid_height_tiles(). Units crossing this boundary wait for completion.
                     const uint32_t midpoint_tiles = (gathered_shard_tiles + 1) / 2;
                     gate->read_k(
-                        noc, k_acc, physical_start, shard_span.k_tiles(), midpoint_tiles, k_dir, k_batch_page_offset);
+                        noc, k_acc, physical_start, k_tiles_in_unit, midpoint_tiles, k_dir, k_batch_page_offset);
                 } else {
                     const uint32_t band = band_i;
                     const bool real_band = band < num_bands;
@@ -584,6 +651,11 @@ void kernel_main() {
                                 read_q_block(noc, q_acc, q_row_start, first_head, q_dir);
                             }
                         }
+                    }
+                }
+                if constexpr (!synthesize_gate && !stream_heads && !fuse_single) {
+                    if (band_i == 0) {
+                        expand_w_group();
                     }
                 }
             }

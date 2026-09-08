@@ -22,7 +22,7 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"  // RingSDPAFusedOpSignaler
 #include "ttnn/operations/ccl/ccl_common.hpp"                       // linearized index / neighbor / fwd-bwd config
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"                    // AllGatherFusedOpSignaler
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"  // AllGatherFusedOpSignaler
 // the fused AG helper (the only Linear+fuse-capable all-gather):
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 
@@ -401,6 +401,7 @@ ProgramDescriptor build_ring_program_descriptor(
     reader_ct.push_back(rank_mapping.mesh_rows);
     reader_ct.push_back(rank_mapping.mesh_cols);
     reader_ct.push_back(static_cast<uint32_t>(partial_readiness_enabled));
+    reader_ct.push_back(ring_size);  // physical SP shard count for shard-major specialization
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(1u);  // fused_ring on
@@ -408,7 +409,8 @@ ProgramDescriptor build_ring_program_descriptor(
     writer_ct.push_back(T * out_elem_bytes);  // row-major page = one output row (no pooling)
     writer_ct.push_back(block_cyclic_ct[0]);  // shard-major physical -> logical output mapping
     writer_ct.push_back(block_cyclic_ct[1]);
-    writer_ct.push_back(ring_size);  // physical shard count (also block-cyclic SP when enabled)
+    writer_ct.push_back(block_cyclic_ct[2]);  // logical key stripe count (SP * TP for TP-sharded KV)
+    writer_ct.push_back(ring_size);           // physical SP shard count
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
 
     std::vector<uint32_t> compute_ct = common_ct;
@@ -421,7 +423,8 @@ ProgramDescriptor build_ring_program_descriptor(
     compute_ct.push_back(1u);                  // fused_ring on
     compute_ct.push_back(block_cyclic_ct[0]);  // shard-major physical -> logical causal mapping
     compute_ct.push_back(block_cyclic_ct[1]);
-    compute_ct.push_back(ring_size);  // physical shard count (also block-cyclic SP when enabled)
+    compute_ct.push_back(block_cyclic_ct[2]);  // logical key stripe count (SP * TP for TP-sharded KV)
+    compute_ct.push_back(ring_size);           // physical SP shard count
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     KernelDescriptor reader_kernel{};

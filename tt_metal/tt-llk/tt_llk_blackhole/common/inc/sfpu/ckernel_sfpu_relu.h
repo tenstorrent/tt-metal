@@ -87,6 +87,10 @@ inline void _relu_max_(T threshold)
     VectorType v_threshold;
     if constexpr (std::is_same_v<T, float>)
     {
+        static_assert(
+            std::is_same_v<VectorType, sfpi::vFloat>,
+            "A float threshold requires VectorType == sfpi::vFloat: sfpi::vInt has no float constructor, so the assignment below would otherwise fail as an "
+            "ambiguous conversion");
         v_threshold = threshold;
     }
     else if constexpr (std::is_same_v<T, std::uint32_t>)
@@ -133,6 +137,10 @@ inline void _relu_min_(T threshold)
     VectorType v_threshold;
     if constexpr (std::is_same_v<T, float>)
     {
+        static_assert(
+            std::is_same_v<VectorType, sfpi::vFloat>,
+            "A float threshold requires VectorType == sfpi::vFloat: sfpi::vInt has no float constructor, so the assignment below would otherwise fail as an "
+            "ambiguous conversion");
         v_threshold = threshold;
     }
     else if constexpr (std::is_same_v<T, std::uint32_t>)
