@@ -243,7 +243,11 @@ jobs:
       - name: Exclude git metadata from the build context
         run: |
           set -euo pipefail
-          printf '.git\n**/.git\n' > "$GITHUB_WORKSPACE/.dockerignore"
+          # tech_reports is 69 MiB of the source tree and nothing a test leg runs
+          # reads it: the only references are a comment, an error string pointing
+          # at the docs, and a release-notes path classifier that runs elsewhere.
+          # Every consumer pulls the source layer, so this comes off every leg.
+          printf '.git\n**/.git\nsrc/tech_reports\n' > "$GITHUB_WORKSPACE/.dockerignore"
           cat "$GITHUB_WORKSPACE/.dockerignore"
 
       - name: Download the build artifact
@@ -314,7 +318,7 @@ jobs:
           # would leave behind holding the layers alive.
           provenance: false
           outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,oci-mediatypes=true
+            type=registry,push=true,compression=zstd,compression-level=7,oci-mediatypes=true
 
       # Runs only if the push succeeded, so a failed build yields an empty ref
       # and the consumer falls back to the artifact path instead of pulling a
