@@ -474,6 +474,53 @@ TEST_F(VariableMatmulTest, CacheHit_InputAndWeightK_VaryingK) {
     }
 }
 
+TEST_F(VariableMatmulTest, ProgramCacheKeysOffsetsAccessorPageSize) {
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    const uint32_t K_parent = 512, M = 128, N = 256;
+    auto in0_km = create_random_device_tensor(K_parent, M, device, /*seed=*/56U);
+    auto in1 = create_random_device_tensor(K_parent, N, device, /*seed=*/57U);
+    auto ref = expert_k_reference(in0_km, in1, /*k_lo=*/0U, /*K_active=*/64U, M, N, kConfig);
+    (void)ttml::core::to_vector<float>(ref);  // Complete setup before isolating the cache census.
+
+    auto offsets_with_length = [device](uint32_t length) {
+        std::vector<uint32_t> values(length, 64U);
+        values.front() = 0U;
+        return make_offsets(values, device);
+    };
+    auto offsets_64b = offsets_with_length(16U);
+    auto offsets_128b_a = offsets_with_length(17U);
+    auto offsets_128b_b = offsets_with_length(32U);
+
+    ASSERT_EQ(offsets_64b.buffer()->aligned_page_size(), 64U);
+    ASSERT_EQ(offsets_128b_a.buffer()->aligned_page_size(), 128U);
+    ASSERT_EQ(offsets_128b_b.buffer()->aligned_page_size(), 128U);
+
+    device->enable_program_cache();
+    device->clear_program_cache();
+
+    auto run_and_check = [&](const ttnn::Tensor& offsets, uint32_t expected_new_entries) {
+        const auto entries_before = device->num_program_cache_entries();
+        auto result = ttml::metal::variable_matmul_k_sliced(
+            /*input_tensor=*/in0_km,
+            /*weight_tensor=*/in1,
+            /*config=*/kConfig,
+            /*offsets_tensor=*/offsets,
+            /*offsets_start_index=*/0U,
+            /*transpose_a=*/true,
+            /*transpose_b=*/false);
+        const auto entries_after = device->num_program_cache_entries();
+
+        EXPECT_EQ(entries_after, entries_before + expected_new_entries)
+            << "unexpected cache behavior for offsets aligned page size " << offsets.buffer()->aligned_page_size();
+        EXPECT_EQ(max_abs_error(result, ref), 0.0F);
+    };
+
+    run_and_check(offsets_64b, /*expected_new_entries=*/1U);
+    run_and_check(offsets_128b_a, /*expected_new_entries=*/1U);
+    run_and_check(offsets_128b_b, /*expected_new_entries=*/0U);
+}
+
 TEST_F(VariableMatmulTest, CacheHit_InputAndOutputRow_VaryingM) {
     auto* device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
