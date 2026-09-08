@@ -100,6 +100,35 @@ TEST(NamedArgsHashSchema, CPU_EmptyEqualsEmpty) {
         << "Two empty schemas must hash identically";
 }
 
+TEST(NamedArgsHashSchema, CPU_DuplicateAliasPatternIsSchema) {
+    NamedKernelArgs shared{.named_common_runtime_args = {{"a.x", 7}, {"b.x", 7}}};
+    auto updated = shared;
+    updated.named_common_runtime_args[0].value = 9;
+    updated.named_common_runtime_args[1].value = 9;
+    EXPECT_EQ(blaze_hash_schema(shared), blaze_hash_schema(updated));
+    updated.named_common_runtime_args[1].value = 10;
+    EXPECT_NE(blaze_hash_schema(shared), blaze_hash_schema(updated));
+    EXPECT_NE(blaze_program_hash(shared), blaze_program_hash(updated));
+}
+
+TEST(NamedArgsHashSchema, CPU_DedupComparesCompleteCoreMapping) {
+    NamedKernelArgs shared{
+        .named_per_core_runtime_args = {{"a.x", {{kCore0, 7}, {kCore1, 8}}}, {"b.x", {{kCore1, 8}, {kCore0, 7}}}}};
+    auto split = shared;
+    split.named_per_core_runtime_args[1].core_values[0].second = 9;
+    EXPECT_NE(blaze_hash_schema(shared), blaze_hash_schema(split));
+    auto reordered = shared;
+    reordered.named_per_core_runtime_args[1].core_values = {{kCore0, 7}, {kCore1, 8}};
+    EXPECT_EQ(blaze_hash_schema(shared), blaze_hash_schema(reordered));
+}
+
+TEST(NamedArgsHashSchema, CPU_ArrayAliasPatternIsSchema) {
+    NamedKernelArgs shared{.named_common_runtime_arg_arrays = {{"a.x", {1, 2}}, {"b.x", {1, 2}}}};
+    auto split = shared;
+    split.named_common_runtime_arg_arrays[1].values[1] = 3;
+    EXPECT_NE(blaze_hash_schema(shared), blaze_hash_schema(split));
+}
+
 // --- value-insensitivity: same schema, different runtime values => SAME hash ---
 
 TEST(NamedArgsHashSchema, CPU_CommonScalarValueInsensitive) {

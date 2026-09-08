@@ -35,7 +35,7 @@ ttsl::optional_reference<const MeshTensor> as_optional_mesh_tensor(const std::op
 }
 
 CBDescriptor cb_descriptor_from_sharded_tensor(
-    uint8_t cb_index,
+    uint16_t cb_index,
     const Tensor& tensor,
     uint32_t address_offset,
     uint32_t total_size,

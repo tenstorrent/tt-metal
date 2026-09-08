@@ -536,6 +536,41 @@ TEST(NamedArgsDescriptorCacheHit, CPU_NamedValuesReappliedOnCacheHit) {
     blaze_expect_cache_hit_values(program, core0, core1, 1000);
 }
 
+TEST(NamedArgsDescriptorCacheHit, CPU_DuplicatesPackAndUpdateWithoutStaleAliases) {
+    const CoreCoord core0{0, 0};
+    const CoreCoord core1{1, 0};
+    auto make_descriptor = [&](uint32_t value) {
+        auto kernel = blaze_cache_hit_kernel(core0, core1, 0);
+        kernel.blaze_named_args = {
+            .named_common_runtime_args = {{"a.x", value}, {"b.x", value}},
+            .named_per_core_runtime_args =
+                {{"a.y", {{core0, value}, {core1, value + 1}}}, {"b.y", {{core1, value + 1}, {core0, value}}}},
+            .named_common_runtime_arg_arrays = {{"a.z", {value, value + 2}}, {"b.z", {value, value + 2}}},
+            .named_per_core_runtime_arg_arrays =
+                {{"a.w", {{core0, {value, value + 3}}, {core1, {value + 4, value + 5}}}},
+                 {"b.w", {{core1, {value + 4, value + 5}}, {core0, {value, value + 3}}}}},
+        };
+        return ProgramDescriptor{.kernels = {kernel}};
+    };
+    auto first = make_descriptor(100);
+    auto updated = make_descriptor(200);
+    EXPECT_EQ(std::hash<ProgramDescriptor>{}(first), std::hash<ProgramDescriptor>{}(updated));
+    Program program{first};
+    // One positional word + one shared scalar + one shared two-word array.
+    ASSERT_EQ(GetCommonRuntimeArgs(program, 0).size(), 4u);
+    ASSERT_EQ(GetRuntimeArgs(program, 0, core0).size(), 4u);
+    ASSERT_EQ(GetRuntimeArgs(program, 0, core1).size(), 4u);
+    apply_descriptor_runtime_args(program, updated);
+    EXPECT_EQ(GetCommonRuntimeArgs(program, 0)[1], 200u);
+    EXPECT_EQ(GetCommonRuntimeArgs(program, 0)[3], 202u);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[1], 201u);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[3], 205u);
+    updated.kernels[0].blaze_named_args.named_common_runtime_args[1].value = 300;
+    EXPECT_NE(std::hash<ProgramDescriptor>{}(first), std::hash<ProgramDescriptor>{}(updated));
+    EXPECT_ANY_THROW(apply_descriptor_runtime_args(program, updated));
+    EXPECT_EQ(GetCommonRuntimeArgs(program, 0)[1], 200u);
+}
+
 TEST(NamedArgsDescriptorCacheHit, CPU_NamedOnlyValuesReappliedOnCacheHit) {
     // No positional args at all: before the fix, apply_descriptor_runtime_args had
     // nothing to copy for this descriptor, so EVERY named value stayed frozen at the

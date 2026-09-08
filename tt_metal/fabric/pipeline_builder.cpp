@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt-metalium/experimental/fabric/control_plane.hpp"
 
@@ -431,10 +432,21 @@ GraphLayoutResult resolve_graph_layout(
                     }
                 }
                 if (!resolved) {
-                    throw std::runtime_error(
-                        "resolve_graph_layout: stage " + std::to_string(i) + " (" + stage_order[i] +
-                        ") has only one chip at both the entry and exit "
-                        "boundary — cannot deconflict entry/exit on the same chip");
+                    // Reaching here means the stage has exactly one chip on both boundaries:
+                    // every alternative exit link and every alternative entry link has already
+                    // been tried above. That is the normal shape of a single-chip pipeline
+                    // stage -- e.g. Qwen 27B's eight 1x1 decoder stages -- not an error.
+                    //
+                    // Distinct entry/exit CHIPS are a contention optimisation, not a hardware
+                    // requirement: one chip can host the inbound and outbound pipeline sockets
+                    // on two different cores, so entry == exit is legal. Accept it and keep the
+                    // resolved coordinates as they are.
+                    log_warning(
+                        tt::LogFabric,
+                        "resolve_graph_layout: stage {} ({}) has one chip at both the entry and "
+                        "exit boundary; routing in and out of the same chip on separate cores.",
+                        i,
+                        stage_order[i]);
                 }
             }
         }

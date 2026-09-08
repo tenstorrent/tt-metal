@@ -31,41 +31,95 @@ namespace tt::tt_metal::experimental::blaze {
 
 namespace {
 
-// The merged runtime-arg layout shared by construction (process_named_args) and
-// descriptor-cache-hit patching (apply_named_runtime_args).  Both MUST agree on
-// where each named value lands, so the merge lives in exactly one place:
-// positional values first, then named scalars, then named arrays, in declaration
-// order.  Only the VALUES are merged; the indices baked into the generated header
-// are computed separately in process_named_args.
+// One layout owns packing, generated indices, and the aliasing part of the cache
+// schema. Equal blocks share storage; arrays remain contiguous. Per-core blocks
+// compare the COMPLETE mapping, in canonical core order, never one sample core.
+struct NamedRuntimeLayout {
+    std::vector<uint32_t> common_values;
+    std::map<CoreCoord, std::vector<uint32_t>> core_values;
+    std::vector<uint32_t> common_indices;
+    std::vector<uint32_t> core_indices;
+    uint32_t core_words = 0;
+};
+
+NamedRuntimeLayout pack_named_runtime_args(const NamedKernelArgs& args) {
+    NamedRuntimeLayout layout;
+    std::map<std::vector<uint32_t>, uint32_t> common_blocks;
+    auto common = [&](const std::vector<uint32_t>& values) {
+        auto [it, inserted] = common_blocks.emplace(values, layout.common_values.size());
+        layout.common_indices.push_back(it->second);
+        if (inserted) {
+            layout.common_values.insert(layout.common_values.end(), values.begin(), values.end());
+        }
+    };
+    for (const auto& arg : args.named_common_runtime_args) {
+        common({arg.value});
+    }
+    for (const auto& arg : args.named_common_runtime_arg_arrays) {
+        common(arg.values);
+    }
+
+    using CoreBlock = std::map<CoreCoord, std::vector<uint32_t>>;
+    std::map<CoreBlock, uint32_t> core_blocks;
+    auto per_core = [&](const CoreBlock& values, uint32_t width) {
+        auto [it, inserted] = core_blocks.emplace(values, layout.core_words);
+        layout.core_indices.push_back(it->second);
+        if (!inserted) {
+            return;
+        }
+        for (const auto& [core, block] : values) {
+            TT_FATAL(block.size() == width, "Named runtime arrays must have equal lengths on all cores");
+            auto& packed = layout.core_values[core];
+            packed.resize(layout.core_words, 0);
+            packed.insert(packed.end(), block.begin(), block.end());
+        }
+        layout.core_words += width;
+    };
+    for (const auto& arg : args.named_per_core_runtime_args) {
+        CoreBlock values;
+        for (const auto& [core, value] : arg.core_values) {
+            TT_FATAL(values.emplace(core, std::vector<uint32_t>{value}).second, "Duplicate core in named runtime arg");
+        }
+        per_core(values, 1);
+    }
+    for (const auto& arg : args.named_per_core_runtime_arg_arrays) {
+        CoreBlock values;
+        for (const auto& [core, block] : arg.core_values) {
+            TT_FATAL(values.emplace(core, block).second, "Duplicate core in named runtime array");
+        }
+        per_core(values, arg.core_values.empty() ? 0 : arg.core_values.front().second.size());
+    }
+    for (auto& [core, values] : layout.core_values) {
+        values.resize(layout.core_words, 0);
+    }
+    return layout;
+}
+
 std::map<CoreCoord, std::vector<uint32_t>> merge_per_core_runtime_args(const KernelDescriptor& kernel_descriptor) {
-    const auto& named_args = kernel_descriptor.blaze_named_args;
+    const auto layout = pack_named_runtime_args(kernel_descriptor.blaze_named_args);
     std::map<CoreCoord, std::vector<uint32_t>> core_to_args;
+    const auto positional_words =
+        kernel_descriptor.runtime_args.empty() ? 0 : kernel_descriptor.runtime_args[0].second.size();
     for (const auto& [core, positional] : kernel_descriptor.runtime_args) {
+        TT_FATAL(positional.size() == positional_words, "Named runtime args require a uniform positional prefix");
         core_to_args[core] = positional;
     }
-    for (const auto& arg : named_args.named_per_core_runtime_args) {
-        for (const auto& [core, value] : arg.core_values) {
-            core_to_args[core].push_back(value);
-        }
+    for (const auto& [core, values] : layout.core_values) {
+        auto& merged = core_to_args[core];
+        merged.resize(positional_words, 0);
+        merged.insert(merged.end(), values.begin(), values.end());
     }
-    for (const auto& arg : named_args.named_per_core_runtime_arg_arrays) {
-        for (const auto& [core, values] : arg.core_values) {
-            core_to_args[core].insert(core_to_args[core].end(), values.begin(), values.end());
-        }
+    for (auto& [core, values] : core_to_args) {
+        values.resize(positional_words + layout.core_words, 0);
     }
     return core_to_args;
 }
 
 std::vector<uint32_t> merge_common_runtime_args(const KernelDescriptor& kernel_descriptor) {
-    const auto& named_args = kernel_descriptor.blaze_named_args;
+    const auto layout = pack_named_runtime_args(kernel_descriptor.blaze_named_args);
     std::vector<uint32_t> merged(
         kernel_descriptor.common_runtime_args.begin(), kernel_descriptor.common_runtime_args.end());
-    for (const auto& arg : named_args.named_common_runtime_args) {
-        merged.push_back(arg.value);
-    }
-    for (const auto& arg : named_args.named_common_runtime_arg_arrays) {
-        merged.insert(merged.end(), arg.values.begin(), arg.values.end());
-    }
+    merged.insert(merged.end(), layout.common_values.begin(), layout.common_values.end());
     return merged;
 }
 
@@ -122,20 +176,23 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
     if (!named_args.named_common_runtime_args.empty() || !named_args.named_per_core_runtime_args.empty() ||
         !named_args.named_common_runtime_arg_arrays.empty() || !named_args.named_per_core_runtime_arg_arrays.empty()) {
         NamedRuntimeArgNamespaces rt_ns_map;
+        const auto layout = pack_named_runtime_args(named_args);
+        std::size_t common_entry = 0;
+        std::size_t core_entry = 0;
 
         // Common scalars: one slot each
         uint32_t common_index = static_cast<uint32_t>(kernel_descriptor.common_runtime_args.size());
         for (const auto& arg : named_args.named_common_runtime_args) {
             auto [ns, field] = split_name(arg.name);
-            rt_ns_map[ns].push_back({field, common_index, 1, RuntimeArgDispatch::COMMON});
-            common_index += 1;
+            rt_ns_map[ns].push_back(
+                {field, common_index + layout.common_indices.at(common_entry++), 1, RuntimeArgDispatch::COMMON});
         }
         // Common arrays: N contiguous slots each
         for (const auto& arg : named_args.named_common_runtime_arg_arrays) {
             auto [ns, field] = split_name(arg.name);
             uint32_t len = static_cast<uint32_t>(arg.values.size());
-            rt_ns_map[ns].push_back({field, common_index, len, RuntimeArgDispatch::COMMON});
-            common_index += len;
+            rt_ns_map[ns].push_back(
+                {field, common_index + layout.common_indices.at(common_entry++), len, RuntimeArgDispatch::COMMON});
         }
 
         // Per-core scalars: one slot each
@@ -145,15 +202,15 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
         }
         for (const auto& arg : named_args.named_per_core_runtime_args) {
             auto [ns, field] = split_name(arg.name);
-            rt_ns_map[ns].push_back({field, per_core_index, 1, RuntimeArgDispatch::PER_CORE});
-            per_core_index += 1;
+            rt_ns_map[ns].push_back(
+                {field, per_core_index + layout.core_indices.at(core_entry++), 1, RuntimeArgDispatch::PER_CORE});
         }
         // Per-core arrays: N contiguous slots each
         for (const auto& arg : named_args.named_per_core_runtime_arg_arrays) {
             auto [ns, field] = split_name(arg.name);
             uint32_t len = arg.core_values.empty() ? 0 : static_cast<uint32_t>(arg.core_values[0].second.size());
-            rt_ns_map[ns].push_back({field, per_core_index, len, RuntimeArgDispatch::PER_CORE});
-            per_core_index += len;
+            rt_ns_map[ns].push_back(
+                {field, per_core_index + layout.core_indices.at(core_entry++), len, RuntimeArgDispatch::PER_CORE});
         }
 
         kernel->set_named_runtime_arg_namespaces(rt_ns_map);
@@ -185,6 +242,49 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
 
 void apply_named_runtime_args(Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_index) {
     const auto& named_args = kernel_descriptor.blaze_named_args;
+    // The cache key normally prevents this mismatch. Also reject direct calls
+    // applying a changed alias pattern to an already-compiled program.
+    const auto layout = pack_named_runtime_args(named_args);
+    const auto& namespaces = program.impl().get_kernel(kernel_index)->named_runtime_arg_namespaces();
+    auto check = [&](const std::string& name, uint32_t index, uint32_t length, RuntimeArgDispatch dispatch) {
+        const auto dot = name.find('.');
+        const auto ns = dot == std::string::npos ? "" : name.substr(0, dot);
+        const auto field = dot == std::string::npos ? name : name.substr(dot + 1);
+        auto found = namespaces.find(ns);
+        TT_FATAL(found != namespaces.end(), "Named runtime argument layout changed: {}", name);
+        auto entry =
+            std::find_if(found->second.begin(), found->second.end(), [&](const auto& e) { return e.field == field; });
+        TT_FATAL(
+            entry != found->second.end() && entry->index == index && entry->length == length &&
+                entry->dispatch == dispatch,
+            "Named runtime argument alias layout changed for {}; construct a new program",
+            name);
+    };
+    std::size_t common_entry = 0;
+    const uint32_t common_base = kernel_descriptor.common_runtime_args.size();
+    for (const auto& arg : named_args.named_common_runtime_args) {
+        check(arg.name, common_base + layout.common_indices.at(common_entry++), 1, RuntimeArgDispatch::COMMON);
+    }
+    for (const auto& arg : named_args.named_common_runtime_arg_arrays) {
+        check(
+            arg.name,
+            common_base + layout.common_indices.at(common_entry++),
+            arg.values.size(),
+            RuntimeArgDispatch::COMMON);
+    }
+    std::size_t core_entry = 0;
+    const uint32_t core_base =
+        kernel_descriptor.runtime_args.empty() ? 0 : kernel_descriptor.runtime_args[0].second.size();
+    for (const auto& arg : named_args.named_per_core_runtime_args) {
+        check(arg.name, core_base + layout.core_indices.at(core_entry++), 1, RuntimeArgDispatch::PER_CORE);
+    }
+    for (const auto& arg : named_args.named_per_core_runtime_arg_arrays) {
+        check(
+            arg.name,
+            core_base + layout.core_indices.at(core_entry++),
+            arg.core_values.empty() ? 0 : arg.core_values[0].second.size(),
+            RuntimeArgDispatch::PER_CORE);
+    }
 
     // Per-core runtime args: rewrite the full merged vector (positional + named values)
     // over the slots process_named_args populated at construction.  In-place element
@@ -238,6 +338,16 @@ ttsl::hash::hash_t hash_named_args_schema(const NamedKernelArgs& named_args) {
         ttsl::hash::hash_combine(hash, arg.name);
         // Per-core array width (uniform across cores); the values themselves are runtime data.
         ttsl::hash::hash_combine(hash, arg.core_values.empty() ? std::size_t{0} : arg.core_values[0].second.size());
+    }
+    // Aliasing changes generated indices. Hash the layout, NOT numeric values:
+    // equal args that later diverge must miss the cache instead of overwriting
+    // one shared slot. Value updates preserving the alias pattern remain hits.
+    const auto layout = pack_named_runtime_args(named_args);
+    for (auto index : layout.common_indices) {
+        ttsl::hash::hash_combine(hash, index);
+    }
+    for (auto index : layout.core_indices) {
+        ttsl::hash::hash_combine(hash, index);
     }
     return hash;
 }

@@ -332,7 +332,7 @@ void py_module_types(nb::module_& mod) {
             Default constructor for CBFormatDescriptor.
         )pbdoc")
         .def(
-            nb::init<uint8_t, tt::DataFormat, uint32_t, std::optional<tt::tt_metal::TileDescriptor>>(),
+            nb::init<uint16_t, tt::DataFormat, uint32_t, std::optional<tt::tt_metal::TileDescriptor>>(),
             nb::arg("buffer_index"),
             nb::arg("data_format"),
             nb::arg("page_size"),
@@ -349,7 +349,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             "__init__",
             [](tt::tt_metal::CBFormatDescriptor* t,
-               uint8_t buffer_index,
+               uint16_t buffer_index,
                ttnn::DataType data_type,
                uint32_t page_size,
                std::optional<tt::tt_metal::TileDescriptor> tile) {

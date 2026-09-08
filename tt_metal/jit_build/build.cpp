@@ -166,6 +166,9 @@ void JitBuildEnv::init(
     string common_flags =
         // Use C++17, plus some specific C++20 features we've enabled
         "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval "
+        // Large fused stages construct extensive named-argument tables at compile time.
+        // This host compiler budget does not change device memory limits.
+        "-fconstexpr-ops-limit=268435456 "
         // Ban dynamic initializations, via a check we've added
         "-ftt-no-dyninit "
         // Rely on Link Time Optimization (removes globally unreachable code)

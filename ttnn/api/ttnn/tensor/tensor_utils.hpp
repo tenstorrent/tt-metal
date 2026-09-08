@@ -70,7 +70,7 @@ std::vector<tt::tt_metal::CoreCoord> get_optimal_worker_cores_for_sharded_tensor
  * @endcode
  */
 tt::tt_metal::CBDescriptor cb_descriptor_from_sharded_tensor(
-    uint8_t cb_index,
+    uint16_t cb_index,
     const Tensor& tensor,
     uint32_t address_offset = 0,
     uint32_t total_size = 0,

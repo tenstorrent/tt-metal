@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "jit_build_utils.hpp"
+#include "common/host_resource_limits.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -31,6 +32,7 @@
 namespace tt::jit_build::utils {
 
 bool run_command(const std::string& cmd, const std::string& log_file, bool verbose) {
+    tt::tt_metal::detail::HostJitCommandLock command_lock;
     TTZoneScopedD(JIT);
     TTZoneTextD(JIT, cmd.c_str(), cmd.length());
     int ret;
@@ -113,6 +115,7 @@ std::vector<std::string> build_gpp_argv(
 }
 
 bool exec_command(const std::vector<std::string>& args, const std::string& working_dir, const std::string& log_file) {
+    tt::tt_metal::detail::HostJitCommandLock command_lock;
     if (args.empty()) {
         return false;
     }

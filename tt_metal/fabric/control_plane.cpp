@@ -2905,21 +2905,36 @@ PortDescriptorTable ControlPlane::generate_port_descriptor_table() {
         return a.second < b.second;
     });
 
+    // Explicit ports are requested per logical mesh, not per neighboring host
+    // (or per rank when a physical host is partitioned into multiple owners).
+    // A requested exit may connect only to a later neighbor in sorted_neighbors.
+    // Validate against ALL cables to that mesh before gathering per-host ports;
+    // otherwise an unrelated neighbor incorrectly reports zero physical lanes.
+    std::map<MeshId, std::vector<uint64_t>> exit_chips_by_neighbor_mesh;
+    for (const auto& [neighbor_mesh_id, neighbor_host] : sorted_neighbors) {
+        if (!check_connection_requested(
+                my_mesh_id, neighbor_mesh_id, requested_intermesh_connections, requested_intermesh_ports)) {
+            continue;
+        }
+        auto& chips = exit_chips_by_neighbor_mesh[neighbor_mesh_id];
+        for (const auto& exit_node : physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host)) {
+            chips.push_back(*exit_node.src_exit_node);
+        }
+    }
+    std::map<MeshId, std::unordered_set<FabricNodeId>> requested_exit_nodes_by_mesh;
+    for (const auto& [neighbor_mesh_id, chips] : exit_chips_by_neighbor_mesh) {
+        requested_exit_nodes_by_mesh.emplace(
+            neighbor_mesh_id,
+            this->get_requested_exit_nodes(my_mesh_id, neighbor_mesh_id, requested_intermesh_ports, chips));
+    }
+
     for (const auto& [neighbor_mesh_id, neighbor_host] : sorted_neighbors) {
         bool connection_requested = check_connection_requested(
             my_mesh_id, neighbor_mesh_id, requested_intermesh_connections, requested_intermesh_ports);
         if (!connection_requested) {
             continue;
         }
-        const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
-        std::vector<uint64_t> src_exit_node_chips;
-        src_exit_node_chips.reserve(exit_nodes.size());
-        std::transform(
-            exit_nodes.begin(), exit_nodes.end(), std::back_inserter(src_exit_node_chips), [](const auto& exit_node) {
-                return *exit_node.src_exit_node;
-            });
-        std::unordered_set<FabricNodeId> requested_exit_nodes = this->get_requested_exit_nodes(
-            my_mesh_id, neighbor_mesh_id, requested_intermesh_ports, src_exit_node_chips);
+        const auto& requested_exit_nodes = requested_exit_nodes_by_mesh.at(neighbor_mesh_id);
         auto neighbor_ports =
             this->gather_intermesh_cables_for_exit_nodes(my_host, neighbor_host, strict_binding, requested_exit_nodes);
         // A host may connect to multiple neighbor hosts on the same logical mesh (e.g. pod
