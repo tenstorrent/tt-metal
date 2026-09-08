@@ -124,7 +124,10 @@ inline RingWorkMasks build_ring_work_masks_device(
     uint32_t kv_local_padded_Nt,
     bool kernel_chunked,
     uint32_t q_chunk_group_tile_count,
-    uint32_t q_local_padded_Nt,
+    // Cache tiles per rank per chunk (the Q slab / kv_stripe_split) and the split itself. Several
+    // shards share one Q rank once the KV is striped finer than Q is sharded.
+    uint32_t kv_region_Nt,
+    uint32_t kv_stripe_split,
     uint32_t logical_nt,
     uint32_t num_joint_k_chunks,
     uint32_t joint_seq_len,
@@ -158,15 +161,17 @@ inline RingWorkMasks build_ring_work_masks_device(
                     ring_id,
                     local_tile_start,
                     q_chunk_group_tile_count,
-                    q_local_padded_Nt,
+                    kv_region_Nt,
                     kv_local_padded_Nt) < logical_nt) {
                 valid_spatial_kv_chunks++;
             }
         }
         const uint32_t valid_kv_chunks = valid_spatial_kv_chunks + (joint_contributes ? num_joint_k_chunks : 0);
         const bool has_kv_work = (kernel_chunked && !kv_pad_rotation_enabled) || valid_spatial_kv_chunks > 0;
+        // Causality is a Q-rank relation; mirrors the host's build_ring_work_plan_impl.
         const bool ring_iter_does_work =
-            (has_kv_work || joint_contributes) && !(kernel_is_causal && tensor_rank < ring_id && !is_balanced);
+            (has_kv_work || joint_contributes) &&
+            !(kernel_is_causal && (tensor_rank / kv_stripe_split) < (ring_id / kv_stripe_split) && !is_balanced);
         if (ring_iter_does_work) {
             plan.active_ring_iter_mask |= (1u << ring_iter);
         }

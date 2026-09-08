@@ -3936,7 +3936,9 @@ def test_ring_mla_full_mesh_rejects_invalid_placements(expect_error):
                 use_column_major_ccl=True,
             )
 
-        with expect_error(RuntimeError, "requires Q sequence dim 2 and KV gather dim"):
+        # Axis-sharded KV covers only sp of the mesh; the KV span is checked before the Q span, since
+        # Q's expected width is derived from the KV shard count (kv_stripe_split = kv_shards/q_shards).
+        with expect_error(RuntimeError, "requires the KV gather dim"):
             invoke(tt_axis_q, tt_axis_kv, tt_persistent, Topology.Ring)
         with expect_error(RuntimeError, "persistent gathered-KV buffer to be replicated"):
             invoke(tt_q, tt_kv, tt_sharded_persistent, Topology.Ring)
@@ -6028,6 +6030,100 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_conf
         do_check=False,
         reuse_kv_buffer=reuse_kv_buffer,
     )
+
+
+
+@pytest.mark.parametrize(
+    "fabric_config",
+    [ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D],
+    ids=["torus_xy", "fabric_2d"],
+)
+def test_ring_mla_full_mesh_tp_striped_kv_rejects_flat_cache(fabric_config, expect_error):
+    """A TP-striped KV cache is chunked-prefill-only, and this pins the reason.
+
+    kv_stripe_split = kv_shards / q_shards is derived from the mesh, so striping the cache across every
+    device while Q stays on SP gives split = tp. But a striped cache is block-cyclic -- each device owns
+    one narrow region of EVERY chunk, not a contiguous run -- which only the chunked mapping expresses.
+    A one-chunk cache therefore has per-device KV shorter than Q and must be refused, not silently
+    mis-mapped. Accuracy on the chunked path is separate coverage."""
+    mesh_config = MESH_CONFIG if MESH_CONFIG.is_galaxy else replace(MESH_CONFIG, tp_size=2, sp_size=MESH_CONFIG.num_devices // 2)
+    if mesh_config.tp_size < 2 or mesh_config.sp_size < 2:
+        pytest.skip(f"TP-striped KV needs a non-degenerate 2D mesh, got {mesh_config}")
+
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=True, fabric_config=fabric_config)
+    try:
+        mesh_device = runtime.mesh_device
+        ring_size = mesh_device.get_num_devices()
+        sp, tp = mesh_config.sp_size, mesh_config.tp_size
+        assert sp * tp == ring_size, f"expected sp*tp == ring_size, got {sp}*{tp} != {ring_size}"
+
+        kv_local = 64                       # cache rows per device: the striped region
+        global_seq = kv_local * ring_size   # 2048 on an 8x4
+        q_local = kv_local * tp             # Q rows per device: tp regions
+        b, nhq, nhk, d_q, d_k, d_v = 1, 4, 1, 64, 64, 32
+        torch.manual_seed(2026)
+        q = fa_rand(b, nhq, global_seq, d_q)
+        kv = fa_rand(b, nhk, global_seq, d_k)
+
+        # Q over the SP axis only (its lane-mates share a slab); KV over every device. Locate the SP
+        # axis from the live mesh shape rather than assuming an order.
+        mesh_shape = tuple(mesh_device.shape)
+        sp_axis_idx = 0 if mesh_shape[0] == sp else 1
+        q_dims = [None, None]
+        q_dims[sp_axis_idx] = 2
+        logger.info(f"mesh_shape={mesh_shape} sp={sp} tp={tp} sp_axis_idx={sp_axis_idx} q_dims={q_dims}")
+        tt_q = ttnn.from_torch(
+            q,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=q_dims),
+        )
+        tt_kv = ttnn.from_torch(
+            kv,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+        )
+        gathered_kv = ttnn.from_torch(
+            torch.zeros(b, nhk, global_seq, d_k),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        assert tt_q.shape[2] * sp == global_seq, f"Q slab {tt_q.shape[2]} x sp {sp} != {global_seq}"
+        assert tt_kv.shape[2] * ring_size == global_seq, f"KV region {tt_kv.shape[2]} x {ring_size} != {global_seq}"
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=32,
+            k_chunk_size=32,
+            exp_approx_mode=False,
+        )
+        with expect_error(RuntimeError, "Per-device Q seq length must be <= per-device K/V seq length"):
+            ttnn.transformer.ring_mla(
+            tt_q,
+            tt_kv,
+            persistent_output_buffer_kv=gathered_kv,
+            head_dim_v=d_v,
+            logical_n=global_seq,
+            program_config=program_config,
+            compute_kernel_config=runtime.compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+            num_links=runtime.num_links,
+            cluster_axis=None,
+            mesh_device=mesh_device,
+            topology=Topology.Ring,
+            subdevice_id=runtime.worker_sub_device_id,
+            ccl_core_grid_offset=(runtime.ccl_column, 0),
+            use_column_major_ccl=True,
+            is_balanced=False,
+        )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
 
 
 @pytest.mark.timeout(1200)

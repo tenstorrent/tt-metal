@@ -2306,6 +2306,9 @@ template <
     // reader's kv_chunk_is_beyond_logical_l skip so the K/V CB producer/consumer counts stay aligned.
     bool joint_n_skip_enabled = false,
     uint32_t joint_local_padded_Nt = 0,  // Lt_local: per-device joint tile count (sharded path)
+    // TP-striped KV: the cache's per-rank per-chunk region, which is q_local_padded_Nt / kv_stripe_split.
+    // 0 = derive it as the Q slab, i.e. a cache sharded exactly like Q.
+    uint32_t kv_region_Nt = 0,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -2338,6 +2341,10 @@ void sdpa_ring_v2(
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool has_sliding_window = sliding_window_size > 0;
+    // Stride for local-cache -> global-sequence mapping. Equals the Q slab when the cache is sharded
+    // like Q; narrower once the KV is striped finer, in which case several shards share one Q rank.
+    constexpr uint32_t kv_rank_stride_Nt = kv_region_Nt != 0 ? kv_region_Nt : q_local_padded_Nt;
+    constexpr uint32_t kv_stripe_split = kv_rank_stride_Nt != 0 ? q_local_padded_Nt / kv_rank_stride_Nt : 1;
     static_assert(!has_sliding_window || chunked_enabled, "Sliding windows require chunked prefill");
     // is_causal: diagonal stamp only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
     const bool is_causal_iter = (is_causal_sdpa && (ring_iter == 0)) || chunked_enabled;
@@ -2445,7 +2452,7 @@ void sdpa_ring_v2(
             chunked_enabled,
             local_padded_Nt,
             chunk_size_t,
-            q_local_padded_Nt>(source_ring_id, k_chunk * Sk_chunk_t, logical_nt);
+            kv_rank_stride_Nt>(source_ring_id, k_chunk * Sk_chunk_t, logical_nt);
     };
 
     // Causal skip: K chunks fully above the diagonal — drain K/V from CBs and skip.
@@ -2489,7 +2496,8 @@ void sdpa_ring_v2(
             }
         } else if constexpr (chunked_enabled) {
             // Absolute Q tile row. Diag stamp masks K past Q's range; logical_n skip handles K past the cache.
-            q_start_tile = chunked.q_start_idx_t + chunked.ring_index * q_local_padded_Nt + q_chunk * Sq_chunk_t;
+            q_start_tile = chunked.q_start_idx_t + (chunked.ring_index / kv_stripe_split) * q_local_padded_Nt +
+                           q_chunk * Sq_chunk_t;
         }
 
         if (try_balanced_skip(q_chunk)) {
@@ -2678,7 +2686,7 @@ void sdpa_ring_v2(
             if constexpr (is_causal_sdpa && !kv_pad_rotation_enabled) {
                 if constexpr (has_sliding_window) {
                     const uint32_t k_global_start =
-                        kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
+                        kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, kv_rank_stride_Nt>(
                             source_ring_id, source_k_chunk * Sk_chunk_t);
                     const uint32_t q_global_end = q_start_tile + Sq_chunk_t;
                     if (k_global_start < q_global_end && q_global_end - k_global_start < active_Sk_param) {
@@ -2713,10 +2721,10 @@ void sdpa_ring_v2(
             // K start tile fed to diag stamp must share Q's coord frame (local for is_causal, global for chunked).
             const uint32_t step_k_start_tile = [&]() {
                 if constexpr (has_sliding_window) {
-                    return kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
+                    return kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, kv_rank_stride_Nt>(
                         source_ring_id, source_k_chunk * Sk_chunk_t);
                 } else if constexpr (chunked_enabled) {
-                    return kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
+                    return kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, kv_rank_stride_Nt>(
                         ring_id, k_chunk * Sk_chunk_t);
                 } else {
                     return k_chunk * Sk_chunk_t;

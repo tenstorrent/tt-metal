@@ -70,6 +70,12 @@ void kernel_main() {
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(38) == 1;
     constexpr bool chunked_enabled = get_compile_time_arg_val(39) == 1;
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(40);
+    // TP-striped KV: chunk_size_t is the GLOBAL chunk, so it spans ring_size cache regions. One region
+    // equals the Q slab only while the cache is sharded exactly like Q, which is kv_stripe_split == 1.
+    // Derived rather than passed so no compile-arg index shifts.
+    constexpr uint32_t kv_region_Nt = chunk_size_t != 0 ? chunk_size_t / ring_size : q_local_padded_Nt;
+    constexpr uint32_t kv_stripe_split = kv_region_Nt != 0 ? q_local_padded_Nt / kv_region_Nt : 1;
+    constexpr uint32_t q_ring_size = ring_size / kv_stripe_split;
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(41) == 1;
     // Slots 42-47 are retained for compile-time arg index stability; live KV-pad Q mapping
     // and active-ring masks are runtime args below.
@@ -133,7 +139,7 @@ void kernel_main() {
         1 + edge_mask_tiles + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
     constexpr uint32_t q_start_idx_t =
-        chunked_enabled && !kv_pad_rotation_enabled ? logical_nt_compile - q_local_padded_Nt * ring_size : 0;
+        chunked_enabled && !kv_pad_rotation_enabled ? logical_nt_compile - q_local_padded_Nt * q_ring_size : 0;
 
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
@@ -435,7 +441,8 @@ void kernel_main() {
                 use_attention_sink,
                 cb_attention_sink,
                 has_gathered_joint_k,
-                Lt_local>(
+                Lt_local,
+                kv_region_Nt>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,
@@ -473,7 +480,7 @@ void kernel_main() {
                 scale_fp32,
                 needs_lightweight_mask,
                 chunked_enabled,
-                q_local_padded_Nt,
+                kv_region_Nt,
                 chunk_size_t>(
                 qk_in0_block_w,
                 qk_subblock_w,

@@ -359,15 +359,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !args.sliding_window_size.has_value() || args.has_sliding_window(),
         "RingJointSDPA sliding_window_size must be greater than zero when provided");
-    // The host work plan already derives its geometry from kv_stripe_split, but the kernels still take
-    // the Q slab as the cache-region stride and read ring_size as the Q rank count, so a split > 1 would
-    // have host and device disagree and silently mis-position every read. Refuse it until the kernel
-    // side (kv_region_Nt compile arg + Q-rank indexing) lands.
-    TT_FATAL(
-        args.kv_stripe_split == 1,
-        "kv_stripe_split ({}) > 1 is not supported yet: the device kernels still derive the cache region "
-        "from the Q slab. Host-side geometry is in place; see the kernel plumbing follow-up.",
-        args.kv_stripe_split);
     const auto& ag = args.all_gather_operation_attributes;
     if (ag.full_mesh) {
         TT_FATAL(!ag.cluster_axis.has_value(), "Full-mesh RingJointSDPA must not carry a cluster axis");
@@ -397,10 +388,17 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 ttnn::operations::ccl::common::has_row_major_mesh_coordinates(gathered_input_tensor_k),
             "Full-mesh RingJointSDPA requires row-major mesh coordinates for Q, local K/V, and gathered K/V");
         TT_FATAL(
-            ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_q, 2) == ag.ring_size &&
-                ttnn::operations::ccl::common::tensor_dim_shard_factor(tensor_args.input_k, ag.dim) == ag.ring_size,
-            "Full-mesh RingJointSDPA requires sequence shards across all {} mesh devices",
+            ttnn::operations::ccl::common::tensor_dim_shard_factor(tensor_args.input_k, ag.dim) == ag.ring_size,
+            "Full-mesh RingJointSDPA requires KV sequence shards across all {} mesh devices",
             ag.ring_size);
+        // Q is sharded kv_stripe_split times coarser than the KV when the cache is TP-deduped.
+        TT_FATAL(
+            ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_q, 2) * args.kv_stripe_split ==
+                ag.ring_size,
+            "Full-mesh RingJointSDPA requires Q dim 2 sharded across {} devices (ring {} / kv_stripe_split {})",
+            ag.ring_size / args.kv_stripe_split,
+            ag.ring_size,
+            args.kv_stripe_split);
         TT_FATAL(
             is_replicated_across_complete_mesh(gathered_input_tensor_k),
             "Full-mesh RingJointSDPA requires the persistent gathered K/V buffer replicated across the mesh");
@@ -634,6 +632,19 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_local_q <= N_local_kv,
         "Per-device Q seq length must be <= per-device K/V seq length. Equal: full-prefill path. Less: "
         "chunked-prefill path. Greater is undefined. Got N_local_q={}, N_local_kv={}",
+        N_local_q,
+        N_local_kv);
+
+    // A TP-striped cache is block-cyclic by construction: a device holds one narrow region of EVERY
+    // chunk, not one contiguous run of the sequence. Only the chunked mapping can express that, and
+    // kv_local >= q_local then forces the cache to be at least kv_stripe_split chunks deep.
+    TT_FATAL(
+        args.kv_stripe_split == 1 || is_chunked,
+        "kv_stripe_split={} requires the chunked-prefill path (per-device Q strictly shorter than "
+        "per-device K/V): a striped cache holds one region per chunk rather than a contiguous run, so it "
+        "must be at least {} chunks deep. Got N_local_q={}, N_local_kv={}",
+        args.kv_stripe_split,
+        args.kv_stripe_split,
         N_local_q,
         N_local_kv);
 
@@ -1205,6 +1216,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     std::optional<uint64_t> route_plan_hash;
     // The caller asks for a full-mesh gather; the proved route decides whether it closes.
     ttnn::ccl::Topology resolved_topology = topology;
+    // How many KV shards share one Q rank. 1 = the cache is sharded exactly like Q; > 1 = TP-deduped.
+    uint32_t resolved_kv_stripe_split = 1;
     if (full_mesh) {
         TT_FATAL(
             topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
@@ -1214,13 +1227,30 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
                 ttnn::operations::ccl::common::has_row_major_mesh_coordinates(input_tensor_k) &&
                 ttnn::operations::ccl::common::has_row_major_mesh_coordinates(persistent_output_buffer_k),
             "ring_mla cluster_axis=None requires row-major mesh coordinates for Q, KV, and the persistent buffer");
+        // KV always spans the whole mesh (the ring transports one shard per device). Q may be sharded
+        // COARSER when the cache is TP-deduped: kv_stripe_split shards then share one Q rank, and the
+        // ring stays the transport while the causal geometry indexes by the Q rank.
+        const uint32_t kv_shards =
+            ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_k, gather_dim);
+        const uint32_t q_shards = ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_q, 2);
         TT_FATAL(
-            ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_q, 2) == num_devices &&
-                ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_k, gather_dim) == num_devices,
-            "ring_mla cluster_axis=None requires Q sequence dim 2 and KV gather dim {} to be sharded across all {} "
-            "mesh devices",
+            kv_shards == num_devices,
+            "ring_mla cluster_axis=None requires the KV gather dim {} sharded across all {} mesh devices, got {}",
             gather_dim,
-            num_devices);
+            num_devices,
+            kv_shards);
+        TT_FATAL(
+            q_shards > 0 && kv_shards % q_shards == 0,
+            "ring_mla cluster_axis=None requires the KV shard count ({}) to be a whole multiple of the Q dim-2 "
+            "shard count ({})",
+            kv_shards,
+            q_shards);
+        resolved_kv_stripe_split = kv_shards / q_shards;
+        TT_FATAL(
+            resolved_kv_stripe_split == 1 || !is_balanced,
+            "ring_mla with a TP-striped KV cache (kv_stripe_split={}) requires is_balanced=false: balancing "
+            "assumes ring ranks and Q chunks correspond one to one",
+            resolved_kv_stripe_split);
         TT_FATAL(
             is_replicated_across_complete_mesh(persistent_output_buffer_k),
             "ring_mla cluster_axis=None requires the persistent gathered-KV buffer to be replicated across the "
@@ -1362,7 +1392,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         latent_v_head_dim.value_or(0),
         kv_cache_num_layers,
         kv_cache_layer_idx,
-        sliding_window_size);
+        sliding_window_size,
+        resolved_kv_stripe_split);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

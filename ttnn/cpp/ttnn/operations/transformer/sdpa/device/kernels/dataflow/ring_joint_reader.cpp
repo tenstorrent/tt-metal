@@ -257,6 +257,11 @@ void kernel_main() {
     constexpr bool chunked_enabled = get_compile_time_arg_val(24) == 1;
     constexpr uint32_t num_q_readers = get_compile_time_arg_val(25);
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(26);
+    // TP-striped KV: chunk_size_t spans the GLOBAL chunk, hence ring_size cache regions. A region is
+    // the Q slab only at kv_stripe_split == 1. Derived so no compile-arg index moves.
+    constexpr uint32_t kv_region_Nt = chunk_size_t != 0 ? chunk_size_t / ring_size : q_local_padded_Nt;
+    constexpr uint32_t kv_stripe_split = kv_region_Nt != 0 ? q_local_padded_Nt / kv_region_Nt : 1;
+    constexpr uint32_t q_ring_size = ring_size / kv_stripe_split;
     constexpr bool indexed_kv_cache = get_compile_time_arg_val(27) == 1;
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(28) == 1;
     // Slot 29 is retained for compile-time arg index stability; live active-ring mask is a runtime arg below.
@@ -488,7 +493,11 @@ void kernel_main() {
                 ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                     fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
             const auto qmap = ring_joint::build_kv_pad_q_mapping_device(
-                kv_actual_tile_count, logical_nt, ring_size, q_local_padded_Nt, tensor_rank);
+                kv_actual_tile_count,
+                logical_nt,
+                q_ring_size,
+                q_local_padded_Nt,
+                tensor_rank / kv_stripe_split);
             const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>(
                 fused_op_receiver.seq.ring_index,
                 ring_size,
@@ -499,7 +508,8 @@ void kernel_main() {
                 kv_local_padded_Nt,
                 chunked_enabled,
                 chunk_size_t,
-                q_local_padded_Nt,
+                kv_region_Nt,
+                kv_stripe_split,
                 logical_nt,
                 num_joint_k_chunks,
                 L,
@@ -875,7 +885,7 @@ void kernel_main() {
                         chunked_enabled,
                         kv_local_padded_Nt,
                         chunk_size_t,
-                        q_local_padded_Nt>(source_ring_id, source_k_chunk * Sk_chunk_t, logical_nt);
+                        kv_region_Nt>(source_ring_id, source_k_chunk * Sk_chunk_t, logical_nt);
 
                 // Sharded joint: this ring iteration serves shard `ring_id`, whose global joint tile
                 // range starts at ring_id * Lt_local. A joint K chunk whose global start tile is

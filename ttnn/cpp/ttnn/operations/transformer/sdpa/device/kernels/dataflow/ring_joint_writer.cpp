@@ -430,6 +430,10 @@ void kernel_main() {
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(28);
     constexpr bool chunked_enabled = get_compile_time_arg_val(29) == 1;
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(30);
+    // TP-striped KV: chunk_size_t spans the GLOBAL chunk = ring_size cache regions. Derived, so no
+    // compile-arg index moves; all three collapse to today's values at kv_stripe_split == 1.
+    constexpr uint32_t kv_region_Nt = chunk_size_t != 0 ? chunk_size_t / ring_size : q_local_padded_Nt;
+    constexpr uint32_t kv_stripe_split = kv_region_Nt != 0 ? q_local_padded_Nt / kv_region_Nt : 1;
     // Slots 31-33 are retained for compile-time arg index stability; live ring-work masks
     // are runtime args below.
     constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(31);
@@ -529,7 +533,8 @@ void kernel_main() {
             kv_local_padded_Nt,
             chunked_enabled,
             chunk_size_t,
-            q_local_padded_Nt,
+            kv_region_Nt,
+            kv_stripe_split,
             logical_nt,
             num_joint_k_chunks,
             L,
@@ -694,7 +699,7 @@ void kernel_main() {
                 const uint32_t q_chunk = decoded_q.q_chunk;
                 const auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
-                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id, Lt, q_local_padded_Nt);
+                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
 
                 if (!single_q_chunk) {
                     CircularBuffer cb_sig(cb_signal);
@@ -835,7 +840,7 @@ void kernel_main() {
 
                 const auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
-                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id, Lt, q_local_padded_Nt);
+                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
 
                 // 1. Complete restore for all Q chunks to keep the prefetch pipeline in sync.
                 // For balanced-skip non-last-ring-iter Q chunks, barrier without pushing —
@@ -946,7 +951,7 @@ void kernel_main() {
 
                 const auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
-                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id, Lt, q_local_padded_Nt);
+                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
 
                 // Only truly causal case appear in the iteration with local KV
                 // Other iterations will just skip the computation with subsequent KV chunks
