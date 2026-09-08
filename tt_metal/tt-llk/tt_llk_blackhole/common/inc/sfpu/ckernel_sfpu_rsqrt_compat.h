@@ -105,7 +105,9 @@ sfpi_inline sfpi::vFloat _reciprocal_compat_(const sfpi::vFloat in)
     // overwrite the exponent field that makes the value an infinity. And it has to compare
     // setsgn(in, 0) rather than a bare in == 0.0F, because SFPSETCC is not specified for
     // negative zero (VectorUnit.md) and leaves -0.0 at 1.7e38; clearing the sign is what
-    // brings -0.0 into the guard, after which the caller-side v_if(in < 0.0) re-signs it.
+    // brings -0.0 into the guard. The guard yields +inf for either zero, so 1/-0 = -inf comes
+    // from the sign restore in _reciprocal_compat_signed_ below (SFPSETSGN), not from here. A
+    // caller that takes the bare primitive keeps |1/in| and so gets +inf for both zeros.
     v_if (sfpi::setsgn(in, 0) == 0.0F)
     {
         out = std::numeric_limits<float>::infinity();
@@ -125,7 +127,10 @@ sfpi_inline sfpi::vFloat _reciprocal_compat_(const sfpi::vFloat in)
 // SFPSETSGN (sfpi::copysgn) rather than v_if(in < 0.0) { out = -out; }. The comparison form is
 // what this wrapper replaced, and it works: measured on Blackhole silicon it does fire on a
 // delivered -0.0, so reciprocal_compat(-0.0) is -inf either way, and the two forms are
-// bit-identical over the SDPA, sampling and compat-unary suites. But SFPSETCC is specified only
+// bit-identical over the SDPA and compat-unary suites -- the two that reach this wrapper.
+// (test_sfpu_sampling is untouched by either form: sampling_recip_value calls the bare
+// primitive, so it is the control proving the refactor did not leak into that consumer, not a
+// comparison of the two restores.) But SFPSETCC is specified only
 // "provided that VC is neither negative zero nor any kind of NaN" (VectorUnit.md), so that
 // agreement is behaviour outside the contract and not a property to rest a documented 1/in on --
 // note the pole guard above needs setsgn(in, 0) precisely because the *equality* comparison does
