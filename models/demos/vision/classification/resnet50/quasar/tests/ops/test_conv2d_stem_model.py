@@ -14,7 +14,7 @@ ON-DEVICE `fold` output (folded small-face geometry) with the model's real `self
 mirrors the model's ACTUAL stem path verbatim so the fault reproduces in seconds instead of a ~28-min run.
 
 Mirrored verbatim from ttnn_functional_resnet50.py (__init__ stem setup + run() lines ~940-1004) and
-resnet50_test_infra.setup_l1_sharded_input (Quasar branch):
+resnet50_test_infra.setup_input (Quasar branch):
   * input image (batch=1): torch (1,3,224,224) -> NHWC, host-padded C 3->nearest_y(3,8)=8 -> (1,224,224,8)
     bf16 ROW_MAJOR, interleaved L1.
   * fold: stride=2, padding=[3,3,3,3,0,5] (fold_pad_h/w=kernel_size=3, fold_pad_c=C-c=5),

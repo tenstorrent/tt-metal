@@ -27,7 +27,7 @@ For resnet50 the constructor is called with kernel_size=3, stride=2 and a (N, 3,
     padding = [3, 3, 3, 3, 0, 1]
     fold_output_shape = (N, 230//2, 230//2, 4*2*2) = (N, 115, 115, 16)
 
-The input to fold is the ROW_MAJOR, HEIGHT_SHARDED NCHW image (setup_l1_sharded_input shards it over
+The input to fold is the ROW_MAJOR, HEIGHT_SHARDED NCHW image (setup_input shards it over
 the flattened N*C*H rows). This test reproduces that exact configuration; only the batch and the core
 count are tied to the device so it runs on the small Quasar sim grid as well as full silicon.
 
@@ -123,7 +123,7 @@ def test_quasar_fold(mesh_device, batch_size):
     golden = torch.permute(golden, (0, 2, 3, 1))
 
     # HEIGHT-shard the ROW_MAJOR NCHW image over the flattened N*C*H rows, tied to the device grid
-    # (mirrors setup_l1_sharded_input). Use an exact divisor so shards are unpadded.
+    # (mirrors setup_input). Use an exact divisor so shards are unpadded.
     total_rows = batch_size * c * h
     num_cores, grid = _fit_cores(total_rows, device)
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)

@@ -261,7 +261,14 @@ class ResNet50TestInfra:
             output_mesh_composer = None
         return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
 
-    def setup_l1_sharded_input(self, device, torch_input_tensor=None):
+    def setup_input(self, device, torch_input_tensor=None):
+        """Build the host input tensor and the device memory_config to load it into.
+
+        The returned placement is arch-dependent (so read it from the returned mem_config, don't assume it
+        from the name): on Quasar the channels-last fold input goes to DRAM (interleaved) so it doesn't crowd
+        the small L1 bank; on Wormhole/Blackhole it is L1 HEIGHT_SHARDED over the compute grid.
+        Returns (tt_inputs_host, input_mem_config).
+        """
         # Default grid; the device-cap clamp below (num_cores = min(..., max_num_cores, ...)) reduces it
         # to the device's real core count, so batches not explicitly handled here (e.g. the small batches
         # used on the 2x3 emulator / craq-sim grid) still get a valid grid instead of an undefined name.
@@ -289,10 +296,10 @@ class ResNet50TestInfra:
             # input_is_nhwc=True)); it has no on-device NCHW->NHWC transpose kernel, so upload the image
             # CHANNELS-LAST, host-padded to the 16B-aligned width (C -> nearest_y(c, 8)). Upload to DRAM
             # (interleaved): the fold reshards onto its compute grid internally (see run()), so it reads the
-            # input from DRAM and does NOT need it resident in L1. On a small-L1 device (e.g. if have3 MB/core,
-            # ~2.68 MB usable bank) keeping this ~846 KB channels-last input in L1 leaves
-            # too little room for the fold's own sharded intermediate on the 2-core grid -> OOM at the fold.
-            # DRAM frees that bank; the cost on a full-size bank is only a one-time DRAM read for the stem input.
+            # input from DRAM and does NOT need it resident in L1. On a small-L1 device, keeping this ~846 KB
+            # channels-last input in L1 leaves too little room for the fold's own sharded intermediate on the
+            # 2-core grid -> OOM at the fold. DRAM frees that bank; the cost on a full-size device is only a
+            # one-time DRAM read for the stem input.
             c_aligned = _nearest_y(c, 8)
             nhwc = torch_input_tensor.permute(0, 2, 3, 1).contiguous()
             if c_aligned != c:
@@ -329,7 +336,7 @@ class ResNet50TestInfra:
 
     def setup_dram_sharded_input(self, device, torch_input_tensor=None):
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
-        tt_inputs_host, input_mem_config = self.setup_l1_sharded_input(device, torch_input_tensor)
+        tt_inputs_host, input_mem_config = self.setup_input(device, torch_input_tensor)
         dram_grid_size = device.dram_grid_size()
         dram_shard_spec = ttnn.ShardSpec(
             ttnn.CoreRangeSet(
