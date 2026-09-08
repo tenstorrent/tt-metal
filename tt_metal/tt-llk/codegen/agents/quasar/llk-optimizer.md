@@ -73,7 +73,7 @@ The kernel in the tree is the tester's, functionally proven. Measure it with the
 execute_step_perf_measure entry full
 execute_step_perf_keep entry
 ```
-In the `PERF_KEEP` line, `vs_baseline=` is the strict standing (regressed if ANY variant is slower; this drives the loop), `typical=` the median (what the run reports), `worst_variant=` the slowest path. When regressed, the step re-aims the per-attempt measurement at that variant — target your edits at it; a regression confined to one variant usually means one code path (e.g. the fp32-accurate branch) that your lever must reach. Ignore `next=` here: attempt 1 always runs (P2). If your mode reports not applicable (Replay Step 0 `SKIP`, or SFPI S1 on an already-SFPI kernel), go straight to P4.
+In the `PERF_KEEP` line, `vs_baseline=` is the strict standing (regressed if ANY variant is slower; this drives the loop), `typical=` the median (what the run reports), `worst_variant=` the slowest path. After every full sweep the step re-aims the per-attempt measurement at the least-improved variant — target your edits at it; a gap confined to one variant usually means one code path (e.g. the fp32-accurate branch) that your lever must reach. Then follow `next=`: attempts continue until `PERF_MAX_ATTEMPTS` are used, whether or not entry is regressed. If your mode reports not applicable (Replay Step 0 `SKIP`, or SFPI S1 on an already-SFPI kernel), skip that lever and use a different one for attempt 1.
 
 ### P2: Attempt loop (k = 1 … `PERF_MAX_ATTEMPTS`)
 
@@ -81,7 +81,7 @@ Each attempt edits the kernel in the tree — always best-so-far — then gates 
 
 1. **Edit — one lever per attempt.** Attempt 1 = your mode's standard optimization (Replay Steps 2–7, or SFPI S2–S6). Later attempts: one S6.1 idiom lever, fewer per-iteration `SFPLOAD`/`SFPSTORE`, or a fused mul+add. Keep the algorithm and the `_init_{op}_` / `_calculate_{op}_` / dispatcher signatures.
 2. **Functional gate** — your mode's compile + `run_test.sh run --k {op} --maxfail 0` (Replay Step 8 / SFPI S7). Not `PASS` (fail, hang, or an unfixable compile error) → `execute_step_perf_revert attempt_{k}`, then step 4. A broken candidate is never measured.
-3. **Perf** — `execute_step_perf_measure attempt_{k}`. Read `action=`: `keep` → `execute_step_perf_keep attempt_{k}`; `revert` → `execute_step_perf_revert attempt_{k}`.
+3. **Perf** — `execute_step_perf_measure attempt_{k}`. Read `action=` and run the matching helper immediately, before touching the kernel again: `keep` → `execute_step_perf_keep attempt_{k}`; `revert` → `execute_step_perf_revert attempt_{k}`; `retry` (simulator unavailable, `status=env_error`) → re-run the same measure command; it does not consume an attempt.
 4. **Route** on the `next=` field of the keep/revert line: `attempt N` → step 1 with k = N; `final` → P3; `done` → P4.
 
 Every `attempt_{k}` label consumes one attempt once you call measure or revert with it. Only a compile error you fix before the functional gate is free. Never exceed `PERF_MAX_ATTEMPTS`.
@@ -91,9 +91,8 @@ Every `attempt_{k}` label consumes one attempt once you call measure or revert w
 Whenever `next=final` (best changed since it was last measured with the full sweep). Best-so-far is in the tree:
 ```bash
 execute_step_perf_measure final full
-execute_step_perf_keep final
 ```
-Read the `next=` of that `PERF_KEEP` line: `attempt N` means the full sweep is still regressed and attempts remain — the per-attempt variant has been re-aimed at the worst one, go back to P2 with k = N; `done` → P4.
+Read `action=`: `keep` → `execute_step_perf_keep final`; `revert` (the kept attempt slowed another variant — `vs_prev=` names it) → `execute_step_perf_revert final`, which restores the last confirmed kernel; `retry` → re-run the same measure command. Then follow that line's `next=`: `attempt N` → back to P2 with k = N (the per-attempt variant is re-aimed at the least-improved one); `done` → P4.
 
 ### P4: Leave the tree on best-so-far
 

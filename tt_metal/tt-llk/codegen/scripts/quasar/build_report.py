@@ -233,8 +233,8 @@ def build(d: dict, log_dir: str) -> str:
             f"generated {_f(perf.get('current_cycles')):.1f} cycles/tile"
         )
         A(
-            f"  Rule:              verdict follows the median variant; the optimizer keeps attempting "
-            f"while ANY variant is slower by more than {_f(perf.get('regress_pct')):.1f}%"
+            f"  Rule:              verdict follows the median variant; attempts target any variant "
+            f"slower than the original by more than {_f(perf.get('regress_pct')):.1f}%"
         )
         A(
             f"  Optimizer loop:    {_i(perf.get('attempts'))} attempt(s), {_i(perf.get('kept'))} kept; shipped: {perf.get('best', '')}"

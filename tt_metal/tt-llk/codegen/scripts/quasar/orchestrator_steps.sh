@@ -671,7 +671,8 @@ key = wv.get("key") or {}
 def suf(v): return str(v).split(".")[-1]
 parts = []
 if key.get("formats.input_A"):
-    parts.append(f"{key['formats.input_A']}->{key.get('formats.output') or '?'}")
+    # sfpu_dst is the op's real output format; formats.output is the packed storage format.
+    parts.append(f"{key['formats.input_A']}->{key.get('formats.sfpu_dst') or key.get('formats.output') or '?'}")
 if key.get("dest_acc"): parts.append("dest_acc=" + suf(key["dest_acc"]))
 if key.get("approx_mode"): parts.append("approx=" + suf(key["approx_mode"]))
 print("|".join([str(d.get("verdict") or "not_measured"), f(d.get("delta_pct_median")),
@@ -683,8 +684,8 @@ print("|".join([str(d.get("verdict") or "not_measured"), f(d.get("delta_pct_medi
 PY
 }
 
-# After a full sweep that is still regressed, point PERF_TEST_ID at the worst variant so the
-# next attempts measure the slow path. Matches the CSV key columns against the collected
+# After a full sweep, point PERF_TEST_ID at the least-improved variant so the next attempts
+# measure where the most room is left. Matches the CSV key columns against the collected
 # pytest ids by text, strictest column set first. Arg: <vs_baseline json>.
 _perf_reaim() {
     local json="$1" collect="$_L/perf_baseline_collect.log" module arch tid
@@ -703,11 +704,15 @@ def need(cols):
         if v in (None, ""): continue
         if c == "formats.input_A": out.append(f"A:{v},")
         elif c == "formats.input_B": out.append(f"B:{v},")
+        elif c == "formats.sfpu_dst": out.append(f"out:{v}]"); out.append(f"sfpu_dst=<DataFormat.{v}")
+        elif c == "formats.sfpu_src": out.append(f"sfpu_src=<DataFormat.{v}")
         elif c == "formats.output": out.append(f"out:{v}]")
+        elif c == "unpack_to_dest": out.append(f"unpack_to_dest={v}")
         elif "." in str(v): out.append(f"<{v}")
     return out
-for cols in (("mathop", "formats.input_A", "formats.input_B", "formats.output",
-              "dest_acc", "approx_mode", "dest_sync", "implied_math_format"),
+for cols in (("mathop", "formats.input_A", "formats.input_B", "formats.sfpu_src", "formats.sfpu_dst",
+              "unpack_to_dest", "dest_acc", "approx_mode", "dest_sync", "implied_math_format"),
+             ("formats.input_A", "formats.sfpu_dst", "dest_acc", "approx_mode"),
              ("formats.input_A", "formats.output", "dest_acc", "approx_mode"),
              ("dest_acc", "approx_mode")):
     n = need(cols)
@@ -720,10 +725,49 @@ PY
 )"
     if [ -n "$tid" ]; then
         ss PERF_TEST_ID "$tid"
-        echo "  re-aimed: attempts now measure the worst variant ($(_perf_summary "$json" | cut -d'|' -f10))"
+        echo "  re-aimed: attempts now measure the least-improved variant ($(_perf_summary "$json" | cut -d'|' -f10))"
     else
-        echo "  re-aim skipped: worst variant not found among collected ids — attempts keep measuring the current variant"
+        echo "  re-aim skipped: variant not found among collected ids — attempts keep measuring the current variant"
     fi
+}
+
+# Record <label> as best-so-far from its vs_baseline summary. Args: <label> <csv> <json> <full>.
+_perf_set_best() {
+    local label="$1" csv="$2" json="$3" full="$4"
+    local vb vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ
+    vb="$(_perf_summary "$json")"
+    IFS='|' read -r vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ <<<"$vb"
+    ss PERF_BEST_CSV             "$csv"
+    ss PERF_BEST_LABEL           "$label"
+    ss PERF_BEST_FULL            "$full" --json   # measured with the full sweep
+    ss PERF_BEST_VS_BASELINE     "$vb_verdict"   # strict rule, drives the loop
+    ss PERF_BEST_VERDICT_TYPICAL "$vb_typ"       # median rule, reported
+    ss PERF_BEST_DELTA_MEDIAN_PCT "$vb_med"
+    ss PERF_BEST_DELTA_WORST_PCT  "$vb_worst"
+    ss PERF_BEST_CYCLES          "$vb_cur"
+    ss PERF_BEST_BASELINE_CYCLES "$vb_base"
+    ss PERF_BEST_VARIANTS        "$vb_n"
+    ss PERF_BEST_VARIANTS_IMPROVED  "${vb_imp:-0}"
+    ss PERF_BEST_VARIANTS_NEUTRAL   "${vb_neu:-0}"
+    ss PERF_BEST_VARIANTS_REGRESSED "${vb_reg:-0}"
+    ss PERF_BEST_WORST_KEY       "$vb_key"
+    printf '%s' "$vb"
+}
+
+# Copy the kernel files in the tree to $_L/<prefix>_*. Arg: <prefix>.
+_perf_snapshot() {
+    local prefix="$1" wt algo gen; wt="$(_wt)"; algo="$(_algo_file)"; gen="$(sg GENERATED_KERNEL)"
+    [ -f "$wt/$algo" ] && { _disk_guard cp "$wt/$algo" "$_L/${prefix}_$(basename "$algo")" || return $?; }
+    [ "$algo" != "$gen" ] && [ -f "$wt/$gen" ] && { _disk_guard cp "$wt/$gen" "$_L/${prefix}_wrapper_$(basename "$gen")" || return $?; }
+    return 0
+}
+
+# Restore the kernel files in the tree from $_L/<prefix>_*. Arg: <prefix>.
+_perf_restore() {
+    local prefix="$1" wt algo gen; wt="$(_wt)"; algo="$(_algo_file)"; gen="$(sg GENERATED_KERNEL)"
+    [ -f "$_L/${prefix}_$(basename "$algo")" ] && cp "$_L/${prefix}_$(basename "$algo")" "$wt/$algo"
+    [ "$algo" != "$gen" ] && [ -f "$_L/${prefix}_wrapper_$(basename "$gen")" ] && cp "$_L/${prefix}_wrapper_$(basename "$gen")" "$wt/$gen"
+    return 0
 }
 
 # Evaluate <current csv> vs <reference csv> with the run's metric and the given
@@ -774,15 +818,16 @@ print(json.dumps({"perf": {
 }
 
 # What the optimizer does after a keep or revert:
-#   attempt N — some variant is still slower than the original and attempts remain
+#   attempt N — attempts remain (a variant still slower than the original goes first)
 #   final     — best changed since its last full sweep
-#   done      — nothing left to do
+#   done      — attempts used up and best measured with the full sweep
 _perf_next() {
     local attempts max vb kept full
     attempts="$(sg PERF_ATTEMPTS)"; max="$(sg PERF_MAX_ATTEMPTS)"; vb="$(sg PERF_BEST_VS_BASELINE)"
     kept="$(sg PERF_KEPT)"; full="$(sg PERF_BEST_FULL)"
     if [ "$vb" = "regressed" ] && [ "${attempts:-0}" -lt "${max:-3}" ]; then echo "attempt $((attempts + 1))"
     elif [ "${kept:-0}" -gt 0 ] && [ "$full" != "true" ]; then echo "final"
+    elif [ "${attempts:-0}" -lt "${max:-3}" ]; then echo "attempt $((attempts + 1))"
     else echo "done"; fi
 }
 
@@ -870,19 +915,29 @@ execute_step_perf_baseline() {
 # ===========================================================================
 # Step 6 — measure the kernel in the tree. Args: <label> [full|variant] (default variant).
 # Labels: entry (tester's kernel, full), attempt_N (candidate, variant), final (best, full).
-# Prints one line; the caller acts on its action=keep|revert field. cur/base are the
-# worst variant's cycles per tile. A failed run prints status=run_failed action=revert.
+# Prints one line; the caller acts on its action=keep|revert|retry field. cur/base are the
+# worst variant's cycles per tile. A failed run prints status=run_failed action=revert; a
+# simulator outage (exit 3) prints status=env_error action=retry.
+# An attempt is judged against best-so-far on its one variant; a final sweep is judged
+# against the last confirmed full sweep (vs_prev) so a change that helped the measured
+# variant but slowed another is reverted.
 # ===========================================================================
 execute_step_perf_measure() {
     local _L; _L="$(_LOG)"
     local label="${1:?label required}" kind="${2:-variant}"
     if [ "$(sg PERF_ENABLED)" != "true" ]; then echo "PERF label=${label} status=disabled ($(sg PERF_REASON)) action=none"; return 0; fi
     case "$kind" in full|variant) ;; *) echo "PERF label=${label} status=bad_args (kind must be full|variant) action=none"; return 0 ;; esac
-    case "$label" in attempt*) ss PERF_ATTEMPTS "$(( $(sg PERF_ATTEMPTS) + 1 ))" --json ;; esac
+    # Re-measuring the same label (after an env_error) does not consume another attempt.
+    case "$label" in attempt*) [ "$(sg PERF_LAST_LABEL)" = "$label" ] || ss PERF_ATTEMPTS "$(( $(sg PERF_ATTEMPTS) + 1 ))" --json ;; esac
     ss PERF_LAST_LABEL "$label"
     ss PERF_LAST_KIND  "$kind"
     local rc; _perf_run "$label" "$kind"; rc=$?
     ss PERF_LAST_RC "$rc" --json
+    if [ "$rc" -eq 3 ]; then
+        # The simulator was unavailable; the kernel is not implicated.
+        echo "PERF label=${label} kind=${kind} status=env_error exit=3 action=retry log=$_L/perf_${label}/run.log"
+        return 0
+    fi
     if [ "$rc" -ne 0 ] || [ -z "$_PERF_CSV" ]; then
         ss PERF_LAST_VS_BEST run_failed; ss PERF_LAST_VS_BASELINE run_failed
         echo "PERF label=${label} kind=${kind} status=run_failed exit=${rc} action=revert log=$_L/perf_${label}/run.log"
@@ -894,8 +949,16 @@ execute_step_perf_measure() {
     local vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ
     IFS='|' read -r vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ <<<"$vb"
     local vbest_verdict="n/a" vbest_med="" vbest_worst="" vbest_cur="" vbest_base="" vbest_n="" _x
+    local vprev_verdict="n/a" vprev_med="" vprev_worst="" vprev_key="" prev; prev="$(sg PERF_FULL_CSV)"
     case "$label" in
-        entry|final) action=keep ;;   # entry: nothing to beat yet; final: re-measures the kernel already kept
+        entry) action=keep ;;   # nothing to beat yet
+        final)                  # the kept attempt, over all variants, vs the last confirmed full sweep
+            if [ -n "$prev" ] && [ -s "$prev" ]; then
+                vprev="$(_perf_eval "$_PERF_CSV" "$prev" "$_L/perf_${label}_vs_prev.json" 0.5)"
+                IFS='|' read -r vprev_verdict vprev_med vprev_worst _x _x _x _x _x _x vprev_key _x <<<"$vprev"
+            fi
+            case "$vprev_verdict" in improved|neutral|n/a) action=keep ;; *) action=revert ;; esac
+            ;;
         *)
             if [ -n "$best" ] && [ -s "$best" ]; then
                 vbest="$(_perf_eval "$_PERF_CSV" "$best" "$_L/perf_${label}_vs_best.json" 0.5)"
@@ -907,11 +970,13 @@ execute_step_perf_measure() {
     ss PERF_LAST_CSV "$_PERF_CSV"
     ss PERF_LAST_VS_BASELINE "$vb_verdict"; ss PERF_LAST_VS_BASELINE_DELTA_PCT "$vb_med"
     ss PERF_LAST_VS_BEST "$vbest_verdict";  ss PERF_LAST_VS_BEST_DELTA_PCT "$vbest_med"
+    ss PERF_LAST_VS_PREV "$vprev_verdict";  ss PERF_LAST_VS_PREV_DELTA_PCT "$vprev_worst"
     ss PERF_LAST_WORST_KEY "$vb_key"
     # Full sweeps also print the per-variant tally and the worst variant.
-    local tally=""
+    local tally="" prevf=""
     [ "$kind" = "full" ] && tally="; ${vb_imp:-?} improved/${vb_neu:-?} neutral/${vb_reg:-?} regressed) typical=${vb_typ:-?} worst_variant=${vb_key:-?}" || tally=")"
-    echo "PERF label=${label} kind=${kind} metric=${metric} cur=${vb_cur:-?} best=${vbest_base:-none} base=${vb_base:-?} vs_best=${vbest_verdict}${vbest_med:+(${vbest_med}%)} vs_baseline=${vb_verdict}(median ${vb_med:-?}%, worst ${vb_worst:-?}%${tally} variants=${vb_n} action=${action}"
+    [ "$label" = "final" ] && prevf=" vs_prev=${vprev_verdict}${vprev_worst:+(worst ${vprev_worst}%${vprev_key:+ on ${vprev_key}})}"
+    echo "PERF label=${label} kind=${kind} metric=${metric} cur=${vb_cur:-?} best=${vbest_base:-none} base=${vb_base:-?} vs_best=${vbest_verdict}${vbest_med:+(${vbest_med}%)}${prevf} vs_baseline=${vb_verdict}(median ${vb_med:-?}%, worst ${vb_worst:-?}%${tally} variants=${vb_n} action=${action}"
 }
 
 # ===========================================================================
@@ -924,45 +989,52 @@ execute_step_perf_keep() {
     if [ "$(sg PERF_ENABLED)" != "true" ]; then echo "PERF_KEEP: disabled next=done"; return 0; fi
     csv="$_L/perf_${label}.post.csv"
     [ -s "$csv" ] || { echo "PERF_KEEP: no measurement for '${label}' — run execute_step_perf_measure ${label} first next=$(_perf_next)"; return 1; }
-    wt="$(_wt)"; algo="$(_algo_file)"; gen="$(sg GENERATED_KERNEL)"
-    [ -f "$wt/$algo" ] && { _disk_guard cp "$wt/$algo" "$_L/perf_best_$(basename "$algo")" || return $?; }
-    [ "$algo" != "$gen" ] && [ -f "$wt/$gen" ] && { _disk_guard cp "$wt/$gen" "$_L/perf_best_wrapper_$(basename "$gen")" || return $?; }
-    local vb vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ full=false
-    vb="$(_perf_summary "$_L/perf_${label}_vs_baseline.json")"
-    IFS='|' read -r vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ <<<"$vb"
+    _perf_snapshot perf_best || return $?
+    local full=false
     [ "$(sg PERF_LAST_LABEL)" = "$label" ] && [ "$(sg PERF_LAST_KIND)" = "full" ] && full=true
-    ss PERF_BEST_CSV             "$csv"
-    ss PERF_BEST_LABEL           "$label"
-    ss PERF_BEST_FULL            "$full" --json   # measured with the full sweep
-    ss PERF_BEST_VS_BASELINE     "$vb_verdict"   # strict rule, drives the loop
-    ss PERF_BEST_VERDICT_TYPICAL "$vb_typ"       # median rule, reported
-    ss PERF_BEST_DELTA_MEDIAN_PCT "$vb_med"
-    ss PERF_BEST_DELTA_WORST_PCT  "$vb_worst"
-    ss PERF_BEST_CYCLES          "$vb_cur"
-    ss PERF_BEST_BASELINE_CYCLES "$vb_base"
-    ss PERF_BEST_VARIANTS        "$vb_n"
-    ss PERF_BEST_VARIANTS_IMPROVED  "${vb_imp:-0}"
-    ss PERF_BEST_VARIANTS_NEUTRAL   "${vb_neu:-0}"
-    ss PERF_BEST_VARIANTS_REGRESSED "${vb_reg:-0}"
-    ss PERF_BEST_WORST_KEY       "$vb_key"
+    local vb vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ
+    vb="$(_perf_set_best "$label" "$csv" "$_L/perf_${label}_vs_baseline.json" "$full")"
+    IFS='|' read -r vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ <<<"$vb"
     case "$label" in attempt*) ss PERF_KEPT "$(( $(sg PERF_KEPT) + 1 ))" --json ;; esac
     local tally=""
-    [ "$full" = "true" ] && tally="; ${vb_imp:-?} improved/${vb_neu:-?} neutral/${vb_reg:-?} regressed"
+    if [ "$full" = "true" ]; then
+        # A full sweep confirms this kernel: it is what a later final sweep is judged against
+        # and what a rejected final falls back to.
+        _disk_guard cp "$csv" "$_L/perf_confirmed.post.csv" || return $?
+        cp "$_L/perf_${label}_vs_baseline.json" "$_L/perf_confirmed_vs_baseline.json"
+        _perf_snapshot perf_confirmed || return $?
+        ss PERF_FULL_CSV        "$_L/perf_confirmed.post.csv"
+        ss PERF_CONFIRMED_LABEL "$label"
+        tally="; ${vb_imp:-?} improved/${vb_neu:-?} neutral/${vb_reg:-?} regressed"
+    fi
     rj message --message "Perf: kept ${label} as best — typical ${vb_typ:-?}, worst-variant ${vb_verdict} vs original (median ${vb_med:-?}%, worst ${vb_worst:-?}%${tally} on $(sg PERF_METRIC))"
-    # Still regressed after a full sweep: aim the next attempts at the worst variant.
-    [ "$full" = "true" ] && [ "$vb_verdict" = "regressed" ] && _perf_reaim "$_L/perf_${label}_vs_baseline.json"
+    [ "$full" = "true" ] && _perf_reaim "$_L/perf_${label}_vs_baseline.json"
     echo "PERF_KEEP: best=${label} vs_baseline=${vb_verdict}(median ${vb_med:-?}%, worst ${vb_worst:-?}%${tally})${full:+ typical=${vb_typ:-?}}${vb_key:+ worst_variant=${vb_key}} attempts=$(sg PERF_ATTEMPTS)/$(sg PERF_MAX_ATTEMPTS) next=$(_perf_next)"
 }
 
 # ===========================================================================
-# Step 6 — discard the candidate in the tree and restore best-so-far. Arg: [attempt label].
-# With a label, a candidate that died before being measured still consumes its attempt.
+# Step 6 — discard the candidate in the tree. Arg: [label].
+#   attempt_N — restore best-so-far. A candidate that died before being measured
+#               still consumes its attempt.
+#   final     — the kept attempt slowed another variant: restore the last confirmed
+#               kernel and make it best-so-far again.
 # Prints next=.
 # ===========================================================================
 execute_step_perf_revert() {
     local _L; _L="$(_LOG)"
     local label="${1:-}"
     if [ "$(sg PERF_ENABLED)" != "true" ]; then echo "PERF_REVERT: disabled next=done"; return 0; fi
+    if [ "$label" = "final" ]; then
+        local conf; conf="$(sg PERF_CONFIRMED_LABEL)"
+        [ -n "$conf" ] || { echo "PERF_REVERT: no confirmed kernel to fall back to — nothing restored next=$(_perf_next)"; return 1; }
+        _perf_restore perf_confirmed
+        _perf_snapshot perf_best || return $?
+        _perf_set_best "$conf" "$(sg PERF_FULL_CSV)" "$_L/perf_confirmed_vs_baseline.json" true >/dev/null
+        local kept; kept="$(sg PERF_KEPT)"; [ "${kept:-0}" -gt 0 ] && ss PERF_KEPT "$((kept - 1))" --json
+        rj message --message "Perf: final sweep regressed vs the confirmed kernel ($(sg PERF_LAST_VS_PREV)) — restored ${conf}"
+        echo "PERF_REVERT: final sweep regressed vs confirmed kernel — restored ${conf} attempts=$(sg PERF_ATTEMPTS)/$(sg PERF_MAX_ATTEMPTS) next=$(_perf_next)"
+        return 0
+    fi
     case "$label" in
         attempt*)
             if [ "$(sg PERF_LAST_LABEL)" != "$label" ]; then
@@ -971,10 +1043,9 @@ execute_step_perf_revert() {
                 ss PERF_LAST_VS_BEST functional_failed; ss PERF_LAST_VS_BASELINE functional_failed
             fi ;;
     esac
-    local wt algo gen best; wt="$(_wt)"; algo="$(_algo_file)"; gen="$(sg GENERATED_KERNEL)"; best="$(sg PERF_BEST_LABEL)"
+    local best; best="$(sg PERF_BEST_LABEL)"
     [ -n "$best" ] || { echo "PERF_REVERT: no best snapshot recorded — nothing restored next=done"; return 1; }
-    [ -f "$_L/perf_best_$(basename "$algo")" ] && cp "$_L/perf_best_$(basename "$algo")" "$wt/$algo"
-    [ "$algo" != "$gen" ] && [ -f "$_L/perf_best_wrapper_$(basename "$gen")" ] && cp "$_L/perf_best_wrapper_$(basename "$gen")" "$wt/$gen"
+    _perf_restore perf_best
     rj message --message "Perf: reverted $(sg PERF_LAST_LABEL) — kept best=${best} ($(sg PERF_LAST_VS_BEST) vs best)"
     echo "PERF_REVERT: restored best=${best} attempts=$(sg PERF_ATTEMPTS)/$(sg PERF_MAX_ATTEMPTS) next=$(_perf_next)"
 }
@@ -1005,7 +1076,7 @@ execute_step_perf_finalize() {
     ss PERF_VERDICT "$verdict"
     ss PERF_VERDICT_NOTE "$note"
     rj metric --patch-json "$(_perf_json)" >/dev/null || true
-    echo "PERF_FINAL: verdict=${verdict}${note} best=$(sg PERF_BEST_LABEL) typical=${typ} median=$(sg PERF_BEST_DELTA_MEDIAN_PCT)% worst=$(sg PERF_BEST_DELTA_WORST_PCT)% tally=$(sg PERF_BEST_VARIANTS_IMPROVED) improved/$(sg PERF_BEST_VARIANTS_NEUTRAL) neutral/$(sg PERF_BEST_VARIANTS_REGRESSED) regressed of $(sg PERF_BEST_VARIANTS) metric=$(sg PERF_METRIC) attempts=$(sg PERF_ATTEMPTS) kept=$(sg PERF_KEPT) rule=verdict-follows-median;attempts-continue-while-any-variant-slower-by-more-than-$(sg PERF_REGRESS_PCT)%"
+    echo "PERF_FINAL: verdict=${verdict}${note} best=$(sg PERF_BEST_LABEL) typical=${typ} median=$(sg PERF_BEST_DELTA_MEDIAN_PCT)% worst=$(sg PERF_BEST_DELTA_WORST_PCT)% tally=$(sg PERF_BEST_VARIANTS_IMPROVED) improved/$(sg PERF_BEST_VARIANTS_NEUTRAL) neutral/$(sg PERF_BEST_VARIANTS_REGRESSED) regressed of $(sg PERF_BEST_VARIANTS) metric=$(sg PERF_METRIC) attempts=$(sg PERF_ATTEMPTS) kept=$(sg PERF_KEPT) rule=verdict-follows-median;all-attempts-used;re-aim-at-variants-slower-by-more-than-$(sg PERF_REGRESS_PCT)%"
 }
 
 # ===========================================================================
