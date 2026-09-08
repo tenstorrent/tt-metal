@@ -830,6 +830,7 @@ class GRPOTrainer:
         self._generation_batch_prompts: int = 0
         self._prompts: List[List[int]] = []
         self._extra_dataset_columns: dict[str, list] = {}
+        self._total_optimizer_steps: int = 0
 
         # Auto-append the framework's default GRPOMonitor unless the config
         # opts out. Placed last so any user-supplied callbacks (e.g. eval)
@@ -1072,7 +1073,7 @@ class GRPOTrainer:
         prompts_per_microbatch = completions_per_microbatch // grpo_cfg.num_generations
         generation_batch_prompts = prompts_per_microbatch * grad_accum
 
-        total_prompts = min(grpo_cfg.prompts_to_train, len(self.dataset))
+        total_prompts = min(int(grpo_cfg.prompts_to_train), len(self.dataset))
         if total_prompts % generation_batch_prompts != 0:
             raise ValueError(
                 f"prompts_to_train ({total_prompts}) must be divisible by the generation batch size "
@@ -1103,6 +1104,8 @@ class GRPOTrainer:
         self._generation_batch_prompts = generation_batch_prompts
         self._prompts = prompts
         self._extra_dataset_columns = extra_columns
+        # Total optimizer steps this run will take. Read by the LR scheduler.
+        self._total_optimizer_steps = (total_prompts // generation_batch_prompts) * self.config.num_iterations
 
     # -- phase helpers -------------------------------------------------------
     #
