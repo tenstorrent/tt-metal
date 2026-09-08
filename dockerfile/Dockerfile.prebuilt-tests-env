@@ -1,3 +1,4 @@
+# syntax=ghcr.io/tenstorrent/tt-metal/tt-metalium/tools/dockerfile-frontend:1.25
 # Test environment image: the source tree and the build output merged at /work,
 # so a hardware test job needs no /work bind mount, no artifact download and no
 # full source checkout. Built by build-prebuilt-tests-image.yaml, which puts the
@@ -12,17 +13,47 @@ FROM ${BASE}
 #         /work/ttnn on PYTHONPATH as well as /work, since /work/ttnn is a
 #         namespace dir and the package itself is /work/ttnn/ttnn. Nothing here
 #         runs pip, so ttnn's declared dependencies are installed from the tree's
-#         pyproject.toml: no base image is guaranteed to carry them already. Both
-#         ci-test and dev lack graphviz and ml_dtypes; an import error names only
-#         the first one missing, so do not read it as the whole gap.
+#         pyproject.toml, in its own layer above: no base image is guaranteed to
+#         carry them already. Both ci-test and dev lack graphviz and ml_dtypes; an
+#         import error names only the first one missing, so do not read it as the
+#         whole gap.
 # wheel = source tree plus the wheel installed; no build tree.
 ARG PROFILE=full
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
+# The dependency manifest alone, before the tree: installing from it here means a
+# source edit no longer re-runs the install, which it did while this lived inside
+# the payload RUN below. pyproject.toml changes far less often than the tree.
+COPY src/pyproject.toml /work/pyproject.toml
+RUN if [ "${PROFILE}" = "full" ]; then uv pip install -r /work/pyproject.toml; fi
+
 # Source first, payload second: the tarball carries ttnn/ttnn/*.so that has to
 # land inside the source's package directory.
-COPY src/ /work/
+#
+# Split by how often each path changes rather than as one COPY. Measured over 199
+# commits, these seven trees are 84 MiB that change in under 3% of commits, so
+# giving them their own layers keeps them cached on a runner across commits and
+# only the volatile remainder is re-pulled.
+COPY src/models/experimental/ /work/models/experimental/
+COPY src/infra/ /work/infra/
+COPY src/tt-train/ /work/tt-train/
+COPY src/tests/sweep_framework/ /work/tests/sweep_framework/
+COPY src/models/sample_data/ /work/models/sample_data/
+COPY src/models/tt_transformers/ /work/models/tt_transformers/
+COPY src/models/tt_dit/ /work/models/tt_dit/
+
+# Everything else. The excludes are relative to the COPIED ROOT, not the build
+# context: `--exclude=src/infra` is silently ignored and ships those bytes twice,
+# which defeats the split. Verified before writing this.
+COPY --exclude=models/experimental \
+     --exclude=infra \
+     --exclude=tt-train \
+     --exclude=tests/sweep_framework \
+     --exclude=models/sample_data \
+     --exclude=models/tt_transformers \
+     --exclude=models/tt_dit \
+     src/ /work/
 
 # Bind-mounted, not COPYed: a COPYed payload stays in its layer forever and a
 # later rm reclaims nothing, which would eat most of the saving.
@@ -38,7 +69,6 @@ RUN --mount=type=bind,source=artifact,target=/tmp/payload \
             tar --zstd -xf "${tarballs[0]}" -C /work; \
             test -d /work/build \
                 || { echo "::error::the tarball produced no /work/build" >&2; exit 1; }; \
-            uv pip install -r /work/pyproject.toml; \
             printf 'profile=full\npayload=%s\n' "$(basename "${tarballs[0]}")" \
                 > /etc/prebuilt-tests-env-manifest ;; \
         wheel) \
