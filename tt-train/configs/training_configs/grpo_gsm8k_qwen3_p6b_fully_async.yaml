@@ -2,7 +2,7 @@ training_config:
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b.yaml"
   # Any local or Hugging Face Qwen3 SFT checkpoint with this architecture can
   # replace this value; both ranks load the same source.
-  model_id: "ichovpanTT/qwen3-0.6b-base-think-sft"
+  model_id: "pyromind/Qwen3-0.6B-gsm8k"
   seed: 0
   rollout_queue_capacity: 2
   optimizer:
@@ -21,6 +21,7 @@ training_config:
     gradient_accumulation_steps: 1
     logging_steps: 1
     checkpointing: false
+    checkpoint_interval: 100
     prompts_to_train: 4
     temperature: 1.0
     max_completion_length: 64

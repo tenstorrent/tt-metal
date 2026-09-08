@@ -81,6 +81,11 @@ def _config():
     return DeviceConfig(raw), raw
 
 
+def _model_id(raw: dict) -> str:
+    """Allow a local/custom Qwen3 SFT directory without editing the YAML."""
+    return os.environ.get("TT_TRAIN_MODEL_ID", raw["training_config"]["model_id"])
+
+
 def _trainer_main() -> None:
     ctx = ttml.autograd.AutoContext.get_instance()
     ctx.initialize_distributed_context(*sys.argv)
@@ -91,7 +96,7 @@ def _trainer_main() -> None:
     transport = None
     completer = None
     try:
-        model_id = raw["training_config"]["model_id"]
+        model_id = _model_id(raw)
         grpo = get_grpo_config(raw, output_dir=str(REPO_ROOT / "generated/tt-train/gsm8k_fully_async"))
         completer = Qwen3CompleterRemoteRollout(
             Qwen3CompletionCtx(grpo.max_completion_length, grpo.temperature, grpo.num_generations),
@@ -133,7 +138,7 @@ def _rollout_main() -> None:
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
     _, raw = _config()
-    model_id = raw["training_config"]["model_id"]
+    model_id = _model_id(raw)
     rr = raw["remote_rollout_config"]
     grpo = raw["training_config"]["grpo_config"]
     mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*rr["mesh_shape"]), offset=ttnn.MeshCoordinate(0, 0))
