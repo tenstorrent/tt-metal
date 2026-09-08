@@ -90,19 +90,24 @@ class _MoEPerfCase:
 
 # K2.7: 384 experts / top-8 over the 7168 embedding, no LatentMoE plumbing.
 #
-# Re-cut 2026-09-08 for #55439, from the MEDIAN of the six runs that measured today's metric rather
+# Re-cut 2026-09-08 for #55439, from the MEDIAN of the nine runs that measured today's metric rather
 # than from one sample. The previous 5,413,674 was one sample of a number that was bimodal: it came
 # from a run where the dispatch program measured ~0.7 us, while runs of the same commit measured it
 # at ~1.12 ms and read 1.10 ms higher. ``_split_off_dispatch`` now keeps that program out of the
 # gated total, so the two clusters collapse into one and the midpoint describes every run.
 #
-# The six samples that measured the dispatch program async -- and so were already measuring today's
-# metric -- with the run each came from:
-#   5,404,540  run 33946052498 att1        5,484,610  run 33871606089 att1
-#   5,413,674  run 33787697384 att3        5,495,657  run 33787697384 att2
-#   5,443,696  run 33871578406 att3        5,512,248  run 33871618241 att3
-# Median 5,464,153, 2.0% peak to peak. Nine local runs of the dispatch-excluded metric agreed at
-# 5,445,011 mean, 0.60% sd.
+# Nine CI measurements of the gated metric. Six predate the fix but measured the dispatch program
+# async, so their total already WAS this metric (less the ~720 ns async record):
+#   5,403,820  run 33946052498 att1        5,483,890  run 33871606089 att1
+#   5,412,954  run 33787697384 att3        5,494,937  run 33787697384 att2
+#   5,442,976  run 33871578406 att3        5,511,528  run 33871618241 att3
+# Three measure it directly, on runs that all landed BRACKETED and so would have failed on the old
+# metric at 6,377,518 / 6,502,417 / 6,551,469:
+#   5,280,196  run 34224607638             5,434,881  run 34224698012
+#   5,389,948  run 34224663346
+# Median 5,434,881, 4.26% peak to peak. Centred on the median rather than the mean so the lowest
+# sample keeps 1.20% inside the lower edge instead of 0.66%. Nine local runs on a single box agreed
+# at 5,445,011 mean, 0.60% sd -- the CI spread is across hosts, the local one is not.
 #
 # Previous history: 5,413,674 from 2026-09-03 (one sample, run 33787697384); 6,260,834 from
 # 2026-09-02; 6,574,780 from run 33194039175.
@@ -112,12 +117,12 @@ class _MoEPerfCase:
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=5_464_153,
+    expected_ns=5_434_881,
     # 4%, not 3%: K2.7 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
     # running second on an already-warm device, does not. Do NOT tighten this to match K3; the
     # asymmetry is a property of the job order, not of the midpoint. Sub-nominal DDR doubles it to 8%.
     # The 1.10 ms swing this margin used to be blamed for was the dispatch program, not warm-up, and
-    # is gone -- the remaining spread is 2.0% across the six CI samples above.
+    # is gone -- the remaining spread is 4.26% across the nine CI samples above, all cross-host.
     margin=0.04,
     shape_note="384 experts / top-8, 7168 emb",
 )
