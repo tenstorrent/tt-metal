@@ -1,0 +1,77 @@
+# tt-perf-report, 1rank  (rendered from the FULL capture; the .csv.gz here is column-reduced)
+# source: ops_perf_results_1rank_deep_rank0_2026_08_31_20_49_35.csv
+
+Warning: Unclassified operation 'OffsetCumsumDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'DispatchDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'UnifiedRoutedExpertFfnDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'CombineDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'PostCombineReduceDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+📊 Stacked report 📊
+====================
+
+Total %  Op Code                                                           Device Time Sum  Op Count  Op Category  Min FLOPs  Max FLOPs  Mean FLOPs  Std FLOPs  Weighted Mean FLOPs
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+99.72 %  InboundSocketServiceSyncOperation (in0:dram_interleaved)         21,031,987.71 μs         9        Other
+ 0.05 %  MatmulDeviceOperation (in0:dram_interleaved)                         11,421.18 μs        89      Compute     3.90 %    40.64 %     20.64 %    12.71 %              15.27 %
+ 0.05 %  CombineDeviceOperation (in0:dram_interleaved)                        10,643.31 μs         8        Other
+ 0.04 %  RingJointSDPADeviceOperation (in0:dram_interleaved)                   8,924.05 μs         8        Other
+ 0.04 %  DispatchDeviceOperation (in0:dram_interleaved)                        8,536.31 μs         8        Other
+ 0.04 %  UnifiedRoutedExpertFfnDeviceOperation (in0:dram_interleaved)          7,506.27 μs         8        Other
+ 0.01 %  ReduceScatterDeviceOperation (in0:dram_interleaved)                   2,615.22 μs         8           DM
+ 0.01 %  ReduceScatterMinimalAsyncDeviceOperation (in0:dram_interleaved)       2,443.12 μs        24        Other
+ 0.01 %  HighBwAllGatherDeviceOperation (in0:dram_interleaved)                 1,409.82 μs        41        Other
+ 0.00 %  PostCombineReduceDeviceOperation (in0:dram_interleaved)               1,024.19 μs         8        Other
+ 0.00 %  LayerNormPostAllGatherDeviceOperation (in0:dram_interleaved)            807.35 μs        25        Other
+ 0.00 %  AllGatherAsyncDeviceOperation (in0:dram_interleaved)                    681.35 μs         8        Other
+ 0.00 %  AllGatherDeviceOperation (in0:dram_interleaved)                         526.30 μs        17           DM
+ 0.00 %  LayerNormPreAllGatherDeviceOperation (in0:dram_interleaved)             391.07 μs        25        Other
+ 0.00 %  BinaryNgDeviceOperation (in0:dram_interleaved)                          307.81 μs        32      Compute
+ 0.00 %  ReduceScatterMinimalAsyncDeviceOperation (in0:l1_interleaved)           304.04 μs         8        Other
+ 0.00 %  MaskedBincountDeviceOperation (in0:l1_interleaved)                      272.57 μs         8        Other
+ 0.00 %  AllGatherAsyncDeviceOperation (in0:l1_interleaved)                      249.51 μs         8        Other
+ 0.00 %  MoeGroupedTopkDeviceOperation (in0:l1_interleaved)                      214.09 μs         8        Other
+ 0.00 %  LayerNormDeviceOperation (in0:dram_interleaved)                         199.02 μs        16      Compute
+ 0.00 %  ConcatDeviceOperation (in0:dram_interleaved)                            171.70 μs        16           TM
+ 0.00 %  RotaryEmbeddingIndexedDeviceOperation (in0:dram_interleaved)            166.85 μs        16        Other
+ 0.00 %  OffsetCumsumDeviceOperation (in0:dram_interleaved)                      157.11 μs         8        Other
+ 0.00 %  UntilizeWithUnpaddingDeviceOperation (in0:l1_interleaved)               143.65 μs        16           TM
+ 0.00 %  NlpCreateHeadsDeviceOperation (in0:dram_interleaved)                    123.40 μs         8           TM
+ 0.00 %  EmbeddingsDeviceOperation (in0:dram_interleaved)                        123.27 μs         8      Compute
+ 0.00 %  SliceDeviceOperation (in0:dram_interleaved)                             120.65 μs        32           TM
+ 0.00 %  NLPConcatHeadsDeviceOperation (in0:dram_interleaved)                    112.59 μs         8           TM
+ 0.00 %  ReshapeViewDeviceOperation (in0:dram_interleaved)                        55.87 μs         8           TM
+ 0.00 %  FastReduceNCDeviceOperation (in0:dram_interleaved)                       49.83 μs         8      Compute
+ 0.00 %  CopyDeviceOperation (in0:l1_interleaved)                                 42.42 μs        16           DM
+ 0.00 %  UpdatePaddedKvCacheDeviceOperation (in0:nd_sharded)                      38.20 μs         8        Other
+ 0.00 %  TypecastDeviceOperation (in0:dram_interleaved)                           24.48 μs         8           TM
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# ---- analyze_layer_budget.py ----
+
+=== 1rank ===
+forward passes (layer x chunk): 288
+COMPUTE per layer per chunk (socket waits excluded): 5.59 ms
+   MLA/attn    1.029 ms  ( 18.4%)
+   MoE         1.898 ms  ( 33.9%)
+   norm        0.024 ms  (  0.4%)
+   other       2.643 ms  ( 47.2%)
+  top ops:
+    MatmulDeviceOperation                                  1.319 ms  x11.0/pass
+    RingJointSDPADeviceOperation                           0.975 ms  x1.0/pass
+    CombineDeviceOperation                                 0.660 ms  x1.0/pass
+    DispatchDeviceOperation                                0.592 ms  x1.0/pass
+    UnifiedRoutedExpertFfnDeviceOperation                  0.470 ms  x1.0/pass
+    ReduceScatterMinimalAsyncDeviceOperation               0.354 ms  x4.0/pass
+    ReduceScatterDeviceOperation                           0.307 ms  x1.0/pass
+    HighBwAllGatherDeviceOperation                         0.176 ms  x5.0/pass
+  [wait] InboundSocketServiceSyncOperation                    2336.87 ms  x1.0/pass
+
+# ---- analyze_kv_ramp.py ----
+
+=== KV-depth ramp 1rank (device 0, 9 passes; pass 0 is warm-up) ===
+  RingJointSDPADeviceOperation                  314    355    570    693    910   1214   1337   1555   1857  us   growth 5.23x
+  UnifiedRoutedExpertFfnDeviceOperation           6    602    959    800    957    952    978    965   1097  us   growth 1.82x
+  CombineDeviceOperation                         86    730   1222   1080   1107   1141   1203   1089   1224  us   growth 1.68x
+  DispatchDeviceOperation                       235    841   1067    927    985   1094    972    969    975  us   growth 1.16x
+  MatmulDeviceOperation                        1304   1301   1302   1301   1302   1305   1303   1301   1301  us   growth 1.00x
