@@ -445,7 +445,17 @@ ProgramDescriptor build_native_equivalent(
             .sub_core_grids = std::nullopt};
         auto pf = UntilizeWithUnpaddingDeviceOperation::select_program_factory(params, input);
         return std::visit(
-            [&](auto&& factory) { return std::decay_t<decltype(factory)>::create_descriptor(params, input, out); }, pf);
+            [&](auto&& factory) -> ProgramDescriptor {
+                using Factory = std::decay_t<decltype(factory)>;
+                if constexpr (requires { Factory::create_descriptor(params, input, out); }) {
+                    return Factory::create_descriptor(params, input, out);
+                } else {
+                    TT_THROW(
+                        "untilize codegen: native fallback selected an untilize_with_unpadding program factory "
+                        "without descriptor support; the live-L1 fallback must select a descriptor-backed factory");
+                }
+            },
+            pf);
     }
 
     UntilizeOperationAttributes attrs{
