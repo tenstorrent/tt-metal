@@ -40,10 +40,7 @@ NIDX, INDEX_DIM = 4, 128
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
 @pytest.mark.parametrize("chunk_local", [640], ids=["chunk640"])  # chunk=5120; 2 chunks -> T=10240 (40 blocks)
-# TODO: re-add "sparse". With random weights the MSA top-k block selection flips chunked-vs-single-shot, so
-# this self-consistency check cannot hold for sparse layers. The sparse cache read itself is covered by
-# test_msa_sp_cache_read_vs_ref (exact PCC vs the reference read) and end-to-end by galaxy_prefill_kv_pcc.
-@pytest.mark.parametrize("layer_kind", ["dense"])
+@pytest.mark.parametrize("layer_kind", ["dense", "sparse"])
 def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, reset_seeds):
     rows, cols = tuple(mesh_device.shape)
     assert (rows, cols) == (8, 4)
@@ -181,10 +178,7 @@ def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, 
 @pytest.mark.parametrize(
     "chunk_local", [256], ids=["chunk256"]
 )  # chunk=2048, T=4096 (32 blocks) — keeps the fp32 CPU ref fast
-# TODO: re-add "sparse". With random weights the MSA top-k block selection diverges from the fp32 reference's,
-# so the attention output cannot be compared. The sparse cache read itself is covered by
-# test_msa_sp_cache_read_vs_ref (exact PCC vs the reference read) and end-to-end by galaxy_prefill_kv_pcc.
-@pytest.mark.parametrize("layer_kind", ["dense"])
+@pytest.mark.parametrize("layer_kind", ["dense", "sparse"])
 def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, chunk_local, reset_seeds):
     """Chunked-prefill chunk-1 output vs the self-contained torch CPU reference (absolute correctness).
 
