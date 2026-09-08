@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary.hpp"
+#include <cmath>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -614,8 +615,25 @@ inline auto invoke_binary_ng_impl(
         }
     }();
     const auto output_preallocated = output.has_value();
+    const auto is_32bit_int = [](DataType dt) { return dt == DataType::INT32 || dt == DataType::UINT32; };
+    const bool is_float_arith = (binary_op_type == operations::binary::BinaryOpType::DIV) ||
+                                (binary_op_type == operations::binary::BinaryOpType::MUL);
+
+    // A float scalar cannot survive pack_scalar_runtime_arg against a 32-bit integer tensor: it is
+    // cast to int32/uint32 there, so 2.5 arrives as 2 and 0.5 as 0, silently. The tensor-tensor path
+    // below already handles the equivalent mismatch by promoting for DIV/MUL and rejecting for the
+    // rest; do the same for a scalar rather than truncating it.
+    const bool scalar_needs_promotion = [&] {
+        if constexpr (requires { rhs.dtype(); }) {
+            return false;
+        } else {
+            return is_float_arith && is_32bit_int(a_dtype) && std::holds_alternative<float>(rhs);
+        }
+    }();
+
     const auto is_integer_division = (binary_op_type == operations::binary::BinaryOpType::DIV) &&
-                                     (a_dtype == DataType::INT32) && (b_dtype == DataType::INT32);
+                                     (a_dtype == DataType::INT32) && (b_dtype == DataType::INT32) &&
+                                     !scalar_needs_promotion;
     if (is_integer_division) {
         // For integer division, output dtype should be float32
         if (dtype.has_value() || output_preallocated) {
@@ -629,15 +647,34 @@ inline auto invoke_binary_ng_impl(
     // fp32 mode, producing inf / garbage (e.g. div(bf16, uint32) -> inf). Promote the integer operand
     // to the floating compute dtype, matching PyTorch type promotion and the existing UINT8->UINT16 and
     // integer-division handling. Scoped to DIV/MUL, the arithmetic ops where this corruption occurs.
-    const auto is_32bit_int = [](DataType dt) { return dt == DataType::INT32 || dt == DataType::UINT32; };
     const auto float_promote_target = [](DataType float_dtype) {
         return float_dtype == DataType::FLOAT32 ? DataType::FLOAT32 : DataType::BFLOAT16;
     };
     std::optional<Tensor> lhs_promoted;
     std::optional<Tensor> rhs_promoted;
+    if constexpr (!requires { rhs.dtype(); }) {
+        if (scalar_needs_promotion) {
+            log_debug(
+                tt::LogOp,
+                "Binary: typecasting lhs from integer dtype {} to {} to match the floating scalar operand",
+                a_dtype,
+                DataType::FLOAT32);
+            lhs_promoted = ttnn::typecast(lhs, DataType::FLOAT32);
+        } else if (is_32bit_int(a_dtype) && std::holds_alternative<float>(rhs)) {
+            // ADD/SUB and friends reject a mixed int/float tensor pair rather than promoting, so a
+            // scalar they cannot represent has to be rejected too instead of being truncated.
+            const float scalar_value = std::get<float>(rhs);
+            TT_FATAL(
+                std::trunc(scalar_value) == scalar_value,
+                "Binary operation {} with a {} tensor cannot represent the scalar {}: it would be truncated to {}. "
+                "Typecast the input to a floating-point dtype first.",
+                binary_op_type,
+                a_dtype,
+                scalar_value,
+                std::trunc(scalar_value));
+        }
+    }
     if constexpr (requires { rhs.dtype(); }) {
-        const bool is_float_arith = (binary_op_type == operations::binary::BinaryOpType::DIV) ||
-                                    (binary_op_type == operations::binary::BinaryOpType::MUL);
         if (is_float_arith) {
             if (is_32bit_int(a_dtype) && tt::tt_metal::is_floating_point(b_dtype)) {
                 const auto target = float_promote_target(b_dtype);

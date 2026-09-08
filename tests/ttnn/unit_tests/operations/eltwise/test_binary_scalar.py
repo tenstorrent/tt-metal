@@ -7,6 +7,8 @@ import pytest
 import ttnn
 import random
 
+from tests.ttnn.utils_for_testing import assert_with_ulp
+
 pytestmark = pytest.mark.use_module_device
 
 
@@ -282,3 +284,50 @@ def test_binary_scalar_uint32_large_values(scalar, device):
         f"Large scalar {scalar} was likely truncated to float. "
         f"Expected {expected.flatten()[0].item()}, got {result.flatten()[0].item()}"
     )
+
+
+@pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize("scalar", [2.5, 0.5, -1.5])
+@pytest.mark.parametrize("ttnn_op", [ttnn.multiply, ttnn.div])
+def test_int_tensor_float_scalar_promotes(device, ttnn_op, tensor_dtype, scalar):
+    # The scalar is packed using the tensor's dtype, so without promotion 2.5 arrives as 2 and 0.5
+    # as 0 -- div(int32, 0.5) used to return inf instead of 14. mul/div promote, matching both torch
+    # and what the tensor-tensor path already does for a mixed int/float pair.
+    torch_input = torch.tensor([[7, 6, 12, 100]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn_op(a, scalar)
+    torch_golden = (torch_input.float() * scalar) if ttnn_op is ttnn.multiply else (torch_input.float() / scalar)
+
+    assert output.dtype == ttnn.float32
+    assert_with_ulp(torch_golden, output, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract])
+def test_int_tensor_fractional_scalar_rejected(device, ttnn_op, tensor_dtype, expect_error):
+    # add/subtract reject a mixed int/float tensor pair rather than promoting, so a scalar they
+    # cannot represent is rejected too instead of being silently truncated.
+    torch_input = torch.tensor([[7, 6, 12, 100]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "cannot represent the scalar"):
+        ttnn_op(a, 2.5)
+
+
+@pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract, ttnn.multiply])
+def test_int_tensor_integer_scalar_unchanged(device, ttnn_op, tensor_dtype):
+    # An integer scalar loses nothing in the pack, so it must keep the integer dtype and value.
+    torch_input = torch.tensor([[7, 6, 12, 100]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn_op(a, 2)
+    torch_golden = {
+        ttnn.add: torch_input + 2,
+        ttnn.subtract: torch_input - 2,
+        ttnn.multiply: torch_input * 2,
+    }[ttnn_op]
+
+    assert output.dtype == tensor_dtype
+    assert torch.equal(ttnn.to_torch(output).float(), torch_golden.float())
