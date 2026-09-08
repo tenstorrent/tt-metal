@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
+
 #include "moreh_sum_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -25,8 +27,6 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     const auto& input = tensor_args.input;
     const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    ReduceOpMath reduce_op = ReduceOpMath::SUM;
-    ReduceOpDim reduce_dim = ReduceOpDim::H;
     const auto& shape = input.padded_shape();
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
 
@@ -34,11 +34,9 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     uint32_t Ht = H / constants::TILE_HEIGHT;
     uint32_t HtWt = Ht * Wt;
 
-    // check mask for h-dim
+    // Logical height determines partial-tile handling and AVG normalization.
     const auto& input_shape_without_padding = input.logical_shape();
     const auto origin_H = input_shape_without_padding[-2];
-    const bool do_mask_h = (origin_H % constants::TILE_HEIGHT) != 0;
-    const auto mask_h = do_mask_h ? origin_H % constants::TILE_HEIGHT : constants::TILE_HEIGHT;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
@@ -52,13 +50,6 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
 
     DataFormat src0_dfb_data_format = datatype_to_dataformat_converter(input.dtype());
     uint32_t src0_single_tile_size = tile_size(src0_dfb_data_format);
-    DataFormat scaler_dfb_data_format = DataFormat::Float16_b;
-    uint32_t scaler_single_tile_size = tile_size(scaler_dfb_data_format);
-    DataFormat mask_h_dfb_data_format = DataFormat::Float16_b;
-    uint32_t mask_h_single_tile_size = tile_size(mask_h_dfb_data_format);
-    DataFormat intermed_dfb_data_format = (fp32_dest_acc_en) ? DataFormat::Float32 : DataFormat::Float16_b;
-    DataFormat intermed1_dfb_data_format = DataFormat::Float16_b;
-    uint32_t intermed_single_tile_size = tile_size(intermed_dfb_data_format);
     DataFormat dst_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tile_size(dst_dfb_data_format);
 
@@ -79,9 +70,6 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     // unity-build translation unit, so no anonymous-namespace constants are introduced.
     const DFBSpecName INPUT_DFB{"input"};
     const DFBSpecName SCALER_DFB{"scaler"};
-    const DFBSpecName MASK_H_DFB{"mask_h"};
-    const DFBSpecName ACCUM_DST_DFB{"accum_dst"};
-    const DFBSpecName MASKED_INPUT_DFB{"masked_input"};
     const DFBSpecName OUT_DFB{"out"};
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
@@ -95,6 +83,23 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
 
     // ---- Dataflow buffers ----
     constexpr uint32_t num_input_tiles = 2;
+    namespace reduce_host = ttnn::kernel_lib::host;
+    const auto reduce_plan = reduce_host::make_reduce_plan(
+        TensorSpec(Shape{origin_H, 32}, TensorLayout(input.dtype(), PageConfig(Layout::TILE), MemoryConfig{})),
+        TensorSpec(Shape{1, 32}, TensorLayout(output.dtype(), PageConfig(Layout::TILE), MemoryConfig{})),
+        ReduceOpMath::SUM,
+        ReduceOpDim::H,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        {.arch = device->arch(),
+         .fp32_dest_acc_en = fp32_dest_acc_en,
+         .dst_full_sync_en = dst_full_sync_en,
+         .available_l1_bytes = 8 * src0_single_tile_size},
+        num_input_tiles * src0_single_tile_size);
+    const auto* auxiliary = reduce_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const auto compute_reduce_args = reduce_host::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
+    const auto reader_reduce_args =
+        reduce_host::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INPUT_DFB,
         .entry_size = src0_single_tile_size,
@@ -103,28 +108,9 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALER_DFB,
-        .entry_size = scaler_single_tile_size,
-        .num_entries = 1,
-        .data_format_metadata = scaler_dfb_data_format,
-    });
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = MASK_H_DFB,
-        .entry_size = mask_h_single_tile_size,
-        .num_entries = 1,
-        .data_format_metadata = mask_h_dfb_data_format,
-    });
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = ACCUM_DST_DFB,
-        .entry_size = intermed_single_tile_size,
-        .num_entries = 1,
-        .data_format_metadata = intermed_dfb_data_format,
-    });
-    uint32_t intermed1_single_tile_size = tile_size(intermed1_dfb_data_format);
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = MASKED_INPUT_DFB,
-        .entry_size = intermed1_single_tile_size,
-        .num_entries = 1,
-        .data_format_metadata = intermed1_dfb_data_format,
+        .entry_size = auxiliary->page_size,
+        .num_entries = auxiliary->page_count,
+        .data_format_metadata = auxiliary->data_format,
     });
     constexpr uint32_t num_output_tiles = 2;
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
@@ -139,8 +125,6 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = OUTPUT_TENSOR, .spec = output.tensor_spec()});
 
     // ---- Reader kernel ----
-    // The mask DFB is produced only when masking is active; the reader's DO_MASK_H define already
-    // gates that production, and gates the dfb::mask_h reference along with it.
     Group<DFBBinding> reader_dfb_bindings = {
         DFBBinding{
             .dfb_spec_name = INPUT_DFB,
@@ -153,20 +137,9 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
     };
-    KernelSpec::CompilerOptions::Defines reader_defines = {{"REDUCE_SCALER", "1"}};
-    if (do_mask_h) {
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = MASK_H_DFB,
-            .accessor_name = "mask_h",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_defines.emplace("DO_MASK_H", "1");
-    }
-
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/reader_moreh_sum_h.cpp",
-        .compiler_options = {.defines = std::move(reader_defines)},
         .dfb_bindings = std::move(reader_dfb_bindings),
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
         .compile_time_args =
@@ -177,8 +150,9 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
                 // since dropping it would be a change to the kernel's argument list beyond the port.
                 {"HtWt", HtWt},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols", "mask_h"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .advanced_options = {.compile_time_varargs = reader_reduce_args},
     });
 
     // ---- Writer kernel ----
@@ -196,98 +170,26 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     });
 
     // ---- Compute kernels (two groups) ----
-    auto reduce_defines_map = reduce_op_utils::get_defines(reduce_op, reduce_dim);
-    if (fp32_dest_acc_en) {
-        reduce_defines_map["FP32_DEST_ACC_EN"] = "1";
-    }
-    KernelSpec::CompilerOptions::Defines reduce_defines(reduce_defines_map);
-
     auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
-    if (auto* compute_gen1 = std::get_if<ComputeGen1Config>(&compute_hw); compute_gen1 && fp32_dest_acc_en) {
-        // Legacy set unpack_to_dest_mode[CBIndex::c_24] = UnpackToDestFp32 when fp32 accumulation is
-        // on; reindexed onto the DFB name and translated to the Metal 2.0 spelling. Metal 2.0 also
-        // *requires* an explicit entry here (accum_dst is Float32 and the kernel consumes it with a
-        // 32-bit dest register).
-        compute_gen1->unpack_modes = ComputeUnpackModes{{ACCUM_DST_DFB, UnpackMode::UnpackToDest}};
-    }
 
-    // The compute kernel binds the mask DFB in every configuration: it constructs the buffer object
-    // unconditionally and gates only some of its FIFO calls on do_mask_h. When masking is off the
-    // reader does not produce into it, leaving compute the single toucher — bound as both PRODUCER
-    // and CONSUMER (self-loop) so the DFB still presents one endpoint of each kind per node.
-    // masked_input is bound PRODUCER+CONSUMER in *every* configuration: the kernel constructs its
-    // buffer object outside the do_mask_h guard, so the dfb::masked_input token has to exist even
-    // where the guard discards all of its FIFO traffic.
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t units_per_core) {
         Group<DFBBinding> dfb_bindings = {
             DFBBinding{
-                .dfb_spec_name = INPUT_DFB,
-                .accessor_name = "input",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            },
+                .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::CONSUMER},
             DFBBinding{
-                .dfb_spec_name = SCALER_DFB,
-                .accessor_name = "scaler",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            },
-            DFBBinding{
-                .dfb_spec_name = MASK_H_DFB,
-                .accessor_name = "mask_h",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            },
-            // accum_dst holds the running reduction result: produced by the reduce output and read
-            // back by the next iteration's accumulation.
-            DFBBinding{
-                .dfb_spec_name = ACCUM_DST_DFB,
-                .accessor_name = "accum_dst",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            },
-            DFBBinding{
-                .dfb_spec_name = ACCUM_DST_DFB,
-                .accessor_name = "accum_dst",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            },
-            // masked_input is packed by this kernel and immediately re-read as the reduce input.
-            DFBBinding{
-                .dfb_spec_name = MASKED_INPUT_DFB,
-                .accessor_name = "masked_input",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            },
-            DFBBinding{
-                .dfb_spec_name = MASKED_INPUT_DFB,
-                .accessor_name = "masked_input",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            },
-            DFBBinding{
-                .dfb_spec_name = OUT_DFB,
-                .accessor_name = "out",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            },
+                .dfb_spec_name = SCALER_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER},
         };
-        if (!do_mask_h) {
-            dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = MASK_H_DFB,
-                .accessor_name = "mask_h",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            });
-        }
         return KernelSpec{
             .unique_id = unique_id,
             .source = "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_sum_h.cpp",
             // O3 is legacy ComputeConfig's default; Metal 2.0's CompilerOptions defaults to O2, so
             // the level has to be stated explicitly to keep the compute kernel where it was.
-            .compiler_options = {.defines = reduce_defines, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
+            .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
             .dfb_bindings = std::move(dfb_bindings),
-            .compile_time_args =
-                {
-                    {"Ht", Ht},
-                    // The kernel unpacks this into a local named `Wt`, but the value is the
-                    // per-core work-split count, not the tensor's tile width.
-                    {"units_per_core", units_per_core},
-                    {"NC", 1},
-                    {"origin_H", origin_H},
-                },
+            .compile_time_args = {{"units_per_core", units_per_core}},
             .hw_config = compute_hw,
+            .advanced_options = {.compile_time_varargs = compute_reduce_args},
         };
     };
 
@@ -327,8 +229,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
             core,
             {{"col_start_tile_id", (num_cols_read / Wt * HtWt) + (num_cols_read % Wt)},
              {"curr_col_in_batch", num_cols_read % Wt},
-             {"num_cols", num_cols_per_core},
-             {"mask_h", mask_h}});
+             {"num_cols", num_cols_per_core}});
 
         AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,

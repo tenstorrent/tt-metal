@@ -14,7 +14,6 @@ void kernel_main() {
         get_arg(args::col_start_tile_id);  // Start id in column major order. This should be the start of a column
     uint32_t curr_col_in_batch = get_arg(args::curr_col_in_batch);
     uint32_t num_cols = get_arg(args::num_cols);  // number of cols to read
-    uint32_t mask_h = get_arg(args::mask_h);
 
     constexpr uint32_t Ht = get_arg(args::Ht);
     constexpr uint32_t Wt = get_arg(args::Wt);
@@ -23,19 +22,8 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
-#ifdef REDUCE_SCALER
-    constexpr uint32_t reduce_factor = get_arg(args::reduce_factor);
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        dfb::scaler,
-        ckernel::PoolType::AVG,
-        ckernel::ReduceDim::REDUCE_COL,
-        reduce_factor>();
-#endif
-
-#ifdef DO_MASK_H
-    DataflowBuffer dfb_mask_h(dfb::mask_h);
-    generate_mask_h(dfb_mask_h, mask_h);
-#endif
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     const auto s = TensorAccessor(tensor::src);
 
