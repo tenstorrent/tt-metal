@@ -681,29 +681,27 @@ using tt::tt_metal::RelativeCoreCoord;
 
 std::size_t hash<RelativeCoreCoord>::operator()(const RelativeCoreCoord& o) const {
     std::size_t seed = 0;
-    seed ^= std::hash<std::size_t>()(o.x) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<std::size_t>()(o.y) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    ttsl::hash::hash_combine(seed, o.x);
+    ttsl::hash::hash_combine(seed, o.y);
     return seed;
 }
 
 std::size_t hash<CoreRange>::operator()(const CoreRange& core_range) const {
-    // Hash x and y components individually using boost-style hash combine to avoid
-    // collisions from the weak std::hash<CoreCoord> (x ^ (y << 1)) in UMD.
-    // E.g. CoreCoord(3,0) and CoreCoord(1,1) both hash to 3 with the weak hash.
-    // TODO: Roll back to std::hash<CoreCoord> once we have a strong hash for xy_pair in UMD.
+    // Hash x/y, not CoreCoord: UMD's std::hash<CoreCoord> is x ^ (y << 1) (issue #45821).
     std::size_t seed = 0;
-    seed ^= std::hash<std::size_t>{}(core_range.start_coord.x) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<std::size_t>{}(core_range.start_coord.y) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<std::size_t>{}(core_range.end_coord.x) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<std::size_t>{}(core_range.end_coord.y) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    ttsl::hash::hash_combine(seed, core_range.start_coord.x);
+    ttsl::hash::hash_combine(seed, core_range.start_coord.y);
+    ttsl::hash::hash_combine(seed, core_range.end_coord.x);
+    ttsl::hash::hash_combine(seed, core_range.end_coord.y);
     return seed;
 }
 
 std::size_t hash<CoreRangeSet>::operator()(const CoreRangeSet& core_range_set) const {
     std::size_t seed = 0;
-    for (const auto& core_range : core_range_set.ranges()) {
-        seed = std::hash<CoreRange>{}(core_range) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    }
+    ttsl::hash::hash_combine(seed, core_range_set.ranges().size());
+    std::for_each(core_range_set.ranges().begin(), core_range_set.ranges().end(), [&](const auto& core_range) {
+        ttsl::hash::hash_combine(seed, core_range);
+    });
     return seed;
 }
 

@@ -55,6 +55,12 @@ TEST(HashCollisionTest, CPU_Issue45821_TruncatedPrefixDoesNotCollide) {
 
 // --- Order sensitivity ---------------------------------------------------------------------
 
+TEST(HashCollisionTest, CPU_LengthMatters) {
+    EXPECT_NE(hash_shape({1, 2, 3}), hash_shape({1, 2}));
+    EXPECT_NE(hash_shape({1, 1}), hash_shape({1}));
+    EXPECT_NE(hash_shape({}), hash_shape({0}));
+}
+
 TEST(HashCollisionTest, CPU_OrderMatters) {
     // A hash used as a cache key must distinguish permutations of the same multiset of dims;
     // otherwise e.g. a [2, 3] tensor and a [3, 2] tensor would share a program.
