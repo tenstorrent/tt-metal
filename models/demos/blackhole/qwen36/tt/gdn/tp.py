@@ -1119,12 +1119,21 @@ class TPGatedDeltaNet:
         if rec_src is not rec:
             ttnn.deallocate(rec)
         self._write_index(self.rec_state, rec_src, slot, dim=0)
+        convs_dev = []
         for m in range(self.K):
             c = convs[m]
             c_src = c if c.dtype == self.conv_states[m].dtype else ttnn.typecast(c, self.conv_states[m].dtype)
             if c_src is not c:
                 ttnn.deallocate(c)
+            convs_dev.append(c_src)
             self._write_index(self.conv_states[m], c_src, slot, dim=1)
+        if self.conv_hist_packed is not None and self._hist_packed_valid:
+            # keep the packed history in sync per slot (no full rebuild): pack this user's 4 conv rows
+            rows = [[ttnn.to_torch(d).reshape(-1).float() for d in ttnn.get_device_tensors(c)] for c in convs_dev]
+            packed_slot = self._packed_slot_tensor(rows, slot)
+            self._write_index(self.conv_hist_packed, packed_slot, slot, dim=0)
+            ttnn.deallocate(packed_slot)
+        else:
             self._hist_packed_valid = False
 
     def remap_slots(self, remap):
@@ -1137,6 +1146,8 @@ class TPGatedDeltaNet:
         if all(idx[i] == i for i in range(self.B)):
             return
         self._gather_indices(self.rec_state, idx, dim=0)
+        if self.conv_hist_packed is not None and self._hist_packed_valid:
+            self._gather_indices(self.conv_hist_packed, idx, dim=0)
         for m in range(self.K):
             self._gather_indices(self.conv_states[m], idx, dim=1)
 
@@ -1354,8 +1365,10 @@ class TPGatedDeltaNet:
         self._kda_dec_const = {"e_q": dev(e_q), "e_g": dev(e_g), "gate": dev(gate), "norm_w": dev(w_host)}
         return self._kda_dec_const
 
-    def _pack_head_tiles(self, rows):
-        """rows: list of 4 torch [C] vectors (this device's channels, oldest first) -> [Nv, 4, 32, 32] bf16 packed tiles."""
+    def _pack_head_tiles(self, rows, parity=0, both_parities=False):
+        """rows: list of 4 torch [C] vectors (this device's channels) -> [Nv, 4, 32, 32] bf16 packed head tiles.
+        Channel chunk c goes to row 2c + parity (the kernel packs user b's token with parity b & 1 so every DRAM->L1
+        segment keeps its 64 B alignment class); taps are stored on both parities so one tap tile serves every user."""
         Nv, Nk, Dk, Dv = self.Nv, self.Nk, self.Dk, self.Dv
         rf = Nv // Nk
         kd = Nk * Dk
@@ -1370,22 +1383,44 @@ class TPGatedDeltaNet:
                         r[kd + hk * Dk : kd + (hk + 1) * Dk],
                         r[2 * kd + h * Dv : 2 * kd + (h + 1) * Dv],
                     ]
-                )
-                n = chunks.numel() // 32
-                out[h, j, 0 : 2 * n : 2, :] = chunks.reshape(-1, 32)  # chunk c in row 2c (64 B aligned segments)
+                ).reshape(-1, 32)
+                n = chunks.shape[0]
+                for par in (0, 1) if both_parities else (parity,):
+                    out[h, j, par : 2 * n + par : 2, :] = chunks
         return out
 
-    def _per_device_rows(self, tensors):
-        """[[torch row per device] per tensor] for a list of mesh tensors holding this layer's per-device [.., C] rows."""
-        return [[ttnn.to_torch(d).reshape(-1).float() for d in ttnn.get_device_tensors(t)] for t in tensors]
+    def _per_device_rows(self, tensors, row=0):
+        """[[torch row per device] per tensor] for mesh tensors holding this layer's per-device [.., C] rows (row `row`)."""
+        return [
+            [ttnn.to_torch(d).reshape(-1, d.shape[-1])[row].float() for d in ttnn.get_device_tensors(t)]
+            for t in tensors
+        ]
 
-    def _packed_from_rows(self, rows_per_tensor):
+    def _packed_from_rows(self, rows_per_tensor, parity=0, both_parities=False):
         """rows_per_tensor: 4 lists (one per slot/tap) of per-device torch rows -> mesh tensor [Nv,4,32,32] per device."""
         n_dev = len(rows_per_tensor[0])
-        # [n_dev * Nv, 4, 32, 32] sharded on dim 0 -> each device holds its own [Nv, 4, 32, 32]
         per_dev = torch.cat(
-            [self._pack_head_tiles([rows_per_tensor[j][d] for j in range(4)]) for d in range(n_dev)], dim=0
+            [
+                self._pack_head_tiles([rows_per_tensor[j][d] for j in range(4)], parity, both_parities)
+                for d in range(n_dev)
+            ],
+            dim=0,
+        )  # [n_dev * Nv, 4, 32, 32] sharded on dim 0 -> each device holds its own [Nv, 4, 32, 32]
+        return ttnn.from_torch(
+            per_dev,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
         )
+
+    def _packed_slot_tensor(self, conv_rows_per_device, b):
+        """One user's packed history [1, Nv, 4, 32, 32] per device (parity b & 1) from 4 per-device rows."""
+        n_dev = len(conv_rows_per_device[0])
+        per_dev = torch.stack(
+            [self._pack_head_tiles([conv_rows_per_device[j][d] for j in range(4)], parity=b & 1) for d in range(n_dev)]
+        )  # [n_dev, Nv, 4, 32, 32] sharded on dim 0 -> [1, Nv, 4, 32, 32] per device
         return ttnn.from_torch(
             per_dev,
             dtype=ttnn.bfloat16,
@@ -1397,15 +1432,32 @@ class TPGatedDeltaNet:
 
     def _conv_taps_packed_t(self):
         if self._conv_taps_packed is None:
-            self._conv_taps_packed = self._packed_from_rows(self._per_device_rows(self.tw["conv_taps"]))
+            self._conv_taps_packed = self._packed_from_rows(
+                self._per_device_rows(self.tw["conv_taps"]), both_parities=True
+            )
         return self._conv_taps_packed
 
     def _ensure_conv_hist_packed(self):
-        """(Re)build the packed history from conv_states when they changed (prefill, reset, restore). Host round trip,
-        runs eagerly before the first decode step of a prompt - never inside a trace capture."""
+        """(Re)build the packed history [Bmax, Nv, 4, 32, 32] from conv_states when they changed (prefill, reset,
+        restore). Host round trip; runs eagerly before the first decode step of a prompt - never inside a trace."""
         if self._hist_packed_valid and self.conv_hist_packed is not None:
             return
-        packed = self._packed_from_rows(self._per_device_rows(self.conv_states))
+        slots = []
+        for b in range(self.B):
+            rows = self._per_device_rows(self.conv_states, row=b)
+            n_dev = len(rows[0])
+            slots.append(
+                torch.stack([self._pack_head_tiles([rows[j][d] for j in range(4)], parity=b & 1) for d in range(n_dev)])
+            )  # [n_dev, Nv, 4, 32, 32]
+        per_dev = torch.stack(slots, dim=1).reshape(-1, self.Nv, 4, 32, 32)  # [n_dev * Bmax, Nv, 4, 32, 32]
+        packed = ttnn.from_torch(
+            per_dev,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+        )
         if self.conv_hist_packed is None:
             self.conv_hist_packed = packed  # stable address for traced decode
         else:
@@ -1537,8 +1589,7 @@ class TPGatedDeltaNet:
         # serving with max_num_seqs > 1 the width-1 bucket still carries [Bmax, Nv, Dk, Dv] state -> fall back.
         if (
             self._decode_fused_conv
-            and B == 1
-            and self.B == 1
+            and B <= tpc.TILE_SIZE
             and self._fuse_ab
             and getattr(self.args, "proj_1d_decode", False)
         ):

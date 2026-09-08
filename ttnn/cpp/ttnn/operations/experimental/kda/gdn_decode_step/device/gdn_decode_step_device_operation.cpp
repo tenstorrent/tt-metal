@@ -73,8 +73,9 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
     const uint32_t C = 2 * Nk * Dk + Nv * Dv;
     if (a.fuse_conv) {
         TT_FATAL(
-            qs.rank() == 3 && qs[0] == 1 && qs[1] == 1 && qs[2] >= a.qkvz_dim + 2 * Nv,
-            "{}: fused-conv qkv (projection row) must be [1, 1, W >= qkvz_dim + 2*Nv] (got {})",
+            qs.rank() == 3 && qs[0] == 1 && qs[1] >= 1 && qs[1] <= tt::constants::TILE_HEIGHT &&
+                qs[2] >= a.qkvz_dim + 2 * Nv,
+            "{}: fused-conv qkv (projection rows) must be [1, B <= 32, W >= qkvz_dim + 2*Nv] (got {})",
             kOp,
             qs);
         TT_FATAL(
@@ -84,19 +85,24 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
             kOp);
         TT_FATAL(
             in.conv_hist.has_value() && in.conv_taps.has_value(), "{}: fused-conv needs conv_hist and conv_taps", kOp);
-        for (const auto& [t, name] :
-             std::array{std::pair{&*in.conv_hist, "conv_hist"}, std::pair{&*in.conv_taps, "conv_taps"}}) {
-            check_tiled(*t, name, {DataType::BFLOAT16});
-            check_same_device(in.qkv, *t, kOp, name);
-            const auto& ps = t->logical_shape();
-            TT_FATAL(
-                ps.rank() == 4 && ps[0] == Nv && ps[1] == 4 && ps[2] == tt::constants::TILE_HEIGHT &&
-                    ps[3] == tt::constants::TILE_WIDTH,
-                "{}: {} must be packed [Nv, 4, 32, 32] (got {})",
-                kOp,
-                name,
-                ps);
-        }
+        check_tiled(*in.conv_hist, "conv_hist", {DataType::BFLOAT16});
+        check_tiled(*in.conv_taps, "conv_taps", {DataType::BFLOAT16});
+        check_same_device(in.qkv, *in.conv_hist, kOp, "conv_hist");
+        check_same_device(in.qkv, *in.conv_taps, kOp, "conv_taps");
+        const auto& hs = in.conv_hist->logical_shape();
+        const auto& ts = in.conv_taps->logical_shape();
+        TT_FATAL(
+            hs.rank() == 5 && hs[0] >= qs[1] && hs[1] == Nv && hs[2] == 4 && hs[3] == tt::constants::TILE_HEIGHT &&
+                hs[4] == tt::constants::TILE_WIDTH,
+            "{}: conv_hist must be packed [Bmax >= B, Nv, 4, 32, 32] (got {})",
+            kOp,
+            hs);
+        TT_FATAL(
+            ts.rank() == 4 && ts[0] == Nv && ts[1] == 4 && ts[2] == tt::constants::TILE_HEIGHT &&
+                ts[3] == tt::constants::TILE_WIDTH,
+            "{}: conv_taps must be packed [Nv, 4, 32, 32] (got {})",
+            kOp,
+            ts);
         TT_FATAL(
             2 * ((2 * Dk + Dv) / tt::constants::TILE_WIDTH) <= tt::constants::TILE_HEIGHT,
             "{}: packed head row needs <= 16 chunks (chunk c in row 2c)",
@@ -122,18 +128,20 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
         }
     }
     const auto& ss = in.state.logical_shape();
+    const uint32_t rows = static_cast<uint32_t>(in.qkv.logical_shape()[-2]);
     TT_FATAL(
-        ss.rank() == 4 && ss[0] == 1 && ss[1] == Nv && ss[2] == Dk && ss[3] == Dv,
-        "{}: state must be [1, Nv, Dk, Dv] (got {})",
+        ss.rank() == 4 && ss[0] >= rows && (a.fuse_conv || ss[0] == 1) && ss[1] == Nv && ss[2] == Dk && ss[3] == Dv,
+        "{}: state must be [Bmax >= B, Nv, Dk, Dv] (got {}, B = {})",
         kOp,
-        ss);
+        ss,
+        rows);
     TT_FATAL(in.weight.logical_volume() == Dv, "{}: weight volume must equal value_dim", kOp);
 }
 
 GdnDecodeStepOperation::spec_return_value_t GdnDecodeStepOperation::compute_output_specs(
-    const operation_attributes_t& a, const tensor_args_t&) {
+    const operation_attributes_t& a, const tensor_args_t& in) {
     return TensorSpec(
-        Shape({1, 1, a.num_value_heads * a.value_dim}),
+        Shape({1, in.qkv.logical_shape()[-2], a.num_value_heads * a.value_dim}),
         TensorLayout(a.output_dtype, PageConfig(Layout::TILE), a.output_mem_config));
 }
 

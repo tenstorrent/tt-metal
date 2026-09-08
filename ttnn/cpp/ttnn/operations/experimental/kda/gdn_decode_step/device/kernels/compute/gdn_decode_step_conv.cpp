@@ -1,9 +1,12 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// Fused-conv variant of the GDN decode step: additionally computes the 4-tap causal depthwise conv + SiLU from the
-// three history rows and the new projection row, beta = sigmoid(b), decay = exp(-exp(A) * softplus(a + dt_bias)) from
-// the per-head scalars, and gates the normalized output with silu(z). One core per value head, token in row 0.
+// Fused-conv variant of the GDN decode step, batched: each core handles one value head for a contiguous group of users
+// [u0, u0 + nu) (rows of the projection tile). Per user: 4-tap causal conv + SiLU on the packed history/tap tiles (row
+// 2c + parity(b) of a packed tile = channel chunk c), scattered into the row-block layout (row b of tile c) with 0/1
+// selector tiles, beta = sigmoid(b) and decay = exp(-exp(A) * softplus(a + dt_bias)) from per-user scalar tiles, the
+// recurrence with the row mask e_b, and the gated RMSNorm output (row b valid, other rows exactly 0). The users'
+// outputs are summed into one accumulator and written once as the group's row span.
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/compute/gdn_step_helpers.hpp"
 
 using namespace gdn_step;
@@ -37,7 +40,7 @@ inline void causal_conv_silu_packed(DataflowBuffer& conv_p) {
     conv_p.push_back(1);
 }
 
-// Scatter: tile c (row 0 = row 2c of conv_p, other rows exactly 0) = sel[c] @ conv_p, packed into qc | kc | vc.
+// Scatter: tile c (row b = the user's row of conv_p, other rows exactly 0) = sel[c] @ conv_p, packed into qc | kc | vc.
 template <uint32_t Kt, uint32_t Vt>
 inline void scatter_conv(DataflowBuffer& qc, DataflowBuffer& kc, DataflowBuffer& vc) {
     constexpr uint32_t Ct = 2 * Kt + Vt;
@@ -134,11 +137,10 @@ inline void silu_tiles(uint32_t a, uint32_t out, DataflowBuffer& out_dfb, uint32
     out_dfb.push_back(n);
 }
 
-// out[i] = (on[i] scaled per column by row 0 of w[i]) * zs[i]; the final product stays in DEST (SFPU fp32 multiply).
-// on and zs are both fp32, so only the bcast pair needs a format reconfig (hoisted); the per-tile inits are cheap.
-inline void gated_output(DataflowBuffer& out, uint32_t n) {
-    out.reserve_back(n);
-    pack_reconfig_data_format(dfb::out);
+// gated = (on x w per column) * zs, with the final product on the SFPU (fp32); rows other than b stay exactly 0.
+inline void gated_user(DataflowBuffer& tmp, uint32_t n) {
+    tmp.reserve_back(n);
+    pack_reconfig_data_format(dfb::tmp);
     reconfig_data_format(dfb::on, dfb::w_in);
     for (uint32_t i = 0; i < n; ++i) {
         mul_bcast_rows_init(dfb::on, dfb::w_in);
@@ -150,16 +152,16 @@ inline void gated_output(DataflowBuffer& out, uint32_t n) {
         mul_binary_tile(0, 1, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, dfb::out, i);
+        pack_tile(0, dfb::tmp, i);
         tile_regs_release();
     }
-    out.push_back(n);
+    tmp.push_back(n);
 }
 
 }  // namespace
 
 template <uint32_t Kt, uint32_t Vt, uint32_t scale_bits, uint32_t inv_dv_bits>
-TT_KERNEL void compute(uint32_t wi_count) {
+TT_KERNEL void compute(uint32_t nu) {
     constexpr uint32_t KV = Kt * Vt;
     constexpr uint32_t Ct = 2 * Kt + Vt;
     constexpr uint32_t one_bits = kOneBits;
@@ -201,25 +203,31 @@ TT_KERNEL void compute(uint32_t wi_count) {
     DataflowBuffer hnew(dfb::hnew);
     DataflowBuffer o(dfb::o);
     DataflowBuffer on(dfb::on);
+    DataflowBuffer out_acc(dfb::out_acc);
+    DataflowBuffer acc2(dfb::acc2);
     DataflowBuffer out(dfb::out);
 
     compute_kernel_hw_startup(dfb::hist, dfb::state_in, dfb::out);
     scaler.wait_front(1);
     eps_l2.wait_front(1);
     eps_norm.wait_front(1);
-    mask.wait_front(1);
     w_in.wait_front(Vt);
-    sel.wait_front(Ct);
     taps.wait_front(4);
+    dtb_s.wait_front(1);
+    nea_s.wait_front(1);
+    // zs = silu(z) for all users of this head (rows = users), once per core
+    z_in.wait_front(Vt);
+    silu_tiles(dfb::z_in, dfb::zs, zs, Vt);
+    z_in.pop_front(Vt);
+    zs.wait_front(Vt);
 
-    for (uint32_t wi = 0; wi < wi_count; ++wi) {
+    for (uint32_t ui = 0; ui < nu; ++ui) {
+        sel.wait_front(Ct);  // per-user selectors (row b <- packed row 2c + parity(b))
+        mask.wait_front(1);  // per-user row mask e_b
         hist.wait_front(3);
         cur.wait_front(1);
-        z_in.wait_front(Vt);
         a_s.wait_front(1);
         b_s.wait_front(1);
-        dtb_s.wait_front(1);
-        nea_s.wait_front(1);
         state_in.wait_front(KV);
 
         // conv + silu on the packed tile, scattered into qc, kc, vc ; gates
@@ -229,19 +237,16 @@ TT_KERNEL void compute(uint32_t wi_count) {
         conv_p.wait_front(1);
         scatter_conv<Kt, Vt>(qc, kc, vc);
         conv_p.pop_front(1);
+        sel.pop_front(Ct);
         gate_beta(beta_t);
         b_s.pop_front(1);
         gate_decay(dec);
         a_s.pop_front(1);
-        dtb_s.pop_front(1);
-        nea_s.pop_front(1);
-        silu_tiles(dfb::z_in, dfb::zs, zs, Vt);
-        z_in.pop_front(Vt);
         qc.wait_front(Kt);
         kc.wait_front(Kt);
         vc.wait_front(Vt);
 
-        // qn = l2norm(q) * scale (rows 1..31 -> 0 through the mask)
+        // qn = l2norm(q) * scale, kn = l2norm(k)  (rows other than b -> 0 through the mask)
         square_tiles(dfb::qc, dfb::tmp, tmp, Kt);
         compute_kernel_lib::
             reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, dfb::tmp, dfb::scaler, dfb::stats>(
@@ -253,8 +258,6 @@ TT_KERNEL void compute(uint32_t wi_count) {
         scale_rows(dfb::qc, dfb::inv, dfb::qn, qn, Kt);
         inv.pop_front(1);
         qc.pop_front(Kt);
-
-        // kn = l2norm(k)
         square_tiles(dfb::kc, dfb::tmp, tmp, Kt);
         compute_kernel_lib::
             reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, dfb::tmp, dfb::scaler, dfb::stats>(
@@ -266,9 +269,7 @@ TT_KERNEL void compute(uint32_t wi_count) {
         scale_rows(dfb::kc, dfb::inv, dfb::kn, kn, Kt);
         inv.pop_front(1);
         kc.pop_front(Kt);
-
-        // vm = v masked to row 0
-        scale_rows(dfb::vc, dfb::mask, dfb::vm, vm, Vt);
+        scale_rows(dfb::vc, dfb::mask, dfb::vm, vm, Vt);  // vm = v masked to row b
         vc.pop_front(Vt);
 
         // hd = h * decay
@@ -314,7 +315,7 @@ TT_KERNEL void compute(uint32_t wi_count) {
         hn.pop_front(KV);
         o.wait_front(Vt);
 
-        // out = rmsnorm(o) * w * silu(z)
+        // gated = rmsnorm(o) * w * silu(z) for this user's row; accumulate over the group's users
         square_tiles(dfb::o, dfb::tmp, tmp, Vt);
         compute_kernel_lib::
             reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, dfb::tmp, dfb::scaler, dfb::stats>(
@@ -327,9 +328,25 @@ TT_KERNEL void compute(uint32_t wi_count) {
         inv.pop_front(1);
         o.pop_front(Vt);
         on.wait_front(Vt);
-        zs.wait_front(Vt);
-        gated_output(out, Vt);
+        gated_user(tmp, Vt);
         on.pop_front(Vt);
-        zs.pop_front(Vt);
+        mask.pop_front(1);
+        tmp.wait_front(Vt);
+        if (ui == 0) {
+            copy_tiles(dfb::tmp, dfb::out_acc, out_acc, Vt);
+        } else {
+            out_acc.wait_front(Vt);
+            add_tiles_n(dfb::out_acc, dfb::tmp, dfb::acc2, acc2, Vt);
+            out_acc.pop_front(Vt);
+            acc2.wait_front(Vt);
+            copy_tiles(dfb::acc2, dfb::out_acc, out_acc, Vt);
+            acc2.pop_front(Vt);
+        }
+        tmp.pop_front(Vt);
     }
+    // the group's rows go out once
+    out_acc.wait_front(Vt);
+    copy_tiles(dfb::out_acc, dfb::out, out, Vt);
+    out_acc.pop_front(Vt);
+    zs.pop_front(Vt);
 }

@@ -61,7 +61,19 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     const uint32_t Nk = a.num_key_heads;
 
     const auto grid = device.compute_with_storage_grid_size();
-    auto dist = kda_factory_detail::distribute_prep(grid, Nv, Nv);  // one head per core
+    const uint32_t num_cores_avail = grid.x * grid.y;
+    // work items: plain variant = one value head per core (B = 1); fused variant = (head, user group) with the smallest
+    // even group size (1 for B = 1) that fits the grid -> B=32: 12 heads x 8 groups of 4 users on 96 cores.
+    const uint32_t B = fused ? static_cast<uint32_t>(in.qkv.logical_shape()[-2]) : 1u;
+    uint32_t gs = (B == 1) ? 1u : 2u;
+    while (Nv * ((B + gs - 1) / gs) > num_cores_avail) {
+        gs += 2;
+    }
+    const uint32_t ugroups = (B + gs - 1) / gs;
+    const uint32_t num_items = Nv * ugroups;
+    TT_FATAL(
+        num_items <= num_cores_avail, "gdn_decode_step: {} work items exceed {} cores", num_items, num_cores_avail);
+    auto dist = kda_factory_detail::distribute_prep(grid, num_items, num_items);  // one item per core
     const auto& cores = dist.core_set;
 
     const m2::KernelSpecName READER{"reader"};
@@ -129,6 +141,8 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     if (fused) {
         for (const auto& d : std::vector<Dfb>{
                  {"conv_p", 1, fp32},
+                 {"out_acc", Vt, fp32},
+                 {"acc2", Vt, fp32},
                  {"qc", Kt, fp32},
                  {"kc", Kt, fp32},
                  {"vc", Vt, fp32},
@@ -165,7 +179,10 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
         .unique_id = READER,
         .source = std::string(kDir) +
                   (fused ? "dataflow/reader_gdn_decode_step_conv.cpp" : "dataflow/reader_gdn_decode_step.cpp"),
-        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 (fused ? std::vector<std::string>{"head", "u0", "nu"}
+                        : std::vector<std::string>{"wi_start", "wi_count"})},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
     for (const auto& d : reader_out) {
@@ -210,7 +227,10 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
                   (fused ? "dataflow/writer_gdn_decode_step_conv.cpp" : "dataflow/writer_gdn_decode_step.cpp"),
         .dfb_bindings = {bind("hnew", EP::CONSUMER), bind("out", EP::CONSUMER)},
         .tensor_bindings = {m2::TensorBinding{STATE, "state_out"}, m2::TensorBinding{OUT, "out"}},
-        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 (fused ? std::vector<std::string>{"head", "u0", "nu"}
+                        : std::vector<std::string>{"wi_start", "wi_count"})},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
     if (fused) {
@@ -242,7 +262,8 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
              {"Vt", Vt},
              {"scale_bits", float_bits(a.scale)},
              {"inv_dv_bits", float_bits(1.0f / static_cast<float>(a.value_dim))}},
-        .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = (fused ? std::vector<std::string>{"nu"} : std::vector<std::string>{"wi_count"})},
         .hw_config = std::move(compute_hw),
     };
     for (const auto& d : reader_out) {
@@ -262,11 +283,22 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     m2::KernelRunArgs compute_args{.kernel = COMPUTE};
     for (uint32_t i = 0; i < dist.cores.size(); ++i) {
         const auto& core = dist.cores[i];
-        m2::AddRuntimeArgsForNode(
-            reader_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
-        m2::AddRuntimeArgsForNode(
-            writer_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
-        m2::AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"wi_count", dist.wi_count[i]}});
+        if (fused) {
+            const uint32_t item = dist.wi_start[i];  // one item per core
+            const uint32_t head = item / ugroups;
+            const uint32_t g = item % ugroups;
+            const uint32_t u0 = g * gs;
+            const uint32_t nu = std::min(gs, B - u0);
+            m2::AddRuntimeArgsForNode(reader_args.runtime_arg_values, core, {{"head", head}, {"u0", u0}, {"nu", nu}});
+            m2::AddRuntimeArgsForNode(writer_args.runtime_arg_values, core, {{"head", head}, {"u0", u0}, {"nu", nu}});
+            m2::AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"nu", nu}});
+        } else {
+            m2::AddRuntimeArgsForNode(
+                reader_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
+            m2::AddRuntimeArgsForNode(
+                writer_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
+            m2::AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"wi_count", dist.wi_count[i]}});
+        }
     }
 
     // ---- tensor parameters

@@ -214,19 +214,110 @@ inline void pack_row_from(
         {.offset_bytes = base + tile_elem_index(dst_row, 16) * esz});
 }
 
-// Build the head's packed [q | k | v] tile into tile `dst_tile` (zeroed first). Channel chunk c goes to row 2c:
-// DRAM->L1 reads need the L1 destination to share the source's 64 B alignment, and only even rows (2c * 32 B) satisfy
-// it.
+// Copy row `src_row` of source tile `page` into row `dst_row` of tile `dst_tile` (two face-row segments). Source and
+// destination rows must have the same parity so both segments keep their 64 B alignment class.
+template <typename Accessor>
+inline void pack_row_from_row(
+    const Accessor& acc,
+    DataflowBuffer& dfb,
+    Noc& noc,
+    uint32_t page,
+    uint32_t src_row,
+    uint32_t dst_tile,
+    uint32_t dst_row) {
+    const uint32_t entry = dfb.get_entry_size();
+    const uint32_t seg = entry / 64;    // one face row: 32 B for bf16
+    const uint32_t esz = entry / 1024;  // bytes per element
+    const uint32_t base = dst_tile * entry;
+    noc.async_read(
+        acc,
+        dfb,
+        seg,
+        {.page_id = page, .offset_bytes = tile_elem_index(src_row, 0) * esz},
+        {.offset_bytes = base + tile_elem_index(dst_row, 0) * esz});
+    noc.async_read(
+        acc,
+        dfb,
+        seg,
+        {.page_id = page, .offset_bytes = tile_elem_index(src_row, 16) * esz},
+        {.offset_bytes = base + tile_elem_index(dst_row, 16) * esz});
+}
+
+// Build the packed [q | k | v] tile of value head h for user row b into tile `dst_tile` (zeroed first): channel chunk c
+// goes to row 2c + (b & 1) (same parity as the source row -> 64 B aligned segments).
+template <uint32_t Kt, uint32_t Vt, uint32_t Nk, typename Accessor>
+inline void pack_head_tile_user(
+    const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint32_t hk, uint32_t h, uint32_t b, uint32_t dst_tile) {
+    const uint32_t par = b & 1u;
+    for (uint32_t c = 0; c < Kt; ++c) {
+        pack_row_from_row(acc, dfb, noc, hk * Kt + c, b, dst_tile, 2 * c + par);
+        pack_row_from_row(acc, dfb, noc, Nk * Kt + hk * Kt + c, b, dst_tile, 2 * (Kt + c) + par);
+    }
+    for (uint32_t c = 0; c < Vt; ++c) {
+        pack_row_from_row(acc, dfb, noc, 2 * Nk * Kt + h * Vt + c, b, dst_tile, 2 * (2 * Kt + c) + par);
+    }
+}
+
+// B=1 convenience (user row 0): chunk c in row 2c.
 template <uint32_t Kt, uint32_t Vt, uint32_t Nk, typename Accessor>
 inline void pack_head_tile(
     const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint32_t hk, uint32_t h, uint32_t dst_tile) {
-    for (uint32_t c = 0; c < Kt; ++c) {
-        pack_row_from(acc, dfb, noc, hk * Kt + c, dst_tile, 2 * c);
-        pack_row_from(acc, dfb, noc, Nk * Kt + hk * Kt + c, dst_tile, 2 * (Kt + c));
+    pack_head_tile_user<Kt, Vt, Nk>(acc, dfb, noc, hk, h, 0, dst_tile);
+}
+
+// Selector tiles for user row b: sel[c] has a single 1.0 at (row b, col 2c + parity(b)), so sel[c] @ P puts packed row
+// 2c + parity(b) of P into row b. Also the row mask e_b (1.0 at (row b, col 0)).
+inline void build_user_selectors(DataflowBuffer& sel, DataflowBuffer& mask, Noc& noc, uint32_t b, uint32_t Ct) {
+    sel.reserve_back(Ct);
+    zero_reserved(sel, noc, Ct);
+    {
+        auto lock = sel.scoped_write_lock(Ct);
+        auto p16 = lock.template get_ptr<volatile uint16_t>();
+        for (uint32_t c = 0; c < Ct; ++c) {
+            p16[c * 1024 + tile_elem_index(b, 2 * c + (b & 1u))] = 0x3F80;
+        }
     }
-    for (uint32_t c = 0; c < Vt; ++c) {
-        pack_row_from(acc, dfb, noc, 2 * Nk * Kt + h * Vt + c, dst_tile, 2 * (2 * Kt + c));
+    sel.push_back(Ct);
+    mask.reserve_back(1);
+    zero_reserved(mask, noc, 1);
+    {
+        auto lock = mask.scoped_write_lock(1);
+        auto p16 = lock.template get_ptr<volatile uint16_t>();
+        p16[tile_elem_index(b, 0)] = 0x3F80;
     }
+    mask.push_back(1);
+}
+
+// Write rows [r0, r0 + nr) of `count` consecutive L1 tiles to the same rows of the destination tiles. Rows are written
+// as whole face-row spans; r0 must be even and nr even (or r0 == 0, nr == 1 -> rows 0..1, row 1 being zero padding),
+// so every DRAM destination address is 64 B aligned.
+template <typename Accessor>
+inline void write_rows(
+    const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint32_t first_page, uint32_t count, uint32_t r0, uint32_t nr) {
+    dfb.wait_front(count);
+    const uint32_t entry = dfb.get_entry_size();
+    const uint32_t esz = entry / 1024;
+    const uint32_t seg = entry / 64;  // one face row
+    const uint32_t r1 = (nr == 1) ? r0 + 2 : r0 + nr;
+    for (uint32_t t = 0; t < count; ++t) {
+        const uint32_t base = t * entry;
+        // rows below 16 live in faces 0/1, rows >= 16 in faces 2/3; write each face span separately
+        for (uint32_t lo = r0; lo < r1;) {
+            const uint32_t hi = (lo < 16) ? (r1 < 16 ? r1 : 16) : r1;
+            for (uint32_t half = 0; half < 2; ++half) {
+                const uint32_t off = tile_elem_index(lo, half * 16) * esz;
+                noc.async_write(
+                    dfb,
+                    acc,
+                    seg * (hi - lo),
+                    {.offset_bytes = base + off},
+                    {.page_id = first_page + t, .offset_bytes = off});
+            }
+            lo = hi;
+        }
+    }
+    noc.async_write_barrier();
+    dfb.pop_front(count);
 }
 
 }  // namespace gdn_step_df

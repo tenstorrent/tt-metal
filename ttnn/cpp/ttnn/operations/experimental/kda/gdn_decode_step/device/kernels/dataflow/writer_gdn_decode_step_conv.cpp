@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
-// Writer for the fused-conv variant (packed layout). The packed history is private per value head (no cross-core
-// hazard); the shift (slot0 <- slot1, ..., slot3 <- new token) is snapshotted at kernel start and written after the
-// state, i.e. after this core's reader has consumed the old history.
+// Writer for the batched fused-conv variant. Per user: snapshot the packed history slots 1..3 + the new token, then
+// after the compute's state output (which implies this core's reader consumed the old history) write the state in
+// place and the shifted history. After the last user: write the group's rows of the head's output tiles.
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
 
 using namespace gdn_step_df;
@@ -21,7 +21,7 @@ inline void write_tiles(const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint
 }  // namespace
 
 template <uint32_t Kt, uint32_t Vt, uint32_t Nk, uint32_t Nv>
-TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
+TT_KERNEL void writer(uint32_t head, uint32_t u0, uint32_t nu) {
     const auto state_acc = TensorAccessor(tensor::state_out);
     const auto out_acc = TensorAccessor(tensor::out);
     const auto qkv_acc = TensorAccessor(tensor::qkv_w);
@@ -32,20 +32,19 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     Noc noc;
     constexpr uint32_t KV = Kt * Vt;
     constexpr uint32_t rf = Nv / Nk;
-    for (uint32_t i = 0; i < wi_count; ++i) {
-        const uint32_t h = wi_start + i;
-        const uint32_t hk = h / rf;
-        // wshift = [slot1, slot2, slot3, new token]  ->  slots 0..3
+    const uint32_t h = head;
+    const uint32_t hk = h / rf;
+    for (uint32_t ui = 0; ui < nu; ++ui) {
+        const uint32_t b = u0 + ui;
+        const uint32_t bh = b * Nv + h;
         wshift.reserve_back(4);
         zero_reserved(wshift, noc, 4);
-        read_tiles_at(hist_acc, wshift, noc, h * 4 + 1, 3, 0);
-        pack_head_tile<Kt, Vt, Nk>(qkv_acc, wshift, noc, hk, h, 3);
+        read_tiles_at(hist_acc, wshift, noc, bh * 4 + 1, 3, 0);
+        pack_head_tile_user<Kt, Vt, Nk>(qkv_acc, wshift, noc, hk, h, b, 3);
         noc.async_read_barrier();
         wshift.push_back(4);
-        // The state write below waits for the compute output, which in turn consumed the reader's copy of the history:
-        // only after that is it safe to overwrite slots 1..3 (the reader and writer share this core's history pages).
-        write_tiles(state_acc, hnew, noc, h * KV, KV);  // in-place state update
-        write_tiles(hist_acc, wshift, noc, h * 4, 4);   // slot0 <- slot1, ..., slot3 <- new token (8 KB)
-        write_tiles(out_acc, out, noc, h * Vt, Vt);
+        write_tiles(state_acc, hnew, noc, bh * KV, KV);  // waits for compute -> old history already consumed
+        write_tiles(hist_acc, wshift, noc, bh * 4, 4);   // slot0 <- slot1, ..., slot3 <- new token
     }
+    write_rows(out_acc, out, noc, h * Vt, Vt, u0, nu);  // the group's rows of this head's output tiles
 }

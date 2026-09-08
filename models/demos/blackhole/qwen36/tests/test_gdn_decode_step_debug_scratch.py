@@ -44,7 +44,7 @@ def test_packed_conv_isolation(device):
     taps = [torch.zeros(C).bfloat16(), torch.zeros(C).bfloat16(), torch.zeros(C).bfloat16(), torch.ones(C).bfloat16()]
     cs = [torch.zeros(C).bfloat16() for _ in range(4)]
     state_b = to_dev(h.reshape(1, Nv, Dk, Dv), ttnn.float32)
-    hist_dev = to_dev(_pack_rows(cs), ttnn.bfloat16)
+    hist_dev = to_dev(_pack_rows(cs).unsqueeze(0), ttnn.bfloat16)
     out_b = ttnn.experimental.kda.gdn_decode_step(
         to_dev(row.reshape(1, 1, W), ttnn.bfloat16),
         to_dev(dtb, ttnn.bfloat16),
@@ -64,7 +64,7 @@ def test_packed_conv_isolation(device):
     out_b_t = ttnn.to_torch(out_b).reshape(-1)
     print(f"plain-vs-packed out pcc={_pcc(out_a_t, out_b_t):.6f} max|d|={(out_a_t - out_b_t).abs().max().item():.4e}")
     print(f"state pcc={_pcc(ttnn.to_torch(state_a), ttnn.to_torch(state_b)):.6f}")
-    hist_t = ttnn.to_torch(hist_dev)
+    hist_t = ttnn.to_torch(hist_dev)[0]
     exp = _pack_rows([cs[1], cs[2], cs[3], row[:C]])
     for j in range(4):
         print(
