@@ -26,6 +26,30 @@ extern void (*__init_array_end[])(void);
 // even though -fno-asynchronous-unwind-tables -fno-exceptions flags are set
 void* __gxx_personality_v0;
 
+// Mirror of tt-metal firmware's configure_gathering() (tt_metal/hw/inc/internal/firmware_common.h).
+// Blackhole boots with instruction gathering on; tt-metal firmware disables it on every RISC.
+// The guard matches tt-metal's, so defining ENABLE_GATHERING both leaves gathering on and
+// switches on the load_replay_buf record-window bracketing in ckernel.h.
+TT_ALWAYS_INLINE void configure_gathering()
+{
+#if defined(ARCH_BLACKHOLE) && !defined(ENABLE_GATHERING)
+    asm(R"ASM(
+        .option push
+        li   t1, 0x2
+        csrrs zero, 0x7c0, t1
+        li   t1, 0x1
+        slli t1, t1, 18
+        fence
+        csrrs zero, 0x7c0, t1
+        li   t1, 0x2
+        csrrc zero, 0x7c0, t1
+        fence
+        .option pop
+         )ASM" ::
+            : "t1");
+#endif
+}
+
 __attribute__((no_profile_instrument_function)) TT_ALWAYS_INLINE void do_crt0()
 {
     asm volatile(
@@ -37,6 +61,9 @@ __attribute__((no_profile_instrument_function)) TT_ALWAYS_INLINE void do_crt0()
 
     // Set stack pointer
     asm volatile("la sp, %0" : : "i"(__stack_top) : "memory");
+
+    // Before any global constructor or Tensix instruction can run.
+    configure_gathering();
 
     // Initialize .bss
     for (volatile std::uint32_t* p = (volatile std::uint32_t*)__ldm_bss_start; p < (volatile std::uint32_t*)__ldm_bss_end; p++)
@@ -123,7 +150,14 @@ TT_ALWAYS_INLINE void device_setup()
     // Initialize tensix semaphores
     ckernel::t6_semaphore_init(ckernel::semaphore::UNPACK_TO_DEST, 0, 1);
     ckernel::t6_semaphore_init(ckernel::semaphore::MATH_DONE, 0, 1);
+#if defined(LLK_BARRIER_ON_TRISC)
+    // barrier.h is already in scope and has reserved the raw names, so go through its own.
+    ckernel::t6_semaphore_init(llk_barrier::ARRIVE_SEM, 0, 1);
+    ckernel::t6_semaphore_init(llk_barrier::RELEASE_SEM, 0, 1);
+#else
     ckernel::t6_semaphore_init(ckernel::semaphore::PACK_DONE, 0, 1);
+    ckernel::t6_semaphore_init(ckernel::semaphore::UNPACK_OPERAND_SYNC, 0, 1);
+#endif
 #endif
 }
 

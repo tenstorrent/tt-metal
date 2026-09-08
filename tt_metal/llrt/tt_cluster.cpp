@@ -217,6 +217,8 @@ bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type)
 
 bool Cluster::is_iommu_enabled() const { return this->iommu_enabled_; }
 
+bool Cluster::is_read_only_page_pinning_supported() const { return this->read_only_page_pinning_supported_; }
+
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     ZoneScoped;
     log_info(tt::LogDevice, "Opening user mode device driver");
@@ -330,6 +332,7 @@ void Cluster::initialize_device_drivers() {
 
     // Cache IOMMU status (expensive to query repeatedly)
     this->iommu_enabled_ = false;
+    this->read_only_page_pinning_supported_ = false;
     if (this->target_type_ == tt::TargetDevice::Silicon) {
         const auto& mmio_ids = this->driver_->get_target_mmio_device_ids();
         if (!mmio_ids.empty()) {
@@ -337,6 +340,11 @@ void Cluster::initialize_device_drivers() {
             auto* pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
             if (pci) {
                 this->iommu_enabled_ = pci->is_iommu_enabled();
+            }
+            // Ask through the same handle map_sysmem_buffer() goes through, rather than re-deriving the
+            // IOMMU and KMD version gate here.
+            if (auto* sysmem_manager = this->driver_->get_chip(mmio_id)->get_sysmem_manager()) {
+                this->read_only_page_pinning_supported_ = sysmem_manager->is_read_only_page_pinning_supported();
             }
         }
     }
@@ -863,7 +871,9 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
     if (rtoptions_.get_watcher_enabled()) {
+        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_write(
+            *this->hal_,
             soc_desc,
             this->virtual_worker_cores_.at(chip_id),
             this->virtual_eth_cores_.at(chip_id),
@@ -893,7 +903,9 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
+        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_read(
+            *this->hal_,
             soc_desc,
             this->virtual_worker_cores_.at(chip_id),
             this->virtual_eth_cores_.at(chip_id),
@@ -919,7 +931,9 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
+        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_write(
+            *this->hal_,
             soc_desc,
             this->virtual_worker_cores_.at(chip_id),
             this->virtual_eth_cores_.at(chip_id),
@@ -951,7 +965,9 @@ void Cluster::write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
+        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_write(
+            *this->hal_,
             soc_desc,
             this->virtual_worker_cores_.at(chip_id),
             this->virtual_eth_cores_.at(chip_id),
@@ -976,7 +992,9 @@ void Cluster::read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
+        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_read(
+            *this->hal_,
             soc_desc,
             this->virtual_worker_cores_.at(chip_id),
             this->virtual_eth_cores_.at(chip_id),
@@ -1010,7 +1028,9 @@ void Cluster::noc_multicast_write(
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
+        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_multicast_write(
+            *this->hal_,
             soc_desc,
             this->virtual_worker_cores_.at(chip_id),
             {core_start.x, core_start.y},
@@ -1053,15 +1073,19 @@ std::unique_ptr<tt::umd::SysmemBuffer> Cluster::allocate_sysmem_buffer(
 }
 
 std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
-    ChipId device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc) const {
+    ChipId device_id,
+    void* buffer,
+    size_t sysmem_buffer_size,
+    bool map_to_noc,
+    tt::umd::DeviceBufferAccess device_access) const {
     tt::umd::SysmemManager* sysmem_manager = this->driver_->get_chip(device_id)->get_sysmem_manager();
     if (!sysmem_manager) {
         TT_THROW("Failed to get SysmemManager for device {}", device_id);
     }
-    return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc);
+    return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc, device_access);
 }
 
-std::optional<tt::umd::semver_t> Cluster::get_ethernet_firmware_version() const {
+std::optional<tt::umd::SemVer> Cluster::get_ethernet_firmware_version() const {
     return this->driver_->get_ethernet_firmware_version();
 }
 
@@ -1599,7 +1623,7 @@ bool Cluster::supports_ethernet_link_retraining() const {
         return true;
     }
     if (this->arch_ == tt::ARCH::BLACKHOLE) {
-        return this->get_ethernet_firmware_version() >= tt::umd::semver_t(1, 9, 0);
+        return this->get_ethernet_firmware_version() >= tt::umd::SemVer(1, 9, 0);
     }
     return false;
 }

@@ -147,6 +147,8 @@ GTEST_SUBTORUS_8X4_PIPELINE="${GTEST_GALAXY_LAYOUT_CHECK}:ControlPlaneFixture.Te
 GTEST_SUBTORUS_4X4_PIPELINE="${GTEST_GALAXY_4X4_SPLIT_HOST_LAYOUT_CHECK}:MultiHost.TestSubtorus4x4PipelineMgdPinningsExact:ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
 GTEST_SINGLE_GALAXY_SLICE="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
 GTEST_SINGLE_GALAXY_BLITZ="${GTEST_GALAXY_LAYOUT_CHECK}:ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
+GTEST_SINGLE_GALAXY_2X2_RING="${GTEST_GALAXY_LAYOUT_CHECK}:ControlPlaneFixture.Test2x2StageRingPipelineOnSingleGalaxy"
+GTEST_SINGLE_GALAXY_2X2_Z="ControlPlaneFixture.Test2x2StageRingForcedOntoZByConfigTorus"
 # Llama 8b pod MGDs (40 host ranks): layout + corner pins + pod CP init; omit TestPipelineBuilderCheck
 # (40-stage resolve_graph_layout ring does not finish in reasonable time on these MGDs).
 GTEST_LLama_8B_POD_LAYOUT="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}"
@@ -447,6 +449,20 @@ for mock in \
   if [[ "${mock}" == *subtorus* ]]; then
     run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_single_galaxy_4x2_line_4stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SINGLE_GALAXY_BLITZ}"
   fi
+
+  # 4-stage ring of 2x2 RING+LINE stages: MGD-declared RING on a 2-device dimension stays allowed
+  # (issue #54650 reserves ports only for fabric-config-driven torus axes) and routing planes are
+  # not downgraded. Subtorus-only for the same reason as the blitz 4-stage ring above.
+  if [[ "${mock}" == *subtorus* ]]; then
+    run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_single_galaxy_2x2_ring_4stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SINGLE_GALAXY_2X2_RING}"
+  fi
+
+  # 4-stage ring of 2x2 LINE+LINE stages with FABRIC_2D_TORUS_XY on top: both planar axes are
+  # config-driven torus axes, so every N/S/E/W edge port is reserved (issue #54650) and the
+  # inter-mesh ring must come up entirely on Z-direction routers.
+  if [[ "${mock}" == *subtorus* ]]; then
+    run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_single_galaxy_2x2_line_4stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SINGLE_GALAXY_2X2_Z}"
+  fi
 done
 
 # TODO: This test is currently disabled because otpimized grouping placements is still not implemented for this case to work
@@ -725,6 +741,22 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${
     --per-solution-timeout ${RING_STRESS_TIMEOUT} \
     --recover-command 'true' \
     -- ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.SweepConsumer_SolutionSpansExpectedHosts:${GTEST_SUBTORUS_2X4_PIPELINE}"
+
+# Regression: multi-solution enumeration of SPLIT-HOST meshes (8x 4x4 torus meshes, two 2x4 host slices
+# each, on the SC4 quad mock — 128 chips / 32 per galaxy = 4 hosts). Split-host meshes partition the hosts
+# into more same-rank groups than the chip-count k_min host cap allows, so the capped enumeration is
+# infeasible — and with the solver's unique_shapes dedup the first cap-dropped placement's footprint blocks
+# every other solution (a ring over all candidate meshes has ONE footprint). Before the enumeration-side
+# host-cap fallback this yielded 0 solutions while the single-solve path mapped the same MGD fine.
+# Asserts >=1 solution enumerates (the driver fails on 0), spans exactly 4 hosts, and runs the pipeline.
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${RING_STRESS_TIMEOUT} SWEEP_EXPECTED_HOSTS=4 python3 tools/scaleout/sweep_rank_binding_solutions.py \
+    --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x4_pipeline_8stage_mesh_graph_descriptor.textproto" \
+    --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" \
+    --mpi-args "--allow-run-as-root --oversubscribe -x SWEEP_EXPECTED_HOSTS" \
+    --max-solutions 2 \
+    --per-solution-timeout ${RING_STRESS_TIMEOUT} \
+    --recover-command 'true' \
+    -- ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.SweepConsumer_SolutionSpansExpectedHosts:ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
 
 fi # bh-ring-stress
 

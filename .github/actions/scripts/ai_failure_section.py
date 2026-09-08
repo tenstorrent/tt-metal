@@ -16,6 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "..", "scripts")))
 
 from ci_digest import fetch_run_summary  # noqa: E402
+from job_owners import lookup  # noqa: E402
 
 
 def _one_line(text, limit=300):
@@ -40,6 +41,9 @@ def section(data):
             note += f" — error: {_one_line(row['error_message'], 200)}"
         if row.get("log_complete") is False:
             note += " (log incomplete)"
+        hit = lookup(row.get("job_name") or "")
+        if hit:
+            note += f" — owner: {hit['owner']} ({hit['team']})"
         lines.append(note)
     if not lines:
         return ""
