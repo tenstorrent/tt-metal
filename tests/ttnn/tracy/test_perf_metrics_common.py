@@ -163,7 +163,14 @@ def test_shipped_counter_type_table_matches_the_header():
 def test_l1_grant_ratios_stay_bounded_when_ready_exceeds_requests():
     # The tt-1xx L1 grant counter is the interface ready line, so it can exceed the request count.
     out = mc.compute_metrics(
-        _View({"L1_0_UNPACKER_0": 100.0, "L1_0_UNPACKER_0_GRANT": 900.0, "L1_0_NOC_RING0_OUTGOING_0": 10.0, "L1_0_NOC_RING0_OUTGOING_0_GRANT": 500.0})
+        _View(
+            {
+                "L1_0_UNPACKER_0": 100.0,
+                "L1_0_UNPACKER_0_GRANT": 900.0,
+                "L1_0_NOC_RING0_OUTGOING_0": 10.0,
+                "L1_0_NOC_RING0_OUTGOING_0_GRANT": 500.0,
+            }
+        )
     )
     assert out["l1_unpacker_backpressure_pct"] == 0.0
     assert out["noc_ring0_grant_eff_pct"] == 100.0

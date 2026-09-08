@@ -171,13 +171,13 @@ def compute_metrics(v: CounterView) -> dict:
     flow1 = safe_div(srcb_avail, unpack1_busy)
     flow_avg = avg_pair(flow0, flow1)
 
-    # Packer Metrics — aggregate IDs work on both WH (per-engine also exposed) and BH (single packer).
+    # Packer Metrics: aggregate IDs work on both WH (per-engine also exposed) and BH (single packer).
     packer_busy = v.count("TDMA_PACK", "PACKER_BUSY")
     pack_utilization = safe_div(packer_busy, pack_cycles)
     dest_read = v.count("TDMA_PACK", "PACKER_DEST_READ_AVAILABLE")
     pack_dest_eff = safe_div(dest_read, packer_busy)
 
-    # ── Math Pipeline Stalls (TDMA_UNPACK bank only — same bank, reliable) ──
+    # ── Math Pipeline Stalls (TDMA_UNPACK bank only: same bank, reliable) ──
     math_available = v.count("TDMA_UNPACK", "MATH_INSTRN_AVAILABLE")
     # No src-data stall metric: MATH_SRC_DATA_READY is gated on dec_instr_alu while
     # MATH_INSTRN_AVAILABLE counts the whole math pipe, so their ratio is not a stall fraction.
@@ -247,7 +247,9 @@ def compute_metrics(v: CounterView) -> dict:
         else None
     )
     math_scoreboard_stall = (
-        one_minus(safe_div(v.count("TDMA_PACK", "MATH_NOT_SCOREBOARD_STALLED"), math_available)) if v.has("MATH_NOT_SCOREBOARD_STALLED") else None
+        one_minus(safe_div(v.count("TDMA_PACK", "MATH_NOT_SCOREBOARD_STALLED"), math_available))
+        if v.has("MATH_NOT_SCOREBOARD_STALLED")
+        else None
     )
     math_pipeline_util = safe_div(v.count("TDMA_UNPACK", "MATH_INSTRN_STARTED"), math_available)
 
@@ -344,7 +346,7 @@ def compute_metrics(v: CounterView) -> dict:
     noc_ring1_out_bp = _bp(_R1_OUT)
     noc_ring1_in_bp = _bp(_R1_IN)
 
-    # Split NoC utilisation (per direction, primary L1_0/L1_1 channels only) — Tracy reports these
+    # Split NoC utilisation (per direction, primary L1_0/L1_1 channels only). Tracy reports these
     # separately; the merged noc_ring{0,1}_util above additionally include the BH secondary channels.
     noc_ring0_out_util = mean_port_util(v, "L1", _R0_OUT, l1_cycles)
     noc_ring0_in_util = mean_port_util(v, "L1", _R0_IN, l1_cycles)
