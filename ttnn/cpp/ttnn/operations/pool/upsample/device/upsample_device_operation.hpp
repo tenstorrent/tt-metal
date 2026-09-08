@@ -23,7 +23,7 @@
 namespace ttnn::prim {
 
 struct UpsampleBilinearProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
 };
 
