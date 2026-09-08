@@ -164,6 +164,7 @@ _HELPER_KERNEL = r"""
 #include "api/compute/reduce.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_in = 0, cb_scaler = 1, cb_out = 16;
@@ -180,16 +181,8 @@ void kernel_main() {
     for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
         cb_reserve_back(cb_in, num_tiles);
         cb_push_back(cb_in, num_tiles);
-        if constexpr (dim == 0) {
-            reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_out,
-                   ReduceInputPolicy::BulkWaitBulkPop>(ReduceInputBlockShape::of(1, num_tiles));
-        } else if constexpr (dim == 1) {
-            reduce<PoolType::AVG, ReduceDim::REDUCE_COL, cb_in, cb_scaler, cb_out,
-                   ReduceInputPolicy::BulkWaitBulkPop>(ReduceInputBlockShape::of(num_tiles, 1));
-        } else {
-            reduce<PoolType::AVG, ReduceDim::REDUCE_SCALAR, cb_in, cb_scaler, cb_out,
-                   ReduceInputPolicy::BulkWaitBulkPop>(ReduceInputBlockShape::of(1, num_tiles));
-        }
+        using Call = ttnn::kernel_lib::ReduceCallAtT<4, 0>;
+        reduce<Call>();
         if (iter + 1 < kernel_iters) {
             cb_wait_front(cb_out, 1);
             cb_pop_front(cb_out, 1);
@@ -209,21 +202,8 @@ _SCALER_KERNEL = r"""
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
-    constexpr uint32_t cb_scaler = 1;
-    constexpr uint32_t dim = get_compile_time_arg_val(0);
-    constexpr uint32_t reduce_factor = get_compile_time_arg_val(1);
-    using ckernel::PoolType;
-    using ckernel::ReduceDim;
-    if constexpr (dim == 0) {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::AVG, ReduceDim::REDUCE_ROW,
-                                                                 reduce_factor>();
-    } else if constexpr (dim == 1) {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::AVG, ReduceDim::REDUCE_COL,
-                                                                 reduce_factor>();
-    } else {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::AVG, ReduceDim::REDUCE_SCALAR,
-                                                                 reduce_factor>();
-    }
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<0>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 }
 """
 
@@ -304,20 +284,60 @@ def create_program_descriptor(
         )
         return ttnn.ProgramDescriptor(kernels=[compute], semaphores=[], cbs=cbs)
 
-    # helper path: needs the AVG scaler CB + the dataflow kernel that fills it.
-    cbs.append(_scratch_cb(CB_SCALER, _dtype_of(accum)))
+    # Keep the native reduce baseline distinct from the hand-written fast benchmark.
+    planner = ttnn.reduce_planner
+
+    def spec(shape, dtype):
+        return ttnn.TensorSpec(
+            ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, ttnn.TensorMemoryLayout.INTERLEAVED, None, ttnn.BufferType.L1
+        )
+
+    output_shape = [32, 1] if dim == "row" else ([1, 32] if dim == "col" else [1, 1])
+    sequence = planner.make_reduce_sequence_plan(
+        reductions=[
+            (
+                CB_IN,
+                planner.ReduceCallConfig(
+                    input_spec=spec(list(input_shape(dim, num_tiles)), input_tensor.dtype),
+                    output_spec=spec(output_shape, output_tensor.dtype),
+                    reduce_math=planner.ReduceMath.AVG,
+                    reduce_dim={
+                        "row": planner.ReduceDimension.ROW,
+                        "col": planner.ReduceDimension.COLUMN,
+                        "scalar": planner.ReduceDimension.SCALAR,
+                    }[dim],
+                    scalar=1.0 / elements_reduced(dim, num_tiles),
+                    fp32_mode=planner.ReduceFp32Mode.FAST,
+                    max_input_cb_bytes=num_tiles * ttnn.tile_size(input_tensor.dtype),
+                ),
+            )
+        ],
+        cb_ids=planner.ReduceSequenceCbIds(auxiliary_cb_id=CB_SCALER, accumulator_cb_id=31, output_cb_id=CB_OUT),
+        hardware=planner.ReduceHardwareConfig(
+            arch=input_tensor.device().arch(),
+            fp32_dest_acc_en=fp32_dest,
+            dst_full_sync_en=False,
+            available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
+        ),
+        algorithm=planner.ReduceAlgorithm.REDUCE_TILE,
+    )
+    compute_args = [num_tiles, dim_id, kernel_iters]
+    sequence.append_to(compute_args)
+    auxiliary_args = []
+    sequence.auxiliary.append_to(auxiliary_args)
+    cbs.append(_scratch_cb(CB_SCALER, input_tensor.dtype, len(sequence.auxiliary.tiles)))
     compute = ttnn.KernelDescriptor(
         kernel_source=_HELPER_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=_single_core(),
-        compile_time_args=[num_tiles, dim_id, kernel_iters],
+        compile_time_args=compute_args,
         config=ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
     )
     scaler = ttnn.KernelDescriptor(
         kernel_source=_SCALER_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=_single_core(),
-        compile_time_args=[dim_id, elements_reduced(dim, num_tiles)],
+        compile_time_args=auxiliary_args,
         runtime_args=[],
         config=ttnn.ReaderConfigDescriptor(),
     )

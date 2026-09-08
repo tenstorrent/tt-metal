@@ -113,6 +113,7 @@ _COMPUTE_KERNEL = r"""
 #include "api/compute/reduce.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_in = 0, cb_scaler = 1, cb_zero = 2, cb_interm = 3, cb_out = 16;
@@ -124,6 +125,7 @@ void kernel_main() {
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);    // float bits of 1/(width*32) (SFPU finalize)
 
     using namespace compute_kernel_lib;
+    using Call = ttnn::kernel_lib::ReduceCallAtT<6, 0>;
     using ckernel::PoolType;
     using ckernel::ReduceDim;
 
@@ -158,8 +160,7 @@ void kernel_main() {
             //      across the width in DEST) together with the within-tile column reduce.
             cb_reserve_back(cb_in, width_tiles);
             cb_push_back(cb_in, width_tiles);
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_out,
-                   ReduceInputPolicy::BulkWaitBulkPop>(ReduceInputBlockShape::of(1, width_tiles));
+            reduce<Call>();
         } else {
             // Re-establish the full accumulate hw config EVERY iteration. The previous iteration's
             // finalize reprogrammed unpack/math/pack; the short inits below (copy_tile_init /
@@ -199,8 +200,7 @@ void kernel_main() {
                     tile_regs_release();
                 }
                 cb_push_back(cb_interm, 1);
-                reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_interm, cb_scaler, cb_out,
-                       ReduceInputPolicy::BulkWaitBulkPop>(ReduceInputBlockShape::of(1, 1));
+                reduce<Call>();
             } else {
                 // ---- dest_accum (2/4) / dest_accum_pairs (3/5): accumulate the row into DEST[0] via
                 //      add_tiles(acc_to_dest), then finalize on the FPU or the SFPU.
@@ -257,8 +257,7 @@ void kernel_main() {
                     pack_tile(0, cb_interm, 0);
                     cb_push_back(cb_interm, 1);
                     tile_regs_release();
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_interm, cb_scaler, cb_out,
-                           ReduceInputPolicy::BulkWaitBulkPop>(ReduceInputBlockShape::of(1, 1));
+                    reduce<Call>();
                 }
             }
         }
@@ -299,9 +298,8 @@ void kernel_main() {
     // power-of-two widths in the sweep, 1/N is exact in both bf16 and fp32, so the scaler adds no
     // error and the accuracy comparison is purely the accumulation path.
     if constexpr (needs_scaler) {
-        const float scaler = 1.0f / static_cast<float>(width_tiles * 32);
-        dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-            scaler);
+        using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<3>;
+        dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     }
     if constexpr (needs_zero) {
         dataflow_kernel_lib::prepare_zero_tile<cb_zero>();
@@ -381,11 +379,49 @@ def create_program_descriptor(
     # float as raw bits (mul_unary_tile takes a bit-pattern). Unused by the FPU-reduce methods.
     scaler_bits = struct.unpack("<I", struct.pack("<f", 1.0 / (width_tiles * TILE)))[0]
 
+    planner = ttnn.reduce_planner
+
+    def spec(shape, dtype):
+        return ttnn.TensorSpec(
+            ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, ttnn.TensorMemoryLayout.INTERLEAVED, None, ttnn.BufferType.L1
+        )
+
+    reduce_tiles = width_tiles if method_id == 0 else 1
+    sequence = planner.make_reduce_sequence_plan(
+        reductions=[
+            (
+                CB_IN if method_id == 0 else CB_INTERM,
+                planner.ReduceCallConfig(
+                    input_spec=spec([32, reduce_tiles * 32], scaler_format),
+                    output_spec=spec([32, 1], output_tensor.dtype),
+                    reduce_math=planner.ReduceMath.SUM,
+                    reduce_dim=planner.ReduceDimension.ROW,
+                    scalar=1.0 / (width_tiles * TILE),
+                    fp32_mode=planner.ReduceFp32Mode.FAST,
+                    max_input_cb_bytes=reduce_tiles * ttnn.tile_size(scaler_format),
+                ),
+            )
+        ],
+        cb_ids=planner.ReduceSequenceCbIds(auxiliary_cb_id=CB_SCALER, accumulator_cb_id=31, output_cb_id=CB_OUT),
+        hardware=planner.ReduceHardwareConfig(
+            arch=input_tensor.device().arch(),
+            fp32_dest_acc_en=fp32_dest,
+            dst_full_sync_en=False,
+            available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
+        ),
+        algorithm=planner.ReduceAlgorithm.REDUCE_TILE,
+    )
+    compute_args = [width_tiles, method_id, kernel_iters, int(fp32_dest), scaler_bits]
+    sequence.append_to(compute_args)
+    auxiliary_args = [width_tiles, int(needs_scaler_cb), int(needs_zero)]
+    if needs_scaler_cb:
+        sequence.auxiliary.append_to(auxiliary_args)
+
     compute = ttnn.KernelDescriptor(
         kernel_source=_COMPUTE_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=_single_core(),
-        compile_time_args=[width_tiles, method_id, kernel_iters, int(fp32_dest), scaler_bits],
+        compile_time_args=compute_args,
         # HiFi4 (the default) fixes the reduce's scaler-multiply fidelity across every variant, so the
         # measured accuracy gap is the input/accumulation dtype, not a fidelity difference. Pass an
         # explicit `math_fidelity` to sweep that axis (LoFi/HiFi2/HiFi3/HiFi4) instead.
@@ -397,7 +433,7 @@ def create_program_descriptor(
         kernel_source=_SCALER_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=_single_core(),
-        compile_time_args=[width_tiles, int(needs_scaler_cb), int(needs_zero)],
+        compile_time_args=auxiliary_args,
         runtime_args=[],
         config=ttnn.ReaderConfigDescriptor(),
     )
@@ -407,7 +443,7 @@ def create_program_descriptor(
         ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor),
     ]
     if needs_scaler_cb:
-        cbs.append(_scratch_cb(CB_SCALER, scaler_format, 1))
+        cbs.append(_scratch_cb(CB_SCALER, scaler_format, len(sequence.auxiliary.tiles)))
     if needs_zero:
         cbs.append(_scratch_cb(CB_ZERO, input_format, 1))  # add operand must match the input format
     if needs_interm:
