@@ -4,6 +4,7 @@
 
 #include "groupnorm_device_operation.hpp"
 #include "groupnorm_program_utils.hpp"
+#include "groupnorm_reduce_plans.hpp"
 
 #include <bit>
 #include <map>
@@ -326,6 +327,23 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     IDevice* device = a.device();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    const float reduce_divisor = static_cast<float>(num_rows_per_batch_per_core * num_datum_row_per_group) *
+                                 (pad.active ? static_cast<float>(pad.logical_hw) / pad.padded_hw : 1.0F);
+    const auto reduce_plans =
+        use_welford ? GroupNormReducePlans{}
+                    : make_groupnorm_reduce_plans(
+                          block_ht,
+                          block_wt,
+                          1,
+                          1,
+                          1,
+                          1.0F / reduce_divisor,
+                          1.0F / (num_cores_per_batch * num_cores_per_group),
+                          im_data_format,
+                          {device->arch(), fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()},
+                          compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -333,14 +351,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // block size for in0 (tensor a)
     uint32_t in0_block_tiles = per_core_Nt * per_core_Mt;
     uint32_t in0_CB_size = a.buffer()->aligned_size_per_bank();  // use buffer size to handle both RM and Tile
-    // Scalar CBs (scaler c_2, scaler-c c_4, eps c_3, ones c_26) are written as bf16 bit patterns, so
-    // they stay bf16 even on the legacy fp32 path where cb_data_format is Float32.
+    // Epsilon remains BF16. Planned auxiliary tiles match the intermediate format.
     const tt::DataFormat eps_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t eps_single_tile_size = tt::tile_size(eps_cb_data_format);
     uint32_t scalar_single_tile_size = eps_single_tile_size;
-    // Welford repurposes c_2 as the fp32 cb_xmm intermediate; legacy uses it as the bf16 scaler.
-    const tt::DataFormat in2_cb_data_format = use_welford ? cb_data_format : eps_cb_data_format;
-    const uint32_t in2_single_tile_size = use_welford ? single_tile_size : scalar_single_tile_size;
+    // Welford repurposes c_2 as cb_xmm; the two-pass path uses its planned auxiliary recipe.
+    const tt::DataFormat in2_cb_data_format = cb_data_format;
+    const uint32_t in2_single_tile_size = single_tile_size;
 
     const GroupNormShardedStaticCbSizes static_cb = compute_sharded_gn_static_cb_sizes(
         a,
@@ -655,6 +672,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     writer_desc.kernel_source = writer_kernel;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
+    if (!use_welford) {
+        reduce_plans.append_auxiliary_to(writer_mcast_sender_compile_time_args);
+    }
     writer_desc.compile_time_args = writer_mcast_sender_compile_time_args;
     // Read under MASK_SYNTHESIZE / NEGATIVE_MASK_SYNTHESIZE to drive the per-group
     // start_stride recurrence. Passed unconditionally, as the interleaved factories do.
@@ -756,9 +776,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     mcast_receiver_compute_compile_time_args.push_back(pad.kernel_logical_hw);
     mcast_receiver_compute_compile_time_args.push_back(pad.padded_hw);
     mcast_receiver_compute_compile_time_args.push_back(static_cast<uint32_t>(pad.active));
+    if (!use_welford) {
+        mcast_sender_compute_compile_time_args.insert(
+            mcast_sender_compute_compile_time_args.end(), reduce_plans.calls.begin(), reduce_plans.calls.end());
+        mcast_receiver_compute_compile_time_args.insert(
+            mcast_receiver_compute_compile_time_args.end(), reduce_plans.calls.begin(), reduce_plans.calls.end());
+    }
     // compute kernel
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
 
     // Float32 input requires fp32_dest_acc_en=true on both GroupNorm paths:
@@ -981,7 +1006,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // in2 scaler - for partial Ex
     constexpr uint32_t in2_cb_index = tt::CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = static_cb.in2_CB_size,
+        .total_size = use_welford ? static_cb.in2_CB_size
+                                  : static_cast<uint32_t>(reduce_plans.local_auxiliary.tiles.size()) * single_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(in2_cb_index),
@@ -1004,12 +1030,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     if (!use_welford) {
         constexpr uint32_t in4_cb_index = tt::CBIndex::c_4;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = static_cb.in2_CB_size,
+            .total_size = single_tile_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(in4_cb_index),
-                .data_format = eps_cb_data_format,
-                .page_size = scalar_single_tile_size,
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
             }}},
         });
     }
@@ -1152,17 +1178,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             .buffer_index = static_cast<uint8_t>(cb_ex2pe_index),
             .data_format = cb_data_format,
             .page_size = single_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t cb_ones_index = tt::CBIndex::c_26;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = scalar_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_ones_index),
-            .data_format = eps_cb_data_format,
-            .page_size = scalar_single_tile_size,
         }}},
     });
 

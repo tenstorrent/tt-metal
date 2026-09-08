@@ -18,16 +18,6 @@
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_mask_synthesize.hpp"
 #endif
 
-void generate_tile_with_packed_bfloat16_values(uint32_t dfb_id, uint32_t packed_bf16_value) {
-    DataflowBuffer dfb(dfb_id);
-    dfb.reserve_back(1);
-    CoreLocalMem<uint32_t> ptr(dfb.get_write_ptr());
-    for (uint32_t i = 0; i < 512U; ++i) {
-        *ptr++ = packed_bf16_value;
-    }
-    dfb.push_back(1);
-}
-
 // Load one row-major gamma/beta stick (TILE_WIDTH datums) into the first row of a tile's two 16x16 faces;
 // byte offsets scale with datum size (2B bf16 / 4B fp32). Blackhole (64B-granular DRAM reads): read the full
 // row into face 0 then L1->L1-copy its second half-row into face 1; else two direct reads, one per face.
@@ -109,7 +99,6 @@ void kernel_main() {
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
     constexpr uint32_t dfb_input_mask_id = tt::CBIndex::c_7;
-    constexpr uint32_t dfb_ones_id = tt::CBIndex::c_26;
 #ifdef PAD_CORRECTION
     constexpr uint32_t dfb_rowvalid_id = tt::CBIndex::c_18;
 #endif
@@ -122,13 +111,15 @@ void kernel_main() {
     const uint32_t input_mask_single_tile_size_bytes = dfb_input_mask.get_tile_size();
 
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
+    constexpr auto negative_mask_args = TensorAccessorArgs<input_mask_args.next_compile_time_args_offset()>();
+    using LocalAuxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<negative_mask_args.next_compile_time_args_offset()>;
+    using GlobalAuxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<LocalAuxiliary::next_compile_time_args_offset()>;
 
 #if defined(FUSE_NEGATIVE_MASK)
     constexpr uint32_t dfb_input_negative_mask_id = tt::CBIndex::c_14;
     DataflowBuffer dfb_input_negative_mask(dfb_input_negative_mask_id);
     const uint32_t input_negative_mask_single_tile_size_bytes = dfb_input_negative_mask.get_tile_size();
 
-    constexpr auto negative_mask_args = TensorAccessorArgs<input_mask_args.next_compile_time_args_offset()>();
     const auto negative_mask_tensor_accessor = TensorAccessor(negative_mask_args, input_negative_mask_addr);
 #endif
 
@@ -224,25 +215,7 @@ void kernel_main() {
 #endif
 
             if (i == 0 and b == 0) {
-                constexpr uint32_t dfb_in_2 = tt::CBIndex::c_2;
-#ifdef PAD_CORRECTION
-                // Host-precomputed corrected reduce scaler: the row mask fixes the numerator,
-                // this fixes the denominator.
-                const float pad_corrected_scaler = __builtin_bit_cast(float, get_arg_val<uint32_t>(8));
-                dataflow_kernel_lib::prepare_reduce_scaler<
-                    dfb_in_2,
-                    ckernel::PoolType::AVG,
-                    ckernel::ReduceDim::REDUCE_SCALAR>(pad_corrected_scaler);
-#else
-                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                    dfb_in_2,
-                    ckernel::PoolType::AVG,
-                    ckernel::ReduceDim::REDUCE_SCALAR,
-                    reduce_factor_w>();
-#endif
-
-                constexpr uint32_t ones = 0x3F803F80;  // 2 packed bfloat16 into 1 uint32_t of value 1.0
-                generate_tile_with_packed_bfloat16_values(dfb_ones_id, ones);
+                dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<LocalAuxiliary>();
 
 #ifdef PAD_CORRECTION
                 // Once-per-core rowvalid tile (c_18): rows < rows_valid_this_core all-ones,
@@ -261,12 +234,7 @@ void kernel_main() {
 #endif
 
                 if constexpr (is_mcast_sender) {
-                    constexpr uint32_t dfb_in_4 = tt::CBIndex::c_4;
-                    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                        dfb_in_4,
-                        ckernel::PoolType::AVG,
-                        ckernel::ReduceDim::REDUCE_SCALAR,
-                        reduce_factor_c>();
+                    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<GlobalAuxiliary>();
                 }
 
                 constexpr uint32_t eps_dfb_id = tt::CBIndex::c_3;
