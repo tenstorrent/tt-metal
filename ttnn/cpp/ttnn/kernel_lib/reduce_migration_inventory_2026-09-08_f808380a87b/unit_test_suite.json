@@ -1323,9 +1323,12 @@
         "test_moreh_norm_rank_1_dim_0",
         "test_moreh_norm_rank_1_global_dim",
         "test_moreh_norm_compute_kernel_options",
-        "test_moreh_norm_callback"
+        "test_moreh_norm_callback",
+        "test_moreh_norm_reduce_block_boundaries"
       ],
-      "notes": [],
+      "notes": [
+        "Migration regression: blocked reductions with partial tails, repeated accumulation, and BF16/FP32 dest."
+      ],
       "id": "T057"
     },
     {
@@ -3365,6 +3368,25 @@
       ],
       "notes": [],
       "id": "T169"
+    },
+    {
+      "kind": "pytest",
+      "source": "tests/ttnn/unit_tests/operations/examples/test_reduce_block.py",
+      "family": "planned reduce helper post-operation regressions",
+      "factories": [],
+      "tests": [
+        "test_reduce_block_avg_post_op",
+        "test_reduce_block_accumulate_final_post_op"
+      ],
+      "notes": [
+        "Migration regression checks for post-scaling and final-only fused callbacks."
+      ],
+      "id": "T170"
     }
-  ]
+  ],
+  "migration_regressions": {
+    "added_test_definitions": 3,
+    "added_collected_cases": 69,
+    "note": "The original report describes the base inventory; current runner also includes these migration regressions."
+  }
 }

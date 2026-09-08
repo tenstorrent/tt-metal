@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <limits>
+
+#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -38,11 +41,9 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
 
     const DFBSpecName INPUT_DFB{"input"};
     const DFBSpecName ONE_DFB{"one"};
-    const DFBSpecName MASK_H_DFB{"mask_h"};
     const DFBSpecName OUTPUT_DFB{"output"};
     const DFBSpecName VAL_DFB{"val"};        // f(x)
     const DFBSpecName CAL_DFB{"cal"};        // calculate f(x) over dimension
-    const DFBSpecName REDUCE_DFB{"reduce"};  // reduce f(x)
 
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
@@ -92,14 +93,51 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
 
     const uint32_t in0_t{1};  // input
-    const uint32_t in1_t{1};  // one
-    const uint32_t in2_t{1};  // mask_h
 
     const uint32_t out0_t{1};  // output
 
-    const uint32_t im0_t{1};  // f(x)
+    constexpr uint32_t reduce_block_tiles = 8;
+    const uint32_t im0_t = std::min<uint32_t>(Ht, 2 * reduce_block_tiles - 1);  // resident input block
     const uint32_t im1_t{1};  // calculate f(x) over dimension
-    const uint32_t im2_t{1};  // reduce f(x)
+
+    namespace reduce_host = ttnn::kernel_lib::host;
+    const auto intermediate_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype();
+    const TensorLayout intermediate_layout(intermediate_dtype, PageConfig(Layout::TILE), MemoryConfig{});
+    const TensorLayout output_layout(out.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    // Keep a full block with the tail so every call can use AccumulateViaAdd
+    // for long sums. A tiny final call would force the entire sequence back
+    // to ReduceTile, losing BF16 precision from repeated within-tile folds.
+    const uint32_t num_blocks = std::max<uint32_t>(1, Ht / reduce_block_tiles);
+    const uint32_t num_descriptors = std::min(num_blocks, 3U);
+    std::vector<reduce_host::ReduceCbConfig> reductions;
+    for (uint32_t i = 0; i < num_descriptors; ++i) {
+        const uint32_t extent =
+            i + 1 == num_descriptors ? origin_h - (num_blocks - 1) * reduce_block_tiles * 32 : reduce_block_tiles * 32;
+        reductions.emplace_back(
+            0,
+            reduce_host::ReduceCallConfig{
+                TensorSpec(Shape{extent, 32}, intermediate_layout),
+                TensorSpec(Shape{1, 32}, output_layout),
+                p == 0.0f ? ReduceOpMath::SUM : ReduceOpMath::MAX,
+                ReduceOpDim::H,
+                1.0F,
+                ReduceFp32Mode::Fast,
+                im0_t * tile_size(intermed_data_format)});
+    }
+    auto reduce_sequence = reduce_host::make_reduce_sequence_plan(
+        reductions,
+        {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2},
+        {.arch = arch,
+         .fp32_dest_acc_en = fp32_dest_acc_en,
+         .dst_full_sync_en = dst_full_sync_en,
+         .available_l1_bytes = 24 * tile_size(intermed_data_format)});
+    reduce_sequence.calls.back().accumulation_index = num_blocks - 1;
+    for (auto& call : reduce_sequence.calls) {
+        // Compute fills a whole resident block and releases it after reduce.
+        call.plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+    }
+    const auto* auxiliary = reduce_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const uint32_t auxiliary_tiles = reduce_sequence.auxiliary.tiles.size();
 
     // No node_ranges: a DFB's placement is derived from the WorkUnitSpec membership of the kernels
     // that bind it. The legacy CBs carried `.core_ranges = all_cores`, which the reader/writer
@@ -112,15 +150,9 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
     };
     DataflowBufferSpec dfb_one{
         .unique_id = ONE_DFB,
-        .entry_size = tile_size(cb_data_format),
-        .num_entries = in1_t,
-        .data_format_metadata = cb_data_format,
-    };
-    DataflowBufferSpec dfb_mask_h{
-        .unique_id = MASK_H_DFB,
-        .entry_size = tile_size(cb_data_format),
-        .num_entries = in2_t,
-        .data_format_metadata = cb_data_format,
+        .entry_size = auxiliary->page_size,
+        .num_entries = auxiliary_tiles,
+        .data_format_metadata = auxiliary->data_format,
     };
     DataflowBufferSpec dfb_output{
         .unique_id = OUTPUT_DFB,
@@ -138,12 +170,6 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
         .unique_id = CAL_DFB,
         .entry_size = tile_size(intermed_data_format),
         .num_entries = im1_t,
-        .data_format_metadata = intermed_data_format,
-    };
-    DataflowBufferSpec dfb_reduce{
-        .unique_id = REDUCE_DFB,
-        .entry_size = tile_size(intermed_data_format),
-        .num_entries = im2_t,
         .data_format_metadata = intermed_data_format,
     };
 
@@ -172,11 +198,6 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
                     .accessor_name = "one",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                DFBBinding{
-                    .dfb_spec_name = MASK_H_DFB,
-                    .accessor_name = "mask_h",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
             },
         .tensor_bindings =
             {
@@ -187,9 +208,10 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"input_is_dram", "num_cols_per_core", "tile_offset", "Ht", "Wt", "origin_h"},
+                .runtime_arg_names = {"input_is_dram", "num_cols_per_core", "tile_offset", "Ht", "Wt"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = reduce_sequence.get_auxiliary_compile_time_args()},
     };
 
     KernelSpec writer{
@@ -248,16 +270,14 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
     std::get<ComputeGen1Config>(compute_hw_config).unpack_modes = {
         {INPUT_DFB, UnpackMode::UnpackToSrc},
         {ONE_DFB, UnpackMode::UnpackToSrc},
-        {MASK_H_DFB, UnpackMode::UnpackToSrc},
         {VAL_DFB, UnpackMode::UnpackToSrc},
         {CAL_DFB, UnpackMode::UnpackToSrc},
-        {REDUCE_DFB, UnpackMode::UnpackToSrc},
     };
 
     // One KernelSpec per legacy compute KernelDescriptor. The two are identical apart from their
     // unique_id — the per-group work count travels as a runtime arg, as it did in legacy — but they
     // must stay separate specs so each can sit in its own WorkUnitSpec and so land on its own core
-    // group. `val`, `cal` and `reduce` are compute-private accumulators: the compute kernel is their
+    // group. `val` and `cal` are compute-private buffers: the compute kernel is their
     // only toucher on any node, so each is self-looped (bound PRODUCER *and* CONSUMER) under a single
     // accessor name, giving the kernel one DataflowBuffer object that drives both directions.
     auto make_compute = [&](KernelSpecName unique_id) {
@@ -286,11 +306,6 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
                         .endpoint_type = DFBEndpointType::CONSUMER,
                     },
                     DFBBinding{
-                        .dfb_spec_name = MASK_H_DFB,
-                        .accessor_name = "mask_h",
-                        .endpoint_type = DFBEndpointType::CONSUMER,
-                    },
-                    DFBBinding{
                         .dfb_spec_name = OUTPUT_DFB,
                         .accessor_name = "y",
                         .endpoint_type = DFBEndpointType::PRODUCER,
@@ -315,22 +330,17 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
                         .accessor_name = "cal",
                         .endpoint_type = DFBEndpointType::CONSUMER,
                     },
-                    DFBBinding{
-                        .dfb_spec_name = REDUCE_DFB,
-                        .accessor_name = "reduce",
-                        .endpoint_type = DFBEndpointType::PRODUCER,
-                    },
-                    DFBBinding{
-                        .dfb_spec_name = REDUCE_DFB,
-                        .accessor_name = "reduce",
-                        .endpoint_type = DFBEndpointType::CONSUMER,
-                    },
                 },
+            .compile_time_args =
+                {{"reduce_block_tiles", reduce_block_tiles},
+                 {"reduce_buffer_tiles", im0_t},
+                 {"reduce_auxiliary_tiles", auxiliary_tiles}},
             .runtime_arg_schema =
                 {
-                    .runtime_arg_names = {"num_cols_per_core", "Ht", "origin_h"},
+                    .runtime_arg_names = {"num_cols_per_core", "Ht"},
                 },
             .hw_config = compute_hw_config,
+            .advanced_options = {.compile_time_varargs = reduce_sequence.get_compile_time_args()},
         };
     };
 
@@ -362,13 +372,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
         .name = "moreh_norm_h_other",
         .kernels = std::move(kernels),
         .dataflow_buffers =
-            {std::move(dfb_input),
-             std::move(dfb_one),
-             std::move(dfb_mask_h),
-             std::move(dfb_output),
-             std::move(dfb_val),
-             std::move(dfb_cal),
-             std::move(dfb_reduce)},
+            {std::move(dfb_input), std::move(dfb_one), std::move(dfb_output), std::move(dfb_val), std::move(dfb_cal)},
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
@@ -399,17 +403,13 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
             AddRuntimeArgsForNode(
                 compute_g1_run_args.runtime_arg_values,
                 core,
-                {{"num_cols_per_core", num_cols_per_core},
-                 {"Ht", static_cast<uint32_t>(Ht)},
-                 {"origin_h", static_cast<uint32_t>(origin_h)}});
+                {{"num_cols_per_core", num_cols_per_core}, {"Ht", static_cast<uint32_t>(Ht)}});
         } else if (core_group_2.contains(core)) {
             num_cols_per_core = num_units_per_core_group_2;
             AddRuntimeArgsForNode(
                 compute_g2_run_args.runtime_arg_values,
                 core,
-                {{"num_cols_per_core", num_cols_per_core},
-                 {"Ht", static_cast<uint32_t>(Ht)},
-                 {"origin_h", static_cast<uint32_t>(origin_h)}});
+                {{"num_cols_per_core", num_cols_per_core}, {"Ht", static_cast<uint32_t>(Ht)}});
         } else {
             TT_THROW("Core not in specified core ranges.");
         }
@@ -421,8 +421,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
              {"num_cols_per_core", num_cols_per_core},
              {"tile_offset", tile_offset},
              {"Ht", static_cast<uint32_t>(Ht)},
-             {"Wt", static_cast<uint32_t>(Wt)},
-             {"origin_h", static_cast<uint32_t>(origin_h)}});
+             {"Wt", static_cast<uint32_t>(Wt)}});
 
         // writer
         AddRuntimeArgsForNode(

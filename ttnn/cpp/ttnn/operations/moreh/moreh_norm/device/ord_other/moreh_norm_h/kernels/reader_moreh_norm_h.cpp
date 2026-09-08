@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -14,23 +15,11 @@ void kernel_main() {
     const auto tile_offset = get_arg(args::tile_offset);
     const auto Ht = get_arg(args::Ht);
     const auto Wt = get_arg(args::Wt);
-    const auto origin_h = get_arg(args::origin_h);
 
     const auto s = TensorAccessor(tensor::input);
 
-    Scalar one;
-    one.f = 1.0f;
-    DataflowBuffer dfb_one(dfb::one);
-    fill_cb_with_value(dfb_one, one.u);
-
-    constexpr uint32_t TILE_H = 32;
-    const bool do_mask_h = (origin_h % TILE_H) != 0;
-    const auto mask_h = do_mask_h ? (origin_h % TILE_H) : TILE_H;
-
-    if (do_mask_h) {
-        DataflowBuffer dfb_mask_h(dfb::mask_h);
-        generate_mask_h(dfb_mask_h, mask_h);
-    }
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::one>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     Noc noc;
     DataflowBuffer dfb_input(dfb::input);
