@@ -230,6 +230,11 @@ class MultiExpertCase:
                 device=dev,
                 dtype=ttnn.bfloat8_b,
             )
+            # The composite writes a TILE input in place, so a re-run would consume the previous run's
+            # output; keep a pristine host copy and restore the device buffer before every run.
+            self.tt_buf_host = ttnn.from_torch(
+                buf, mesh_mapper=ttnn.ReplicateTensorToMesh(dev), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+            )
 
         def idx(vals):
             return ttnn.from_torch(
@@ -254,6 +259,8 @@ class MultiExpertCase:
         self.out = None
 
     def run(self):
+        if not self.x_row_major:
+            ttnn.copy_host_to_device_tensor(self.tt_buf_host, self.tt_buf)
         self.out = self.expert(self.tt_buf, self.tt_counts, self.tt_offsets)
         return self.out
 
