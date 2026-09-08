@@ -15,6 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 
 # Its own env var rather than riding PREFILL_TRACE_DIR: the drafter golden is a separate artifact with its
@@ -62,10 +63,23 @@ def read_slot_dflash_kv(
 
 
 def _load_golden_kv(
-    golden_dir: Path, *, num_layers: int, num_kv_heads: int, head_dim: int, out_len: int, clamp: bool = False
+    golden_dir: Path,
+    *,
+    num_layers: int,
+    num_kv_heads: int,
+    head_dim: int,
+    out_len: int,
+    clamp: bool = False,
+    rope_convention: str = "interleaved",
 ):
     """Load the golden reference context K and V (fp32) from the safetensors artifact in ``golden_dir``,
-    trimmed to ``out_len`` (or the golden's own length when ``clamp`` is set)."""
+    trimmed to ``out_len`` (or the golden's own length when ``clamp`` is set).
+
+    The golden stores **half-split** roped K (it was traced from the HF drafter). When the device runs the
+    Meta ``"interleaved"`` convention (the meta-rope branch default), its stored K is the half-split K with
+    its head_dim ``src``-permuted, so reindex the golden **K only** by the same ``src`` here to compare like
+    with like: ``interleaved[j] == halfsplit[src[j]]`` ⇒ ``golden_k[..., src]`` equals the device K. V never
+    touches rope, so it is untouched. Exact (a pure permutation), reversible via the config flag."""
     from safetensors import safe_open
 
     out = []
@@ -85,7 +99,12 @@ def _load_golden_kv(
             out.append(sl[:, :, :n, :].to(torch.float32))
     if out[0].shape[2] != out[1].shape[2]:
         raise RuntimeError(f"drafter golden K/V seq differ: {out[0].shape[2]} vs {out[1].shape[2]}")
-    logger.info(f"[dflash-pcc] golden K/V {tuple(out[0].shape)} from {golden_dir}")
+    if rope_convention == "interleaved":
+        src = torch.argsort(interleaved_to_halfsplit_perm(head_dim))
+        out[0] = out[0][..., src].contiguous()  # K only; V never roped
+    elif rope_convention != "half_split":
+        raise ValueError(f"unknown rope_convention {rope_convention!r} (expected 'interleaved' or 'half_split')")
+    logger.info(f"[dflash-pcc] golden K/V {tuple(out[0].shape)} from {golden_dir} (rope_convention={rope_convention})")
     return out[0], out[1]
 
 
@@ -127,11 +146,13 @@ def dflash_kv_cache_pcc_check(
     golden_dir=None,
     threshold: float = None,
     record_only: bool = False,
+    rope_convention: str = "interleaved",
 ) -> float:
     """Validate the drafter's populated context K/V for one slot against the golden trace by reading the
     device caches directly, returning the minimum per-(layer, head) PCC. Raises on failure unless
     ``record_only``, and returns 1.0 (unmeasured) when no golden is available. Host-side counterpart of
-    ``dflash_kv_table_pcc_check`` below."""
+    ``dflash_kv_table_pcc_check`` below. ``rope_convention`` reindexes the golden K to the device's stored-K
+    convention (see :func:`_load_golden_kv`)."""
     golden_dir = Path(golden_dir or os.environ.get(GOLDEN_KV_ENV) or GOLDEN_KV_DEFAULT)
     if not golden_dir.is_dir():
         logger.info(f"[dflash-pcc] SKIPPED: golden dir {golden_dir} not present (set {GOLDEN_KV_ENV})")
@@ -140,7 +161,12 @@ def dflash_kv_cache_pcc_check(
         threshold = float(os.environ.get(PCC_ENV, DEFAULT_PCC))
 
     golden_k, golden_v = _load_golden_kv(
-        golden_dir, num_layers=num_layers, num_kv_heads=num_kv_heads, head_dim=head_dim, out_len=out_len
+        golden_dir,
+        num_layers=num_layers,
+        num_kv_heads=num_kv_heads,
+        head_dim=head_dim,
+        out_len=out_len,
+        rope_convention=rope_convention,
     )
     logger.info(
         f"[dflash-pcc] drafter context-KV vs golden: slot={slot_id} out_len={out_len} layers={num_layers} "
@@ -216,12 +242,20 @@ def _dflash_config_ids(table):
 
 
 def dflash_kv_table_pcc_check(
-    table, slot_id: int, real_len: int, *, read_config_slice, threshold: float, golden_dir: str = None
+    table,
+    slot_id: int,
+    real_len: int,
+    *,
+    read_config_slice,
+    threshold: float,
+    golden_dir: str = None,
+    rope_convention: str = "interleaved",
 ) -> float | None:
     """Validate the drafter's context K/V for one slot against the golden by reading it back through the
     published KV chunk table (the same path migration uses), returning the minimum per-(layer, head) PCC
     or None when there is nothing to check. Table-based counterpart of ``dflash_kv_cache_pcc_check`` that
-    never raises."""
+    never raises. ``rope_convention`` reindexes the golden K to the device's stored-K convention (see
+    :func:`_load_golden_kv`)."""
     ids = _dflash_config_ids(table)
     if ids is None:
         return None
@@ -255,6 +289,7 @@ def dflash_kv_table_pcc_check(
         head_dim=head_dim,
         out_len=real_len,
         clamp=True,
+        rope_convention=rope_convention,
     )
     cmp_len = golden_k.shape[2]
     if cmp_len < real_len:

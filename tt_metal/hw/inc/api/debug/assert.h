@@ -27,7 +27,10 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 
 #elif defined(LIGHTWEIGHT_KERNEL_ASSERTS)
 
-#define ASSERT(condition, ...) (void(not(condition) ? ({ asm("ebreak"); }), 0 : 0))
+// Trap wrapped as a function to avoid inline assembly at ASSERT macro's use site.
+FORCE_INLINE void lightweight_assert_trap() { asm("ebreak"); }
+
+#define ASSERT(condition, ...) (void(not(condition) ? lightweight_assert_trap(), 0 : 0))
 
 #define ASSERT_ENABLED 1
 #define LIGHTWEIGHT_ASSERT_ENABLED 1

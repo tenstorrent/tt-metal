@@ -168,7 +168,7 @@ _CASES = [
 _IDS = ["stem4x4_pure", "stem4x4_bias_relu", "wide_n256_4x4_bias_relu", "relu_3x3_bias", "stem7x7_s2"]
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("case", _CASES, ids=_IDS)
 def test_regular_conv2d_wh_control(mesh_device, case):

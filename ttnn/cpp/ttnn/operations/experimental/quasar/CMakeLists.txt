@@ -14,7 +14,7 @@ set_target_properties(
             api
 )
 
-# Match every per-op kernel directory: kernels/, kernels_ng/, kernels_dfb/.
+# Match every per-op kernel directory: kernels/, kernels_ng/, kernels_dfb/, kernels_qsr/.
 file(GLOB_RECURSE kernels */device/kernels*/*)
 
 target_sources(

@@ -45,6 +45,11 @@ class TtTransformer(LightweightModule):
         self.grid_size = self.args.max_grid_size
         self.enable_prefetcher_performance_mode = enable_prefetcher_performance_mode
         self.use_prefetcher = args.use_prefetcher
+        # BH-prefetcher bring-up: with unfused CCL the attention uses the non-fused create-heads/concat
+        # path, which needs the simple (non-fused-qk) rotary tables. Select the fused-qk rope tables
+        # only when the fused collectives are actually in use.
+        self.use_unfused_ccl = getattr(args, "use_unfused_ccl", False)
+        self.use_fused_rope = self.use_prefetcher and not self.use_unfused_ccl
         state_dict_prefix = args.get_state_dict_prefix("", None)
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
@@ -177,7 +182,19 @@ class TtTransformer(LightweightModule):
         return self.tt_rot_mats_prefill
 
     def setup_prefill(self, mesh_sub_device_manager_id_prefill=None):
-        if not self.use_prefetcher:
+        # BH unfused-CCL path: prefill uses the fused all_gather_minimal_matmul + interleaved weights, never
+        # the ring matmuls or the prefetcher global CB (those are decode-only). Run prefill exactly like the
+        # no-prefetcher path (default sub-device, no custom manager). Loading the prefetcher's prefill
+        # sub-device manager here forces the prefill/sampling auto-grid ops (ttnn.untilize/ttnn.embedding,
+        # which pick the full 12-wide compute grid) through the strict sub-device validation, which fails on
+        # the dispatch column ("Kernel group cores do not match sub device cores"). The no-prefetcher path
+        # loads no custom manager, so that validation is skipped (see program.cpp: "No sub device manager,
+        # nothing to validate"). Decode still sets up the prefetcher via setup_decode.
+        if not self.use_prefetcher or self.use_unfused_ccl:
+            if self.use_prefetcher:
+                # A decode run may have left the prefetcher (worker/prefetcher) sub-device manager loaded;
+                # clear it so prefill + sampling run on the default sub-device.
+                self.mesh_device.clear_loaded_sub_device_manager()
             self.prefetcher_setup = None
             self.mesh_sub_device_manager_id_prefill = mesh_sub_device_manager_id_prefill
             if self.tt_ccl_prefill is not None:
@@ -196,6 +213,14 @@ class TtTransformer(LightweightModule):
                 self.tt_ccl_prefill = self.tt_ccl
             else:
                 self.tt_ccl = self.tt_ccl_prefill
+            if self.use_unfused_ccl:
+                # Force the prefill CCL onto the stable (no-prefetcher) collective paths. use_prefetcher is
+                # read at forward time to choose ring vs stable reduce_scatter/all_gather; on the BH 2D-torus
+                # the ring prefill collectives (ring_reduce_scatter / experimental all-gathers) deadlock, so
+                # the unfused prefill must use the exact same stable ops as the no-prefetcher path. Prefill
+                # buffer allocation keys off use_ring_*_prefill (topology), not use_prefetcher, so flipping
+                # this after construction is safe.
+                self.tt_ccl.use_prefetcher = False
             return
 
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
@@ -538,7 +563,7 @@ class TtTransformer(LightweightModule):
         # expanded layout ([1, expanded_batch, heads, head_dim]); feeding that to the non-fused op
         # (via the slice branch in forward_decode) yields a wrong rotary at pos>0 (pos0 is rotary-
         # independent, so it hides the bug) and collapses multi-layer decode PCC.
-        if self.use_prefetcher:
+        if self.use_fused_rope:
             rope_idxs = self.rope_setup.get_rm_rot_idxs(rot_current_pos, on_host=True)
         else:
             rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
@@ -586,7 +611,7 @@ class TtTransformer(LightweightModule):
         Get rope sin/cos
         Embed tokens
         """
-        if self.use_prefetcher:
+        if self.use_fused_rope:
             tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
         else:
             tt_rot_mats = self.rope_setup.get_rot_mats(rope_idxs)
@@ -661,7 +686,9 @@ class TtTransformer(LightweightModule):
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
-                num_links=3 if self.use_prefetcher else self.model_config["GALAXY_NUM_LINKS"],
+                num_links=3
+                if (self.use_prefetcher and not getattr(self.args, "is_blackhole", False))
+                else self.model_config["GALAXY_NUM_LINKS"],
                 cluster_axis=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",
@@ -777,7 +804,7 @@ class TtTransformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        if self.use_prefetcher:
+        if self.use_fused_rope:
             rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
         else:
             rot_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
@@ -796,7 +823,9 @@ class TtTransformer(LightweightModule):
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
-                num_links=3 if self.use_prefetcher else self.model_config["GALAXY_NUM_LINKS"],
+                num_links=3
+                if (self.use_prefetcher and not getattr(self.args, "is_blackhole", False))
+                else self.model_config["GALAXY_NUM_LINKS"],
                 cluster_axis=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",

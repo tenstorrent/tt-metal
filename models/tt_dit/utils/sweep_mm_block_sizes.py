@@ -171,6 +171,20 @@ SHAPES = [
     (4768, 3584, 5376, 12, 7, False, "mmrs"),
     (4768, 3584, 5376, 12, 8, False, "mmrs"),
     (4768, 3584, 5376, 12, 9, False, "mmrs"),
+    # LTX / Wan2.2 MMRS ff2 shapes on BH 4x8 sp1tp0 (TP ring of 4 on axis 0), 12x8 matmul grid —
+    # resweep under the windowed L1 handoff (see the mmrs runner: combos with >= 2 M blocks per
+    # core run windowed, the rest via the DRAM handoff). LTX ff2: K = 16384/tp4, N = 4096;
+    # stage_1 M = 9728/sp8, stage_2 M = 38912/sp8. Wan2.2 ff2: K = 13824/tp4, N = 5120;
+    # 720p M = 9472 on a single galaxy and 9472/4 = 2368 on the quad-galaxy config.
+    (1216, 4096, 4096, 12, 8, False, "mmrs"),  # LTX stage_1 (no config entry yet: DRAM fallback today)
+    (4864, 4096, 4096, 12, 8, False, "mmrs"),  # LTX stage_2
+    (2368, 3456, 5120, 12, 8, False, "mmrs"),  # Wan2.2 720p, quad galaxy (M = 9472/4)
+    (9472, 3456, 5120, 12, 8, False, "mmrs"),  # Wan2.2 720p, single galaxy
+    # Aang MMRS ff2 shapes (same K/N family as Wan: K = 13824/tp4, N = 5120).
+    (2656, 3456, 5120, 12, 8, False, "mmrs"),  # Aang a2v
+    (11520, 3456, 5120, 12, 8, False, "mmrs"),  # Aang SR (super-resolution)
+    (1664, 3456, 5120, 12, 8, False, "mmrs"),  # Aang a2v @1080p
+    (7200, 3456, 5120, 12, 8, False, "mmrs"),  # Aang SR @1080p
     # 12x8 won that grid sweep (1.313 ms vs 1.373 at 12x7 and 1.487 at 12x9); the longer durations
     # (M = 9216 / 13632) reuse its blocking rather than being swept -- warmup compiles one program per
     # combo and compile time grows with M, so M=9216 alone is ~75 min against ~9 min here, for a block
@@ -188,6 +202,13 @@ SHAPES = [
     (1024, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_spatial_mm_in_proj (swiglu post-matmul, not fused)
     (1152, 768, 4608, 12, 9, True, "plain"),  # SNG_x_c_mlp
     (128, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_ctx_spatial_mm_in_proj
+    # Flux2 MMRS @1024px (bh_4x8_sp0_tp1), 12x8 matmul grid: RowParallel ff2 / proj_out, K already
+    # per-device. Swept under the windowed L1 handoff — the runner windows combos whose M block
+    # leaves >= 2 blocks per core and runs the rest via the DRAM handoff, mirroring the model.
+    # (128, 2304, 6144) is deliberately absent: Mt=4 rows over 8 grid rows is one partial block per
+    # core at every blocking, so it always takes the DRAM handoff and its existing entry stands.
+    (1152, 3072, 6144, 12, 8, False, "mmrs"),  # SNG proj_out @1024px
+    (1024, 2304, 6144, 12, 8, False, "mmrs"),  # DBL ff2 @1024px
     # 2048 tokens
     (4096, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_spatial_mm_in_proj
     (4224, 768, 4608, 12, 9, True, "plain"),  # SNG_x_c_mlp
@@ -921,7 +942,42 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
         rs_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_cores, 0) for _ in range(3)]
         barrier_semaphore = ttnn.create_global_semaphore(mesh_device, ccl_cores, 0)
 
+        # Caller-owned counter arrays for the windowed L1 handoff, shaped like CCLManager's
+        # (uint32, L1 HEIGHT_SHARDED over the full grid; a [num_cores, num_cores] square covers
+        # both the per-MM-core progress rows and the per-RS-reader credit rows).
+        counter_slots = full_grid.x * full_grid.y
+
+        def _counter_array():
+            return ttnn.allocate_tensor_on_device(
+                ttnn.Shape([counter_slots, counter_slots]),
+                ttnn.uint32,
+                ttnn.ROW_MAJOR_LAYOUT,
+                mesh_device,
+                ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(ccl_cores, [1, counter_slots], ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+            )
+
+        mm_progress_counters = _counter_array()
+        mm_credit_counters = _counter_array()
+
+        # Windowed L1 handoff, mirroring FusedMMRSConfig.get_params + forward_fused_addcmul: a
+        # combo whose M block leaves >= 2 blocks per core hands the MM output to the RS through a
+        # 2-block rolling L1 window; the rest take the DRAM handoff (a 1-block window cannot
+        # rotate, and its block-quantized height can exceed full residency). The sweep therefore
+        # compares windowed small-M-block combos and DRAM large-M-block combos on equal footing —
+        # exactly the choice the model would make for each blocking. Note the L1 pre-filter does
+        # not model the resident window shard (window * M_block * Nt_per_core tiles), so windowed
+        # combos near the budget are rejected by the device and logged, not mispredicted here.
+        mt_per_core = -(-((M + 31) // 32) // core_grid.y)
+        l1_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+        dram_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
         def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
+            blocks_per_core = -(-mt_per_core // m_blk)
+            window = 2 if blocks_per_core >= 2 else None
             ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
                 input_tensor=tt_input,
                 weight_tensor=tt_weight,
@@ -934,7 +990,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 chunk_width_in_mm_blocks=1,
                 num_workers_per_link=num_workers_per_link,
                 bias=tt_bias,
-                memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+                memory_config_mm=l1_mem if window is not None else dram_mem,
                 rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
                 topology=cfg["topology"],
                 cluster_axis=cluster_axis,
@@ -943,6 +999,9 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 fused_ternary_scalar=1.0,
                 addcmul_input_tensor1=tt_addcmul_a,
                 addcmul_input_tensor2=tt_addcmul_b,
+                mm_window_blocks=window,
+                mm_progress_counters=mm_progress_counters,
+                mm_credit_counters=mm_credit_counters if window is not None else None,
             )
             if sync:
                 ttnn.synchronize_device(mesh_device)

@@ -53,7 +53,8 @@ void kernel_main() {
                     tile_regs_acquire();
 
                     if (enable_reload) {
-                        copy_tile_to_dst_init_short_with_dt(cb_in1, cb_intermed0);
+                        reconfig_data_format_srca(cb_in1, cb_intermed0);
+                        copy_init(cb_intermed0);
                         intermed0_cb.wait_front(out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             copy_tile(cb_intermed0, i, i);

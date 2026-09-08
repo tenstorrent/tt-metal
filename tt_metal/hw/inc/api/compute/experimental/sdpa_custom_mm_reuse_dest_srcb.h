@@ -58,7 +58,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
     PACK((llk_pack_init<ckernel::PackMode::Default, false>(out_cb_id)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, ckernel::PackMode::Default>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, ckernel::PackMode::Default>(out_cb_id)));
 }
 
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(

@@ -59,6 +59,76 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         ct_dim,
         rt_dim,
         kt_dim);
+
+    // MxFp4 operands feeding matmul are ALWAYS unpacked as the 2x-packed src-register format
+    // (MxFp4_2x_B) on Quasar. The generated unpack_dst_format[] table keeps the op-agnostic MX
+    // default (Float16_b, needed by non-matmul MxFp4 ops), so override only the unpacker gasket
+    // OUT_DATA_FORMAT here. Safe: this runs at init with the unpacker idle (before the first
+    // UNPACR), OUT_DATA_FORMAT is a shadow register, and the buffer descriptor (keyed on the MxFp4
+    // L1 format + tile geometry) is unchanged. EN_32BIT_DEST does not affect the MxFp4->MxFp4_2x_B reconfig validity,
+    // so pass false.
+    if (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4) {
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false>(
+            get_operand_src_format(operandB_id), static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B));
+    }
+    if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) {
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, false>(
+            get_operand_src_format(operandA_id), static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B));
+    }
+}
+
+/**
+ * @brief Undo the MxFp4 -> MxFp4_2x_B unpacker OUT_DATA_FORMAT override from @ref llk_unpack_AB_matmul_init.
+ *
+ * @param operandA: The input0 operand circular buffer (matches the matmul init call)
+ * @param operandB: The input1 operand circular buffer
+ *
+ * Restores each MxFp4 operand's unpacker OUT_DATA_FORMAT to the op-agnostic unpack_dst_format[]
+ * value (Float16_b), so a following NON-matmul op on the same MxFp4 buffer unpacks correctly. This
+ * explicit restore is required because the non-matmul unpack inits never reprogram OUT_DATA_FORMAT,
+ * and llk_unpack_reconfig_data_format is silently skipped for a same-format operand
+ * (should_reconfig_src_reg_df keys on the generated table, which never saw the 2x override).
+ *
+ * @note Call after all matmuls, before initializing the next op, whenever an MxFp4 matmul operand is
+ * reused by a non-matmul op in the same kernel. Pair with @ref llk_math_matmul_uninit (via mm_uninit).
+ * Same UNP mapping as init: In0(operandA)->SrcB->UNP_B, In1(operandB)->SrcA->UNP_A.
+ */
+inline void llk_unpack_AB_matmul_uninit(const std::uint32_t operandA, const std::uint32_t operandB) {
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
+    if (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4) {
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false>(
+            get_operand_src_format(operandB_id), unpack_dst_format[operandB_id]);
+    }
+    if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) {
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, false>(
+            get_operand_src_format(operandA_id), unpack_dst_format[operandA_id]);
+    }
+}
+
+/**
+ * @brief Runtime-transpose overload, signature-compatible with the Wormhole/Blackhole llk_api.
+ *
+ * Quasar takes transpose as a template argument, but the shared Compute API passes it as a runtime
+ * value. This overload absorbs that difference here rather than forcing an arch branch into the
+ * Compute API. Every parameter is required: the template overload above covers the shorter argument lists.
+ *
+ * @param operandA: The input0 operand circular buffer
+ * @param operandB: The input1 operand circular buffer
+ * @param transpose: Transpose flag; only 0 is supported on Quasar (transpose of SrcA is not implemented)
+ * @param ct_dim: number of tiles in the column dimension for input1 of matrix multiply
+ * @param rt_dim: number of tiles in the row dimension for input0 of matrix multiply
+ * @param kt_dim: number of tiles in the common dimension between input0 & input1 of matrix multiply
+ */
+__attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
+    LLK_ASSERT(transpose == 0, "non-default transpose not supported on Quasar");
+    llk_unpack_AB_matmul_init<false /*TRANSPOSE_EN*/>(operandA, operandB, ct_dim, rt_dim, kt_dim);
 }
 
 /**

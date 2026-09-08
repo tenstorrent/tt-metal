@@ -7,6 +7,7 @@ from typing import List
 from fuser.block_data import BlockData
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
+from fuser.operand import BfdResource, bfd_current
 from fuser.pack_node import PackNode
 from fuser.tile_loop import LoopBlock, TileLoop
 
@@ -30,11 +31,14 @@ class MatmulPacker(Packer):
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        buf_desc_id = pack_node.output.buf_desc_id
         subblock_r_dim = block.block_tiles_y
         subblock_c_dim = block.block_tiles_x
         num_subblocks_c_dim = block.tile_count_x // subblock_c_dim
-        return f"_llk_pack_matmul_init_({buf_desc_id}, {subblock_r_dim}, {subblock_c_dim}, {num_subblocks_c_dim});\n"
+        return (
+            pack_node.output.bfd_alloc_and_program(BfdResource.PACK0)
+            + f"_llk_pack_matmul_init_({bfd_current(BfdResource.PACK0)}, "
+            f"{subblock_r_dim}, {subblock_c_dim}, {num_subblocks_c_dim});\n"
+        )
 
     def pack(
         self,

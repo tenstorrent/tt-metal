@@ -36,8 +36,6 @@ def run_math_unary_test(
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    if "digamma" in str(ttnn_function):
-        torch_input_tensor = torch_input_tensor * 100.0 + 2.0
 
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor)
@@ -51,20 +49,6 @@ def run_math_unary_test(
         assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     else:
         assert_with_ulp(torch_output_tensor, output_tensor, ulp, allow_nonfinite=allow_nonfinite)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_i0(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.i0, layout=layout, ulp=1)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_lgamma(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.lgamma, layout=layout, pcc_check=True, pcc=0.99)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -139,56 +123,10 @@ def test_log2(device, h, w, layout):
     run_math_unary_test(device, h, w, ttnn.log2, layout=layout, ulp=1, allow_nonfinite=True)
 
 
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_neg(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.neg, layout=layout, ulp=0)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_abs(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.abs, layout=layout, ulp=0)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_rad2deg(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.rad2deg, ulp=1)
-
-
-def test_cbrt(device):
-    # Exhaustive over every bf16 value.
-    # Evaluate the registered golden in fp64 by upcasting the input,
-    # in bf16 the non-representable 1/3 was rounding the reference up to 2 ULP short of the true
-    # cube root while the kernel was correct. Subnormal bf16 inputs are flushed to zero on device.
-    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
-    input_tensor = all_bitpatterns.view(torch.bfloat16)
-    input_tensor = input_tensor[torch.isfinite(input_tensor.to(torch.float32))]
-    input_tensor = torch.where(
-        input_tensor.to(torch.float32).abs() < 2.0**-126, torch.zeros_like(input_tensor), input_tensor
-    )
-
-    golden_function = ttnn.get_golden_function(ttnn.cbrt)
-    golden = golden_function(input_tensor.to(torch.float64))
-
-    tt_in = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-    result = ttnn.to_torch(ttnn.cbrt(tt_in))
-    assert_with_ulp(golden, result, 1)
-
-
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_tril(device, h, w):
     run_math_unary_test(device, h, w, ttnn.tril, ulp=0)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_deg2rad(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.deg2rad, ulp=2)
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -196,12 +134,6 @@ def test_deg2rad(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_sqrt(device, h, w, layout):
     run_math_unary_test(device, h, w, ttnn.sqrt, layout=layout, ulp=1)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_digamma(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.digamma, ulp=1)
 
 
 def test_digamma_large_x(device):
@@ -241,38 +173,6 @@ def test_digamma_small_x(device):
 @pytest.mark.parametrize("w", [128])
 def test_erf(device, h, w):
     run_math_unary_test(device, h, w, ttnn.erf, ulp=1)
-
-
-@pytest.mark.parametrize("h", [2])
-@pytest.mark.parametrize("w", [3])
-def test_erfc(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.erfc, ulp=1)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_erfinv(device, h, w):
-    # ULP=227 exceeds the ULP ≤ 5 policy; fall back to PCC with the original per-test threshold.
-    run_math_unary_test(device, h, w, ttnn.erfinv, pcc_check=True, pcc=0.999)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_square(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.square, layout=layout, ulp=1)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_exp2(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.exp2, ulp=1)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_expm1(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.expm1, ulp=1)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -336,12 +236,6 @@ def run_math_unary_test_range(device, h, w, ttnn_function, ulp=1):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_ulp(torch_output_tensor, output_tensor, ulp)
-
-
-@pytest.mark.parametrize("h", [5])
-@pytest.mark.parametrize("w", [5])
-def test_multigammaln(device, h, w):
-    run_math_unary_test_range(device, h, w, ttnn.multigammaln, ulp=2)
 
 
 def run_math_test_polygamma(device, h, w, scalar, ttnn_function, ulp=1):

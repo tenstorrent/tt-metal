@@ -11,6 +11,7 @@
 
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/tt_metal/test_kernels/dataflow/dfb_scoped_lock_cache_common.h"
 
 namespace tt::tt_metal {
@@ -186,7 +187,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
         slow_dispatch::WriteToL1(mesh_device, core, ring_base, prefill);
     }
 
-    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     // Kernels write their in-kernel verification read-back (via the non-cacheable alias so the result lands
     // in TL1) to the scratch region; the host reads it directly. Layout: handshake -> num_rounds words (one
@@ -204,7 +205,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
 }
 
 #define DFB_CACHE_SKIP_IF_NOT_QUASAR()                                                               \
-    if (this->devices_.at(0)->arch() != ARCH::QUASAR) {                                              \
+    if (this->device().arch() != ARCH::QUASAR) {                                                     \
         GTEST_SKIP() << "scoped-lock cache ops are Quasar-only; the WH/BH path is the lock tracker"; \
     }
 
@@ -223,7 +224,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheFlushProducerStrided1Sx
         /*producer=*/true,
         /*mode=*/DfbCacheTestMode::FlushOnRelease,
         /*lock_n=*/4};
-    EXPECT_EQ(run_dfb_scoped_lock_cache_test(*this->devices_.at(0), p), dfb_cache_expected(p));
+    EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->device(), p), dfb_cache_expected(p));
 }
 
 // Same baseline but lock_n=1: only the head entry {0} is held/flushed.
@@ -238,7 +239,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheFlushProducerStrided1Sx
         /*producer=*/true,
         /*mode=*/DfbCacheTestMode::FlushOnRelease,
         /*lock_n=*/1};
-    EXPECT_EQ(run_dfb_scoped_lock_cache_test(*this->devices_.at(0), p), dfb_cache_expected(p));
+    EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->device(), p), dfb_cache_expected(p));
 }
 
 // 2 producers (stride==2): only this producer's held {0,2,4,6} flush; interleaved neighbours {1,3,5,7} untouched.
@@ -253,7 +254,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheFlushProducerStrided2Sx
         /*producer=*/true,
         /*mode=*/DfbCacheTestMode::FlushOnRelease,
         /*lock_n=*/4};
-    EXPECT_EQ(run_dfb_scoped_lock_cache_test(*this->devices_.at(0), p), dfb_cache_expected(p));
+    EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->device(), p), dfb_cache_expected(p));
 }
 
 // ALL pattern (broadcast, stride==1) instead of STRIDED; held = {0..3}.
@@ -268,7 +269,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheFlushProducerAll) {
         /*producer=*/true,
         /*mode=*/DfbCacheTestMode::FlushOnRelease,
         /*lock_n=*/4};
-    EXPECT_EQ(run_dfb_scoped_lock_cache_test(*this->devices_.at(0), p), dfb_cache_expected(p));
+    EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->device(), p), dfb_cache_expected(p));
 }
 
 // Wrap: held window {0,2,0} crosses the ring end -> exercises the wrap-to-base branch (idempotent); {0,2}=NEW.
@@ -283,7 +284,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheFlushProducerWrap) {
         /*producer=*/true,
         /*mode=*/DfbCacheTestMode::FlushOnRelease,
         /*lock_n=*/3};
-    EXPECT_EQ(run_dfb_scoped_lock_cache_test(*this->devices_.at(0), p), dfb_cache_expected(p));
+    EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->device(), p), dfb_cache_expected(p));
 }
 
 // Consumer release must NOT flush -> every slot reads back OLD.
@@ -298,7 +299,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheFlushConsumerDoesNotFlu
         /*producer=*/false,
         /*mode=*/DfbCacheTestMode::FlushOnRelease,
         /*lock_n=*/4};
-    EXPECT_EQ(run_dfb_scoped_lock_cache_test(*this->devices_.at(0), p), dfb_cache_expected(p));
+    EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->device(), p), dfb_cache_expected(p));
 }
 
 // ---- Invalidate-on-acquire (both lock kinds) -------------------------------------------
@@ -316,7 +317,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheInvalidateProducerStrid
         /*producer=*/true,
         /*mode=*/DfbCacheTestMode::InvalidateOnAcquire,
         /*lock_n=*/4};
-    EXPECT_EQ(run_dfb_scoped_lock_cache_test(*this->devices_.at(0), p), dfb_cache_expected(p));
+    EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->device(), p), dfb_cache_expected(p));
 }
 
 // 2 producers (stride==2): only held {0,2,4,6} invalidated; interleaved neighbours {1,3,5,7} keep stale OLD.
@@ -331,7 +332,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheInvalidateProducerStrid
         /*producer=*/true,
         /*mode=*/DfbCacheTestMode::InvalidateOnAcquire,
         /*lock_n=*/4};
-    EXPECT_EQ(run_dfb_scoped_lock_cache_test(*this->devices_.at(0), p), dfb_cache_expected(p));
+    EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->device(), p), dfb_cache_expected(p));
 }
 
 // A read lock also invalidates on acquire -> held {0,1,2,3}=NEW, rest OLD.
@@ -346,7 +347,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheInvalidateConsumer) {
         /*producer=*/false,
         /*mode=*/DfbCacheTestMode::InvalidateOnAcquire,
         /*lock_n=*/4};
-    EXPECT_EQ(run_dfb_scoped_lock_cache_test(*this->devices_.at(0), p), dfb_cache_expected(p));
+    EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->device(), p), dfb_cache_expected(p));
 }
 
 // 1 producer + 4 ALL consumers sharing entries: producer seeds shared-L2=OLD/TL1=NEW + signals, then all 4
@@ -364,7 +365,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheInvalidateMultiConsumer
         /*mode=*/DfbCacheTestMode::InvalidateOnAcquire,
         /*lock_n=*/2,
         /*multi_all=*/true};
-    const auto result = run_dfb_scoped_lock_cache_test(*this->devices_.at(0), p);
+    const auto result = run_dfb_scoped_lock_cache_test(this->device(), p);
     const auto expected = dfb_cache_expected(p);  // held {0,1} -> NEW, {2,3} -> OLD
     ASSERT_EQ(result.size(), static_cast<size_t>(p.num_consumers) * p.num_entries);
     for (uint32_t c = 0; c < p.num_consumers; ++c) {
@@ -388,7 +389,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheHandshakeDmToDmWrap) {
         /*lock_n=*/1};
     p.handshake = true;
     p.num_rounds = 12;  // > capacity (4) so each slot is reused ~3x
-    const auto result = run_dfb_scoped_lock_cache_test(*this->devices_.at(0), p);
+    const auto result = run_dfb_scoped_lock_cache_test(this->device(), p);
     ASSERT_EQ(result.size(), p.num_rounds);
     std::vector<uint32_t> expected(p.num_rounds);
     for (uint32_t r = 0; r < p.num_rounds; ++r) {
@@ -413,7 +414,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheHandshakeNonSnoopingPro
     p.handshake = true;
     p.num_rounds = 12;
     p.nonsnoop_producer = true;
-    const auto result = run_dfb_scoped_lock_cache_test(*this->devices_.at(0), p);
+    const auto result = run_dfb_scoped_lock_cache_test(this->device(), p);
     ASSERT_EQ(result.size(), p.num_rounds);
     std::vector<uint32_t> expected(p.num_rounds);
     for (uint32_t r = 0; r < p.num_rounds; ++r) {

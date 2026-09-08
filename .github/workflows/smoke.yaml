@@ -10,9 +10,26 @@ on:
         required: false
         type: string
         default: ""
+      cpu-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Canonical (non-Harbor-prefixed, publicly pullable) image ref used for the
+          github_hosted_cpu SKU. GitHub-hosted runners have no Harbor access, so the
+          Harbor-prefixed docker-image ref cannot be pulled there. Same idea as
+          docs-latest-public.yaml, which pulls the raw GHCR tag on ubuntu-latest.
       package-artifact-name:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Image with the packages already installed. When set it replaces
+          docker-image and the download and install steps are skipped. Empty
+          means the artifact path, which is what forks always get.
       enabled-skus:
         required: false
         type: string
@@ -108,7 +125,12 @@ jobs:
     timeout-minutes: 30
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ (inputs.docker-image && (contains(join(matrix.test-group.runs_on, ','), 'dedicated-merge-gate') && inputs.docker-image || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image))) || 'docker-image-unresolved!' }}
+      # github_hosted_cpu runs on GitHub-hosted runners with no Harbor access, so it
+      # needs the canonical (publicly pullable) cpu-docker-image ref instead of the
+      # Harbor-prefixed one (same reason dedicated-merge-gate uses the raw ref).
+      # A prebuilt image already carries the packages, and is a canonical ghcr
+      # ref so it needs no Harbor prefix on any SKU.
+      image: ${{ inputs.prebuilt-image || (matrix.test-group.sku == 'github_hosted_cpu' && (inputs.cpu-docker-image || inputs.docker-image)) || (inputs.docker-image && (contains(join(matrix.test-group.runs_on, ','), 'dedicated-merge-gate') && inputs.docker-image || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image))) || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
@@ -116,9 +138,11 @@ jobs:
         LLVM_PROFILE_FILE: "/work/coverage/%p-%m.profraw"
       volumes:
         - /work
-        - ${{ (!contains(join(matrix.test-group.runs_on, ','), 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
+        # No hugepages on viommu runners or on GitHub-hosted CPU-only runners.
+        - ${{ (!contains(join(matrix.test-group.runs_on, ','), 'viommu') && matrix.test-group.sku != 'github_hosted_cpu' && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       # Memory reduction in WH LB coming up: https://github.com/tenstorrent/metal-internal-workflows/issues/786
-      options: --device /dev/tenstorrent ${{ contains(matrix.test-group.sku, 'llmbox') && '--memory 256g' || '' }}
+      # github_hosted_cpu has no /dev/tenstorrent to pass through.
+      options: ${{ matrix.test-group.sku != 'github_hosted_cpu' && '--device /dev/tenstorrent' || '' }} ${{ contains(matrix.test-group.sku, 'llmbox') && '--memory 256g' || '' }}
     defaults:
       run:
         shell: bash
@@ -134,6 +158,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - uses: ./.github/actions/download-artifact-with-retry
+        if: ${{ inputs.prebuilt-image == '' }}
         timeout-minutes: 15
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
@@ -165,6 +190,7 @@ jobs:
           echo "Memory limit validated: ${memory_bytes} bytes"
 
       - name: Install packages
+        if: ${{ inputs.prebuilt-image == '' }}
         timeout-minutes: 10
         run: |
           # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.

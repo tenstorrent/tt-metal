@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_allclose, assert_numeric_metrics, assert_with_ulp
 from models.common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
@@ -209,3 +209,28 @@ def test_sum_subcores(device, sub_core_grids, dtype, shape):
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+@pytest.mark.parametrize("input_shape", [(32, 32), (16, 2, 32, 3), (16, 2, 32, 24), (1, 1, 64, 64)])
+@pytest.mark.parametrize("dim", [None, -1, -2])
+@pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["accurate", "fast"])
+def test_sum_fp32_fast_and_approximate_mode(device, input_shape, dim, fast_and_approximate_mode):
+    """FLOAT32 sum with both values of fast_and_approximate_mode.
+    - False (default): accurate SFPU path.
+    - True: faster FPU/TF32 path - result is approximate.
+    """
+    torch.manual_seed(1)
+
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
+    torch_output_tensor = torch.sum(torch_input_tensor, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    output_tensor = ttnn.sum(input_tensor, fast_and_approximate_mode=fast_and_approximate_mode, dim=dim)
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor)).reshape(torch_output_tensor.shape)
+
+    if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
+        assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
+    else:
+        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)

@@ -595,6 +595,97 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
+/**
+ * @brief Enumerate up to `max_solutions` distinct multi-mesh mappings (thin batch wrapper over
+ *        MultiMeshSolutionEnumerator::next()).
+ *
+ * @param max_solutions Maximum number of solutions to return. 0 means "all" up to the enumerator's safety cap.
+ *        The count is against COMPLETED (inter- + intra-mesh) solutions: a placement whose intra-mesh mapping
+ *        fails is forbidden/retried inside next(), never dropped from the count.
+ * @param unique_shapes When true, count solutions by the set of physical meshes used (order-independent).
+ * @return Vector of successful TopologyMappingResults (empty if none exist). Each has success == true.
+ */
+std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
+    const LogicalMultiMeshGraph& adjacency_map_logical,
+    const PhysicalMultiMeshGraph& adjacency_map_physical,
+    const TopologyMappingConfig& config,
+    std::size_t max_solutions,
+    bool unique_shapes = false,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+
+/**
+ * @brief Pull-based multi-solution enumerator: call next() to get one more distinct solution each time.
+ *
+ * A lazy, incremental multi-solution enumerator over inter-mesh placements. Construct it once
+ * with the logical/physical graphs + config, then call next() repeatedly:
+ *
+ *   MultiMeshSolutionEnumerator e(logical, physical, config, unique_shapes, asic_map, fnode_map);
+ *   while (auto solution = e.next()) {
+ *       ... use / write / test *solution ...   // solution k is ready before k+1 is even searched for
+ *   }                                          // next() == std::nullopt => enumeration exhausted
+ *
+ * Internally it drives ONE persistent incremental SAT enumeration session (TopologyMappingEnumerationSession) — the
+ * SAME SAT path, symmetry shortcuts, and minimal-host prime as the single-solve inter-mesh solver, exposed
+ * lazily instead of collected. The hard CNF is encoded and primed exactly ONCE (on the first next()); every later
+ * next() is a warm solve on the same solver (reusing all learned clauses + phase saving) plus one blocking clause.
+ * So enumerating N solutions this way costs the same as the batch path, but you get each solution as soon as it is
+ * found and can stop at any time by simply not calling next() again. Selection of solutions is IDENTICAL to the
+ * batch path (same session, constraints, and unique_shapes).
+ *
+ * Lifetime: the enumerator holds references to the graphs/config/rank maps passed to the constructor; the caller must
+ * keep those alive for as long as the enumerator is used.
+ */
+class MultiMeshSolutionEnumerator {
+public:
+    MultiMeshSolutionEnumerator(
+        const LogicalMultiMeshGraph& adjacency_map_logical,
+        const PhysicalMultiMeshGraph& adjacency_map_physical,
+        const TopologyMappingConfig& config,
+        bool unique_shapes = false,
+        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+
+    // Constructed in place and used via next(); the persistent SAT session is move-only, so this is too.
+    MultiMeshSolutionEnumerator(const MultiMeshSolutionEnumerator&) = delete;
+    MultiMeshSolutionEnumerator& operator=(const MultiMeshSolutionEnumerator&) = delete;
+
+    /**
+     * @brief Return the next distinct, intra-mesh-completed solution, or std::nullopt when the enumeration is
+     *        exhausted (a genuine UNSAT -- no budget give-up). Each returned result has success == true.
+     */
+    std::optional<TopologyMappingResult> next();
+
+    /** Number of solutions returned by next() so far. */
+    std::size_t solutions_returned() const { return emitted_; }
+
+private:
+    // Caller-owned graph/config inputs -- must outlive this enumerator (passed by reference, no defaults).
+    const LogicalMultiMeshGraph& adjacency_map_logical_;
+    const PhysicalMultiMeshGraph& adjacency_map_physical_;
+    const TopologyMappingConfig& config_;
+    // The rank maps have default {} args, so store them BY VALUE: a const& member would dangle if the
+    // enumerator were constructed with the defaults (temporary destroyed after the constructor).
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank_;
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank_;
+    bool unique_shapes_;
+
+    // Derived once from config/graphs.
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints_;
+    ::tt::tt_fabric::ConnectionValidationMode inter_mesh_validation_mode_;
+
+    // One persistent incremental SAT session (same SAT path + shortcuts + minimal-host prime as the batch solve)
+    // plus the running exclusion bookkeeping.
+    ::tt::tt_fabric::TopologyMappingEnumerationSession<MeshId, MeshId> session_;
+    std::vector<std::map<MeshId, MeshId>> excluded_;  // found placements, blocked on subsequent next()
+    std::size_t emitted_ = 0;
+    // One-shot relaxation of the hard minimal-host cap, mirroring the single-solve fallback: when the
+    // capped encoding is UNSAT, next() clears the cap and re-encodes a fresh session (see next()).
+    bool host_cap_relaxed_ = false;
+    // Intra-mesh forbid/retry state
+    std::vector<std::pair<MeshId, MeshId>> intra_failed_mesh_pairs_;
+};
+
 /** Log inter-mesh and per-mesh intra-mesh degree histograms at INFO (one line each). */
 void log_logical_multi_mesh_adjacency_histograms(const LogicalMultiMeshGraph& multi_mesh_graph);
 void log_physical_multi_mesh_adjacency_histograms(const PhysicalMultiMeshGraph& multi_mesh_graph);

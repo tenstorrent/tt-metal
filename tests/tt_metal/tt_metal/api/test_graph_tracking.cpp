@@ -39,7 +39,7 @@ public:
 
 }  // namespace
 
-TEST(GraphTrackerThreading, SingleThreadCapturesEachEventOnce) {
+TEST(GraphTrackerThreading, CPU_SingleThreadCapturesEachEventOnce) {
     auto& tracker = GraphTracker::instance();
     tracker.clear();
 
@@ -64,7 +64,7 @@ TEST(GraphTrackerThreading, SingleThreadCapturesEachEventOnce) {
 // pushes its processor before either starts dispatching (via a barrier), so
 // if storage were shared both threads would iterate both processors and each
 // would see 2 * kIterations events.
-TEST(GraphTrackerThreading, ProcessorsAreIsolatedPerThread) {
+TEST(GraphTrackerThreading, CPU_ProcessorsAreIsolatedPerThread) {
     constexpr int kIterations = 1000;
     constexpr int kNumThreads = 2;
 
@@ -110,7 +110,7 @@ TEST(GraphTrackerThreading, ProcessorsAreIsolatedPerThread) {
 
 // Reproduces the race from tt-mlir#8302. One thread spins push/pop_processor
 // while another spins track_function_start.
-TEST(GraphTrackerThreading, ConcurrentPushPopAndTrackDoNotRace) {
+TEST(GraphTrackerThreading, CPU_ConcurrentPushPopAndTrackDoNotRace) {
     constexpr auto kDuration = std::chrono::milliseconds(200);
 
     std::atomic<bool> stop{false};

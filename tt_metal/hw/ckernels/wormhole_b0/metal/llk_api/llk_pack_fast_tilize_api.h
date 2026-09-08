@@ -43,7 +43,7 @@ inline void llk_pack_fast_tilize_block(
     const std::uint32_t unit_dim,
     const std::uint32_t num_units) {
     LLK_ASSERT(
-        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     const std::uint8_t output_id = get_output_id(output);

@@ -38,8 +38,8 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
     auto all_cores = sender_cores.merge(receiver_cores);
     auto mesh_device = devices_[0];
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{sender_core, receiver_cores}};
-    auto global_cb = tt::tt_metal::experimental::CreateGlobalCircularBuffer(
-        mesh_device.get(), sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
+    auto global_cb = tt::tt_metal::experimental::GlobalCircularBuffer(
+        *mesh_device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -167,8 +167,7 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
     // Run a rectangular kernel grid with a remote CB on only one receiver. Dispatch must overwrite stale config on
     // idle_core with the zero sentinel that setup_remote_cb_interfaces() skips.
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sparse_mapping = {{sender_core, receiver_cores}};
-    auto sparse_global_cb =
-        experimental::CreateGlobalCircularBuffer(mesh_device.get(), sparse_mapping, 3200, BufferType::L1);
+    auto sparse_global_cb = experimental::GlobalCircularBuffer(*mesh_device, sparse_mapping, 3200, BufferType::L1);
     distributed::MeshWorkload sparse_workload;
     Program sparse_program = CreateProgram();
     experimental::CreateCircularBuffer(sparse_program, receiver_cores, make_cb_config(), sparse_global_cb);

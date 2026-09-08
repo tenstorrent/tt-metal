@@ -31,7 +31,7 @@
 // Pair with llk_pack_mutex_ADC, never with plain llk_pack.
 template <bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
 inline void llk_pack_init_mutex_ADC(
-    const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1, const std::uint32_t input_operand = 0) {
+    const std::uint32_t pack_output, std::uint32_t num_tiles = 1, const std::uint32_t input_operand = 0) {
     const std::uint32_t output_id = get_output_id(pack_output);
     // 8-bit datums (Int8, UInt8, Fp8_e4m3, Lf8) do not require the Blackhole tilize workaround.
     const bool is_input_8bit_format = IS_8BIT_FORMAT(static_cast<std::uint32_t>(unpack_src_format[input_operand]));

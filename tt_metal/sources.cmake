@@ -45,6 +45,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/fabric_types.hpp
     api/tt-metalium/experimental/fabric/mesh_graph.hpp
     api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp
+    api/tt-metalium/experimental/fabric/physical_descriptor_builder.hpp
     api/tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp
     api/tt-metalium/experimental/fabric/physical_system_descriptor.hpp
     api/tt-metalium/experimental/fabric/pipeline_builder.hpp
@@ -234,6 +235,9 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_realtime_profiler_push.cpp
     impl/dispatch/kernels/device_print_dispatch.h
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
+    fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp
+    fabric/impl/kernels/edm_fabric/fabric_router_relay_extension.cpp
+    fabric/impl/kernels/edm_fabric/fabric_router_udm_mux_extension.cpp
     fabric/impl/kernels/tt_fabric_mux.cpp
     fabric/impl/kernels/tt_fabric_mux_v2.cpp
     fabric/impl/kernels/tt_fabric_mux_v2_forwarder.hpp

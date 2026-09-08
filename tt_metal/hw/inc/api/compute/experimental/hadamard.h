@@ -92,7 +92,7 @@ ALWI void hadamard_h128_init(const uint32_t in_cb_id, const uint32_t h16_cb_id, 
 
     // Fully re-establish the packer HW config + dest layout for out_cb_id.
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
-    PACK((llk_pack_dest_init<fp32_dest_acc_en, ckernel::PackMode::Default>()));
+    PACK((llk_pack_dest_init<fp32_dest_acc_en, ckernel::PackMode::Default>(out_cb_id)));
 }
 
 // clang-format off

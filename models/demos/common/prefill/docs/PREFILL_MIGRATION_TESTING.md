@@ -66,7 +66,7 @@ stays 32-token-block aligned).
 rank would publish a table covering just its own layer slice and a merged mock table is not implemented. So
 **Gate 1** needs a 1-rank binding. `PREFILL_ENABLE_MIGRATION=1` (Gate 2) has no such restriction: the real
 path merges the per-rank stage layouts through the worker
-(`deliver_device_map_and_gather_stage_layout`), so a pipelined runner publishes one table spanning every
+(`deliver_device_map_and_gather_stage_layouts`), so a pipelined runner publishes one table spanning every
 rank's layers. Gate 2 runs on 1, 2 or 4 ranks — see *Covering every rank* below for what that costs on the
 read-back side.
 
@@ -443,7 +443,7 @@ Expect `[producer] KV cache PCC PASSED` (threshold `PREFILL_STANDALONE_CHUNKED_P
 This gate is not a prerequisite for the producer's golden PCC on the real-migration path, because the runner
 serialises the device map there too: one `serialize_device_map` call sits above the mock/real split inside the
 `_migration_enabled` block, so **every rank on either path** publishes its own host-local sidecar. It has to
-be: `deliver_device_map_and_gather_stage_layout` hands the map to the co-located *worker* over the migration
+be: `deliver_device_map_and_gather_stage_layouts` hands the map to the co-located *worker* over the migration
 client and leaves nothing on disk, while every device-less read-back resolves chips from the JSON.
 
 That call **had** regressed to living under `if _mock_migration:` only, and the symptom is exactly as quiet as
@@ -539,7 +539,8 @@ gates you intend to run require.
 | Gate | Hook | Signature requirement |
 |------|------|-----------------------|
 | 1 | `build_kv_chunk_table` | serialises the block-cyclic layout; issues no comms |
-| 2 | `kv_migration_base_address` | this rank's KV base DRAM address, for the cross-stage table merge |
+| 2 | `kv_migration_stages` | one `KvCacheStage` per migratable cache, for the cross-stage table merge |
+| 2 | `kv_migration_base_address` | alternative to the above, for a model with a SINGLE cache: just that cache's base DRAM address |
 | 2 `dst-bytes` | **none** | nothing is decoded — the byte compare is model-agnostic |
 | 2 `dst-golden` | none beyond Gate 1 | reuses the producer's own read-back, not a runtime hook |
 

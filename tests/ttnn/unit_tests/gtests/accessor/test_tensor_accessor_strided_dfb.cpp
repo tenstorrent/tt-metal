@@ -18,6 +18,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -116,8 +117,6 @@ void run_strided_dfb_copy_test(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     uint32_t num_dfb_entries,
     KernelBuilderFn kernel_builder_fn) {
-    auto* device = mesh_device->get_devices().at(0);
-
     MemoryConfig mem_config(TensorMemoryLayout::INTERLEAVED, params.buffer_type);
     tt::tt_metal::TensorSpec tensor_spec(
         params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
@@ -203,7 +202,7 @@ void run_strided_dfb_copy_test(
     // -----------------------------------------------------------------------
     // Dispatch and verify
     // -----------------------------------------------------------------------
-    detail::LaunchProgram(device, program);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     const auto output_cpu = output_tensor.cpu(true);
     const auto output_shard = ttnn::distributed::get_device_tensors(output_cpu).front();

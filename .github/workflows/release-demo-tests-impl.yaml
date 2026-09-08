@@ -38,6 +38,11 @@ on:
         type: string
         default: ""
         description: "URL to gist containing models_e2e_tests.yaml (optional, falls back to local file if not provided). Security: Only GitHub gist/raw URLs allowed, validated before download."
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
     outputs:
       matrix:
         description: "Filtered matrix of single-host legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
@@ -155,3 +160,4 @@ jobs:
       # P&R installs the manylinux wheel; put its libs first so pytest does not
       # mix them with the Ubuntu tarball. T1 inplace leaves this false.
       prefer-wheel-libs: true
+      summary-scope: ${{ inputs.summary-scope }}

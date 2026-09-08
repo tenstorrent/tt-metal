@@ -134,6 +134,7 @@ class FuserConfig(TestConfig):
         for run_type in run_types:
             runs = []
             self.global_config.perf_run_type = run_type
+            self.global_config.sentinel = FuserSentinel()
 
             self.test_name = (
                 FUSED_TESTS_DIR / f"{self.global_config.test_name}_{run_type.name}.cpp"
@@ -182,7 +183,7 @@ class FuserConfig(TestConfig):
             perf_report.append(results)
             logger.info("Perf results:\n{}", results)
 
-            csv_prefix = f"{self.global_config.test_name}_fused_test"
+            csv_prefix = f"{self.global_config.test_name.replace('/', '_')}_fused_test"
             perf_report.dump_csv(f"{csv_prefix}.{worker_id}.csv")
             perf_report.post_process()
             perf_report.dump_csv(f"{csv_prefix}.{worker_id}.post.csv")

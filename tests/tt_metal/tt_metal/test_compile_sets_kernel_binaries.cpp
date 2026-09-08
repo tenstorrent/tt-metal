@@ -23,7 +23,6 @@
 #include "impl/kernels/kernel.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <umd/device/types/arch.hpp>
 
 using std::vector;
@@ -142,7 +141,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
         auto mask = BuildEnvManager::get_instance(extract_context_id(device))
                         .get_device_build_env(device->build_id())
                         .build_key();
-        slow_dispatch::CompileProgram(*device, program);
+        program.impl().compile(device);
         compute_binaries.insert({mask, compute_kernel->binaries(mask)});
         TT_FATAL(compute_binaries.at(mask).size() == 3, "Expected 3 Compute binaries!");
         brisc_binaries.insert({mask, riscv0_kernel->binaries(mask)});
@@ -184,7 +183,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
                     auto mask = BuildEnvManager::get_instance(extract_context_id(device))
                                     .get_device_build_env(device->build_id())
                                     .build_key();
-                    slow_dispatch::CompileProgram(*device, program);
+                    program.impl().compile(device);
                     uint32_t programmable_core_index = MetalContext::instance().hal().get_programmable_core_type_index(
                         HalProgrammableCoreType::TENSIX);
                     const KernelGroup* kernel_group = program.impl().kernels_on_core(core, programmable_core_index);

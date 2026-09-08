@@ -183,7 +183,7 @@ m2::ProgramSpec make_split_touch_spec(distributed::MeshDevice& mesh_device, uint
     return spec;
 }
 
-TEST_F(UnitMeshFixture, HalfGrid3Plus3DFBsOnDevice) {
+TEST_F(UnitMeshAnyDispatchFixture, HalfGrid3Plus3DFBsOnDevice) {
     require_at_least_two_nodes(this->device());
     const bool is_quasar = this->device().arch() == ARCH::QUASAR;
 
@@ -303,7 +303,7 @@ TEST_F(UnitMeshFixture, HalfGrid3Plus3DFBsOnDevice) {
     }
     m2::SetProgramRunArgs(program, params);
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     for (uint32_t i = 0; i < per_half * 2; ++i) {
         std::vector<uint32_t> got;
@@ -314,14 +314,17 @@ TEST_F(UnitMeshFixture, HalfGrid3Plus3DFBsOnDevice) {
 
 // Stress: 16+16 DFBs. Credit-handshake over every buffer; host checks entry_size + device slot
 // written back from each consumer.
-TEST_F(UnitMeshFixture, HalfGrid16Plus16DFBsOnDevice) {
+TEST_F(UnitMeshAnyDispatchFixture, HalfGrid16Plus16DFBsOnDevice) {
     require_at_least_two_nodes(this->device());
     const bool is_quasar = this->device().arch() == ARCH::QUASAR;
 
     constexpr uint32_t per_half = 16;
     constexpr uint32_t touched_magic = 0xA11CED00u;
     m2::ProgramSpec spec = make_split_touch_spec(this->device(), per_half);
-    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    auto device_range = distributed::MeshCoordinateRange(this->device().shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, m2::MakeProgramFromSpec(this->device(), spec));
+    Program& program = workload.get_programs().at(device_range);
 
     expect_half_grid_slots_packed(program, per_half, is_quasar);
     expect_no_slot_collision_on_core(program, CoreCoord{0, 0});
@@ -339,7 +342,7 @@ TEST_F(UnitMeshFixture, HalfGrid16Plus16DFBsOnDevice) {
         {.kernel = m2::KernelSpecName{"cons_b"}, .runtime_arg_values = cons_rtas(m2::NodeCoord{1, 0})},
     };
     m2::SetProgramRunArgs(program, params);
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
 
     std::vector<uint32_t> left_slots(per_half), right_slots(per_half);
     for (uint32_t i = 0; i < per_half; ++i) {
@@ -356,7 +359,7 @@ TEST_F(UnitMeshFixture, HalfGrid16Plus16DFBsOnDevice) {
 }
 
 // End-to-end identity across two disjoint halves: one DFB + producer/consumer pair per half.
-TEST_F(UnitMeshFixture, HalfGridOnDeviceDataflow1DFBEach) {
+TEST_F(UnitMeshAnyDispatchFixture, HalfGridOnDeviceDataflow1DFBEach) {
     require_at_least_two_nodes(this->device());
     const bool is_quasar = this->device().arch() == ARCH::QUASAR;
 
@@ -449,7 +452,7 @@ TEST_F(UnitMeshFixture, HalfGridOnDeviceDataflow1DFBEach) {
     m2_writeshard_barrier_uint32(this->device(), in_a, input_a);
     m2_writeshard_barrier_uint32(this->device(), in_b, input_b);
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_a, result_b;
     slow_dispatch::ReadFromBuffer(out_a.mesh_buffer(), result_a);
@@ -458,7 +461,7 @@ TEST_F(UnitMeshFixture, HalfGridOnDeviceDataflow1DFBEach) {
     EXPECT_EQ(result_b, input_b) << "right-half DFB round-trip mismatch";
 }
 
-TEST_F(UnitMeshFixture, CoordinatorWorkerSlotReuseOnDevice) {
+TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerSlotReuseOnDevice) {
     const CoreCoord grid = this->device().compute_with_storage_grid_size();
     if (grid.x < 3) {
         GTEST_SKIP() << "Needs at least coordinator + 2 workers (got " << grid.x << "x" << grid.y << ")";
@@ -528,8 +531,107 @@ TEST_F(UnitMeshFixture, CoordinatorWorkerSlotReuseOnDevice) {
         {.kernel = m2::KernelSpecName{"worker_cons"}, .runtime_arg_values = std::move(worker_cons_rtas)},
     };
     m2::SetProgramRunArgs(program, params);
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    distributed::MeshWorkload coord_worker_workload;
+    coord_worker_workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), coord_worker_workload, /*blocking=*/true);
 
+    expect_touch_results(
+        this->device(),
+        CoreCoord{0, 0},
+        coord_result_addr,
+        2,
+        /*expected_entry_size=*/32,
+        touched_magic,
+        {impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_wide"))->device_slot,
+         impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_coord"))->device_slot});
+    expect_touch_results(
+        this->device(),
+        CoreCoord{1, 0},
+        worker_result_addr,
+        4,
+        /*expected_entry_size=*/32,
+        touched_magic,
+        {impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_wide"))->device_slot,
+         impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_worker_0"))->device_slot,
+         impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_worker_1"))->device_slot,
+         impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_worker_2"))->device_slot});
+}
+
+// Same topology as CoordinatorWorkerSlotReuseOnDevice, but sparse DFBs are created first so the
+// all-cores DFB lands at a high slot.
+TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerGappedSlotsOnDevice) {
+    const CoreCoord grid = this->device().compute_with_storage_grid_size();
+    if (grid.x < 3) {
+        GTEST_SKIP() << "Needs at least coordinator + 2 workers (got " << grid.x << "x" << grid.y << ")";
+    }
+
+    const m2::NodeCoord coordinator{0, 0};
+    const m2::NodeCoord worker_start{1, 0};
+    const m2::NodeCoord worker_end{static_cast<size_t>(grid.x - 1), 0};
+
+    constexpr uint32_t touched_magic = 0xA11CED00u;
+    auto coord_prod = make_touch_producer("coord_prod", 2, this->device());
+    auto coord_cons = make_touch_consumer("coord_cons", 2, touched_magic, this->device());
+    auto worker_prod = make_touch_producer("worker_prod", 4, this->device());
+    auto worker_cons = make_touch_consumer("worker_cons", 4, touched_magic, this->device());
+
+    m2::ProgramSpec spec;
+    spec.name = "dfb_gapped_slot_touch";
+
+    auto add_dfb = [&](const std::string& name) {
+        auto dfb = MakeMinimalDFB(name, 32, 2);
+        dfb.data_format_metadata = tt::DataFormat::Float16_b;
+        spec.dataflow_buffers.push_back(dfb);
+    };
+    add_dfb("dfb_worker_0");
+    add_dfb("dfb_worker_1");
+    add_dfb("dfb_worker_2");
+    add_dfb("dfb_coord");
+    add_dfb("dfb_wide");
+
+    bind_touch_dfbs(coord_prod, coord_cons, "dfb_wide", 0);
+    bind_touch_dfbs(coord_prod, coord_cons, "dfb_coord", 1);
+    bind_touch_dfbs(worker_prod, worker_cons, "dfb_wide", 0);
+    bind_touch_dfbs(worker_prod, worker_cons, "dfb_worker_0", 1);
+    bind_touch_dfbs(worker_prod, worker_cons, "dfb_worker_1", 2);
+    bind_touch_dfbs(worker_prod, worker_cons, "dfb_worker_2", 3);
+
+    spec.kernels = {coord_prod, coord_cons, worker_prod, worker_cons};
+    spec.work_units = {
+        MakeMinimalWorkUnit("wu_coord", coordinator, {"coord_prod", "coord_cons"}),
+        MakeMinimalWorkUnit("wu_workers", m2::NodeRange{worker_start, worker_end}, {"worker_prod", "worker_cons"}),
+    };
+
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    const auto& impl = program.impl();
+    EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_worker_0"))->device_slot, 0u);
+    EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_worker_1"))->device_slot, 1u);
+    EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_worker_2"))->device_slot, 2u);
+    EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_coord"))->device_slot, 0u);
+    EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_wide"))->device_slot, 3u);
+    expect_no_slot_collision_on_core(program, CoreCoord{0, 0});
+    expect_no_slot_collision_on_core(program, CoreCoord{1, 0});
+
+    m2::ProgramRunArgs params;
+    const uint32_t coord_result_addr = touch_result_l1_addr(this->device(), 2);
+    const uint32_t worker_result_addr = touch_result_l1_addr(this->device(), 4);
+    m2::KernelRunArgs::RuntimeArgValues worker_cons_rtas;
+    for (size_t x = worker_start.x; x <= worker_end.x; ++x) {
+        m2::AddRuntimeArgsForNode(worker_cons_rtas, m2::NodeCoord{x, 0}, {{"result_l1_addr", worker_result_addr}});
+    }
+    params.kernel_run_args = {
+        {.kernel = m2::KernelSpecName{"coord_prod"}},
+        {.kernel = m2::KernelSpecName{"coord_cons"},
+         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(coordinator, {{"result_l1_addr", coord_result_addr}})},
+        {.kernel = m2::KernelSpecName{"worker_prod"}},
+        {.kernel = m2::KernelSpecName{"worker_cons"}, .runtime_arg_values = std::move(worker_cons_rtas)},
+    };
+    m2::SetProgramRunArgs(program, params);
+    distributed::MeshWorkload coord_worker_workload;
+    coord_worker_workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), coord_worker_workload, /*blocking=*/true);
+
+    // Coordinator: slots 0 (coord-only) and 3 (wide); 1 and 2 unused.
     expect_touch_results(
         this->device(),
         CoreCoord{0, 0},

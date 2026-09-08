@@ -30,21 +30,21 @@ constexpr bool sdpa_can_preload_ln2_constants() {
     return false;
 }
 
-template <bool legacy_compat = true>
+template <bool legacy_compat, bool is_fp32_dest_acc_en>
 inline void calculate_recip_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     if constexpr (legacy_compat) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
-            // _reciprocal_compat_signed_ is the bare _reciprocal_compat_ plus the negate that
-            // restores the sign the primitive drops; this path used to call the primitive
-            // directly and so returned 1/|x| rather than 1/x. The one consumer that still takes
-            // it bare is sampling_recip_value in blackhole's ckernel_sfpu_sampling.h, which keeps |1/x|
+            // _reciprocal_compat_signed_ is the bare _reciprocal_compat_ plus the sign restore
+            // the primitive drops; this path used to call the primitive directly and so returned
+            // 1/|x| rather than 1/x. The one consumer that still takes it bare is
+            // sampling_recip_value in blackhole's ckernel_sfpu_sampling.h, which keeps |1/x|
             // deliberately because its legacy path has to stay bit-identical for blaze. No such
             // contract covers legacy_compat here -- it selects the algorithm, nothing pins the
             // output bits -- so the sign is restored rather than documented.
             sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_signed_<APPROX ? 2 : 3>(in);
-            if constexpr (!(DST_ACCUM_MODE || APPROX)) {
+            if constexpr (!(is_fp32_dest_acc_en || APPROX)) {
                 out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
             }
             sfpi::dst_reg[0] = out;
@@ -57,7 +57,7 @@ inline void calculate_recip_first_column() {
 
             if constexpr (APPROX) {
                 out = ckernel::sfpu::sfpu_reciprocal_iter<0>(in);
-            } else if constexpr (DST_ACCUM_MODE) {
+            } else if constexpr (is_fp32_dest_acc_en) {
                 out = ckernel::sfpu::sfpu_reciprocal_iter<2>(in);
             } else {
                 out = ckernel::sfpu::sfpu_reciprocal_iter<1>(in);
@@ -209,30 +209,31 @@ inline void calculate_exponential_polynomial() {
     }
 }
 
-template <bool SDPA_EXP_APPROX_MODE, std::uint16_t scale_bf16>
+template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, bool is_fp32_dest_acc_en>
 inline void calculate_exponential_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     if constexpr (SDPA_EXP_APPROX_MODE) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
             sfpi::vFloat result =
-                ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+                ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, is_fp32_dest_acc_en>(
                     val, scale_bf16);
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg += 2;
         }
     } else {
-        constexpr int polynomial_degree = DST_ACCUM_MODE ? 4 : 2;
+        constexpr int polynomial_degree = is_fp32_dest_acc_en ? 4 : 2;
         calculate_exponential_polynomial<
             true,
             ITERATIONS_HALF_FACE,
             false,
             polynomial_degree,
-            DST_ACCUM_MODE,
+            is_fp32_dest_acc_en,
             scale_bf16>();
     }
 }
 
+template <bool is_fp32_dest_acc_en>
 inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     constexpr std::uint32_t prev_max_base_idx = 0;
@@ -255,10 +256,10 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::vFloat diff_worker = worker_max_vec - cur_max;
 
         sfpi::vFloat exp_prev =
-            ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+            ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, is_fp32_dest_acc_en>(
                 diff_prev, scale_bf16);
         sfpi::vFloat exp_worker =
-            ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+            ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, is_fp32_dest_acc_en>(
                 diff_worker, scale_bf16);
 
         sfpi::dst_reg[prev_max_base_idx] = exp_prev;
@@ -273,13 +274,14 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     }
 }
 
-inline void calculate_softplus_first_column(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
+template <bool is_fp32_dest_acc_en>
+inline void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     float beta = ckernel::sfpu::Converter::as_float(param0);
     float beta_reciprocal = ckernel::sfpu::Converter::as_float(param1);
     float threshold = ckernel::sfpu::Converter::as_float(param2);
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-        ckernel::sfpu::calculate_softplus_body<APPROX, DST_ACCUM_MODE>(beta, beta_reciprocal, threshold);
+        ckernel::sfpu::calculate_softplus_body<APPROX, is_fp32_dest_acc_en>(beta, beta_reciprocal, threshold);
         sfpi::dst_reg += 2;
     }
 }

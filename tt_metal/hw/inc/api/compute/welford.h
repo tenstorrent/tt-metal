@@ -54,11 +54,12 @@ ALWI void welford_init() {
  * when the `do_scale` path runs `mul_tiles_bcast_scalar` in the same DST window.
  */
 #ifndef ARCH_QUASAR
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void welford_reinit(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
     state_configure(cbid, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         /*transpose=*/0, /*transpose_within_16x16_face=*/false, cbid)));
-    MATH((llk_math_welfords_sfpu_reinit<DST_ACCUM_MODE>(cbid)));
+    MATH((llk_math_welfords_sfpu_reinit<is_fp32_dest_acc_en>(cbid)));
 }
 #endif
 

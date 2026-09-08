@@ -14,7 +14,7 @@ when not on a galaxy or when no golden trace is provided.
 Env:
   PREFILL_TRACE_DIR   golden trace dir (metadata.json + kv_cache/layer_N.safetensors)     [required]
   PREFILL_CHUNKED     "1" -> chunked (SP ring cache-read for every chunk); "0" -> one-shot           [default 0]
-  PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode only)                             [default 5120]
+  PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode only)                             [default 8192]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement                   [default 1]
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs) [default: all]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8"                        [default bf4]
@@ -93,7 +93,7 @@ def main():
     token_ids = list(json.load(open(Path(golden_dir) / "metadata.json"))["token_ids"])
     n_tokens = len(token_ids)
     chunked = os.getenv("PREFILL_CHUNKED", "0") == "1"
-    chunk_size = int(os.getenv("PREFILL_CHUNK_SIZE", "5120"))
+    chunk_size = int(os.getenv("PREFILL_CHUNK_SIZE", "8192"))
     tps_iters = int(os.getenv("PREFILL_TPS_ITERS", "1"))
 
     n_chunks, chunk, total = plan(n_tokens, chunk_size, chunked, ROWS)
@@ -118,7 +118,8 @@ def main():
     # all-gather fallback. Both use ring collectives and therefore need the cyclic torus route
     # -> FABRIC_1D_RING + the torus mesh descriptor
     # (TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_torus_xy_graph_descriptor.textproto).
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
+    _linear = os.getenv("PREFILL_TOPOLOGY", "ring") == "linear"
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D if _linear else ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(ROWS, COLS))
     print(f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
     try:
@@ -151,12 +152,13 @@ def main():
             num_layers=num_layers,
             max_seq_len=total,
             mesh_shape=(ROWS, COLS),
-            chunk_size=chunk,
+            default_chunk_size=chunk,
             num_users=1,
             expert_weight_dtype=expert_dtype,
             cache_dtype=kv_cache_dtype,
             weight_cache_path=cache_path,
             owns_kv_cache=True,  # standalone harness owns its cache (runtime.kv_cache)
+            topology=ttnn.Topology.Linear if _linear else ttnn.Topology.Ring,
         )
         runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
         del state_dict

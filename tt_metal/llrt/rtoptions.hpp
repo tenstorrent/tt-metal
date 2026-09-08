@@ -119,6 +119,8 @@ struct InspectorSettings {
     bool serialize_on_dispatch_timeout = true;
     bool capture_tensor_specs = true;
     bool log_runtime_entries = false;
+    bool log_mesh_buffers = false;
+    bool log_mesh_sockets = false;
 };
 
 template <typename T>
@@ -188,6 +190,17 @@ class RunTimeOptions {
     bool is_custom_fabric_mesh_graph_desc_path_set = false;
     std::string custom_fabric_mesh_graph_desc_path;
 
+    // Path to a Factory System Descriptor (FSD): the "as-built"/expected description of the cluster's
+    // topology, as opposed to the Physical System Descriptor (PSD) that tooling discovers live from the
+    // running hardware. Users supply it via `tt-run --factory-system-descriptor <path>`, which is
+    // plumbed to every rank as the TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH env var (env/RTOptions is the
+    // single source of truth for the path). It lets rank-binding generation map against the known-good
+    // factory topology instead of relying on live discovery, which is slow and can misbehave on
+    // partially reachable or degraded clusters. When provided, it also lets Fabric 2.0 statically
+    // reroute traffic around broken links.
+    // See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.
+    std::string factory_system_descriptor_path;
+
     bool build_map_enabled = false;
 
     WatcherSettings watcher_settings;
@@ -227,6 +240,10 @@ class RunTimeOptions {
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
     bool experimental_noc_debug_dump_enabled = false;
+    // Tuning for the NOC-debug-dump background thread (see ProfilerStateManager::start_debug_dump_thread).
+    std::chrono::milliseconds noc_debug_poll_interval{500};
+    std::chrono::milliseconds noc_debug_full_read_interval{4000};
+    std::chrono::milliseconds noc_debug_watermark_margin{3000};
 
     bool checkpoint_enabled = false;
 
@@ -263,7 +280,7 @@ class RunTimeOptions {
     // This option will enable this feature to help flush out whether there is a missing cache invalidation
     bool enable_hw_cache_invalidation = false;
 
-    tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
+    std::optional<tt_metal::DispatchCoreType> dispatch_core_type_override;
 
     // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
     bool use_quasar_tensix_dispatch_cores = false;
@@ -533,6 +550,10 @@ public:
     void set_inspector_capture_tensor_specs(bool enabled) { inspector_settings.capture_tensor_specs = enabled; }
     bool get_inspector_log_runtime_entries() const { return inspector_settings.log_runtime_entries; }
     void set_inspector_log_runtime_entries(bool enabled) { inspector_settings.log_runtime_entries = enabled; }
+    bool get_inspector_log_mesh_buffers() const { return inspector_settings.log_mesh_buffers; }
+    void set_inspector_log_mesh_buffers(bool enabled) { inspector_settings.log_mesh_buffers = enabled; }
+    bool get_inspector_log_mesh_sockets() const { return inspector_settings.log_mesh_sockets; }
+    void set_inspector_log_mesh_sockets(bool enabled) { inspector_settings.log_mesh_sockets = enabled; }
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
@@ -670,6 +691,21 @@ public:
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
+    // How often the NOC-debug-dump background thread polls for stalled cores (light, unblocking poll).
+    std::chrono::milliseconds get_noc_debug_poll_interval() const { return noc_debug_poll_interval; }
+    void set_noc_debug_poll_interval(std::chrono::milliseconds interval) { noc_debug_poll_interval = interval; }
+    // How often the thread self-triggers a full read + process + report + discharge. Rounded up to a whole number
+    // of poll intervals. Zero disables the self-triggered full read entirely (events are then only processed on a
+    // user read or at device close).
+    std::chrono::milliseconds get_noc_debug_full_read_interval() const { return noc_debug_full_read_interval; }
+    void set_noc_debug_full_read_interval(std::chrono::milliseconds interval) {
+        noc_debug_full_read_interval = interval;
+    }
+    // Bounded-lateness margin held back when processing events mid-run. MUST exceed the poll interval above, which
+    // is what bounds how long a stalled core can stay unrecorded; otherwise a cross-core violation can be judged
+    // before the peer core's earlier event has arrived. Validated in start_debug_dump_thread().
+    std::chrono::milliseconds get_noc_debug_watermark_margin() const { return noc_debug_watermark_margin; }
+    void set_noc_debug_watermark_margin(std::chrono::milliseconds margin) { noc_debug_watermark_margin = margin; }
 
     void set_checkpoint_enabled(bool v) { checkpoint_enabled = v; }
     bool get_checkpoint_enabled() const { return checkpoint_enabled; }
@@ -721,7 +757,9 @@ public:
     bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
     bool get_gathering_enabled() const { return this->enable_gathering; }
 
-    tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
+    std::optional<tt_metal::DispatchCoreType> get_dispatch_core_type_override() const {
+        return dispatch_core_type_override;
+    }
 
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
     bool is_simulator_or_emulated() const {
@@ -764,6 +802,11 @@ public:
 
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
+
+    // Factory System Descriptor (FSD) path. Empty when unset.
+    bool has_factory_system_descriptor_path() const { return !factory_system_descriptor_path.empty(); }
+    const std::string& get_factory_system_descriptor_path() const { return factory_system_descriptor_path; }
+    void set_factory_system_descriptor_path(const std::string& path) { factory_system_descriptor_path = path; }
 
     bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
 

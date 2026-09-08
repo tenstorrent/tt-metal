@@ -22,8 +22,9 @@ template <
     int num_total_experts,
     bool zero_tail = false,
     bool full_sort = false,
-    bool generate_indices = true>
-inline void llk_math_sfpu_generic_moe_gate_topk(uint32_t eps, uint32_t scale) {
+    bool generate_indices = true,
+    bool do_extra_scale = false>
+inline void llk_math_sfpu_generic_moe_gate_topk(uint32_t eps, uint32_t scale, uint32_t extra_scale = 0) {
     _llk_math_eltwise_unary_sfpu_params_(
         _generic_moe_gate_topk_<
             normalize,
@@ -31,11 +32,13 @@ inline void llk_math_sfpu_generic_moe_gate_topk(uint32_t eps, uint32_t scale) {
             num_total_experts,
             zero_tail,
             full_sort,
-            generate_indices>,
+            generate_indices,
+            do_extra_scale>,
         0,
         VectorMode::RC_custom,
         eps,
-        scale);
+        scale,
+        extra_scale);
 }
 
 }  // namespace sfpu

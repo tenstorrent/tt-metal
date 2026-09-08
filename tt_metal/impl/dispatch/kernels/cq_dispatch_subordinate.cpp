@@ -15,11 +15,9 @@
 #include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
-#if DEVICE_PRINT_DISPATCH_ENABLED
 #include "tt_metal/impl/dispatch/kernels/device_print_dispatch.h"
-#endif
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
 #include "hostdev/dev_msgs.h"
 #include "risc_common.h"
@@ -86,7 +84,16 @@ constexpr uint64_t device_print_cycles_for_full = DEVICE_PRINT_CYCLES_FOR_FULL;
 // process_go_signal_mcast_cmd protects today's known site, but we save/restore for
 // defense-in-depth so future dispatch_s code can rely on cmd_buf state being preserved
 // across an execute() / shutdown() call.
-//
+#ifdef ARCH_QUASAR
+// Quasar keeps its cmd_buf state in RoCC overlay registers rather than the NOC_CTRL /
+// NOC_*_ADDR_COORDINATE MMIO registers Wormhole and Blackhole expose, so there is nothing for a
+// snapshot/restore guard to read back through NOC_CMD_BUF_READ_REG. Nothing needs restoring
+// either: every dispatch_s write path re-programs the whole cmd_buf via
+// cq_noc_async_write_init_state before it issues a with_state transaction, and the
+// wait_for_workers reorder in process_go_signal_mcast_cmd keeps device_print_dispatcher.execute()
+// out of every init_state -> with_state window.
+using DispatchSNocCmdBufGuard = device_print_dispatch::EmptyNocCmdBufGuard;
+#else
 // Constructor: snapshot the regs, then call the new-API _init_state functions to program
 // NOC_CTRL for our reads (cmd_buf 1) and writes (cmd_buf 0).
 // Destructor: restore the saved regs.
@@ -113,6 +120,7 @@ struct DispatchSNocCmdBufGuard {
     DispatchSNocCmdBufGuard(const DispatchSNocCmdBufGuard&) = delete;
     DispatchSNocCmdBufGuard& operator=(const DispatchSNocCmdBufGuard&) = delete;
 };
+#endif
 
 static DevicePrintDispatch<
     true,
@@ -337,7 +345,7 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
-    uint32_t sync_index = cmd->mcast.wait_stream - first_stream_used;
+    uint32_t sync_index = load_aligned<uint32_t>(&cmd->mcast.wait_stream) - first_stream_used;
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
 
     volatile tt_l1_ptr uint32_t* sync_sem_addr =
@@ -356,23 +364,22 @@ void process_go_signal_mcast_cmd() {
     }
     mcasts_sent++;  // Go signal sent -> update counter
 
-    // The location of the go signal embedded in the command does not meet NOC alignment requirements.
-    // cmd_ptr is guaranteed to meet the alignment requirements, since it is written to by prefetcher over NOC.
-    // Copy the go signal from an unaligned location to an aligned (cmd_ptr) location. This is safe as long as we
-    // can guarantee that copying the go signal does not corrupt any other command fields, which is true (see
-    // CQDispatchGoSignalMcastCmd).
+    // The go signal embedded in the command does not meet NOC alignment requirements, but cmd_ptr does
+    // (the prefetcher writes it over the NOC), so the go signal is copied there. storage_offset lands that
+    // copy anywhere in the 16-byte command, so every field must be read into a local before the first
+    // store below, and none may be read from cmd after it.
     // NOC source addresses must be raw L1 byte offsets (cached-alias form), so keep
     // aligned_go_signal_storage at the cached alias for the NOC sources below.
     // CPU writes go through a separate uncached pointer so the value lands in L1 SRAM directly;
     // the NOC then reads the same physical location via the cached-form source address.
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached = uncached_l1_ptr<uint32_t>(cmd_ptr);
-    uint32_t go_signal_value = cmd->mcast.go_signal;
+    uint32_t go_signal_value = load_aligned<uint32_t>(&cmd->mcast.go_signal);
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
     uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
     uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
-    uint32_t wait_count = cmd->mcast.wait_count;
-    uint32_t wait_stream = cmd->mcast.wait_stream;
+    uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
+    uint32_t wait_stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
 
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
@@ -477,13 +484,13 @@ void process_dispatch_s_wait_cmd() {
     ASSERT(
         (cmd->wait.flags == (CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM)) &&
         distributed_dispatcher);
-    uint32_t stream = cmd->wait.stream;
+    uint32_t stream = load_aligned<uint16_t>(&cmd->wait.stream);
     uint32_t index = stream - first_stream_used;
     volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
         static_cast<uintptr_t>(STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
 
     // Wait for workers to complete
-    while (stream_wrap_gt(cmd->wait.count, *worker_sem)) {
+    while (stream_wrap_gt(load_aligned<uint32_t>(&cmd->wait.count), *worker_sem)) {
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
@@ -502,7 +509,7 @@ void process_dispatch_s_wait_cmd() {
 FORCE_INLINE
 void set_num_worker_sems() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
-    num_worker_sems = cmd->set_num_worker_sems.num_worker_sems;
+    num_worker_sems = load_aligned<uint32_t>(&cmd->set_num_worker_sems.num_worker_sems);
     ASSERT(num_worker_sems <= max_num_worker_sems);
     cmd_ptr += sizeof(CQDispatchCmd);
 }
@@ -510,7 +517,7 @@ void set_num_worker_sems() {
 FORCE_INLINE
 void set_go_signal_noc_data() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
-    uint32_t num_words = cmd->set_go_signal_noc_data.num_words;
+    uint32_t num_words = load_aligned<uint32_t>(&cmd->set_go_signal_noc_data.num_words);
     ASSERT(num_words <= max_num_go_signal_noc_data_entries);
     volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + sizeof(CQDispatchCmd));
     for (uint32_t i = 0; i < num_words; ++i) {
@@ -654,7 +661,9 @@ void kernel_main() {
                 break;
             case CQ_DISPATCH_CMD_RT_PROFILER_FLUSH:
                 DPRINT("CQ_DISPATCH_CMD_RT_PROFILER_FLUSH\n");
-                wait_for_workers(cmd->rt_profiler_flush.wait_count, cmd->rt_profiler_flush.wait_stream);
+                wait_for_workers(
+                    load_aligned<uint32_t>(&cmd->rt_profiler_flush.wait_count),
+                    load_aligned<uint32_t>(&cmd->rt_profiler_flush.wait_stream));
                 cmd_ptr += sizeof(CQDispatchCmd);
                 break;
             case CQ_DISPATCH_CMD_TERMINATE:

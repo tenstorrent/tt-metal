@@ -656,6 +656,9 @@ inline void matmul_configure_mop_throttled(
  * @param rt_dim: Number of row tiles in the output block.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
  * @note @ref _llk_math_matmul_ runs the configured matmul with matching template args.
+ * @note Establishes the operand-driven DEFAULT Src zero-substitution state; @ref
+ *       _llk_math_matmul_ asserts this precondition under LLK asserts, so a prior op that left PRESERVE
+ *       must be followed by this init (or a format-changing reconfig) before the matmul.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_init_(
@@ -684,6 +687,14 @@ inline void _llk_math_matmul_init_(
         matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // Matmul never sets the Src zero-substitution flag itself, so
+    // re-establish the operand-driven DEFAULT here. A preceding copy_init/datacopy op may have left the flag in
+    // PRESERVE. Relying on a reconfig_data_format to clear it is not enough: the metal wrapper
+    // llk_math_reconfig_data_format_srca(old, new) skips the LLK reconfig entirely when old == new format, so on a
+    // same-format reconfig the reset never runs. Without this line MVMUL would inherit a stale keep-denormals flag
+    // (denormal Src results differ). Mirrors what reduce/transpose/datacopy inits already do.
+    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -715,6 +726,17 @@ template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
 {
     llk::san::operation_check<llk::san::Operation::Matmul>(math_fidelity, THROTTLE_LEVEL, ct_dim, rt_dim);
+
+    // Zero-flag leak guard. MVMUL reads ALU_ACC_CTRL_Zero_Flag_disabled_src, which for
+    // denormal Src operands changes the result (flush vs keep — measured on WH n150 / BH p150b). Matmul is
+    // a "runs-in-DEFAULT" op: it never sets the flag itself and relies on hw_configure / a format-changing
+    // reconfig having established the format-driven DEFAULT. If a prior copy_init/datacopy op left the flag in
+    // PRESERVE and no format-changing reconfig ran before this matmul, MVMUL silently
+    // keeps denormals. This assert catches exactly that leak (fires only under LLK asserts).
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "matmul: Src zero-substitution flag does not hold the operand-driven value — a prior op (copy_init/datacopy) left "
+        "a keep flag before MVMUL without a format-changing reconfig; denormal Src results will differ");
 
     const bool reuse_a           = ct_dim >= rt_dim;
     const std::uint32_t t_dim    = reuse_a ? rt_dim : ct_dim;

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/device_fixture.hpp"
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -74,7 +73,7 @@ KernelCacheStatus CompileProgramTestWrapper(
             .get_device_build_env(device.build_id())
             .build_env.get_out_kernel_root_path());
 
-    slow_dispatch::CompileProgram(device, program);
+    program.impl().compile(&device);
 
     std::unordered_map<std::string, std::string> post_compile_kernel_to_hash_str = get_last_program_binary_path(
         program,

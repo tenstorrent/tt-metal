@@ -110,6 +110,8 @@ class Flux2SingleTransformerBlock(Module):
             mesh_axis=tp_axis,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            # No explicit L1 mm_memory_config: the fused MMRS path now hands the MM output to the
+            # RS through the rolling L1 window by default (see Linear.forward_fused_addcmul).
         )
 
         self._dim = dim
@@ -293,6 +295,8 @@ class Flux2Transformer(Module):
             mesh_device=device,
             mesh_axis=tp_axis,
             ccl_manager=ccl_manager,
+            # No explicit L1 mm_memory_config: this layer's fused path uses the rolling-window L1
+            # handoff by default, and its plain forward never read mm_memory_config.
         )
 
         self.device = device

@@ -91,8 +91,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _configure_buf_desc_table_(buf_desc_id_pack, bd_pack);
     _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
 
-    // Implied math format disable for SrcS and sfpmem mod selection
+    // Implied math format disable for SrcS (unpacker). Load/store decode uses explicit sfpmem.
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
+
+    // SFPU load reads what UNP_S wrote; store writes what PACK1 will read.
+    const std::uint32_t load_sfpmem  = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.unpack_S_dst));
+    const std::uint32_t store_sfpmem = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.pack_S_src));
 
     // -------------------------------------------------------------------------
     // SFPU configuration and execution
@@ -121,11 +125,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #pragma GCC unroll 8
             for (int d = 0; d < num_sfpu_iterations; d++)
             {
-                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, ckernel::math::SFPU_SRCS_BASE_ADDR + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG0, load_sfpmem, ADDR_MOD_7, 0, ckernel::math::SFPU_SRCS_BASE_ADDR + (d << 1));
                 // Multiply LREG0 * LREG0, store result in LREG0
                 TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
                 // Store result back to destination
-                TT_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, store_base_addr + (d << 1));
+                TT_SFPSTORE(p_sfpu::LREG0, store_sfpmem, ADDR_MOD_7, 0, store_base_addr + (d << 1));
             }
 
             _llk_math_eltwise_sfpu_srcs_clear_vlds_<true /*SRCS_RD_DONE*/, true /*SRCS_WR_DONE*/>(); // Clears dvalid for SFPU read and write

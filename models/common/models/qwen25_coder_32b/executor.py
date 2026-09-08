@@ -1,146 +1,90 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Thin executors for ``Qwen25Coder32B`` delegating to shared ``EagerLLMExecutor`` /
-``TracedLLMExecutor`` (paged KV, page tables, compile).
-"""
-
-from __future__ import annotations
+"""Qwen2.5-Coder-32B construction and compatibility entry points."""
 
 import ttnn
-from models.common.models.executor import EagerLLMExecutor, TracedLLMExecutor
-from models.common.models.qwen25_coder_32b.model import Qwen25Coder32B, _slice_last_token_tile
+from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.models.qwen2_executor import Qwen25Coder32BExecutor, Qwen25Coder32BExecutorConfig
+from models.common.models.qwen2_executor import build_qwen25_coder_32b_executor as _build_qwen25_coder_32b_executor
+from models.common.models.qwen25_coder_32b.hf_adaptor import Qwen25Coder32BForCausalLM
+from models.common.models.qwen25_coder_32b.model import _slice_last_token_tile
 
 
-def _iter_qwen25_coder_32b_executor_named_modules(model: Qwen25Coder32B):
-    yield ("embed", model.embed)
-    yield ("rope_setup", model.rope_setup)
-    for i, layer in enumerate(model.layers):
-        yield (f"layer{i}", layer)
-    yield ("norm", model.norm)
-    yield ("lm_head", model.lm_head)
+def build_qwen25_coder_32b_executor(
+    llm: Qwen25Coder32BForCausalLM,
+    config: Qwen25Coder32BExecutorConfig,
+) -> Qwen25Coder32BExecutor:
+    return _build_qwen25_coder_32b_executor(llm, config)
 
 
-class EagerQwen25Coder32BExecutor:
-    """Delegates to ``EagerLLMExecutor``; attaches ``model_args`` on the model for the engine."""
+def _compat_executor_config(model, *, trace_mode: str, device_sampling_enabled: bool) -> Qwen25Coder32BExecutorConfig:
+    runtime_config = getattr(model, "model_args", None)
+    if runtime_config is None:
+        raise ValueError("Qwen25Coder32B compatibility executor requires model.model_args")
+    block_size = 32
+    max_seq_len = int(getattr(runtime_config, "max_seq_len", model.config.max_seq_len))
+    max_batch_size = int(getattr(runtime_config, "max_batch_size", model.config.max_batch_size))
+    max_num_blocks = ((max_seq_len + block_size - 1) // block_size) * max_batch_size
+    return Qwen25Coder32BExecutorConfig(
+        trace=TraceConfig(mode=trace_mode),
+        warmup=WarmupConfig(
+            prefill_seq_lens=tuple(getattr(runtime_config, "trace_prefill_supported_seq_lens", (128, 1024))),
+            prefill_batch_sizes=(1,),
+            include_decode_top_k=device_sampling_enabled,
+        ),
+        paged_kv_cache=PagedKVCacheConfig(
+            block_size=block_size,
+            max_num_blocks=max_num_blocks,
+            dtype=getattr(runtime_config, "kv_cache_dtype", ttnn.bfloat8_b),
+        ),
+        device_sampling_enabled=device_sampling_enabled,
+    )
 
-    def __init__(self, model: Qwen25Coder32B, mesh_device: ttnn.MeshDevice):
-        self._engine = EagerLLMExecutor(
-            model, mesh_device, iter_named_modules=_iter_qwen25_coder_32b_executor_named_modules
+
+class EagerQwen25Coder32BExecutor(Qwen25Coder32BExecutor):
+    """Compatibility wrapper over the shared eager runtime."""
+
+    def __init__(self, model, mesh_device):
+        del mesh_device
+        super().__init__(
+            model,
+            model.model_args,
+            _compat_executor_config(model, trace_mode="none", device_sampling_enabled=False),
         )
 
-    @property
-    def model(self) -> Qwen25Coder32B:
-        return self._engine.model
 
-    @property
-    def mesh_device(self) -> ttnn.MeshDevice:
-        return self._engine.mesh_device
-
-    @property
-    def model_args(self):
-        return self._engine.model_args
-
-    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
-        return self._engine.allocate_kv_cache(kv_cache_shape, dtype, num_layers)
-
-    def compile_prefill(self, **kwargs):
-        return self._engine.compile_prefill(**kwargs)
-
-    def compile_decode(self, **kwargs):
-        return self._engine.compile_decode(**kwargs)
-
-    def prefill_forward(self, *args, **kwargs):
-        return self._engine.prefill_forward(*args, **kwargs)
-
-    def decode_forward(self, *args, **kwargs):
-        return self._engine.decode_forward(*args, **kwargs)
-
-    def warmup_model_prefill(self, *args, **kwargs):
-        # Eager execution captures no prefill trace; fail loud instead of silently no-op'ing.
-        raise NotImplementedError("EagerQwen25Coder32BExecutor does not support prefill-trace warmup")
-
-    def cleanup(self) -> None:
-        return self._engine.cleanup()
-
-
-class TracedQwen25Coder32BExecutor:
-    """Traced path; same surface as ``EagerQwen25Coder32BExecutor``."""
+class TracedQwen25Coder32BExecutor(Qwen25Coder32BExecutor):
+    """Compatibility wrapper over the shared traced runtime."""
 
     def __init__(
         self,
-        model: Qwen25Coder32B,
-        mesh_device: ttnn.MeshDevice,
+        model,
+        mesh_device,
         ondevice_decode_loop: bool = False,
         fast_prefill_last_token: bool = False,
     ):
-        self._engine = TracedLLMExecutor(
+        del mesh_device, fast_prefill_last_token
+        super().__init__(
             model,
-            mesh_device,
-            iter_named_modules=_iter_qwen25_coder_32b_executor_named_modules,
-            ondevice_decode_loop=ondevice_decode_loop,
-            fast_prefill_last_token=fast_prefill_last_token,
+            model.model_args,
+            _compat_executor_config(
+                model,
+                trace_mode="all",
+                device_sampling_enabled=bool(ondevice_decode_loop),
+            ),
         )
 
-    @property
-    def model(self) -> Qwen25Coder32B:
-        return self._engine.model
 
-    @property
-    def mesh_device(self) -> ttnn.MeshDevice:
-        return self._engine.mesh_device
-
-    @property
-    def model_args(self):
-        return self._engine.model_args
-
-    @property
-    def trace_id_prefill(self):
-        return self._engine.trace_id_prefill
-
-    @property
-    def trace_ids_decode(self):
-        return self._engine.trace_ids_decode
-
-    @property
-    def already_warmed_up_prefill(self):
-        return self._engine.already_warmed_up_prefill
-
-    def warmup_model_prefill(self, *args, **kwargs):
-        return self._engine.warmup_model_prefill(*args, **kwargs)
-
-    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
-        return self._engine.allocate_kv_cache(kv_cache_shape, dtype, num_layers)
-
-    def compile_prefill(self, **kwargs):
-        return self._engine.compile_prefill(**kwargs)
-
-    def compile_decode(self, **kwargs):
-        return self._engine.compile_decode(**kwargs)
-
-    def prefill_forward(self, *args, **kwargs):
-        return self._engine.prefill_forward(*args, **kwargs)
-
-    def decode_forward(self, *args, **kwargs):
-        return self._engine.decode_forward(*args, **kwargs)
-
-    def cleanup(self) -> None:
-        return self._engine.cleanup()
-
-
-def run_prefill(model: Qwen25Coder32B, token_ids_tt: ttnn.Tensor, *, start_pos: int = 0) -> ttnn.Tensor:
-    """Prefill chunk without paged executor (tests): ``token_ids_tt`` shape ``[1,1,1,S]``, ``S % 128 == 0``."""
+def run_prefill(model, token_ids_tt, *, start_pos: int = 0):
     return model.prefill_from_token_ids(token_ids_tt, start_pos=start_pos)
 
 
-def run_decode(model: Qwen25Coder32B, token_id_tt: ttnn.Tensor, *, current_pos: int) -> ttnn.Tensor:
-    """Single-token decode without page table (tests)."""
+def run_decode(model, token_id_tt, *, current_pos: int):
     return model.decode_from_token_ids(token_id_tt, current_pos=current_pos)
 
 
-def run_lm_head(model: Qwen25Coder32B, hidden_tt: ttnn.Tensor) -> ttnn.Tensor:
-    """Last-tile hidden slice so width-sharded LM matmul M matches ``LMHead1D`` program config."""
+def run_lm_head(model, hidden_tt):
     if len(hidden_tt.shape) == 4 and hidden_tt.shape[2] > 32:
         old = hidden_tt
         hidden_tt = _slice_last_token_tile(old, hidden_tt.shape[2] - 1)

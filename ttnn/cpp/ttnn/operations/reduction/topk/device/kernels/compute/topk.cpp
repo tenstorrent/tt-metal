@@ -323,11 +323,13 @@ void kernel_main() {
 
                 // Load tiles into destination registers for merging
                 // Load existing sorted values into dest reg 0
-                copy_tile_to_dst_init_short_with_dt(dfb1, dfb0);
+                reconfig_data_format_srca(dfb1, dfb0);
+                copy_init(dfb0);
                 copy_tile(dfb0, 0, DST_VAL);
 
                 // Load existing sorted indices into dest reg 2
-                copy_tile_to_dst_init_short_with_dt(dfb0, dfb1);
+                reconfig_data_format_srca(dfb0, dfb1);
+                copy_init(dfb1);
                 copy_tile(dfb1, 0, DST_IND);
 
                 if (first_sort_from_transposed) {
@@ -338,11 +340,13 @@ void kernel_main() {
                 }
 
                 // Load new input values into dest reg 1
-                copy_tile_to_dst_init_short_with_dt(transposed_ind_dfb_index, transposed_val_dfb_index);
+                reconfig_data_format_srca(transposed_ind_dfb_index, transposed_val_dfb_index);
+                copy_init(transposed_val_dfb_index);
                 copy_tile(transposed_val_dfb_index, transposed_offset, 1);
 
                 // Load new input indices into dest reg 3
-                copy_tile_to_dst_init_short_with_dt(transposed_val_dfb_index, transposed_ind_dfb_index);
+                reconfig_data_format_srca(transposed_val_dfb_index, transposed_ind_dfb_index);
+                copy_init(transposed_ind_dfb_index);
                 copy_tile(transposed_ind_dfb_index, transposed_offset, 3);
 
                 // Perform merge and sort operation

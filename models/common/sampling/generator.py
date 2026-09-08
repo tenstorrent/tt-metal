@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import itertools
 import random
 import secrets
 from dataclasses import dataclass, fields, replace
@@ -91,6 +92,12 @@ class _TraceKey:
     bucket: int | None = None
 
 
+# precompile(all_configs=True) enumerates every combination of the bool fields above. Derive the
+# count so a new flag breaks the unpacking there instead of silently leaving its programs
+# uncompiled -- which reopens TT_FATAL !is_capturing_trace on the first request needing it.
+_TRACE_KEY_FLAGS = sum(f.type in (bool, "bool") for f in fields(_TraceKey))
+
+
 class SamplingGenerator:
     """
     High-level sampling helper that owns both `TTSampling` and `TTPenalties`
@@ -131,6 +138,7 @@ class SamplingGenerator:
         self.seed_manager = SeedManager(
             self.tt_sampling,
             max_batch_size=seed_batch_size,
+            salt_duplicate_seeds=getattr(args, "salt_duplicate_seeds", True),
         )
 
     def _new_trace_state(self):
@@ -172,10 +180,10 @@ class SamplingGenerator:
                 continue
         self._trace_states.clear()
 
-    def reset_prompt_tokens(self, prompt_tokens):
+    def reset_prompt_tokens(self, prompt_tokens, slots: list[int] | None = None):
         if not self._penalties_active:
             return
-        self.tt_penalties.reset_prompt_tokens(prompt_tokens)
+        self.tt_penalties.reset_prompt_tokens(prompt_tokens, slots=slots)
 
     def reset_output_state(self, tokens=None):
         if not self._penalties_active:
@@ -314,11 +322,93 @@ class SamplingGenerator:
         *,
         penalties_on: bool,
         tt_out_tok: Optional[ttnn.Tensor],
+        count_tokens: bool = True,
     ):
         if penalties_on:
             logits = self.tt_penalties.apply(logits)
         tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
+        if penalties_on and count_tokens:
+            # Fold the penalty bookkeeping into the sampled step rather than running it afterwards in
+            # sample(). The order is unchanged -- penalties are applied to this step's logits from the
+            # previous steps' counts, then the new token is counted -- but doing it here means it is part
+            # of whatever trace captures this, instead of a handful of scatter/tilize/reshape allocations
+            # on every decode step behind a live trace. Those ops take no preallocated output tensor, so
+            # tracing them is the only way to stop them allocating.
+            self.tt_penalties.update_output_tokens(tt_out_tok if tt_out_tok is not None else tt_tokens)
         return tt_tokens, tt_log_probs
+
+    def reset_penalty_counts(self):
+        """Zero the output-token penalty counters, if penalties are active.
+
+        Eager pre-compile passes pass ``count_tokens=False`` to _run_sampling instead, so they never add
+        phantom tokens and nothing needs undoing. Passes inside a trace-capture window must NOT disable
+        counting: capture records rather than executes, so nothing is counted at capture time, and
+        disabling it there would drop the update from every replay -- the real sampled token would never
+        be penalized. This remains for callers that genuinely want the counters cleared. In-place, so it
+        allocates nothing.
+        """
+        if self._penalties_active:
+            self.tt_penalties.reset_output_tokens()
+
+    def precompile(
+        self,
+        logits: ttnn.Tensor,
+        *,
+        tt_out_tok: Optional[ttnn.Tensor] = None,
+        all_configs: bool = False,
+    ) -> None:
+        """Run the sampling pipeline once without capturing, to compile it and size its scratch.
+
+        This is the pre-compile step :meth:`capture_trace` would otherwise do inline. Callers that capture
+        the sampling trace behind another trace (e.g. right after the decode trace) should run it earlier,
+        while no trace is live on device, and then pass ``skip_precompile=True`` to :meth:`capture_trace`;
+        left inline, this pass allocates device buffers that a live trace can corrupt on replay.
+
+        ``logits`` only has to match the spec of the tensor that will later be captured, not be it.
+
+        ``all_configs`` compiles every ``_TraceKey`` flag combination rather than just the one active
+        now. Traces are keyed on (penalties, log_probs, force_argmax), but warmup only ever runs one of
+        those, so a request asking for logprobs or penalties later finds an uncaptured slot and, because
+        callers pass ``skip_precompile=True``, executes its program for the first time inside a live
+        trace capture -- TT_FATAL !is_capturing_trace, which kills the engine rather than erroring.
+        """
+        if not all_configs:
+            self._run_sampling(
+                logits,
+                penalties_on=self._penalties_active,
+                tt_out_tok=tt_out_tok,
+                count_tokens=False,
+            )
+            return
+
+        log_probs = self.tt_sampling.log_probs_calculator
+        saved_penalties = self._penalties_active
+        saved_force_argmax = self.tt_sampling._force_argmax_sampling
+        saved_enabled = list(log_probs.logprobs_enabled)
+        saved_num_logprobs = list(log_probs.num_logprobs)
+        try:
+            for penalties_on, log_probs_on, force_argmax in itertools.product((False, True), repeat=_TRACE_KEY_FLAGS):
+                # Models that disable force-argmax never reach that program, and it is not runnable
+                # under their sub-device config (untilize with sub_core_grids=None).
+                if force_argmax and not self.tt_sampling._allow_force_argmax_sampling:
+                    continue
+                self._penalties_active = penalties_on
+                # Set the flag directly: reset_params() would re-derive it from k/p/temp and overwrite
+                # the live request params, and only the flag selects the program being compiled.
+                self.tt_sampling._force_argmax_sampling = force_argmax
+                log_probs.set_log_probs_mode(log_probs_on, num_logprobs=0)
+                self._run_sampling(
+                    logits,
+                    penalties_on=penalties_on,
+                    tt_out_tok=tt_out_tok,
+                    count_tokens=False,
+                )
+        finally:
+            self._penalties_active = saved_penalties
+            self.tt_sampling._force_argmax_sampling = saved_force_argmax
+            # Restore through the setter that owns the derived flags rather than re-deriving them here.
+            log_probs.set_log_probs_mode(saved_enabled, num_logprobs=saved_num_logprobs)
+            self._log_probs_active = log_probs.enable_log_probs
 
     def capture_trace(
         self,
@@ -340,11 +430,17 @@ class SamplingGenerator:
             logger.debug(
                 f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
             )
+            # TTPenalties.apply() rewrites its input in place, so compiling on `logits` itself would
+            # leave the capture buffer already penalized and make the first replay penalize it twice.
+            scratch = ttnn.clone(logits) if penalties_on else logits
             self._run_sampling(
-                logits,
+                scratch,
                 penalties_on=penalties_on,
                 tt_out_tok=tt_out_tok,
+                count_tokens=False,
             )
+            if scratch is not logits:
+                ttnn.deallocate(scratch)
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
         sampled = self._run_sampling(
@@ -388,10 +484,14 @@ class SamplingGenerator:
         enable_trace: bool = True,
         tt_out_tok: Optional[ttnn.Tensor] = None,
         skip_precompile: bool = False,
+        count_tokens: bool = True,
     ) -> ttnn.Tensor:
         """
         Convenience wrapper that either runs the sampling module directly or
         replays a captured trace.
+
+        ``count_tokens`` only applies to the untraced path: the token-count update is recorded into
+        the trace at capture time, so a replay always performs it.
         """
 
         penalties_on = self._penalties_active
@@ -400,30 +500,33 @@ class SamplingGenerator:
         # Explicit request seeds update a persistent seed tensor every token;
         # run them directly so trace replay cannot observe stale seed state.
         use_internal_trace = enable_trace and not self.seed_manager.has_active_request_seed()
-
+        if use_internal_trace and not count_tokens:
+            raise ValueError("count_tokens=False cannot be honoured on a traced sample(); pass enable_trace=False.")
         if not use_internal_trace:
             tt_out = self._run_sampling(
                 logits,
                 penalties_on=penalties_on,
                 tt_out_tok=tt_out_tok,
+                count_tokens=count_tokens,
             )
         else:
             key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
             if slot["id"] is None:
-                return self.capture_trace(
+                self.capture_trace(
                     logits,
                     tt_out_tok=tt_out_tok,
                     skip_precompile=skip_precompile,
                 )
+                # begin/end_trace_capture only records the ops, so the captured output buffer
+                # still holds the previous step's token; replay before returning it as this
+                # step's sample. Callers that only capture (warmup) must not pay for this.
+                return self._execute_trace(key)
 
             self._validate_trace_inputs(slot, logits, tt_out_tok)
             tt_out = self._execute_trace(key)
 
-        if penalties_on and tt_out is not None:
-            if isinstance(tt_out, tuple):
-                self.tt_penalties.update_output_tokens(tt_out[0])
-            else:
-                self.tt_penalties.update_output_tokens(tt_out)
+        # The penalty update now runs inside _run_sampling, so it is captured with the rest of the sampled
+        # step and replayed with it -- there is nothing to do here.
         return tt_out
 
 
@@ -736,10 +839,28 @@ class SeedManager:
     writes to device. `write_device_seed_values` writes explicit seeds only.
     """
 
-    def __init__(self, tt_sampling, max_batch_size=32):
+    def __init__(self, tt_sampling=None, max_batch_size=32, salt_duplicate_seeds=True, *, seed_buffer=None):
+        if tt_sampling is None and seed_buffer is None:
+            raise TypeError("SeedManager requires tt_sampling or a mutable seed_buffer")
+        if tt_sampling is not None and seed_buffer is not None:
+            raise TypeError("SeedManager accepts exactly one device seed sink")
         self.max_batch_size = max_batch_size
+        # When False, concurrent slots sharing a request seed keep salt 0, so two independent
+        # requests carrying the same seed stay bit-identical (the OpenAI/vLLM reproducibility
+        # contract, asserted by the vLLM TT sampling suite).
+        #
+        # #53077 added salting for "n>1 completions of one prompt with a fixed seed occupy
+        # several slots with the same request seed". That premise does not hold on the vLLM v1
+        # path: ParentRequest._get_child_sampling_params already gives child i `seed + i`
+        # (vllm/v1/engine/parallel_sampling.py), so n>1 children never reach the backend
+        # sharing a seed. There, every duplicate seed is genuinely independent requests that
+        # MUST match, and salting them is a regression. Demo paths that do replicate one seed
+        # across slots (e.g. simple_text_demo.py) keep the default and are unaffected.
+        self.salt_duplicate_seeds = salt_duplicate_seeds
         self.seeds = [None for _ in range(max_batch_size)]
         self.seed_counters = [0 for _ in range(max_batch_size)]
+        # Last per-slot device seeds pushed by get_new_values; the Python sampler turns these
+        # into its per-user uniforms so it draws from the same stream as the device PRNG path.
         # Disambiguates concurrent slots that carry the SAME explicit request
         # seed (n>1 completions of one prompt with a fixed seed). A slot whose
         # seed is unique among active slots always has salt 0, preserving the
@@ -748,6 +869,13 @@ class SeedManager:
         # Pre-allocate RNG objects; actual request seeds are set via reset_seed().
         self.rngs = [random.Random(secrets.randbits(64)) for _ in range(max_batch_size)]
         self.tt_sampling = tt_sampling
+        self._seed_buffer = seed_buffer
+        self._seed_buffer_source = None
+        if seed_buffer is not None:
+            source = getattr(seed_buffer, "source", None)
+            if source is None or not callable(getattr(seed_buffer, "update", None)):
+                raise TypeError("seed_buffer must expose source and update()")
+            self._seed_buffer_source = source.clone() if callable(getattr(source, "clone", None)) else copy.copy(source)
         # True when at least one user slot has a non-None request seed.
         self._seed_active = False
         # Set to True by reset_seed() so the next get_new_values() pushes
@@ -761,13 +889,114 @@ class SeedManager:
         # True only for the most recent get_new_values() call when at least
         # one active slot used an explicit request seed.
         self._active_request_seed = False
+        # Sampling1D runtime state. The all-unseeded path is deliberately
+        # untouched until an explicit request seed overlays model defaults.
+        self._runtime_seed_buffer_managed = False
         # Mesh mapper for sharding seeds across rows when sampling_dp > 1.
-        if tt_sampling._sampling_dp > 1:
+        sampling_dp = 1 if tt_sampling is None else tt_sampling._sampling_dp
+        if sampling_dp > 1:
             self._seed_mapper = ttnn.ShardTensor2dMesh(
                 tt_sampling.mesh_device, dims=tt_sampling._param_dims, mesh_shape=tt_sampling.cluster_shape
             )
         else:
             self._seed_mapper = None
+
+    def restore_default_device_values(self) -> None:
+        """Restore a model-owned seed buffer after an explicitly seeded request.
+
+        ``LazyBuffer.update`` also replaces its future materialization source.  Runtime
+        request seeds are invocation state, not model configuration, so preserve the
+        construction-time source across updates and restore it when execution returns
+        to the legacy ``seed=None`` path.
+        """
+
+        if self._seed_buffer is None or self._seed_buffer_source is None:
+            return
+        source = (
+            self._seed_buffer_source.clone()
+            if callable(getattr(self._seed_buffer_source, "clone", None))
+            else copy.copy(self._seed_buffer_source)
+        )
+        self._seed_buffer.update(source)
+        self._seed_buffer.source = source
+        self.seeds = [None for _ in range(self.max_batch_size)]
+        self.seed_counters = [0 for _ in range(self.max_batch_size)]
+        self._seed_active = False
+        self._active_request_seed = False
+        self._reseted = False
+        self._needs_skip = False
+        self._runtime_seed_buffer_managed = False
+
+    @property
+    def seed_buffer(self):
+        """Return the borrowed model-owned seed buffer, if this manager uses one."""
+
+        return self._seed_buffer
+
+    def get_seed_device_buffer(self):
+        """Return the stable model-owned device handle used by Sampling1D traces."""
+
+        get_device_buffer = getattr(self._seed_buffer, "get_device_buffer", None)
+        return get_device_buffer() if callable(get_device_buffer) else None
+
+    def refresh_absolute_request_seeds(self, seeds, active_slots, positions, *, reset_batch: bool):
+        """Refresh a model-owned seed buffer for one Sampling1D decode step.
+
+        Explicit slots use the stable ``hash(request_seed, absolute_position)``
+        stream. Every unseeded and inactive slot retains its exact
+        construction-default value. The initial all-unseeded path remains
+        untouched; after a mixed/seeded request, the first all-unseeded call
+        restores the complete default tensor. Explicit seeds remain stable
+        across slot remaps through their absolute-position hash.
+        """
+
+        if self._seed_buffer is None:
+            raise RuntimeError("absolute request-seed refresh requires a model-owned seed buffer")
+        active = {int(slot) for slot in active_slots}
+        if any(slot < 0 or slot >= self.max_batch_size for slot in active):
+            raise ValueError("active seed slot is outside the seed-buffer capacity")
+        requested = {slot: self._seed_from_slot_params(seeds, slot) for slot in active}
+        explicit = {slot: seed for slot, seed in requested.items() if seed is not None}
+        if not explicit:
+            if self._runtime_seed_buffer_managed:
+                self.restore_default_device_values()
+                return tuple(int(value) for value in self._seed_buffer_source.reshape(-1).tolist())
+            return None
+
+        values = [int(value) for value in self._seed_buffer_source.reshape(-1).tolist()]
+        if len(values) != self.max_batch_size:
+            raise ValueError("seed-buffer default source does not match its declared capacity")
+        for slot, request_seed in explicit.items():
+            position = self._position_for_slot(positions, slot)
+            if position is None or position < 0:
+                raise ValueError("explicit request seed requires a nonnegative absolute decode position")
+            self.seeds[slot] = request_seed
+            self.seed_counters[slot] = position + 1
+            values[slot] = _hash_request_seed_to_device_seed(request_seed, position + 1)
+        for slot in set(range(self.max_batch_size)) - set(explicit):
+            self.seeds[slot] = None
+            self.seed_counters[slot] = 0
+        self._seed_active = True
+        self._active_request_seed = True
+        self._runtime_seed_buffer_managed = True
+        self._write_model_seed_values(values)
+        return tuple(values)
+
+    @staticmethod
+    def _position_for_slot(positions, slot: int):
+        if isinstance(positions, torch.Tensor):
+            flat = positions.reshape(-1)
+            return None if slot >= flat.numel() else int(flat[slot].item())
+        if isinstance(positions, (list, tuple)):
+            return None if slot >= len(positions) else int(positions[slot])
+        return None if positions is None else int(positions)
+
+    def _write_model_seed_values(self, values) -> None:
+        source = torch.tensor(values, dtype=self._seed_buffer_source.dtype).reshape(self._seed_buffer_source.shape)
+        self._seed_buffer.update(source)
+        # Request state must not become the LazyBuffer's rematerialization
+        # default after model cleanup.
+        self._seed_buffer.source = self._seed_buffer_source
 
     def _next_unseeded_rng_seed(self) -> int:
         return secrets.randbits(64)
@@ -796,6 +1025,8 @@ class SeedManager:
         rather than a running count -- avoids re-colliding with a surviving
         duplicate after an earlier one finished and vacated its slot.
         """
+        if not self.salt_duplicate_seeds:
+            return 0
         taken = {
             self.seed_salts[other]
             for other in range(self.max_batch_size)
@@ -863,7 +1094,7 @@ class SeedManager:
             if slot < 0 or slot >= flat.numel():
                 return None
             seed = flat[slot]
-        elif isinstance(seeds, list):
+        elif isinstance(seeds, (list, tuple)):
             if slot < 0 or slot >= len(seeds):
                 return None
             seed = seeds[slot]
@@ -889,8 +1120,12 @@ class SeedManager:
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
 
-    def reset_seed_from_slots_if_needed(self, seeds, user_ids) -> None:
-        """Reset only active slots whose slot-indexed seed changed."""
+    def reset_seed_from_slots_if_needed(self, seeds, user_ids) -> list[int]:
+        """Reset only active slots whose slot-indexed seed changed.
+
+        Returns the reset slots: they hold newly admitted requests, so their host
+        position is authoritative even when the rest of the batch's is not.
+        """
         if user_ids is None:
             user_ids = range(self.max_batch_size)
         reset_slots = []
@@ -900,6 +1135,7 @@ class SeedManager:
                 reset_slots.append(slot)
         if reset_slots:
             self.reset_seed_from_slots(seeds, reset_slots)
+        return reset_slots
 
     def align_seed_counters_to_positions(self, seeds, user_ids, positions, offset: int = 1):
         """Make explicit-seed decode independent of persistent slot lifetime.
@@ -909,6 +1145,10 @@ class SeedManager:
         slots. For explicit request seeds, deriving the per-token device seed
         from the absolute decode position keeps the stream reproducible even
         when the Python-side slot counter was reset or moved.
+
+        ``positions`` MUST be authoritative for the slots being aligned: the
+        counter self-advances per token, so aligning to a position that lags
+        under async scheduling makes the stream timing-dependent (#51981).
         """
         if positions is None:
             return
@@ -1014,6 +1254,9 @@ class SeedManager:
         except (TypeError, ValueError) as exc:
             raise ValueError("seed_values must contain integer-like values") from exc
 
+        if self._seed_buffer is not None:
+            self._write_model_seed_values(wrapped)
+            return
         seed_tt = ttnn.from_torch(
             torch.tensor(wrapped, dtype=torch.uint32),
             dtype=ttnn.uint32,
@@ -1076,3 +1319,4 @@ class SeedManager:
 
         self.write_device_seed_values(new_seeds)
         self._reseted = False
+        return tuple(new_seeds)

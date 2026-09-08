@@ -94,7 +94,6 @@ def _fit_cores(total_rows, device):
     return num_cores, grid
 
 
-@pytest.mark.timeout(300)  # transpose-chain fold deadlocks on Quasar; cap it so the hang doesn't block the suite
 @pytest.mark.xfail(
     run=False,
     reason="use_transpose_as_fold=True routes through the Quasar transpose_wh compute (transpose_wh_rm), "

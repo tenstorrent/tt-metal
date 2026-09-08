@@ -11,13 +11,14 @@
  * LLK PACK FAST TILIZE (BH)
  *************************************************************************/
 
+template <bool is_fp32_dest_acc_en>
 inline void llk_pack_fast_tilize_init(
     const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
     const std::uint8_t output_id = get_output_id(pack_output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const uint32_t use_32bit_dest =
         pack_src_format[output_id] == (uint)DataFormat::Float32 || pack_src_format[output_id] == (uint)DataFormat::Tf32;
-    _llk_pack_fast_tilize_init_<DST_SYNC_MODE, DST_ACCUM_MODE>(
+    _llk_pack_fast_tilize_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
         use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces, pack_src_format[output_id]);
 }
 

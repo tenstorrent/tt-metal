@@ -58,6 +58,44 @@ TORCH_INTEGER_DTYPES = [
 NP_INTEGER_DTYPES = [np.byte, np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
 
 
+def make_disjoint_dram_core_range_set(device):
+    num_dram_banks = device.dram_grid_size().x
+    first_range_end = 2 if num_dram_banks == 7 else 1
+    return ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(first_range_end, 0)),
+            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(num_dram_banks - 1, 0)),
+        }
+    )
+
+
+def make_full_dram_core_range_set(device):
+    num_dram_banks = device.dram_grid_size().x
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))})
+
+
+# DRAM core grids that can only be built once a device is available are referenced from
+# `@pytest.mark.parametrize` by a stable string key instead of by the factory callable
+# itself, so that every pytest-xdist worker collects an identical set of test IDs.
+# (A bare function object renders as `<function ... at 0x...>`, whose address differs per
+# worker process, which makes xdist abort with "different tests were collected".)
+DRAM_GRID_FACTORIES = {
+    "disjoint_dram": make_disjoint_dram_core_range_set,
+    "full_dram": make_full_dram_core_range_set,
+}
+
+
+def resolve_dram_grid(grid, device):
+    """Resolve a parametrized `grid` value into a concrete `ttnn.CoreRangeSet`.
+
+    String values are looked up in `DRAM_GRID_FACTORIES` and built for `device`;
+    already-concrete `CoreRangeSet` values are returned unchanged.
+    """
+    if isinstance(grid, str):
+        return DRAM_GRID_FACTORIES[grid](device)
+    return grid
+
+
 def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorch_result):
     messages = []
     messages.append(message)

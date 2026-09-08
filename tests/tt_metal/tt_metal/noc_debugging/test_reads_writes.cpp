@@ -2,7 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <cstdlib>
+#include <thread>
 #include <gtest/gtest.h>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -312,8 +316,7 @@ void RunSemaphoreIncMulticastTest(
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    uint32_t num_dest_cores =
-        (mcast_end_virtual.x - mcast_start_virtual.x + 1) * (mcast_end_virtual.y - mcast_start_virtual.y + 1);
+    uint32_t num_dest_cores = CoreRange(mcast_start, mcast_end).size();
 
     constexpr uint32_t buffer_page_size = 64;
     distributed::DeviceLocalBufferConfig l1_config{
@@ -945,6 +948,254 @@ TEST_F(NOCDebuggingFixture, PostedWritesWithFlush) {
     }
 }
 
+// Sums the sizes of the profiler's per-core/per-risc Tracy marker set for a device (this is the map that
+// device_markers.emplace() at profiler.cpp:2068 grows, and that the NOC-debug dedup relies on).
+size_t total_device_marker_count(ChipId device_id) {
+    auto& psm = tt::tt_metal::MetalContext::instance().profiler_state_manager();
+    std::lock_guard<std::recursive_mutex> lock{psm->device_profiler_map_mutex};
+    auto it = psm->device_profiler_map.find(device_id);
+    if (it == psm->device_profiler_map.end()) {
+        return 0;
+    }
+    size_t count = 0;
+    for (const auto& [core, risc_map] : it->second.device_markers_per_core_risc_map) {
+        for (const auto& [risc, markers] : risc_map) {
+            count += markers.size();
+        }
+    }
+    return count;
+}
+
+// Runs the stress kernel once from a single core (num_iterations wrapped-source non-posted writes, no barrier). By
+// default it then drains via the profiler read (where process_accumulated_events + finish_cores run). Set
+// read_after=false to leave the results undrained so a test can observe what the background periodic poll accumulated
+// while the kernel ran, before any host force-read. wait_iters>0 adds an on-device idle after every burst_size writes
+// (models a long-running kernel that spends time not emitting events).
+void run_stress_write_program(
+    NOCDebuggingFixture* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t num_iterations,
+    bool read_after = true,
+    uint32_t wait_iters = 0,
+    uint32_t burst_size = 0) {
+    auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
+    auto dest_core_virtual =
+        mesh_device->worker_core_from_logical_core(CoreCoord{compute_grid_size.x - 1, compute_grid_size.y - 1});
+    CoreRange sender_range(CoreCoord{0, 0}, CoreCoord{0, 0});
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram();
+    // Fixed-size buffer regardless of num_iterations; the kernel wraps its source within SRC_SLOTS slots so a huge
+    // iteration count (e.g. 100000) stays in-bounds while still generating that many distinct profiler events.
+    constexpr uint32_t kBufferBytes = 4096;
+    constexpr uint32_t kSlotBytes = 32;
+    distributed::DeviceLocalBufferConfig l1_config{
+        .page_size = kBufferBytes, .buffer_type = tt::tt_metal::BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = kBufferBytes};
+    auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+    std::map<std::string, std::string> defines = {
+        {"SRC_BASE_ADDR", std::to_string(l1_buffer->address())},
+        {"SRC_SLOTS", std::to_string(kBufferBytes / kSlotBytes)},
+        {"OTHER_CORE_X", std::to_string(dest_core_virtual.x)},
+        {"OTHER_CORE_Y", std::to_string(dest_core_virtual.y)},
+        {"DST_ADDR", std::to_string(l1_buffer->address())},
+        {"NUM_ITERATIONS", std::to_string(num_iterations)},
+    };
+    if (wait_iters > 0) {
+        defines["WAIT_ITERS"] = std::to_string(wait_iters);
+        defines["BURST_SIZE"] = std::to_string(burst_size > 0 ? burst_size : num_iterations);
+    }
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_stress_writes.cpp",
+        sender_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+    workload.add_program(device_range, std::move(program));
+    fixture->RunProgram(mesh_device, workload);
+    if (read_after) {
+        ReadMeshDeviceProfilerResults(*mesh_device);
+    }
+}
+
+// Iteration count for the stress test below, env-configurable via NOC_DEBUG_STRESS_ITERATIONS (default 20, kept
+// small for CI). Set it high (e.g. 100000) to stress the profiler event/marker path.
+uint32_t marker_test_iterations() {
+    if (const char* env = std::getenv("NOC_DEBUG_STRESS_ITERATIONS"); env != nullptr) {
+        if (const uint32_t parsed = static_cast<uint32_t>(std::strtoul(env, nullptr, 10)); parsed > 0) {
+            return parsed;
+        }
+    }
+    return 20;
+}
+
+// Retunes the background debug-dump thread for the lifetime of this object, then restores the previous settings.
+//
+// The thread reads the three knobs once and captures them BY VALUE when it starts (see
+// ProfilerStateManager::start_debug_dump_thread), and it is started at device open. So setting rtoptions from a test
+// body has no effect on the running thread -- the knobs only take hold across a stop/relaunch, which is what this
+// does. Restoring in the destructor means the rest of the suite keeps the defaults even if the test body aborts
+// early on a failed assertion.
+class ScopedDebugDumpTuning {
+public:
+    ScopedDebugDumpTuning(
+        std::vector<tt::tt_metal::IDevice*> devices,
+        std::chrono::milliseconds poll,
+        std::chrono::milliseconds full_read,
+        std::chrono::milliseconds margin) :
+        devices_{std::move(devices)},
+        prev_poll_{rtoptions().get_noc_debug_poll_interval()},
+        prev_full_read_{rtoptions().get_noc_debug_full_read_interval()},
+        prev_margin_{rtoptions().get_noc_debug_watermark_margin()} {
+        restart(poll, full_read, margin);
+    }
+
+    ~ScopedDebugDumpTuning() { restart(prev_poll_, prev_full_read_, prev_margin_); }
+
+    ScopedDebugDumpTuning(const ScopedDebugDumpTuning&) = delete;
+    ScopedDebugDumpTuning& operator=(const ScopedDebugDumpTuning&) = delete;
+
+private:
+    static tt::llrt::RunTimeOptions& rtoptions() { return tt::tt_metal::MetalContext::instance().rtoptions(); }
+
+    void restart(
+        std::chrono::milliseconds poll, std::chrono::milliseconds full_read, std::chrono::milliseconds margin) {
+        auto& psm = tt::tt_metal::MetalContext::instance().profiler_state_manager();
+        if (psm->debug_dump_thread.joinable()) {
+            psm->stop_debug_dump_thread = true;
+            psm->stop_debug_dump_thread_cv.notify_all();
+            psm->debug_dump_thread.join();
+        }
+        rtoptions().set_noc_debug_poll_interval(poll);
+        rtoptions().set_noc_debug_full_read_interval(full_read);
+        rtoptions().set_noc_debug_watermark_margin(margin);
+        // start_debug_dump_thread() clears the stop flag, so the thread is live again after this.
+        // Must cover EVERY device the thread originally covered (profiler_initializer.cpp launches it with all of
+        // them): a device left out stops being drained, and later tests running on it see no events at all.
+        tt::tt_metal::LaunchIntervalBasedProfilerReadThread(devices_);
+    }
+
+    std::vector<tt::tt_metal::IDevice*> devices_;
+    std::chrono::milliseconds prev_poll_;
+    std::chrono::milliseconds prev_full_read_;
+    std::chrono::milliseconds prev_margin_;
+};
+
+// Exposes the core "days-long workload" problem. During a long kernel the background debug-dump poll READS events off
+// the device but does not PROCESS or REPORT them -- detection, reporting and discharge only happen on a user read. So
+// before any user read the pending-event queue and the marker set grow with total events and NO issue has been
+// detected yet, even though the kernel already committed violations (here: same source reused with no barrier). The
+// fix makes the poll process + report + discharge as events arrive, so before any user read: issues are already
+// detected and host memory stays bounded regardless of run length.
+//
+// Large-N stress test: the device profiler buffer must overflow so the periodic poll actually runs mid-kernel.
+// Skipped at the small CI default; drive with NOC_DEBUG_STRESS_ITERATIONS>=100000.
+TEST_F(NOCDebuggingFixture, IncrementalProcessingDuringLongKernel) {
+    if (marker_test_iterations() < 100000) {
+        GTEST_SKIP() << "set NOC_DEBUG_STRESS_ITERATIONS>=100000 to run this stress test";
+    }
+    this->RunTestOnDevice<NOCDebuggingFixture>(
+        [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
+            ASSERT_TRUE(noc_debug_state != nullptr);
+            const auto device_id = mesh_device->get_devices()[0]->id();
+            const uint32_t writes = marker_test_iterations();
+            const uint32_t burst = writes / 4;
+            constexpr uint32_t wait_iters = 50'000'000u;
+
+            // One long kernel, NO user read: only the background periodic poll drains the device.
+            run_stress_write_program(fixture, mesh_device, writes, /*read_after=*/false, wait_iters, burst);
+            // Let the poll catch up on anything still stalled after the kernel finished.
+            std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+
+            const auto summary = noc_debug_state->get_state_summary();
+            const size_t markers = total_device_marker_count(device_id);
+            log_info(
+                tt::LogMetal,
+                "[incremental] before any user read: pending_events={}, issues={}, markers={} (writes={})",
+                summary.pending_events,
+                summary.issues,
+                markers,
+                writes);
+
+            // With incremental processing the poll detects issues as they happen (not deferred to a read)...
+            EXPECT_GT(summary.issues, 0u) << "no issue detected before a user read -- processing is deferred to reads";
+            // ...and discharges events + markers so host memory stays bounded regardless of run length.
+            EXPECT_LT(summary.pending_events, writes / 2) << "pending events accumulated unprocessed";
+            EXPECT_LT(markers, writes / 2) << "marker set accumulated undischarged";
+        },
+        this->devices_[0]);
+}
+
+// Same behaviour as the stress test above, but cheap enough to run in CI on every commit, so the background
+// processing path (self-triggered full read -> watermark -> incremental report -> marker discharge) actually has
+// regression protection.
+//
+// It is a short kernel rather than a huge one because the event COUNT was never what the stress test needed. What
+// matters is the event time SPAN: process_accumulated_events_up_to() holds back everything within margin_ticks of the
+// newest event it has seen, so events only become processable once the span exceeds the margin. At the 3000 ms
+// default no short kernel can ever qualify. Shrinking the margin to 60 ms (and the full-read period to 20 ms, so
+// several passes land while the kernel is still running) gets the same coverage from a sub-second kernel.
+TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
+    // Collected here (where the fixture's device list is in scope) because the retuned thread has to be relaunched
+    // covering every device, not just the one this test runs on -- see ScopedDebugDumpTuning.
+    std::vector<tt::tt_metal::IDevice*> all_devices;
+    for (const auto& md : this->devices_) {
+        for (auto* d : md->get_devices()) {
+            all_devices.push_back(d);
+        }
+    }
+    this->RunTestOnDevice<NOCDebuggingFixture>(
+        [all_devices](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
+            ASSERT_TRUE(noc_debug_state != nullptr);
+            const auto device_id = mesh_device->get_devices()[0]->id();
+
+            // The margin must exceed the poll interval (start_debug_dump_thread enforces that) and must be well
+            // under the kernel's event span, or nothing ever falls behind the watermark. That threshold is what this
+            // test actually pins: raising the margin above the kernel's span flips the results to
+            // pending_events=401/issues=0 (nothing processed) instead of 121/1, so the assertions below fail if
+            // mid-run processing regresses to being deferred to a user read.
+            ScopedDebugDumpTuning tuning{
+                all_devices,
+                /*poll=*/std::chrono::milliseconds(10),
+                /*full_read=*/std::chrono::milliseconds(10),
+                /*margin=*/std::chrono::milliseconds(30)};
+            // Relaunching the thread above drains the device once, which can push leftovers from earlier tests.
+            noc_debug_state->reset_state();
+
+            // 400 writes in 10 bursts, each burst followed by an on-device idle, giving a sub-second kernel. The
+            // source slot wraps after SRC_SLOTS(=128) writes, so the unbarriered source reuse -- the violation this
+            // asserts on -- happens around burst 4, early enough to fall behind the watermark before the kernel ends.
+            constexpr uint32_t writes = 400;
+            constexpr uint32_t burst = 40;
+            constexpr uint32_t wait_iters = 8'000'000u;
+
+            // NO user read: only the background thread drains, processes, reports and discharges.
+            run_stress_write_program(fixture, mesh_device, writes, /*read_after=*/false, wait_iters, burst);
+            // Let the last full-read pass land after the kernel finished.
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+            const auto summary = noc_debug_state->get_state_summary();
+            const size_t markers = total_device_marker_count(device_id);
+            log_info(
+                tt::LogMetal,
+                "[incremental-fast] before any user read: pending_events={}, issues={}, markers={} (writes={})",
+                summary.pending_events,
+                summary.issues,
+                markers,
+                writes);
+
+            EXPECT_GT(summary.issues, 0u) << "no issue detected before a user read -- processing is deferred to reads";
+            EXPECT_LT(summary.pending_events, writes / 2) << "pending events accumulated unprocessed";
+            EXPECT_LT(markers, writes / 2) << "marker set accumulated undischarged";
+        },
+        this->devices_[0]);
+}
+
 // Non-posted semaphore increments with no barrier stay outstanding at kernel end -> unflushed-semaphore issue.
 TEST_F(NOCDebuggingFixture, SemaphoreIncNoBarrier) {
     for (auto& mesh_device : this->devices_) {
@@ -1138,8 +1389,7 @@ void RunMcastTest(
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    uint32_t num_dest_cores =
-        (mcast_end_virtual.x - mcast_start_virtual.x + 1) * (mcast_end_virtual.y - mcast_start_virtual.y + 1);
+    uint32_t num_dest_cores = CoreRange(mcast_start, mcast_end).size();
 
     constexpr uint32_t buffer_page_size = 64;
     constexpr uint32_t buffer_size = buffer_page_size;

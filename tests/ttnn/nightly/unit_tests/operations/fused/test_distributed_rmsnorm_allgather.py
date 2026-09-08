@@ -13,6 +13,9 @@ from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     ttnn_rms_norm_post_all_gather,
 )
 
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
+
 
 def _run_distributed_rmsnorm_single_device(
     device,

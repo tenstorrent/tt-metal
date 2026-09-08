@@ -12,9 +12,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -95,7 +95,7 @@ TEST_F(UnitMeshFixture, Object_Intent_Provenance_Violation_SanityCheck) {
 
     // 3. The sanitizer should catch that the execution sequence breached pointer provenance bounds
     EXPECT_DEATH(
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*Object Intent Violation: Attempted to modify memory belonging to an adjacent object context.*");
 }
 
@@ -162,7 +162,7 @@ TEST_F(UnitMeshFixture, Object_Intent_Provenance_NonAdjacent_Violation) {
     SetRuntimeArgs(program, kernel, logical_core, {addr_a, addr_c - addr_a});
 
     EXPECT_DEATH(
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*Object Intent Violation: Attempted to modify memory belonging to an adjacent object context.*");
 }
 
@@ -209,7 +209,7 @@ TEST_F(UnitMeshFixture, Object_Intent_Provenance_NoViolation_Control) {
 
     // Must NOT abort. If the sanitizer is over-eager, LaunchProgram will SIGABRT
     // and the test harness will mark this as failed.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 }
 
@@ -259,7 +259,7 @@ TEST_F(UnitMeshFixture, Object_Intent_IOArg_Exempt_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {addr_a, addr_b});
 
     // Must NOT abort — B was handed to the kernel as a runtime arg.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -324,7 +324,7 @@ TEST_F(UnitMeshFixture, Object_Intent_GloballyAllocatedCB_Exempt_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Must NOT abort — writing a globally-allocated CB the kernel owns is legitimate.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -384,7 +384,7 @@ TEST_F(UnitMeshFixture, Object_Intent_MultiKernel_Core_NoViolation) {
     SetRuntimeArgs(program, kernel_1, logical_core, {buffer_2->address()});
 
     // Must NOT abort — Object Intent no-ops on multi-kernel cores.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");

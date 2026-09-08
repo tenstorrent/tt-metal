@@ -14,6 +14,12 @@ target_link_libraries(
         gtest
         gtest_main
 )
+# NOTE: deliberately metal_common_pch, not metal_test_pch. metal_test_pch is compiled with
+# TT::Metalium's usage requirements (TRACY_IMPORTS, the tt-metalium/ include dirs) and its
+# contents #include <tt-metalium/...>. REUSE_FROM does not propagate those to the consumer, so a
+# target that doesn't link Metalium can neither validate the .gch (-Winvalid-pch) nor fall back to
+# parsing the header textually. This test links only TT::STL + gtest and includes no Metalium
+# headers; keep it on the common PCH rather than linking Metalium just to satisfy the PCH.
 target_precompile_headers(unit_tests_gha_annotation REUSE_FROM metal_common_pch)
 set_target_properties(
     unit_tests_gha_annotation

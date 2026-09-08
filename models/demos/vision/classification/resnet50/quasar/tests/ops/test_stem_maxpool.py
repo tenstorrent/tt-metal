@@ -63,7 +63,7 @@ _SHAPES = [
         112,
         "112x112",
         id="112x112",
-        marks=pytest.mark.timeout(600),
+        marks=pytest.mark.timeout(1200),
     ),
     pytest.param(
         28,

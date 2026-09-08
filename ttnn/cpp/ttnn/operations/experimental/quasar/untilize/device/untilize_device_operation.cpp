@@ -115,6 +115,22 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             operation_attributes.use_multicore,
             "sub_core_grid implementation only supported when use_multicore flag argument is set to true");
+        // The sub_core_grids factory uses the same writer kernel design as the parallelize-column
+        // factory (writer_unary_stick_layout_split_rows_interleaved_parallel_columns_metal2). That
+        // kernel loops `(num_sticks / TILE_HEIGHT) * num_tiles_per_core` times calling wait_front(1),
+        // but reader/compute only push `ntiles_per_core` tiles. When ntiles_per_column > 1 the counts
+        // disagree and the writer deadlocks. The parallelize-column factory guards against this with
+        // the same precondition (see get_pf_type: "currently multi_core parallelization on column
+        // only works for single tile height tensors"). Mirrors the identical fix in the non-quasar
+        // ttnn::untilize sub_core_grids path (#51216 item 3).
+        const uint32_t ntiles_per_column = tensor_height / TILE_HEIGHT;
+        TT_FATAL(
+            ntiles_per_column == 1,
+            "sub_core_grids untilize only supports tensors with a single tile-row height "
+            "(ntiles_per_column must be 1, got {}). Use ttnn::untilize without sub_core_grids "
+            "for tensors taller than one tile row ({} rows).",
+            ntiles_per_column,
+            tensor_height);
     }
 
     // If input is sharded, then the shard shape must be in multiples of tiles

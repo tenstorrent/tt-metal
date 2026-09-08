@@ -319,18 +319,6 @@ inline void _llk_pack_reconfig_data_format_(
 }
 
 /**
- * @brief Enable or disable reading the destination register as 32-bit data for the packer.
- *
- * @param enable: True to read dest as 32-bit (FP32) data, false otherwise.
- * @note Stalls on the pack pipe before modifying the PCK_DEST_RD_CTRL config register.
- */
-inline void _llk_pack_set_fp32_dest_acc_(bool enable)
-{
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
-    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
-}
-
-/**
  * @brief One-time hardware configuration of the packer for a given data format and tile geometry.
  *
  * Programs the packer config registers (formats, strides, relu) for the chosen pack mode. Call once

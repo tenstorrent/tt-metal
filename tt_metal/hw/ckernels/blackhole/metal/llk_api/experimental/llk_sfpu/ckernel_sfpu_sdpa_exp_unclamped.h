@@ -25,7 +25,7 @@ namespace ckernel::sfpu {
  *
  * @tparam SCALE_EN: Multiply the input by exp_base_scale_factor first, values = <true/false>
  * @param exp_base_scale_factor: Scale as a raw bf16 bit pattern; ignored when SCALE_EN is false.
- * @note bf16 DEST only -- the leaf static_asserts on DST_ACCUM_MODE.
+ * @note bf16 DEST only -- the leaf static_asserts on is_fp32_dest_acc_en.
  * @note Callers must pass val <= 0, which is what makes dropping the upper clamp safe. The
  *       clamped path saturates xlog2 = val/ln2 + 127 at its upper bound; that bound is
  *       unreachable for non-positive inputs, so removing it is dead-code removal for the SDPA
@@ -34,14 +34,14 @@ namespace ckernel::sfpu {
  *       SFPLOADI immediate, so the invariant SFPU config + ADDR_MOD_7 is all it needs. Calling
  *       exp_init would only program the TTI exp path's state, which nothing here reads.
  */
-template <bool SCALE_EN>
+template <bool SCALE_EN, bool is_fp32_dest_acc_en>
 inline void calculate_sdpa_exp_unclamped(const std::uint32_t exp_base_scale_factor) {
     // One SFPU slot is 4 DEST rows x 8 columns, so a full 16x16 face is 8 slots.
     constexpr int ITERATIONS_FULL_FACE = 8;
     for (int d = 0; d < ITERATIONS_FULL_FACE; d++) {
         const sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::dst_reg[0] =
-            _ckernel_sfpu_exp_accurate_upper_unclamped_<SCALE_EN, DST_ACCUM_MODE>(val, exp_base_scale_factor);
+            _ckernel_sfpu_exp_accurate_upper_unclamped_<SCALE_EN, is_fp32_dest_acc_en>(val, exp_base_scale_factor);
         sfpi::dst_reg++;
     }
 }

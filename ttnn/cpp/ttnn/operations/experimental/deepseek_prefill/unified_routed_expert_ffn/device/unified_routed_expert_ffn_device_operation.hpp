@@ -32,25 +32,25 @@ struct UnifiedRoutedExpertFfnDeviceOperation {
 
 namespace ttnn::prim {
 
-ttnn::Tensor unified_routed_expert_ffn(
+// Single-program multi-expert MoE FFN. The device program's kernels loop over all
+// `experts_per_chip` local experts, running the full gate/up/down FFN for each.
+ttnn::Tensor unified_routed_expert_moe(
     const ttnn::Tensor& x,
-    const ttnn::Tensor& gate_proj,
-    const ttnn::Tensor& up_proj,
-    const ttnn::Tensor& down_proj,
+    const std::vector<ttnn::Tensor>& gate_projs,
+    const std::vector<ttnn::Tensor>& up_projs,
+    const std::vector<ttnn::Tensor>& down_projs,
     const ttnn::Tensor& counts,
     const ttnn::Tensor& global_expert_idx_table,
-    uint32_t local_expert_id,
-    uint32_t chunk_M_tiles,
+    const ttnn::Tensor& expert_region_offsets,
+    const ttnn::Tensor& output,
     uint32_t m_tiles,
-    bool read_x_at_offset,
+    uint32_t experts_per_chip,
     bool x_is_row_major,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const std::optional<ttnn::Tensor>& optional_output,
-    const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
     ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation activation =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation::Silu,
-    const std::optional<ttnn::Tensor>& gate_bias = std::nullopt,
-    const std::optional<ttnn::Tensor>& up_bias = std::nullopt,
-    const std::optional<ttnn::Tensor>& down_bias = std::nullopt);
+    const std::vector<ttnn::Tensor>& gate_biases = {},
+    const std::vector<ttnn::Tensor>& up_biases = {},
+    const std::vector<ttnn::Tensor>& down_biases = {});
 
 }  // namespace ttnn::prim

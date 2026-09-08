@@ -21,10 +21,10 @@ Flow:
 fixtures).
 
 Requires: a Blackhole galaxy; ``$DFLASH_HF_MODEL`` (drafter ``config.json`` [+ ``model.safetensors`` for the
-pretrained axis]); for the pretrained axis also ``KIMI_K2_6_HF_MODEL`` + ``TT_KIMI_PREFILL_TTNN_CACHE``.
+pretrained axis]); for the pretrained axis also ``KIMI_K2_7_HF_MODEL`` + ``TT_KIMI_PREFILL_TTNN_CACHE``.
 
-    DFLASH_HF_MODEL=/path/to/Kimi-K2.6-DFlash \
-    KIMI_K2_6_HF_MODEL=/path/to/Kimi-K2.6 TT_KIMI_PREFILL_TTNN_CACHE=/path/to/kimi_ttnn_cache MESH_DEVICE=8x4 \
+    DFLASH_HF_MODEL=/path/to/Kimi-K2.7-Code-DFlash \
+    KIMI_K2_7_HF_MODEL=/path/to/Kimi-K2.7-Code TT_KIMI_PREFILL_TTNN_CACHE=/path/to/kimi_ttnn_cache MESH_DEVICE=8x4 \
     pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash_prefill_integration.py -svv -k pretrained
 """
 
@@ -37,10 +37,12 @@ from loguru import logger
 import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_dflash_kv_cache, init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
@@ -68,23 +70,19 @@ MAX_RANDOM_LAYERS = 12
 )
 @pytest.mark.parametrize("n_routed_experts, gate_fallback_mode", [(384, GateComputeMode.DEVICE)], ids=["e384_device"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
-            },
+            torus_xy_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi"])
 @pytest.mark.timeout(0)
 def test_dflash_prefill_integration(
     variant,
@@ -97,7 +95,6 @@ def test_dflash_prefill_integration(
     n_routed_experts,
     gate_fallback_mode,
     num_links,
-    topology,
     use_pretrained,
     temperature,
     tokenizer,
@@ -106,10 +103,11 @@ def test_dflash_prefill_integration(
     drafter_state_dict,
     hf_context_kv,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])[1]
     if not use_pretrained and num_layers > MAX_RANDOM_LAYERS:
         pytest.skip(
             f"random verifier at {num_layers} layers materializes the whole Kimi model in host RAM "
-            f"(384 experts × 60 MoE layers ≈ 2 TB → OOM). Use -k pretrained (KIMI_K2_6_HF_MODEL + "
+            f"(384 experts × 60 MoE layers ≈ 2 TB → OOM). Use -k pretrained (KIMI_K2_7_HF_MODEL + "
             f"TT_KIMI_PREFILL_TTNN_CACHE, memory-bounded layer-by-layer), or a smaller num_layers."
         )
 
@@ -141,6 +139,7 @@ def test_dflash_prefill_integration(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         max_seq_len=isl_total,
+        chunk_size=isl_total,
         num_links=num_links,
         topology=topology,
     )
@@ -170,10 +169,10 @@ def test_dflash_prefill_integration(
     #   random     → create_hf_model + extract_tt_state_dict
     if use_pretrained:
         model_path = request.getfixturevalue("model_path")
-        wcp = request.getfixturevalue("weight_cache_path")  # None unless real weights ($KIMI_K2_6_HF_MODEL) present
+        wcp = request.getfixturevalue("weight_cache_path")  # None unless real weights ($KIMI_K2_7_HF_MODEL) present
         if wcp is None:
             pytest.skip(
-                "pretrained verifier needs real Kimi weights: set KIMI_K2_6_HF_MODEL (+ TT_KIMI_PREFILL_TTNN_CACHE)"
+                "pretrained verifier needs real Kimi weights: set KIMI_K2_7_HF_MODEL (+ TT_KIMI_PREFILL_TTNN_CACHE)"
             )
         rows, cols = mesh_shape
         effective_cache_path = wcp / f"{rows}x{cols}"
@@ -305,8 +304,13 @@ def test_dflash_prefill_integration(
     dk, dv = _read(k_cache), _read(v_cache)
 
     fails = []
+    # HF reference ropes K half-split; the meta-rope drafter persists K interleaved (= half-split K with its
+    # head_dim src-permuted), so reindex the reference K by src to compare like with like. V never roped.
+    src = torch.argsort(interleaved_to_halfsplit_perm(dcfg.head_dim)) if dcfg.rope_convention == "interleaved" else None
     for i in range(dcfg.num_hidden_layers):
         rk, rv = real[i]
+        if src is not None:
+            rk = rk[..., src]
         ok_k, pcc_k = comp_pcc(rk, dk[i], PCC_THRESHOLD)
         ok_v, pcc_v = comp_pcc(rv, dv[i], PCC_THRESHOLD)
         logger.info(f"draft layer {i}: K pcc={pcc_k} (ok={ok_k})  V pcc={pcc_v} (ok={ok_v})")

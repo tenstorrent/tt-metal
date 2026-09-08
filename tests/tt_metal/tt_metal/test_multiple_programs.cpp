@@ -17,6 +17,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 using std::vector;
@@ -218,7 +219,7 @@ TEST_F(UnitMeshFixture, MultiplePrograms) {
         *src1_dram_buffer,
         *dst_dram_buffer);
 
-    slow_dispatch::LaunchProgram(this->device(), program1, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program1), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> intermediate_result_vec;
     slow_dispatch::ReadFromBuffer(*dst_dram_buffer, intermediate_result_vec);
@@ -242,7 +243,7 @@ TEST_F(UnitMeshFixture, MultiplePrograms) {
         *src1_dram_buffer,
         *dst_dram_buffer);
 
-    slow_dispatch::LaunchProgram(this->device(), program2, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program2), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);

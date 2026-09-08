@@ -4,17 +4,73 @@
 
 #include "ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
 
-#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+
+#include <algorithm>
+#include <bit>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::prim::sharded_layernorm_helpers {
+
+//////////////////////////////////////////////////////////////////////////////
+// Spec identities
+//////////////////////////////////////////////////////////////////////////////
+
+const m2::KernelSpecName READER_SENDER{"reader_sender"};
+const m2::KernelSpecName READER_RECEIVER_ALL_TO_ALL{"reader_receiver_all_to_all"};
+const m2::KernelSpecName READER_RECEIVER{"reader_receiver"};
+const m2::KernelSpecName WRITER_SENDER{"writer_sender"};
+const m2::KernelSpecName WRITER_RECEIVER{"writer_receiver"};
+const m2::KernelSpecName COMPUTE_ALL_TO_ALL{"compute_all_to_all"};
+const m2::KernelSpecName COMPUTE_NOT_ALL_TO_ALL{"compute_not_all_to_all"};
+const m2::KernelSpecName IDLE_READER{"idle_reader"};
+const m2::KernelSpecName IDLE_WRITER{"idle_writer"};
+const m2::KernelSpecName IDLE_COMPUTE{"idle_compute"};
+
+const m2::DFBSpecName IN0{"in0"};
+const m2::DFBSpecName IN1{"in1"};
+const m2::DFBSpecName IN_PRE_ADD{"in_pre_add"};
+const m2::DFBSpecName SCALER{"scaler"};
+const m2::DFBSpecName EPS{"eps"};
+const m2::DFBSpecName SCALER_GLOBAL{"scaler_global"};
+const m2::DFBSpecName GAMMA{"gamma"};
+const m2::DFBSpecName BETA{"beta"};
+const m2::DFBSpecName STATS{"stats"};
+const m2::DFBSpecName EX_PARTIAL{"ex_partial"};
+const m2::DFBSpecName EX{"ex"};
+const m2::DFBSpecName EX_EXTERNAL{"ex_external"};
+const m2::DFBSpecName EX_PARTIAL2{"ex_partial2"};
+const m2::DFBSpecName EX2{"ex2"};
+const m2::DFBSpecName EX_EXTERNAL2{"ex_external2"};
+const m2::DFBSpecName MASK_SCRATCH{"mask_scratch"};
+const m2::DFBSpecName EX_GLOBAL{"ex_global"};
+const m2::DFBSpecName OUT{"out"};
+const m2::DFBSpecName XMM{"xmm"};
+const m2::DFBSpecName COL_MASK{"col_mask"};
+const m2::DFBSpecName VAR{"var"};
+const m2::DFBSpecName EX2PE{"ex2pe"};
+const m2::DFBSpecName STATS_REDUCED{"stats_reduced"};
+const m2::DFBSpecName TRANSPOSE{"transpose"};
+const m2::DFBSpecName X{"x"};
+const m2::DFBSpecName RECIPROCALS{"reciprocals"};
+const m2::DFBSpecName X_WELFORD{"x_welford"};
+
+const m2::TensorParamName INPUT{"input"};
+const m2::TensorParamName RESIDUAL{"residual"};
+const m2::TensorParamName GAMMA_T{"weight"};
+const m2::TensorParamName BETA_T{"bias"};
+const m2::TensorParamName STATS_T{"stats"};
+const m2::TensorParamName RECIP{"recip"};
+const m2::TensorParamName OUTPUT{"output"};
+
+const m2::SemaphoreSpecName REDUCE_SENDER{"reduce_sender"};
+const m2::SemaphoreSpecName REDUCE_RECEIVER{"reduce_receiver"};
+const m2::SemaphoreSpecName REDUCE_SECOND_STAGE{"reduce_second_stage"};
 
 //////////////////////////////////////////////////////////////////////////////
 // Validation and data format helpers
@@ -49,31 +105,31 @@ void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_
 }
 
 std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat>
-get_cb_data_formats(
+get_dfb_data_formats(
     const Tensor& output,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
     const std::optional<const Tensor>& stats,
     bool fp32_dest_acc_en) {
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat gamma_cb_data_format = gamma.has_value()
-                                              ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
+    tt::DataFormat dfb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat gamma_dfb_data_format = gamma.has_value()
+                                               ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
+                                               : tt::DataFormat::Float16_b;
+    tt::DataFormat beta_dfb_data_format = beta.has_value()
+                                              ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
                                               : tt::DataFormat::Float16_b;
-    tt::DataFormat beta_cb_data_format = beta.has_value()
-                                             ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
-                                             : tt::DataFormat::Float16_b;
-    tt::DataFormat stats_cb_data_format = stats.has_value()
-                                              ? tt::tt_metal::datatype_to_dataformat_converter(stats.value().dtype())
-                                              : tt::DataFormat::Float16_b;
-    tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
+    tt::DataFormat stats_dfb_data_format = stats.has_value()
+                                               ? tt::tt_metal::datatype_to_dataformat_converter(stats.value().dtype())
+                                               : tt::DataFormat::Float16_b;
+    tt::DataFormat reciprocal_dfb_data_format = tt::DataFormat::Float32;
     return {
         out_data_format,
-        cb_data_format,
-        gamma_cb_data_format,
-        beta_cb_data_format,
-        stats_cb_data_format,
-        reciprocal_cb_data_format};
+        dfb_data_format,
+        gamma_dfb_data_format,
+        beta_dfb_data_format,
+        stats_dfb_data_format,
+        reciprocal_dfb_data_format};
 }
 
 namespace {
@@ -413,49 +469,8 @@ CoreRanges CoreRanges::compute(const GridParams& grid, const WorkerDistribution&
     return cr;
 }
 
-KernelLayout KernelLayout::compute(
-    const GridParams& grid, const WorkerDistribution& workers, const CoreRanges& core_ranges) {
-    KernelLayout layout;
-
-    // Determine which kernels are present based on grid and worker configuration
-    // This logic must match the kernel creation in add_kernel_descriptors()
-    layout.has_reader_receiver_all_to_all = grid.use_mcast && !core_ranges.all_to_all_workers_except_sender.empty();
-    layout.has_reader_receiver = workers.num_none_all_to_all_workers > 0;
-    layout.has_writer_receiver = workers.num_none_all_to_all_workers > 0;
-
-    // Compute kernel indices based on ordering in add_kernel_descriptors()
-    // Order: reader_sender, [reader_receiver_all_to_all], [reader_receiver],
-    //        writer_sender, [writer_receiver],
-    //        compute_all_to_all, [compute_not_all_to_all]
-    uint32_t idx = 0;
-
-    layout.reader_sender_idx = idx++;
-
-    if (layout.has_reader_receiver_all_to_all) {
-        layout.reader_receiver_all_to_all_idx = idx++;
-    }
-
-    if (layout.has_reader_receiver) {
-        layout.reader_receiver_idx = idx++;
-    }
-
-    layout.writer_sender_idx = idx++;
-
-    if (layout.has_writer_receiver) {
-        layout.writer_receiver_idx = idx++;
-    }
-
-    layout.compute_all_to_all_idx = idx++;
-
-    if (workers.num_none_all_to_all_workers > 0) {
-        layout.compute_not_all_to_all_idx = idx++;
-    }
-
-    return layout;
-}
-
 //////////////////////////////////////////////////////////////////////////////
-// Kernel paths, defines, and compile-time args helpers
+// Kernel paths and dataflow buffer sizes
 //////////////////////////////////////////////////////////////////////////////
 
 KernelPaths KernelPaths::get(
@@ -491,933 +506,981 @@ KernelPaths KernelPaths::get(
     return paths;
 }
 
-KernelDefines KernelDefines::build(
-    bool has_b,
-    bool has_gamma,
-    bool has_beta,
-    bool rms_norm,
-    bool use_welford,
-    bool skip_write_back,
-    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
-    std::optional<tt::tt_metal::DataType> output_dtype) {
-    KernelDefines defines;
-
-    // Reader defines
-    if (has_b) {
-        defines.reader.emplace_back("FUSE_PRE_ADD", "1");
-    }
-    if (has_gamma) {
-        defines.reader.emplace_back("FUSE_GAMMA", "1");
-    }
-    if (has_beta) {
-        defines.reader.emplace_back("FUSE_BETA", "1");
-    }
-
-    // Writer defines
-    if (rms_norm) {
-        defines.writer.emplace_back("RMSNORM", "1");
-    }
-    if (skip_write_back) {
-        defines.writer.emplace_back("SKIP_WRITE_BACK", "1");
-    }
-
-    // Compute defines
-    if (has_b) {
-        defines.compute.emplace_back("FUSE_PRE_ADD", "1");
-    }
-    if (rms_norm && !use_welford) {
-        defines.compute.emplace_back("RMSNORM", "1");
-    }
-    if (fused_activation.has_value()) {
-        const auto& act = fused_activation.value();
-        // The inner tile loop variable in layernorm_sharded.cpp is "w" (dst register index).
-        // Using "i" would refer to the outer block_h loop and apply the activation to the
-        // wrong dst register.
-        auto act_defines =
-            ttnn::operations::unary::utils::get_defines(act.op_type, act.params, "ACTIVATION", "w", output_dtype);
-        for (auto& [key, val] : act_defines) {
-            defines.compute.emplace_back(key, val);
-        }
-    }
-
-    return defines;
-}
-
-CBSizeParams::Sizes CBSizeParams::compute() const {
+DFBSizeParams::Sizes DFBSizeParams::compute() const {
     Sizes sizes;
 
     uint32_t in0_block_tiles = block_wt * block_ht;
 
-    sizes.in0_CB_size = in0_block_tiles * in_single_tile_size;
-    sizes.in1_CB_size = sizes.in0_CB_size;
-    sizes.in2_CB_size = bfloat16_tile_size;
-    sizes.in3_CB_size = bfloat16_tile_size;
-    sizes.in5_CB_size = in0_block_tiles * gamma_single_tile_size / block_ht;
-    sizes.in6_CB_size = in0_block_tiles * beta_single_tile_size / block_ht;
+    sizes.in0_dfb_size = in0_block_tiles * in_single_tile_size;
+    sizes.in1_dfb_size = sizes.in0_dfb_size;
+    sizes.in2_dfb_size = bfloat16_tile_size;
+    sizes.in3_dfb_size = bfloat16_tile_size;
+    sizes.in5_dfb_size = in0_block_tiles * gamma_single_tile_size / block_ht;
+    sizes.in6_dfb_size = in0_block_tiles * beta_single_tile_size / block_ht;
 
-    sizes.x_CB_size = in0_block_tiles * single_tile_size;
+    sizes.x_dfb_size = in0_block_tiles * single_tile_size;
     if (is_post_all_gather && !rms_norm) {
-        // Non-RMSNORM post-allgather reuses cb_x (c_24) as both cb_ex_sqr and cb_im.
-        // The allgather worker writes 1 tile to cb_ex_sqr first, advancing the write
-        // pointer. The CB needs an extra tile so the subsequent cb_im write has enough
+        // Non-RMSNORM post-allgather reuses x as both the E[x^2] and the intermediate buffer.
+        // The allgather worker writes 1 tile to the E[x^2] slot first, advancing the write
+        // pointer. The buffer needs an extra tile so the subsequent intermediate write has enough
         // contiguous space.
-        sizes.x_CB_size += single_tile_size;
+        sizes.x_dfb_size += single_tile_size;
     }
-    sizes.xmm_CB_size = in0_block_tiles * single_tile_size;
+    sizes.xmm_dfb_size = in0_block_tiles * single_tile_size;
 
-    sizes.ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
-    sizes.ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
+    sizes.ex_partial_dfb_size = in0_block_tiles * single_tile_size / block_wt;
+    sizes.ex_external_dfb_size = tt::div_up(Kt, block_wt) * single_tile_size;
 
     if (is_pre_all_gather || is_post_all_gather) {
-        sizes.ex_partial_CB_size = sizes.ex_partial_CB_size * pre_all_gather_stats_block_tiles;
+        sizes.ex_partial_dfb_size = sizes.ex_partial_dfb_size * pre_all_gather_stats_block_tiles;
     }
 
-    sizes.ex_CB_size = sizes.ex_partial_CB_size;
-    sizes.ex_global_CB_size = sizes.ex_partial_CB_size;
-    sizes.ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
+    sizes.ex_dfb_size = sizes.ex_partial_dfb_size;
+    sizes.ex_global_dfb_size = sizes.ex_partial_dfb_size;
+    sizes.ex2pe_dfb_size = num_rows_per_all_to_all_worker * single_tile_size;
 
     if (is_post_all_gather) {
-        sizes.stats_cb_size = post_all_gather_stats_block_tiles * stats_single_tile_size;
-        sizes.stats_reduced_cb_size = pre_all_gather_stats_block_tiles * single_tile_size;
+        sizes.stats_dfb_size = post_all_gather_stats_block_tiles * stats_single_tile_size;
+        sizes.stats_reduced_dfb_size = pre_all_gather_stats_block_tiles * single_tile_size;
     }
 
     if (is_pre_all_gather) {
-        sizes.out_CB_size = pre_all_gather_stats_block_tiles * out_single_tile_size;
+        sizes.out_dfb_size = pre_all_gather_stats_block_tiles * out_single_tile_size;
     } else {
-        sizes.out_CB_size = in0_block_tiles * out_single_tile_size;
+        sizes.out_dfb_size = in0_block_tiles * out_single_tile_size;
     }
 
-    sizes.out_reshard_CB_size = sizes.out_CB_size;
+    sizes.out_reshard_dfb_size = sizes.out_dfb_size;
     if (is_post_all_gather && !skip_write_back) {
-        sizes.out_reshard_CB_size = block_wt_resharded * block_ht * out_single_tile_size;
+        sizes.out_reshard_dfb_size = block_wt_resharded * block_ht * out_single_tile_size;
     }
 
-    // Update ex_external_CB_size based on configuration
+    // Update ex_external_dfb_size based on configuration
     if (use_two_stage_reduce) {
-        sizes.ex_external_CB_size = (num_blocks_first_stage + num_blocks_second_stage - 1) * single_tile_size;
+        sizes.ex_external_dfb_size = (num_blocks_first_stage + num_blocks_second_stage - 1) * single_tile_size;
     }
     if (is_pre_all_gather) {
-        sizes.ex_external_CB_size = sizes.ex_external_CB_size * pre_all_gather_stats_block_tiles;
+        sizes.ex_external_dfb_size = sizes.ex_external_dfb_size * pre_all_gather_stats_block_tiles;
     }
 
     if (use_welford) {
-        sizes.ex_external_CB_size *= 2;
-        sizes.ex_partial_CB_size *= 2;
-        sizes.ex_CB_size *= 2;
-        sizes.ex_global_CB_size *= 2;
+        sizes.ex_external_dfb_size *= 2;
+        sizes.ex_partial_dfb_size *= 2;
+        sizes.ex_dfb_size *= 2;
+        sizes.ex_global_dfb_size *= 2;
     }
 
     return sizes;
 }
 
-CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
-    CompileTimeArgs args;
+//////////////////////////////////////////////////////////////////////////////
+// Dataflow buffer specs
+//////////////////////////////////////////////////////////////////////////////
 
-    const auto& grid = *ctx.grid;
-    const auto& workers = *ctx.workers;
-    const auto& core_ranges = *ctx.core_ranges;
+namespace {
 
-    uint32_t num_subblocks_w = ctx.block_wt / ctx.subblock_wt;
+// A dataflow buffer's total size in Metal 2.0 is entry_size * num_entries. Every buffer in this
+// factory is sized in bytes by DFBSizeParams and paged by one tile, so the entry count follows from
+// the two. The single-entry form covers the buffers whose page size *is* their whole size.
+void add_dfb(
+    m2::ProgramSpec& spec,
+    const m2::DFBSpecName& unique_id,
+    uint32_t total_size,
+    uint32_t entry_size,
+    tt::DataFormat data_format,
+    std::optional<m2::TensorParamName> borrowed_from = std::nullopt) {
+    TT_FATAL(entry_size > 0, "Dataflow buffer '{}' has a zero entry size", unique_id);
+    spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+        .unique_id = unique_id,
+        .entry_size = entry_size,
+        .num_entries = total_size / entry_size,
+        .data_format_metadata = data_format,
+        .borrowed_from = std::move(borrowed_from),
+    });
+}
 
-    // Reader sender compile time args
-    args.reader_sender = {
-        ctx.reduce_receiver_semaphore_id,
-        ctx.reduce_sender_semaphore_id,
-        grid.num_blocks,
-        ctx.block_ht,
-        ctx.block_ht * ctx.single_tile_size,
-        workers.num_cores_all_to_all_first_stage,
-        workers.num_rows_per_all_to_all_worker,
-        workers.num_rows_per_all_to_all_worker * ctx.single_tile_size,
-        workers.num_rows_per_all_to_all_worker_last,
-        workers.num_rows_per_all_to_all_worker_last * ctx.single_tile_size,
-        (uint32_t)grid.row_wise,
-        core_ranges.num_cores_x_mcast,
-        core_ranges.num_cores_y_mcast,
-        (uint32_t)grid.use_two_stage_reduce,
-        workers.num_blocks_first_stage,
-        workers.num_blocks_second_stage,
-        ctx.reduce_second_stage_semaphore_id,
-        (uint32_t)ctx.rms_norm,
-        (uint32_t)ctx.use_welford,
-        core_ranges.num_mcast_dests};
+// Make the two members of a legacy two-index circular buffer into an alias clique. Both members
+// must name each other, which is what makes the group legal.
+void alias_pair(m2::ProgramSpec& spec, const m2::DFBSpecName& first, const m2::DFBSpecName& second) {
+    for (auto& dfb : spec.dataflow_buffers) {
+        if (dfb.unique_id == first) {
+            dfb.advanced_options.alias_with = {second};
+        } else if (dfb.unique_id == second) {
+            dfb.advanced_options.alias_with = {first};
+        }
+    }
+}
 
-    // Reader receiver all-to-all compile time args
-    args.reader_receiver_all_to_all = {
-        ctx.reduce_receiver_semaphore_id,
-        ctx.reduce_sender_semaphore_id,
-        grid.num_blocks,
-        ctx.block_ht,
-        1,  // is_all_to_all_worker
-        workers.num_cores_all_to_all_first_stage,
-        workers.num_rows_per_all_to_all_worker,
-        workers.num_rows_per_all_to_all_worker_last,
-        (uint32_t)grid.row_wise,
-        core_ranges.num_cores_x_mcast,
-        core_ranges.num_cores_y_mcast,
-        (uint32_t)grid.use_two_stage_reduce,
-        workers.num_blocks_first_stage,
-        workers.num_blocks_second_stage,
-        ctx.reduce_second_stage_semaphore_id,
-        (uint32_t)ctx.rms_norm,
-        (uint32_t)ctx.use_welford};
+std::optional<tt::DataFormat> data_format_of(const m2::ProgramSpec& spec, const m2::DFBSpecName& dfb) {
+    for (const auto& candidate : spec.dataflow_buffers) {
+        if (candidate.unique_id == dfb) {
+            return candidate.data_format_metadata;
+        }
+    }
+    return std::nullopt;
+}
 
-    // Reader receiver (not all-to-all) compile time args
-    args.reader_receiver = {
-        ctx.reduce_receiver_semaphore_id,
-        ctx.reduce_sender_semaphore_id,
-        grid.num_blocks,
-        ctx.block_ht,
-        0,  // is_all_to_all_worker
-        workers.num_cores_all_to_all_first_stage,
-        workers.num_rows_per_all_to_all_worker,
-        workers.num_rows_per_all_to_all_worker_last,
-        (uint32_t)grid.row_wise,
-        1,  // num_cores_x_mcast (dummy for non-all-to-all)
-        1,  // num_cores_y_mcast (dummy for non-all-to-all)
-        0,  // use_two_stage_reduce
-        0,  // num_blocks_first_stage
-        0,  // num_blocks_second_stage
-        ctx.reduce_second_stage_semaphore_id,
-        (uint32_t)ctx.rms_norm,
-        (uint32_t)ctx.use_welford};
+}  // namespace
 
-    // Writer sender compile time args
-    args.writer_sender = {
-        1,  // is_all_to_all_worker
-        (uint32_t)ctx.has_gamma,
-        (uint32_t)ctx.has_beta,
-        ctx.block_wt,
-        (uint32_t)ctx.use_welford};
-    tt::tt_metal::TensorAccessorArgs(ctx.gamma_buffer).append_to(args.writer_sender);
-    tt::tt_metal::TensorAccessorArgs(ctx.beta_buffer).append_to(args.writer_sender);
+void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
+    const bool nd = !c.is_pre_all_gather && !c.is_post_all_gather;
+    const auto& sizes = c.sizes;
 
-    // Writer receiver compile time args
-    args.writer_receiver = {
-        0,  // is_all_to_all_worker
-        (uint32_t)ctx.has_gamma,
-        (uint32_t)ctx.has_beta,
-        ctx.block_wt,
-        (uint32_t)ctx.use_welford};
-    tt::tt_metal::TensorAccessorArgs(ctx.gamma_buffer).append_to(args.writer_receiver);
-    tt::tt_metal::TensorAccessorArgs(ctx.beta_buffer).append_to(args.writer_receiver);
+    // Input shard. The compute kernel reads it in place; nothing streams into it.
+    add_dfb(spec, IN0, sizes.in0_dfb_size, c.in_single_tile_size, c.in_data_format, INPUT);
 
-    // Add stick size for row-major gamma/beta
-    if (ctx.gamma_is_row_major) {
-        args.writer_sender.push_back(ctx.gamma_stick_size);
-        args.writer_receiver.push_back(ctx.gamma_stick_size);
-    } else if (ctx.beta_is_row_major) {
-        args.writer_sender.push_back(ctx.beta_stick_size);
-        args.writer_receiver.push_back(ctx.beta_stick_size);
+    // Residual shard for the fused pre-add. The post-all-gather compute kernel has no pre-add, so it
+    // never reads a residual even when one is supplied.
+    if (c.has_b && !c.is_post_all_gather) {
+        add_dfb(spec, IN1, sizes.in1_dfb_size, c.in_single_tile_size, c.in_data_format, RESIDUAL);
     }
 
-    // Add data format flags
-    args.writer_sender.push_back(ctx.gamma_cb_data_format == tt::DataFormat::Float32);
-    args.writer_sender.push_back(ctx.beta_cb_data_format == tt::DataFormat::Float32);
-    args.writer_receiver.push_back(ctx.gamma_cb_data_format == tt::DataFormat::Float32);
-    args.writer_receiver.push_back(ctx.beta_cb_data_format == tt::DataFormat::Float32);
+    // Pre-all-gather pre-add destination. It borrows the *input* tensor, so a + b is written back
+    // over a's own shard.
+    if (c.is_pre_all_gather && c.has_b) {
+        add_dfb(spec, IN_PRE_ADD, sizes.in1_dfb_size, c.in_single_tile_size, c.in_data_format, INPUT);
+    }
 
-    // Write-back compile time args
-    args.writer_sender.push_back(ctx.block_wt * ctx.out_single_tile_size);
-    args.writer_sender.push_back(ctx.block_wt_resharded * ctx.out_single_tile_size);
-    args.writer_sender.push_back(ctx.block_ht);
+    if (!c.use_welford) {
+        add_dfb(spec, SCALER, sizes.in2_dfb_size, c.bfloat16_tile_size, tt::DataFormat::Float16_b);
 
-    args.writer_receiver.push_back(ctx.block_wt * ctx.out_single_tile_size);
-    args.writer_receiver.push_back(ctx.block_wt_resharded * ctx.out_single_tile_size);
-    args.writer_receiver.push_back(ctx.block_ht);
-    args.writer_receiver.push_back(ctx.use_welford);
+        // The pre-all-gather compute kernel folds epsilon into the post-all-gather stage instead, so
+        // it never reads an epsilon tile.
+        if (!c.is_pre_all_gather) {
+            add_dfb(spec, EPS, sizes.in3_dfb_size, c.bfloat16_tile_size, tt::DataFormat::Float16_b);
+        }
 
-    // Compute compile time args (all-to-all)
-    bool float32_reduction = ctx.fp32_dest_acc_en && !ctx.legacy_reduction;
-    args.compute_all_to_all = {
-        0,
-        (uint32_t)ctx.has_gamma,
-        (uint32_t)ctx.has_beta,
-        workers.num_blocks_first_stage,
-        ctx.block_ht,
-        ctx.block_wt,
-        ctx.subblock_wt,
-        num_subblocks_w,
-        1,  // is_all_to_all_worker
-        ctx.block_ht * ctx.block_wt,
-        (uint32_t)ctx.fp32_dest_acc_en,
-        (uint32_t)float32_reduction,
-        (uint32_t)ctx.legacy_rsqrt,
-        workers.num_blocks_second_stage};
+        // Global reduce scaler: Float32 when the intermediates are Float32, otherwise bfloat16.
+        const tt::DataFormat scaler_global_format =
+            c.dfb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        const uint32_t scaler_global_tile_size = tt::tile_size(scaler_global_format);
+        add_dfb(spec, SCALER_GLOBAL, scaler_global_tile_size, scaler_global_tile_size, scaler_global_format);
 
-    // Compute compile time args (not all-to-all)
-    args.compute_not_all_to_all = {
-        0,
-        (uint32_t)ctx.has_gamma,
-        (uint32_t)ctx.has_beta,
-        workers.num_blocks_first_stage,
-        ctx.block_ht,
-        ctx.block_wt,
-        ctx.subblock_wt,
-        num_subblocks_w,
-        0,  // is_all_to_all_worker
-        ctx.block_ht * ctx.block_wt,
-        (uint32_t)ctx.fp32_dest_acc_en,
-        (uint32_t)float32_reduction,
-        (uint32_t)ctx.legacy_rsqrt,
-        workers.num_blocks_second_stage};
+        // Scratch holding the masked input for the LayerNorm E[x] reduction, so the input buffer stays
+        // intact for the (x - E[x]) pass. The mask itself is the writer-generated COL_MASK below.
+        if (c.do_legacy_layernorm_col_mask) {
+            add_dfb(spec, MASK_SCRATCH, sizes.xmm_dfb_size, c.single_tile_size, c.dfb_data_format);
+        }
+        if (c.do_col_mask) {
+            // Writer-generated column mask, block_wt tiles (one tile-row), always in bfloat16: the mask
+            // holds only 1.0 or 0.0, which is exact in that format. The writer fills it per core from
+            // the core's width position; compute waits on it and reads by tile index.
+            add_dfb(spec, COL_MASK, c.col_mask_gen_dfb_size_bytes, c.bfloat16_tile_size, tt::DataFormat::Float16_b);
+        }
 
-    // Welford-specific compute args
-    if (ctx.use_welford) {
-        const uint32_t tile_width = ctx.tile_width;
+        // The Var[x] reduce chain. Only the non-distributed stage runs the second half of it on-core;
+        // after the all-gather the partials arrive already reduced.
+        if (!c.is_post_all_gather) {
+            add_dfb(spec, EX_PARTIAL2, sizes.ex_partial_dfb_size, c.single_tile_size, c.dfb_data_format);
+            add_dfb(spec, EX_EXTERNAL2, sizes.ex_external_dfb_size, c.single_tile_size, c.dfb_data_format);
+        }
+        add_dfb(spec, EX2, sizes.ex_dfb_size, c.single_tile_size, c.dfb_data_format);
+        if (nd) {
+            add_dfb(spec, EX2PE, sizes.ex2pe_dfb_size, c.single_tile_size, c.dfb_data_format);
+        }
+    }
+
+    // The E[x] reduce chain. RMSNorm normalizes by the mean of squares and has no mean to reduce, and
+    // the distributed stages carry E[x] through the statistics tensor rather than these buffers.
+    if (!c.rms_norm && nd) {
+        add_dfb(spec, EX_PARTIAL, sizes.ex_partial_dfb_size, c.single_tile_size, c.dfb_data_format);
+        add_dfb(spec, EX, sizes.ex_dfb_size, c.single_tile_size, c.dfb_data_format);
+        add_dfb(spec, EX_EXTERNAL, sizes.ex_external_dfb_size, c.single_tile_size, c.dfb_data_format);
+    }
+
+    if (c.has_gamma && !c.is_pre_all_gather) {
+        add_dfb(spec, GAMMA, sizes.in5_dfb_size, c.gamma_single_tile_size, c.gamma_dfb_data_format);
+    }
+    if (c.has_beta && !c.is_pre_all_gather) {
+        add_dfb(spec, BETA, sizes.in6_dfb_size, c.beta_single_tile_size, c.beta_dfb_data_format);
+    }
+
+    // x: the pre-add result before the all-gather, x itself in the middle stage, E[x]^2 after it.
+    add_dfb(spec, X, sizes.x_dfb_size, c.single_tile_size, c.dfb_data_format);
+
+    // x - E[x], and the gamma/beta streaming intermediate. The pre-all-gather stage produces
+    // statistics only and never forms either.
+    if (!c.is_pre_all_gather) {
+        add_dfb(spec, XMM, sizes.xmm_dfb_size, c.single_tile_size, c.dfb_data_format);
+    }
+
+    // The multicast landing buffer for the final statistics. The pre-all-gather stage sends its
+    // statistics off-device instead of broadcasting them back.
+    if (!c.is_pre_all_gather) {
+        add_dfb(spec, EX_GLOBAL, sizes.ex_global_dfb_size, c.single_tile_size, c.dfb_data_format);
+    }
+
+    if (c.use_welford) {
+        // transpose_dest is currently unusable, so the Welford statistics are transposed back to
+        // columns through this buffer instead.
+        add_dfb(spec, TRANSPOSE, sizes.ex_global_dfb_size, c.single_tile_size, c.dfb_data_format);
+        add_dfb(
+            spec,
+            RECIPROCALS,
+            c.reciprocal_dfb_size_bytes,
+            c.reciprocal_dfb_size_bytes,
+            c.reciprocal_dfb_data_format,
+            RECIP);
+    }
+
+    // Output. When the writer reshards, this buffer is a plain intermediate and the output tensor is
+    // reached through its own binding instead.
+    add_dfb(
+        spec,
+        OUT,
+        sizes.out_dfb_size,
+        c.out_single_tile_size,
+        c.out_data_format,
+        c.writes_back ? std::nullopt : std::optional<m2::TensorParamName>(OUTPUT));
+
+    // Welford-fp32 alias: a second index over the primary buffer's SRAM, same total size. Alias group
+    // members must agree on whether they borrow their memory, so the non-fused alias borrows the input
+    // tensor exactly as the buffer it shares does.
+    if (c.welford_fp32_alias) {
+        if (c.has_b) {
+            add_dfb(spec, X_WELFORD, sizes.x_dfb_size, c.single_tile_size, c.dfb_data_format);
+            alias_pair(spec, X, X_WELFORD);
+        } else {
+            add_dfb(spec, X_WELFORD, sizes.in0_dfb_size, c.in_single_tile_size, c.in_data_format, INPUT);
+            alias_pair(spec, IN0, X_WELFORD);
+        }
+    }
+
+    // These three are the only buffers this op places on a subset of its cores: the all-to-all compute
+    // kernel binds them alone, so they exist on the all-to-all cores only. A buffer's device-facing slot
+    // is the lowest one no buffer sharing a core with it has taken, so declaring them here, after every
+    // all-core buffer, keeps each core's occupied slots a gap-free run starting at zero.
+    if (c.is_post_all_gather) {
+        add_dfb(spec, STATS, sizes.stats_dfb_size, c.stats_single_tile_size, c.stats_dfb_data_format, STATS_T);
+        add_dfb(spec, STATS_REDUCED, sizes.stats_reduced_dfb_size, c.single_tile_size, c.dfb_data_format);
+        add_dfb(spec, VAR, sizes.ex_global_dfb_size, c.single_tile_size, c.dfb_data_format);
+    }
+}
+
+void add_tensor_parameter_specs(
+    m2::ProgramSpec& spec,
+    const SpecConfig& c,
+    const Tensor& input,
+    const std::optional<Tensor>& residual,
+    const std::optional<Tensor>& gamma,
+    const std::optional<Tensor>& beta,
+    const std::optional<Tensor>& stats,
+    const std::optional<Tensor>& recip,
+    const Tensor& output) {
+    spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()});
+    spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
+    if (c.has_b && !c.is_post_all_gather) {
+        spec.tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = RESIDUAL, .spec = residual.value().tensor_spec()});
+    }
+    if (c.has_gamma && !c.is_pre_all_gather) {
+        spec.tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = GAMMA_T, .spec = gamma.value().tensor_spec()});
+    }
+    if (c.has_beta && !c.is_pre_all_gather) {
+        spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = BETA_T, .spec = beta.value().tensor_spec()});
+    }
+    if (c.is_post_all_gather) {
+        spec.tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = STATS_T, .spec = stats.value().tensor_spec()});
+    }
+    if (c.use_welford) {
+        spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = RECIP, .spec = recip.value().tensor_spec()});
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// Kernel specs
+//////////////////////////////////////////////////////////////////////////////
+
+namespace {
+
+void bind_dfb(m2::KernelSpec& kernel, const m2::DFBSpecName& dfb, std::string accessor_name, m2::DFBEndpointType role) {
+    kernel.dfb_bindings.push_back(m2::DFBBinding{
+        .dfb_spec_name = dfb,
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = role,
+    });
+}
+
+// Bind a buffer the kernel both fills and drains. One accessor name serves both directions, so
+// the kernel builds a single DataflowBuffer object for the FIFO.
+void bind_self_loop(m2::KernelSpec& kernel, const m2::DFBSpecName& dfb, std::string accessor_name) {
+    bind_dfb(kernel, dfb, accessor_name, m2::DFBEndpointType::PRODUCER);
+    bind_dfb(kernel, dfb, std::move(accessor_name), m2::DFBEndpointType::CONSUMER);
+}
+
+void bind_tensor(m2::KernelSpec& kernel, const m2::TensorParamName& tensor, std::string accessor_name) {
+    kernel.tensor_bindings.push_back(m2::TensorBinding{
+        .tensor_parameter_name = tensor,
+        .accessor_name = std::move(accessor_name),
+    });
+}
+
+void bind_semaphore(m2::KernelSpec& kernel, const m2::SemaphoreSpecName& sem, std::string accessor_name) {
+    kernel.semaphore_bindings.push_back(m2::SemaphoreBinding{
+        .semaphore_spec_name = sem,
+        .accessor_name = std::move(accessor_name),
+    });
+}
+
+// Preprocessor flags shared by every kernel role. Each one gates a buffer that is absent in some
+// configurations, so it has to reach the preprocessor: an `if constexpr` still looks up the binding
+// token in its discarded branch.
+void add_shared_defines(m2::KernelSpec& kernel, const SpecConfig& c) {
+    if (c.has_b) {
+        kernel.compiler_options.defines.emplace("FUSE_PRE_ADD", "1");
+    }
+    if (c.has_gamma) {
+        kernel.compiler_options.defines.emplace("FUSE_GAMMA", "1");
+    }
+    if (c.has_beta) {
+        kernel.compiler_options.defines.emplace("FUSE_BETA", "1");
+    }
+}
+
+//--------------------------------------------------------------------------
+// Reader
+//--------------------------------------------------------------------------
+
+m2::KernelSpec::CompileTimeArgs reader_sender_compile_time_args(
+    const GridParams& grid, const WorkerDistribution& workers, const CoreRanges& core_ranges, const SpecConfig& c) {
+    return {
+        {"num_blocks", grid.num_blocks},
+        {"block_h", c.block_ht},
+        {"num_all_to_all_workers_first_stage", workers.num_cores_all_to_all_first_stage},
+        {"num_tiles_per_worker", workers.num_rows_per_all_to_all_worker},
+        {"num_tiles_per_worker_bytes", workers.num_rows_per_all_to_all_worker * c.single_tile_size},
+        {"num_tiles_per_worker_last", workers.num_rows_per_all_to_all_worker_last},
+        {"num_tiles_per_worker_last_bytes", workers.num_rows_per_all_to_all_worker_last * c.single_tile_size},
+        {"row_major", static_cast<uint32_t>(grid.row_wise)},
+        {"num_x", core_ranges.num_cores_x_mcast},
+        {"num_y", core_ranges.num_cores_y_mcast},
+        {"use_two_stage_reduce", static_cast<uint32_t>(grid.use_two_stage_reduce)},
+        {"num_blocks_first_stage", workers.num_blocks_first_stage},
+        {"num_blocks_second_stage", workers.num_blocks_second_stage},
+        {"num_mcast_dests", core_ranges.num_mcast_dests},
+    };
+}
+
+// The receiver kernel runs both on the all-to-all workers and on the workers that only wait for the
+// multicast. The two differ in `is_all_to_all_worker` and, for the workers that never gather, in the
+// multicast grid dimensions, which legacy pinned to 1 x 1 so the coordinate block shrinks to the one
+// sender coordinate.
+m2::KernelSpec::CompileTimeArgs reader_receiver_compile_time_args(
+    const GridParams& grid,
+    const WorkerDistribution& workers,
+    const CoreRanges& core_ranges,
+    const SpecConfig& c,
+    bool is_all_to_all_worker) {
+    return {
+        {"num_blocks", grid.num_blocks},
+        {"block_h", c.block_ht},
+        {"is_all_to_all_worker", static_cast<uint32_t>(is_all_to_all_worker)},
+        {"num_all_to_all_workers", workers.num_cores_all_to_all_first_stage},
+        {"num_tiles_per_worker", workers.num_rows_per_all_to_all_worker},
+        {"num_tiles_per_worker_last", workers.num_rows_per_all_to_all_worker_last},
+        {"row_major", static_cast<uint32_t>(grid.row_wise)},
+        {"num_x", is_all_to_all_worker ? core_ranges.num_cores_x_mcast : 1},
+        {"num_y", is_all_to_all_worker ? core_ranges.num_cores_y_mcast : 1},
+        {"use_two_stage_reduce", static_cast<uint32_t>(is_all_to_all_worker && grid.use_two_stage_reduce)},
+        {"num_blocks_first_stage", is_all_to_all_worker ? workers.num_blocks_first_stage : 0},
+        {"num_blocks_second_stage", is_all_to_all_worker ? workers.num_blocks_second_stage : 0},
+    };
+}
+
+// `is_all_to_all_worker` is true for the reader instances placed on the all-to-all group: after the
+// all-gather only those nodes carry the reduced-statistics buffer, so only they bind it.
+void bind_reader_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is_all_to_all_worker) {
+    bind_semaphore(kernel, REDUCE_RECEIVER, "reduce_receiver");
+    bind_semaphore(kernel, REDUCE_SENDER, "reduce_sender");
+    bind_semaphore(kernel, REDUCE_SECOND_STAGE, "reduce_second_stage");
+
+    if (c.is_pre_all_gather) {
+        // Before the all-gather the reader only serves the E[x^2] chain: it gathers the other cores'
+        // partials and hands the combined result back to compute.
+        bind_dfb(kernel, EX_PARTIAL2, "ex_partial2", m2::DFBEndpointType::CONSUMER);
+        bind_dfb(kernel, EX_EXTERNAL2, "ex_external2", m2::DFBEndpointType::PRODUCER);
+        bind_dfb(kernel, EX2, "ex2", m2::DFBEndpointType::CONSUMER);
+        return;
+    }
+    if (c.is_post_all_gather) {
+        // After the all-gather there is nothing to gather across cores: the sender multicasts the
+        // reduced statistics and every reader receives them.
+        bind_dfb(kernel, EX_GLOBAL, "ex_global", m2::DFBEndpointType::PRODUCER);
+        if (is_all_to_all_worker) {
+            bind_dfb(kernel, STATS_REDUCED, "stats_reduced", m2::DFBEndpointType::CONSUMER);
+        }
+        return;
+    }
+
+    if (!c.rms_norm) {
+        bind_dfb(kernel, EX_PARTIAL, "ex_partial", m2::DFBEndpointType::CONSUMER);
+        bind_dfb(kernel, EX_EXTERNAL, "ex_external", m2::DFBEndpointType::PRODUCER);
+        bind_dfb(kernel, EX, "ex", m2::DFBEndpointType::CONSUMER);
+    }
+    if (!c.use_welford) {
+        bind_dfb(kernel, EX_PARTIAL2, "ex_partial2", m2::DFBEndpointType::CONSUMER);
+        bind_dfb(kernel, EX_EXTERNAL2, "ex_external2", m2::DFBEndpointType::PRODUCER);
+        bind_dfb(kernel, EX2PE, "ex2pe", m2::DFBEndpointType::CONSUMER);
+        bind_dfb(kernel, EX2, "ex2", m2::DFBEndpointType::CONSUMER);
+    }
+    bind_dfb(kernel, EX_GLOBAL, "ex_global", m2::DFBEndpointType::PRODUCER);
+}
+
+void add_reader_defines(m2::KernelSpec& kernel, const SpecConfig& c) {
+    add_shared_defines(kernel, c);
+    // Both flags decide which halves of the reduce chain exist, so they gate binding tokens rather
+    // than arithmetic.
+    if (c.rms_norm) {
+        kernel.compiler_options.defines.emplace("RMSNORM", "1");
+    }
+    if (c.use_welford) {
+        kernel.compiler_options.defines.emplace("USE_WELFORD", "1");
+    }
+}
+
+//--------------------------------------------------------------------------
+// Writer
+//--------------------------------------------------------------------------
+
+m2::KernelSpec::CompileTimeArgs writer_compile_time_args(
+    const SpecConfig& c, bool is_all_to_all_worker, uint32_t writer_num_varargs) {
+    m2::KernelSpec::CompileTimeArgs args{
+        {"is_all_to_all_worker", static_cast<uint32_t>(is_all_to_all_worker)},
+        {"block_w", c.block_wt},
+    };
+    if (c.do_col_mask) {
+        args.emplace("logical_K", c.logical_K);
+    }
+    if (!c.is_pre_all_gather) {
+        args.emplace("gamma_is_float32", static_cast<uint32_t>(c.gamma_dfb_data_format == tt::DataFormat::Float32));
+        args.emplace("beta_is_float32", static_cast<uint32_t>(c.beta_dfb_data_format == tt::DataFormat::Float32));
+    }
+    if (c.writes_back) {
+        args.emplace("worker_core_stride_w_bytes", c.block_wt * c.out_single_tile_size);
+        args.emplace("storage_core_stride_w_bytes", c.block_wt_resharded * c.out_single_tile_size);
+        args.emplace("block_ht", c.block_ht);
+        // The segment block's length varies per node, and the kernel copies it into a local array, so
+        // it needs a compile-time bound: the longest block any node was given. A zero bound would
+        // give the kernel a zero-length array to copy into, so a caller that has not measured the
+        // block yet is a construction error rather than a degenerate configuration.
+        TT_FATAL(
+            writer_num_varargs > 0,
+            "Writer write-back segment block length is 0, but this configuration writes back. The "
+            "length is measured by build_run_args, which must run before the kernel specs are built.");
+        args.emplace("max_write_back_segments", writer_num_varargs / 3);
+    }
+    return args;
+}
+
+void bind_writer_resources(m2::KernelSpec& kernel, const SpecConfig& c) {
+    if (c.is_pre_all_gather) {
+        bind_dfb(kernel, SCALER, "scaler", m2::DFBEndpointType::PRODUCER);
+        bind_dfb(kernel, SCALER_GLOBAL, "scaler_global", m2::DFBEndpointType::PRODUCER);
+        if (c.do_col_mask) {
+            bind_dfb(kernel, COL_MASK, "col_mask", m2::DFBEndpointType::PRODUCER);
+        }
+        return;
+    }
+
+    if (!c.use_welford) {
+        if (c.is_post_all_gather) {
+            // After the all-gather the compute kernel reduces the gathered statistics with the global
+            // scaler alone, so the per-core scaler the writer still generates is never drained.
+            bind_self_loop(kernel, SCALER, "scaler");
+        } else {
+            bind_dfb(kernel, SCALER, "scaler", m2::DFBEndpointType::PRODUCER);
+        }
+        bind_dfb(kernel, EPS, "eps", m2::DFBEndpointType::PRODUCER);
+        bind_dfb(kernel, SCALER_GLOBAL, "scaler_global", m2::DFBEndpointType::PRODUCER);
+        if (c.do_col_mask) {
+            bind_dfb(kernel, COL_MASK, "col_mask", m2::DFBEndpointType::PRODUCER);
+        }
+    }
+    if (c.has_gamma) {
+        bind_dfb(kernel, GAMMA, "gamma", m2::DFBEndpointType::PRODUCER);
+        bind_tensor(kernel, GAMMA_T, "gamma");
+    }
+    if (c.has_beta) {
+        bind_dfb(kernel, BETA, "beta", m2::DFBEndpointType::PRODUCER);
+        bind_tensor(kernel, BETA_T, "beta");
+    }
+    if (c.writes_back) {
+        bind_dfb(kernel, OUT, "out", m2::DFBEndpointType::CONSUMER);
+        // The write-back moves nothing through a buffer: it reads this binding's base address and
+        // issues its own remote writes to the storage cores.
+        bind_tensor(kernel, OUTPUT, "dst");
+    }
+}
+
+void add_writer_defines(m2::KernelSpec& kernel, const SpecConfig& c) {
+    add_shared_defines(kernel, c);
+    if (c.rms_norm) {
+        kernel.compiler_options.defines.emplace("RMSNORM", "1");
+    }
+    if (c.use_welford) {
+        kernel.compiler_options.defines.emplace("USE_WELFORD", "1");
+    }
+    // The write-back reads runtime arguments only the post-all-gather stage supplies, so the build
+    // that compiles it is the build where those arguments exist.
+    if (!c.writes_back) {
+        kernel.compiler_options.defines.emplace("SKIP_WRITE_BACK", "1");
+    }
+    if (c.do_col_mask) {
+        kernel.compiler_options.defines.emplace("DO_COL_MASK", "1");
+    }
+}
+
+//--------------------------------------------------------------------------
+// Compute
+//--------------------------------------------------------------------------
+
+m2::KernelSpec::CompileTimeArgs compute_compile_time_args(
+    const GridParams& grid, const WorkerDistribution& workers, const SpecConfig& c) {
+    m2::KernelSpec::CompileTimeArgs args{
+        {"num_blocks_first_stage", workers.num_blocks_first_stage},
+        {"block_h", c.block_ht},
+        {"block_w", c.block_wt},
+        {"subblock_w", c.subblock_wt},
+        {"num_subblocks_w", c.block_wt / c.subblock_wt},
+        {"num_tiles_per_block", c.block_ht * c.block_wt},
+        {"float32_dtype", static_cast<uint32_t>(c.fp32_dest_acc_en)},
+        {"legacy_rsqrt", static_cast<uint32_t>(c.legacy_rsqrt)},
+        {"num_blocks_second_stage", workers.num_blocks_second_stage},
+    };
+
+    if (c.use_welford) {
         // Number of valid (logical) columns in the final tile of the width. The kernel uses this
         // both to bound the partial Welford tile and, via last_block_w, to weight the final width
         // shard in the cross-core combine, so it must reflect the logical width, not padded K.
-        uint32_t last_tile_W = (ctx.logical_K % tile_width == 0) ? tile_width : (ctx.logical_K % tile_width);
-        auto eps_u32 = std::bit_cast<uint32_t>(ctx.eps);
-        const uint32_t logical_Kt = (ctx.logical_K + tile_width - 1) / tile_width;
+        const uint32_t last_tile_w = (c.logical_K % c.tile_width == 0) ? c.tile_width : (c.logical_K % c.tile_width);
+        const uint32_t logical_Kt = (c.logical_K + c.tile_width - 1) / c.tile_width;
         // Number of valid (logical) tiles the final width block reduces. The other width blocks each own
         // block_wt tiles; the final block owns the remainder. Each block spans a whole number of tiles
         // (block_w columns), so when the logical width does not fill them evenly the final core owns
         // fewer than block_wt tiles, and the cross-core combine must weight it by its true width, not
         // block_w. A partial boundary tile is counted as a valid tile here; its valid-column count is
-        // carried separately in last_tile_W and combined into last_block_w.
+        // carried separately in last_tile_w and combined into last_block_w.
         // For example, w=96 gives 3 tiles, which sharded on two cores leaves two real tiles on the
         // first core and one real tile plus one padding tile on the second. For w=80 (also 3 tiles),
-        // the second core owns last_block_wt = 1 tile that is itself partial (last_tile_W = 16 valid
+        // the second core owns last_block_wt = 1 tile that is itself partial (last_tile_w = 16 valid
         // columns) plus one padding tile.
         // The subtraction below does not underflow: validate_sharded_input requires the trailing width pad
         // to be strictly less than one shard, i.e. (num_blocks - 1) * block_wt < Kt, and the padded width
         // Kt equals logical_Kt (padded_shape rounds the logical width up to a whole tile). So
         // (num_blocks - 1) * block_wt is strictly less than logical_Kt, and the final width block always
         // owns at least one logical tile: last_block_wt >= 1.
-        const uint32_t last_block_wt = logical_Kt - (ctx.grid->num_blocks - 1) * ctx.block_wt;
+        const uint32_t last_block_wt = logical_Kt - (grid.num_blocks - 1) * c.block_wt;
 
-        args.compute_all_to_all.push_back(tile_width);
-        args.compute_all_to_all.push_back(last_tile_W);
-        args.compute_all_to_all.push_back(ctx.logical_K);
-        args.compute_all_to_all.push_back(eps_u32);
-        args.compute_all_to_all.push_back(ctx.per_core_recip_lut_size);
-        args.compute_all_to_all.push_back(last_block_wt);
-
-        args.compute_not_all_to_all.push_back(tile_width);
-        args.compute_not_all_to_all.push_back(last_tile_W);
-        args.compute_not_all_to_all.push_back(ctx.logical_K);
-        args.compute_not_all_to_all.push_back(eps_u32);
-        args.compute_not_all_to_all.push_back(ctx.per_core_recip_lut_size);
-        args.compute_not_all_to_all.push_back(last_block_wt);
+        args.emplace("tile_width", c.tile_width);
+        args.emplace("last_tile_w", last_tile_w);
+        args.emplace("W", c.logical_K);
+        args.emplace("eps", std::bit_cast<uint32_t>(c.eps));
+        args.emplace("per_core_recip_lut_size", c.per_core_recip_lut_size);
+        args.emplace("last_block_wt", last_block_wt);
     }
-
     return args;
 }
 
-//////////////////////////////////////////////////////////////////////////////
-// Kernel and CB descriptor builders
-//////////////////////////////////////////////////////////////////////////////
+void bind_compute_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is_all_to_all_worker) {
+    // Every stage reads its input shard in place, so compute owns both ends of it.
+    bind_self_loop(kernel, IN0, "in0");
+    if (c.has_b && !c.is_post_all_gather) {
+        bind_self_loop(kernel, IN1, "in1");
+    }
+    if (c.has_gamma && !c.is_pre_all_gather) {
+        bind_dfb(kernel, GAMMA, "gamma", m2::DFBEndpointType::CONSUMER);
+    }
+    if (c.has_beta && !c.is_pre_all_gather) {
+        bind_dfb(kernel, BETA, "beta", m2::DFBEndpointType::CONSUMER);
+    }
+    bind_self_loop(kernel, X, "x");
 
-namespace {
-
-// build_writer_args() lays out the gamma/beta base addresses at fixed writer arg indices 3 and 4.
-constexpr uint32_t kWriterGammaArgIdx = 3;
-constexpr uint32_t kWriterBetaArgIdx = 4;
-
-// Bind the gamma/beta writer address slots to their Buffer* so the framework patches them on
-// cache hits. A null buffer (absent optional tensor) leaves the baked 0 untouched.
-void bind_writer_gamma_beta(KernelDescriptor& desc, Buffer* gamma_buffer, Buffer* beta_buffer) {
-    if (gamma_buffer == nullptr && beta_buffer == nullptr) {
+    if (c.is_pre_all_gather) {
+        if (c.has_b) {
+            bind_self_loop(kernel, IN_PRE_ADD, "in_pre_add");
+        }
+        bind_dfb(kernel, SCALER, "scaler", m2::DFBEndpointType::CONSUMER);
+        bind_dfb(kernel, SCALER_GLOBAL, "scaler_global", m2::DFBEndpointType::CONSUMER);
+        bind_dfb(kernel, EX_PARTIAL2, "ex_partial2", m2::DFBEndpointType::PRODUCER);
+        bind_dfb(kernel, EX_EXTERNAL2, "ex_external2", m2::DFBEndpointType::CONSUMER);
+        if (c.do_col_mask) {
+            bind_dfb(kernel, COL_MASK, "col_mask", m2::DFBEndpointType::CONSUMER);
+        }
+        // The combine writes its result into one of these two, and only the cores that gather run it.
+        // Both endpoints are declared on every compute instance regardless: the buffers exist on every
+        // node the reader spans, so each instance needs its producer side even where nothing writes it.
+        // The statistics leave the device through the all-gather rather than through a kernel, so the
+        // output has no reader and compute holds both of its ends.
+        bind_dfb(kernel, EX2, "ex2", m2::DFBEndpointType::PRODUCER);
+        bind_self_loop(kernel, OUT, "out");
         return;
     }
-    for (const auto& core_args : desc.runtime_args) {
-        const CoreCoord& core = core_args.first;
-        if (gamma_buffer != nullptr) {
-            desc.buffer_bindings.push_back({core, kWriterGammaArgIdx, gamma_buffer});
+
+    bind_self_loop(kernel, XMM, "xmm");
+    bind_dfb(kernel, EX_GLOBAL, "ex_global", m2::DFBEndpointType::CONSUMER);
+    // Where the writer reshards, it drains this buffer; compute is then the producer alone. Otherwise
+    // compute is its only toucher.
+    if (c.writes_back) {
+        bind_dfb(kernel, OUT, "out", m2::DFBEndpointType::PRODUCER);
+    } else {
+        bind_self_loop(kernel, OUT, "out");
+    }
+
+    if (c.is_post_all_gather) {
+        bind_dfb(kernel, EPS, "eps", m2::DFBEndpointType::CONSUMER);
+        bind_dfb(kernel, SCALER_GLOBAL, "scaler_global", m2::DFBEndpointType::CONSUMER);
+        bind_self_loop(kernel, EX2, "ex2");
+        // The statistics reduction runs only on the cores that gather, and its three buffers are
+        // placed with it.
+        if (is_all_to_all_worker) {
+            bind_self_loop(kernel, STATS, "stats");
+            bind_self_loop(kernel, VAR, "var");
+            // The reader drains the reduced statistics to multicast them, so compute is the producer
+            // alone even though it also reads its own result back.
+            bind_dfb(kernel, STATS_REDUCED, "stats_reduced", m2::DFBEndpointType::PRODUCER);
         }
-        if (beta_buffer != nullptr) {
-            desc.buffer_bindings.push_back({core, kWriterBetaArgIdx, beta_buffer});
+        return;
+    }
+
+    // Non-distributed. The reduce pipeline's buffers all leave this kernel for the reader, so compute
+    // holds the producer side of each even where it reads its own result back on the way.
+    if (!c.rms_norm) {
+        bind_dfb(kernel, EX_PARTIAL, "ex_partial", m2::DFBEndpointType::PRODUCER);
+        bind_dfb(kernel, EX, "ex", m2::DFBEndpointType::PRODUCER);
+        bind_dfb(kernel, EX_EXTERNAL, "ex_external", m2::DFBEndpointType::CONSUMER);
+    }
+    if (c.use_welford) {
+        bind_self_loop(kernel, TRANSPOSE, "transpose");
+        bind_self_loop(kernel, RECIPROCALS, "reciprocals");
+        if (c.welford_fp32_alias) {
+            bind_self_loop(kernel, X_WELFORD, "x_welford");
+        }
+    } else {
+        bind_dfb(kernel, SCALER, "scaler", m2::DFBEndpointType::CONSUMER);
+        bind_dfb(kernel, EPS, "eps", m2::DFBEndpointType::CONSUMER);
+        bind_dfb(kernel, SCALER_GLOBAL, "scaler_global", m2::DFBEndpointType::CONSUMER);
+        bind_dfb(kernel, EX_PARTIAL2, "ex_partial2", m2::DFBEndpointType::PRODUCER);
+        bind_dfb(kernel, EX2, "ex2", m2::DFBEndpointType::PRODUCER);
+        bind_dfb(kernel, EX_EXTERNAL2, "ex_external2", m2::DFBEndpointType::CONSUMER);
+        bind_dfb(kernel, EX2PE, "ex2pe", m2::DFBEndpointType::PRODUCER);
+        if (c.do_legacy_layernorm_col_mask) {
+            bind_self_loop(kernel, MASK_SCRATCH, "mask_scratch");
+        }
+        if (c.do_col_mask) {
+            bind_dfb(kernel, COL_MASK, "col_mask", m2::DFBEndpointType::CONSUMER);
         }
     }
 }
 
-void add_idle_core_kernel_descriptors(
-    ProgramDescriptor& program_descriptor,
-    const CoreRanges& core_ranges,
-    const KernelConfig& kernel_config,
-    const KernelDescriptor::NamedCompileTimeArgs& reader_cb_named_args,
-    const KernelDescriptor::NamedCompileTimeArgs& writer_cb_named_args,
-    const KernelDescriptor::NamedCompileTimeArgs& compute_cb_named_args) {
-    if (core_ranges.inactive_cores.empty()) {
+void add_compute_defines(m2::KernelSpec& kernel, const SpecConfig& c, bool is_all_to_all_worker) {
+    add_shared_defines(kernel, c);
+    if (c.rms_norm && !c.use_welford) {
+        kernel.compiler_options.defines.emplace("RMSNORM", "1");
+    }
+    if (c.do_col_mask) {
+        kernel.compiler_options.defines.emplace("DO_COL_MASK", "1");
+    }
+    if (c.welford_fp32_alias) {
+        kernel.compiler_options.defines.emplace("WELFORD_FP32_ALIAS", "1");
+    }
+    // The all-to-all workers read three extra runtime arguments and touch three extra buffers, so the
+    // distinction has to be visible to the preprocessor rather than to `if constexpr` alone.
+    if (is_all_to_all_worker) {
+        kernel.compiler_options.defines.emplace("IS_ALLGATHER_WORKER", "1");
+    }
+    for (const auto& [key, value] : c.activation_defines) {
+        kernel.compiler_options.defines.emplace(key, value);
+    }
+}
+
+// Legacy carried a vector indexed by buffer index, defaulted everywhere except the Welford alias.
+// That one becomes UnpackToDest; the remaining Float32 buffers the kernel consumes get an explicit
+// UnpackToSrc, which is required once the 32-bit Dest register is enabled and which legacy supplied
+// silently.
+//
+// The choice of which buffers get which mode assumes a Gen1 target (Wormhole, Blackhole), where
+// unpacking straight to Dest costs performance unless it is the only way to keep 32 bits of
+// precision. That is why UnpackToDest appears only at the Welford alias and every other Float32
+// buffer is pinned to UnpackToSrc. Gen2 reverses the tradeoff: unpacking to Dest is free there and
+// is the preferred mode for anything the SFPU consumes, so these assignments stay legal but become
+// slower than they need to be. They want revisiting before this op targets Gen2.
+void set_compute_unpack_modes(m2::KernelSpec& kernel, const m2::ProgramSpec& spec, const SpecConfig& c) {
+    auto& modes = m2::unpack_modes(std::get<m2::ComputeHardwareConfig>(kernel.hw_config));
+    if (c.welford_fp32_alias) {
+        modes.emplace(X_WELFORD, UnpackMode::UnpackToDest);
+    }
+    if (!c.fp32_dest_acc_en) {
         return;
     }
-
-    auto with_idle_define = [](KernelDescriptor::Defines defines) {
-        defines.emplace_back("IDLE_CORE", "1");
-        return defines;
-    };
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = kernel_config.reader_receiver_path;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = core_ranges.inactive_cores;
-    reader_desc.compile_time_args = kernel_config.reader_receiver_ct_args;
-    reader_desc.named_compile_time_args = reader_cb_named_args;
-    reader_desc.defines = with_idle_define(kernel_config.reader_receiver_defines);
-    reader_desc.config = DataMovementConfigDescriptor{
-        .processor = DataMovementProcessor::RISCV_0,
-        .noc = kernel_config.reader_noc,
-        .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-    program_descriptor.kernels.push_back(std::move(reader_desc));
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kernel_config.writer_path;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = core_ranges.inactive_cores;
-    writer_desc.compile_time_args = kernel_config.writer_receiver_ct_args;
-    auto writer_named_args = writer_cb_named_args;
-    writer_named_args.push_back({"is_all_to_all_worker", 0});
-    writer_desc.named_compile_time_args = std::move(writer_named_args);
-    writer_desc.defines = with_idle_define(kernel_config.writer_defines);
-    writer_desc.config = DataMovementConfigDescriptor{
-        .processor = DataMovementProcessor::RISCV_1,
-        .noc = kernel_config.writer_noc,
-        .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-    program_descriptor.kernels.push_back(std::move(writer_desc));
-
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = kernel_config.compute_path;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = core_ranges.inactive_cores;
-    compute_desc.compile_time_args = kernel_config.compute_not_all_to_all_ct_args;
-    compute_desc.named_compile_time_args = compute_cb_named_args;
-    compute_desc.defines = with_idle_define(kernel_config.compute_defines);
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = kernel_config.math_fidelity,
-        .fp32_dest_acc_en = kernel_config.fp32_dest_acc_en,
-        .dst_full_sync_en = kernel_config.dst_full_sync_en,
-        .math_approx_mode = kernel_config.math_approx_mode};
-    program_descriptor.kernels.push_back(std::move(compute_desc));
+    for (const auto& binding : kernel.dfb_bindings) {
+        if (binding.endpoint_type != m2::DFBEndpointType::CONSUMER) {
+            continue;
+        }
+        if (data_format_of(spec, binding.dfb_spec_name) != tt::DataFormat::Float32) {
+            continue;
+        }
+        modes.emplace(binding.dfb_spec_name, UnpackMode::UnpackToSrc);
+    }
 }
 
 }  // namespace
 
-void add_kernel_descriptors(
-    ProgramDescriptor& program_descriptor,
+void add_kernel_and_work_unit_specs(
+    m2::ProgramSpec& spec,
     const CoreRanges& core_ranges,
     const WorkerDistribution& workers,
     const GridParams& grid,
-    KernelConfig&& kernel_config) {
-    // Named compile-time args for CB indices - enables kernel chaining/fusion
-    KernelDescriptor::NamedCompileTimeArgs reader_cb_named_args = {
-        {"cb_ex_partial", tt::CBIndex::c_8},
-        {"cb_ex", tt::CBIndex::c_9},
-        {"cb_ex_external", tt::CBIndex::c_10},
-        {"cb_ex_partial2", tt::CBIndex::c_11},
-        {"cb_ex2", tt::CBIndex::c_12},
-        {"cb_ex_external2", tt::CBIndex::c_13},
-        {"cb_ex_global", tt::CBIndex::c_15},
-        {"cb_ex2pe", tt::CBIndex::c_20},
+    const SpecConfig& c,
+    uint32_t writer_num_varargs) {
+    const bool has_reader_receiver_all_to_all = grid.use_mcast && !core_ranges.all_to_all_workers_except_sender.empty();
+    const bool has_not_all_to_all_workers = workers.num_none_all_to_all_workers > 0;
+    const bool has_inactive_cores = !core_ranges.inactive_cores.empty();
+
+    const m2::DataMovementHardwareConfig reader_hw = m2::DataMovementGen1Config{
+        .processor = DataMovementProcessor::RISCV_0, .noc = c.reader_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+    const m2::DataMovementHardwareConfig writer_hw = m2::DataMovementGen1Config{
+        .processor = DataMovementProcessor::RISCV_1, .noc = c.writer_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+
+    // The reader's trailing coordinate block is one X coordinate per multicast column followed by one
+    // Y coordinate per multicast row. Its length is a compile-time property of the kernel, but the
+    // kernel indexes into it, so it stays a vararg block.
+    const uint32_t sender_num_coords = core_ranges.num_cores_x_mcast + core_ranges.num_cores_y_mcast;
+
+    //----------------------------------------------------------------------
+    // Reader sender
+    //----------------------------------------------------------------------
+    m2::KernelSpec reader_sender{
+        .unique_id = READER_SENDER,
+        .source = c.reader_sender_path,
+        .compile_time_args = reader_sender_compile_time_args(grid, workers, core_ranges, c),
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"mcast_dest_noc_start_x",
+                  "mcast_dest_noc_start_y",
+                  "mcast_dest_noc_end_x",
+                  "mcast_dest_noc_end_y",
+                  "start_x",
+                  "start_y"}},
+        .hw_config = reader_hw,
+    };
+    reader_sender.advanced_options.num_runtime_varargs = sender_num_coords;
+    add_reader_defines(reader_sender, c);
+    bind_reader_resources(reader_sender, c, /*is_all_to_all_worker=*/true);
+    spec.kernels.push_back(std::move(reader_sender));
+
+    //----------------------------------------------------------------------
+    // Reader receivers
+    //----------------------------------------------------------------------
+    const m2::KernelSpec::RuntimeArgSchema receiver_schema{
+        .runtime_arg_names = {
+            "is_last_all_to_all_worker",
+            "all_to_all_tile_offset_bytes",
+            "is_second_stage_reader",
+            "start_x",
+            "start_y"}};
+
+    auto make_reader_receiver = [&](const m2::KernelSpecName& name, bool is_all_to_all_worker) {
+        m2::KernelSpec kernel{
+            .unique_id = name,
+            .source = c.reader_receiver_path,
+            .compile_time_args = reader_receiver_compile_time_args(grid, workers, core_ranges, c, is_all_to_all_worker),
+            .runtime_arg_schema = receiver_schema,
+            .hw_config = reader_hw,
+        };
+        kernel.advanced_options.num_runtime_varargs = is_all_to_all_worker ? sender_num_coords : 2;
+        add_reader_defines(kernel, c);
+        bind_reader_resources(kernel, c, /*is_all_to_all_worker=*/is_all_to_all_worker);
+        return kernel;
     };
 
-    KernelDescriptor::NamedCompileTimeArgs writer_cb_named_args = {
-        {"cb_gamma", tt::CBIndex::c_5},
-        {"cb_beta", tt::CBIndex::c_6},
-        {"cb_out", tt::CBIndex::c_16},
-        {"cb_out_resharded", tt::CBIndex::c_17},
-        {"cb_in_2", tt::CBIndex::c_2},
-        {"cb_eps", tt::CBIndex::c_3},
-        {"cb_in_4", tt::CBIndex::c_4},
-        // On-device column mask (non-distributed, generated by the writer under DO_COL_MASK): the mask
-        // CB and the logical width (where the padding columns begin).
-        {"cb_col_mask", tt::CBIndex::c_19},
-        {"logical_K", kernel_config.logical_K},
-        // Per-core width in tiles and the Welford flag, shared by both writer descriptors. The
-        // per-role is_all_to_all_worker flag is appended per descriptor below, since it differs.
-        {"block_w", kernel_config.block_wt},
-        {"use_welford", static_cast<uint32_t>(kernel_config.use_welford)},
-    };
-
-    KernelDescriptor::NamedCompileTimeArgs compute_cb_named_args = {
-        {"cb_in0", tt::CBIndex::c_0},
-        {"cb_in1", tt::CBIndex::c_1},
-        {"cb_scaler", tt::CBIndex::c_2},
-        {"cb_eps", tt::CBIndex::c_3},
-        {"cb_scaler_global", tt::CBIndex::c_4},
-        {"cb_gamma", tt::CBIndex::c_5},
-        {"cb_beta", tt::CBIndex::c_6},
-        {"cb_ex_partial", tt::CBIndex::c_8},
-        {"cb_ex", tt::CBIndex::c_9},
-        {"cb_ex_external", tt::CBIndex::c_10},
-        {"cb_ex_partial2", tt::CBIndex::c_11},
-        {"cb_ex2", tt::CBIndex::c_12},
-        {"cb_ex_external2", tt::CBIndex::c_13},
-        {"cb_ex_global", tt::CBIndex::c_15},
-        {"cb_out", tt::CBIndex::c_16},
-        {"cb_xmm", tt::CBIndex::c_18},
-        {"cb_ex2pe", tt::CBIndex::c_20},
-        {"cb_x", tt::CBIndex::c_24},
-        // Welford-fp32 alias of cb_x (c_0 in non-fused mode, c_24 in fused mode). When the
-        // alias is active the kernel reads cb_x_welford for the Welford section so the unpacker
-        // takes the UnpackToDestFp32 path; the post-Welford eltwise still reads cb_x via SrcA.
-        // When inactive, cb_x_welford == cb_x on the kernel side (see
-        // layernorm_sharded_welford.cpp) so the named arg can stay present unconditionally.
-        {"cb_x_welford", tt::CBIndex::c_29},
-        {"welford_fp32_alias", static_cast<uint8_t>(kernel_config.welford_fp32_alias ? 1 : 0)},
-        // Column mask for the non-tile-aligned path. CB 14 (E[x] scratch) is LayerNorm-only; CB 19
-        // (the writer-generated mask) is applied at every masking site and shared with RMSNorm.
-        {"cb_mask_scratch", tt::CBIndex::c_14},
-        {"cb_col_mask_packed", tt::CBIndex::c_19},
-    };
-
-    add_idle_core_kernel_descriptors(
-        program_descriptor,
-        core_ranges,
-        kernel_config,
-        reader_cb_named_args,
-        writer_cb_named_args,
-        compute_cb_named_args);
-
-    // Reader sender kernel
-    KernelDescriptor reader_sender_kernel_desc;
-    reader_sender_kernel_desc.kernel_source = kernel_config.reader_sender_path;
-    reader_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_sender_kernel_desc.core_ranges = core_ranges.sender_cores;
-    reader_sender_kernel_desc.compile_time_args = std::move(kernel_config.reader_sender_ct_args);
-    reader_sender_kernel_desc.named_compile_time_args = reader_cb_named_args;
-    reader_sender_kernel_desc.defines = std::move(kernel_config.reader_sender_defines);
-    reader_sender_kernel_desc.runtime_args = std::move(kernel_config.reader_sender_rt_args);
-    reader_sender_kernel_desc.config = DataMovementConfigDescriptor{
-        .processor = DataMovementProcessor::RISCV_0,
-        .noc = kernel_config.reader_noc,
-        .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-    program_descriptor.kernels.push_back(std::move(reader_sender_kernel_desc));
-
-    // Reader receiver all-to-all kernel
-    if (grid.use_mcast && !core_ranges.all_to_all_workers_except_sender.empty()) {
-        KernelDescriptor reader_receiver_all_to_all_kernel_desc;
-        reader_receiver_all_to_all_kernel_desc.kernel_source = kernel_config.reader_receiver_path;
-        reader_receiver_all_to_all_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        reader_receiver_all_to_all_kernel_desc.core_ranges = core_ranges.all_to_all_workers_except_sender;
-        reader_receiver_all_to_all_kernel_desc.compile_time_args =
-            std::move(kernel_config.reader_receiver_all_to_all_ct_args);
-        reader_receiver_all_to_all_kernel_desc.named_compile_time_args = reader_cb_named_args;
-        reader_receiver_all_to_all_kernel_desc.defines = kernel_config.reader_receiver_defines;
-        reader_receiver_all_to_all_kernel_desc.runtime_args =
-            std::move(kernel_config.reader_receiver_all_to_all_rt_args);
-        reader_receiver_all_to_all_kernel_desc.config = DataMovementConfigDescriptor{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = kernel_config.reader_noc,
-            .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-        program_descriptor.kernels.push_back(std::move(reader_receiver_all_to_all_kernel_desc));
+    if (has_reader_receiver_all_to_all) {
+        spec.kernels.push_back(make_reader_receiver(READER_RECEIVER_ALL_TO_ALL, /*is_all_to_all_worker=*/true));
+    }
+    if (has_not_all_to_all_workers) {
+        spec.kernels.push_back(make_reader_receiver(READER_RECEIVER, /*is_all_to_all_worker=*/false));
     }
 
-    // Reader receiver (not all-to-all) kernel
-    if (workers.num_none_all_to_all_workers > 0) {
-        KernelDescriptor reader_receiver_kernel_desc;
-        reader_receiver_kernel_desc.kernel_source = kernel_config.reader_receiver_path;
-        reader_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        reader_receiver_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
-        reader_receiver_kernel_desc.compile_time_args = std::move(kernel_config.reader_receiver_ct_args);
-        reader_receiver_kernel_desc.named_compile_time_args = reader_cb_named_args;
-        reader_receiver_kernel_desc.defines = std::move(kernel_config.reader_receiver_defines);
-        reader_receiver_kernel_desc.runtime_args = std::move(kernel_config.reader_receiver_rt_args);
-        reader_receiver_kernel_desc.config = DataMovementConfigDescriptor{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = kernel_config.reader_noc,
-            .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-        program_descriptor.kernels.push_back(std::move(reader_receiver_kernel_desc));
-    }
-
-    // Writer sender kernel (for all-to-all cores)
-    KernelDescriptor writer_sender_kernel_desc;
-    writer_sender_kernel_desc.kernel_source = kernel_config.writer_path;
-    writer_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_sender_kernel_desc.core_ranges = core_ranges.all_to_all_cores;
-    writer_sender_kernel_desc.compile_time_args = std::move(kernel_config.writer_sender_ct_args);
-    auto writer_sender_named_args = writer_cb_named_args;
-    writer_sender_named_args.push_back({"is_all_to_all_worker", 1});
-    writer_sender_kernel_desc.named_compile_time_args = std::move(writer_sender_named_args);
-    writer_sender_kernel_desc.defines = kernel_config.writer_defines;
-    writer_sender_kernel_desc.runtime_args = std::move(kernel_config.writer_sender_rt_args);
-    bind_writer_gamma_beta(writer_sender_kernel_desc, kernel_config.gamma_buffer, kernel_config.beta_buffer);
-    writer_sender_kernel_desc.config = DataMovementConfigDescriptor{
-        .processor = DataMovementProcessor::RISCV_1,
-        .noc = kernel_config.writer_noc,
-        .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-    program_descriptor.kernels.push_back(std::move(writer_sender_kernel_desc));
-
-    // Writer receiver kernel (for not all-to-all cores)
-    if (workers.num_none_all_to_all_workers > 0) {
-        KernelDescriptor writer_receiver_kernel_desc;
-        writer_receiver_kernel_desc.kernel_source = kernel_config.writer_path;
-        writer_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        writer_receiver_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
-        writer_receiver_kernel_desc.compile_time_args = std::move(kernel_config.writer_receiver_ct_args);
-        auto writer_receiver_named_args = writer_cb_named_args;
-        writer_receiver_named_args.push_back({"is_all_to_all_worker", 0});
-        writer_receiver_kernel_desc.named_compile_time_args = std::move(writer_receiver_named_args);
-        writer_receiver_kernel_desc.defines = std::move(kernel_config.writer_defines);
-        writer_receiver_kernel_desc.runtime_args = std::move(kernel_config.writer_receiver_rt_args);
-        bind_writer_gamma_beta(writer_receiver_kernel_desc, kernel_config.gamma_buffer, kernel_config.beta_buffer);
-        writer_receiver_kernel_desc.config = DataMovementConfigDescriptor{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = kernel_config.writer_noc,
-            .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-        program_descriptor.kernels.push_back(std::move(writer_receiver_kernel_desc));
-    }
-
-    // Compute kernel (all-to-all cores)
-    KernelDescriptor compute_all_to_all_kernel_desc;
-    // Welford-fp32 alias index gets UnpackToDestFp32 mode so the welford section reads full
-    // FP32 into DEST via cb_x_welford (c_29). cb_x itself (c_0 non-fused, c_24 fused) stays at
-    // Default mode so the post-welford FPU eltwise (sub_tiles_bcast_cols) keeps reading via
-    // SrcA TF32.
-    //
-    // cb_ex_global (c_15) was considered and rejected. Its only consumer is transpose_tile,
-    // which would benefit from UnpackToDestFp32 in isolation, but the transpose result is then
-    // packed into cb_transpose and the downstream consumers (sub_tiles_bcast_cols /
-    // mul_tiles_bcast_cols) read cb_transpose via SrcA, truncating to TF32.
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (kernel_config.welford_fp32_alias) {
-        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_29)] =
-            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
-
-    compute_all_to_all_kernel_desc.kernel_source = kernel_config.compute_path;
-    compute_all_to_all_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_all_to_all_kernel_desc.core_ranges = core_ranges.all_to_all_cores;
-    compute_all_to_all_kernel_desc.compile_time_args = std::move(kernel_config.compute_all_to_all_ct_args);
-    compute_all_to_all_kernel_desc.named_compile_time_args = compute_cb_named_args;
-    compute_all_to_all_kernel_desc.defines = kernel_config.compute_defines;
-    compute_all_to_all_kernel_desc.runtime_args = std::move(kernel_config.compute_all_to_all_rt_args);
-    compute_all_to_all_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = kernel_config.math_fidelity,
-        .fp32_dest_acc_en = kernel_config.fp32_dest_acc_en,
-        .dst_full_sync_en = kernel_config.dst_full_sync_en,
-        .unpack_to_dest_mode = unpack_to_dest_mode,
-        .math_approx_mode = kernel_config.math_approx_mode};
-    program_descriptor.kernels.push_back(std::move(compute_all_to_all_kernel_desc));
-
-    // Compute kernel (not all-to-all cores)
-    if (workers.num_none_all_to_all_workers > 0) {
-        KernelDescriptor compute_not_all_to_all_kernel_desc;
-        compute_not_all_to_all_kernel_desc.kernel_source = kernel_config.compute_path;
-        compute_not_all_to_all_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_not_all_to_all_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
-        compute_not_all_to_all_kernel_desc.compile_time_args = std::move(kernel_config.compute_not_all_to_all_ct_args);
-        compute_not_all_to_all_kernel_desc.named_compile_time_args = compute_cb_named_args;
-        compute_not_all_to_all_kernel_desc.defines = std::move(kernel_config.compute_defines);
-        compute_not_all_to_all_kernel_desc.runtime_args = std::move(kernel_config.compute_not_all_to_all_rt_args);
-        compute_not_all_to_all_kernel_desc.config = ComputeConfigDescriptor{
-            .math_fidelity = kernel_config.math_fidelity,
-            .fp32_dest_acc_en = kernel_config.fp32_dest_acc_en,
-            .dst_full_sync_en = kernel_config.dst_full_sync_en,
-            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
-            .math_approx_mode = kernel_config.math_approx_mode};
-        program_descriptor.kernels.push_back(std::move(compute_not_all_to_all_kernel_desc));
-    }
-}
-
-void add_cb_descriptors(
-    ProgramDescriptor& program_descriptor,
-    const CoreRanges& core_ranges,
-    const CoreRangeSet& all_worker_and_storage_cores,
-    const CBConfig& cb_config) {
-    auto make_cb_descriptor = [](uint32_t total_size,
-                                 const CoreRangeSet& core_ranges,
-                                 uint8_t buffer_index,
-                                 tt::DataFormat data_format,
-                                 uint32_t page_size,
-                                 Buffer* buffer = nullptr) {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = total_size;
-        cb_desc.core_ranges = core_ranges;
-        cb_desc.format_descriptors.push_back(
-            CBFormatDescriptor{.buffer_index = buffer_index, .data_format = data_format, .page_size = page_size});
-        cb_desc.buffer = buffer;
-        return cb_desc;
-    };
-
-    // CB 0: in0 sharded. In non-fused welford-fp32 mode we also register c_29 as a second
-    // buffer index on the same SRAM so the Welford section can read with UnpackToDestFp32
-    // while the post-Welford eltwise keeps reading c_0 via SrcA.
-    // In fused mode c_0 carries the raw input which Welford never reads -- Welford
-    // reads the post-add result in c_24 instead -- so the alias goes there (see CB 24 below).
-    {
-        auto cb0_desc = make_cb_descriptor(
-            cb_config.in0_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_0,
-            cb_config.in_data_format,
-            cb_config.in_single_tile_size,
-            cb_config.a_buffer);
-        if (cb_config.welford_fp32_alias && !cb_config.has_b) {
-            cb0_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
-                .data_format = cb_config.in_data_format,
-                .page_size = cb_config.in_single_tile_size});
-        }
-        program_descriptor.cbs.push_back(std::move(cb0_desc));
-    }
-
-    // CB 1: in1 sharded (if b)
-    if (cb_config.has_b) {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.in1_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_1,
-            cb_config.in_data_format,
-            cb_config.in_single_tile_size,
-            cb_config.b_buffer));
-        if (cb_config.is_pre_all_gather) {
-            program_descriptor.cbs.push_back(make_cb_descriptor(
-                cb_config.in1_CB_size,
-                core_ranges.all_cores,
-                tt::CBIndex::c_14,
-                cb_config.in_data_format,
-                cb_config.in_single_tile_size,
-                cb_config.a_buffer));
-        }
-    }
-
-    // CB 5: gamma
-    if (cb_config.has_gamma) {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.in5_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_5,
-            cb_config.gamma_cb_data_format,
-            cb_config.gamma_single_tile_size));
-    }
-
-    // CB 6: beta
-    if (cb_config.has_beta) {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.in6_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_6,
-            cb_config.beta_cb_data_format,
-            cb_config.beta_single_tile_size));
-    }
-
-    // CB 24: x. In fused welford-fp32 mode we add c_29 as a second buffer index on c_24
-    // (the post-add result), backed by the same SRAM, configured with UnpackToDestFp32
-    // for the Welford section. The post-Welford eltwise still reads c_24 via SrcA (TF32).
-    {
-        auto cbx_desc = make_cb_descriptor(
-            cb_config.x_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_24,
-            cb_config.cb_data_format,
-            cb_config.single_tile_size);
-        if (cb_config.welford_fp32_alias && cb_config.has_b) {
-            cbx_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
-                .data_format = cb_config.cb_data_format,
-                .page_size = cb_config.single_tile_size});
-        }
-        program_descriptor.cbs.push_back(std::move(cbx_desc));
-    }
-
-    // CB 18: xmm
-    program_descriptor.cbs.push_back(make_cb_descriptor(
-        cb_config.xmm_CB_size,
-        core_ranges.all_cores,
-        tt::CBIndex::c_18,
-        cb_config.cb_data_format,
-        cb_config.single_tile_size));
-
-    // ex_partial, ex, ex_external (if not rms_norm)
-    if (!cb_config.rms_norm) {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.ex_partial_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_8,
-            cb_config.cb_data_format,
-            cb_config.single_tile_size));
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.ex_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_9,
-            cb_config.cb_data_format,
-            cb_config.single_tile_size));
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.ex_external_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_10,
-            cb_config.cb_data_format,
-            cb_config.single_tile_size));
-    }
-
-    if (!cb_config.use_welford) {
-        // CB 2: in2 scaler
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.in2_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_2,
-            tt::DataFormat::Float16_b,
-            cb_config.bfloat16_tile_size));
-        if (cb_config.do_legacy_layernorm_col_mask) {
-            // CB 14: scratch holding the masked input for the LayerNorm E[x] reduction (so cb_in stays
-            // intact for the (x - E[x]) pass). The mask itself is the writer-generated CB 19 below.
-            program_descriptor.cbs.push_back(make_cb_descriptor(
-                cb_config.xmm_CB_size,
-                core_ranges.all_cores,
-                tt::CBIndex::c_14,
-                cb_config.cb_data_format,
-                cb_config.single_tile_size));
-        }
-        if (cb_config.do_col_mask) {
-            // CB 19: writer-generated column mask, block_wt tiles (one tile-row), always in bfloat16.
-            // The mask holds only 1.0 or 0.0 in bfloat16. The writer fills it per core from the core's
-            // width position (full / partial / all-padding per tile); compute waits on it and reads by tile index.
-            program_descriptor.cbs.push_back(make_cb_descriptor(
-                cb_config.col_mask_gen_CB_size_bytes,
-                core_ranges.all_cores,
-                tt::CBIndex::c_19,
-                tt::DataFormat::Float16_b,
-                cb_config.bfloat16_tile_size));
-        }
-        // CB 3: in3 eps
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.in3_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_3,
-            tt::DataFormat::Float16_b,
-            cb_config.bfloat16_tile_size));
-        // CB 4: in4 scaler-c (global reduce scaler — F32 when intermediates are F32, otherwise BF16)
-        tt::DataFormat scaler_global_format =
-            cb_config.cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-        uint32_t scaler_global_tile_size = tt::tile_size(scaler_global_format);
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            scaler_global_tile_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_4,
-            scaler_global_format,
-            scaler_global_tile_size));
-        // CB 11: ex_partial2
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.ex_partial_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_11,
-            cb_config.cb_data_format,
-            cb_config.single_tile_size));
-        // CB 12: ex2
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.ex_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_12,
-            cb_config.cb_data_format,
-            cb_config.single_tile_size));
-        // CB 13: ex_external2
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.ex_external_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_13,
-            cb_config.cb_data_format,
-            cb_config.single_tile_size));
-        // CB 20: ex2pe
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.ex2pe_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_20,
-            cb_config.cb_data_format,
-            cb_config.single_tile_size));
-    }
-
-    // CB 15: ex_global
-    program_descriptor.cbs.push_back(make_cb_descriptor(
-        cb_config.ex_global_CB_size,
-        core_ranges.all_cores,
-        tt::CBIndex::c_15,
-        cb_config.cb_data_format,
-        cb_config.single_tile_size));
-
-    if (cb_config.use_welford) {
-        // CB 22: transpose intermediate
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.ex_global_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_22,
-            cb_config.cb_data_format,
-            cb_config.single_tile_size));
-
-        // CB 25: Reciprocal LUT
-        CBDescriptor recip_cb_desc;
-        recip_cb_desc.total_size = cb_config.reciprocal_CB_size_bytes;
-        recip_cb_desc.core_ranges = core_ranges.all_cores;
-        recip_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_25,
-            .data_format = cb_config.reciprocal_cb_data_format,
-            .page_size = cb_config.reciprocal_CB_size_bytes});
-        recip_cb_desc.buffer = cb_config.recip_buffer;
-        program_descriptor.cbs.push_back(std::move(recip_cb_desc));
-    }
-
-    if (cb_config.is_post_all_gather) {
-        // CB 7: cb_stats
-        CBDescriptor stats_cb_desc;
-        stats_cb_desc.total_size = cb_config.stats_cb_size;
-        stats_cb_desc.core_ranges = core_ranges.sender_cores;
-        stats_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_7,
-            .data_format = cb_config.stats_cb_data_format,
-            .page_size = cb_config.stats_single_tile_size});
-        stats_cb_desc.buffer = cb_config.stats_buffer;
-        program_descriptor.cbs.push_back(std::move(stats_cb_desc));
-
-        // CB 21: cb_stats_reduced
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.stats_reduced_cb_size,
-            core_ranges.sender_cores,
-            tt::CBIndex::c_21,
-            cb_config.cb_data_format,
-            cb_config.single_tile_size));
-
-        // CB 19: cb_var
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.ex_global_CB_size,
-            core_ranges.sender_cores,
-            tt::CBIndex::c_19,
-            cb_config.cb_data_format,
-            cb_config.single_tile_size));
-    }
-
-    // CB 16: output
-    if (cb_config.is_pre_all_gather) {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.out_CB_size,
-            core_ranges.sender_cores,
-            tt::CBIndex::c_16,
-            cb_config.out_data_format,
-            cb_config.out_single_tile_size,
-            cb_config.output_buffer));
-    } else {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.out_CB_size,
-            core_ranges.all_cores,
-            tt::CBIndex::c_16,
-            cb_config.out_data_format,
-            cb_config.out_single_tile_size,
-            cb_config.output_buffer));
-    }
-
-    // CB 17: output reshard (if is_post_all_gather and not skip_write_back)
-    if (cb_config.is_post_all_gather && !cb_config.skip_write_back) {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.out_reshard_CB_size,
-            all_worker_and_storage_cores,
-            tt::CBIndex::c_17,
-            cb_config.out_data_format,
-            cb_config.out_single_tile_size,
-            cb_config.output_reshard_buffer));
-    }
-
-    if (!core_ranges.inactive_cores.empty()) {
-        for (auto& cb_desc : program_descriptor.cbs) {
-            if (cb_desc.buffer == nullptr && cb_desc.core_ranges == core_ranges.all_cores) {
-                cb_desc.core_ranges = core_ranges.mcast_dest_cores;
+    //----------------------------------------------------------------------
+    // Writers
+    //----------------------------------------------------------------------
+    // The pre-all-gather writer reads the packed scalers and, only when it generates a column mask,
+    // this core's width offset. The other two additionally read epsilon, and the write-back build
+    // reads the segment block's two scalars.
+    auto writer_schema = [&]() {
+        m2::KernelSpec::RuntimeArgSchema schema;
+        if (!c.use_welford) {
+            schema.runtime_arg_names.push_back("scalar_c");
+            schema.runtime_arg_names.push_back("scalar_w");
+            if (!c.is_pre_all_gather) {
+                schema.runtime_arg_names.push_back("eps");
             }
         }
+        if (!c.is_pre_all_gather || c.do_col_mask) {
+            schema.runtime_arg_names.push_back("width_shard_tile_start_id");
+        }
+        if (c.writes_back) {
+            schema.runtime_arg_names.push_back("num_segments_to_write_back");
+            schema.runtime_arg_names.push_back("storage_core_start_offset");
+        }
+        return schema;
+    }();
+
+    auto make_writer = [&](const m2::KernelSpecName& name, bool is_all_to_all_worker, uint32_t num_varargs) {
+        m2::KernelSpec kernel{
+            .unique_id = name,
+            .source = c.writer_path,
+            .compile_time_args = writer_compile_time_args(c, is_all_to_all_worker, writer_num_varargs),
+            .runtime_arg_schema = writer_schema,
+            .hw_config = writer_hw,
+        };
+        kernel.advanced_options.num_runtime_varargs = num_varargs;
+        add_writer_defines(kernel, c);
+        bind_writer_resources(kernel, c);
+        return kernel;
+    };
+
+    spec.kernels.push_back(make_writer(WRITER_SENDER, /*is_all_to_all_worker=*/true, writer_num_varargs));
+    if (has_not_all_to_all_workers) {
+        spec.kernels.push_back(make_writer(WRITER_RECEIVER, /*is_all_to_all_worker=*/false, writer_num_varargs));
+    }
+
+    //----------------------------------------------------------------------
+    // Compute
+    //----------------------------------------------------------------------
+    auto compute_schema = [&](bool is_all_to_all_worker) {
+        m2::KernelSpec::RuntimeArgSchema schema;
+        schema.runtime_arg_names.push_back("num_reduce_tiles_per_block_h");
+        if (is_all_to_all_worker) {
+            schema.runtime_arg_names.push_back("num_rows_per_all_to_all_worker");
+            schema.runtime_arg_names.push_back("use_two_stage_reduce");
+            schema.runtime_arg_names.push_back("is_second_stage_reader");
+            if (c.is_post_all_gather) {
+                schema.runtime_arg_names.push_back("num_distributed_blocks");
+            }
+        }
+        if (c.use_welford) {
+            schema.runtime_arg_names.push_back("welford_reduce_w");
+            if (is_all_to_all_worker) {
+                schema.runtime_arg_names.push_back("boundary_width_index");
+                schema.runtime_arg_names.push_back("my_width_index");
+            }
+        }
+        return schema;
+    };
+
+    auto make_compute = [&](const m2::KernelSpecName& name, bool is_all_to_all_worker) {
+        m2::KernelSpec kernel{
+            .unique_id = name,
+            .source = c.compute_path,
+            // Legacy defaults opt_level on the per-kernel-type config struct, where a compute kernel
+            // gets O3; Metal 2.0's single type-agnostic CompilerOptions defaults to O2 for both
+            // kinds, so the level has to be stated to keep the compile and the link where they were.
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .compile_time_args = compute_compile_time_args(grid, workers, c),
+            .runtime_arg_schema = compute_schema(is_all_to_all_worker),
+            .hw_config = c.compute_hw,
+        };
+        add_compute_defines(kernel, c, is_all_to_all_worker);
+        bind_compute_resources(kernel, c, is_all_to_all_worker);
+        set_compute_unpack_modes(kernel, spec, c);
+        return kernel;
+    };
+
+    spec.kernels.push_back(make_compute(COMPUTE_ALL_TO_ALL, /*is_all_to_all_worker=*/true));
+    if (has_not_all_to_all_workers) {
+        spec.kernels.push_back(make_compute(COMPUTE_NOT_ALL_TO_ALL, /*is_all_to_all_worker=*/false));
+    }
+
+    //----------------------------------------------------------------------
+    // Idle triple
+    //----------------------------------------------------------------------
+    // A non-rectangular shard grid leaves holes inside the multicast bounding box. The reduction
+    // multicasts across the whole box, so those nodes still need this program's dataflow buffers and
+    // semaphores in place; they do no work of their own. Their kernels compile their bodies out
+    // entirely, so they take no arguments — the buffers land on the node through the host-side
+    // bindings alone.
+    if (has_inactive_cores) {
+        m2::KernelSpec idle_reader{
+            .unique_id = IDLE_READER,
+            .source = c.reader_receiver_path,
+            .compile_time_args =
+                reader_receiver_compile_time_args(grid, workers, core_ranges, c, /*is_all_to_all_worker=*/false),
+            .hw_config = reader_hw,
+        };
+        add_reader_defines(idle_reader, c);
+        idle_reader.compiler_options.defines.emplace("IDLE_CORE", "1");
+        bind_reader_resources(idle_reader, c, /*is_all_to_all_worker=*/false);
+        spec.kernels.push_back(std::move(idle_reader));
+
+        m2::KernelSpec idle_writer{
+            .unique_id = IDLE_WRITER,
+            .source = c.writer_path,
+            .compile_time_args = writer_compile_time_args(c, /*is_all_to_all_worker=*/false, writer_num_varargs),
+            .hw_config = writer_hw,
+        };
+        add_writer_defines(idle_writer, c);
+        idle_writer.compiler_options.defines.emplace("IDLE_CORE", "1");
+        bind_writer_resources(idle_writer, c);
+        spec.kernels.push_back(std::move(idle_writer));
+
+        m2::KernelSpec idle_compute{
+            .unique_id = IDLE_COMPUTE,
+            .source = c.compute_path,
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .compile_time_args = compute_compile_time_args(grid, workers, c),
+            .hw_config = c.compute_hw,
+        };
+        add_compute_defines(idle_compute, c, /*is_all_to_all_worker=*/false);
+        idle_compute.compiler_options.defines.emplace("IDLE_CORE", "1");
+        bind_compute_resources(idle_compute, c, /*is_all_to_all_worker=*/false);
+        set_compute_unpack_modes(idle_compute, spec, c);
+        spec.kernels.push_back(std::move(idle_compute));
+    }
+
+    //----------------------------------------------------------------------
+    // Semaphores and work units
+    //----------------------------------------------------------------------
+    // The semaphore set spans the whole multicast bounding box, not just the active cores: the
+    // reduction's multicast signals the holes too.
+    for (const auto& name : {REDUCE_SENDER, REDUCE_RECEIVER, REDUCE_SECOND_STAGE}) {
+        spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = name, .target_nodes = core_ranges.mcast_dest_cores});
+    }
+
+    // The writer and compute kernels of the all-to-all group span both the sender node set and the
+    // rest of the all-to-all group, so they appear in two work units and their derived node set is
+    // the union.
+    spec.work_units.push_back(m2::WorkUnitSpec{
+        .name = "sender",
+        .kernels = {READER_SENDER, WRITER_SENDER, COMPUTE_ALL_TO_ALL},
+        .target_nodes = core_ranges.sender_cores,
+    });
+    if (has_reader_receiver_all_to_all) {
+        spec.work_units.push_back(m2::WorkUnitSpec{
+            .name = "all_to_all_except_sender",
+            .kernels = {READER_RECEIVER_ALL_TO_ALL, WRITER_SENDER, COMPUTE_ALL_TO_ALL},
+            .target_nodes = core_ranges.all_to_all_workers_except_sender,
+        });
+    }
+    if (has_not_all_to_all_workers) {
+        spec.work_units.push_back(m2::WorkUnitSpec{
+            .name = "not_all_to_all",
+            .kernels = {READER_RECEIVER, WRITER_RECEIVER, COMPUTE_NOT_ALL_TO_ALL},
+            .target_nodes = core_ranges.not_all_to_all_workers,
+        });
+    }
+    if (has_inactive_cores) {
+        spec.work_units.push_back(m2::WorkUnitSpec{
+            .name = "inactive",
+            .kernels = {IDLE_READER, IDLE_WRITER, IDLE_COMPUTE},
+            .target_nodes = core_ranges.inactive_cores,
+        });
     }
 }
 
 //////////////////////////////////////////////////////////////////////////////
-// Runtime args building
+// Runtime argument building
 //////////////////////////////////////////////////////////////////////////////
 
 CoreIndices CoreIndices::compute(uint32_t core_idx, const CoreCoord& core, const RuntimeArgsContext& ctx) {
@@ -1479,47 +1542,11 @@ bool CoreIndices::is_all_to_all(const RuntimeArgsContext& ctx) const {
     return width_index < ctx.workers.num_cores_all_to_all;
 }
 
-std::vector<uint32_t> build_compute_args(
-    const CoreIndices& idx, const RuntimeArgsContext& ctx, bool& is_all_to_all_out) {
-    std::vector<uint32_t> args{idx.num_reduce_tiles_per_block_h};
-    is_all_to_all_out = idx.is_all_to_all(ctx);
+namespace {
 
-    if (is_all_to_all_out) {
-        uint32_t num_rows;
-        if (ctx.grid.use_two_stage_reduce) {
-            num_rows = idx.width_index_two_stage == ctx.workers.num_cores_all_to_all_first_stage - 1
-                           ? ctx.workers.num_rows_per_all_to_all_worker_last
-                           : ctx.workers.num_rows_per_all_to_all_worker;
-        } else {
-            num_rows = idx.width_index == ctx.workers.num_cores_all_to_all - 1
-                           ? ctx.workers.num_rows_per_all_to_all_worker_last
-                           : ctx.workers.num_rows_per_all_to_all_worker;
-        }
-        args.push_back(num_rows);
-        args.push_back((uint32_t)ctx.grid.use_two_stage_reduce);
-        bool is_second_stage_reader =
-            ctx.grid.use_two_stage_reduce && idx.width_index < ctx.workers.num_cores_all_to_all_first_stage;
-        args.push_back((uint32_t)is_second_stage_reader);
-        if (ctx.is_post_all_gather) {
-            args.push_back((uint32_t)ctx.num_distributed_devices);
-        }
-    }
-    // Welford-only args, appended after the all-to-all args so the other compute kernels, which do not
-    // read them, are unaffected. The Welford kernel reads welford_reduce_w at different index on
-    // all-to-all workers vs other workers.
-    args.push_back(idx.welford_reduce_w);
-    // The global width-block index of the last real (partial) block, and this core's own width-block
-    // index. The Welford cross-core combine (run only on all-to-all workers) uses these to weight each
-    // combined block/row by its true logical width: the partial block sits at a single global position,
-    // not in every row. Read at indices 5 and 6 on all-to-all workers.
-    args.push_back(ctx.last_core_width_index);
-    args.push_back(idx.width_index);
-    return args;
-}
-
-std::vector<uint32_t> build_reader_sender_args(
-    const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx, IDevice* device) {
-    // Compute mcast range
+// The multicast range this sender covers, plus its own position within the grid.
+std::vector<uint32_t> reader_sender_named_values(
+    const CoreCoord& core, const RuntimeArgsContext& ctx, IDevice* device) {
     CoreCoord mcast_start, mcast_end;
     if (ctx.grid.mcast_1d) {
         CoreCoord top_left = {(std::size_t)ctx.core_ranges.start_core.x, (std::size_t)ctx.core_ranges.start_core.y};
@@ -1547,106 +1574,61 @@ std::vector<uint32_t> build_reader_sender_args(
         std::swap(mcast_start, mcast_end);
     }
 
-    std::vector<uint32_t> args;
-    args.reserve(7 + ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size());
-    args.push_back(mcast_start.x);
-    args.push_back(mcast_start.y);
-    args.push_back(mcast_end.x);
-    args.push_back(mcast_end.y);
-
+    uint32_t start_x = 0;
+    uint32_t start_y = 0;
     if (ctx.grid.mcast_1d) {
-        args.push_back(core.x - ctx.core_ranges.start_core.x);
-        args.push_back(core.y - ctx.core_ranges.start_core.y);
-        args.insert(args.end(), ctx.mcast_noc_x.begin(), ctx.mcast_noc_x.end());
-        args.insert(args.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
+        start_x = core.x - ctx.core_ranges.start_core.x;
+        start_y = core.y - ctx.core_ranges.start_core.y;
+    } else if (ctx.grid.row_wise) {
+        start_x = core.x - ctx.core_ranges.start_core.x;
     } else {
-        if (ctx.grid.row_wise) {
-            args.push_back(core.x - ctx.core_ranges.start_core.x);
-            args.push_back(0);
-            args.insert(args.end(), ctx.mcast_noc_x.begin(), ctx.mcast_noc_x.end());
-            args.push_back(ctx.mcast_noc_y[idx.height_index]);
-        } else {
-            args.push_back(0);
-            args.push_back(core.y - ctx.core_ranges.start_core.y);
-            args.push_back(ctx.mcast_noc_x[idx.height_index]);
-            args.insert(args.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
-        }
+        start_y = core.y - ctx.core_ranges.start_core.y;
     }
-    return args;
+    return {mcast_start.x, mcast_start.y, mcast_end.x, mcast_end.y, start_x, start_y};
 }
 
-std::vector<uint32_t> build_reader_receiver_all_to_all_args(
-    const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx) {
-    std::vector<uint32_t> args;
-    args.reserve(6 + ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size());
-
-    bool is_last_all_to_all_worker;
-    if (ctx.grid.use_two_stage_reduce) {
-        is_last_all_to_all_worker = idx.width_index_two_stage == ctx.workers.num_cores_all_to_all_first_stage - 1;
-    } else {
-        is_last_all_to_all_worker = idx.width_index == ctx.workers.num_cores_all_to_all - 1;
-    }
-    args.push_back(is_last_all_to_all_worker);
-    args.push_back(idx.all_to_all_worker_tile_offset_bytes);
-
-    bool is_second_stage_reader =
-        ctx.grid.use_two_stage_reduce && idx.width_index < ctx.workers.num_cores_all_to_all_first_stage;
-    args.push_back((uint32_t)is_second_stage_reader);
-
+// The coordinate block an all-to-all worker walks to reach its remote peers: every X coordinate of
+// the multicast grid followed by every Y coordinate. In the 2D cases only one of the two axes varies,
+// so the other contributes the single coordinate of this core's own row or column.
+std::vector<uint32_t> gather_coord_varargs(const CoreIndices& idx, const RuntimeArgsContext& ctx) {
+    std::vector<uint32_t> varargs;
+    varargs.reserve(ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size());
     if (ctx.grid.mcast_1d) {
-        args.push_back(core.x - ctx.core_ranges.start_core.x);
-        args.push_back(core.y - ctx.core_ranges.start_core.y);
-        args.insert(args.end(), ctx.mcast_noc_x.begin(), ctx.mcast_noc_x.end());
-        args.insert(args.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
+        varargs.insert(varargs.end(), ctx.mcast_noc_x.begin(), ctx.mcast_noc_x.end());
+        varargs.insert(varargs.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
+    } else if (ctx.grid.row_wise) {
+        varargs.insert(varargs.end(), ctx.mcast_noc_x.begin(), ctx.mcast_noc_x.end());
+        varargs.push_back(ctx.mcast_noc_y[idx.height_index]);
     } else {
-        if (ctx.grid.row_wise) {
-            args.push_back(core.x - ctx.core_ranges.start_core.x);
-            args.push_back(0);
-            args.insert(args.end(), ctx.mcast_noc_x.begin(), ctx.mcast_noc_x.end());
-            args.push_back(ctx.mcast_noc_y[idx.height_index]);
-        } else {
-            args.push_back(0);
-            args.push_back(core.y - ctx.core_ranges.start_core.y);
-            args.push_back(ctx.mcast_noc_x[idx.height_index]);
-            args.insert(args.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
-        }
+        varargs.push_back(ctx.mcast_noc_x[idx.height_index]);
+        varargs.insert(varargs.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
     }
-    return args;
+    return varargs;
 }
 
-std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(const CoreIndices& idx, const RuntimeArgsContext& ctx) {
-    std::vector<uint32_t> args;
-    args.reserve(7);
-    args.push_back(false);  // is_last_all_to_all_worker
-    args.push_back(idx.all_to_all_worker_tile_offset_bytes);
-    args.push_back(0);  // is_second_stage_reader
-    args.push_back(0);
-    args.push_back(0);
-
+// A core that only waits for the multicast needs one coordinate pair: the sender's.
+std::vector<uint32_t> sender_coord_varargs(const CoreIndices& idx, const RuntimeArgsContext& ctx) {
     if (ctx.grid.mcast_1d) {
-        args.push_back(ctx.mcast_noc_x[0]);
-        args.push_back(ctx.mcast_noc_y[0]);
-    } else {
-        if (ctx.grid.row_wise) {
-            args.push_back(ctx.mcast_noc_x[0]);
-            args.push_back(ctx.mcast_noc_y[idx.height_index]);
-        } else {
-            args.push_back(ctx.mcast_noc_x[idx.height_index]);
-            args.push_back(ctx.mcast_noc_y[0]);
-        }
+        return {ctx.mcast_noc_x[0], ctx.mcast_noc_y[0]};
     }
-    return args;
+    if (ctx.grid.row_wise) {
+        return {ctx.mcast_noc_x[0], ctx.mcast_noc_y[idx.height_index]};
+    }
+    return {ctx.mcast_noc_x[idx.height_index], ctx.mcast_noc_y[0]};
 }
 
-std::vector<uint32_t> build_write_back_args(
-    const RuntimeArgsContext& ctx, uint32_t& current_storage_core, uint32_t& current_storage_core_offset) {
+// Which storage-core segments this worker's output block spans, three values each: the byte count and
+// the destination node's coordinates. Advances the shared storage-core cursor, so it must be called
+// once per core in shard order.
+std::vector<uint32_t> write_back_varargs(
+    const RuntimeArgsContext& ctx,
+    uint32_t& current_storage_core,
+    uint32_t& current_storage_core_offset,
+    uint32_t& num_segments_out,
+    uint32_t& storage_core_start_offset_out) {
     std::vector<uint32_t> args;
-    if (!ctx.is_post_all_gather) {
-        return args;
-    }
-
-    args.push_back(current_storage_core_offset * ctx.out_single_tile_size);
-    uint32_t num_segments = 0;
+    storage_core_start_offset_out = current_storage_core_offset * ctx.out_single_tile_size;
+    num_segments_out = 0;
     uint32_t worker_offset = 0;
 
     while (worker_offset < ctx.block_wt) {
@@ -1654,7 +1636,7 @@ std::vector<uint32_t> build_write_back_args(
         uint32_t tiles_left = ctx.block_wt - worker_offset;
         uint32_t tiles_to_write = std::min(tiles_left, tiles_available);
 
-        num_segments += 1;
+        num_segments_out += 1;
         args.push_back(tiles_to_write * ctx.out_single_tile_size);
         args.push_back(ctx.storage_core_noc_x[current_storage_core]);
         args.push_back(ctx.storage_core_noc_y[current_storage_core]);
@@ -1671,79 +1653,252 @@ std::vector<uint32_t> build_write_back_args(
                 ctx.num_storage_cores);
         }
     }
-    args.insert(args.begin(), num_segments);
     return args;
 }
 
-std::vector<uint32_t> build_writer_args(
-    const CoreIndices& idx,
-    const RuntimeArgsContext& ctx,
-    const std::vector<uint32_t>& write_back_args,
-    bool is_all_to_all) {
-    std::vector<uint32_t> args;
-    args.reserve(6 + write_back_args.size());
-
-    if (is_all_to_all) {
-        if (ctx.grid.use_two_stage_reduce && idx.width_index >= ctx.workers.num_cores_all_to_all_first_stage) {
-            args.push_back(ctx.packed_cinv_value_one);
-        } else {
-            args.push_back(ctx.packed_cinv_value);
+m2::KernelRunArgs* find_run_args(m2::ProgramRunArgs& run_args, const m2::KernelSpecName& kernel) {
+    for (auto& entry : run_args.kernel_run_args) {
+        if (entry.kernel == kernel) {
+            return &entry;
         }
-    } else {
-        args.push_back(ctx.packed_cinv_value);
     }
-    args.push_back(ctx.packed_winv_value);
-    args.push_back(ctx.eps_u);
-    args.push_back(ctx.gamma_dram_addr);
-    args.push_back(ctx.beta_dram_addr);
-    args.push_back(idx.width_shard_tile_start_id);
-    args.insert(args.end(), write_back_args.begin(), write_back_args.end());
-    return args;
+    return nullptr;
 }
 
-RuntimeArgsResult RuntimeArgsResult::build(
-    const std::vector<CoreCoord>& cores, RuntimeArgsContext& ctx, IDevice* device) {
-    RuntimeArgsResult result;
+}  // namespace
+
+RunArgsAndWriterVarargs build_run_args(
+    const std::vector<CoreCoord>& cores,
+    const RuntimeArgsContext& ctx,
+    const SpecConfig& config,
+    IDevice* device,
+    const Tensor& input,
+    const std::optional<Tensor>& residual,
+    const std::optional<Tensor>& gamma,
+    const std::optional<Tensor>& beta,
+    const std::optional<Tensor>& stats,
+    const std::optional<Tensor>& recip,
+    const Tensor& output) {
+    // The same three predicates that decide which kernels the spec declares.
+    const bool has_reader_receiver_all_to_all =
+        ctx.grid.use_mcast && !ctx.core_ranges.all_to_all_workers_except_sender.empty();
+    const bool has_not_all_to_all_workers = ctx.workers.num_none_all_to_all_workers > 0;
+
+    m2::ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(m2::KernelRunArgs{.kernel = READER_SENDER});
+    if (has_reader_receiver_all_to_all) {
+        run_args.kernel_run_args.push_back(m2::KernelRunArgs{.kernel = READER_RECEIVER_ALL_TO_ALL});
+    }
+    if (has_not_all_to_all_workers) {
+        run_args.kernel_run_args.push_back(m2::KernelRunArgs{.kernel = READER_RECEIVER});
+    }
+    run_args.kernel_run_args.push_back(m2::KernelRunArgs{.kernel = WRITER_SENDER});
+    if (has_not_all_to_all_workers) {
+        run_args.kernel_run_args.push_back(m2::KernelRunArgs{.kernel = WRITER_RECEIVER});
+    }
+    run_args.kernel_run_args.push_back(m2::KernelRunArgs{.kernel = COMPUTE_ALL_TO_ALL});
+    if (has_not_all_to_all_workers) {
+        run_args.kernel_run_args.push_back(m2::KernelRunArgs{.kernel = COMPUTE_NOT_ALL_TO_ALL});
+    }
+
+    auto& reader_sender = *find_run_args(run_args, READER_SENDER);
+    auto& writer_sender = *find_run_args(run_args, WRITER_SENDER);
+    auto& compute_all_to_all = *find_run_args(run_args, COMPUTE_ALL_TO_ALL);
+    // Absent when this configuration places no such kernel; the loop below only reaches them for
+    // cores that fall in the matching group, which is empty in that case.
+    auto* reader_receiver_all_to_all = find_run_args(run_args, READER_RECEIVER_ALL_TO_ALL);
+    auto* reader_receiver = find_run_args(run_args, READER_RECEIVER);
+    auto* writer_receiver = find_run_args(run_args, WRITER_RECEIVER);
+    auto* compute_not_all_to_all = find_run_args(run_args, COMPUTE_NOT_ALL_TO_ALL);
 
     uint32_t current_storage_core = 0;
     uint32_t current_storage_core_offset = 0;
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
-        auto idx = CoreIndices::compute(i, core, ctx);
+        const auto idx = CoreIndices::compute(i, core, ctx);
+        const bool is_all_to_all = idx.is_all_to_all(ctx);
 
-        // Compute runtime args
-        bool is_all_to_all = false;
-        auto compute_args = build_compute_args(idx, ctx, is_all_to_all);
+        //------------------------------------------------------------------
+        // Compute
+        //------------------------------------------------------------------
+        auto& compute = is_all_to_all ? compute_all_to_all : *compute_not_all_to_all;
+        m2::AddRuntimeArgsForNode(
+            compute.runtime_arg_values, core, {{"num_reduce_tiles_per_block_h", idx.num_reduce_tiles_per_block_h}});
         if (is_all_to_all) {
-            result.compute_all_to_all.emplace_back(core, compute_args);
-        } else {
-            result.compute_not_all_to_all.emplace_back(core, compute_args);
+            uint32_t num_rows;
+            if (ctx.grid.use_two_stage_reduce) {
+                num_rows = idx.width_index_two_stage == ctx.workers.num_cores_all_to_all_first_stage - 1
+                               ? ctx.workers.num_rows_per_all_to_all_worker_last
+                               : ctx.workers.num_rows_per_all_to_all_worker;
+            } else {
+                num_rows = idx.width_index == ctx.workers.num_cores_all_to_all - 1
+                               ? ctx.workers.num_rows_per_all_to_all_worker_last
+                               : ctx.workers.num_rows_per_all_to_all_worker;
+            }
+            const bool is_second_stage_reader =
+                ctx.grid.use_two_stage_reduce && idx.width_index < ctx.workers.num_cores_all_to_all_first_stage;
+            m2::AddRuntimeArgsForNode(
+                compute.runtime_arg_values,
+                core,
+                {{"num_rows_per_all_to_all_worker", num_rows},
+                 {"use_two_stage_reduce", static_cast<uint32_t>(ctx.grid.use_two_stage_reduce)},
+                 {"is_second_stage_reader", static_cast<uint32_t>(is_second_stage_reader)}});
+            if (ctx.is_post_all_gather) {
+                m2::AddRuntimeArgsForNode(
+                    compute.runtime_arg_values, core, {{"num_distributed_blocks", ctx.num_distributed_devices}});
+            }
+        }
+        if (config.use_welford) {
+            m2::AddRuntimeArgsForNode(compute.runtime_arg_values, core, {{"welford_reduce_w", idx.welford_reduce_w}});
+            if (is_all_to_all) {
+                // The global width-block index of the last real (partial) block, and this core's own
+                // width-block index. The Welford cross-core combine uses these to weight each combined
+                // block or row by its true logical width: the partial block sits at a single global
+                // position, not in every row.
+                m2::AddRuntimeArgsForNode(
+                    compute.runtime_arg_values,
+                    core,
+                    {{"boundary_width_index", ctx.last_core_width_index}, {"my_width_index", idx.width_index}});
+            }
         }
 
-        // Reader runtime args
+        //------------------------------------------------------------------
+        // Reader
+        //------------------------------------------------------------------
         if (idx.width_index == 0) {
-            auto reader_args = build_reader_sender_args(core, idx, ctx, device);
-            result.reader_sender.emplace_back(core, reader_args);
+            const auto named = reader_sender_named_values(core, ctx, device);
+            m2::AddRuntimeArgsForNode(
+                reader_sender.runtime_arg_values,
+                core,
+                {{"mcast_dest_noc_start_x", named[0]},
+                 {"mcast_dest_noc_start_y", named[1]},
+                 {"mcast_dest_noc_end_x", named[2]},
+                 {"mcast_dest_noc_end_y", named[3]},
+                 {"start_x", named[4]},
+                 {"start_y", named[5]}});
+            reader_sender.advanced_options.runtime_varargs[core] = gather_coord_varargs(idx, ctx);
         } else if (is_all_to_all) {
-            auto reader_args = build_reader_receiver_all_to_all_args(core, idx, ctx);
-            result.reader_receiver_all_to_all.emplace_back(core, reader_args);
+            const bool is_last_all_to_all_worker =
+                ctx.grid.use_two_stage_reduce
+                    ? idx.width_index_two_stage == ctx.workers.num_cores_all_to_all_first_stage - 1
+                    : idx.width_index == ctx.workers.num_cores_all_to_all - 1;
+            const bool is_second_stage_reader =
+                ctx.grid.use_two_stage_reduce && idx.width_index < ctx.workers.num_cores_all_to_all_first_stage;
+            uint32_t start_x = 0;
+            uint32_t start_y = 0;
+            if (ctx.grid.mcast_1d) {
+                start_x = core.x - ctx.core_ranges.start_core.x;
+                start_y = core.y - ctx.core_ranges.start_core.y;
+            } else if (ctx.grid.row_wise) {
+                start_x = core.x - ctx.core_ranges.start_core.x;
+            } else {
+                start_y = core.y - ctx.core_ranges.start_core.y;
+            }
+            m2::AddRuntimeArgsForNode(
+                reader_receiver_all_to_all->runtime_arg_values,
+                core,
+                {{"is_last_all_to_all_worker", static_cast<uint32_t>(is_last_all_to_all_worker)},
+                 {"all_to_all_tile_offset_bytes", idx.all_to_all_worker_tile_offset_bytes},
+                 {"is_second_stage_reader", static_cast<uint32_t>(is_second_stage_reader)},
+                 {"start_x", start_x},
+                 {"start_y", start_y}});
+            reader_receiver_all_to_all->advanced_options.runtime_varargs[core] = gather_coord_varargs(idx, ctx);
         } else {
-            auto reader_args = build_reader_receiver_not_all_to_all_args(idx, ctx);
-            result.reader_receiver.emplace_back(core, reader_args);
+            m2::AddRuntimeArgsForNode(
+                reader_receiver->runtime_arg_values,
+                core,
+                {{"is_last_all_to_all_worker", 0},
+                 {"all_to_all_tile_offset_bytes", idx.all_to_all_worker_tile_offset_bytes},
+                 {"is_second_stage_reader", 0},
+                 {"start_x", 0},
+                 {"start_y", 0}});
+            reader_receiver->advanced_options.runtime_varargs[core] = sender_coord_varargs(idx, ctx);
         }
 
-        // Writer runtime args
-        auto write_back_args = build_write_back_args(ctx, current_storage_core, current_storage_core_offset);
-        auto writer_args = build_writer_args(idx, ctx, write_back_args, is_all_to_all);
-        if (is_all_to_all) {
-            result.writer_sender.emplace_back(core, writer_args);
-        } else {
-            result.writer_receiver.emplace_back(core, writer_args);
+        //------------------------------------------------------------------
+        // Writer
+        //------------------------------------------------------------------
+        auto& writer = is_all_to_all ? writer_sender : *writer_receiver;
+        if (!config.use_welford) {
+            // A two-stage reduce's second-stage cores have already had the cross-core average applied
+            // by the first stage, so they must not apply it again.
+            const uint32_t packed_cinv = (is_all_to_all && ctx.grid.use_two_stage_reduce &&
+                                          idx.width_index >= ctx.workers.num_cores_all_to_all_first_stage)
+                                             ? ctx.packed_cinv_value_one
+                                             : ctx.packed_cinv_value;
+            m2::AddRuntimeArgsForNode(
+                writer.runtime_arg_values, core, {{"scalar_c", packed_cinv}, {"scalar_w", ctx.packed_winv_value}});
+            if (!config.is_pre_all_gather) {
+                m2::AddRuntimeArgsForNode(writer.runtime_arg_values, core, {{"eps", ctx.eps_u}});
+            }
+        }
+        if (!config.is_pre_all_gather || config.do_col_mask) {
+            m2::AddRuntimeArgsForNode(
+                writer.runtime_arg_values, core, {{"width_shard_tile_start_id", idx.width_shard_tile_start_id}});
+        }
+        if (ctx.writes_back) {
+            uint32_t num_segments = 0;
+            uint32_t storage_core_start_offset = 0;
+            auto segments = write_back_varargs(
+                ctx, current_storage_core, current_storage_core_offset, num_segments, storage_core_start_offset);
+            m2::AddRuntimeArgsForNode(
+                writer.runtime_arg_values,
+                core,
+                {{"num_segments_to_write_back", num_segments},
+                 {"storage_core_start_offset", storage_core_start_offset}});
+            writer.advanced_options.runtime_varargs[core] = std::move(segments);
         }
     }
 
-    return result;
+    // The write-back segment block is ragged: how many storage cores a worker's output block spans
+    // depends on where the shared storage cursor happened to be. The vararg count is a per-kernel
+    // property, so every node declares the longest block and the shorter ones are zero-padded. The
+    // kernel reads exactly num_segments_to_write_back segments, so the padding is never looked at.
+    uint32_t writer_num_varargs = 0;
+    if (ctx.writes_back) {
+        size_t longest = 0;
+        for (auto* writer : {&writer_sender, writer_receiver}) {
+            if (writer == nullptr) {
+                continue;
+            }
+            for (const auto& [node, varargs] : writer->advanced_options.runtime_varargs) {
+                longest = std::max(longest, varargs.size());
+            }
+        }
+        for (auto* writer : {&writer_sender, writer_receiver}) {
+            if (writer == nullptr) {
+                continue;
+            }
+            for (auto& [node, varargs] : writer->advanced_options.runtime_varargs) {
+                varargs.resize(longest, 0);
+            }
+        }
+        writer_num_varargs = static_cast<uint32_t>(longest);
+    }
+
+    //----------------------------------------------------------------------
+    // Tensor arguments
+    //----------------------------------------------------------------------
+    run_args.tensor_args.emplace(INPUT, input.mesh_tensor());
+    run_args.tensor_args.emplace(OUTPUT, output.mesh_tensor());
+    if (config.has_b && !config.is_post_all_gather) {
+        run_args.tensor_args.emplace(RESIDUAL, residual.value().mesh_tensor());
+    }
+    if (config.has_gamma && !config.is_pre_all_gather) {
+        run_args.tensor_args.emplace(GAMMA_T, gamma.value().mesh_tensor());
+    }
+    if (config.has_beta && !config.is_pre_all_gather) {
+        run_args.tensor_args.emplace(BETA_T, beta.value().mesh_tensor());
+    }
+    if (config.is_post_all_gather) {
+        run_args.tensor_args.emplace(STATS_T, stats.value().mesh_tensor());
+    }
+    if (config.use_welford) {
+        run_args.tensor_args.emplace(RECIP, recip.value().mesh_tensor());
+    }
+
+    return RunArgsAndWriterVarargs{.run_args = std::move(run_args), .writer_num_varargs = writer_num_varargs};
 }
 
 }  // namespace ttnn::prim::sharded_layernorm_helpers

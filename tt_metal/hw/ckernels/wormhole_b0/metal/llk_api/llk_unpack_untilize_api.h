@@ -16,7 +16,7 @@
  * compute API and are scheduled for removal; see tt-metal#22904.
  *************************************************************************/
 
-inline void llk_unpack_untilize_init(std::uint32_t operand = 0) {
+inline void llk_unpack_untilize_init(std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = 1;
 

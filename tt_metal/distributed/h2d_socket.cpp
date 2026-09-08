@@ -57,6 +57,18 @@ void advance_h2d_simulator_socket_device(MeshDevice* mesh_device, const MeshCoor
 
 }  // namespace
 
+void H2DSocket::enable_mock_flow_control(const MeshDevice& mesh_device) {
+    // Emule executes the receiver, so only Mock needs synthetic acknowledgements.
+    if (MetalContext::instance(extract_context_id(&mesh_device)).get_cluster().get_target_device_type() !=
+        tt::TargetDevice::Mock) {
+        return;
+    }
+
+    // Alias the acknowledgement counter to bytes_sent_ so the FIFO always reads as drained. All
+    // host-side uses of bytes_acked_ptr_ are reads, and the non-movable socket keeps the pointer valid.
+    bytes_acked_ptr_ = &bytes_sent_;
+}
+
 H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
@@ -430,6 +442,7 @@ H2DSocket::H2DSocket(
         bytes_acked_info = init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment, shm_name);
         bytes_acked_ptr_ = host_buffer_.get();
     }
+    enable_mock_flow_control(*mesh_device);
 
     init_config_buffer(mesh_device);
     init_data_buffer(mesh_device, pcie_alignment);
@@ -473,6 +486,7 @@ H2DSocket::H2DSocket(
     PinnedBufferInfo bytes_acked_info =
         init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment_, shm_name);
     bytes_acked_ptr_ = host_buffer_.get();
+    enable_mock_flow_control(*mesh_device);
 
     // Take the caller-supplied DRISC L1 offsets verbatim. No MeshBuffer allocation:
     // the framework's L1 allocator is worker-only, and host writes to DRAM-L1 go

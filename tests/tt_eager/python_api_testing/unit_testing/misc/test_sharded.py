@@ -1631,7 +1631,7 @@ def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len):
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(device.dram_grid_size().x, 0),
+                ttnn.CoreCoord(device.dram_grid_size().x - 1, 0),
             ),
         }
     )

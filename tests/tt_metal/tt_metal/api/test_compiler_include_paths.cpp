@@ -24,7 +24,6 @@
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "device_fixture.hpp"
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -70,7 +69,7 @@ void kernel_main() {
 
     EXPECT_NO_THROW({
         CreateKernelFromString(program, kernel_src, CoreCoord{0, 0}, config);
-        slow_dispatch::CompileProgram(this->device(), program);
+        program.impl().compile(&this->device());
     });
 
     fs::remove_all(include_dir);
@@ -117,7 +116,7 @@ void kernel_main() {
 
     EXPECT_NO_THROW({
         CreateKernelFromString(program, kernel_src, CoreCoord{0, 0}, config);
-        slow_dispatch::CompileProgram(this->device(), program);
+        program.impl().compile(&this->device());
     });
 
     fs::remove_all(absolute_include_dir);
@@ -215,7 +214,7 @@ void kernel_main() {
             .compiler_include_paths = {include_dir},
         };
         auto kernel_handle = CreateKernelFromString(program, kernel_src, CoreCoord{0, 0}, config);
-        slow_dispatch::CompileProgram(this->device(), program);
+        program.impl().compile(&this->device());
 
         const uint32_t tensix_core_type =
             MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);

@@ -6,6 +6,7 @@
 
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 #include <array>
 #include <map>
@@ -107,7 +108,7 @@ static void run_intra_tensix_dfb_program(
 
     slow_dispatch::WriteToL1(mesh_device, logical_core, dfb_l1_addr, input);
 
-    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     // Packer increments each word by 1, then unpacker increments it by 1 → +2 per word.
     // This holds for every Neo's ring independently, so the entire L1 region is input + 2.
@@ -257,7 +258,7 @@ TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     EXPECT_NE(self_rc.config.intra_shadow_tc_id, self_tc);
     EXPECT_GE(self_rc.config.remapper_pair_index, ::dfb::REMAPPER_ONE_TO_ONE_PAIR_START);
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> output;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
@@ -345,7 +346,7 @@ static void run_intra_tensix_dfb_program_2_0(
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_bytes / sizeof(uint32_t));
     slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, input);
 
-    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> expected(input.size());
     std::transform(input.begin(), input.end(), expected.begin(), [](uint32_t v) { return v + 2; });
@@ -530,12 +531,14 @@ TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input_remapper);
     m2_writeshard_barrier_uint32(this->device(), in_tensor, input_remapper);
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    // Ring L1 address is fixed by finalize, so read it while the program is still owned here: the launch moves
+    // the program into the workload, which invalidates program (and remapper_dfb) once the launch returns.
+    const uint32_t remapper_l1_addr = remapper_dfb->uniform_alloc_addr();
+
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     // Verify remapper ring L1: DM wrote input_remapper; Tensix consumed credits
     // (ALL pattern) but did not overwrite the ring's data.
-    const uint32_t remapper_l1_addr =
-        program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB_REMAPPER))->uniform_alloc_addr();
     std::vector<uint32_t> l1_remapper;
     slow_dispatch::ReadFromL1(this->device(), CoreCoord(0, 0), remapper_l1_addr, num_entries * entry_size, l1_remapper);
     EXPECT_EQ(input_remapper, l1_remapper) << "M2 DM->Tensix strided x ALL remapper ring L1 mismatch";
@@ -690,7 +693,7 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
     const auto before = read_live_tcs(this->device(), CoreCoord(0, 0), /*neo_id=*/0);
     ASSERT_GE(before.capacity.size(), ::dfb::NUM_TILE_COUNTERS_PER_TENSIX);
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> scratch;
     slow_dispatch::ReadFromL1(

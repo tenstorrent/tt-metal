@@ -363,10 +363,8 @@ void MetalEnvImpl::initialize_fabric_tensix_datamover_config() {
         return;
     }
 
-    if (get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        return;
-    }
-
+    // Mock is included: this is control-plane/soc-descriptor derived (no device I/O), and the mock
+    // fabric compile fatals on a null tensix_config_ when FabricTensixConfig != DISABLED.
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
         auto& cp = this->get_control_plane();
         cp.initialize_fabric_tensix_datamover_config();
@@ -639,10 +637,6 @@ float MetalEnv::get_eps() const { return impl_->get_hal().get_eps(); }
 float MetalEnv::get_nan() const { return impl_->get_hal().get_nan(); }
 float MetalEnv::get_inf() const { return impl_->get_hal().get_inf(); }
 
-tt::tt_fabric::ControlPlane& MetalEnv::get_control_plane() {
-    impl_->ensure_context_registered(*this);
-    return impl_->get_control_plane();
-}
 distributed::SystemMesh& MetalEnv::get_system_mesh() {
     impl_->ensure_context_registered(*this);
     return impl_->get_system_mesh();

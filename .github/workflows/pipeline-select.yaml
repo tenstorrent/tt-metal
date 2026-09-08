@@ -19,10 +19,6 @@ on:
         required: false
         type: boolean
         default: false
-      single-card-ttnn-models-frequent:
-        required: false
-        type: boolean
-        default: false
       cpp-unit:
         description: "Run cpp unit tests"
         required: false
@@ -59,7 +55,6 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       run-perf-device-models: ${{ steps.logic.outputs.run-perf-device-models }}
-      run-ttnn-models-frequent: ${{ steps.logic.outputs.run-ttnn-models-frequent }}
       run-cpp-unit: ${{ steps.logic.outputs.run-cpp-unit }}
     steps:
       - name: Determine test execution
@@ -68,17 +63,14 @@ jobs:
           case "${{ inputs.trigger_type }}" in
             "manual")
               echo "run-perf-device-models=${{ inputs.single-card-perf-device-models }}" >> $GITHUB_OUTPUT
-              echo "run-ttnn-models-frequent=${{ inputs.single-card-ttnn-models-frequent }}" >> $GITHUB_OUTPUT
               echo "run-cpp-unit=${{ inputs.cpp-unit }}" >> $GITHUB_OUTPUT
               ;;
             "models-mandatory")
               echo "run-perf-device-models=true" >> $GITHUB_OUTPUT
-              echo "run-ttnn-models-frequent=true" >> $GITHUB_OUTPUT
               echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
               ;;
             "models-extended")
               echo "run-perf-device-models=true" >> $GITHUB_OUTPUT
-              echo "run-ttnn-models-frequent=true" >> $GITHUB_OUTPUT
               echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
               ;;
           esac
@@ -107,15 +99,6 @@ jobs:
     uses: ./.github/workflows/perf-device-models-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  single-card-ttnn-models-frequent:
-    if: ${{ needs.determine-tests.outputs.run-ttnn-models-frequent == 'true' }}
-    needs: [build-artifact, determine-tests]
-    secrets: inherit
-    uses: ./.github/workflows/single-card-ttnn-models-frequent-tests-impl.yaml
-    with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

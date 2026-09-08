@@ -36,14 +36,9 @@ the layout DOES matter: pass --ds-kpe-layout vllm to reindex our k_pe to vLLM's
 half-split layout (interleaved_to_halfsplit_perm in tt/mla/rope.py) and assert a hard
 element-wise k_pe PCC (~0.99997) instead of the frame-invariant L2.
 
-Runtime (Blackhole 1x4, layer shard already downloaded — measured layer 0):
-  host_*  (CPU only)            ~25 s for all 3 (shared module fixture: weight load +
-                                one 5120 forward; the 3 asserts are ~0 s each)
-  device indexer                ~45 s  (10 s mesh setup + 30 s device stems/score/topk)
-  device kv                     ~65 s  (forward + sparse_mla host fallback, ~24 GB RAM)
-  device mla                    ~50 s  (forward + sparse_mla host fallback, ~24 GB RAM)
-First run adds one-time JIT kernel compile (~1-2 min) and, if uncached, a multi-GB
-HF shard download. All are correctness gates → marked `gate`; @timeout(0).
+Device rows use only the supported Fabric2D 2x2, 2x4, 4x2, or 8x4 profiles. Runtime depends on
+mesh and cache warmth; first run adds one-time JIT compilation and, if uncached, a multi-GB HF
+shard download. All are correctness gates → marked `gate`; @timeout(0).
 
 ────────────────────────────────────────────────────────────────────────────────
 GLM-5.1 (model id `glm_5_1`)
@@ -72,7 +67,8 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLAReference, pretrained_mla_weights
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config, glm_hf_config  # GLM dims + HF config
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import (
-    parametrize_mesh_device,
+    detect_num_devices,
+    parametrize_mesh_and_device_params,
     skip_if_seq_too_small_for_sp,
 )
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_plugin import is_marker_explicitly_selected
@@ -257,14 +253,14 @@ def _assert_kv(ref_kv: torch.Tensor, kvpe: torch.Tensor, tag: str, kpe_layout: s
 
 
 # ----------------------------------------------------------------------------
-# Device: the TT implementation vs the official reference (Blackhole 1x4).
+# Device: the TT implementation vs the official reference on supported Fabric2D profiles.
 # ----------------------------------------------------------------------------
-_DEVICE_PARAMS = [
-    {
-        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-    }
-]
+_WORKER_L1_SIZE = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
+_TORUS_XY_CERTIFIED = (
+    detect_num_devices() == 32
+    and os.environ.get("PREFILL_TORUS_XY_CERTIFIED") == "1"
+    and bool(os.environ.get("TT_MESH_GRAPH_DESC_PATH"))
+)
 
 
 def _config_for(model: str):
@@ -315,8 +311,7 @@ def _shard_idx_input(t, mesh_device):
     )
 
 
-@parametrize_mesh_device()
-@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
+@parametrize_mesh_and_device_params(worker_l1_size=_WORKER_L1_SIZE, torus_xy_certified=_TORUS_XY_CERTIFIED)
 @pytest.mark.parametrize("model, layer", _CASES, ids=_CASE_IDS)
 @pytest.mark.timeout(0)
 def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, monkeypatch):
@@ -437,8 +432,7 @@ def _run_device_forward(model, config, layer, mesh_device):
     return ref, out_t, kvpe_t
 
 
-@parametrize_mesh_device()
-@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
+@parametrize_mesh_and_device_params(worker_l1_size=_WORKER_L1_SIZE, torus_xy_certified=_TORUS_XY_CERTIFIED)
 @pytest.mark.parametrize("model, layer", _CASES, ids=_CASE_IDS)
 @pytest.mark.timeout(0)
 def test_kv_cache_device_vs_reference(mesh_device, model, layer, device_params, ds_kpe_layout):
@@ -449,8 +443,7 @@ def test_kv_cache_device_vs_reference(mesh_device, model, layer, device_params, 
     ttnn.synchronize_device(mesh_device)
 
 
-@parametrize_mesh_device()
-@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
+@parametrize_mesh_and_device_params(worker_l1_size=_WORKER_L1_SIZE, torus_xy_certified=_TORUS_XY_CERTIFIED)
 @pytest.mark.parametrize("model, layer", _CASES, ids=_CASE_IDS)
 @pytest.mark.timeout(0)
 def test_mla_output_device_vs_reference(mesh_device, model, layer, device_params):

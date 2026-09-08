@@ -23,6 +23,7 @@ from models.common.llm_runtime.tensor_resources import (
     TensorResourceOrphan,
     attach_cleanup_failures,
     best_effort_deallocate_owned_tensors,
+    raise_cleanup_failures,
     release_orphans,
 )
 
@@ -87,10 +88,17 @@ class TraceCapturePlan:
     prepare_inputs: Callable[[], PersistentInputs | Any]
     capture: Callable[[PersistentInputs], Any]
     refresh_policy: InputRefreshPolicy = InputRefreshPolicy()
+    schema_fingerprint: Any = None
+    prepare_workspace: Callable[[], Any] | None = None
+    workspace_fingerprint: Any = None
+    prime: Callable[[PersistentInputs], Any] | None = None
+    release_prime_output: Callable[[Any], list[BaseException]] | None = None
 
     def __post_init__(self) -> None:
         if self.operation not in ("prefill", "decode"):
             raise ValueError(f"Unsupported trace operation: {self.operation!r}")
+        if (self.prime is None) is not (self.release_prime_output is None):
+            raise ValueError("trace capture prime and output releaser must be configured together")
 
 
 @dataclass
@@ -98,6 +106,17 @@ class TraceRecord:
     signature: Any
     operation: str
     artifact: TraceArtifact | None = None
+
+
+@dataclass
+class TraceAliasRecord:
+    """Program-local postprocess state kept outside the shared hidden trace."""
+
+    trace_key: TraceKey
+    workspace_fingerprint: Any
+    prepare_workspace: Callable[[], Any] | None = field(default=None, repr=False)
+    workspace: Any = None
+    deallocated_tensor_ids: set[int] = field(default_factory=set, repr=False)
 
 
 class TraceCompiler:
@@ -119,17 +138,53 @@ class TraceCompiler:
         self._traces: dict[TraceKey, TraceRecord] = {}
         self._plans: dict[TraceKey, TraceCapturePlan] = {}
         self._program_to_trace: dict[ProgramKey, TraceKey] = {}
+        self._aliases: dict[ProgramKey, TraceAliasRecord] = {}
         self._rollback_orphans: list[TensorResourceOrphan] = []
         self._capture_in_progress = False
         self._activated = False
         self._released = False
         self._previous_replay_key: TraceKey | None = None
+        self._replay_count = 0
+        self._replay_counts = {"prefill": 0, "decode": 0}
 
     # Public API
 
     @property
     def trace_active(self) -> bool:
         return self._activated
+
+    @property
+    def replay_count(self) -> int:
+        """Return successfully submitted trace replays across all operations."""
+
+        return self._replay_count
+
+    @property
+    def replay_counts(self) -> dict[str, int]:
+        """Return a snapshot of successfully submitted replays by operation."""
+
+        return dict(self._replay_counts)
+
+    @property
+    def trace_count(self) -> int:
+        """Return the number of semantic hidden traces in the registry."""
+
+        return len(self._traces)
+
+    @property
+    def trace_association_count(self) -> int:
+        """Return the number of compiled-program aliases associated to traces."""
+
+        return len(self._program_to_trace)
+
+    def registered_coverage(self, operation: str) -> tuple[tuple[TraceKey, Any], ...]:
+        """Return registered trace keys/signatures for one operation."""
+
+        if operation not in ("prefill", "decode"):
+            raise ValueError(f"Unsupported trace operation: {operation!r}")
+        return tuple(
+            (trace_key, record.signature) for trace_key, record in self._traces.items() if record.operation == operation
+        )
 
     def get(self, key: TraceKey) -> TraceRecord | None:
         """Return the record needed to finish an operation-specific replay."""
@@ -140,6 +195,14 @@ class TraceCompiler:
         """Return the registered trace association for one compiled program."""
 
         return self._program_to_trace.get(program_key)
+
+    def workspace_for_program(self, program_key: ProgramKey) -> Any:
+        """Return one alias's postprocess workspace after capture allocation."""
+
+        alias = self._aliases.get(program_key)
+        if alias is None:
+            raise RuntimeError(f"Program key {program_key.digest} has no trace alias workspace")
+        return alias.workspace
 
     def register_capture_plan(self, plan: TraceCapturePlan) -> TraceKey:
         """Validate a compiled source and register one explicit trace association."""
@@ -153,6 +216,11 @@ class TraceCompiler:
         existing_association = self._program_to_trace.get(plan.program_key)
         if existing_association is not None and existing_association != trace_key:
             raise ValueError(f"Program key {plan.program_key.digest} already has a different trace association")
+        existing_alias = self._aliases.get(plan.program_key)
+        if existing_alias is not None and existing_alias.workspace_fingerprint != plan.workspace_fingerprint:
+            raise ValueError(
+                f"Program key {plan.program_key.digest} was registered with a different workspace fingerprint"
+            )
 
         record = self._traces.get(trace_key)
         if record is None:
@@ -169,7 +237,15 @@ class TraceCompiler:
                 raise RuntimeError(f"Trace key collision for digest {trace_key.digest}: operation differs")
             if self._plans[trace_key].refresh_policy != plan.refresh_policy:
                 raise ValueError(f"Trace key {trace_key.digest} was registered with a different refresh policy")
+            if self._plans[trace_key].schema_fingerprint != plan.schema_fingerprint:
+                raise ValueError(f"Trace key {trace_key.digest} was registered with a different schema fingerprint")
         self._program_to_trace[plan.program_key] = trace_key
+        if existing_alias is None:
+            self._aliases[plan.program_key] = TraceAliasRecord(
+                trace_key=trace_key,
+                workspace_fingerprint=plan.workspace_fingerprint,
+                prepare_workspace=plan.prepare_workspace,
+            )
         return trace_key
 
     def capture_all(self) -> None:
@@ -187,7 +263,6 @@ class TraceCompiler:
 
         prepared: dict[TraceKey, tuple[PersistentInputs, TraceCapturePlan]] = {}
         captured_keys: set[TraceKey] = set()
-        self.program_compiler.set_trace_capture_in_progress(True)
         self._capture_in_progress = True
         try:
             for trace_key, plan in self._plans.items():
@@ -196,6 +271,10 @@ class TraceCompiler:
                 persistent = values if isinstance(values, PersistentInputs) else PersistentInputs(values)
                 prepared[trace_key] = (persistent, plan)
 
+            for program_key, alias in self._aliases.items():
+                if alias.prepare_workspace is not None:
+                    alias.workspace = alias.prepare_workspace()
+
             capture_order = sorted(
                 prepared,
                 key=lambda trace_key: self._traces[trace_key].operation == "prefill",
@@ -203,6 +282,35 @@ class TraceCompiler:
             for trace_key in capture_order:
                 persistent, plan = prepared[trace_key]
                 record = self._traces[trace_key]
+                # Program signatures intentionally describe padded trace
+                # identity, not active-row cardinality. Selected operation
+                # plans therefore prime their exact persistent-input body
+                # immediately before capturing that same body. No unrelated
+                # trace can perturb allocator/program state between the prime
+                # and ``begin_trace_capture``.
+                if plan.prime is not None:
+                    prime_output = None
+                    try:
+                        prime_output = plan.prime(persistent)
+                        ttnn.synchronize_device(self.mesh_device)
+                    except BaseException as primary:
+                        cleanup_failures = plan.release_prime_output(prime_output)
+                        try:
+                            ttnn.synchronize_device(self.mesh_device)
+                        except BaseException as error:
+                            cleanup_failures.append(error)
+                        attach_cleanup_failures(primary, cleanup_failures)
+                        raise
+                    release_failures = plan.release_prime_output(prime_output)
+                    try:
+                        ttnn.synchronize_device(self.mesh_device)
+                    except BaseException as error:
+                        release_failures.append(error)
+                    if release_failures:
+                        raise_cleanup_failures(release_failures)
+                    logger.info(f"Primed {plan.operation} trace capture body: signature={plan.trace_signature!r}")
+
+                self.program_compiler.set_trace_capture_in_progress(True)
                 trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
                 outputs = None
                 try:
@@ -225,8 +333,9 @@ class TraceCompiler:
                     outputs=outputs,
                     refresh_policy=plan.refresh_policy,
                 )
-                logger.info(f"Captured {plan.operation} trace")
+                logger.info(f"Captured {plan.operation} trace: signature={plan.trace_signature!r}")
                 captured_keys.add(trace_key)
+                self.program_compiler.set_trace_capture_in_progress(False)
 
             ttnn.synchronize_device(self.mesh_device)
             self._capture_in_progress = False
@@ -236,6 +345,7 @@ class TraceCompiler:
             _trim_host_allocator()
         except BaseException as primary:
             cleanup_failures = self._release_trace_resources()
+            cleanup_failures.extend(self._release_alias_workspaces())
             for trace_key, (persistent, _) in prepared.items():
                 if trace_key in captured_keys:
                     continue
@@ -248,8 +358,10 @@ class TraceCompiler:
                 if orphan_failures:
                     self._rollback_orphans.append(orphan)
 
-            self._activated = bool(self._rollback_orphans) or any(
-                record.artifact is not None for record in self._traces.values()
+            self._activated = (
+                bool(self._rollback_orphans)
+                or any(record.artifact is not None for record in self._traces.values())
+                or any(alias.workspace is not None for alias in self._aliases.values())
             )
             self._capture_in_progress = False
             self.program_compiler.set_trace_capture_in_progress(False)
@@ -293,6 +405,8 @@ class TraceCompiler:
         )
         refresh_inputs(artifact, decision)
         ttnn.execute_trace(self.mesh_device, artifact.trace_id, cq_id=0, blocking=False)
+        self._replay_count += 1
+        self._replay_counts[record.operation] += 1
         self._previous_replay_key = trace_key
         return artifact.outputs
 
@@ -302,6 +416,7 @@ class TraceCompiler:
         if self._released:
             return
         failures = self._release_trace_resources()
+        failures.extend(self._release_alias_workspaces())
         failures.extend(release_orphans(self._rollback_orphans))
         if failures:
             self._activated = True
@@ -322,6 +437,20 @@ class TraceCompiler:
         failures: list[BaseException] = []
         for record in self._traces.values():
             failures.extend(self._release_trace(record))
+        return failures
+
+    def _release_alias_workspaces(self) -> list[BaseException]:
+        failures: list[BaseException] = []
+        for alias in self._aliases.values():
+            if alias.workspace is None:
+                continue
+            alias_failures = best_effort_deallocate_owned_tensors(
+                alias.workspace,
+                alias.deallocated_tensor_ids,
+            )
+            failures.extend(alias_failures)
+            if not alias_failures:
+                alias.workspace = None
         return failures
 
     def _release_trace(self, record: TraceRecord) -> list[BaseException]:

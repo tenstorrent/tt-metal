@@ -182,7 +182,7 @@ void pad_input(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_le
     DataflowBuffer dfb_mask_padded_obj(dfb_mask_padded);
     reconfig_data_format(dfb_in, dfb_mask_padded);
     pack_reconfig_data_format(dfb_out);
-    copy_tile_init(dfb_in);  // need to copy from CB to DST to be able to run sfpu math
+    copy_init(dfb_in);  // need to copy from CB to DST to be able to run sfpu math
     for (std::uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
         const std::uint32_t rem = (cur_blk + blk > dfb_length_t) ? (dfb_length_t - cur_blk) : blk;
         tile_regs_acquire();
@@ -223,7 +223,7 @@ void exp_cb(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_max, 
     reconfig_data_format_srcb(dfb_max);
     sub_bcast_cols_init(dfb_in, dfb_max);
 #else
-    copy_tile_init(dfb_in);  // need to copy from CB to DST to be able to run sfpu math
+    copy_init(dfb_in);  // need to copy from CB to DST to be able to run sfpu math
 #endif
     exp_tile_init<EXP_APPROX>();
     for (std::uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
@@ -268,7 +268,7 @@ void reduce_cb(bool use_prev_reduce, std::uint32_t dfb_length_t) {
                 // Load previous result into DST[1] and accumulate
                 DataflowBuffer(dfb_prev_out_id).wait_front(1);
                 reconfig_data_format_srca(dfb_prev_out_id);
-                copy_tile_init(dfb_prev_out_id);
+                copy_init(dfb_prev_out_id);
                 copy_tile(dfb_prev_out_id, 0, 1);
 
                 // Accumulate based on reduce type
@@ -359,7 +359,7 @@ void kernel_main() {
     DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
 #endif
     compute_kernel_hw_startup(dfb_in0, dfb_max_scaler, dfb_exps);
-    init_sfpu(dfb_mask_padded, dfb_mask_padded);
+    copy_init(dfb_mask_padded);
 
     dfb_max_scaler_obj.wait_front(1);  // comes from the reader
     dfb_sum_scaler_obj.wait_front(1);  // comes from the reader
@@ -498,7 +498,7 @@ void kernel_main() {
         reconfig_data_format_srca(dfb_sum_final);
         pack_reconfig_data_format(dfb_sum_final, dfb_recip);
         tile_regs_acquire();
-        copy_tile_init(dfb_sum_final);
+        copy_init(dfb_sum_final);
         copy_tile(dfb_sum_final, 0, dst0);
 
         DataflowBuffer(dfb_sum_final).pop_front(1);

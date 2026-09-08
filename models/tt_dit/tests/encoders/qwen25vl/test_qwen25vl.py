@@ -26,6 +26,47 @@ from ....utils.check import assert_quality
 from ....utils.test import line_params_req_exact_devices
 
 
+def _text_config(config):
+    """transformers 5.x nests the language-model fields under `.text_config`; 4.x had them at the
+    top level of `Qwen2_5_VLConfig`. Returns `config` unchanged when already a text config."""
+    return getattr(config, "text_config", config)
+
+
+def _rope_params(config):
+    """transformers 5.x moved `rope_theta` into `rope_parameters` (aliased as `rope_scaling`)."""
+    params = getattr(config, "rope_parameters", None) or config.rope_scaling
+    rope_theta = params["rope_theta"] if "rope_theta" in params else config.rope_theta
+    return rope_theta, params["mrope_section"]
+
+
+def _real_tokens_only(x: torch.Tensor, attention_mask: torch.Tensor | None) -> torch.Tensor:
+    """Drop padding rows before comparing against the transformers reference.
+
+    We and transformers assign different position numbers to *padding* tokens, and that
+    disagreement is the only thing separating the two outputs. For 5 real tokens and 3 padding:
+
+                                        real tokens      padding
+        ours   (create_rope_tensors)    0, 1, 2, 3, 4    1, 1, 1
+        theirs (auto-inferred)          0, 1, 2, 3, 4    5, 6, 7
+
+    Both tests here compare against the auto-inferred convention: test_qwen25vl_text_encoder
+    lets Qwen2_5_VLTextModel infer positions internally, and test_qwen25vl_attention builds the
+    same arange positions by hand because it drives a single attention module directly.
+
+    Real tokens get the same position number either way, so the outputs agree everywhere a caller
+    actually reads. Padding output is discarded downstream by every caller, so comparing it
+    measures nothing but the convention mismatch -- it dragged PCC to ~91.5% against a 95.2%
+    threshold while the real tokens were exact.
+
+    transformers 4.x used our convention, which is why this only surfaced with the 5.12.1 pin.
+    Whether `create_rope_tensors` should switch to theirs is a live question for the Qwen-Image
+    owners; it changes model code, not just this test, so it is deliberately not decided here.
+    """
+    if attention_mask is None:
+        return x
+    return x[attention_mask.bool()]
+
+
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -61,24 +102,27 @@ def test_qwen25vl_attention(*, mesh_device: ttnn.MeshDevice, masked: bool) -> No
     torch_model = parent_torch_model.model.language_model.layers[0].self_attn
     assert isinstance(torch_model, transformers.models.qwen2_5_vl.modeling_qwen2_5_vl.Qwen2_5_VLAttention)
 
+    attn_config = _text_config(torch_model.config)
+    rope_theta, mrope_section = _rope_params(attn_config)
+
     model = Qwen25VlAttention(
-        hidden_size=torch_model.config.hidden_size,
-        num_heads=torch_model.config.num_attention_heads,
-        num_key_value_heads=torch_model.config.num_key_value_heads,
+        hidden_size=attn_config.hidden_size,
+        num_heads=attn_config.num_attention_heads,
+        num_key_value_heads=attn_config.num_key_value_heads,
         ctx=Qwen25VlContext(mesh_device, tp_axis, ccl_manager),
     )
     model.load_torch_state_dict(torch_model.state_dict())
 
-    sequence = torch.randn([batch_size, sequence_length, torch_model.config.hidden_size])
+    sequence = torch.randn([batch_size, sequence_length, attn_config.hidden_size])
     m = torch.randint(0, sequence_length + 1, [batch_size])
     attention_mask = torch.arange(sequence_length) < m.unsqueeze(1) if masked else None
     cos, sin = create_rope_tensors(
         batch_size,
         sequence_length,
         attention_mask,
-        head_dim=torch_model.config.hidden_size // torch_model.config.num_attention_heads,
-        rope_theta=torch_model.config.rope_theta,
-        mrope_section=torch_model.config.rope_scaling["mrope_section"],
+        head_dim=attn_config.hidden_size // attn_config.num_attention_heads,
+        rope_theta=rope_theta,
+        mrope_section=mrope_section,
     )
 
     tt_sequence = tensor.from_torch(sequence, device=mesh_device)
@@ -97,8 +141,17 @@ def test_qwen25vl_attention(*, mesh_device: ttnn.MeshDevice, masked: bool) -> No
     tt_out_torch = tensor.to_torch(tt_out)
 
     logger.info("running torch model...")
-    position_ids, _ = parent_torch_model.model.get_rope_index(input_ids=sequence, attention_mask=attention_mask)
-    position_embeddings = torch_model.rotary_emb(sequence, position_ids)
+    # get_rope_index is a vision+text utility; its own docstring says pure-text callers should
+    # "rely on model's auto-inferred position ids". For a text-only sequence Qwen2_5_VLTextModel
+    # infers plain arange positions replicated across all three mrope axes, so build that directly
+    # instead of calling get_rope_index off-label (which additionally requires a mm_token_type_ids
+    # argument and an integer input_ids carrier it has no real use for here).
+    position_ids = torch.arange(sequence_length).view(1, 1, -1).expand(3, batch_size, -1)
+    # transformers 5.x loads at the checkpoint dtype (bf16) where 4.x loaded fp32, so the fp32
+    # `sequence` no longer matches the weights. Feed the reference what the device already sees.
+    ref_sequence = sequence.to(next(parent_torch_model.parameters()).dtype)
+    # transformers 5.x moved rotary_emb off the attention module up to Qwen2_5_VLTextModel.
+    position_embeddings = parent_torch_model.model.language_model.rotary_emb(ref_sequence, position_ids)
     if attention_mask is not None:
         causal_attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
         causal_attention_mask = causal_attention_mask.expand([-1, -1, sequence_length, -1])
@@ -109,12 +162,17 @@ def test_qwen25vl_attention(*, mesh_device: ttnn.MeshDevice, masked: bool) -> No
 
     with torch.no_grad():
         out, _ = torch_model.forward(
-            sequence,
+            ref_sequence,
             attention_mask=causal_attention_mask,
             position_embeddings=position_embeddings,
         )
 
-    assert_quality(out, tt_out_torch, pcc=0.982, relative_rmse=0.19)
+    assert_quality(
+        _real_tokens_only(out, attention_mask),
+        _real_tokens_only(tt_out_torch, attention_mask),
+        pcc=0.988,
+        relative_rmse=0.15,
+    )
 
 
 @pytest.mark.parametrize(
@@ -159,24 +217,27 @@ def test_qwen25vl_text_encoder(
     mid = len(torch_text_model.layers) // 2
     del torch_text_model.layers[mid - skip_layers // 2 : mid - (-skip_layers // 2)]
 
+    text_config = _text_config(torch_model.config)
+    rope_theta, mrope_section = _rope_params(text_config)
+
     model = Qwen25VlTextEncoder(
-        vocab_size=torch_model.config.vocab_size,
-        hidden_size=torch_model.config.hidden_size,
-        intermediate_size=torch_model.config.intermediate_size,
-        hidden_act=torch_model.config.hidden_act,
-        num_hidden_layers=torch_model.config.num_hidden_layers - skip_layers,
-        num_attention_heads=torch_model.config.num_attention_heads,
-        num_key_value_heads=torch_model.config.num_key_value_heads,
-        rms_norm_eps=torch_model.config.rms_norm_eps,
-        rope_theta=torch_model.config.rope_theta,
-        mrope_section=torch_model.config.rope_scaling["mrope_section"],
+        vocab_size=text_config.vocab_size,
+        hidden_size=text_config.hidden_size,
+        intermediate_size=text_config.intermediate_size,
+        hidden_act=text_config.hidden_act,
+        num_hidden_layers=text_config.num_hidden_layers - skip_layers,
+        num_attention_heads=text_config.num_attention_heads,
+        num_key_value_heads=text_config.num_key_value_heads,
+        rms_norm_eps=text_config.rms_norm_eps,
+        rope_theta=rope_theta,
+        mrope_section=mrope_section,
         device=mesh_device,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
     )
     model.load_torch_state_dict(torch_text_model.state_dict())
 
-    tokens = torch.randint(0, torch_model.config.vocab_size, [batch_size, sequence_length])
+    tokens = torch.randint(0, text_config.vocab_size, [batch_size, sequence_length])
     m = torch.randint(0, sequence_length + 1, [batch_size])
     attention_mask = torch.arange(sequence_length) < m.unsqueeze(1) if masked else None
     cos, sin = model.create_rope_tensors(batch_size, sequence_length, attention_mask)
@@ -204,10 +265,12 @@ def test_qwen25vl_text_encoder(
         )
         prompt_embeds = out.hidden_states[-1]
 
+    prompt_embeds = _real_tokens_only(prompt_embeds, attention_mask)
+    tt_prompt_embeds_torch = _real_tokens_only(tt_prompt_embeds_torch, attention_mask)
     if masked:
-        assert_quality(prompt_embeds, tt_prompt_embeds_torch, pcc=0.952, relative_rmse=0.31)
+        assert_quality(prompt_embeds, tt_prompt_embeds_torch, pcc=0.994, relative_rmse=0.09)
     else:
-        assert_quality(prompt_embeds, tt_prompt_embeds_torch, pcc=0.991, relative_rmse=0.14)
+        assert_quality(prompt_embeds, tt_prompt_embeds_torch, pcc=0.994, relative_rmse=0.09)
 
 
 @pytest.mark.parametrize(
@@ -288,4 +351,4 @@ def test_qwen25vl_encoder_pair(
     tt_embeds *= tt_mask.unsqueeze(-1)
 
     assert torch.allclose(mask, tt_mask)
-    assert_quality(embeds, tt_embeds, pcc=0.983, relative_rmse=0.19)
+    assert_quality(embeds, tt_embeds, pcc=0.988, relative_rmse=0.15)

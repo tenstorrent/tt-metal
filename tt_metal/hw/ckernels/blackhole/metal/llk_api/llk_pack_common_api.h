@@ -6,6 +6,8 @@
 #include "internal/circular_buffer_interface.h"
 #include "ckernel.h"
 #include "ckernel_globals.h"
+#include "llk_assert.h"
+#include "llk_fp32_dest_acc.h"
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
@@ -15,11 +17,14 @@
  *************************************************************************/
 
 /**
- * Enable or disable FP32 accumulation in the packer destination register.
+ * Pack-thread half of a mid-kernel FP32 dest-acc reconfiguration.
  *
- * @param enable When true, the packer treats the destination register as FP32 accumulated.
+ * Drains the packer FIFO, waits for MATH to program dest-acc CFG (including PCK_DEST_RD_CTRL),
+ * then STALLWAITs.
+ *
+ * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_math_set_fp32_dest_acc.
  */
-inline void llk_pack_set_fp32_dest_acc(bool enable) { _llk_pack_set_fp32_dest_acc_(enable); }
+inline void llk_pack_wait_fp32_dest_acc() { _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(); }
 
 /**
  * Configure the packer hardware for the given output operand.
@@ -109,10 +114,10 @@ inline void llk_pack_dest_section_done() {
  *
  * @tparam pack_mode   Packer program mode (Default or Untilize; Tilize is not used on this path).
  * @tparam diagonal    Diagonal packing flag (unused on Blackhole).
- * @param  pack_output Output circular buffer / operand index (defaults to 16).
+ * @param  pack_output Output circular buffer / operand index.
  */
 template <PackMode pack_mode = PackMode::Default, bool diagonal = false>
-inline void llk_init_packer_dest_offset_registers([[maybe_unused]] const std::uint32_t pack_output = 16) {
+inline void llk_init_packer_dest_offset_registers([[maybe_unused]] const std::uint32_t pack_output) {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
         "Blackhole llk_init_packer_dest_offset_registers: PackMode::Tilize is not used on this path");
@@ -125,10 +130,10 @@ inline void llk_init_packer_dest_offset_registers([[maybe_unused]] const std::ui
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @tparam pack_mode           Packer program mode (Default or Untilize; Tilize is not used on this path).
- * @param  pack_output         Output circular buffer / operand index (defaults to 16).
+ * @param  pack_output         Output circular buffer / operand index.
  */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output = 16) {
+inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output) {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
         "Blackhole llk_pack_dest_init: PackMode::Tilize is not used on this path");

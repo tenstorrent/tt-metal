@@ -38,6 +38,8 @@ Tensor sum(
     float scalar = 1.0f,
     bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    // When false (default), fp32 sum runs on the accurate SFPU path; true selects the faster tf32 FPU path.
+    bool fast_and_approximate_mode = false,
     // Layout of the result. std::nullopt (default) is TILE, except a ROW_MAJOR input reduced over
     // -1/-2 on the dense RM path, which stays ROW_MAJOR. An explicit layout is always honored.
     const std::optional<Layout>& output_layout = std::nullopt);
@@ -51,8 +53,7 @@ Tensor mean(
     float scalar = 1.0f,
     bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    // When false (default), fp32 mean reduces on the accurate SFPU path (full fp32); true selects the faster tf32 FPU
-    // path.
+    // When false (default), fp32 mean runs on the accurate SFPU path; true selects the faster tf32 FPU path.
     bool fast_and_approximate_mode = false,
     // See ttnn::sum above.
     const std::optional<Layout>& output_layout = std::nullopt);
@@ -66,7 +67,7 @@ Tensor max(
     float scalar = 1.0f,
     bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    // When false (default), fp32 max selects the accurate SFPU path; true selects the faster FPU path.
+    // When false (default), fp32 max runs on the accurate SFPU path; true selects the faster tf32 FPU path.
     bool fast_and_approximate_mode = false);
 
 Tensor min(
@@ -77,7 +78,9 @@ Tensor min(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    // When false (default), fp32 min runs on the accurate SFPU path; true selects the faster tf32 FPU path.
+    bool fast_and_approximate_mode = false);
 
 Tensor std(
     const Tensor& input_tensor_arg,

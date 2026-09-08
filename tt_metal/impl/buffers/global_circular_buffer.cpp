@@ -127,6 +127,13 @@ void initialize_global_circular_buffer(
 }  // namespace
 
 GlobalCircularBuffer::GlobalCircularBuffer(
+    distributed::MeshDevice& device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type) :
+    GlobalCircularBuffer{&device, sender_receiver_core_mapping, size, buffer_type} {}
+
+GlobalCircularBuffer::GlobalCircularBuffer(
     IDevice* device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,

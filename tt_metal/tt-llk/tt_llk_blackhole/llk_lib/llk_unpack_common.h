@@ -373,8 +373,13 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
 inline void _llk_unpack_set_srcb_dummy_valid_()
 {
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
-    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-    TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    // Stall_Clr_Cntrl=1: each publication waits on Unpackers[i].SrcBank -- the bank it
+    // actually clears -- rather than MatrixUnit.Src?Bank, a different bank once
+    // double-buffering reaches steady state. Carried by the instruction itself, so it
+    // cannot go stale the way a separate preceding stall can once SET_DVALID flips the
+    // bank pointer. Wormhole uses a preceding stall only because it has no such operand.
+    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 }
 
 /**

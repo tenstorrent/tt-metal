@@ -25,7 +25,11 @@ using namespace tt::tt_metal;
 TEST_F(UnitMeshFixture, AddTwoInts) {
     uint32_t l1_unreserved_base = this->device().allocator()->get_base_allocator_addr(HalMemType::L1);
 
-    Program program = CreateProgram();
+    auto device_range = distributed::MeshCoordinateRange(this->device().shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, CreateProgram());
+    Program& program = workload.get_programs().at(device_range);
+
     CoreCoord core = {0, 0};
     constexpr std::array<uint32_t, 2> first_runtime_args = {101, 202};
     constexpr std::array<uint32_t, 2> second_runtime_args = {303, 606};
@@ -41,7 +45,7 @@ TEST_F(UnitMeshFixture, AddTwoInts) {
 
     // First run
     SetRuntimeArgs(program, add_two_ints_kernel, core, first_runtime_args);
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
 
     std::vector<uint32_t> first_kernel_result;
     slow_dispatch::ReadFromL1(this->device(), core, l1_unreserved_base, sizeof(int), first_kernel_result);
@@ -49,7 +53,7 @@ TEST_F(UnitMeshFixture, AddTwoInts) {
 
     // Second run with updated args
     SetRuntimeArgs(program, add_two_ints_kernel, core, second_runtime_args);
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
 
     std::vector<uint32_t> second_kernel_result;
     slow_dispatch::ReadFromL1(this->device(), core, l1_unreserved_base, sizeof(int), second_kernel_result);

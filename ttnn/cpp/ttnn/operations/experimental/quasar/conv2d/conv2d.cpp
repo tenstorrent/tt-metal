@@ -340,13 +340,13 @@ Result conv2d_DRAM(
 static ttnn::Tensor fix_conv_output_logical_nhw(
     const ttnn::Tensor& out, uint32_t batch_size, uint32_t output_height, uint32_t output_width) {
     const auto& logical = out.logical_shape();
+    const uint32_t true_nhw = batch_size * output_height * output_width;
     // Only the flattened conv-as-matmul output form [1, 1, NHW, C] is over-counted here; leave anything else
     // (already-unflattened, rank != 4, or batch/H folded differently) untouched to avoid mislabeling a real
     // spatial dim as NHW.
     if (logical.rank() != 4 || logical[0] != 1 || logical[1] != 1) {
         return out;
     }
-    const uint32_t true_nhw = batch_size * output_height * output_width;
     if (static_cast<uint32_t>(logical[2]) == true_nhw || static_cast<uint32_t>(logical[2]) < true_nhw) {
         // Already correct, or somehow smaller (never over-count) -- do not touch.
         return out;
@@ -668,6 +668,16 @@ Result conv2d_L1(
     // plain matmul (im2col is trivial), so setting full_inner_dim engages the split; this dodges the fused
     // conv's full-N HEIGHT_SHARDED weights overflow (the observed N-halving) AND the fused 0x19. 1x1 already
     // has act_block_w == full_K (single K-block, num_blocks_act_w == 1), so no act_block_w override is needed.
+    // [#48552] Route the 1x1 conv that use_matmul_for_1x1_conv REJECTED (stride>1 => the layer4 downsample
+    // 1024->2048 s2) through the SPLIT path (Program A gather+tilize -> Program B plain K-spill matmul) -- the
+    // same proven path conv2 uses, and the same one the passing s1 1x1 convs effectively use. A 1x1 conv IS a
+    // plain matmul (im2col is trivial), so setting full_inner_dim engages the split; this dodges the fused
+    // conv's full-N HEIGHT_SHARDED weights overflow (the observed N-halving) AND the fused 0x19. 1x1 already
+    // has act_block_w == full_K (single K-block, num_blocks_act_w == 1), so no act_block_w override is needed.
+    // [#48552 Stage2 REVERTED-AGAIN] A block-sharded extension was tried (relax to block_sharded_conv + force
+    // act_block_w=full_K), but the DPRINT proved block-sharding splits K across the GRID columns (nbw2 on the
+    // 2-core grid) regardless of act_block_w -> the split never engages and act_block_w=full_K + nbw2 is an
+    // inconsistent K config. HEIGHT_SHARDED is the only single-K-block shape, so keep this HS-only.
     const bool force_1x1_nonmm_split = arch_is_quasar && split_env_requested && height_sharded_conv && !mm_conv &&
                                        !conv_is_1d_depthwise && (kernel_size[0] == 1) && (kernel_size[1] == 1) &&
                                        (full_inner_dim_k_ntiles <= kQuasarConvNoSpillMaxKTiles);

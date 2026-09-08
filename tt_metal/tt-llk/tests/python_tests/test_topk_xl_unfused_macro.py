@@ -84,7 +84,9 @@ class TOPK_XL_MACRO_KNOBS(TemplateParameter):
         return "\n".join(lines)
 
 
-def _variant(K, num_chunks, opt_out=False, mutate=False, num_rows=2):
+def _variant(
+    K, num_chunks, opt_out=False, mutate=False, num_rows=2, reinit_after_copy=False
+):
     """The op path: row-major index split, UNFUSED merge/rebuild, descending.
     Mirrors test_topk_xl._variant with the macro knobs added."""
     tail_elements = K
@@ -111,6 +113,7 @@ def _variant(K, num_chunks, opt_out=False, mutate=False, num_rows=2):
                 fused_reduce=False,
                 chunk_base_mode=TopKXLChunkBaseMode.Static,
                 chunk_base=0,
+                reinit_after_copy=reinit_after_copy,
             ),
             TOPK_XL_MACRO_KNOBS(opt_out=opt_out, mutate=mutate),
         ],
@@ -189,3 +192,16 @@ def test_topk_xl_unfused_macro_mutation(K):
         f"is void; the macro path is either not being compiled in or not "
         f"being exercised."
     )
+
+
+@parametrize(K=[512, 1024, 2048], opt_out=[False, True])
+def test_topk_xl_unfused_macro_reinit_after_copy(K, opt_out):
+    """The post-copy unfused reinit reaches the MOP Expander through
+    ``topk_mop_config<false>``, whose recording window is the macro body (16
+    instructions) on the default build and the shipping body (18) under
+    ``DISABLE_TOPK_XL_SFPLOADMACRO``. A reinit that programs the other build's
+    length replays a truncated or overlong merge body, so run both arms at
+    num_chunks = 4 for the same reason the chained gate does."""
+    config, rows = _variant(K, num_chunks=4, opt_out=opt_out, reinit_after_copy=True)
+    result = config.run().result
+    _check(result, K, rows, compare_index_set=True)

@@ -17,6 +17,8 @@ on:
           - llama3.1-8b
           - llama3.3-70b
           - sampling-common
+          - tt-transformers-common
+          - deepseek-v3
       sku:
         description: "Select SKU to test"
         required: false

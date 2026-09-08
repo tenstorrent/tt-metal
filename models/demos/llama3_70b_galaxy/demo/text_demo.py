@@ -1,32 +1,29 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-from loguru import logger
-from datetime import datetime
 import hashlib
-import requests
 import json
 import math
-import torch
-import pytest
 import os
-import ttnn
+from datetime import datetime
+from pathlib import Path
 
+import pytest
+import requests
+import torch
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import comp_pcc
+from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
-from models.tt_transformers.tt.common import (
-    preprocess_inputs_prefill,
-    PagedAttentionConfig,
-)
-from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
-from models.common.utility_functions import (
-    comp_pcc,
-)
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -214,7 +211,34 @@ def create_tt_model(
     # When running running prefill-only profile, run just 1 layer
     tt_model_args.n_layers = num_layers if not prefill_profile else 1
 
-    state_dict = tt_model_args.load_state_dict()
+    # Warm ttnn cache => build from .tensorbin, skip the HF from_pretrained load. Pure placeholder:
+    # this galaxy demo embeds tokens on-device (HostEmbedding is tests-only), so the state_dict
+    # feeds only the TtTransformer -- no host-weight hybrid needed. (#45400)
+    cache_dir = tt_model_args.weight_cache_path(dtype)
+    cache_identity = dict(
+        model_name=tt_model_args.model_name,
+        n_layers=tt_model_args.n_layers,
+        mesh_shape=tuple(mesh_device.shape),
+        # The galaxy loader picks prefetcher-vs-DRAM cache FILENAMES off use_prefetcher
+        # (llama_attention.py wqkv_sharded_2d_prefetcher / _dram), and the optimizations level
+        # sets per-tensor dtypes that are baked into filenames. Key the marker on both so a cache
+        # seeded under one configuration is not certified for another. (#45400 review, finding B2)
+        build_variant={
+            "use_prefetcher": bool(getattr(tt_model_args, "use_prefetcher", False)),
+            "optimizations": repr(getattr(tt_model_args, "optimizations", None)),
+        },
+    )
+    loaded_real_weights = False
+    if (
+        not prefill_profile
+        and not getattr(tt_model_args, "dummy_weights", False)
+        and weight_cache_is_complete(cache_dir, **cache_identity)
+    ):
+        logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
+        state_dict = build_cached_state_dict(cache_dir, build_variant=cache_identity["build_variant"])
+    else:
+        state_dict = tt_model_args.load_state_dict()
+        loaded_real_weights = bool(state_dict) and not getattr(tt_model_args, "dummy_weights", False)
     page_table = None
     paged_attention_config = None
     tt_kv_cache = None
@@ -245,6 +269,9 @@ def create_tt_model(
 
     if use_paged_kv_cache:
         tt_kv_cache = [l.attention.layer_past for l in model.layers]
+
+    if loaded_real_weights and not prefill_profile:
+        mark_weight_cache_complete(cache_dir, state_dict, **cache_identity)
 
     return tt_model_args, model, page_table, [tt_kv_cache]
 
