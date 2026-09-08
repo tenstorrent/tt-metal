@@ -1,0 +1,1627 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
+<meta content="899 Python test functions, 85 C++ cases; 18,452 collected pytest cases." name="description"/>
+<title>Reduce-helper migration unit-test suite · tt-metal</title>
+<style>
+:root {
+  color-scheme: light;
+  --ink: #182d3a;
+  --muted: #586977;
+  --paper: #ffffff;
+  --canvas: #f4f7f9;
+  --line: #dce5eb;
+  --accent: #006b72;
+  --accent-soft: #e7f4f3;
+  --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
+}
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:hover { color: #004b51; }
+a:focus-visible, button:focus-visible, input:focus-visible, .table-wrap:focus-visible {
+  outline: 3px solid #52aaa8;
+  outline-offset: 3px;
+}
+.skip-link { position: fixed; top: -80px; left: 16px; z-index: 20; padding: 12px 18px; background: white; }
+.skip-link:focus { top: 12px; }
+.masthead {
+  border-top: 5px solid var(--accent);
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+  padding: 20px 32px;
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: center;
+}
+.brand { font-size: 12px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.masthead-links { display: flex; flex-wrap: wrap; gap: 20px; font-size: 13px; }
+.layout {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 36px;
+  max-width: 1700px;
+  margin: 0 auto;
+  padding: 34px 32px 60px;
+}
+.sidebar { position: sticky; top: 24px; align-self: start; max-height: calc(100vh - 48px); overflow-y: auto; padding-right: 8px; }
+.nav-title { margin: 0 0 14px; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+.sidebar ul { margin: 0; padding: 0; list-style: none; }
+.sidebar li { margin: 0; }
+.sidebar a { display: block; padding: 7px 10px; border-radius: 5px; font-size: 13px; text-decoration: none; color: var(--muted); line-height: 1.45; }
+.sidebar a:hover { color: var(--accent); background: var(--accent-soft); }
+.sidebar .nav-h3 a { padding-left: 22px; font-size: 12px; }
+main { min-width: 0; }
+.article { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 30px 36px; box-shadow: 0 4px 16px #182d3a04; }
+h1, h2, h3 { line-height: 1.25; letter-spacing: -.018em; scroll-margin-top: 24px; }
+h1 { font-size: clamp(26px, 3vw, 38px); max-width: 960px; margin: 0 0 22px; }
+h2 { font-size: 24px; margin: 48px 0 18px; padding-top: 25px; border-top: 1px solid var(--line); }
+h3 { font-size: 18px; margin: 34px 0 16px; }
+p { margin: 0 0 18px; }
+li { margin: 8px 0; }
+p, li { overflow-wrap: anywhere; }
+code { font-family: var(--mono); font-size: .86em; background: #eff4f6; border-radius: 4px; padding: 2px 5px; overflow-wrap: anywhere; }
+pre { overflow-x: auto; padding: 18px; border: 1px solid var(--line); border-radius: 6px; background: #f5f8fa; }
+pre code { padding: 0; background: transparent; font-size: 12px; }
+.table-wrap { overflow-x: auto; margin: 20px 0 26px; border: 1px solid var(--line); border-radius: 7px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; line-height: 1.6; }
+th { background: #edf3f6; text-align: left; font-size: 11px; font-weight: 750; letter-spacing: .025em; }
+th, td { vertical-align: top; padding: 13px 14px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+th + th, td + td { border-left: 1px solid #e8eef2; }
+tbody tr:nth-child(even) { background: #f9fbfc; }
+tbody tr:hover { background: #eef8f7; }
+tbody tr:last-child td { border-bottom: none; }
+td:first-child { min-width: 180px; }
+td a { overflow-wrap: anywhere; }
+td code { font-size: 11px; }
+td a[id] { scroll-margin-top: 30px; }
+tr:has(:target) { background: #ddf3e9; }
+.filters { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin: 0 0 22px; padding: 15px 18px; border: 1px solid var(--line); border-radius: 8px; background: white; }
+.filters label { font-size: 13px; font-weight: 650; }
+.filters input { flex: 1 1 250px; min-width: 150px; border: 1px solid #c4d4dd; border-radius: 5px; padding: 9px 11px; color: var(--ink); font: inherit; font-size: 13px; }
+.filters button { border: 1px solid #c4d4dd; border-radius: 5px; background: white; padding: 9px 12px; font: inherit; font-size: 12px; cursor: pointer; }
+.filters button:hover { background: var(--canvas); }
+.filters output { font-size: 12px; color: var(--muted); }
+.empty-table { margin: -10px 0 24px; font-size: 13px; color: var(--muted); }
+.footer { margin-top: 22px; font-size: 12px; color: var(--muted); }
+[hidden] { display: none !important; }
+@media (min-width: 1350px) { .layout { grid-template-columns: 260px minmax(0, 1fr); gap: 42px; } }
+@media (max-width: 1000px) {
+  .layout { grid-template-columns: 1fr; gap: 22px; padding: 24px 20px 40px; }
+  .sidebar { position: static; max-height: none; padding: 0; }
+  .sidebar ul { columns: 2; column-gap: 20px; }
+  .sidebar li { break-inside: avoid; }
+  .article { padding: 24px; }
+}
+@media (max-width: 600px) {
+  body { font-size: 14px; }
+  .masthead { padding: 16px; align-items: flex-start; flex-direction: column; gap: 10px; }
+  .layout { padding: 20px 12px 30px; }
+  .sidebar ul { columns: 1; }
+  .sidebar { padding: 4px 8px; }
+  .article { padding: 20px 15px; }
+  th, td { padding: 10px; }
+  .table-wrap table { min-width: 680px; }
+  .filters { padding: 12px; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+@media print {
+  body { background: white; color: black; font-size: 10pt; }
+  .masthead, .sidebar, .filters, .footer, .skip-link { display: none; }
+  .layout { display: block; padding: 0; max-width: none; }
+  .article { padding: 0; border: 0; box-shadow: none; }
+  h1 { font-size: 22pt; }
+  h2 { font-size: 16pt; }
+  h3 { font-size: 12pt; }
+  .table-wrap { overflow: visible; border-radius: 0; }
+  table { font-size: 8pt; }
+  th, td { padding: 6px; }
+  td:first-child { min-width: 0; }
+  pre { white-space: pre-wrap; }
+  tr { break-inside: avoid; }
+  thead { display: table-header-group; }
+  a { color: black; }
+  tr[hidden] { display: table-row !important; }
+  .table-wrap[hidden] { display: block !important; }
+  .empty-table { display: none !important; }
+}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#report">Skip to report</a>
+<header class="masthead">
+<span class="brand">tt-metal / reduce migration tests</span>
+<div class="masthead-links"><a href="index.html">Migration inventory</a><a href="unit_test_suite.md">Markdown source</a><a href="unit_test_suite.json">Suite manifest</a><a href="unit_test_suite.csv">All tests CSV</a><a href="unit_test_collection.json">Collection counts</a><a href="../../../../../scripts/run_reduce_migration_tests.py">Runner script</a></div>
+</header>
+<div class="layout">
+<nav aria-label="Report contents" class="sidebar">
+<p class="nav-title">On this page</p>
+<ul><li class="nav-h2"><a href="#run-the-suite">Run the suite</a></li><li class="nav-h2"><a href="#selection-and-coverage-limits">Selection and coverage limits</a></li><li class="nav-h2"><a href="#verification">Verification</a></li><li class="nav-h2"><a href="#source-groups">Source groups</a></li></ul>
+</nav>
+<main id="report">
+<div class="filters" hidden="" id="table-controls">
+<label for="table-search">Filter tables</label>
+<input aria-describedby="table-status" autocomplete="off" id="table-search" placeholder="Factory, test file, or test group" type="search"/>
+<button id="clear-search" type="button">Clear</button>
+<output aria-live="polite" id="table-status"></output>
+</div>
+<article class="article"><h1 id="reduce-helper-migration-unit-test-suite">Reduce-helper migration unit-test suite</h1>
+<p>Inventory commit: <code>f808380a87b320e24457c600cc79b05d7a0b8f73</code>. Collection date: 2026-09-08.</p>
+<p><strong>984 unique test definitions: 899 Python test functions in 164 modules, plus 85 C++ cases in 5 source files.</strong> The C++ count includes <strong>4 upstream-disabled cases</strong>, skipped by default.</p>
+<p><strong>Pytest collection: 18,452 parametrized cases; 0 groups failed collection.</strong> Cases include upstream skip/xfail marks, host validation and reference-only checks within the selected operation suites. The executed/pass count will depend on architecture, available devices, environment opt-ins and filters. Some tests also contain internal shape loops, which are one pytest case, not one case per loop iteration.</p>
+<p>Collection used the checkout's default pytest target, <code>wormhole_b0</code>. Parameter expansion can differ on another architecture or with different environment/filter settings.</p>
+<p><a href="unit_test_suite.json">Manifest</a> · <a href="unit_test_suite.csv">Every selected test and its case count</a> · <a href="unit_test_collection.json">Collection results by source</a></p>
+<h2 id="run-the-suite">Run the suite</h2>
+<p>From the repository root:</p>
+<pre><code class="language-bash">python scripts/run_reduce_migration_tests.py
+</code></pre>
+<p>The runner invokes <code>scripts/run_safe_pytest.sh --run-all --no-precompile</code> once per source group, serially. It continues through failing groups and returns nonzero if any group fails. It preserves the repository fixtures, architecture checks and skips; <code>--runslow</code> is enabled for TTNN unit-test modules. C++ cases run through the pytest adapter, using the existing <code>build/test/ttnn/unit_tests_ttnn</code> and <code>build/test/ttnn/unit_tests_ttnn_udm</code> binaries. The adapter checks that exactly the requested C++ test ran and propagates failures and skips.</p>
+<p>Useful commands:</p>
+<pre><code class="language-bash"># Count the actual parametrized cases without executing test bodies
+python scripts/run_reduce_migration_tests.py --collect-only
+
+# Inspect the selection or the wrapper commands
+python scripts/run_reduce_migration_tests.py --list
+python scripts/run_reduce_migration_tests.py --dry-run
+
+# Run groups associated with a report factory (family-level selection)
+python scripts/run_reduce_migration_tests.py --factory F058
+
+# Narrow by source/group and forward normal pytest filters
+python scripts/run_reduce_migration_tests.py --group moreh -- -k callback
+
+# Optional Python kernel warm-up; collection always disables precompile
+python scripts/run_reduce_migration_tests.py --precompile
+
+# Explicitly opt in to the four upstream-disabled C++ tests
+python scripts/run_reduce_migration_tests.py --include-disabled-gtests --group T159
+</code></pre>
+<p>Each invocation creates a new <code>generated/test_reports/reduce-migration-*</code> directory. It contains a manifest snapshot, a log/JUnit XML/count JSON/node-ID list for each group, and <code>summary.json</code>. <code>--output-dir</code> accepts a new directory and refuses to overwrite an existing one. Use the test environment and hardware topology appropriate to the selected groups; this inventory spans single-device, multidevice and Quasar operation tests. The runner does not change hardware visibility or enable test-specific environment opt-ins. DeepSeek groups default <code>MESH_DEVICE=AUTO</code>, as their conftest requires a system selection even during collection; an existing caller-provided value takes precedence.</p>
+<h2 id="selection-and-coverage-limits">Selection and coverage limits</h2>
+<p>Existing compute reduce-helper factories plus the 19 dataflow-extension hosts in the migration inventory. Direct operation unit suites, their validation/cache/numerical/performance cases, model per-op suites, and C++ operation/UDM tests. End-to-end model suites and incidental math in unrelated tests are outside this suite.</p>
+<p>Each Python test function/method is selected once; pytest expands all parameters and fixtures. Each C++ TEST/TEST_F is one case. Disabled C++ tests are retained as pytest skips unless explicitly enabled. Tests can cover more than one factory; mapping is a family selection aid, not proof that every case executes every listed factory.</p>
+<p>The selected modules include sanity and nightly tests without applying their CI <code>-k</code>/<code>-m</code> filters. This is broader than the representative test nodes in the earlier factory/CI audit. Whole operations may dispatch among several factories; shared parameter tables are retained for that operation family. Unrelated standalone reductions (prod/top-k/argmax/fast NC), unrelated Moreh backward factories, NC-only Moreh softmax tests, model end-to-end tests, and perf-table report generators are excluded. <code>prod</code> rows are deselected from mixed generic-reduction parameter tables.</p>
+<p>The suite includes MLA prefill/decode because those entry points select the listed SDPA factories. It does not credit standard <code>ttnn.sum</code>/<code>mean</code> calls in Quasar-named files to the separate experimental Quasar reduction factories.</p>
+<p>Factories without direct executable coverage remain explicit:</p>
+<ul>
+<li><code>F046</code>, <code>F047</code>, <code>F048</code>, <code>DH004</code>: No direct test invokes the experimental Quasar generic-reduction entry points. The Quasar-named ResNet sum/mean tests actually call standard ttnn.sum/mean and are included against the standard factories.</li>
+<li><code>DH005</code>: No direct test found for the experimental Quasar joint SDPA factory.</li>
+<li><code>DH001</code>: No unit test found for the BGE custom encoder SDPA descriptor. Existing BGE attention PCC tests use the stock path.</li>
+<li><code>F090</code>: The explicit large-height general-softmax factory smoke test is disabled upstream; retained as a skipped adapter case.</li>
+<li><code>F024</code>: Source-composition-only test; does not execute a factory or helper kernel, so excluded.</li>
+</ul>
+<p><code>F084</code> is covered through the shared sharded-normalization builder. Both factories in <code>F087</code> are selected. <code>F041</code> and <code>F086</code> have factory tests but cannot enable the retained compute-helper branch identified in the earlier audit.</p>
+<h2 id="verification">Verification</h2>
+<p>Every selected Python definition was checked against the source AST, and every selected C++ name was found in the corresponding built binary using <code>--gtest_list_tests</code>. Pytest collection was run through the protected runner, with precompile disabled. The C++ adapter was separately exercised with a synthetic gtest executable: pass, failure, runtime skip, zero matching tests, continuation after failure, and an upstream-disabled case behaved as expected. Script lint and Python compilation checks passed. No device unit-test bodies or C++ builds were run for this scripts/report-only change.</p>
+<h2 id="source-groups">Source groups</h2>
+<div aria-label="Test suite table 1" class="table-wrap" role="region" tabindex="0"><table>
+<thead>
+<tr>
+<th scope="col">Group</th>
+<th scope="col">Source</th>
+<th scope="col">Factory IDs</th>
+<th scope="col" style="text-align:right">Definitions</th>
+<th scope="col" style="text-align:right">Collected cases</th>
+<th scope="col">Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>T001</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py">tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">365</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T002</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/reduce/test_reduction_mean.py">tests/ttnn/unit_tests/operations/reduce/test_reduction_mean.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">364</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T003</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py">tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">19</td>
+<td style="text-align:right">560</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T004</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/reduce/test_reduction_h_interleaved.py">tests/ttnn/unit_tests/operations/reduce/test_reduction_h_interleaved.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">42</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T005</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/reduce/test_max.py">tests/ttnn/unit_tests/operations/reduce/test_max.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">300</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T006</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/reduce/test_sum.py">tests/ttnn/unit_tests/operations/reduce/test_sum.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">407</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T007</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py">tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">7</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T008</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/reduction/test_sum_int.py">tests/ttnn/nightly/unit_tests/operations/reduction/test_sum_int.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">87</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T009</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max_sfpu.py">tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max_sfpu.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">144</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T010</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/reduction/test_mean_ulp.py">tests/ttnn/nightly/unit_tests/operations/reduction/test_mean_ulp.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">397</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T011</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py">tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">45</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T012</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/reduction/test_reduce.py">tests/ttnn/nightly/unit_tests/operations/reduction/test_reduce.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">54</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T013</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops.py">tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">704</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T014</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_w_scalar.py">tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_w_scalar.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">960</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T015</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_memory_configs.py">tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_memory_configs.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">174</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T016</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/reduce/test_reduction.py">tests/ttnn/unit_tests/operations/reduce/test_reduction.py</a></td>
+<td>DH011, F098, F099, F100</td>
+<td style="text-align:right">18</td>
+<td style="text-align:right">344</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T017</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/reduction/test_reduction_op_corners.py">tests/ttnn/nightly/unit_tests/operations/reduction/test_reduction_op_corners.py</a></td>
+<td>DH011, F098, F099, F100, F101, F102</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">69</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T018</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/reduce/test_moe.py">tests/ttnn/unit_tests/operations/reduce/test_moe.py</a></td>
+<td>F101</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T019</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/reduce/test_sampling.py">tests/ttnn/unit_tests/operations/reduce/test_sampling.py</a></td>
+<td>F102</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">26</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T020</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py">tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py</a></td>
+<td>F102</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">8</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T021</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/reduce/test_tiebreak_input_adjust.py">tests/ttnn/unit_tests/operations/reduce/test_tiebreak_input_adjust.py</a></td>
+<td>F099, F102</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">22</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T022</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/reduction/test_deepseek_grouped_gate.py">tests/ttnn/nightly/unit_tests/operations/reduction/test_deepseek_grouped_gate.py</a></td>
+<td>F052</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">6</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T023</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py">tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py</a></td>
+<td>F053</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">33</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T024</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py">tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py</a></td>
+<td>DH009, DH010, F083, F084, F085, F086, F087</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">72</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T025</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_exhaustive.py">tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_exhaustive.py</a></td>
+<td>DH009, DH010, F083, F084, F085, F086, F087</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">455</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T026</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py">tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py</a></td>
+<td>DH009, DH010, F083, F084, F085, F086, F087</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">200</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T027</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py">tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py</a></td>
+<td>F088, F089, F090, F091, F092, F093</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">3</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T028</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/fused/test_group_norm.py">tests/ttnn/unit_tests/operations/fused/test_group_norm.py</a></td>
+<td>F079, F080, F081</td>
+<td style="text-align:right">29</td>
+<td style="text-align:right">462</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T029</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py">tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py</a></td>
+<td>F079, F080, F081</td>
+<td style="text-align:right">16</td>
+<td style="text-align:right">156</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T030</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/fused/test_layer_norm.py">tests/ttnn/unit_tests/operations/fused/test_layer_norm.py</a></td>
+<td>DH009, DH010, F083, F084, F085, F086, F087</td>
+<td style="text-align:right">16</td>
+<td style="text-align:right">265</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T031</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py">tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py</a></td>
+<td>DH009, DH010, F083, F084, F085, F086, F087</td>
+<td style="text-align:right">15</td>
+<td style="text-align:right">280</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T032</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/fused/test_rms_norm.py">tests/ttnn/unit_tests/operations/fused/test_rms_norm.py</a></td>
+<td>DH009, DH010, F083, F084, F085, F086, F087</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">90</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T033</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py">tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py</a></td>
+<td>DH009, DH010, F083, F084, F085, F086, F087</td>
+<td style="text-align:right">12</td>
+<td style="text-align:right">118</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T034</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/fused/test_softmax.py">tests/ttnn/unit_tests/operations/fused/test_softmax.py</a></td>
+<td>F088, F089, F090, F091, F092, F093</td>
+<td style="text-align:right">21</td>
+<td style="text-align:right">433</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T035</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py">tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py</a></td>
+<td>F088, F089, F090, F091, F092, F093</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">10</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T036</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py">tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py</a></td>
+<td>DH009, DH010, F083, F084, F085, F086, F087</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">201</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T037</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py">tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py</a></td>
+<td>DH009, DH010, F083, F084, F085, F086, F087</td>
+<td style="text-align:right">12</td>
+<td style="text-align:right">142</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T038</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_rmsnorm_allgather.py">tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_rmsnorm_allgather.py</a></td>
+<td>DH009, DH010, F083, F084, F085, F086, F087</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">4</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T039</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py">tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py</a></td>
+<td>F079, F080, F081</td>
+<td style="text-align:right">15</td>
+<td style="text-align:right">210</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T040</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py">tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py</a></td>
+<td>F079, F080, F081</td>
+<td style="text-align:right">12</td>
+<td style="text-align:right">373</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T041</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/fused/test_layer_norm_ulp.py">tests/ttnn/nightly/unit_tests/operations/fused/test_layer_norm_ulp.py</a></td>
+<td>DH009, DH010, F083, F084, F085, F086, F087</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">268</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T042</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/fused/test_layernorm.py">tests/ttnn/nightly/unit_tests/operations/fused/test_layernorm.py</a></td>
+<td>DH009, DH010, F083, F084, F085, F086, F087</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">102</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T043</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/fused/test_layernorm_sharded.py">tests/ttnn/nightly/unit_tests/operations/fused/test_layernorm_sharded.py</a></td>
+<td>DH009, DH010, F083, F084, F085, F086, F087</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">300</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T044</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/fused/test_rmsnorm.py">tests/ttnn/nightly/unit_tests/operations/fused/test_rmsnorm.py</a></td>
+<td>DH009, DH010, F083, F084, F085, F086, F087</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">29</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T045</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/fused/test_softmax.py">tests/ttnn/nightly/unit_tests/operations/fused/test_softmax.py</a></td>
+<td>F088, F089, F090, F091, F092, F093</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T046</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_interleaved.py">tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_interleaved.py</a></td>
+<td>F088, F089, F090, F091, F092, F093</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">24</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T047</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_sharded.py">tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_sharded.py</a></td>
+<td>F088, F089, F090, F091, F092, F093</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">13</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T048</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_ulp.py">tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_ulp.py</a></td>
+<td>F088, F089, F090, F091, F092, F093</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">198</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T049</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations_compute_only/fused/test_group_norm.py">tests/ttnn/nightly/unit_tests/operations_compute_only/fused/test_group_norm.py</a></td>
+<td>F079, F080, F081</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">8</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T050</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/transformers/test_transformer.py">tests/ttnn/unit_tests/operations/transformers/test_transformer.py</a></td>
+<td>F088</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">16</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T051</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_clip_grad_norm.py">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_clip_grad_norm.py</a></td>
+<td>F057</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">20</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T052</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_dot.py">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_dot.py</a></td>
+<td>F058</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">25</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T053</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py</a></td>
+<td>F059, F060, F061</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">128</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T054</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py</a></td>
+<td>F062, F063, F064</td>
+<td style="text-align:right">12</td>
+<td style="text-align:right">103</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T055</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py</a></td>
+<td>F065, F066</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">341</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T056</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_mean.py">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_mean.py</a></td>
+<td>F067</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">71</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T057</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py</a></td>
+<td>F068, F069</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">1,556</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T058</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py</a></td>
+<td>F078</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">259</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T059</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py</a></td>
+<td>F070, F071, F072, F073, F074, F075, F076, F077</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">101</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T060</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax.py">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax.py</a></td>
+<td>F070, F071, F072, F073, F074, F075, F076, F077</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">100</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T061</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmin.py">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmin.py</a></td>
+<td>F070, F071, F072, F073, F074, F075, F076, F077</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">100</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T062</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax_ulp.py">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax_ulp.py</a></td>
+<td>F070, F071, F072, F073</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">162</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T063</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py">tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py</a></td>
+<td>F036</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">28</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T064</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py">tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py</a></td>
+<td>F040</td>
+<td style="text-align:right">55</td>
+<td style="text-align:right">127</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T065</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py">tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py</a></td>
+<td>F041</td>
+<td style="text-align:right">14</td>
+<td style="text-align:right">19</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T066</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_4d.py">tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_4d.py</a></td>
+<td>F041</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">5</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T067</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_perf.py">tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_perf.py</a></td>
+<td>F041</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">4</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T068</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py">tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py</a></td>
+<td>F042</td>
+<td style="text-align:right">11</td>
+<td style="text-align:right">27</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T069</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py">tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py</a></td>
+<td>F043</td>
+<td style="text-align:right">12</td>
+<td style="text-align:right">32</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T070</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py">tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py</a></td>
+<td>F055, F056</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">54</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T071</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py">tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py</a></td>
+<td>DH008</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">242</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T072</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/ccl/test_minimals.py">tests/ttnn/unit_tests/operations/ccl/test_minimals.py</a></td>
+<td>F035</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">89</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T073</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py">models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py</a></td>
+<td>F034</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">36</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T074</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/examples/test_compute_fusion.py">tests/ttnn/unit_tests/operations/examples/test_compute_fusion.py</a></td>
+<td>F111</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">3</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T075</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/examples/test_reduce_accumulate.py">tests/ttnn/unit_tests/operations/examples/test_reduce_accumulate.py</a></td>
+<td>F112</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T076</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/examples/test_row_reduce_accumulate.py">tests/ttnn/unit_tests/operations/examples/test_row_reduce_accumulate.py</a></td>
+<td>F114</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T077</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/examples/fidelity_sweep/test_reduce_accumulate_fidelity.py">tests/ttnn/unit_tests/operations/examples/fidelity_sweep/test_reduce_accumulate_fidelity.py</a></td>
+<td>F112</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T078</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/examples/fidelity_sweep/test_row_reduce_accumulate_fidelity.py">tests/ttnn/unit_tests/operations/examples/fidelity_sweep/test_row_reduce_accumulate_fidelity.py</a></td>
+<td>F114</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T079</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py">tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py</a></td>
+<td>F116, F117</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">41</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T080</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/sdpa/test_mla_decode.py">tests/ttnn/unit_tests/operations/sdpa/test_mla_decode.py</a></td>
+<td>DH019</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T081</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py">tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py</a></td>
+<td>DH016</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">5</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T082</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py">tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py</a></td>
+<td>DH016</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">7</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T083</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/sdpa/test_paged_sdpa_decode_flexible_geometry.py">tests/ttnn/unit_tests/operations/sdpa/test_paged_sdpa_decode_flexible_geometry.py</a></td>
+<td>DH019</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">10</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T084</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py">tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py</a></td>
+<td>DH019</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">12</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T085</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py">tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py</a></td>
+<td>DH016</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">10</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T086</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py">tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py</a></td>
+<td>DH018</td>
+<td style="text-align:right">23</td>
+<td style="text-align:right">32</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T087</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py">tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py</a></td>
+<td>DH017</td>
+<td style="text-align:right">18</td>
+<td style="text-align:right">21</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T088</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py">tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py</a></td>
+<td>DH016</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">69</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T089</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode.py</a></td>
+<td>DH019</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">40</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T090</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode_stress.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode_stress.py</a></td>
+<td>DH019</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T091</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill.py</a></td>
+<td>DH016</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">20</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T092</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_chunked_vs_not.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_chunked_vs_not.py</a></td>
+<td>DH016</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">4</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T093</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_stress.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_stress.py</a></td>
+<td>DH016</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">288</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T094</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py</a></td>
+<td>DH016</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">36</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T095</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py</a></td>
+<td>DH019</td>
+<td style="text-align:right">14</td>
+<td style="text-align:right">88</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T096</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py</a></td>
+<td>DH019</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">10</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T097</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_sink.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_sink.py</a></td>
+<td>DH019</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">18</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T098</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_joint.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_joint.py</a></td>
+<td>DH013</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">200</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T099</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py</a></td>
+<td>DH013, DH016</td>
+<td style="text-align:right">25</td>
+<td style="text-align:right">994</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T100</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_ring_distributed.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_ring_distributed.py</a></td>
+<td>DH014, DH016</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">224</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T101</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py</a></td>
+<td>DH018</td>
+<td style="text-align:right">12</td>
+<td style="text-align:right">53</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T102</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py</a></td>
+<td>DH017</td>
+<td style="text-align:right">30</td>
+<td style="text-align:right">57</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T103</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa_block_cyclic_multidevice.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa_block_cyclic_multidevice.py</a></td>
+<td>DH017</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">4</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T104</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa_perf.py">tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa_perf.py</a></td>
+<td>DH017</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">4</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T105</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/operations/sdpa/test_bounded_sliding_kv_cache.py">tests/ttnn/unit_tests/operations/sdpa/test_bounded_sliding_kv_cache.py</a></td>
+<td>DH019</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T106</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_flash_mla_deepseek.py">models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_flash_mla_deepseek.py</a></td>
+<td>DH019</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T107</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py">tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py</a></td>
+<td>DH015</td>
+<td style="text-align:right">43</td>
+<td style="text-align:right">113</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T108</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/nightly/blackhole/sdpa/test_ring_joint_sdpa_cross_padded.py">tests/nightly/blackhole/sdpa/test_ring_joint_sdpa_cross_padded.py</a></td>
+<td>DH015</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">3</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T109</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/nightly/blackhole/sdpa/test_ring_joint_attention.py">tests/nightly/blackhole/sdpa/test_ring_joint_attention.py</a></td>
+<td>DH015</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">9</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T110</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/nightly/t3000/ccl/test_ring_joint_attention.py">tests/nightly/t3000/ccl/test_ring_joint_attention.py</a></td>
+<td>DH015</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">162</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T111</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/nightly/tg/ccl/test_ring_joint_attention.py">tests/nightly/tg/ccl/test_ring_joint_attention.py</a></td>
+<td>DH015</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">38</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T112</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/tt_dit/tests/unit/test_ring_joint_attention.py">models/tt_dit/tests/unit/test_ring_joint_attention.py</a></td>
+<td>DH015</td>
+<td style="text-align:right">7</td>
+<td style="text-align:right">2,178</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T113</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/minimax_m3/tests/unit/test_ring_joint_sp_vs_ref.py">models/demos/minimax_m3/tests/unit/test_ring_joint_sp_vs_ref.py</a></td>
+<td>DH015</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T114</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/minimax_m3/tests/unit/test_ring_joint_cache_read_sp_vs_ref.py">models/demos/minimax_m3/tests/unit/test_ring_joint_cache_read_sp_vs_ref.py</a></td>
+<td>DH015</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T115</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py">models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py</a></td>
+<td>DH015</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">72</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T116</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py">tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py</a></td>
+<td>DH012</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">11</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T117</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/tt_dit/tests/unit/test_exp_ring_joint_attention.py">models/tt_dit/tests/unit/test_exp_ring_joint_attention.py</a></td>
+<td>DH012</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">6</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T118</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/nightly/blackhole/sdpa/test_sparse_sdpa_multidevice.py">tests/nightly/blackhole/sdpa/test_sparse_sdpa_multidevice.py</a></td>
+<td>DH018</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">4</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T119</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py">tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py</a></td>
+<td>DH016</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">58</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T120</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/nightly/t3000/ccl/test_ring_attention_all_gather.py">tests/nightly/t3000/ccl/test_ring_attention_all_gather.py</a></td>
+<td>DH014</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">22</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T121</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/nightly/tg/ccl/test_ring_attention_all_gather.py">tests/nightly/tg/ccl/test_ring_attention_all_gather.py</a></td>
+<td>DH014</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">22</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T122</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/ops/test_chunked_scaled_dot_product_attention.py">models/experimental/llama32_1b_quasar/tests/ops/test_chunked_scaled_dot_product_attention.py</a></td>
+<td>DH006</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">3</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T123</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/ops/test_paged_scaled_dot_product_attention_decode.py">models/experimental/llama32_1b_quasar/tests/ops/test_paged_scaled_dot_product_attention_decode.py</a></td>
+<td>DH007</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T124</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/ops/test_rms_norm.py">models/experimental/llama32_1b_quasar/tests/ops/test_rms_norm.py</a></td>
+<td>DH009, F083</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">5</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T125</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/ops/test_rms_norm_post_all_gather.py">models/experimental/llama32_1b_quasar/tests/ops/test_rms_norm_post_all_gather.py</a></td>
+<td>F085, F087</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">3</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T126</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/ops/test_rms_norm_pre_all_gather.py">models/experimental/llama32_1b_quasar/tests/ops/test_rms_norm_pre_all_gather.py</a></td>
+<td>F087</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">3</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T127</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/ops/test_sampling.py">models/experimental/llama32_1b_quasar/tests/ops/test_sampling.py</a></td>
+<td>F102</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T128</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention.py">models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention.py</a></td>
+<td>DH006</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">3</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T129</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention_decode.py">models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention_decode.py</a></td>
+<td>DH007</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T130</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/prototype_ops/test_chunked_scaled_dot_product_attention.py">models/experimental/llama32_1b_quasar/tests/prototype_ops/test_chunked_scaled_dot_product_attention.py</a></td>
+<td>DH006</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">3</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T131</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/prototype_ops/test_paged_scaled_dot_product_attention_decode.py">models/experimental/llama32_1b_quasar/tests/prototype_ops/test_paged_scaled_dot_product_attention_decode.py</a></td>
+<td>DH007</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T132</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/prototype_ops/test_rms_norm.py">models/experimental/llama32_1b_quasar/tests/prototype_ops/test_rms_norm.py</a></td>
+<td>DH009, F083</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">5</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T133</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/prototype_ops/test_rms_norm_post_all_gather.py">models/experimental/llama32_1b_quasar/tests/prototype_ops/test_rms_norm_post_all_gather.py</a></td>
+<td>F085, F087</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">3</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T134</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/prototype_ops/test_rms_norm_pre_all_gather.py">models/experimental/llama32_1b_quasar/tests/prototype_ops/test_rms_norm_pre_all_gather.py</a></td>
+<td>F087</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">3</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T135</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/prototype_ops/test_sampling.py">models/experimental/llama32_1b_quasar/tests/prototype_ops/test_sampling.py</a></td>
+<td>F102</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T136</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/prototype_ops/test_scaled_dot_product_attention.py">models/experimental/llama32_1b_quasar/tests/prototype_ops/test_scaled_dot_product_attention.py</a></td>
+<td>DH006</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">3</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T137</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/prototype_ops/test_scaled_dot_product_attention_decode.py">models/experimental/llama32_1b_quasar/tests/prototype_ops/test_scaled_dot_product_attention_decode.py</a></td>
+<td>DH007</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T138</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/graph_ops/test_paged_scaled_dot_product_attention_decode.py">models/experimental/llama32_1b_quasar/tests/graph_ops/test_paged_scaled_dot_product_attention_decode.py</a></td>
+<td>DH007</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T139</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/graph_ops/test_rms_norm.py">models/experimental/llama32_1b_quasar/tests/graph_ops/test_rms_norm.py</a></td>
+<td>DH009, F083</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">4</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T140</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/llama32_1b_quasar/tests/graph_ops/test_scaled_dot_product_attention.py">models/experimental/llama32_1b_quasar/tests/graph_ops/test_scaled_dot_product_attention.py</a></td>
+<td>DH006</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T141</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/ops/quasar/tests/gpt_oss_ops/test_rms_norm.py">models/experimental/ops/quasar/tests/gpt_oss_ops/test_rms_norm.py</a></td>
+<td>DH009, F083</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">5</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T142</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/ops/quasar/tests/gpt_oss_ops/test_sum.py">models/experimental/ops/quasar/tests/gpt_oss_ops/test_sum.py</a></td>
+<td>F098, F099, F100</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T143</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/ops/quasar/tests/gpt_oss_ops/test_scaled_dot_product_attention.py">models/experimental/ops/quasar/tests/gpt_oss_ops/test_scaled_dot_product_attention.py</a></td>
+<td>DH016</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T144</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/ops/quasar/tests/gpt_oss_ops/test_paged_scaled_dot_product_attention_decode.py">models/experimental/ops/quasar/tests/gpt_oss_ops/test_paged_scaled_dot_product_attention_decode.py</a></td>
+<td>DH019</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T145</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/ops/quasar/tests/qwen3_vl_ops/test_rms_norm.py">models/experimental/ops/quasar/tests/qwen3_vl_ops/test_rms_norm.py</a></td>
+<td>DH009, F083</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">8</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T146</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/ops/quasar/tests/qwen3_vl_ops/test_scaled_dot_product_attention.py">models/experimental/ops/quasar/tests/qwen3_vl_ops/test_scaled_dot_product_attention.py</a></td>
+<td>DH016</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T147</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/ops/quasar/tests/qwen3_vl_ops/test_paged_scaled_dot_product_attention_decode.py">models/experimental/ops/quasar/tests/qwen3_vl_ops/test_paged_scaled_dot_product_attention_decode.py</a></td>
+<td>DH019</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T148</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/deepseek_v3/tests/unit/test_rmsnorm.py">models/demos/deepseek_v3/tests/unit/test_rmsnorm.py</a></td>
+<td>DH009, F083, F085, F087</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">12</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T149</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/deepseek_v3/tests/unit/test_reduce.py">models/demos/deepseek_v3/tests/unit/test_reduce.py</a></td>
+<td>F098, F099, F100</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">6</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T150</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_rmsnorm_deepseek.py">models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_rmsnorm_deepseek.py</a></td>
+<td>DH009, F083</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T151</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/vision/classification/resnet50/quasar/tests/ops/test_reduce_sum_mean.py">models/demos/vision/classification/resnet50/quasar/tests/ops/test_reduce_sum_mean.py</a></td>
+<td>F098, F099</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">12</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T152</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/t3000/falcon40b/tests/unit_tests/test_falcon_softmax.py">models/demos/t3000/falcon40b/tests/unit_tests/test_falcon_softmax.py</a></td>
+<td>F088, F089</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T153</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/t3000/falcon40b/tests/unit_tests/layernorm/test_fused_falcon_layernorm.py">models/demos/t3000/falcon40b/tests/unit_tests/layernorm/test_fused_falcon_layernorm.py</a></td>
+<td>DH009, F083</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T154</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/t3000/falcon40b/tests/unit_tests/layernorm/test_falcon_layernorm.py">models/demos/t3000/falcon40b/tests/unit_tests/layernorm/test_falcon_layernorm.py</a></td>
+<td>DH009, F083</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T155</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_softmax.py">models/experimental/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_softmax.py</a></td>
+<td>F088, F089</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">24</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T156</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_ln.py">models/experimental/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_ln.py</a></td>
+<td>DH009, F083</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">48</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T157</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/gpt_oss/tests/unit/test_rope.py">models/demos/gpt_oss/tests/unit/test_rope.py</a></td>
+<td>DH019</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T158</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/experimental/ops/quasar/gpt_oss/tests/unit/test_rope.py">models/experimental/ops/quasar/gpt_oss/tests/unit/test_rope.py</a></td>
+<td>DH019</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T159</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/gtests/test_normalization.cpp">tests/ttnn/unit_tests/gtests/test_normalization.cpp</a></td>
+<td>F079, F080, F081, F083, F084, F085, F086, F087, F088, F089, F090, F091, F092, F093, DH009, DH010</td>
+<td style="text-align:right">37</td>
+<td style="text-align:right">37</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T160</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/gtests/test_reduction.cpp">tests/ttnn/unit_tests/gtests/test_reduction.cpp</a></td>
+<td>F098, F099, F100, DH011, F101, F102</td>
+<td style="text-align:right">27</td>
+<td style="text-align:right">27</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T161</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/gtests/test_graph_capture_arguments_morehdot.cpp">tests/ttnn/unit_tests/gtests/test_graph_capture_arguments_morehdot.cpp</a></td>
+<td>F058</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T162</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp">tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp</a></td>
+<td>DH002</td>
+<td style="text-align:right">14</td>
+<td style="text-align:right">14</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T163</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp">tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp</a></td>
+<td>DH003</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">6</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T164</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/nightly/tg/ccl/test_distributed_rms_norm_decode_configs.py">tests/nightly/tg/ccl/test_distributed_rms_norm_decode_configs.py</a></td>
+<td>F035</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">16</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T165</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py">tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py</a></td>
+<td>F035</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">2</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T166</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py">models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py</a></td>
+<td>F088, F089</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">11</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T167</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/minimax_m3/tests/unit/test_indexer_score_msa_accuracy.py">models/demos/minimax_m3/tests/unit/test_indexer_score_msa_accuracy.py</a></td>
+<td>F040</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">3</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T168</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/minimax_m3/tests/unit/test_msa_prefill_vs_ref.py">models/demos/minimax_m3/tests/unit/test_msa_prefill_vs_ref.py</a></td>
+<td>DH017, F040</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Collected</td>
+</tr>
+<tr>
+<td>T169</td>
+<td><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/models/demos/minimax_m3/tests/unit/test_msa_sp_sharded_vs_ref.py">models/demos/minimax_m3/tests/unit/test_msa_sp_sharded_vs_ref.py</a></td>
+<td>F040</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1</td>
+<td>Collected</td>
+</tr>
+</tbody>
+</table></div>
+</article>
+<footer class="footer">Collection and runner validation at f808380a87b. Device unit-test bodies were not executed.</footer>
+</main>
+</div>
+<script>
+(() => {
+  const controls = document.getElementById('table-controls');
+  const input = document.getElementById('table-search');
+  const status = document.getElementById('table-status');
+  const clear = document.getElementById('clear-search');
+  const tables = [...document.querySelectorAll('.article .table-wrap')].map(wrapper => {
+    const rows = [...wrapper.querySelectorAll('tbody tr')].map(row => ({
+      row, text: row.textContent.toLocaleLowerCase()
+    }));
+    const message = document.createElement('p');
+    message.className = 'empty-table';
+    message.textContent = 'No matching rows in this table.';
+    message.hidden = true;
+    wrapper.after(message);
+    return {wrapper, rows, message};
+  });
+  const total = tables.reduce((sum, table) => sum + table.rows.length, 0);
+  const update = () => {
+    const query = input.value.trim().toLocaleLowerCase();
+    let visible = 0;
+    tables.forEach(({wrapper, rows, message}) => {
+      let matches = 0;
+      rows.forEach(({row, text}) => {
+        const match = !query || text.includes(query);
+        row.hidden = !match;
+        if (match) matches++;
+      });
+      wrapper.hidden = matches === 0;
+      message.hidden = matches !== 0;
+      visible += matches;
+    });
+    status.textContent = query ? `${visible} of ${total} table rows match` : `${total} table rows`;
+    clear.disabled = !input.value;
+  };
+  input.addEventListener('input', update);
+  clear.addEventListener('click', () => { input.value = ''; update(); input.focus(); });
+  document.addEventListener('click', event => {
+    const link = event.target.closest('a[href^="#"]');
+    if (!link || !input.value) return;
+    const target = document.getElementById(link.getAttribute('href').slice(1));
+    if (target && target.closest('tr[hidden]')) { input.value = ''; update(); }
+  });
+  controls.hidden = false;
+  update();
+})();
+</script>
+</body>
+</html>

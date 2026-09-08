@@ -1,0 +1,985 @@
+group,kind,source,line,test,factory_ids,collected_cases,collection_status,disabled_cpp
+T001,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py,24,test_min,DH011; F098; F099; F100,256,collected,False
+T001,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py,53,test_min_global,DH011; F098; F099; F100,32,collected,False
+T001,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py,81,test_min_row_major,DH011; F098; F099; F100,2,collected,False
+T001,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py,111,test_min_multi_dim,DH011; F098; F099; F100,3,collected,False
+T001,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py,141,test_min_fp32_fast_and_approximate_mode,DH011; F098; F099; F100,72,collected,False
+T002,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_mean.py,24,test_mean,DH011; F098; F099; F100,256,collected,False
+T002,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_mean.py,69,test_mean_scaling,DH011; F098; F099; F100,56,collected,False
+T002,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_mean.py,89,test_mean_scaling_factor,DH011; F098; F099; F100,28,collected,False
+T002,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_mean.py,108,test_mean_shard,DH011; F098; F099; F100,16,collected,False
+T002,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_mean.py,173,test_mean_fp32_fast_and_approximate_mode_no_dim,DH011; F098; F099; F100,8,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,43,test_mean_row_major,DH011; F098; F099; F100,19,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,93,test_sum_row_major,DH011; F098; F099; F100,12,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,131,test_sum_global_row_major,DH011; F098; F099; F100,1,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,168,test_max_row_major,DH011; F098; F099; F100,6,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,206,test_min_row_major,DH011; F098; F099; F100,4,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,242,test_std_row_major,DH011; F098; F099; F100,5,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,280,test_var_row_major,DH011; F098; F099; F100,5,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,321,test_mean_multi_dim_row_major,DH011; F098; F099; F100,6,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,358,test_sum_multi_dim_row_major,DH011; F098; F099; F100,2,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,465,test_rm_reduce_w_interleaved_tile_aligned,DH011; F098; F099; F100,144,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,504,test_rm_reduce_w_interleaved_non_tile_aligned,DH011; F098; F099; F100,56,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,538,test_rm_reduce_w_interleaved_memory_configs,DH011; F098; F099; F100,12,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,579,test_rm_reduce_h_interleaved_tile_aligned,DH011; F098; F099; F100,144,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,616,test_rm_reduce_h_interleaved_non_tile_aligned,DH011; F098; F099; F100,56,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,650,test_rm_reduce_h_interleaved_memory_configs,DH011; F098; F099; F100,12,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,681,test_rm_reduce_interleaved_program_cache,DH011; F098; F099; F100,8,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,719,test_rm_reduce_h_axis_split,DH011; F098; F099; F100,48,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,758,test_rm_reduce_row_major_output_rejected_for_block_float,DH011; F098; F099; F100,4,collected,False
+T003,pytest,tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py,786,test_rm_reduce_padded_h_slices_rejected,DH011; F098; F099; F100,16,collected,False
+T004,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_h_interleaved.py,35,test_3D_tensor,DH011; F098; F099; F100,16,collected,False
+T004,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_h_interleaved.py,92,test_2D_tensor_full_grid,DH011; F098; F099; F100,16,collected,False
+T004,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_h_interleaved.py,149,test_2D_tensor,DH011; F098; F099; F100,10,collected,False
+T005,pytest,tests/ttnn/unit_tests/operations/reduce/test_max.py,23,test_max,DH011; F098; F099; F100,128,collected,False
+T005,pytest,tests/ttnn/unit_tests/operations/reduce/test_max.py,47,test_max_4d,DH011; F098; F099; F100,4,collected,False
+T005,pytest,tests/ttnn/unit_tests/operations/reduce/test_max.py,69,test_max_2d,DH011; F098; F099; F100,16,collected,False
+T005,pytest,tests/ttnn/unit_tests/operations/reduce/test_max.py,91,test_max_global,DH011; F098; F099; F100,50,collected,False
+T005,pytest,tests/ttnn/unit_tests/operations/reduce/test_max.py,128,test_max_dim,DH011; F098; F099; F100,30,collected,False
+T005,pytest,tests/ttnn/unit_tests/operations/reduce/test_max.py,151,test_max_fp32_fast_and_approximate_mode,DH011; F098; F099; F100,72,collected,False
+T006,pytest,tests/ttnn/unit_tests/operations/reduce/test_sum.py,23,test_sum,DH011; F098; F099; F100,192,collected,False
+T006,pytest,tests/ttnn/unit_tests/operations/reduce/test_sum.py,52,test_sum_global,DH011; F098; F099; F100,96,collected,False
+T006,pytest,tests/ttnn/unit_tests/operations/reduce/test_sum.py,99,test_sum_4d,DH011; F098; F099; F100,80,collected,False
+T006,pytest,tests/ttnn/unit_tests/operations/reduce/test_sum.py,130,test_sum_nd_shard,DH011; F098; F099; F100,3,collected,False
+T006,pytest,tests/ttnn/unit_tests/operations/reduce/test_sum.py,177,test_sum_subcores,DH011; F098; F099; F100,12,collected,False
+T006,pytest,tests/ttnn/unit_tests/operations/reduce/test_sum.py,217,test_sum_fp32_fast_and_approximate_mode,DH011; F098; F099; F100,24,collected,False
+T007,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py,61,test_reduce_cache_reuse_same_config,DH011; F098; F099; F100,1,collected,False
+T007,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py,98,test_reduce_cache_miss_different_math_ops,DH011; F098; F099; F100,1,collected,False
+T007,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py,128,test_reduce_cache_miss_different_dims,DH011; F098; F099; F100,1,collected,False
+T007,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py,160,test_reduce_cache_miss_different_input_dtypes,DH011; F098; F099; F100,1,collected,False
+T007,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py,190,test_reduce_cache_miss_different_memory_configs,DH011; F098; F099; F100,1,collected,False
+T007,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py,226,test_reduce_cache_miss_different_shapes,DH011; F098; F099; F100,1,collected,False
+T007,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py,256,test_reduce_cache_miss_sub_core_grids,DH011; F098; F099; F100,1,collected,False
+T008,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_sum_int.py,39,test_sum_int32,DH011; F098; F099; F100,72,collected,False
+T008,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_sum_int.py,53,test_sum_int32_keepdim,DH011; F098; F099; F100,4,collected,False
+T008,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_sum_int.py,67,test_sum_int32_overflow_wraps,DH011; F098; F099; F100,1,collected,False
+T008,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_sum_int.py,80,test_sum_int32_all_zeros_regression,DH011; F098; F099; F100,1,collected,False
+T008,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_sum_int.py,99,test_sum_int32_with_scaling,DH011; F098; F099; F100,9,collected,False
+T009,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max_sfpu.py,30,test_max_min,DH011; F098; F099; F100,84,collected,False
+T009,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max_sfpu.py,56,test_max_min_with_scaling,DH011; F098; F099; F100,18,collected,False
+T009,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max_sfpu.py,109,test_int32_reduce_with_extreme_value_in_input,DH011; F098; F099; F100,24,collected,False
+T009,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max_sfpu.py,142,test_int32_reduce_row_major_pad_value,DH011; F098; F099; F100,18,collected,False
+T010,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_mean_ulp.py,160,test_mean_ulp_bf16,DH011; F098; F099; F100,216,collected,False
+T010,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_mean_ulp.py,210,test_mean_ulp_fp32,DH011; F098; F099; F100,108,collected,False
+T010,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_mean_ulp.py,298,test_mean_fp32_accurate_vs_fast,DH011; F098; F099; F100,60,collected,False
+T010,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_mean_ulp.py,338,test_mean_fp32_accurate_memory_layouts,DH011; F098; F099; F100,8,collected,False
+T010,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_mean_ulp.py,359,test_mean_fp32_long_reduction_regression,DH011; F098; F099; F100,2,collected,False
+T010,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_mean_ulp.py,378,test_mean_fp32_accurate_large_depth,DH011; F098; F099; F100,2,collected,False
+T010,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_mean_ulp.py,392,test_mean_fp32_accurate_falls_back_without_fp32_dest_acc,DH011; F098; F099; F100,1,collected,False
+T011,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py,44,test_min_max_mean_global,DH011; F098; F099; F100,30,collected,False
+T011,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py,136,test_reduce_w_height_sharded,DH011; F098; F099; F100,2,collected,False
+T011,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py,146,test_reduce_w_height_sharded_grid_mismatch,DH011; F098; F099; F100,2,collected,False
+T011,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py,152,test_reduce_w_height_sharded_shard_height_mismatch,DH011; F098; F099; F100,1,collected,False
+T011,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py,158,test_reduce_w_height_sharded_uneven_split,DH011; F098; F099; F100,3,collected,False
+T011,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py,172,test_reduce_w_height_sharded_float_min,DH011; F098; F099; F100,1,collected,False
+T011,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py,192,test_reduce_w_height_sharded_orientation_matched,DH011; F098; F099; F100,4,collected,False
+T011,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_min_max.py,203,test_reduce_w_height_sharded_orientation_mismatch,DH011; F098; F099; F100,2,collected,False
+T012,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_reduce.py,21,test_sharded_reduce_h,DH011; F098; F099; F100,4,collected,False
+T012,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_reduce.py,98,test_nd_sharded_reduce_h_no_output_shard_spec,DH011; F098; F099; F100,2,collected,False
+T012,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_reduce.py,176,test_rm_reduce_h_axis_split,DH011; F098; F099; F100,32,collected,False
+T012,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_reduce.py,214,test_rm_reduce_h_axis_split_output_layout,DH011; F098; F099; F100,16,collected,False
+T013,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops.py,64,test_generic_ops,DH011; F098; F099; F100,704,collected,False
+T014,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_w_scalar.py,238,test_generic_ops_w_scalar_part1,DH011; F098; F099; F100,240,collected,False
+T014,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_w_scalar.py,247,test_generic_ops_w_scalar_part2,DH011; F098; F099; F100,720,collected,False
+T015,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_memory_configs.py,48,test_generic_ops_ndim_shard,DH011; F098; F099; F100,48,collected,False
+T015,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_memory_configs.py,146,test_generic_ops_wh_block_shard,DH011; F098; F099; F100,96,collected,False
+T015,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_memory_configs.py,284,test_generic_ops_dtypes_layouts,DH011; F098; F099; F100,30,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,23,test_std,DH011; F098; F099; F100,160,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,69,test_var,DH011; F098; F099; F100,80,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,112,test_var_fp32_translation_invariance,DH011; F098; F099; F100,18,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,169,test_var_fp32_doscale_wt_gt_1,DH011; F098; F099; F100,8,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,203,test_std_var_wide_low_variance,DH011; F098; F099; F100,4,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,221,test_std_var_hw_reduce_batch_crosses_tree_block,DH011; F098; F099; F100,1,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,308,test_sum_8d_tensor_dims,DH011; F098; F099; F100,12,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,342,test_sum_7d_tensor_dims,DH011; F098; F099; F100,2,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,375,test_sum_6d_tensor_dims,DH011; F098; F099; F100,3,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,407,test_sum_5d_tensor_dims,DH011; F098; F099; F100,3,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,438,test_sum_4d_tensor_dims,DH011; F098; F099; F100,9,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,773,test_sum_3d_tensor_dims,DH011; F098; F099; F100,3,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,802,test_sum_2d_tensor_dims,DH011; F098; F099; F100,4,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,833,test_mean_4d_tensor_dims,DH011; F098; F099; F100,18,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,863,test_mean_3d_tensor_dims,DH011; F098; F099; F100,4,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,892,test_mean_2d_tensor_dims,DH011; F098; F099; F100,6,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,983,test_run_reduce_sum_h_after_max_pool,DH011; F098; F099; F100,2,collected,False
+T016,pytest,tests/ttnn/unit_tests/operations/reduce/test_reduction.py,1001,test_torch_compatibility,DH011; F098; F099; F100,7,collected,False
+T017,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_reduction_op_corners.py,507,test_moe,DH011; F098; F099; F100; F101; F102,5,collected,False
+T017,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_reduction_op_corners.py,623,test_sampling,DH011; F098; F099; F100; F101; F102,4,collected,False
+T017,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_reduction_op_corners.py,736,test_sum_multi_dim_row_major,DH011; F098; F099; F100; F101; F102,4,collected,False
+T017,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_reduction_op_corners.py,783,test_generic_ops_dim_parity,DH011; F098; F099; F100; F101; F102,56,collected,False
+T018,pytest,tests/ttnn/unit_tests/operations/reduce/test_moe.py,72,test_moe,F101,2,collected,False
+T019,pytest,tests/ttnn/unit_tests/operations/reduce/test_sampling.py,194,test_sampling_callback,F102,12,collected,False
+T019,pytest,tests/ttnn/unit_tests/operations/reduce/test_sampling.py,235,test_sampling_sub_32_users,F102,12,collected,False
+T019,pytest,tests/ttnn/unit_tests/operations/reduce/test_sampling.py,313,test_sampling_subcores_callback,F102,2,collected,False
+T020,pytest,tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py,10,test_manual_seed_different_argument_calls,F102,1,collected,False
+T020,pytest,tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py,37,test_manual_tensors_wrong_config,F102,1,collected,False
+T020,pytest,tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py,47,test_manual_seed_base_functionality,F102,1,collected,False
+T020,pytest,tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py,91,test_manual_seed_mapping_functionality,F102,1,collected,False
+T020,pytest,tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py,143,test_manual_seed_skip_with_uint32_max,F102,1,collected,False
+T020,pytest,tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py,185,test_manual_seed_skip_with_uint32_max_user_ids_scalar,F102,1,collected,False
+T020,pytest,tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py,195,test_manual_seed_skip_with_uint32_max_user_ids_tensor,F102,1,collected,False
+T020,pytest,tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py,208,test_manual_seed_mapping_functionality_sub_core_grids,F102,1,collected,False
+T021,pytest,tests/ttnn/unit_tests/operations/reduce/test_tiebreak_input_adjust.py,113,test_masked_index_min_reduce_is_exact,F099; F102,2,collected,False
+T021,pytest,tests/ttnn/unit_tests/operations/reduce/test_tiebreak_input_adjust.py,163,test_tiebreak_boosts_lowest_global_index_for_greedy_users,F099; F102,10,collected,False
+T021,pytest,tests/ttnn/unit_tests/operations/reduce/test_tiebreak_input_adjust.py,194,test_tiebreak_leaves_random_users_bit_identical,F099; F102,4,collected,False
+T021,pytest,tests/ttnn/unit_tests/operations/reduce/test_tiebreak_input_adjust.py,207,test_tiebreak_is_repeatable,F099; F102,1,collected,False
+T021,pytest,tests/ttnn/unit_tests/operations/reduce/test_tiebreak_input_adjust.py,219,test_sampling_picks_lowest_global_index_after_adjust,F099; F102,5,collected,False
+T022,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_deepseek_grouped_gate.py,371,test_grouped_gate_against_reference,F052,1,collected,False
+T022,pytest,tests/ttnn/nightly/unit_tests/operations/reduction/test_deepseek_grouped_gate.py,418,test_grouped_gate,F052,5,collected,False
+T023,pytest,tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py,63,test_ssm_reduce,F053,32,collected,False
+T023,pytest,tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py,67,test_ssm_1d_sum_reduce_with_program_cache,F053,1,collected,False
+T024,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py,182,test_distributed_layernorm_with_program_cache,DH009; DH010; F083; F084; F085; F086; F087,24,collected,False
+T024,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py,197,test_distributed_layernorm_with_program_cache_4chip,DH009; DH010; F083; F084; F085; F086; F087,48,collected,False
+T025,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_exhaustive.py,89,test_distributed_norm_allclose,DH009; DH010; F083; F084; F085; F086; F087,432,collected,False
+T025,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_exhaustive.py,160,test_smoke,DH009; DH010; F083; F084; F085; F086; F087,2,collected,False
+T025,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_exhaustive.py,211,test_distributed_layernorm_dtype,DH009; DH010; F083; F084; F085; F086; F087,4,collected,False
+T025,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_exhaustive.py,267,test_distributed_layernorm_memory_layouts,DH009; DH010; F083; F084; F085; F086; F087,8,collected,False
+T025,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_exhaustive.py,327,test_distributed_rmsnorm_memory_layouts,DH009; DH010; F083; F084; F085; F086; F087,2,collected,False
+T025,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_exhaustive.py,382,test_distributed_norm_large_batch,DH009; DH010; F083; F084; F085; F086; F087,2,collected,False
+T025,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_exhaustive.py,421,test_distributed_layernorm_sweep_hidden_dim,DH009; DH010; F083; F084; F085; F086; F087,4,collected,False
+T025,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_exhaustive.py,483,test_distributed_rmsnorm_2d_core_grid,DH009; DH010; F083; F084; F085; F086; F087,1,collected,False
+T026,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py,314,test_pre_allgather_layernorm,DH009; DH010; F083; F084; F085; F086; F087,32,collected,False
+T026,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py,359,test_pre_allgather_layernorm_1d_reduce,DH009; DH010; F083; F084; F085; F086; F087,16,collected,False
+T026,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py,402,test_post_allgather_layernorm,DH009; DH010; F083; F084; F085; F086; F087,64,collected,False
+T026,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py,494,test_simulated_distributed_layernorm,DH009; DH010; F083; F084; F085; F086; F087,64,collected,False
+T026,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py,681,test_simulated_distributed_norm_multi_core_non_tile_aligned_width,DH009; DH010; F083; F084; F085; F086; F087,4,collected,False
+T026,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py,693,test_simulated_distributed_norm_two_stage_reduce_non_tile_aligned_width,DH009; DH010; F083; F084; F085; F086; F087,4,collected,False
+T026,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py,871,test_simulated_distributed_norm_tile_aligned_width,DH009; DH010; F083; F084; F085; F086; F087,4,collected,False
+T026,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py,882,test_simulated_distributed_norm_pre_all_gather_non_tile_aligned_width,DH009; DH010; F083; F084; F085; F086; F087,6,collected,False
+T026,pytest,tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py,894,test_simulated_distributed_norm_non_tile_aligned_width,DH009; DH010; F083; F084; F085; F086; F087,6,collected,False
+T027,pytest,tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py,76,test_eltwise_softmax_in_place_test,F088; F089; F090; F091; F092; F093,3,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,179,test_group_norm_with_height_sharded,F079; F080; F081,2,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,270,test_group_norm_height_sharded_non_tile_aligned,F079; F080; F081,2,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,359,test_group_norm_block_sharded_non_tile_aligned,F079; F080; F081,6,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,450,test_group_norm_with_block_sharded_v2_8x4_grid,F079; F080; F081,6,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,569,test_group_norm_with_offset_shard_grid,F079; F080; F081,40,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,664,test_group_norm_with_block_sharded_v2_8x8_grid,F079; F080; F081,20,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,765,test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout,F079; F080; F081,6,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,997,test_sdxl_base_group_norm,F079; F080; F081,70,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1011,test_sdxl_group_norm_reverse_inplace,F079; F080; F081,70,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1024,test_sdxl_base_group_norm_bh,F079; F080; F081,11,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1101,test_sdxl_base_group_norm_negative_mask,F079; F080; F081,3,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1203,test_group_norm_compute_config,F079; F080; F081,1,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1294,test_group_norm_oft,F079; F080; F081,6,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1398,test_group_norm_no_input_mask,F079; F080; F081,2,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1498,test_group_norm_bf16_negative_mask,F079; F080; F081,1,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1585,test_group_norm_auto_negative_mask_synthesis,F079; F080; F081,1,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1722,test_group_norm_negative_tests,F079; F080; F081,1,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1739,test_group_norm_rejects_non_tile_aligned_spatial,F079; F080; F081,1,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1775,test_group_norm_rejects_per_sample_non_tile_aligned_spatial,F079; F080; F081,1,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1809,test_group_norm_rejects_tile_input_with_inplace,F079; F080; F081,1,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1827,test_group_norm_rejects_host_input_mask,F079; F080; F081,1,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1844,test_group_norm_rejects_host_negative_mask,F079; F080; F081,1,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1899,test_group_norm_rejects_negative_mask_with_welford,F079; F080; F081,1,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1921,test_group_norm_tile_layout_declines_negative_mask,F079; F080; F081,1,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,1954,test_group_norm_dram_grid_size,F079; F080; F081,3,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,2028,test_group_norm_optional_weight_bias,F079; F080; F081,6,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,2137,test_group_norm_sharded_all_config,F079; F080; F081,96,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,2245,test_group_norm_sharded_dirty_padding,F079; F080; F081,48,collected,False
+T028,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm.py,2330,test_group_norm_sharded_dirty_padding_tile_aligned_groups,F079; F080; F081,54,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,315,test_group_norm_DRAM,F079; F080; F081,54,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,359,test_group_norm_DRAM_row_major_smoke,F079; F080; F081,3,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,384,test_group_norm_no_input_mask_DRAM,F079; F080; F081,9,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,496,test_group_norm_non_tile_aligned_DRAM,F079; F080; F081,6,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,511,test_group_norm_non_tile_aligned_per_sample_DRAM,F079; F080; F081,2,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,525,test_group_norm_non_tile_aligned_program_cache_aliasing_DRAM,F079; F080; F081,1,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,569,test_group_norm_non_tile_aligned_explicit_grid_DRAM,F079; F080; F081,4,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,604,test_group_norm_non_tile_aligned_padding_fraction_DRAM,F079; F080; F081,4,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,622,test_group_norm_non_tile_aligned_no_input_mask_DRAM,F079; F080; F081,1,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,637,test_group_norm_non_tile_aligned_shifted_input_DRAM,F079; F080; F081,3,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,684,test_group_norm_non_tile_aligned_garbage_padding_DRAM,F079; F080; F081,1,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,731,test_group_norm_non_tile_aligned_dirty_padding_grids_DRAM,F079; F080; F081,7,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,776,test_group_norm_non_tile_aligned_dirty_padding_is_ignored_DRAM,F079; F080; F081,1,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,808,test_sdxl_base_group_norm_split,F079; F080; F081,2,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,905,test_group_norm_DRAM_oft,F079; F080; F081,2,collected,False
+T029,pytest,tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py,1043,test_group_norm_interleaved_all_config,F079; F080; F081,56,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,89,test_layer_norm,DH009; DH010; F083; F084; F085; F086; F087,16,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,108,test_layer_norm_with_weight_and_bias,DH009; DH010; F083; F084; F085; F086; F087,8,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,138,test_layer_norm_with_weight_and_bias_row_major,DH009; DH010; F083; F084; F085; F086; F087,2,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,169,test_layer_norm_with_weight_bias_and_residual_input,DH009; DH010; F083; F084; F085; F086; F087,60,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,205,test_layer_norm_with_tile_layout,DH009; DH010; F083; F084; F085; F086; F087,4,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,249,test_large_layer_norm,DH009; DH010; F083; F084; F085; F086; F087,36,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,269,test_large_layer_norm_with_weight_and_bias,DH009; DH010; F083; F084; F085; F086; F087,8,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,300,test_large_layer_norm_with_weight,DH009; DH010; F083; F084; F085; F086; F087,8,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,327,test_large_layer_norm_with_bias,DH009; DH010; F083; F084; F085; F086; F087,8,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,352,test_large_layer_norm_with_legacy_reduction_and_rsqrt,DH009; DH010; F083; F084; F085; F086; F087,8,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,407,test_large_layer_norm_with_weight_bias_and_residual_input,DH009; DH010; F083; F084; F085; F086; F087,28,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,443,test_l1_interleaved,DH009; DH010; F083; F084; F085; F086; F087,4,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,471,test_layer_norm_across_dtypes,DH009; DH010; F083; F084; F085; F086; F087,32,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,503,test_layer_norm_with_padding,DH009; DH010; F083; F084; F085; F086; F087,36,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,542,test_layer_norm_inputs_requires_input_tensor,DH009; DH010; F083; F084; F085; F086; F087,1,collected,False
+T030,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm.py,552,test_norm_row_major_weight_partial_tile_padding,DH009; DH010; F083; F084; F085; F086; F087,6,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,32,test_layer_norm_sharded_single_stage,DH009; DH010; F083; F084; F085; F086; F087,64,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,59,test_layer_norm_sharded_two_stage,DH009; DH010; F083; F084; F085; F086; F087,24,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,82,test_layer_norm_sharded_with_residual,DH009; DH010; F083; F084; F085; F086; F087,16,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,110,test_layer_norm_sharded_with_weight_and_bias,DH009; DH010; F083; F084; F085; F086; F087,16,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,139,test_layer_norm_sharded_with_weight_and_bias_row_major,DH009; DH010; F083; F084; F085; F086; F087,8,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,169,test_layer_norm_sharded_with_weight_and_bias_and_residual,DH009; DH010; F083; F084; F085; F086; F087,16,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,196,test_layer_norm_sharded_padded,DH009; DH010; F083; F084; F085; F086; F087,1,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,265,test_layer_norm_sharded_width_default_config,DH009; DH010; F083; F084; F085; F086; F087,1,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,344,test_layer_norm_sharded_2d_with_grid_offset,DH009; DH010; F083; F084; F085; F086; F087,12,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,429,test_layer_norm_sharded_1d_mcast_with_grid_offset,DH009; DH010; F083; F084; F085; F086; F087,4,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,506,test_layer_norm_sharded_uneven_multicore_logical_width,DH009; DH010; F083; F084; F085; F086; F087,24,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,520,test_layer_norm_sharded_uneven_multicore_logical_width_row_major,DH009; DH010; F083; F084; F085; F086; F087,12,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,544,test_layer_norm_sharded_uneven_multicore_logical_width_two_stage,DH009; DH010; F083; F084; F085; F086; F087,10,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,568,test_layer_norm_sharded_width_non_rectangular_grid,DH009; DH010; F083; F084; F085; F086; F087,48,collected,False
+T031,pytest,tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py,659,test_layer_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores,DH009; DH010; F083; F084; F085; F086; F087,24,collected,False
+T032,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm.py,22,test_rms_norm,DH009; DH010; F083; F084; F085; F086; F087,18,collected,False
+T032,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm.py,57,test_rms_norm_row_major,DH009; DH010; F083; F084; F085; F086; F087,64,collected,False
+T032,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm.py,101,test_rms_norm_with_weight_and_residual,DH009; DH010; F083; F084; F085; F086; F087,8,collected,False
+T033,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py,34,test_rms_norm_sharded_single_stage,DH009; DH010; F083; F084; F085; F086; F087,32,collected,False
+T033,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py,59,test_rms_norm_sharded_two_stage,DH009; DH010; F083; F084; F085; F086; F087,12,collected,False
+T033,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py,80,test_rms_norm_sharded_with_residual,DH009; DH010; F083; F084; F085; F086; F087,8,collected,False
+T033,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py,105,test_rms_norm_sharded_with_bias_only,DH009; DH010; F083; F084; F085; F086; F087,8,collected,False
+T033,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py,135,test_rms_norm_sharded_with_weight_and_bias,DH009; DH010; F083; F084; F085; F086; F087,8,collected,False
+T033,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py,160,test_rms_norm_sharded_with_weight_and_bias_row_major,DH009; DH010; F083; F084; F085; F086; F087,4,collected,False
+T033,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py,189,test_rms_norm_sharded_with_weight_and_bias_and_residual,DH009; DH010; F083; F084; F085; F086; F087,8,collected,False
+T033,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py,213,test_rms_norm_sharded_padded,DH009; DH010; F083; F084; F085; F086; F087,1,collected,False
+T033,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py,285,test_rms_norm_sharded_width_default_config,DH009; DH010; F083; F084; F085; F086; F087,1,collected,False
+T033,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py,361,test_rms_norm_sharded_uneven_multicore_logical_width,DH009; DH010; F083; F084; F085; F086; F087,12,collected,False
+T033,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py,376,test_rms_norm_sharded_width_non_rectangular_grid,DH009; DH010; F083; F084; F085; F086; F087,12,collected,False
+T033,pytest,tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py,441,test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores,DH009; DH010; F083; F084; F085; F086; F087,12,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,29,test_large_softmax,F088; F089; F090; F091; F092; F093,6,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,65,test_softmax_stable_neg_values,F088; F089; F090; F091; F092; F093,24,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,166,test_softmax_stable_with_program_cache,F088; F089; F090; F091; F092; F093,128,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,277,test_softmax_sharded_stable_with_program_cache,F088; F089; F090; F091; F092; F093,16,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,301,test_softmax,F088; F089; F090; F091; F092; F093,108,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,328,test_softmax_with_3D,F088; F089; F090; F091; F092; F093,1,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,348,test_softmax_with_padded_tile_layout,F088; F089; F090; F091; F092; F093,1,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,372,test_softmax_with_padded_tile_layout_large,F088; F089; F090; F091; F092; F093,1,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,395,test_specific_tensor_combination,F088; F089; F090; F091; F092; F093,1,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,430,test_5d_softmax,F088; F089; F090; F091; F092; F093,5,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,469,test_large_fill_softmax,F088; F089; F090; F091; F092; F093,48,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,499,test_softmax_sd,F088; F089; F090; F091; F092; F093,1,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,561,test_softmax_dtypes,F088; F089; F090; F091; F092; F093,11,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,604,test_softmax_bfloat8_dims,F088; F089; F090; F091; F092; F093,9,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,644,test_softmax_accuracy,F088; F089; F090; F091; F092; F093,8,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,688,test_softmax_large_kernel_block_size,F088; F089; F090; F091; F092; F093,4,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,760,test_softmax_non_divisible_width,F088; F089; F090; F091; F092; F093,20,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,774,test_softmax_large_non_divisible_width,F088; F089; F090; F091; F092; F093,3,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,797,test_scale_mask_softmax_non_divisible_width,F088; F089; F090; F091; F092; F093,36,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,852,test_softmax_4096x4096_fp32,F088; F089; F090; F091; F092; F093,1,collected,False
+T034,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax.py,877,test_softmax_large_kernel_mask_padded,F088; F089; F090; F091; F092; F093,1,collected,False
+T035,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py,82,test_softmax_cache_reuse_same_config_5d,F088; F089; F090; F091; F092; F093,1,collected,False
+T035,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py,116,test_softmax_cache_reuse_same_config_4d,F088; F089; F090; F091; F092; F093,1,collected,False
+T035,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py,151,test_softmax_cache_miss_different_dims_5d,F088; F089; F090; F091; F092; F093,1,collected,False
+T035,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py,185,test_softmax_cache_miss_different_factories,F088; F089; F090; F091; F092; F093,1,collected,False
+T035,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py,220,test_softmax_cache_miss_different_input_dtypes,F088; F089; F090; F091; F092; F093,1,collected,False
+T035,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py,250,test_softmax_cache_miss_different_memory_configs,F088; F089; F090; F091; F092; F093,1,collected,False
+T035,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py,282,test_softmax_cache_miss_different_shapes,F088; F089; F090; F091; F092; F093,1,collected,False
+T035,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py,314,test_scale_mask_softmax_cache_miss_different_mask_dtypes,F088; F089; F090; F091; F092; F093,1,collected,False
+T035,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py,366,test_scale_mask_softmax_cache_miss_different_mask_memory_configs,F088; F089; F090; F091; F092; F093,1,collected,False
+T035,pytest,tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py,417,test_scale_mask_softmax_cache_reuse_same_mask_config,F088; F089; F090; F091; F092; F093,1,collected,False
+T036,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py,183,test_layernorm_part_2_with_program_cache,DH009; DH010; F083; F084; F085; F086; F087,192,collected,False
+T036,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py,236,test_layernorm_part_2_with_program_cache2,DH009; DH010; F083; F084; F085; F086; F087,4,collected,False
+T036,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py,266,test_layer_norm_post_all_gather_non_tile_aligned_width,DH009; DH010; F083; F084; F085; F086; F087,3,collected,False
+T036,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py,327,test_layer_norm_post_all_gather_bias_only_matches_torch,DH009; DH010; F083; F084; F085; F086; F087,1,collected,False
+T036,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py,391,test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major,DH009; DH010; F083; F084; F085; F086; F087,1,collected,False
+T037,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py,428,test_layernorm_part_1_with_program_cache,DH009; DH010; F083; F084; F085; F086; F087,96,collected,False
+T037,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py,457,test_layernorm_part_1_with_program_cache2,DH009; DH010; F083; F084; F085; F086; F087,2,collected,False
+T037,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py,488,test_layernorm_pre_post_gamma_only_pcc,DH009; DH010; F083; F084; F085; F086; F087,2,collected,False
+T037,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py,498,test_layernorm_pre_all_gather_residual_pcc,DH009; DH010; F083; F084; F085; F086; F087,6,collected,False
+T037,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py,507,test_layernorm_pre_all_gather_residual_padding_zeroed,DH009; DH010; F083; F084; F085; F086; F087,1,collected,False
+T037,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py,590,test_layernorm_pre_all_gather_residual_mismatched_dtype,DH009; DH010; F083; F084; F085; F086; F087,2,collected,False
+T037,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py,672,test_residual_logical_shape_mismatch_rejected,DH009; DH010; F083; F084; F085; F086; F087,8,collected,False
+T037,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py,730,test_layernorm_pre_all_gather_welford_residual,DH009; DH010; F083; F084; F085; F086; F087,6,collected,False
+T037,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py,898,test_pre_allgather_ignores_implicit_tile_padding,DH009; DH010; F083; F084; F085; F086; F087,1,collected,False
+T037,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py,933,test_layernorm_pre_all_gather_welford_fp32_precision,DH009; DH010; F083; F084; F085; F086; F087,4,collected,False
+T037,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py,1066,test_pre_all_gather_non_welford_fp32_precision,DH009; DH010; F083; F084; F085; F086; F087,12,collected,False
+T037,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py,1151,test_pre_all_gather_non_welford_fp32_requires_fp32_dest_acc,DH009; DH010; F083; F084; F085; F086; F087,2,collected,False
+T038,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_rmsnorm_allgather.py,124,test_rmsnorm_2d_core_grid_single_device,DH009; DH010; F083; F084; F085; F086; F087,4,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,17,test_group_norm_large_ex_external_cb,F079; F080; F081,2,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,73,test_group_norm_sharded_ex_external_cb_gap,F079; F080; F081,2,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,214,test_group_norm_with_height_sharded,F079; F080; F081,2,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,222,test_group_norm_with_block_sharded_v2_8x4_grid,F079; F080; F081,6,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,230,test_group_norm_with_block_sharded_v2_8x8_grid,F079; F080; F081,20,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,238,test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout,F079; F080; F081,6,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,252,test_sdxl_base_group_norm,F079; F080; F081,70,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,261,test_sdxl_group_norm_reverse_inplace,F079; F080; F081,70,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,269,test_sdxl_base_group_norm_bh,F079; F080; F081,11,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,276,test_sdxl_base_group_norm_negative_mask,F079; F080; F081,3,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,283,test_group_norm_compute_config,F079; F080; F081,1,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,291,test_group_norm_oft,F079; F080; F081,6,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,299,test_group_norm_no_input_mask,F079; F080; F081,2,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,305,test_group_norm_dram_grid_size,F079; F080; F081,3,collected,False
+T039,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py,315,test_group_norm_optional_weight_bias,F079; F080; F081,6,collected,False
+T040,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py,87,test_group_norm_DRAM,F079; F080; F081,84,collected,False
+T040,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py,94,test_group_norm_DRAM_rejects_non_uniform_mcast_groups,F079; F080; F081,1,collected,False
+T040,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py,177,test_group_norm_no_input_mask_DRAM,F079; F080; F081,108,collected,False
+T040,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py,197,test_group_norm_DRAM_unit_shapes,F079; F080; F081,54,collected,False
+T040,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py,211,test_group_norm_no_input_mask_DRAM_unit_shapes,F079; F080; F081,9,collected,False
+T040,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py,222,test_sdxl_base_group_norm_split_unit_shapes,F079; F080; F081,2,collected,False
+T040,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py,235,test_sdxl_base_group_norm_split_large,F079; F080; F081,4,collected,False
+T040,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py,245,test_group_norm_DRAM_oft_unit_shapes,F079; F080; F081,2,collected,False
+T040,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py,264,test_group_norm_DRAM_row_major,F079; F080; F081,81,collected,False
+T040,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py,307,test_group_norm_DRAM_row_major_rejects_welford,F079; F080; F081,3,collected,False
+T040,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py,353,test_group_norm_DRAM_row_major_affine_and_mask,F079; F080; F081,24,collected,False
+T040,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py,429,test_group_norm_DRAM_row_major_no_mcast_large_block_ht,F079; F080; F081,1,collected,False
+T041,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layer_norm_ulp.py,201,test_layer_norm_ulp_bf16_no_weight_bias,DH009; DH010; F083; F084; F085; F086; F087,36,collected,False
+T041,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layer_norm_ulp.py,237,test_layer_norm_ulp_bf16_with_weight_bias,DH009; DH010; F083; F084; F085; F086; F087,108,collected,False
+T041,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layer_norm_ulp.py,297,test_layer_norm_ulp_fp32_no_weight_bias,DH009; DH010; F083; F084; F085; F086; F087,18,collected,False
+T041,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layer_norm_ulp.py,322,test_layer_norm_ulp_fp32_with_weight_bias,DH009; DH010; F083; F084; F085; F086; F087,54,collected,False
+T041,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layer_norm_ulp.py,467,test_layer_norm_ulp_sharded_non_tile_aligned_width,DH009; DH010; F083; F084; F085; F086; F087,12,collected,False
+T041,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layer_norm_ulp.py,492,test_layer_norm_ulp_sharded_tile_aligned_width_split_across_cores,DH009; DH010; F083; F084; F085; F086; F087,2,collected,False
+T041,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layer_norm_ulp.py,504,test_rms_norm_ulp_sharded_non_tile_aligned_width,DH009; DH010; F083; F084; F085; F086; F087,6,collected,False
+T041,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layer_norm_ulp.py,531,test_rms_norm_ulp_sharded_unevenly_split_width_across_cores,DH009; DH010; F083; F084; F085; F086; F087,8,collected,False
+T041,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layer_norm_ulp.py,545,test_norm_ulp_sharded_non_tile_aligned_residual,DH009; DH010; F083; F084; F085; F086; F087,24,collected,False
+T042,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layernorm.py,231,test_layernorm_mix_precision,DH009; DH010; F083; F084; F085; F086; F087,36,collected,False
+T042,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layernorm.py,245,test_layer_norm_block_sharded_height_pad,DH009; DH010; F083; F084; F085; F086; F087,2,collected,False
+T042,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layernorm.py,321,test_layer_norm_4D_llama,DH009; DH010; F083; F084; F085; F086; F087,16,collected,False
+T042,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layernorm.py,370,test_layernorm_interleaved_all_config,DH009; DH010; F083; F084; F085; F086; F087,48,collected,False
+T043,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layernorm_sharded.py,53,test_layernorm_sharded_mix_precision_rm,DH009; DH010; F083; F084; F085; F086; F087,72,collected,False
+T043,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layernorm_sharded.py,307,test_layernorm_1d_sharded_mix_precision_rm,DH009; DH010; F083; F084; F085; F086; F087,216,collected,False
+T043,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_layernorm_sharded.py,536,test_layernorm_block_sharded_all_config,DH009; DH010; F083; F084; F085; F086; F087,12,collected,False
+T044,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_rmsnorm.py,147,test_rmsnorm_test,DH009; DH010; F083; F084; F085; F086; F087,12,collected,False
+T044,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_rmsnorm.py,153,test_llama_4D_rms_norm,DH009; DH010; F083; F084; F085; F086; F087,15,collected,False
+T044,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_rmsnorm.py,190,test_large_tensor_rms_norm,DH009; DH010; F083; F084; F085; F086; F087,2,collected,False
+T045,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_softmax.py,19,test_ttnn_softmax_sdxl_attention,F088; F089; F090; F091; F092; F093,1,collected,False
+T045,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_softmax.py,61,test_transformer_attention_softmax_inplace_large_kernel_stress,F088; F089; F090; F091; F092; F093,1,collected,False
+T046,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_interleaved.py,38,test_softmax,F088; F089; F090; F091; F092; F093,4,collected,False
+T046,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_interleaved.py,84,test_softmax_with_program_cache,F088; F089; F090; F091; F092; F093,2,collected,False
+T046,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_interleaved.py,119,test_softmax_mix_precision,F088; F089; F090; F091; F092; F093,4,collected,False
+T046,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_interleaved.py,178,test_scale_mask_softmax_inplace,F088; F089; F090; F091; F092; F093,12,collected,False
+T046,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_interleaved.py,266,test_scale_mask_softmax,F088; F089; F090; F091; F092; F093,2,collected,False
+T047,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_sharded.py,34,test_softmax_causal_mask,F088; F089; F090; F091; F092; F093,1,collected,False
+T047,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_sharded.py,119,test_softmax,F088; F089; F090; F091; F092; F093,4,collected,False
+T047,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_sharded.py,213,test_scale_mask_softmax_rm,F088; F089; F090; F091; F092; F093,4,collected,False
+T047,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_sharded.py,311,test_softmax_with_sharded_mask,F088; F089; F090; F091; F092; F093,4,collected,False
+T048,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_ulp.py,137,test_softmax_ulp_bf16_normal,F088; F089; F090; F091; F092; F093,100,collected,False
+T048,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_ulp.py,167,test_softmax_ulp_bf16_wide_uniform_h,F088; F089; F090; F091; F092; F093,48,collected,False
+T048,pytest,tests/ttnn/nightly/unit_tests/operations/fused/test_softmax_ulp.py,205,test_softmax_ulp_fp32_normal_fp32_acc_on,F088; F089; F090; F091; F092; F093,50,collected,False
+T049,pytest,tests/ttnn/nightly/unit_tests/operations_compute_only/fused/test_group_norm.py,28,test_input_mask_num_cores_across_channel_zero,F079; F080; F081,1,collected,False
+T049,pytest,tests/ttnn/nightly/unit_tests/operations_compute_only/fused/test_group_norm.py,42,test_input_mask_num_groups_not_divisible_by_num_cores,F079; F080; F081,1,collected,False
+T049,pytest,tests/ttnn/nightly/unit_tests/operations_compute_only/fused/test_group_norm.py,56,test_find_expected_dram_grid_no_valid_grid,F079; F080; F081,1,collected,False
+T049,pytest,tests/ttnn/nightly/unit_tests/operations_compute_only/fused/test_group_norm.py,75,test_dram_group_norm_virtual_columns_none_valid,F079; F080; F081,1,collected,False
+T049,pytest,tests/ttnn/nightly/unit_tests/operations_compute_only/fused/test_group_norm.py,110,test_validate_dram_grid,F079; F080; F081,2,collected,False
+T049,pytest,tests/ttnn/nightly/unit_tests/operations_compute_only/fused/test_group_norm.py,139,test_num_out_blocks_exceeds_block_ht,F079; F080; F081,2,collected,False
+T050,pytest,tests/ttnn/unit_tests/operations/transformers/test_transformer.py,22,test_transformer_attention_softmax,F088,4,collected,False
+T050,pytest,tests/ttnn/unit_tests/operations/transformers/test_transformer.py,67,test_transformer_attention_softmax_,F088,4,collected,False
+T050,pytest,tests/ttnn/unit_tests/operations/transformers/test_transformer.py,141,test_transformer_attention_softmax_numeric_stability,F088,4,collected,False
+T050,pytest,tests/ttnn/unit_tests/operations/transformers/test_transformer.py,176,test_transformer_attention_softmax_inplace_numeric_stability,F088,4,collected,False
+T051,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_clip_grad_norm.py,30,test_moreh_clip_grad_norm,F057,18,collected,False
+T051,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_clip_grad_norm.py,102,test_moreh_clip_grad_norm_with_error_if_nonfinite,F057,2,collected,False
+T052,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_dot.py,96,test_moreh_dot,F058,12,collected,False
+T052,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_dot.py,118,test_moreh_matmul_1d_callback,F058,12,collected,False
+T052,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_dot.py,142,test_moreh_dot_optional_output_tensor,F058,1,collected,False
+T053,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py,289,test_moreh_group_norm,F059; F060; F061,24,collected,False
+T053,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py,331,test_moreh_group_norm_callback,F059; F060; F061,1,collected,False
+T053,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py,474,test_moreh_group_norm_backward,F059; F060; F061,96,collected,False
+T053,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py,531,test_moreh_group_norm_backward_callback,F059; F060; F061,1,collected,False
+T053,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py,566,test_moreh_group_norm_backward_rejects_invalid_mean_volume,F059; F060; F061,2,collected,False
+T053,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py,622,test_moreh_group_norm_backward_large_algorithm,F059; F060; F061,4,collected,False
+T054,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py,477,test_moreh_layer_norm,F062; F063; F064,16,collected,False
+T054,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py,511,test_moreh_layer_norm_backward,F062; F063; F064,16,collected,False
+T054,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py,545,test_moreh_layer_norm_backward_with_gamma_or_beta,F062; F063; F064,16,collected,False
+T054,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py,577,test_moreh_layer_norm_compute_kernel_options,F062; F063; F064,16,collected,False
+T054,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py,611,test_moreh_layer_norm_backward_compute_kernel_options,F062; F063; F064,16,collected,False
+T054,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py,645,test_moreh_layer_norm_callback,F062; F063; F064,4,collected,False
+T054,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py,685,test_moreh_layer_norm_backward_callback,F062; F063; F064,4,collected,False
+T054,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py,702,test_moreh_layer_norm_backward_rejects_invalid_mean_volume,F062; F063; F064,1,collected,False
+T054,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py,736,test_moreh_layer_norm_backward_rejects_same_volume_wrong_mean_shape,F062; F063; F064,1,collected,False
+T054,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py,795,test_moreh_layer_norm_no_mean_rstd,F062; F063; F064,8,collected,False
+T054,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py,804,test_moreh_layer_norm_rstd_only_mean_none,F062; F063; F064,1,collected,False
+T054,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py,869,test_moreh_layer_norm_backward_large_algorithm,F062; F063; F064,4,collected,False
+T055,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py,352,test_moreh_linear_backward,F065; F066,336,collected,False
+T055,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py,373,test_moreh_linear_backward_enable_cache,F065; F066,3,collected,False
+T055,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_linear.py,403,test_moreh_bias_backward_fp32,F065; F066,2,collected,False
+T056,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_mean.py,147,test_moreh_mean_ttnn_dtype,F067,56,collected,False
+T056,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_mean.py,163,test_moreh_mean_compute_kernel_options,F067,6,collected,False
+T056,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_mean.py,179,test_moreh_mean_optional_output,F067,6,collected,False
+T056,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_mean.py,194,test_moreh_mean_callback,F067,3,collected,False
+T057,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py,270,test_moreh_norm_rank_1_dim_0_keepdim_false_output_modes,F068; F069,12,collected,False
+T057,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py,394,test_moreh_norm,F068; F069,1440,collected,False
+T057,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py,416,test_moreh_norm_rank_1_dim_0,F068; F069,16,collected,False
+T057,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py,462,test_moreh_norm_rank_1_global_dim,F068; F069,32,collected,False
+T057,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py,521,test_moreh_norm_compute_kernel_options,F068; F069,36,collected,False
+T057,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_norm.py,554,test_moreh_norm_callback,F068; F069,20,collected,False
+T058,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py,192,test_moreh_sum,F078,120,collected,False
+T058,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py,222,test_moreh_sum_non_4d,F078,96,collected,False
+T058,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py,239,test_moreh_sum_rank_1_global,F078,2,collected,False
+T058,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py,260,test_moreh_sum_enable_cache,F078,3,collected,False
+T058,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py,290,test_moreh_sum_fp32_dest_acc,F078,12,collected,False
+T058,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py,530,test_moreh_sum_integer,F078,20,collected,False
+T058,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py,569,test_moreh_sum_large_integer_magnitude,F078,6,collected,False
+T059,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py,155,test_softmax_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,32,collected,False
+T059,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py,186,test_softmax_large_algorithm_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,4,collected,False
+T059,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py,225,test_softmax_not_multiple_of_32_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,8,collected,False
+T059,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py,300,test_softmax_backward_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,32,collected,False
+T059,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py,333,test_softmax_backward_large_algorithmfor_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,4,collected,False
+T059,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py,366,test_softmax_backward_not_multiple_of_32_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,8,collected,False
+T059,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py,437,test_softmax_callback,F070; F071; F072; F073; F074; F075; F076; F077,6,collected,False
+T059,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py,471,test_softmax_backward_callback,F070; F071; F072; F073; F074; F075; F076; F077,5,collected,False
+T059,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py,503,test_softmax_optional_output_tensor,F070; F071; F072; F073; F074; F075; F076; F077,1,collected,False
+T059,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py,525,test_softmax_backward_optional_output_tensor,F070; F071; F072; F073; F074; F075; F076; F077,1,collected,False
+T060,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax.py,156,test_logsoftmax_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,32,collected,False
+T060,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax.py,188,test_logsoftmax_large_algorithm_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,4,collected,False
+T060,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax.py,222,test_logsoftmax_not_multiple_of_32_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,8,collected,False
+T060,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax.py,297,test_logsoftmax_backward_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,32,collected,False
+T060,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax.py,329,test_logsoftmax_backward_large_algorithm_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,4,collected,False
+T060,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax.py,363,test_logsoftmax_backward_not_multiple_of_32_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,8,collected,False
+T060,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax.py,429,test_logsoftmax_optional_output_tensor,F070; F071; F072; F073; F074; F075; F076; F077,1,collected,False
+T060,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax.py,451,test_logsoftmax_backward_optional_output_tensor,F070; F071; F072; F073; F074; F075; F076; F077,1,collected,False
+T060,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax.py,477,test_logsoftmax_callback,F070; F071; F072; F073; F074; F075; F076; F077,5,collected,False
+T060,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax.py,511,test_logsoftmax_backward_callback,F070; F071; F072; F073; F074; F075; F076; F077,5,collected,False
+T061,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmin.py,156,test_softmin_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,32,collected,False
+T061,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmin.py,187,test_softmin_large_algorithm_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,4,collected,False
+T061,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmin.py,220,test_softmin_not_multiple_of_32_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,8,collected,False
+T061,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmin.py,295,test_softmin_backward_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,32,collected,False
+T061,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmin.py,327,test_softmin_backward_large_algorithmfor_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,4,collected,False
+T061,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmin.py,361,test_softmin_backward_not_multiple_of_32_for_dim_hw,F070; F071; F072; F073; F074; F075; F076; F077,8,collected,False
+T061,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmin.py,427,test_softmin_optional_output_tensor,F070; F071; F072; F073; F074; F075; F076; F077,1,collected,False
+T061,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmin.py,449,test_softmin_backward_optional_output_tensor,F070; F071; F072; F073; F074; F075; F076; F077,1,collected,False
+T061,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmin.py,475,test_softmin_callback,F070; F071; F072; F073; F074; F075; F076; F077,5,collected,False
+T061,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmin.py,508,test_softmin_backward_callback,F070; F071; F072; F073; F074; F075; F076; F077,5,collected,False
+T062,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax_ulp.py,148,test_moreh_logsoftmax_ulp_bf16,F070; F071; F072; F073,108,collected,False
+T062,pytest,tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_logsoftmax_ulp.py,188,test_moreh_logsoftmax_ulp_fp32,F070; F071; F072; F073,54,collected,False
+T063,pytest,tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py,110,test_matches_torch,F036,8,collected,False
+T063,pytest,tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py,213,test_rejects_a_site_past_the_batch_on_a_cache_hit,F036,4,collected,False
+T063,pytest,tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py,275,test_every_site_reads_its_own_plane_from_one_cached_program,F036,4,collected,False
+T063,pytest,tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py,356,test_rejects_shapes_that_only_agree_once_padded,F036,8,collected,False
+T063,pytest,tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py,419,test_the_route_to_a_peer_contradicts_its_rank_once_the_tp_axis_wraps,F036,4,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,245,test_indexer_score_accuracy,F040,4,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,290,test_indexer_score_knobs,F040,8,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,330,test_indexer_score_shapes,F040,12,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,376,test_indexer_score_indexed_cache,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,401,test_indexer_score_indexed_cache_nd_sharded_k,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,422,test_indexer_score_indexed_cache_rejects_oob,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,443,test_indexer_score_indexed_cache_requires_idx_for_multislot,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,455,test_indexer_score_rejects_sharded_q,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,468,test_indexer_score_nd_sharded_k_multi_T,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,524,test_indexer_score_runtime_kv_len,F040,4,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,550,test_indexer_score_rejects_bad_kv_len,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,571,test_indexer_score_determinism,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,619,test_indexer_score_msa_compute_paths,F040,3,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,632,test_indexer_score_dsa_msa_differ,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,649,test_indexer_score_m3_per_group,F040,8,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,675,test_indexer_score_multigroup,F040,4,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,689,test_indexer_score_multigroup_m3,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,705,test_indexer_score_multigroup_equals_single,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,725,test_indexer_score_multigroup_rejects,F040,2,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,734,test_indexer_score_multigroup_rejects_indivisible,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,748,test_indexer_score_compute_kernel_config,F040,3,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,759,test_indexer_score_rejects_fp32_dest_acc,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,771,test_indexer_score_perf,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,931,test_indexer_score_genmcast_regimes,F040,6,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,938,test_indexer_score_streaming_qmcast_uneven_bands,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,977,test_indexer_score_block_split_fill,F040,4,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1058,test_indexer_score_qb_per_device_chunk_start,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1074,test_indexer_score_qb_one_compile_all_chunk_starts,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1113,test_indexer_score_qb_sp2_tp2,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1169,test_indexer_score_qb_msa_per_device_chunk_start,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1189,test_indexer_score_qb_msa_sp2_tp2,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1314,test_indexer_score_math_util,F040,3,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1357,test_indexer_score_block_pool,F040,4,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1384,test_indexer_score_block_pool_m3,F040,4,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1410,test_indexer_score_block_pool_exact_vs_unpooled,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1444,test_indexer_score_msa_indexed_cache,F040,2,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1483,test_indexer_score_msa_runtime_kv_len,F040,2,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1520,test_indexer_score_msa_block_pool_kv_len,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1546,test_indexer_score_msa_rejects_kv_len_not_block_aligned,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1580,test_indexer_score_msa_indexed_cache_nd_sharded_k,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1622,test_indexer_score_msa_runtime_kv_len_compute_paths,F040,3,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1659,test_indexer_score_msa_indexed_cache_rejects,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1691,test_indexer_score_msa_rejects_bad_kv_len,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1713,test_indexer_score_msa_indexed_cache_block_pool,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1759,test_indexer_score_block_pool_large_blocks_per_unit,F040,4,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1787,test_indexer_score_block_pool_validation,F040,3,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1843,test_indexer_score_slab_invp_math,F040,9,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1866,test_indexer_score_qb_block_cyclic,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1901,test_indexer_score_qb_both_axes_seq,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1928,test_indexer_score_sp1_tp4_seq_subshard,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,1973,test_indexer_score_sp2_tp2_seq_subshard_rotated,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,2085,test_indexer_score_qb_straddle,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,2136,test_indexer_score_qb_msa_block_cyclic,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,2165,test_indexer_score_qb_msa_block_cyclic_straddle,F040,1,collected,False
+T064,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py,2198,test_indexer_score_rejects_partial_block_cyclic_args,F040,1,collected,False
+T065,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py,203,test_indexer_score_ring4_fused,F041,2,collected,False
+T065,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py,210,test_indexer_score_ring4_fused_bfp8_k,F041,2,collected,False
+T065,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py,216,test_indexer_score_ring4_fused_production_shape,F041,1,collected,False
+T065,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py,296,test_indexer_score_ring4_fused_indexed_cache,F041,1,collected,False
+T065,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py,302,test_indexer_score_ring4_fused_nd_indexed_bounded_gather_cache_hit,F041,2,collected,False
+T065,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py,388,test_indexer_score_ring4_fused_straddle,F041,1,collected,False
+T065,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py,426,test_indexer_score_ring4_fused_runtime_kv_len,F041,1,collected,False
+T065,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py,483,test_indexer_score_ring4_fused_window_past_short_prefix,F041,1,collected,False
+T065,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py,533,test_indexer_score_ring4_fused_program_cache_reuse,F041,2,collected,False
+T065,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py,662,test_indexer_score_full_mesh_loudbox_accuracy_placement_and_cache_reuse,F041,2,collected,False
+T065,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py,674,test_indexer_score_full_mesh_galaxy_8x4_accuracy,F041,1,collected,False
+T065,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py,681,test_indexer_score_full_mesh_indexed_bounded_gather_cache_hit_and_determinism,F041,1,collected,False
+T065,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py,772,test_indexer_score_full_mesh_rejects_invalid_contracts,F041,1,collected,False
+T065,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py,836,test_indexer_score_ring4_fused_rejects_head_streaming,F041,1,collected,False
+T066,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_4d.py,103,test_indexer_score_full_mesh_2x2_accuracy_placement_and_cache_reuse,F041,2,collected,False
+T066,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_4d.py,112,test_indexer_score_ring4_fused_4d,F041,2,collected,False
+T066,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_4d.py,180,test_indexer_score_sptp_fused_4d,F041,1,collected,False
+T067,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_perf.py,171,test_ring_indexer_score_dsa_perf,F041,4,collected,False
+T068,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py,123,test_prepare_chunk_recurrence_work_golden,F042,1,collected,False
+T068,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py,315,test_prepare_chunk_recurrence_contract_accuracy_and_determinism,F042,2,collected,False
+T068,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py,381,test_prepare_chunk_recurrence_t_inv_is_stable_for_correlated_keys,F042,1,collected,False
+T068,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py,406,test_prepare_chunk_recurrence_cache_hit_rebinds_fresh_tensors,F042,1,collected,False
+T068,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py,427,test_prepare_chunk_recurrence_default_compute_config_matches_explicit_defaults,F042,1,collected,False
+T068,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py,449,test_prepare_chunk_recurrence_precise_math_uses_distinct_accurate_program,F042,1,collected,False
+T068,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py,463,test_prepare_chunk_recurrence_rejects_unsupported_compute_config,F042,1,collected,False
+T068,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py,479,test_prepare_chunk_recurrence_production_performance,F042,1,collected,False
+T068,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py,523,test_prepare_chunk_recurrence_rejects_host_inputs,F042,5,collected,False
+T068,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py,556,test_prepare_chunk_recurrence_rejects_invalid_inputs,F042,12,collected,False
+T068,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py,603,test_prepare_chunk_recurrence_rejects_invalid_options,F042,1,collected,False
+T069,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py,116,test_sigmoid_gated_rms_norm_work_golden,F043,1,collected,False
+T069,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py,289,test_sigmoid_gated_rms_norm_is_accurate_and_deterministic,F043,4,collected,False
+T069,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py,327,test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic,F043,3,collected,False
+T069,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py,381,test_sigmoid_gated_rms_norm_production_performance,F043,3,collected,False
+T069,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py,439,test_sigmoid_gated_rms_norm_program_key_includes_epsilon,F043,1,collected,False
+T069,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py,451,test_sigmoid_gated_rms_norm_cache_hit_rebinds_fresh_tensors,F043,1,collected,False
+T069,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py,493,test_sigmoid_gated_rms_norm_default_compute_config_matches_explicit_defaults,F043,1,collected,False
+T069,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py,513,test_sigmoid_gated_rms_norm_exact_math_changes_program_and_output,F043,1,collected,False
+T069,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py,544,test_sigmoid_gated_rms_norm_rejects_unsupported_compute_config,F043,1,collected,False
+T069,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py,570,test_sigmoid_gated_rms_norm_rejects_invalid_tensors,F043,10,collected,False
+T069,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py,620,test_sigmoid_gated_rms_norm_rejects_invalid_options,F043,5,collected,False
+T069,pytest,tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py,633,test_sigmoid_gated_rms_norm_rejects_sharded_output,F043,1,collected,False
+T070,pytest,tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py,192,test_distributed_fused_rmsnorm_sweep_fusions,F055; F056,32,collected,False
+T070,pytest,tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py,238,test_distributed_fused_rmsnorm_sweep_shapes,F055; F056,12,collected,False
+T070,pytest,tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py,270,test_distributed_fused_rmsnorm_odd_hidden_dim,F055; F056,4,collected,False
+T070,pytest,tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py,305,test_distributed_fused_rmsnorm_wan_configs,F055; F056,4,collected,False
+T070,pytest,tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py,334,test_distributed_fused_rmsnorm_program_cache,F055; F056,1,collected,False
+T070,pytest,tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py,381,test_distributed_fused_rmsnorm_fp32_rope,F055; F056,1,collected,False
+T071,pytest,tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py,227,test_distributed_dit_layernorm_use_cases,DH008,192,collected,False
+T071,pytest,tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py,284,test_distributed_dit_layernorm_odd_hidden_dim,DH008,14,collected,False
+T071,pytest,tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py,326,test_distributed_dit_layernorm_wan_configs,DH008,8,collected,False
+T071,pytest,tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py,353,test_distributed_dit_layernorm_affine_layouts_and_dtypes,DH008,4,collected,False
+T071,pytest,tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py,508,test_distributed_dit_layernorm_batched_affine,DH008,16,collected,False
+T071,pytest,tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py,553,test_distributed_dit_layernorm_program_cache,DH008,2,collected,False
+T071,pytest,tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py,603,test_distributed_dit_pre_allgather_welford_precision,DH008,4,collected,False
+T071,pytest,tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py,669,test_dit_layernorm_pre_allgather_fp32_precision,DH008,2,collected,False
+T072,pytest,tests/ttnn/unit_tests/operations/ccl/test_minimals.py,508,test_tg_trace_rms_fuse,F035,1,collected,False
+T072,pytest,tests/ttnn/unit_tests/operations/ccl/test_minimals.py,582,test_tg_trace_rms_fuse_qwen,F035,1,collected,False
+T072,pytest,tests/ttnn/unit_tests/operations/ccl/test_minimals.py,648,test_6u_trace_rms_fuse_deepseek,F035,1,collected,False
+T072,pytest,tests/ttnn/unit_tests/operations/ccl/test_minimals.py,721,test_6u_trace_rms_fuse,F035,1,collected,False
+T072,pytest,tests/ttnn/unit_tests/operations/ccl/test_minimals.py,795,test_6u_trace_rms_fuse_qwen,F035,1,collected,False
+T072,pytest,tests/ttnn/unit_tests/operations/ccl/test_minimals.py,864,test_rms_fuse_deepseek,F035,16,collected,False
+T072,pytest,tests/ttnn/unit_tests/operations/ccl/test_minimals.py,940,test_rms_fuse,F035,32,collected,False
+T072,pytest,tests/ttnn/unit_tests/operations/ccl/test_minimals.py,1002,test_rms_fuse_n300,F035,4,collected,False
+T072,pytest,tests/ttnn/unit_tests/operations/ccl/test_minimals.py,1099,test_rms_fuse_qwen,F035,32,collected,False
+T073,pytest,models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py,560,test_corr_det,F034,12,collected,False
+T073,pytest,models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py,1133,test_rmsnorm_batched_rope_corr,F034,4,collected,False
+T073,pytest,models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py,1218,test_rmsnorm_module_corr,F034,5,collected,False
+T073,pytest,models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py,1372,test_traced_corr,F034,12,collected,False
+T073,pytest,models/tt_dit/tests/unit/test_distributed_rmsnorm_fused.py,1755,test_sweep,F034,3,collected,False
+T074,pytest,tests/ttnn/unit_tests/operations/examples/test_compute_fusion.py,140,test_compute_fusion_correctness,F111,1,collected,False
+T074,pytest,tests/ttnn/unit_tests/operations/examples/test_compute_fusion.py,152,test_compute_fusion_device_perf,F111,1,collected,False
+T074,pytest,tests/ttnn/unit_tests/operations/examples/test_compute_fusion.py,284,test_compute_fusion_microbench,F111,1,collected,False
+T075,pytest,tests/ttnn/unit_tests/operations/examples/test_reduce_accumulate.py,164,test_reduce_accumulate_correctness,F112,1,collected,False
+T075,pytest,tests/ttnn/unit_tests/operations/examples/test_reduce_accumulate.py,180,test_reduce_accumulate_device_perf,F112,1,collected,False
+T076,pytest,tests/ttnn/unit_tests/operations/examples/test_row_reduce_accumulate.py,184,test_row_reduce_accumulate_correctness,F114,1,collected,False
+T076,pytest,tests/ttnn/unit_tests/operations/examples/test_row_reduce_accumulate.py,204,test_row_reduce_accumulate_device_perf,F114,1,collected,False
+T077,pytest,tests/ttnn/unit_tests/operations/examples/fidelity_sweep/test_reduce_accumulate_fidelity.py,122,test_reduce_accumulate_fidelity,F112,1,collected,False
+T078,pytest,tests/ttnn/unit_tests/operations/examples/fidelity_sweep/test_row_reduce_accumulate_fidelity.py,120,test_row_reduce_accumulate_fidelity,F114,1,collected,False
+T079,pytest,tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py,42,test_toy_variance,F116; F117,20,collected,False
+T079,pytest,tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py,124,test_toy_variance_width_sharded,F116; F117,16,collected,False
+T079,pytest,tests/ttnn/unit_tests/operations/toy_variance/test_toy_variance.py,163,test_toy_variance_width_sharded_unsupported,F116; F117,5,collected,False
+T080,pytest,tests/ttnn/unit_tests/operations/sdpa/test_mla_decode.py,43,test_flash_mla_decode,DH019,2,collected,False
+T081,pytest,tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py,26,test_flash_mla_prefill,DH016,4,collected,False
+T081,pytest,tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py,56,test_chunked_flash_mla_prefill_partial_single_page_paged_cache,DH016,1,collected,False
+T082,pytest,tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py,187,test_flash_mla_prefill,DH016,7,collected,False
+T083,pytest,tests/ttnn/unit_tests/operations/sdpa/test_paged_sdpa_decode_flexible_geometry.py,110,test_legacy_no_override,DH019,4,collected,False
+T083,pytest,tests/ttnn/unit_tests/operations/sdpa/test_paged_sdpa_decode_flexible_geometry.py,160,test_override_matches_alloc_is_noop,DH019,1,collected,False
+T083,pytest,tests/ttnn/unit_tests/operations/sdpa/test_paged_sdpa_decode_flexible_geometry.py,300,test_override_view_full_into_sliding_buffer,DH019,1,collected,False
+T083,pytest,tests/ttnn/unit_tests/operations/sdpa/test_paged_sdpa_decode_flexible_geometry.py,313,test_override_view_sliding_into_full_buffer,DH019,1,collected,False
+T083,pytest,tests/ttnn/unit_tests/operations/sdpa/test_paged_sdpa_decode_flexible_geometry.py,326,test_negative_byte_count_mismatch,DH019,1,collected,False
+T083,pytest,tests/ttnn/unit_tests/operations/sdpa/test_paged_sdpa_decode_flexible_geometry.py,359,test_negative_zero_block_size_rejected,DH019,1,collected,False
+T083,pytest,tests/ttnn/unit_tests/operations/sdpa/test_paged_sdpa_decode_flexible_geometry.py,421,test_negative_asymmetric_num_kv_heads_byte_count_mismatch,DH019,1,collected,False
+T084,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py,50,test_sdpa_decode,DH019,2,collected,False
+T084,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py,78,test_sdpa_decode_non_tile_aligned_heads,DH019,1,collected,False
+T084,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py,106,test_sdpa_decode_non_causal,DH019,1,collected,False
+T084,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py,130,test_sdpa_decode_ignore_users,DH019,1,collected,False
+T084,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py,166,test_sdpa_decode_paged_attention,DH019,1,collected,False
+T084,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py,209,test_sdpa_decode_kv_head_core_divisibility,DH019,1,collected,False
+T084,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py,234,test_sdpa_decode_sharded,DH019,1,collected,False
+T084,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py,255,test_sdpa_decode_program_cache,DH019,1,collected,False
+T084,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py,369,test_sdpa_decode_sliding_window,DH019,1,collected,False
+T084,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py,428,test_sdpa_decode_broadcast_mask_batch,DH019,2,collected,False
+T085,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py,575,test_sdpa_tt,DH016,1,collected,False
+T085,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py,603,test_sdpa_noncausal,DH016,1,collected,False
+T085,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py,671,test_sdpa_noncausal_randn_bias,DH016,1,collected,False
+T085,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py,682,test_sdpa_tt_with_program_cache,DH016,1,collected,False
+T085,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py,704,test_sdpa_sliding_window,DH016,2,collected,False
+T085,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py,725,test_sdpa_sliding_window_streaming_parity,DH016,2,collected,False
+T085,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py,754,test_sdpa_with_attention_sink,DH016,2,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,38,test_sparse_kv_format_api_is_explicit,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,70,test_sparse_sdpa_runs,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,97,test_sparse_sdpa_scaled_fp8_kv,DH018,6,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,125,test_sparse_sdpa_bf16_multi_query_tile,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,137,test_sparse_sdpa_scaled_fp8_kv_multi_query_tile,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,160,test_sparse_sdpa_scaled_fp8_rejects_malformed_packed_width,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,175,test_sparse_sdpa_scaled_fp8_rejects_unaligned_rope_offset,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,196,test_sparse_sdpa_rejects_v_dim_larger_than_k_dim,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,217,test_sparse_sdpa_rejects_kv_format_storage_mismatch,DH018,2,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,235,test_sparse_sdpa_output_dtype,DH018,2,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,255,test_sparse_sdpa_pcc_single_chunk,DH018,2,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,269,test_sparse_sdpa_pcc_multi_chunk,DH018,2,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,279,test_sparse_sdpa_kv_len_no_recompile,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,295,test_sparse_sdpa_oversized_persistent_kv,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,328,test_sparse_sdpa_block_cyclic_sp1_identity,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,356,test_sparse_sdpa_block_cyclic_chunk_local_rejected,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,389,test_sparse_sdpa_indexed_kv_cache,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,413,test_sparse_sdpa_indexed_addr_change_on_hit,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,447,test_sparse_sdpa_indexed_nd_sharded_kv,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,471,test_sparse_sdpa_scaled_fp8_indexed_nd_sharded_kv,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,503,test_sparse_sdpa_nd_sharded_kv_len_change,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,529,test_sparse_sdpa_indexed_oob_rejected_on_hit,DH018,1,collected,False
+T086,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py,549,test_sparse_sdpa_bad_layout_rejected_on_hit,DH018,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,38,test_golden_all_blocks_selected_equals_dense,DH017,2,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,48,test_golden_sentinel_tail_is_truncation,DH017,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,67,test_op_is_registered,DH017,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,75,test_msa_native_pcc_random_selection,DH017,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,85,test_msa_native_gqa_pcc_random_selection,DH017,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,95,test_msa_native_gqa_group_isolation,DH017,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,108,test_msa_native_pcc_sentinel_tail,DH017,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,121,test_msa_native_q_dtype,DH017,2,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,160,test_msa_gqa_kv_len_no_recompile,DH017,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,173,test_msa_bad_n_kv_rejected_on_hit,DH017,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,191,test_golden_all_blocks_causal_equals_dense_causal,DH017,2,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,208,test_msa_native_causal_pcc,DH017,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,221,test_msa_native_causal_multiband_pcc,DH017,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,234,test_msa_native_causal_fp8_q_rejected,DH017,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,246,test_msa_native_causal_vs_noncausal_differs,DH017,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,265,test_msa_native_block_cyclic_sp1_identity,DH017,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,284,test_msa_native_block_cyclic_sp1_bit_exact,DH017,1,collected,False
+T087,pytest,tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,298,test_msa_native_block_cyclic_chunk_local_rejected,DH017,1,collected,False
+T088,pytest,tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py,76,test_windowed_sdpa_smoke,DH016,56,collected,False
+T088,pytest,tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py,148,test_windowed_sdpa_q_token_offset,DH016,12,collected,False
+T088,pytest,tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py,248,test_windowed_sdpa_q_offset_tensor_on_mesh,DH016,1,collected,False
+T089,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode.py,63,test_flash_mla_decode,DH019,40,collected,False
+T090,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode_stress.py,65,test_flash_mla_decode_stress,DH019,2,collected,False
+T091,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill.py,45,test_flash_mla_prefill,DH016,20,collected,False
+T092,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_chunked_vs_not.py,212,test_chunked_flash_mla_prefill_vs_flash_mla_prefill,DH016,4,collected,False
+T093,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_stress.py,79,test_flash_mla_prefill_stress,DH016,288,collected,False
+T094,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py,263,test_sdpa_chunked,DH016,32,collected,False
+T094,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py,315,test_chunked_sdpa_legacy_scalar_chunk_start_idx_program_cache_key,DH016,1,collected,False
+T094,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py,394,test_sdpa_chunked_iterate_batch,DH016,1,collected,False
+T094,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py,464,test_chunked_sdpa_geometry_override_hma_shared_buffer,DH016,1,collected,False
+T094,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py,541,test_chunked_sdpa_geometry_override_rejects_elems_per_block_mismatch,DH016,1,collected,False
+T095,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py,54,test_sdpa_decode,DH019,16,collected,False
+T095,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py,89,test_sdpa_decode_non_causal,DH019,4,collected,False
+T095,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py,113,test_sdpa_decode_ignore_users,DH019,1,collected,False
+T095,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py,171,test_sdpa_decode_paged_attention,DH019,15,collected,False
+T095,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py,215,test_sdpa_decode_paged_attention_regressions,DH019,8,collected,False
+T095,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py,289,test_sdpa_decode_paged_attention_default_config_regression,DH019,1,collected,False
+T095,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py,312,test_sdpa_decode_tree_reduction_power_of_2_regression,DH019,1,collected,False
+T095,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py,384,test_sdpa_decode_sharded,DH019,4,collected,False
+T095,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py,427,test_sdpa_decode_sharded_on_subcoregrids,DH019,2,collected,False
+T095,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py,464,test_sdpa_decode_perf,DH019,1,collected,False
+T095,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py,525,test_sdpa_decode_program_cache,DH019,2,collected,False
+T095,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py,647,test_sdpa_decode_ndpcc,DH019,3,collected,False
+T095,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py,677,test_sdpa_decode_sliding_window,DH019,28,collected,False
+T095,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py,744,test_sdpa_decode_broadcast_mask_batch,DH019,2,collected,False
+T096,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py,31,test_mask_dtype_bf16_then_bfp8,DH019,1,collected,False
+T096,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py,141,test_share_cache_false_then_true_program_cache_distinct,DH019,1,collected,False
+T096,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py,287,test_share_cache_nullopt_bkv_relation_change,DH019,1,collected,False
+T096,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py,307,test_cur_pos_list_values_change_program_cache_distinct,DH019,1,collected,False
+T096,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py,387,test_mla_head_dim_v_change_program_cache_distinct,DH019,1,collected,False
+T096,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py,479,test_q_shard_height_diff_same_logical_program_cache_distinct,DH019,1,collected,False
+T096,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py,586,test_cur_pos_tensor_rank1_then_rank2_same_dram_same_qkv_program_cache,DH019,1,collected,False
+T096,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py,710,test_attn_mask_realloc_reused_program_cache_hit,DH019,1,collected,False
+T096,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py,829,test_page_table_realloc_reused_program_cache_hit,DH019,1,collected,False
+T096,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py,966,test_attention_sink_realloc_reused_program_cache_hit,DH019,1,collected,False
+T097,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_sink.py,35,test_sdpa_decode,DH019,18,collected,False
+T098,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_joint.py,141,test_joint_sdpa,DH013,192,collected,False
+T098,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_joint.py,170,test_joint_sdpa_program_cache,DH013,8,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,258,test_sdpa_tt_padded,DH013; DH016,240,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,290,test_sdpa_tt,DH013; DH016,180,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,326,test_sdpa_tt_small_chunks,DH013; DH016,2,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,346,test_sdpa_perf,DH013; DH016,2,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,363,test_sdpa_tt_large_seq,DH013; DH016,2,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,399,test_sdpa_tt_perf,DH013; DH016,5,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,419,test_sdpa_tt_with_program_cache,DH013; DH016,24,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,445,test_sdpa_noncausal,DH013; DH016,60,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,466,test_sdpa_noncausal_unequal_seqlen,DH013; DH016,16,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,486,test_sdpa_noncausal_mask,DH013; DH016,48,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,537,test_sdpa_noncausal_mask_streaming,DH013; DH016,96,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,805,test_sdpa_chunked,DH013; DH016,32,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,870,test_sdpa_chunked_iterate_batch,DH013; DH016,1,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,1029,test_joint_sdpa,DH013; DH016,192,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,1058,test_joint_sdpa_program_cache,DH013; DH016,8,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,1182,test_sdpa_benchmark_detailed,DH013; DH016,1,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,1302,test_sdpa_benchmark,DH013; DH016,1,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,1442,test_sdpa_sliding_window,DH013; DH016,56,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,1459,test_sdpa_sliding_window_program_cache_key_includes_window,DH013; DH016,2,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,1920,test_sdpa_with_attention_sink,DH013; DH016,12,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,1944,test_sdpa_with_attention_sink_sliding_window,DH013; DH016,4,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,1970,test_sdpa_with_attention_sink_gpt_oss_prefill_sampled_accuracy,DH013; DH016,1,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,2105,test_sdpa_noncausal_partial_k_near_uniform,DH013; DH016,4,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,2112,test_sdpa_noncausal_partial_k_reduce_trigger,DH013; DH016,1,collected,False
+T099,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py,2127,test_sdpa_large_score_precision,DH013; DH016,4,collected,False
+T100,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_ring_distributed.py,157,test_ring_distributed_sdpa_main,DH014; DH016,64,collected,False
+T100,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_ring_distributed.py,302,test_ring_distributed_sdpa_prefix_and_paged_kv,DH014; DH016,160,collected,False
+T101,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py,43,test_sparse_sdpa_pcc_single_chunk,DH018,9,collected,False
+T101,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py,63,test_sparse_sdpa_pcc,DH018,9,collected,False
+T101,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py,75,test_sparse_sdpa_multitoken,DH018,3,collected,False
+T101,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py,93,test_sparse_sdpa_heads,DH018,8,collected,False
+T101,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py,109,test_sparse_sdpa_heads_aggressive_block,DH018,2,collected,False
+T101,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py,126,test_sparse_sdpa_fp8_kv,DH018,4,collected,False
+T101,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py,140,test_sparse_sdpa_fp8_q,DH018,4,collected,False
+T101,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py,156,test_sparse_sdpa_query_subblock,DH018,2,collected,False
+T101,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py,178,test_sparse_sdpa_determinism,DH018,2,collected,False
+T101,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py,274,test_sparse_sdpa_perf,DH018,7,collected,False
+T101,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py,305,test_sparse_sdpa_perf_scaled_fp8_production,DH018,2,collected,False
+T101,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py,312,test_sparse_sdpa_indexed_cache_hit_host_dispatch_is_cheap,DH018,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,38,test_golden_all_blocks_selected_equals_dense,DH017,8,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,49,test_golden_sentinel_tail_is_truncation,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,70,test_golden_all_masked_row_is_zero_not_nan,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,87,test_op_is_registered,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,101,test_msa_native_pcc_random_selection,DH017,8,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,114,test_msa_native_pcc_causal_selection,DH017,4,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,126,test_msa_native_multi_token_per_core,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,138,test_msa_native_prod_shape_sampled_accuracy,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,152,test_msa_native_gqa_pcc_random_selection,DH017,3,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,164,test_msa_native_gqa_group_isolation,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,178,test_msa_native_prod_shape_gqa_sampled_accuracy,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,191,test_msa_native_pcc_sentinel_tail,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,207,test_msa_native_pcc_bfp8_cache,DH017,4,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,224,test_msa_native_q_dtype,DH017,2,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,237,test_msa_native_output_dtype_matches_q_and_distinct_programs,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,269,test_msa_native_v_dim_distinct_programs_and_correct,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,316,test_msa_composed_pcc,DH017,4,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,383,test_msa_kv_len_no_recompile,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,400,test_msa_gqa_kv_len_no_recompile,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,415,test_msa_oversized_persistent_kv,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,437,test_msa_indexed_kv_cache,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,451,test_msa_indexed_kv_cache_first_call_nonzero_slot,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,465,test_msa_indexed_nd_sharded_kv,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,480,test_msa_nd_sharded_kv_len_change,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,494,test_msa_indexed_oob_rejected_on_hit,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,506,test_msa_bad_runtime_t_rejected_on_hit,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,522,test_msa_hash_distinct_kv_dtype,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,540,test_msa_native_determinism,DH017,2,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,580,test_msa_native_causal_chunk_start_no_recompile,DH017,1,collected,False
+T102,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py,599,test_msa_native_causal_per_rank_sp,DH017,1,collected,False
+T103,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa_block_cyclic_multidevice.py,46,test_msa_native_block_cyclic_sp_gt1_matches_plain,DH017,4,collected,False
+T104,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa_perf.py,67,test_msa_perf_prod,DH017,2,collected,False
+T104,pytest,tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa_perf.py,86,test_msa_perf_prod_single_chip_gqa,DH017,2,collected,False
+T105,pytest,tests/ttnn/unit_tests/operations/sdpa/test_bounded_sliding_kv_cache.py,162,test_bounded_sliding_kv_cache_position_modulo_round_trip,DH019,1,collected,False
+T105,pytest,tests/ttnn/unit_tests/operations/sdpa/test_bounded_sliding_kv_cache.py,180,test_bounded_sliding_kv_cache_without_modulo_clobbers,DH019,1,collected,False
+T106,pytest,models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_flash_mla_deepseek.py,148,test_deepseek_v3_mla_flash_mla_trace_mode,DH019,1,collected,False
+T106,pytest,models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_flash_mla_deepseek.py,378,test_paged_flash_mla_verify_aliasing_two_step_mesh_sharded_pos_idxs,DH019,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,3507,test_ring_joint_attention_chunked_nd_sharded_indexed_kv_cache_accuracy,DH015,2,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,3553,test_ring_joint_attention_kv_pad_aware_rotation_accuracy,DH015,4,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,3574,test_ring_joint_attention_gpt_oss_first_complete_group_sliding_kv_pad_reuse_accuracy_and_determinism,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,3588,test_ring_mla_chunked_kv_actual_isl_indexed_reuse_max_accuracy_and_determinism,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,3596,test_ring_mla_chunked_nd_sharded_indexed_kv_cache_accuracy_and_determinism,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,3633,test_ring_mla_nd_sharded_indexed_kv_cache_accuracy,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,3662,test_ring_mla_full_mesh_accuracy_row_major_gather_and_cache_reuse,DH015,4,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,3789,test_ring_mla_full_mesh_chunked_indexed_cache_accuracy_and_determinism,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,3833,test_ring_mla_full_mesh_kv_actual_isl_cache_patch_accuracy_and_determinism,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,3854,test_ring_mla_full_mesh_rejects_invalid_topology_and_placements,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,3978,test_ring_mla_metadata_matches_scalar_indexed,DH015,4,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,4117,test_ring_mla_metadata_matches_scalar_rotation,DH015,6,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,4270,test_ring_mla_metadata_trace_replay_matches_scalar,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,4563,test_ring_joint_attention_sdpa_sweep_perf_impl,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,4612,test_ring_mla_sweep_perf_impl,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,4647,test_ring_joint_attention_sdpa_accuracy,DH015,18,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,4684,test_ring_mla_accuracy,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,4721,test_ring_joint_attention_sdpa_determinism,DH015,9,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,4748,test_ring_mla_determinism,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5030,test_ring_joint_attention_perf_check,DH015,2,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5086,test_ring_mla_perf_better_than_separate_v_ring_joint,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5311,test_ring_joint_attention_sdpa_chunked_accuracy,DH015,4,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5327,test_ring_joint_attention_gpt_oss_chunked_sliding_native_ring_gqa_accuracy_and_determinism,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5375,test_ring_joint_attention_gemma_complete_group_sliding_geometry,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5397,test_ring_joint_attention_gpt_oss_chunked_sliding_indexed_kv_cache_accuracy,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5435,test_ring_joint_attention_gpt_oss_chunked_sliding_linear_topology_accuracy,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5465,test_ring_joint_attention_gpt_oss_chunked_sliding_production_accuracy,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5482,test_ring_joint_attention_gpt_oss_chunked_full_causal_attention_sink_accuracy,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5539,test_ring_joint_attention_gqa_with_joint_tensors_rejected,DH015,3,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5646,test_ring_joint_attention_minimax3_gqa_chunked_accuracy,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5658,test_ring_joint_attention_minimax3_gqa_full_causal_attention_sink_accuracy_and_determinism,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5698,test_ring_joint_attention_minimax3_gqa_chunked_reuse_kv_hang_regression,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5731,test_ring_joint_attention_chunked_perf_impl,DH015,4,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5756,test_ring_joint_attention_minimax3_gqa_chunked_perf_impl,DH015,2,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5779,test_ring_mla_chunked_accuracy,DH015,4,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5805,test_ring_mla_chunked_perf_impl,DH015,8,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5830,test_ring_joint_attention_sdpa_chunked_determinism,DH015,2,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5849,test_ring_joint_attention_minimax3_gqa_chunked_determinism,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,5872,test_ring_mla_chunked_determinism,DH015,4,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,6185,test_ring_mla_chunked_perf_check,DH015,2,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,6250,test_ring_joint_attention_minimax3_gqa_chunked_perf_check,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,6326,test_ring_joint_attention_gpt_oss_chunked_sliding_perf_check,DH015,1,collected,False
+T107,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py,6546,test_ring_joint_attention_sdpa_cross_accuracy,DH015,6,collected,False
+T108,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_sdpa_cross_padded.py,44,test_cross_padded_ring8,DH015,3,collected,False
+T109,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_attention.py,47,test_ring_joint_sdpa_dit_bh_qb_ge,DH015,5,collected,False
+T109,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_attention.py,126,test_ring_joint_sdpa_program_cache,DH015,3,collected,False
+T109,pytest,tests/nightly/blackhole/sdpa/test_ring_joint_attention.py,205,test_ring_joint_sdpa_sharded_prompt,DH015,1,collected,False
+T110,pytest,tests/nightly/t3000/ccl/test_ring_joint_attention.py,42,test_ring_joint_sdpa_dit_wh_t3k,DH015,5,collected,False
+T110,pytest,tests/nightly/t3000/ccl/test_ring_joint_attention.py,131,test_ring_joint_sdpa,DH015,126,collected,False
+T110,pytest,tests/nightly/t3000/ccl/test_ring_joint_attention.py,213,test_ring_joint_sdpa_multi_batch_wh_t3k,DH015,1,collected,False
+T110,pytest,tests/nightly/t3000/ccl/test_ring_joint_attention.py,284,test_ring_joint_sdpa_program_cache,DH015,3,collected,False
+T110,pytest,tests/nightly/t3000/ccl/test_ring_joint_attention.py,360,test_ring_joint_sdpa_sd35_model_config,DH015,2,collected,False
+T110,pytest,tests/nightly/t3000/ccl/test_ring_joint_attention.py,392,test_ring_joint_sdpa_wan_14b_720p_model_config,DH015,2,collected,False
+T110,pytest,tests/nightly/t3000/ccl/test_ring_joint_attention.py,427,test_ring_joint_sdpa_mochi_model_config,DH015,2,collected,False
+T110,pytest,tests/nightly/t3000/ccl/test_ring_joint_attention.py,489,test_ring_joint_sdpa_sweep_perf,DH015,20,collected,False
+T110,pytest,tests/nightly/t3000/ccl/test_ring_joint_attention.py,663,test_ring_joint_sdpa_sharded_prompt,DH015,1,collected,False
+T111,pytest,tests/nightly/tg/ccl/test_ring_joint_attention.py,36,test_ring_joint_sdpa_dit_wh_glx,DH015,5,collected,False
+T111,pytest,tests/nightly/tg/ccl/test_ring_joint_attention.py,127,test_ring_joint_sdpa,DH015,28,collected,False
+T111,pytest,tests/nightly/tg/ccl/test_ring_joint_attention.py,215,test_ring_joint_sdpa_program_cache,DH015,3,collected,False
+T111,pytest,tests/nightly/tg/ccl/test_ring_joint_attention.py,301,test_ring_joint_sdpa_sharded_prompt,DH015,2,collected,False
+T112,pytest,models/tt_dit/tests/unit/test_ring_joint_attention.py,741,test_ring_joint_sdpa,DH015,1920,collected,False
+T112,pytest,models/tt_dit/tests/unit/test_ring_joint_attention.py,907,test_ring_joint_sdpa_shapes,DH015,224,collected,False
+T112,pytest,models/tt_dit/tests/unit/test_ring_joint_attention.py,1008,test_ring_joint_sdpa_dit_wh_t3k,DH015,5,collected,False
+T112,pytest,models/tt_dit/tests/unit/test_ring_joint_attention.py,1086,test_ring_joint_sdpa_dit_bh_qb_ge,DH015,5,collected,False
+T112,pytest,models/tt_dit/tests/unit/test_ring_joint_attention.py,1168,test_ring_joint_sdpa_dit_wh_glx,DH015,5,collected,False
+T112,pytest,models/tt_dit/tests/unit/test_ring_joint_attention.py,1250,test_ring_joint_sdpa_dit_bh_glx,DH015,5,collected,False
+T112,pytest,models/tt_dit/tests/unit/test_ring_joint_attention.py,1600,test_ring_joint_sdpa_sharded_prompt,DH015,14,collected,False
+T113,pytest,models/demos/minimax_m3/tests/unit/test_ring_joint_sp_vs_ref.py,48,test_ring_joint_sp_vs_ref,DH015,2,collected,False
+T114,pytest,models/demos/minimax_m3/tests/unit/test_ring_joint_cache_read_sp_vs_ref.py,50,test_ring_joint_cache_read_sp,DH015,2,collected,False
+T115,pytest,models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py,530,test_mla_sdpa,DH015,48,collected,False
+T115,pytest,models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py,903,test_mla_sdpa_perf,DH015,24,collected,False
+T116,pytest,tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py,603,test_exp_ring_joint_attention_sdpa_sweep_perf_impl,DH012,2,collected,False
+T116,pytest,tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py,627,test_exp_ring_joint_attention_sdpa_accuracy,DH012,4,collected,False
+T116,pytest,tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py,663,test_exp_ring_joint_attention_sdpa_determinism,DH012,2,collected,False
+T116,pytest,tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py,686,test_exp_ring_joint_attention_sdpa_semaphore_realloc_cache_hit,DH012,1,collected,False
+T116,pytest,tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py,938,test_exp_ring_joint_attention_perf_check,DH012,2,collected,False
+T117,pytest,models/tt_dit/tests/unit/test_exp_ring_joint_attention.py,389,test_exp_ring_joint_sdpa_dit_bh_glx_custom,DH012,6,collected,False
+T118,pytest,tests/nightly/blackhole/sdpa/test_sparse_sdpa_multidevice.py,57,test_sparse_sdpa_block_cyclic_sp_multi,DH018,4,collected,False
+T119,pytest,tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py,199,test_sdpa_sweep_perf_impl,DH016,18,collected,False
+T119,pytest,tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py,213,test_sdpa_accuracy,DH016,18,collected,False
+T119,pytest,tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py,246,test_sdpa_determinism,DH016,18,collected,False
+T119,pytest,tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py,281,test_sdpa_create_perf_table,DH016,2,collected,False
+T119,pytest,tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py,441,test_sdpa_perf_check,DH016,2,collected,False
+T120,pytest,tests/nightly/t3000/ccl/test_ring_attention_all_gather.py,299,test_ring_attention_all_gather,DH014,15,collected,False
+T120,pytest,tests/nightly/t3000/ccl/test_ring_attention_all_gather.py,389,test_ring_attention_all_gather_program_cache,DH014,6,collected,False
+T120,pytest,tests/nightly/t3000/ccl/test_ring_attention_all_gather.py,481,test_ring_attention_all_gather_semaphore_realloc_cache_hit,DH014,1,collected,False
+T121,pytest,tests/nightly/tg/ccl/test_ring_attention_all_gather.py,69,test_ring_attention_all_gather,DH014,16,collected,False
+T121,pytest,tests/nightly/tg/ccl/test_ring_attention_all_gather.py,155,test_ring_attention_all_gather_program_cache,DH014,6,collected,False
+T122,pytest,models/experimental/llama32_1b_quasar/tests/ops/test_chunked_scaled_dot_product_attention.py,53,test_chunked_scaled_dot_product_attention,DH006,3,collected,False
+T123,pytest,models/experimental/llama32_1b_quasar/tests/ops/test_paged_scaled_dot_product_attention_decode.py,65,test_paged_scaled_dot_product_attention_decode,DH007,2,collected,False
+T124,pytest,models/experimental/llama32_1b_quasar/tests/ops/test_rms_norm.py,39,test_rms_norm,DH009; F083,5,collected,False
+T125,pytest,models/experimental/llama32_1b_quasar/tests/ops/test_rms_norm_post_all_gather.py,53,test_rms_norm_post_all_gather,F085; F087,3,collected,False
+T126,pytest,models/experimental/llama32_1b_quasar/tests/ops/test_rms_norm_pre_all_gather.py,51,test_rms_norm_pre_all_gather,F087,3,collected,False
+T127,pytest,models/experimental/llama32_1b_quasar/tests/ops/test_sampling.py,78,test_sampling,F102,2,collected,False
+T128,pytest,models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention.py,47,test_scaled_dot_product_attention,DH006,3,collected,False
+T129,pytest,models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention_decode.py,57,test_scaled_dot_product_attention_decode,DH007,2,collected,False
+T130,pytest,models/experimental/llama32_1b_quasar/tests/prototype_ops/test_chunked_scaled_dot_product_attention.py,53,test_chunked_scaled_dot_product_attention,DH006,3,collected,False
+T131,pytest,models/experimental/llama32_1b_quasar/tests/prototype_ops/test_paged_scaled_dot_product_attention_decode.py,65,test_paged_scaled_dot_product_attention_decode,DH007,2,collected,False
+T132,pytest,models/experimental/llama32_1b_quasar/tests/prototype_ops/test_rms_norm.py,39,test_rms_norm,DH009; F083,5,collected,False
+T133,pytest,models/experimental/llama32_1b_quasar/tests/prototype_ops/test_rms_norm_post_all_gather.py,53,test_rms_norm_post_all_gather,F085; F087,3,collected,False
+T134,pytest,models/experimental/llama32_1b_quasar/tests/prototype_ops/test_rms_norm_pre_all_gather.py,51,test_rms_norm_pre_all_gather,F087,3,collected,False
+T135,pytest,models/experimental/llama32_1b_quasar/tests/prototype_ops/test_sampling.py,79,test_sampling,F102,2,collected,False
+T136,pytest,models/experimental/llama32_1b_quasar/tests/prototype_ops/test_scaled_dot_product_attention.py,47,test_scaled_dot_product_attention,DH006,3,collected,False
+T137,pytest,models/experimental/llama32_1b_quasar/tests/prototype_ops/test_scaled_dot_product_attention_decode.py,57,test_scaled_dot_product_attention_decode,DH007,2,collected,False
+T138,pytest,models/experimental/llama32_1b_quasar/tests/graph_ops/test_paged_scaled_dot_product_attention_decode.py,113,test_paged_scaled_dot_product_attention_decode,DH007,1,collected,False
+T139,pytest,models/experimental/llama32_1b_quasar/tests/graph_ops/test_rms_norm.py,232,test_rms_norm,DH009; F083,4,collected,False
+T140,pytest,models/experimental/llama32_1b_quasar/tests/graph_ops/test_scaled_dot_product_attention.py,94,test_scaled_dot_product_attention,DH006,1,collected,False
+T141,pytest,models/experimental/ops/quasar/tests/gpt_oss_ops/test_rms_norm.py,202,test_rms_norm,DH009; F083,5,collected,False
+T142,pytest,models/experimental/ops/quasar/tests/gpt_oss_ops/test_sum.py,63,test_sum,F098; F099; F100,1,collected,False
+T143,pytest,models/experimental/ops/quasar/tests/gpt_oss_ops/test_scaled_dot_product_attention.py,160,test_scaled_dot_product_attention,DH016,2,collected,False
+T144,pytest,models/experimental/ops/quasar/tests/gpt_oss_ops/test_paged_scaled_dot_product_attention_decode.py,199,test_paged_scaled_dot_product_attention_decode,DH019,2,collected,False
+T145,pytest,models/experimental/ops/quasar/tests/qwen3_vl_ops/test_rms_norm.py,372,test_rms_norm,DH009; F083,8,collected,False
+T146,pytest,models/experimental/ops/quasar/tests/qwen3_vl_ops/test_scaled_dot_product_attention.py,147,test_scaled_dot_product_attention,DH016,2,collected,False
+T147,pytest,models/experimental/ops/quasar/tests/qwen3_vl_ops/test_paged_scaled_dot_product_attention_decode.py,113,test_paged_scaled_dot_product_attention_decode,DH019,1,collected,False
+T148,pytest,models/demos/deepseek_v3/tests/unit/test_rmsnorm.py,46,test_rmsnorm_pre_all_gather_single_device,DH009; F083; F085; F087,1,collected,False
+T148,pytest,models/demos/deepseek_v3/tests/unit/test_rmsnorm.py,134,test_rmsnorm_pre_all_gather_mesh_device,DH009; F083; F085; F087,2,collected,False
+T148,pytest,models/demos/deepseek_v3/tests/unit/test_rmsnorm.py,226,test_rmsnorm_post_all_gather,DH009; F083; F085; F087,1,collected,False
+T148,pytest,models/demos/deepseek_v3/tests/unit/test_rmsnorm.py,374,test_rmsnorm_distributed_mesh_device,DH009; F083; F085; F087,2,collected,False
+T148,pytest,models/demos/deepseek_v3/tests/unit/test_rmsnorm.py,558,test_rmsnorm_single_device,DH009; F083; F085; F087,2,collected,False
+T148,pytest,models/demos/deepseek_v3/tests/unit/test_rmsnorm.py,629,test_rmsnorm_mesh_device,DH009; F083; F085; F087,4,collected,False
+T149,pytest,models/demos/deepseek_v3/tests/unit/test_reduce.py,22,test_reduce_sum_single_device,F098; F099; F100,2,collected,False
+T149,pytest,models/demos/deepseek_v3/tests/unit/test_reduce.py,77,test_reduce_sum_mesh_device,F098; F099; F100,4,collected,False
+T150,pytest,models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_rmsnorm_deepseek.py,43,test_deepseek_v3_mla_rms_norm_trace_mode,DH009; F083,2,collected,False
+T151,pytest,models/demos/vision/classification/resnet50/quasar/tests/ops/test_reduce_sum_mean.py,45,test_quasar_reduce_h,F098; F099,6,collected,False
+T151,pytest,models/demos/vision/classification/resnet50/quasar/tests/ops/test_reduce_sum_mean.py,82,test_quasar_reduce_w,F098; F099,6,collected,False
+T152,pytest,models/demos/t3000/falcon40b/tests/unit_tests/test_falcon_softmax.py,121,test_FalconSoftmax_inference,F088; F089,1,collected,False
+T153,pytest,models/demos/t3000/falcon40b/tests/unit_tests/layernorm/test_fused_falcon_layernorm.py,319,test_FalconLayernorm_inference,DH009; F083,1,collected,False
+T154,pytest,models/demos/t3000/falcon40b/tests/unit_tests/layernorm/test_falcon_layernorm.py,242,test_FalconLayernorm_inference,DH009; F083,1,collected,False
+T155,pytest,models/experimental/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_softmax.py,113,test_bert_large_softmax_test,F088; F089,24,collected,False
+T156,pytest,models/experimental/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_ln.py,160,test_layernorm_test,DH009; F083,48,collected,False
+T157,pytest,models/demos/gpt_oss/tests/unit/test_rope.py,1524,test_sdpa_with_large_q_values,DH019,2,collected,False
+T158,pytest,models/experimental/ops/quasar/gpt_oss/tests/unit/test_rope.py,1524,test_sdpa_with_large_q_values,DH019,2,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,71,NormalizationSmoke.SoftmaxInterleavedUniform,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,100,NormalizationSmoke.SoftmaxNumericStableShift,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,129,NormalizationSmoke.SoftmaxShardedInPlace,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,154,NormalizationSmoke.ScaleMaskSoftmax,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,185,NormalizationSmoke.ScaleMaskSoftmaxCausalInPlace,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,220,NormalizationSmoke.SoftmaxGeneralW,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,233,NormalizationSmoke.SoftmaxGeneralH,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,245,NormalizationSmoke.SoftmaxGeneralWLarge,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,259,NormalizationSmoke.DISABLED_SoftmaxGeneralHLarge,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,True
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,298,NormalizationSmoke.SoftmaxWideRowSum,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,393,NormalizationSmoke.LayerNormInterleaved,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,415,NormalizationSmoke.LayerNormInterleavedGammaBeta,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,440,NormalizationSmoke.LayerNormResidualFused,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,460,NormalizationSmoke.LayerNormWelfordInterleaved,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,485,NormalizationSmoke.LayerNormSharded1x1,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,503,NormalizationSmoke.LayerNormShardedWelford1x1,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,529,NormalizationSmoke.LayerNormRowMajorGammaBeta,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,551,NormalizationSmoke.RmsNormInterleaved,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,564,NormalizationSmoke.RmsNormInterleavedWeight,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,581,NormalizationSmoke.RmsNormSharded1x1,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,605,NormalizationSmoke.LayerNormFp32,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,628,NormalizationSmoke.DistributedLayerNormStats,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,654,NormalizationSmoke.DistributedLayerNormEndToEnd,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,679,NormalizationSmoke.DistributedRmsNormStats,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,704,NormalizationSmoke.DistributedRmsNormEndToEnd,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,733,NormalizationSmoke.DistributedRmsNorm2DGridStats,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,755,NormalizationSmoke.DistributedRmsNorm2DGrid,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,793,NormalizationSmoke.DistributedPreResidualFused,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,825,NormalizationSmoke.DistributedPostGammaBeta,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,851,NormalizationSmoke.DISABLED_DistributedLayerNormPostWelford,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,True
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,954,NormalizationSmoke.GroupNormNoMcastInterleaved,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,976,NormalizationSmoke.GroupNormMcastInterleaved,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,1009,NormalizationSmoke.DISABLED_GroupNormMultiRowTileWideC,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,True
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,1040,NormalizationSmoke.GroupNormShardedBlock1x1,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,1074,NormalizationSmoke.GroupNormShardedBlock1x1GammaBeta,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,1104,NormalizationSmoke.GroupNormWelfordInterleaved,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,False
+T159,gtest,tests/ttnn/unit_tests/gtests/test_normalization.cpp,1130,NormalizationSmoke.DISABLED_GroupNormInputMask,F079; F080; F081; F083; F084; F085; F086; F087; F088; F089; F090; F091; F092; F093; DH009; DH010,1,collected,True
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,382,ReductionSmoke.SumReduceW,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,419,ReductionSmoke.SumReduceH,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,432,ReductionSmoke.SumReduceBothDims,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,455,ReductionSmoke.MinMaxReduceW,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,482,ReductionSmoke.MinMaxReduceH,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,509,ReductionSmoke.MinMaxReduceBothDims,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,536,ReductionSmoke.MeanReduceW,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,554,ReductionSmoke.MeanReduceH,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,572,ReductionSmoke.MeanReduceBothDims,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,587,ReductionSmoke.Fp32AccurateMeanW,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,605,ReductionSmoke.Fp32AccurateMaxW,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,627,ReductionSmoke.Int32SumW,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,645,ReductionSmoke.Int32MinMaxW,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,667,ReductionSmoke.Int32SumBothDims,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,682,ReductionSmoke.RowMajorSumW,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,702,ReductionSmoke.RowMajorSumHSplit,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,717,ReductionSmoke.RowMajorMeanW,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,753,ReductionSmoke.MultiAxisSumChain,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,770,ReductionSmoke.WelfordVarW,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,788,ReductionSmoke.WelfordStdH,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,806,ReductionSmoke.WelfordVarDim0,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,825,ReductionSmoke.WelfordStdMultiDim,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,843,ReductionSmoke.Fp32WelfordVarW,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,867,ReductionSmoke.ArgmaxMultiCoreRowMajorLastDim,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,959,ReductionSmoke.ArgmaxGlobalRowMajor,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,1350,ReductionSmoke.MoeMixtralShape,F098; F099; F100; DH011; F101; F102,1,collected,False
+T160,gtest,tests/ttnn/unit_tests/gtests/test_reduction.cpp,1392,ReductionSmoke.SamplingGreedyTopK1,F098; F099; F100; DH011; F101; F102,1,collected,False
+T161,gtest,tests/ttnn/unit_tests/gtests/test_graph_capture_arguments_morehdot.cpp,29,TestGraphCaptureArgumentsMorehDot.MorehDot,F058,1,collected,False
+T162,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp,324,MeshDevice1x4Fabric2DUDMFixture.TestWidthReductionInterleaved2D_Small,DH002,1,collected,False
+T162,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp,332,MeshDevice1x4Fabric2DUDMFixture.TestWidthReductionInterleaved2D_Medium,DH002,1,collected,False
+T162,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp,339,MeshDevice1x4Fabric2DUDMFixture.TestWidthReductionInterleaved2D_Large,DH002,1,collected,False
+T162,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp,346,MeshDevice1x4Fabric2DUDMFixture.TestWidthReductionInterleaved3D,DH002,1,collected,False
+T162,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp,353,MeshDevice1x4Fabric2DUDMFixture.TestWidthReductionInterleaved4D,DH002,1,collected,False
+T162,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp,366,MeshDevice2x4Fabric2DUDMFixture.TestWidthReductionInterleaved2D_Small,DH002,1,collected,False
+T162,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp,373,MeshDevice2x4Fabric2DUDMFixture.TestWidthReductionInterleaved2D_Medium,DH002,1,collected,False
+T162,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp,380,MeshDevice2x4Fabric2DUDMFixture.TestWidthReductionInterleaved2D_Large,DH002,1,collected,False
+T162,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp,387,MeshDevice2x4Fabric2DUDMFixture.TestWidthReductionInterleaved3D,DH002,1,collected,False
+T162,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp,394,MeshDevice2x4Fabric2DUDMFixture.TestWidthReductionInterleaved4D,DH002,1,collected,False
+T162,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp,406,MeshDevice2x4Fabric2DUDMFixture.TestWidthReductionInterleavedSwapped2D_Small,DH002,1,collected,False
+T162,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp,414,MeshDevice2x4Fabric2DUDMFixture.TestWidthReductionInterleavedSwapped2D_Large,DH002,1,collected,False
+T162,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp,422,MeshDevice2x4Fabric2DUDMFixture.TestWidthReductionInterleavedSwapped3D,DH002,1,collected,False
+T162,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/test_udm_reduction_interleaved.cpp,430,MeshDevice2x4Fabric2DUDMFixture.TestWidthReductionInterleavedSwapped4D,DH002,1,collected,False
+T163,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp,472,MeshDevice1x4Fabric2DUDMFixture.TestWidthReduction2D_Small,DH003,1,collected,False
+T163,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp,483,MeshDevice1x4Fabric2DUDMFixture.TestWidthReduction2D_Medium,DH003,1,collected,False
+T163,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp,494,MeshDevice1x4Fabric2DUDMFixture.TestWidthReduction2D_Large,DH003,1,collected,False
+T163,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp,511,MeshDevice2x4Fabric2DUDMFixture.TestWidthReduction2D_Small,DH003,1,collected,False
+T163,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp,523,MeshDevice2x4Fabric2DUDMFixture.TestWidthReduction2D_Medium,DH003,1,collected,False
+T163,gtest,tests/ttnn/unit_tests/gtests/udm/reduction/sharded/test_udm_reduction.cpp,535,MeshDevice2x4Fabric2DUDMFixture.TestWidthReduction2D_Large,DH003,1,collected,False
+T164,pytest,tests/nightly/tg/ccl/test_distributed_rms_norm_decode_configs.py,338,test_distributed_rms_norm_decode_configs,F035,16,collected,False
+T165,pytest,tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py,352,test_fused_rms_minimal_rejects_stats_dtype_mismatch,F035,2,collected,False
+T166,pytest,models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py,233,test_falcon7b_attnention_sliced,F088; F089,3,collected,False
+T166,pytest,models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py,483,test_falcon7b_attention_softmax_sequence,F088; F089,3,collected,False
+T166,pytest,models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py,747,test_softmax,F088; F089,5,collected,False
+T167,pytest,models/demos/minimax_m3/tests/unit/test_indexer_score_msa_accuracy.py,107,test_indexer_score_msa_accuracy,F040,3,collected,False
+T168,pytest,models/demos/minimax_m3/tests/unit/test_msa_prefill_vs_ref.py,43,test_msa_prefill,DH017; F040,1,collected,False
+T169,pytest,models/demos/minimax_m3/tests/unit/test_msa_sp_sharded_vs_ref.py,45,test_msa_sp_sharded,F040,1,collected,False

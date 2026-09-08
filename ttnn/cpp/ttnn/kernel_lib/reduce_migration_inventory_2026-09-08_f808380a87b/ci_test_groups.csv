@@ -1,0 +1,28 @@
+id,path,line,name,lane,command,skus,note
+S_FUSED,tests/pipeline_reorg/ttnn_sanity_tests.yaml,170,ttnn fused group 1,Sanity,"pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 1 --splitting-algorithm least_duration -m ""not disable_fast_runtime_mode""",wh_n300_civ2; bh_p100; bh_p150b_civ2; sim_wh_n150; sim_bh_p150,"Group 2 at line 186 runs the other half; together both splits cover the directory. Physical SKUs include wh_n300_civ2, bh_p100 and bh_p150b_civ2. Eight-device tests cannot run on these SKUs."
+S_REDUCE,tests/pipeline_reorg/ttnn_sanity_tests.yaml,253,ttnn reduce group,Sanity,"pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce -xv -m ""not disable_fast_runtime_mode""",wh_n300_civ2; bh_p100; bh_p150b_civ2; sim_wh_n150; sim_bh_p150,
+S_HELPERS,tests/pipeline_reorg/ttnn_sanity_tests.yaml,303,llk helper library tests,Sanity,"pytest --timeout 1800 -xv -m ""not models_device_performance_bare_metal"" --ignore=tests/ttnn/unit_tests/operations/examples/fidelity_sweep/test_reduce_accumulate_fidelity.py tests/ttnn/unit_tests/operations/examples tests/ttnn/unit_tests/kernel_lib tests/ttnn/unit_tests/operations/toy_*",wh_n300_civ2; bh_p150b_civ2,"Only wh_n300_civ2 and bh_p150b_civ2; no bh_p100, so this group is not rerun by L2’s P100 job. The named fidelity test is ignored."
+S_INDEXER,tests/pipeline_reorg/ttnn_sanity_tests.yaml,237,ttnn indexer_score group,Sanity,"pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py -k ""accuracy and rank7"" -xv",wh_n300_civ2; bh_p100; bh_p150b_civ2; sim_wh_n150; sim_bh_p150,The accuracy-and-rank7 filter does not include the helper fallback test.
+S_BH_INDEXER,tests/pipeline_reorg/blackhole_multi_card_sanity_tests.yaml,45,"TTNN multi-device CCL, SDPA PERF, and indexer tests (QB2 only)",Sanity,"pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_quietbox_ci_perf -q
+pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
+pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
+pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
+pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py -k indexer_score_qb -svv
+pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_perf.py -svv
+",bh_quietbox_2,Ring factory coverage; its helper branch is disabled at construction.
+L_FUSED,tests/pipeline_reorg/ops_unit_tests.yaml,50,ttnn nightly fused tests,L2 nightly,"pytest tests/ttnn/nightly/unit_tests/operations/fused -xv -m ""not disable_fast_runtime_mode"" --timeout=600",wh_n300_civ2; bh_p100,
+L_REDUCTION,tests/pipeline_reorg/ops_unit_tests.yaml,61,ttnn nightly reduction tests,L2 nightly,"pytest tests/ttnn/nightly/unit_tests/operations/reduction -xv -m ""not disable_fast_runtime_mode"" --timeout=600",wh_n300_civ2; bh_p100,
+L_EXPERIMENTAL_BH,tests/pipeline_reorg/ops_unit_tests.yaml,86,ttnn nightly experimental tests (blackhole),L2 nightly,"pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k ""not performance"" -m ""not requires_host_iommu"" --timeout=600",bh_p100; bh_p150b_civ2,
+L_MOREH,tests/pipeline_reorg/ops_unit_tests.yaml,222,ttnn nightly moreh tests,L2 nightly,"pytest tests/ttnn/nightly/unit_tests/operations/moreh -xv -m ""not disable_fast_runtime_mode"" --timeout=600",wh_n300_civ2; bh_p100,
+L_TRANSFORMERS,tests/pipeline_reorg/ops_unit_tests.yaml,207,ttnn nightly transformers tests,L2 nightly,"pytest tests/ttnn/nightly/unit_tests/operations/transformers -xv -m ""not disable_fast_runtime_mode"" --timeout=600",wh_n150_civ2; wh_n300_civ2; bh_p100; bh_p150b_civ2,
+L_MISC,tests/pipeline_reorg/ops_unit_tests.yaml,233,ttnn nightly misc (rand and ssm) tests,L2 nightly,"pytest tests/ttnn/nightly/unit_tests/operations/rand tests/ttnn/nightly/unit_tests/operations/ssm -xv -m ""not disable_fast_runtime_mode"" --timeout=600",wh_n150_civ2; wh_n300_civ2; bh_p100; bh_p150b_civ2,
+L_CCL_N300,tests/pipeline_reorg/ops_unit_tests.yaml,329,ttnn n300 ccl tests,L2 nightly,"pytest \
+  tests/ttnn/unit_tests/operations/ccl/test_ccl_l1_small_semaphores.py \
+  tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_rms_fuse_n300 \
+  -xv -m ""not disable_fast_runtime_mode"" --timeout=300
+",wh_n300_civ2,
+L_P100,.github/workflows/tt-metal-l2-nightly.yaml,276,ttnn-p100-tests,L2 nightly,Calls ttnn-sanity-tests-impl.yaml with enabled-skus: bh_p100,bh_p100,"Runs on every scheduled L2 invocation. Thus enabled single-device S_FUSED/S_REDUCE cases also have L2 coverage, even though their files are under unit_tests rather than nightly."
+OTHER_DIT,tests/pipeline_reorg/models_unit_tests.yaml,956,"TT-DiT common unit tests, shared amongst all models.",Neither,"unset TT_METAL_WATCHER  # blocked by #50886
+pytest --timeout 10000 models/tt_dit/tests/unit/
+",wh_n150; bh_quietbox_2,Model tier 1 on wh_n150 / bh_quietbox_2; not called by tt-metal-l2-nightly.yaml.
+OTHER_ATTN,tests/pipeline_reorg/blackhole_e2e_tests.yaml,79,ttnn attn_res_gather_softmax unit tests,Neither,"pytest tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py -k ""mesh-2x4""",bh_loudbox,"Separate Blackhole e2e workflow; bh_loudbox, mesh-2x4."
