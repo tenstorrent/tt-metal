@@ -113,6 +113,7 @@ def _golden_function_matmul_batched_weights(
     transpose_a=False,
     transpose_b=False,
     *,
+    activation=None,
     program_config=None,
     **kwargs,
 ):
@@ -122,6 +123,7 @@ def _golden_function_matmul_batched_weights(
             input_tensor_b,
             transpose_a=transpose_a,
             transpose_b=transpose_b,
+            activation=activation,
             program_config=program_config,
         )
         for input_tensor_b in input_tensors_b

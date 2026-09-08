@@ -32,28 +32,18 @@ def _preprocess_collective_golden_inputs(function_args, function_kwargs):
     return tuple(function_args), function_kwargs
 
 
-def _mesh_coordinate_to_index(coordinate, mesh_shape):
-    """Convert a row-major mesh coordinate to its flat device index."""
+def _get_collective_groups(topology, cluster_axis):
+    """Return topology coordinates grouped along the collective axis."""
 
-    index = 0
-    for value, dimension in zip(coordinate, mesh_shape):
-        index = index * dimension + int(value)
-    return index
-
-
-def _get_collective_groups(mesh_shape, cluster_axis):
-    """Return row-major device indices grouped along the collective axis."""
-
-    import itertools
-    import math
-
+    mesh_coords = list(topology.mesh_coords)
     if cluster_axis is None:
-        return [list(range(math.prod(mesh_shape)))]
+        return [mesh_coords]
 
     groups = {}
-    for coordinate in itertools.product(*(range(dimension) for dimension in mesh_shape)):
+    for mesh_coord in mesh_coords:
+        coordinate = tuple(int(value) for value in mesh_coord)
         group_coordinate = coordinate[:cluster_axis] + coordinate[cluster_axis + 1 :]
-        groups.setdefault(group_coordinate, []).append(_mesh_coordinate_to_index(coordinate, mesh_shape))
+        groups.setdefault(group_coordinate, []).append(mesh_coord)
     return list(groups.values())
 
 
@@ -68,18 +58,40 @@ def _ordered_distributed_shards(distributed_golden):
         raise TypeError(f"Expected DistributedGolden, got {type(distributed_golden)}")
     if distributed_golden.shards is None:
         raise ValueError("Collective golden requires coordinate-keyed input shards")
-    missing_coords = [
-        mesh_coord
-        for mesh_coord in distributed_golden.topology.mesh_coords
-        if mesh_coord not in distributed_golden.shards
+
+    shards = dict(distributed_golden.shards)
+    topology_coords = tuple(distributed_golden.topology.mesh_coords)
+    if distributed_golden.global_value is not None and len(shards) != len(topology_coords):
+        representative_shape = tuple(next(iter(shards.values())).shape)
+        shard_shapes = {mesh_coord: representative_shape for mesh_coord in topology_coords}
+        shards = ttnn.decompose_mesh_value(
+            distributed_golden.global_value,
+            topology=distributed_golden.topology,
+            shard_shapes_by_mesh_coord=shard_shapes,
+        )
+
+    return {mesh_coord: shards[mesh_coord] for mesh_coord in topology_coords if mesh_coord in shards}
+
+
+def _collective_groups(distributed_golden, input_shards, cluster_axis):
+    groups = [
+        group
+        for group in _get_collective_groups(distributed_golden.topology, cluster_axis)
+        if all(mesh_coord in input_shards for mesh_coord in group)
     ]
-    if missing_coords:
-        raise ValueError("Collective golden requires shards for every topology coordinate")
-    return [distributed_golden.shards[mesh_coord] for mesh_coord in distributed_golden.topology.mesh_coords]
+    if not groups:
+        raise ValueError("Collective golden requires all shards for at least one collective group")
+    return groups
+
+
+def _output_compare_coords(distributed_golden, output_shards):
+    if distributed_golden.compare_coords is None:
+        return None
+    return frozenset(mesh_coord for mesh_coord in distributed_golden.compare_coords if mesh_coord in output_shards)
 
 
 def _distributed_collective_golden(
-    per_device_outputs,
+    output_shards,
     tensor_topology,
     mesh_shard_dims,
     *,
@@ -90,10 +102,9 @@ def _distributed_collective_golden(
         for shard_dim in mesh_shard_dims
     ]
     output_topology = tensor_topology.with_placements(placements)
-    mesh_coords = ttnn.mesh_coords_for_shards(output_topology, len(per_device_outputs))
-    shards = dict(zip(mesh_coords, per_device_outputs))
+    shards = dict(output_shards)
     global_value = None
-    if len(shards) == len(output_topology.mesh_coords):
+    if set(shards) == set(output_topology.mesh_coords):
         global_value = ttnn.compose_mesh_value(shards_by_mesh_coord=shards, topology=output_topology)
     return ttnn.DistributedGolden(
         topology=output_topology,
@@ -130,15 +141,14 @@ def _golden_function_all_broadcast(
     **kwargs,
 ):
     input_shards = _ordered_distributed_shards(input_tensor)
-    mesh_shape = input_tensor.topology.distribution_shape
     input_shard_dims = _topology_shard_dims(input_tensor.topology)
-    groups = _get_collective_groups(mesh_shape, cluster_axis)
+    groups = _collective_groups(input_tensor, input_shards, cluster_axis)
     group_size = len(groups[0])
-    per_result_device_outputs = [[None] * len(input_shards) for _ in range(group_size)]
+    per_result_device_outputs = [{} for _ in range(group_size)]
     for group in groups:
-        for result_index, source_index in enumerate(group):
-            for destination_index in group:
-                per_result_device_outputs[result_index][destination_index] = input_shards[source_index]
+        for result_index, source_coord in enumerate(group):
+            for destination_coord in group:
+                per_result_device_outputs[result_index][destination_coord] = input_shards[source_coord]
 
     output_shard_dims = list(input_shard_dims)
     if cluster_axis is None:
@@ -146,7 +156,12 @@ def _golden_function_all_broadcast(
     else:
         output_shard_dims[cluster_axis] = None
     return [
-        _distributed_collective_golden(outputs, input_tensor.topology, output_shard_dims)
+        _distributed_collective_golden(
+            outputs,
+            input_tensor.topology,
+            output_shard_dims,
+            compare_coords=_output_compare_coords(input_tensor, outputs),
+        )
         for outputs in per_result_device_outputs
     ]
 
@@ -168,16 +183,21 @@ def _golden_function_all_gather(
     import torch
 
     input_shards = _ordered_distributed_shards(input_tensor)
-    mesh_shape = input_tensor.topology.distribution_shape
     input_shard_dims = _topology_shard_dims(input_tensor.topology)
-    per_device_outputs = [None] * len(input_shards)
-    for group in _get_collective_groups(mesh_shape, cluster_axis):
-        gathered = torch.cat([input_shards[index] for index in group], dim=dim)
-        for index in group:
-            per_device_outputs[index] = gathered
+    output_shards = {}
+    for group in _collective_groups(input_tensor, input_shards, cluster_axis):
+        gathered = torch.cat([input_shards[mesh_coord] for mesh_coord in group], dim=dim)
+        for mesh_coord in group:
+            output_shards[mesh_coord] = gathered
 
-    output_shard_dims = _replace_matching_shards_with_replicas(input_shard_dims, dim, input_shards[0].ndim)
-    return _distributed_collective_golden(per_device_outputs, input_tensor.topology, output_shard_dims)
+    input_rank = next(iter(input_shards.values())).ndim
+    output_shard_dims = _replace_matching_shards_with_replicas(input_shard_dims, dim, input_rank)
+    return _distributed_collective_golden(
+        output_shards,
+        input_tensor.topology,
+        output_shard_dims,
+        compare_coords=_output_compare_coords(input_tensor, output_shards),
+    )
 
 
 ttnn.attach_golden_function(
@@ -196,20 +216,24 @@ def _golden_function_all_reduce(
     import torch
 
     input_shards = _ordered_distributed_shards(input_tensor)
-    mesh_shape = input_tensor.topology.distribution_shape
     input_shard_dims = _topology_shard_dims(input_tensor.topology)
-    per_device_outputs = [None] * len(input_shards)
-    for group in _get_collective_groups(mesh_shape, cluster_axis):
-        reduced = torch.stack([input_shards[index] for index in group]).sum(dim=0)
-        for index in group:
-            per_device_outputs[index] = reduced
+    output_shards = {}
+    for group in _collective_groups(input_tensor, input_shards, cluster_axis):
+        reduced = torch.stack([input_shards[mesh_coord] for mesh_coord in group]).sum(dim=0)
+        for mesh_coord in group:
+            output_shards[mesh_coord] = reduced
 
     output_shard_dims = list(input_shard_dims)
     if cluster_axis is None:
         output_shard_dims = [None] * len(output_shard_dims)
     else:
         output_shard_dims[cluster_axis] = None
-    return _distributed_collective_golden(per_device_outputs, input_tensor.topology, output_shard_dims)
+    return _distributed_collective_golden(
+        output_shards,
+        input_tensor.topology,
+        output_shard_dims,
+        compare_coords=_output_compare_coords(input_tensor, output_shards),
+    )
 
 
 ttnn.attach_golden_function(
@@ -231,20 +255,26 @@ def _golden_function_reduce_scatter(
     input_shards = _ordered_distributed_shards(input_tensor)
     mesh_shape = input_tensor.topology.distribution_shape
     input_shard_dims = _topology_shard_dims(input_tensor.topology)
-    per_device_outputs = [None] * len(input_shards)
-    for group in _get_collective_groups(mesh_shape, cluster_axis):
-        reduced = torch.stack([input_shards[index] for index in group]).sum(dim=0)
-        for index, chunk in zip(group, torch.chunk(reduced, len(group), dim=dim)):
-            per_device_outputs[index] = chunk
+    output_shards = {}
+    for group in _collective_groups(input_tensor, input_shards, cluster_axis):
+        reduced = torch.stack([input_shards[mesh_coord] for mesh_coord in group]).sum(dim=0)
+        for mesh_coord, chunk in zip(group, torch.chunk(reduced, len(group), dim=dim)):
+            output_shards[mesh_coord] = chunk
 
-    output_shard_dims = list(_replace_matching_shards_with_replicas(input_shard_dims, dim, input_shards[0].ndim))
-    normalized_dim = _normalize_dim(dim, input_shards[0].ndim)
+    input_rank = next(iter(input_shards.values())).ndim
+    output_shard_dims = list(_replace_matching_shards_with_replicas(input_shard_dims, dim, input_rank))
+    normalized_dim = _normalize_dim(dim, input_rank)
     if cluster_axis is None:
         for axis, dimension in enumerate(mesh_shape):
             output_shard_dims[axis] = normalized_dim if dimension > 1 else None
     else:
         output_shard_dims[cluster_axis] = normalized_dim
-    return _distributed_collective_golden(per_device_outputs, input_tensor.topology, output_shard_dims)
+    return _distributed_collective_golden(
+        output_shards,
+        input_tensor.topology,
+        output_shard_dims,
+        compare_coords=_output_compare_coords(input_tensor, output_shards),
+    )
 
 
 ttnn.attach_golden_function(
@@ -397,11 +427,21 @@ def _golden_function_reduce_to_root(
 ):
     import torch
 
-    input_shards_l = _ordered_distributed_shards(input_tensor_l)
-    input_shards_s = _ordered_distributed_shards(input_tensor_s)
-    input_shards_m = _ordered_distributed_shards(input_tensor_m)
-    if len(input_shards_l) != 4 or len(input_shards_s) != 4 or len(input_shards_m) != 4:
+    input_shards_l_by_coord = _ordered_distributed_shards(input_tensor_l)
+    input_shards_s_by_coord = _ordered_distributed_shards(input_tensor_s)
+    input_shards_m_by_coord = _ordered_distributed_shards(input_tensor_m)
+    input_coords = [
+        mesh_coord
+        for mesh_coord in input_tensor_l.topology.mesh_coords
+        if mesh_coord in input_shards_l_by_coord
+        and mesh_coord in input_shards_s_by_coord
+        and mesh_coord in input_shards_m_by_coord
+    ]
+    if len(input_coords) != 4:
         raise ValueError("reduce_to_root golden requires the operation's fixed four-device topology")
+    input_shards_l = [input_shards_l_by_coord[mesh_coord] for mesh_coord in input_coords]
+    input_shards_s = [input_shards_s_by_coord[mesh_coord] for mesh_coord in input_coords]
+    input_shards_m = [input_shards_m_by_coord[mesh_coord] for mesh_coord in input_coords]
 
     tile_width = 32
     num_cores = input_shards_s[0].shape[-1] // tile_width
@@ -570,20 +610,21 @@ def _golden_function_moe_routing_remap(
     for dimension in mesh_shape[cluster_axis + 1 :]:
         member_stride *= dimension
 
-    per_device_outputs = []
-    for device_index in range(num_devices):
+    output_shards = {}
+    for device_index, mesh_coord in enumerate(routing_weights_tensor.topology.mesh_coords):
         member_index = (device_index // member_stride) % mesh_shape[cluster_axis]
         local_start = member_index * local_non_zero_size
         local_indices = non_zero_indices[local_start : local_start + local_non_zero_size]
         output = torch.zeros_like(routing_weights)
         output.flatten()[local_indices] = routing_weights.flatten()[local_indices]
-        per_device_outputs.append(output)
+        output_shards[mesh_coord] = output
 
     output_shard_dims = (0,) * len(mesh_shape)
     return _distributed_collective_golden(
-        per_device_outputs,
+        output_shards,
         routing_weights_tensor.topology,
         output_shard_dims,
+        compare_coords=_output_compare_coords(routing_weights_tensor, output_shards),
     )
 
 

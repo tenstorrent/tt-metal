@@ -8,7 +8,6 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_for_wormhole_b0
 from models.common.utility_functions import torch_random
 
 
@@ -210,6 +209,41 @@ def test_distributed_comparison_selects_requested_device_shard(monkeypatch):
     selected_golden, selected_output = comparison_pairs[0]
     assert torch.equal(selected_golden, golden_shard)
     assert torch.equal(selected_output, device_tensors[1].value)
+
+
+def test_collective_golden_does_not_require_remote_shards():
+    """A local collective group can be evaluated without shards owned by other
+    processes in the global mesh."""
+    mesh_coords = tuple(ttnn.MeshCoordinate(row, column) for row in range(2) for column in range(4))
+    topology = ttnn.TensorTopologySnapshot(
+        distribution_shape=(2, 4),
+        placements=(ttnn.PlacementReplicate(), ttnn.PlacementReplicate()),
+        mesh_coords=mesh_coords,
+    )
+    local_coords = mesh_coords[:4]
+    remote_coords = mesh_coords[4:]
+    input_golden = ttnn.DistributedGolden(
+        topology=topology,
+        shards={
+            mesh_coord: torch.tensor([column + 1.0], dtype=torch.bfloat16)
+            for column, mesh_coord in enumerate(local_coords)
+        },
+        compare_coords=frozenset(local_coords),
+    )
+
+    assert not set(remote_coords) & set(input_golden.shards)
+
+    all_reduce_golden = ttnn.get_golden_function(ttnn.all_reduce)
+    output_golden = all_reduce_golden(input_golden, cluster_axis=1)
+
+    assert output_golden.global_value is None
+    assert output_golden.shards is not None
+    assert set(output_golden.shards) == set(local_coords)
+    assert output_golden.compare_coords == frozenset(local_coords)
+
+    expected_shard = torch.tensor([10.0], dtype=torch.bfloat16)
+    for output_shard in output_golden.shards.values():
+        assert torch.equal(output_shard, expected_shard)
 
 
 def test_typecast_golden_prefers_explicit_bfloat16_metadata():

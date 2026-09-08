@@ -112,7 +112,12 @@ def distributed_golden_for_comparison(tensor, golden_value=None):
             topology=topology,
             shard_shapes_by_mesh_coord=shard_shapes_by_mesh_coord,
         )
-        return ttnn.DistributedGolden(topology=topology, global_value=golden_value, shards=shards)
+        return ttnn.DistributedGolden(
+            topology=topology,
+            global_value=golden_value,
+            shards=shards,
+            compare_coords=frozenset(mesh_coords),
+        )
 
     shards = {
         mesh_coord: _convert_ttnn_to_torch_for_comparison(device_tensor)
@@ -122,7 +127,12 @@ def distributed_golden_for_comparison(tensor, golden_value=None):
         global_value = ttnn.compose_mesh_value(shards_by_mesh_coord=shards, topology=topology)
     except ValueError:
         global_value = None
-    return ttnn.DistributedGolden(topology=topology, global_value=global_value, shards=shards)
+    return ttnn.DistributedGolden(
+        topology=topology,
+        global_value=global_value,
+        shards=shards,
+        compare_coords=frozenset(mesh_coords),
+    )
 
 
 def _distributed_golden_global_value(distributed_golden):
@@ -199,12 +209,85 @@ def _distributed_comparison_pairs(golden, output):
     return pairs
 
 
+def _structured_output_pairs(golden_outputs, outputs):
+    import numbers
+    import torch
+
+    if isinstance(outputs, (ttnn.Tensor, torch.Tensor)) and isinstance(golden_outputs, (list, tuple)):
+        if len(golden_outputs) != 1:
+            raise ValueError(
+                f"Output structure mismatch: tensor output cannot be paired with {len(golden_outputs)} golden outputs"
+            )
+        golden_outputs = golden_outputs[0]
+
+    def pairs(golden_output, output):
+        if golden_output is None or output is None:
+            if golden_output is None and output is None:
+                return
+            raise TypeError(
+                f"Output structure mismatch: golden type {type(golden_output)} does not match output type {type(output)}"
+            )
+        if isinstance(golden_output, (list, tuple)) or isinstance(output, (list, tuple)):
+            if not isinstance(golden_output, (list, tuple)) or not isinstance(output, (list, tuple)):
+                raise TypeError(
+                    f"Output structure mismatch: golden type {type(golden_output)} "
+                    f"does not match output type {type(output)}"
+                )
+            if len(golden_output) != len(output):
+                raise ValueError(
+                    f"Output structure mismatch: golden has {len(golden_output)} elements "
+                    f"but output has {len(output)}"
+                )
+            for nested_golden, nested_output in zip(golden_output, output):
+                yield from pairs(nested_golden, nested_output)
+            return
+        if isinstance(golden_output, dict) or isinstance(output, dict):
+            if not isinstance(golden_output, dict) or not isinstance(output, dict):
+                raise TypeError(
+                    f"Output structure mismatch: golden type {type(golden_output)} "
+                    f"does not match output type {type(output)}"
+                )
+            if golden_output.keys() != output.keys():
+                raise ValueError("Output structure mismatch: golden and output dictionaries have different keys")
+            for key in golden_output:
+                yield from pairs(golden_output[key], output[key])
+            return
+        yield golden_output, output
+
+    output_pairs = tuple(pairs(golden_outputs, outputs))
+    return tuple(
+        sorted(
+            output_pairs,
+            key=lambda pair: not (isinstance(pair[0], numbers.Number) or isinstance(pair[1], numbers.Number)),
+        )
+    )
+
+
 def compare_tensors_using_pcc(
     python_fully_qualified_name, golden_outputs, outputs, desired_pcc, level, fail_on_bad_comparison
 ):
+    import numbers
     import torch
 
     from models.common.utility_functions import comp_pcc, comp_ulp
+
+    if isinstance(golden_outputs, (list, tuple, dict)) or isinstance(outputs, (list, tuple, dict)):
+        comparison_records = []
+        for golden_output, output in _structured_output_pairs(golden_outputs, outputs):
+            comparison_records.extend(
+                compare_tensors_using_pcc(
+                    python_fully_qualified_name,
+                    golden_output,
+                    output,
+                    desired_pcc,
+                    level,
+                    fail_on_bad_comparison,
+                )
+            )
+        return comparison_records
+
+    if golden_outputs is None or outputs is None:
+        return list(_structured_output_pairs(golden_outputs, outputs))
 
     if isinstance(golden_outputs, ttnn.DistributedGolden):
         comparison_records = []
@@ -221,150 +304,132 @@ def compare_tensors_using_pcc(
             )
         return comparison_records
 
-    if isinstance(outputs, ttnn.Tensor):
-        if isinstance(golden_outputs, (list, tuple)) and len(golden_outputs) == 1:
-            golden_outputs = golden_outputs[0]
-        if not isinstance(golden_outputs, torch.Tensor):
-            raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
-        outputs = [outputs]
-        golden_outputs = [golden_outputs]
-    elif isinstance(outputs, torch.Tensor):
-        if isinstance(golden_outputs, (list, tuple)) and len(golden_outputs) == 1:
-            golden_outputs = golden_outputs[0]
-        if not isinstance(golden_outputs, torch.Tensor):
-            raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
-        outputs = [outputs]
-        golden_outputs = [golden_outputs]
-    else:
-        if not isinstance(outputs, (list, tuple)):
-            raise TypeError(f"Expected list or tuple, got {type(outputs)}")
-        if not isinstance(golden_outputs, (list, tuple)):
-            raise TypeError(f"Expected list or tuple, got {type(golden_outputs)}")
-
-    comparison_records = []
-    for index, (golden_output, output) in enumerate(zip(golden_outputs, outputs)):
-        if isinstance(golden_output, ttnn.DistributedGolden):
-            comparison_records.extend(
-                compare_tensors_using_pcc(
-                    python_fully_qualified_name,
-                    golden_output,
-                    output,
-                    desired_pcc,
-                    level,
-                    fail_on_bad_comparison,
-                )
+    if isinstance(golden_outputs, numbers.Number) or isinstance(outputs, numbers.Number):
+        if not isinstance(golden_outputs, numbers.Number) or not isinstance(outputs, numbers.Number):
+            raise TypeError(
+                f"Output structure mismatch: golden type {type(golden_outputs)} does not match output type {type(outputs)}"
             )
-            continue
-        torch_output = output if isinstance(output, torch.Tensor) else to_torch_for_comparison(output, golden_output)
-        same_shape = golden_output.shape == torch_output.shape
-        comparison_config = getattr(golden_output, "_ttnn_comparison_config", None)
-        comparison_golden = golden_output
-        comparison_output = torch_output
-        if comparison_config is not None and comparison_config.mask is not None and same_shape:
-            comparison_mask = comparison_config.mask.to(dtype=torch.bool, device=golden_output.device)
-            while comparison_mask.ndim < golden_output.ndim:
-                comparison_mask = comparison_mask.unsqueeze(-1)
-            try:
-                comparison_mask = torch.broadcast_to(comparison_mask, golden_output.shape)
-            except RuntimeError as error:
-                raise ValueError(
-                    f"Golden comparison mask shape {tuple(comparison_config.mask.shape)} cannot be broadcast "
-                    f"to output shape {tuple(golden_output.shape)}"
-                ) from error
-            comparison_golden = golden_output[comparison_mask]
-            comparison_output = torch_output[comparison_mask]
-
-        flattened_golden = comparison_golden.reshape(-1)
-        flattened_output = comparison_output.reshape(-1)
-
-        def is_constant(flattened_tensor):
-            if flattened_tensor.numel() == 0:
-                return True
-            first_value = flattened_tensor[0]
-            if flattened_tensor.dtype.is_floating_point or flattened_tensor.dtype.is_complex:
-                if bool(torch.isnan(first_value)):
-                    return bool(torch.all(torch.isnan(flattened_tensor)))
-            return bool(torch.all(flattened_tensor == first_value))
-
-        pcc_is_degenerate = (
-            flattened_golden.numel() < 2
-            or flattened_output.numel() < 2
-            or is_constant(flattened_golden)
-            or is_constant(flattened_output)
+        return compare_scalar_outputs(
+            python_fully_qualified_name,
+            golden_outputs,
+            outputs,
+            desired_pcc,
+            level,
+            fail_on_bad_comparison,
         )
-        use_comparison_config = comparison_config is not None and (
-            comparison_config.scope == "all" or pcc_is_degenerate
-        )
-        if use_comparison_config and comparison_config.method == "skip":
-            continue
 
-        if use_comparison_config and same_shape:
-            nonfinite_masks_match = True
-            if comparison_config.nonfinite == "mask" and (
-                comparison_golden.dtype.is_floating_point
-                or comparison_golden.dtype.is_complex
-                or comparison_output.dtype.is_floating_point
-                or comparison_output.dtype.is_complex
-            ):
-                golden_finite = torch.isfinite(comparison_golden)
-                output_finite = torch.isfinite(comparison_output)
-                nonfinite_masks_match = bool(torch.equal(golden_finite, output_finite))
-                if nonfinite_masks_match and not bool(golden_finite.all()):
-                    comparison_golden = comparison_golden.clone()
-                    comparison_output = comparison_output.clone()
-                    comparison_golden[~golden_finite] = 0
-                    comparison_output[~output_finite] = 0
+    if not isinstance(outputs, (ttnn.Tensor, torch.Tensor)):
+        raise TypeError(f"Expected a tensor output, got {type(outputs)}")
+    if not isinstance(golden_outputs, torch.Tensor):
+        raise TypeError(f"Expected torch.Tensor golden output, got {type(golden_outputs)}")
 
-            if not nonfinite_masks_match:
-                matches = False
-            elif comparison_config.method == "ulp":
-                matches, _ = comp_ulp(
+    output = outputs
+    golden_output = golden_outputs
+    torch_output = output if isinstance(output, torch.Tensor) else to_torch_for_comparison(output, golden_output)
+    same_shape = golden_output.shape == torch_output.shape
+    comparison_config = getattr(golden_output, "_ttnn_comparison_config", None)
+    comparison_golden = golden_output
+    comparison_output = torch_output
+    if comparison_config is not None and comparison_config.mask is not None and same_shape:
+        comparison_mask = comparison_config.mask.to(dtype=torch.bool, device=golden_output.device)
+        while comparison_mask.ndim < golden_output.ndim:
+            comparison_mask = comparison_mask.unsqueeze(-1)
+        try:
+            comparison_mask = torch.broadcast_to(comparison_mask, golden_output.shape)
+        except RuntimeError as error:
+            raise ValueError(
+                f"Golden comparison mask shape {tuple(comparison_config.mask.shape)} cannot be broadcast "
+                f"to output shape {tuple(golden_output.shape)}"
+            ) from error
+        comparison_golden = golden_output[comparison_mask]
+        comparison_output = torch_output[comparison_mask]
+
+    flattened_golden = comparison_golden.reshape(-1)
+    flattened_output = comparison_output.reshape(-1)
+
+    def is_constant(flattened_tensor):
+        if flattened_tensor.numel() == 0:
+            return True
+        first_value = flattened_tensor[0]
+        if flattened_tensor.dtype.is_floating_point or flattened_tensor.dtype.is_complex:
+            if bool(torch.isnan(first_value)):
+                return bool(torch.all(torch.isnan(flattened_tensor)))
+        return bool(torch.all(flattened_tensor == first_value))
+
+    pcc_is_degenerate = (
+        flattened_golden.numel() < 2
+        or flattened_output.numel() < 2
+        or is_constant(flattened_golden)
+        or is_constant(flattened_output)
+    )
+    use_comparison_config = comparison_config is not None and (comparison_config.scope == "all" or pcc_is_degenerate)
+    if use_comparison_config and comparison_config.method == "skip":
+        return []
+
+    if use_comparison_config and same_shape:
+        nonfinite_masks_match = True
+        if comparison_config.nonfinite == "mask" and (
+            comparison_golden.dtype.is_floating_point
+            or comparison_golden.dtype.is_complex
+            or comparison_output.dtype.is_floating_point
+            or comparison_output.dtype.is_complex
+        ):
+            golden_finite = torch.isfinite(comparison_golden)
+            output_finite = torch.isfinite(comparison_output)
+            nonfinite_masks_match = bool(torch.equal(golden_finite, output_finite))
+            if nonfinite_masks_match and not bool(golden_finite.all()):
+                comparison_golden = comparison_golden.clone()
+                comparison_output = comparison_output.clone()
+                comparison_golden[~golden_finite] = 0
+                comparison_output[~output_finite] = 0
+
+        if not nonfinite_masks_match:
+            matches = False
+        elif comparison_config.method == "ulp":
+            matches, _ = comp_ulp(
+                comparison_golden,
+                comparison_output,
+                ulp_threshold=comparison_config.ulp_threshold,
+                allow_nonfinite=True,
+            )
+            matches = bool(matches)
+        else:
+            if comparison_golden.dtype != comparison_output.dtype:
+                comparison_output = comparison_output.to(comparison_golden.dtype)
+            matches = bool(
+                torch.allclose(
                     comparison_golden,
                     comparison_output,
-                    ulp_threshold=comparison_config.ulp_threshold,
-                    allow_nonfinite=True,
+                    rtol=comparison_config.rtol,
+                    atol=comparison_config.atol,
+                    equal_nan=comparison_config.equal_nan,
                 )
-                matches = bool(matches)
-            else:
-                if comparison_golden.dtype != comparison_output.dtype:
-                    comparison_output = comparison_output.to(comparison_golden.dtype)
-                matches = bool(
-                    torch.allclose(
-                        comparison_golden,
-                        comparison_output,
-                        rtol=comparison_config.rtol,
-                        atol=comparison_config.atol,
-                        equal_nan=comparison_config.equal_nan,
-                    )
-                )
-            actual_pcc = 1.0 if matches else 0.0
-        elif use_comparison_config:
-            matches = False
-            actual_pcc = 0.0
-        elif pcc_is_degenerate:
-            if golden_output.dtype != torch_output.dtype:
-                torch_output = torch_output.to(golden_output.dtype)
-            matches = same_shape and bool(
-                torch.allclose(golden_output, torch_output, rtol=1e-5, atol=1e-4, equal_nan=True)
             )
-            actual_pcc = 1.0 if matches else 0.0
-        else:
-            matches, actual_pcc = comp_pcc(comparison_golden, comparison_output, desired_pcc)
+        actual_pcc = 1.0 if matches else 0.0
+    elif use_comparison_config:
+        matches = False
+        actual_pcc = 0.0
+    elif pcc_is_degenerate:
+        if golden_output.dtype != torch_output.dtype:
+            torch_output = torch_output.to(golden_output.dtype)
+        matches = same_shape and bool(torch.allclose(golden_output, torch_output, rtol=1e-5, atol=1e-4, equal_nan=True))
+        actual_pcc = 1.0 if matches else 0.0
+    else:
+        matches, actual_pcc = comp_pcc(comparison_golden, comparison_output, desired_pcc)
 
-        comparison_record = {
-            "tensor_id": int(output.tensor_id),
-            "golden_tensor_id": int(golden_output.tensor_id),
-            "matches": bool(matches),
-            "desired_pcc": float(desired_pcc),
-            "actual_pcc": float(actual_pcc),
-        }
-        comparison_records.append(comparison_record)
-        if not matches:
-            error_message = f"{python_fully_qualified_name}: Comparing output tensor {index} against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
-            if fail_on_bad_comparison:
-                raise RuntimeError(error_message)
-            logger.error(error_message)
-    return comparison_records
+    comparison_record = {
+        "tensor_id": int(output.tensor_id),
+        "golden_tensor_id": int(golden_output.tensor_id),
+        "matches": bool(matches),
+        "desired_pcc": float(desired_pcc),
+        "actual_pcc": float(actual_pcc),
+    }
+    if not matches:
+        error_message = f"{python_fully_qualified_name}: Comparing output tensor 0 against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
+        if fail_on_bad_comparison:
+            raise RuntimeError(error_message)
+        logger.error(error_message)
+    return [comparison_record]
 
 
 def should_compare_tensor_outputs(golden_outputs, outputs):
@@ -374,7 +439,14 @@ def should_compare_tensor_outputs(golden_outputs, outputs):
 def should_compare_scalar_outputs(golden_outputs, outputs):
     import numbers
 
-    return isinstance(golden_outputs, numbers.Number) and isinstance(outputs, numbers.Number)
+    try:
+        output_pairs = _structured_output_pairs(golden_outputs, outputs)
+    except (TypeError, ValueError):
+        return True
+    return any(
+        isinstance(golden_output, numbers.Number) or isinstance(output, numbers.Number)
+        for golden_output, output in output_pairs
+    )
 
 
 def compare_scalar_outputs(
@@ -536,22 +608,20 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs, *, 
 
 
 def postprocess_global_golden_function_outputs(outputs, golden_outputs):
+    import numbers
     import torch
 
-    if isinstance(outputs, (ttnn.Tensor, torch.Tensor)):
-        if isinstance(golden_outputs, (list, tuple)) and len(golden_outputs) == 1:
-            golden_outputs = golden_outputs[0]
-        if not isinstance(golden_outputs, (torch.Tensor, ttnn.DistributedGolden)):
-            raise TypeError(f"Expected torch.Tensor or DistributedGolden, got {type(golden_outputs)}")
-        outputs = [outputs]
-        golden_outputs = [golden_outputs]
-    else:
-        if not isinstance(outputs, (list, tuple)):
-            raise TypeError(f"Expected list or tuple, got {type(outputs)}")
-        if not isinstance(golden_outputs, (list, tuple)):
-            raise TypeError(f"Expected list or tuple, got {type(golden_outputs)}")
-
-    for output, golden_output in zip(outputs, golden_outputs):
+    for golden_output, output in _structured_output_pairs(golden_outputs, outputs):
+        if isinstance(golden_output, numbers.Number) or isinstance(output, numbers.Number):
+            if isinstance(golden_output, numbers.Number) and isinstance(output, numbers.Number):
+                continue
+            raise TypeError(
+                f"Output structure mismatch: golden type {type(golden_output)} does not match output type {type(output)}"
+            )
+        if not isinstance(output, (ttnn.Tensor, torch.Tensor)):
+            raise TypeError(f"Expected a tensor output, got {type(output)}")
+        if not isinstance(golden_output, (torch.Tensor, ttnn.DistributedGolden)):
+            raise TypeError(f"Expected torch.Tensor or DistributedGolden, got {type(golden_output)}")
         if output.tensor_id is None:
             raise RuntimeError("Output tensor does not have a tensor_id")
         if isinstance(output, ttnn.Tensor) and not isinstance(golden_output, ttnn.DistributedGolden):
@@ -727,7 +797,8 @@ def create_comparison_mode_wrapper(operation, function):
             local_golden_function_output, output
         ):
             try:
-                set_tensor_id(local_golden_function_output)
+                for golden_tensor in get_all_tensors(local_golden_function_output):
+                    set_tensor_id(golden_tensor)
                 local_tensor_comparison_records = compare_tensors_using_pcc(
                     operation.python_fully_qualified_name,
                     local_golden_function_output,
@@ -748,7 +819,7 @@ def create_comparison_mode_wrapper(operation, function):
             local_golden_function_output, output
         ):
             try:
-                local_tensor_comparison_records = compare_scalar_outputs(
+                local_tensor_comparison_records = compare_tensors_using_pcc(
                     operation.python_fully_qualified_name,
                     local_golden_function_output,
                     output,
@@ -769,7 +840,8 @@ def create_comparison_mode_wrapper(operation, function):
             global_golden_function_output, output
         ):
             try:
-                set_tensor_id(global_golden_function_output)
+                for golden_tensor in get_all_tensors(global_golden_function_output):
+                    set_tensor_id(golden_tensor)
                 postprocess_global_golden_function_outputs(output, global_golden_function_output)
                 global_tensor_comparison_records = compare_tensors_using_pcc(
                     operation.python_fully_qualified_name,
@@ -791,7 +863,7 @@ def create_comparison_mode_wrapper(operation, function):
             global_golden_function_output, output
         ):
             try:
-                global_tensor_comparison_records = compare_scalar_outputs(
+                global_tensor_comparison_records = compare_tensors_using_pcc(
                     operation.python_fully_qualified_name,
                     global_golden_function_output,
                     output,
