@@ -192,7 +192,8 @@ void kernel_main() {
                 auto means_addr = dfb_partial.get_read_ptr();
                 auto vars_addr = means_addr + partial_tile_size_bytes;
 
-                // dfb::partial is Float32: each element is 4 bytes.
+                // dfb::partial is Float32: each element is 4 bytes. Only row zero
+                // contains statistics; other rows may contain retained compute input.
                 auto* means_ptr = reinterpret_cast<volatile float*>(means_addr);
                 auto* vars_ptr = reinterpret_cast<volatile float*>(vars_addr);
 

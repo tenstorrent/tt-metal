@@ -163,12 +163,17 @@ def test_std_w_streaming_output_padding_is_finite(device):
     ids=["bf16", "fp32", "bfp8"],
 )
 @pytest.mark.parametrize("width", [96, 128], ids=["scalar_combine", "compact_combine"])
-def test_std_var_hw_output_padding_is_zero(device, torch_dtype, ttnn_dtype, ttnn_op, width):
+@pytest.mark.parametrize("height", [32, 64, 160], ids=["one_tile", "retained_pair", "streaming"])
+def test_std_var_hw_output_padding_is_zero(device, torch_dtype, ttnn_dtype, ttnn_op, width, height):
     torch.manual_seed(0)
     # More outputs than either supported Gen1 compute grid ensures that the
     # one-entry combined buffer and partial/output packer formats are reused.
-    torch_input = -torch.rand((1, 256, 32, width), dtype=torch_dtype)
+    # Ht >= 2 also leaves retained input in unused rows of the internal mean tile.
+    torch_input = -torch.rand((1, 256, height, width), dtype=torch_dtype)
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    quantized_input = ttnn.to_torch(input_tensor).double()
+    torch_op = torch.var if ttnn_op == ttnn.var else torch.std
+    expected = torch_op(quantized_input, dim=(-2, -1), keepdim=True, correction=0)
 
     output_tensor = ttnn_op(input_tensor, dim=(-2, -1), keepdim=True, correction=False)
     padded_output = output_tensor.cpu().to_torch_with_padded_shape()
@@ -177,6 +182,7 @@ def test_std_var_hw_output_padding_is_zero(device, torch_dtype, ttnn_dtype, ttnn
 
     assert torch.isfinite(padded_output).all()
     assert torch.count_nonzero(padding) == 0
+    torch.testing.assert_close(padded_output[..., :1, :1].double(), expected, rtol=0.02, atol=1e-5)
 
 
 @pytest.mark.parametrize("ttnn_op,torch_op", [(ttnn.var, torch.var), (ttnn.std, torch.std)], ids=["var", "std"])

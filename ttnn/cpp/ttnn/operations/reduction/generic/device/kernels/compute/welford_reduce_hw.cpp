@@ -93,8 +93,9 @@ void kernel_main() {
                     constexpr std::uint32_t stats_input_dst = input_dst;
 #else
                     dfb_in.wait_front(onetile);
-                    // Keep DST[2] clean: finalisation writes only the result rows, so
-                    // parking pass-one input there would leak stale data into padding.
+                    // Retain the first two inputs in DST[3] and mean_dst until pass two.
+                    // Partial tiles are private: only row zero is consumed by the writer;
+                    // unused rows of mean_dst may still contain this input after finalisation.
                     const std::uint32_t stats_input_dst =
                         ht < num_front_retained_limit ? (ht == 0 ? retained_input_dst : mean_dst) : input_dst;
                     copy_tile(dfb::in, 0, stats_input_dst);
@@ -145,7 +146,8 @@ void kernel_main() {
 #endif
                 tile_regs_commit();
 
-                // Pack mean (DST[1]) and var (DST[2]) tiles to dfb_partial.
+                // Publish row-zero mean/variance statistics in full-tile storage.
+                // Unused rows are unspecified, unlike the zero-padded final output.
                 dfb_partial.reserve_back(2);
                 tile_regs_wait();
                 pack_block(mean_dst, dfb::partial, 2);
