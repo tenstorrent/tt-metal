@@ -1193,7 +1193,7 @@ def test_mistral4_kv_cache_table(
     Readback test for the Mistral-Small-4-119B (non-balanced / sequential) KV chunk address table.
 
     Runs one dense Mistral 4 MLA layer with random weights (SP=8 on axis 0, TP=4 on axis 1) to fill a
-    sequentially laid-out KVPE cache, builds the table with create_kv_chunk_address_table_kimi, then
+    sequentially laid-out KVPE cache, builds the table with create_kv_chunk_address_table_block_cyclic, then
     reads every 32-token chunk back through the table and checks it against the gathered cache. The
     sequential gather is already position-continuous, so no chunk reorder is needed.
     """
@@ -1241,7 +1241,7 @@ def test_mistral4_kv_cache_table(
     lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
 
-    lookup_table = create_kv_chunk_address_table_kimi(
+    lookup_table = create_kv_chunk_address_table_block_cyclic(
         config=lookup_table_config,
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,

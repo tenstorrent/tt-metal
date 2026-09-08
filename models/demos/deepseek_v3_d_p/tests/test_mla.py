@@ -48,11 +48,8 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
-from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-_WORKER_L1_SIZE = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
 
 
 def run_mla_inference(
@@ -435,7 +432,6 @@ def run_model(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "worker_l1_size": _WORKER_L1_SIZE,
         },
     ],
     ids=["fabric2d"],
