@@ -174,6 +174,32 @@ void validate_rms_norm_gamma(
         validate_rms_norm_gamma_tensor(operation_attributes, *tensor_args.rms_norm_gamma, tensor_args.input_tensor_b);
     }
 }
+
+void validate_rms_norm_group_size(const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes) {
+    const uint32_t group_size = operation_attributes.rms_norm_group_size;
+    if (!operation_attributes.rms_norm) {
+        TT_FATAL(group_size == 0, "matmul_decode rms_norm_group_size requires rms_norm");
+        return;
+    }
+    if (group_size == 0) {
+        return;
+    }
+    TT_FATAL(
+        group_size <= static_cast<uint32_t>(operation_attributes.N),
+        "matmul_decode rms_norm_group_size ({}) must be <= N ({})",
+        group_size,
+        operation_attributes.N);
+    TT_FATAL(
+        group_size % tt::constants::TILE_WIDTH == 0,
+        "matmul_decode rms_norm_group_size ({}) must be divisible by {}",
+        group_size,
+        tt::constants::TILE_WIDTH);
+    TT_FATAL(
+        static_cast<uint32_t>(operation_attributes.N) % group_size == 0,
+        "matmul_decode rms_norm requires N ({}) divisible by group_size ({})",
+        operation_attributes.N,
+        group_size);
+}
 }  // namespace
 
 MatmulDecodeDeviceOperation::program_factory_t MatmulDecodeDeviceOperation::select_program_factory(
@@ -202,6 +228,7 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
 
     if (operation_attributes.rms_norm) {
         validate_rms_norm_gamma(operation_attributes, tensor_args);
+        validate_rms_norm_group_size(operation_attributes);
         TT_FATAL(
             std::isfinite(operation_attributes.rms_norm_epsilon) && operation_attributes.rms_norm_epsilon >= 0.0F,
             "matmul_decode rms_norm_epsilon must be finite and non-negative, but got {}",
@@ -232,6 +259,7 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             !operation_attributes.rms_norm_gamma.has_value() && !tensor_args.rms_norm_gamma.has_value(),
             "matmul_decode rms_norm_gamma requires rms_norm");
+        validate_rms_norm_group_size(operation_attributes);
     }
 
     if (operation_attributes.mesh_coords.has_value()) {
@@ -921,7 +949,8 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     bool output_mcast_two_hub,
     bool rms_norm,
     const std::optional<std::variant<float, Tensor>>& rms_norm_gamma,
-    float rms_norm_epsilon) {
+    float rms_norm_epsilon,
+    uint32_t rms_norm_group_size) {
     using OperationType = ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation;
     using ttnn::operations::experimental::matmul_decode::gcb_num_receivers;
 
@@ -949,6 +978,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         attrs.rms_norm = rms_norm;
         attrs.rms_norm_gamma = rms_norm_gamma_scalar;
         attrs.rms_norm_epsilon = rms_norm_epsilon;
+        attrs.rms_norm_group_size = rms_norm_group_size;
         attrs.in0_row_major_height_sharded =
             input_tensor_a.layout() == Layout::ROW_MAJOR &&
             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;

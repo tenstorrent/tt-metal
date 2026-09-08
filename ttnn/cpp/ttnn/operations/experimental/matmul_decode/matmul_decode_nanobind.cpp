@@ -53,7 +53,7 @@ void bind_matmul_decode_operation(nb::module_& mod) {
 
     ttnn::bind_function<"matmul_decode", "ttnn.experimental.">(
         mod,
-        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False, mesh_coords: Optional[list[ttnn.MeshCoordinate]] = None, ring_gather: bool = False, output_core_grid: Optional[ttnn.CoreRangeSet] = None, output_mcast_two_hub: bool = False, rms_norm: bool = False, rms_norm_gamma: Optional[Union[float, ttnn.Tensor]] = None, rms_norm_epsilon: float = 1e-6) -> ttnn.Tensor
+        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False, mesh_coords: Optional[list[ttnn.MeshCoordinate]] = None, ring_gather: bool = False, output_core_grid: Optional[ttnn.CoreRangeSet] = None, output_mcast_two_hub: bool = False, rms_norm: bool = False, rms_norm_gamma: Optional[Union[float, ttnn.Tensor]] = None, rms_norm_epsilon: float = 1e-6, rms_norm_group_size: int = 0) -> ttnn.Tensor
 
         Returns the matrix product of two tensors.
 
@@ -150,6 +150,11 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 ``[1, N / num_weight_cores]``. Required when ``rms_norm`` is True.
             rms_norm_epsilon (float, optional): non-negative RMSNorm epsilon. Defaults
                 to 1e-6.
+            rms_norm_group_size (int, optional): when nonzero and ``rms_norm`` is True,
+                normalize within groups of this many elements along N instead of the
+                full row. Must be <= N, divisible by 32, and divide N evenly. ``0``
+                (the default) preserves legacy full-row normalization. Requires
+                ``rms_norm``; nonzero values are rejected when ``rms_norm`` is False.
 
                 When `input_tensor_a` is ROW_MAJOR and HEIGHT_SHARDED, it must be replicated on
                 the same core grid as `input_tensor_b` (shard width = K, shard height = M).
@@ -177,7 +182,8 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("output_mcast_two_hub") = false,
         nb::arg("rms_norm") = false,
         nb::arg("rms_norm_gamma") = nb::none(),
-        nb::arg("rms_norm_epsilon") = 1.0e-6F);
+        nb::arg("rms_norm_epsilon") = 1.0e-6F,
+        nb::arg("rms_norm_group_size") = 0);
 }
 
 // Descriptor-level bindings for models/experimental/ops/descriptors/matmul_decode.py, mirroring
@@ -207,7 +213,8 @@ void bind_matmul_decode_descriptor(nb::module_& mod) {
         .def_rw("output_mcast_two_hub", &ttnn::prim::MatmulDecodeParams::output_mcast_two_hub)
         .def_rw("rms_norm", &ttnn::prim::MatmulDecodeParams::rms_norm)
         .def_rw("rms_norm_gamma", &ttnn::prim::MatmulDecodeParams::rms_norm_gamma)
-        .def_rw("rms_norm_epsilon", &ttnn::prim::MatmulDecodeParams::rms_norm_epsilon);
+        .def_rw("rms_norm_epsilon", &ttnn::prim::MatmulDecodeParams::rms_norm_epsilon)
+        .def_rw("rms_norm_group_size", &ttnn::prim::MatmulDecodeParams::rms_norm_group_size);
 
     nb::class_<ttnn::prim::MatmulDecodeInputs>(mod, "MatmulDecodeInputs")
         .def(
