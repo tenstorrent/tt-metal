@@ -195,7 +195,7 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
     return hash;
 }
 
-std::optional<MeshRingPlan> resolve_mesh_ring_plan(
+std::optional<ResolvedMeshRoute> resolve_mesh_ring_plan(
     const ttnn::Tensor& tensor,
     std::optional<uint32_t> cluster_axis,
     uint32_t num_links,
@@ -239,18 +239,17 @@ std::optional<MeshRingPlan> resolve_mesh_ring_plan(
         if (!route_hash.has_value()) {
             return std::nullopt;
         }
-        return MeshRingPlan{
-            .cluster_axis = cluster_axis,
-            .full_mesh = false,
-            .orientation = ttnn::ccl::snake_ring::Orientation::Row,
-            .mesh_rows = shape[0],
-            .mesh_cols = shape[1],
-            .ring_size = shape[*cluster_axis],
-            .num_links = num_links,
-            .topology = topology,
-            .fabric_config = fabric_config,
-            .axis_topology = axis_topology,
-            .route_plan_hash = ttsl::hash::hash_objects(*route_hash, fabric_config, axis_topology)};
+        return ResolvedMeshRoute{
+            .plan =
+                MeshRingPlan{
+                    .cluster_axis = cluster_axis,
+                    .full_mesh = false,
+                    .orientation = ttnn::ccl::snake_ring::Orientation::Row,
+                    .mesh_rows = shape[0],
+                    .mesh_cols = shape[1],
+                    .ring_size = shape[*cluster_axis],
+                    .route_plan_hash = ttsl::hash::hash_objects(*route_hash, fabric_config, axis_topology)},
+            .topology = topology};
     }
 
     // A cycle needs an even lane count and >2 devices; 1xN can still close on a torus, so the edge proof decides.
@@ -279,20 +278,19 @@ std::optional<MeshRingPlan> resolve_mesh_ring_plan(
         return std::nullopt;
     }
     const auto build = [&](ttnn::ccl::snake_ring::Orientation orientation,
-                           tt::tt_fabric::Topology plan_topology,
+                           tt::tt_fabric::Topology route_topology,
                            uint64_t route_hash) {
-        return MeshRingPlan{
-            .cluster_axis = std::nullopt,
-            .full_mesh = true,
-            .orientation = orientation,
-            .mesh_rows = shape[0],
-            .mesh_cols = shape[1],
-            .ring_size = static_cast<uint32_t>(shape.mesh_size()),
-            .num_links = num_links,
-            .topology = plan_topology,
-            .fabric_config = fabric_config,
-            .axis_topology = axis_topology,
-            .route_plan_hash = ttsl::hash::hash_objects(route_hash, fabric_config, axis_topology)};
+        return ResolvedMeshRoute{
+            .plan =
+                MeshRingPlan{
+                    .cluster_axis = std::nullopt,
+                    .full_mesh = true,
+                    .orientation = orientation,
+                    .mesh_rows = shape[0],
+                    .mesh_cols = shape[1],
+                    .ring_size = static_cast<uint32_t>(shape.mesh_size()),
+                    .route_plan_hash = ttsl::hash::hash_objects(route_hash, fabric_config, axis_topology)},
+            .topology = route_topology};
     };
 
     if (cycle_possible) {
@@ -336,7 +334,10 @@ std::optional<MeshRingPlan> resolve_mesh_ring_plan(
 }
 
 MeshRingPosition get_mesh_ring_position(
-    const ttnn::Tensor& tensor, const ttnn::MeshCoordinate& coordinate, const MeshRingPlan& plan) {
+    const ttnn::Tensor& tensor,
+    const ttnn::MeshCoordinate& coordinate,
+    const MeshRingPlan& plan,
+    tt::tt_fabric::Topology topology) {
     if (plan.full_mesh) {
         TT_FATAL(
             tensor.device() != nullptr && tensor.device()->shape().dims() == 2 && coordinate.dims() == 2,
@@ -357,7 +358,7 @@ MeshRingPosition get_mesh_ring_position(
         const uint32_t transport_rank = ttnn::ccl::snake_ring::index_from_coordinate(
             coordinate[0], coordinate[1], plan.mesh_rows, plan.mesh_cols, plan.orientation);
         // Open path: the end ranks have no neighbor one way, which is how an axis line signals a dead direction.
-        const bool closed = plan.topology == tt::tt_fabric::Topology::Ring;
+        const bool closed = topology == tt::tt_fabric::Topology::Ring;
         std::optional<ttnn::MeshCoordinate> forward_coord;
         std::optional<ttnn::MeshCoordinate> backward_coord;
         if (closed || transport_rank + 1 < plan.ring_size) {
@@ -382,9 +383,9 @@ MeshRingPosition get_mesh_ring_position(
         .transport_rank = transport_rank,
         .tensor_rank = transport_rank,
         .forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            tensor, coordinate, 1, plan.topology, plan.cluster_axis),
+            tensor, coordinate, 1, topology, plan.cluster_axis),
         .backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            tensor, coordinate, -1, plan.topology, plan.cluster_axis)};
+            tensor, coordinate, -1, topology, plan.cluster_axis)};
 }
 
 }  // namespace ttnn::operations::ccl::common

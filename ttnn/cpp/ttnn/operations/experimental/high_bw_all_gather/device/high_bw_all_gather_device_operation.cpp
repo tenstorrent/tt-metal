@@ -331,6 +331,13 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
         "high_bw_all_gather input and output tensors must be on the same mesh device");
 
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
+    // A full mesh is gathered as one snake across both axes, which only a 2D fabric can route.
+    TT_FATAL(
+        !linearized_mesh_ring || fabric_is_2d,
+        "high_bw_all_gather cluster_axis=None requires a 2D fabric config (FABRIC_2D or "
+        "FABRIC_2D_TORUS_X/Y/XY), got {}",
+        fabric_config);
     // Axis 0 is N/S, and axis 1 is E/W.
     // An inactive axis has num_devices = 1, num_links = 0, Linear topology.
     std::array<tt::tt_fabric::Topology, 2> axis_topology{
@@ -369,7 +376,6 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
                                                       : axis_num_devices[0] * axis_num_devices[1];
     const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const bool one_active_axis = (axis_num_devices[0] > 1) != (axis_num_devices[1] > 1);
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
     ttnn::ccl::snake_ring::Orientation snake_orientation = linearized_mesh_ring && mesh_shape[0] % 2 != 0
                                                                ? ttnn::ccl::snake_ring::Orientation::Column
                                                                : ttnn::ccl::snake_ring::Orientation::Row;
@@ -377,7 +383,7 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     bool linearized_mesh_open_path = false;
     if (fabric_is_2d && (linearized_mesh_ring || one_active_axis)) {
         // Safe to opt in: this op's line schedule already handles dead endpoints for axis gathers.
-        const auto mesh_ring_plan = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
+        const auto mesh_route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
             input_tensor,
             cluster_axis,
             collective_num_links,
@@ -385,11 +391,11 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             true,
             "high_bw_all_gather",
             /*allow_open_path=*/linearized_mesh_ring);
-        if (mesh_ring_plan.has_value()) {
-            snake_orientation = mesh_ring_plan->orientation;
-            direct_neighbor_route_hash = mesh_ring_plan->route_plan_hash;
+        if (mesh_route.has_value()) {
+            snake_orientation = mesh_route->plan.orientation;
+            direct_neighbor_route_hash = mesh_route->plan.route_plan_hash;
             linearized_mesh_open_path =
-                linearized_mesh_ring && mesh_ring_plan->topology == tt::tt_fabric::Topology::Linear;
+                linearized_mesh_ring && mesh_route->topology == tt::tt_fabric::Topology::Linear;
         }
     }
     const uint32_t active_axis = cluster_axis.value_or(0);

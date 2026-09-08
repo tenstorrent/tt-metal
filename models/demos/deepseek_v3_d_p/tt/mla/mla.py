@@ -1909,6 +1909,15 @@ class ttMLA:
             f"TP-deduped KVPE cache declares {self._declared_seq_shard_factor(storage)} dim-2 stripes, "
             f"expected sp*tp = {stripes}"
         )
+        # One snake across both mesh axes, so only Fabric2D can route it. FABRIC_1D reaches the op and
+        # fails its generic neighbor proof instead, which names the symptom rather than this cause.
+        fabric = ttnn.get_fabric_config()
+        assert fabric in (
+            ttnn.FabricConfig.FABRIC_2D,
+            ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+            ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        ), f"full-mesh KVPE gather requires a 2D fabric config, got {fabric}"
         gathered = ttnn.experimental.high_bw_all_gather(
             storage,
             dim=2,

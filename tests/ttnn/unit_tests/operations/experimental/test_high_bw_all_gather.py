@@ -834,8 +834,9 @@ def test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf(mesh_device):
 )
 @pytest.mark.parametrize("device_params", _FULL_MESH_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-def test_high_bw_all_gather_galaxy_8x4_whole_mesh_ring_accuracy(mesh_device):
-    """Gather exactly across a 32-rank snake ring while Galaxy remains an 8x4 mesh."""
+def test_high_bw_all_gather_galaxy_8x4_whole_mesh_accuracy(mesh_device):
+    """Gather across all 32 ranks as one snake -- a ring on a torus, an open path on a plain 2D
+    fabric -- while Galaxy remains an 8x4 mesh."""
     assert tuple(mesh_device.shape) == (8, 4)
     _run_high_bw_all_gather_accuracy(
         mesh_device,

@@ -579,11 +579,9 @@ ProgramDescriptor build_ring_program_descriptor(
             .mesh_rows = fused.mesh_rows,
             .mesh_cols = fused.mesh_cols,
             .ring_size = ring_size,
-            .num_links = fused.num_links,
-            // Load-bearing: get_mesh_ring_position reads closure off this, and the struct defaults to Linear.
-            .topology = fused.topology,
             .route_plan_hash = fused.route_plan_hash};
-        const auto position = ttnn::operations::ccl::common::get_mesh_ring_position(q, coord, mesh_ring_plan);
+        const auto position =
+            ttnn::operations::ccl::common::get_mesh_ring_position(q, coord, mesh_ring_plan, fused.topology);
         TT_FATAL(
             position.transport_rank == transport_rank && position.tensor_rank == tensor_rank,
             "indexer_score fused full-mesh rank plan drift at coordinate {}",
