@@ -1,68 +1,128 @@
 # LLK perf time budget -- matrix for llk-perf-budget.yaml (workflow_dispatch or
 # a marked push; nothing here runs on a schedule or on a PR).
 #
-# One row is one card. Each job measures every requested run-type selection in
-# sequence on that card -- full, isolates, l1, isolates_l1 -- each with a cold
-# build, the whole perf suite in a single group, non speed-of-light. Four jobs
-# occupy four cards, not sixteen: a card is the scarce thing, and measuring the
-# configurations on one card also removes the machine from the comparison
-# between them.
+# A row is one WORKER, and what a worker means depends on the shard count the
+# workflow asks for:
 #
-# Two cards per architecture, because a gate's budget has to hold on the slower
-# card and the spread between machines was so far assumed rather than measured.
-# The two rows differ only in `card`; a runner takes one job at a time, so they
-# land on different machines, and each job records its runner, host and devices.
+#   shards 1  -- each worker measures the whole suite on its own card. Two
+#                workers are then two independent cards measuring the same
+#                thing, which is how the card-to-card spread is obtained.
+#   shards N  -- worker k measures shard k of N (pytest-split --group k
+#                --splits N). The wall clock a sharded gate pays is the SLOWEST
+#                worker, not the sum; the sum is the card time it costs.
 #
-# The runner is tt_metal/tt-llk/tests/run_llk_perf_budget.sh, which times the
-# producer and the consumer of every configuration separately and writes one
-# perf_budget/summary-<config>.json each. Which configurations it runs comes
-# from CONFIGS, set by the workflow.
+# Five slots per architecture, because the nightly splits into five. The
+# workflow keeps only the slots a run needs, so a one-shard run reserves one
+# card per architecture (or two, for the spread) rather than five.
 #
-# Timeouts hold every configuration in one job. Measured on one Blackhole card,
-# non-SoL, whole suite: full 19:41, isolates 12:40, L1_TO_L1 6:17 -- about an
-# hour for all four. The cap is several times that, and the per-SKU sum stays
-# inside the llk/perf allocation in .github/time_budget.yaml.
+# Each worker measures every requested run-type selection in sequence, each with
+# a cold build. The runner is tt_metal/tt-llk/tests/run_llk_perf_budget.sh; it
+# takes the group and the shard count, and reads CONFIGS, PRODUCER_WORKERS and
+# CONSUMER_WORKERS from the environment -- all set by the workflow.
+#
+# Timeouts hold every configuration in one job, at one shard, which is the
+# longest a worker can be. Measured in CI, non-SoL, whole suite, four
+# configurations: about 105 min on Wormhole and 127 min on Blackhole. The cap is
+# 240, and the per-SKU sum has to stay inside the llk/perf allocation in
+# .github/time_budget.yaml -- which is what limits the slots to five.
 
-- name: llk_perf_budget wormhole card 1
-  card: 1
+- name: llk_perf_budget wormhole worker 1
+  slot: 1
   team: llk
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_budget.sh 1 1
+    ./tests/run_llk_perf_budget.sh "$BUDGET_GROUP" "$BUDGET_SHARDS"
   skus:
     wh_n150_civ2:
-      timeout: 240
+      timeout: 180
   owner_id: U09UC143684 # Nemanja Divnic
-
-- name: llk_perf_budget wormhole card 2
-  card: 2
+- name: llk_perf_budget wormhole worker 2
+  slot: 2
   team: llk
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_budget.sh 1 1
+    ./tests/run_llk_perf_budget.sh "$BUDGET_GROUP" "$BUDGET_SHARDS"
   skus:
     wh_n150_civ2:
-      timeout: 240
+      timeout: 180
   owner_id: U09UC143684 # Nemanja Divnic
-
-- name: llk_perf_budget blackhole card 1
-  card: 1
+- name: llk_perf_budget wormhole worker 3
+  slot: 3
   team: llk
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_budget.sh 1 1
+    ./tests/run_llk_perf_budget.sh "$BUDGET_GROUP" "$BUDGET_SHARDS"
   skus:
-    bh_p150b_civ2:
-      timeout: 240
+    wh_n150_civ2:
+      timeout: 180
   owner_id: U09UC143684 # Nemanja Divnic
-
-- name: llk_perf_budget blackhole card 2
-  card: 2
+- name: llk_perf_budget wormhole worker 4
+  slot: 4
   team: llk
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_budget.sh 1 1
+    ./tests/run_llk_perf_budget.sh "$BUDGET_GROUP" "$BUDGET_SHARDS"
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U09UC143684 # Nemanja Divnic
+- name: llk_perf_budget wormhole worker 5
+  slot: 5
+  team: llk
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_budget.sh "$BUDGET_GROUP" "$BUDGET_SHARDS"
+  skus:
+    wh_n150_civ2:
+      timeout: 180
+  owner_id: U09UC143684 # Nemanja Divnic
+- name: llk_perf_budget blackhole worker 1
+  slot: 1
+  team: llk
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_budget.sh "$BUDGET_GROUP" "$BUDGET_SHARDS"
   skus:
     bh_p150b_civ2:
-      timeout: 240
+      timeout: 180
+  owner_id: U09UC143684 # Nemanja Divnic
+- name: llk_perf_budget blackhole worker 2
+  slot: 2
+  team: llk
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_budget.sh "$BUDGET_GROUP" "$BUDGET_SHARDS"
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U09UC143684 # Nemanja Divnic
+- name: llk_perf_budget blackhole worker 3
+  slot: 3
+  team: llk
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_budget.sh "$BUDGET_GROUP" "$BUDGET_SHARDS"
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U09UC143684 # Nemanja Divnic
+- name: llk_perf_budget blackhole worker 4
+  slot: 4
+  team: llk
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_budget.sh "$BUDGET_GROUP" "$BUDGET_SHARDS"
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
+  owner_id: U09UC143684 # Nemanja Divnic
+- name: llk_perf_budget blackhole worker 5
+  slot: 5
+  team: llk
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_budget.sh "$BUDGET_GROUP" "$BUDGET_SHARDS"
+  skus:
+    bh_p150b_civ2:
+      timeout: 180
   owner_id: U09UC143684 # Nemanja Divnic

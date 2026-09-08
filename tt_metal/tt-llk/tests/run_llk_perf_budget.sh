@@ -26,7 +26,9 @@
 #   * the build tree is wiped before each configuration, so every compile time
 #     is the cold one a fresh gate runner pays and not a short-circuit on
 #     .build_complete,
-#   * the sweep is one group by default, so one job measures the whole suite.
+#   * the sweep is one group by default, so one job measures the whole suite;
+#     at <n_groups> above 1 this job measures its own shard, and the wall clock
+#     a sharded gate pays is the slowest shard, not the sum.
 #
 # Usage: run_llk_perf_budget.sh [<group> <n_groups>]
 # Env:
@@ -35,12 +37,23 @@
 #   BUDGET_DIR      summary directory     (default python_tests/perf_budget)
 #   BUDGET_CARD     card label for the report, e.g. 1 or 2
 #   COLD_BUILD      true|false            (default true; wipes the build tree)
+#   PRODUCER_WORKERS  xdist workers for the compile phase (default 10, as CI)
+#   CONSUMER_WORKERS  xdist workers for the measure phase (default 15, as CI)
+#
+# The two worker counts are the nightly's, kept so these durations are
+# comparable with it. They are not the same kind of number: the consumer's 15
+# is device parallelism -- fifteen test variants measured on fifteen Tensix
+# cores -- while the producer's 10 is host compile parallelism and is bounded by
+# the runner's CPUs, not by the card. PRODUCER_WORKERS exists to measure whether
+# 10 is leaving host CPUs idle.
 set -uo pipefail
 
 GROUP="${1:-1}"
 N_GROUPS="${2:-1}"
 CONFIGS="${CONFIGS:-full,isolates,l1,isolates_l1}"
 SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-false}"
+PRODUCER_WORKERS="${PRODUCER_WORKERS:-10}"
+CONSUMER_WORKERS="${CONSUMER_WORKERS:-15}"
 COLD_BUILD="${COLD_BUILD:-true}"
 
 case "$SPEED_OF_LIGHT" in
@@ -119,6 +132,7 @@ SELECT=(-m "perf and not accuracy" --timeout=60)
 # checkable after the fact rather than assumed.
 BOARDS="$(ls /dev/tenstorrent 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 HOST="$(hostname)"
+NPROC="$(nproc 2>/dev/null || echo 0)"
 COMMIT="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
 
 WORST_RC=0
@@ -133,12 +147,14 @@ for config in "${CONFIG_LIST[@]}"; do
 
   echo "::group::$TAG"
   echo "=== $TAG: run types: ${RUN_TYPES:-<all declared>}," \
-       "speed of light: $SPEED_OF_LIGHT, group $GROUP/$N_GROUPS"
+       "speed of light: $SPEED_OF_LIGHT, group $GROUP/$N_GROUPS," \
+       "producer -n $PRODUCER_WORKERS, consumer -n $CONSUMER_WORKERS," \
+       "host CPUs $NPROC"
   wipe_build_tree
 
   PRODUCER_START=$(date +%s)
   pytest "${PYTEST_EXTRA[@]}" "${SPEED_OF_LIGHT_ARGS[@]}" "${RUN_TYPE_ARGS[@]}" \
-    --compile-producer -n 10 "${SELECT[@]}" "${SPLIT_ARGS[@]}" \
+    --compile-producer -n "$PRODUCER_WORKERS" "${SELECT[@]}" "${SPLIT_ARGS[@]}" \
     --junitxml="pytest-report-${TAG}-compile.xml" .
   PRODUCER_RC=$?
   PRODUCER_S=$(( $(date +%s) - PRODUCER_START ))
@@ -146,7 +162,7 @@ for config in "${CONFIG_LIST[@]}"; do
 
   CONSUMER_START=$(date +%s)
   pytest "${PYTEST_EXTRA[@]}" "${SPEED_OF_LIGHT_ARGS[@]}" "${RUN_TYPE_ARGS[@]}" \
-    --compile-consumer -n 15 "${SELECT[@]}" "${SPLIT_ARGS[@]}" \
+    --compile-consumer -n "$CONSUMER_WORKERS" "${SELECT[@]}" "${SPLIT_ARGS[@]}" \
     --junitxml="pytest-report-${TAG}-run.xml" .
   CONSUMER_RC=$?
   CONSUMER_S=$(( $(date +%s) - CONSUMER_START ))
@@ -168,6 +184,9 @@ summary = {
     "card": "$CARD",
     "group": "$GROUP",
     "n_groups": "$N_GROUPS",
+    "producer_workers": $PRODUCER_WORKERS,
+    "consumer_workers": $CONSUMER_WORKERS,
+    "nproc": $NPROC,
     "producer_s": $PRODUCER_S,
     "consumer_s": $CONSUMER_S,
     "total_s": $TOTAL_S,

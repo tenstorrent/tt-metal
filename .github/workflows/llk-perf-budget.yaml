@@ -22,12 +22,21 @@ name: "LLK perf time budget"
 # nothing unless its commit message carries a marker, so an ordinary push to
 # the branch cannot occupy the lab by accident:
 #
-#   [budget-run]    the whole matrix -- both architectures, two cards each,
-#                   four configurations per card
+#   [budget-run]    both architectures, two cards each, four configurations per
+#                   card, unsharded
+#   [budget-shards] the same four configurations split across FIVE workers per
+#                   architecture, to measure what sharding buys
+#
+# Two counts can be named in the message as well, in any combination with the
+# markers above:
+#
+#   [budget-shards=2]     split across two workers instead
+#   [budget-producer=15]  give the compile phase 15 xdist workers, not 10
 #   [budget-smoke]  one job: one Blackhole card, L1_TO_L1 alone. Use this first
 #                   after touching the workflow or the runner script.
 #
-# Dispatch inputs, when present, override both.
+# Dispatch inputs, when present, override all of them, and expose shard counts
+# the markers do not (2) plus the producer's worker count.
 
 on:
   push:
@@ -50,9 +59,23 @@ on:
         default: "full,isolates,l1,isolates_l1"
         type: string
       cards:
-        description: "How many cards per architecture, as a comma-separated list of labels (1,2). One entry means one card."
+        description: "At one shard: how many cards per architecture measure the whole suite, as a comma-separated list of labels (1,2)."
         required: false
         default: "1,2"
+        type: string
+      shards:
+        description: "Split the suite across this many workers per architecture. 1 measures the whole suite in one job."
+        required: false
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "5"
+      producer-workers:
+        description: "xdist workers for the compile phase. The nightly uses 10; the consumer is always 15."
+        required: false
+        default: "10"
         type: string
       speed-of-light:
         description: "Measure with --speed-of-light instead (the nightly's mode)"
@@ -66,7 +89,10 @@ permissions:
   packages: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.architecture || 'push' }}-${{ github.ref }}
+  # Scoped to the commit, not the branch: two measurement runs with different
+  # shard counts are different experiments and must be allowed to run at the
+  # same time. A re-run of the same commit still supersedes itself.
+  group: ${{ github.workflow }}-${{ inputs.architecture || 'push' }}-${{ github.sha }}
   cancel-in-progress: true
 
 env:
@@ -79,6 +105,7 @@ jobs:
     # to the measurement branch cannot occupy the lab by accident.
     if: ${{ github.event_name == 'workflow_dispatch'
       || contains(github.event.head_commit.message, '[budget-run]')
+      || contains(github.event.head_commit.message, '[budget-shards]')
       || contains(github.event.head_commit.message, '[budget-smoke]') }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
@@ -86,12 +113,15 @@ jobs:
   load-test-matrix:
     if: ${{ github.event_name == 'workflow_dispatch'
       || contains(github.event.head_commit.message, '[budget-run]')
+      || contains(github.event.head_commit.message, '[budget-shards]')
       || contains(github.event.head_commit.message, '[budget-smoke]') }}
     runs-on: ubuntu-slim
     needs: [build-images]
     outputs:
       matrix: ${{ steps.trim.outputs.matrix }}
       configs: ${{ steps.trim.outputs.configs }}
+      shards: ${{ steps.trim.outputs.shards }}
+      producer_workers: ${{ steps.trim.outputs.producer_workers }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_perf_budget_tests.yaml
     steps:
@@ -134,7 +164,7 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
-      - name: Keep the requested cards, and validate the configurations
+      - name: Keep the workers this run needs, and validate the configurations
         id: trim
         env:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
@@ -144,30 +174,67 @@ jobs:
           CARDS: ${{ inputs.cards
             || (contains(github.event.head_commit.message, '[budget-smoke]')
             && '1' || '1,2') }}
+          # Shard and worker counts come from the dispatch inputs when there
+          # are any, else from the commit message, which can carry
+          # [budget-shards=2] and [budget-producer=15]. Parsed in python rather
+          # than in an expression, so one mechanism covers every value instead
+          # of one marker per number.
+          SHARDS_INPUT: ${{ inputs.shards }}
+          PRODUCER_INPUT: ${{ inputs.producer-workers }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
-          # Cards are matrix rows; configurations are not -- each job measures
-          # every one of them in sequence, so they travel to the runner as
-          # CONFIGS. Validated here all the same, because a typo would
-          # otherwise surface an hour into a job that had a card reserved.
-          FILTER='import json, os, sys
+          # A row is a worker. At one shard a worker measures the whole suite,
+          # so the workers are the cards and CARDS says how many; above one
+          # shard, worker k measures shard k and the shard count says how many.
+          # Configurations are not rows -- every worker measures all of them in
+          # sequence -- but they are validated here all the same, because a typo
+          # would otherwise surface an hour into a job holding a card.
+          FILTER='import json, os, re, sys
           KNOWN = ["full", "isolates", "l1", "isolates_l1"]
           rows = json.loads(os.environ["MATRIX"])
           configs = [c.strip() for c in os.environ["CONFIGS"].split(",") if c.strip()]
           cards = [c.strip() for c in os.environ["CARDS"].split(",") if c.strip()]
+          msg = os.environ.get("HEAD_MSG", "")
+          def number(name, given, default):
+              if given.strip():
+                  return int(given)
+              found = re.search(r"\[budget-" + name + r"=(\d+)\]", msg)
+              if found:
+                  return int(found.group(1))
+              return default
+          shards = number("shards", os.environ.get("SHARDS_INPUT", ""),
+                          5 if "[budget-shards]" in msg else 1)
+          producer_workers = number("producer", os.environ.get("PRODUCER_INPUT", ""), 10)
+          if shards < 1 or producer_workers < 1:
+              sys.exit("shards and producer workers must be positive")
           unknown = [c for c in configs if c not in KNOWN]
           if unknown:
               sys.exit("unknown config(s) %s; valid: %s" % (unknown, KNOWN))
           if not configs:
               sys.exit("no configuration requested")
-          keep = [r for r in rows if str(r["card"]) in cards]
+          wanted = shards if shards > 1 else len(cards)
+          slots = sorted({int(r["slot"]) for r in rows})
+          if wanted > len(slots):
+              sys.exit("%d workers asked for, but the matrix declares %d slots per "
+                       "architecture" % (wanted, len(slots)))
+          keep = [r for r in rows if int(r["slot"]) <= wanted]
           if not keep:
-              sys.exit("no matrix row left for cards=%s" % cards)
-          print("%d job(s), each measuring %s:" % (len(keep), ", ".join(configs)),
-                file=sys.stderr)
+              sys.exit("no matrix row left for %d worker(s)" % wanted)
           for r in keep:
-              print("  " + r["name"], file=sys.stderr)
+              # At one shard there is no group to be in: the worker measures
+              # everything, and its slot is only a card label.
+              r["group"] = r["slot"] if shards > 1 else 1
+              r["shards"] = shards
+          what = ("shard %s of %d" % ("k", shards)) if shards > 1 else "the whole suite"
+          print("%d job(s), each measuring %s of %s:"
+                % (len(keep), what, ", ".join(configs)), file=sys.stderr)
+          for r in keep:
+              print("  %s -- group %s/%s" % (r["name"], r["group"], shards),
+                    file=sys.stderr)
           print("matrix=" + json.dumps(keep))
-          print("configs=" + ",".join(configs))'
+          print("configs=" + ",".join(configs))
+          print("shards=%d" % shards)
+          print("producer_workers=%d" % producer_workers)'
           python3 -c "$FILTER" >> "$GITHUB_OUTPUT"
 
   llk-perf-budget-exec:
@@ -209,13 +276,17 @@ jobs:
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
           echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
-          echo "SLUG=$CHIP_ARCH-card${{ matrix.test-group.card }}" >> "$GITHUB_ENV"
+          # One name per worker. At one shard the worker is a card, so the
+          # slot reads as the card label; above one shard it is the group index.
+          echo "SLUG=$CHIP_ARCH-worker${{ matrix.test-group.slot }}-of${{ matrix.test-group.shards }}" >> "$GITHUB_ENV"
       - name: Record which machine and card this landed on
         shell: bash
         run: |
-          echo "runner: ${RUNNER_NAME:-unknown}"
-          echo "host:   $(hostname)"
+          echo "runner:  ${RUNNER_NAME:-unknown}"
+          echo "host:    $(hostname)"
           echo "devices: $(ls /dev/tenstorrent 2>/dev/null | tr '\n' ' ')"
+          # The ceiling the producer's xdist workers compete for.
+          echo "CPUs:    $(nproc)"
           tt-smi -ls 2>/dev/null || echo "tt-smi not available in this image"
       - name: Measure the budget
         shell: bash
@@ -224,9 +295,15 @@ jobs:
           # A push carries no inputs, so this falls through to false, which is
           # the mode being measured.
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light || false }}
-          BUDGET_CARD: ${{ matrix.test-group.card }}
-          # Every configuration this card measures, in order.
+          BUDGET_CARD: ${{ matrix.test-group.slot }}
+          # Every configuration this worker measures, in order.
           CONFIGS: ${{ needs.load-test-matrix.outputs.configs }}
+          # Which shard, and out of how many. One means the whole suite.
+          BUDGET_GROUP: ${{ matrix.test-group.group }}
+          BUDGET_SHARDS: ${{ needs.load-test-matrix.outputs.shards }}
+          # The nightly's compile parallelism, and the knob for whether it is
+          # leaving the runner's CPUs idle.
+          PRODUCER_WORKERS: ${{ needs.load-test-matrix.outputs.producer_workers }}
         run: |
           ${{ matrix.test-group.cmd }}
 
@@ -270,6 +347,7 @@ jobs:
     # that asked for nothing, where the whole workflow is skipped.
     if: ${{ always() && (github.event_name == 'workflow_dispatch'
       || contains(github.event.head_commit.message, '[budget-run]')
+      || contains(github.event.head_commit.message, '[budget-shards]')
       || contains(github.event.head_commit.message, '[budget-smoke]')) }}
     runs-on: ubuntu-latest
     steps:
@@ -283,7 +361,7 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
-          import glob, json, os
+          import glob, json
 
           rows = []
           for path in sorted(glob.glob("summaries/**/summary-*.json", recursive=True)):
@@ -295,45 +373,71 @@ jobs:
               print("No job produced a summary. Check the job logs.")
               raise SystemExit(0)
 
-          sol = "on" if rows[0].get("speed_of_light") else "off"
-          print(f"Speed of light **{sol}**, cold build, whole suite in one group, "
-                f"producer `-n 10`, consumer `-n 15`.\n")
-          print("| arch | config | run types | card | producer | consumer | total | rc c/m | runner |")
-          print("| --- | --- | --- | --: | --: | --: | --: | --: | --- |")
+          def hms(s):
+              return "%d:%02d:%02d" % (s // 3600, (s % 3600) // 60, s % 60)
+
           order = {"full": 0, "isolates": 1, "isolates_l1": 2, "l1": 3}
+          first = rows[0]
+          sol = "on" if first.get("speed_of_light") else "off"
+          shards = int(first.get("n_groups", 1))
+          print(f"Speed of light **{sol}**, cold build, "
+                f"{'the whole suite in one worker' if shards == 1 else f'the suite split across {shards} workers'}, "
+                f"producer `-n {first.get('producer_workers')}`, "
+                f"consumer `-n {first.get('consumer_workers')}`, "
+                f"host CPUs {first.get('nproc')}.\n")
+
+          label = "card" if shards == 1 else "shard"
+          print(f"| arch | config | run types | {label} | producer | consumer | total | rc c/m | runner |")
+          print("| --- | --- | --- | --: | --: | --: | --: | --: | --- |")
           for r in sorted(rows, key=lambda r: (r["arch"], order.get(r["config"], 9), str(r["card"]))):
               print("| {arch} | {config} | `{run_types}` | {card} | {producer} | {consumer} "
                     "| **{total}** | {producer_rc}/{consumer_rc} | {runner} |".format(**r))
 
-          # Per (arch, config), what the two cards disagree by. A gate's budget has
-          # to hold on the slower card, so the spread is part of the answer.
-          print("\n## Card-to-card spread\n")
-          print("| arch | config | slower total | faster total | spread |")
-          print("| --- | --- | --: | --: | --: |")
           groups = {}
           for r in rows:
               groups.setdefault((r["arch"], r["config"]), []).append(r)
-          def hms(s):
-              return "%d:%02d:%02d" % (s // 3600, (s % 3600) // 60, s % 60)
-          for (arch, config), got in sorted(groups.items(), key=lambda kv: (kv[0][0], order.get(kv[0][1], 9))):
-              if len(got) < 2:
-                  continue
-              totals = sorted(r["total_s"] for r in got)
-              lo, hi = totals[0], totals[-1]
-              pct = (hi - lo) / lo * 100 if lo else 0
-              print(f"| {arch} | {config} | {hms(hi)} | {hms(lo)} | {hms(hi - lo)} ({pct:.1f}%) |")
+          keyed = sorted(groups.items(), key=lambda kv: (kv[0][0], order.get(kv[0][1], 9)))
 
-          # What each card spent in total, which is what this run occupied the
-          # lab for -- as opposed to what any one configuration would cost a gate.
-          print("\n## What each card spent\n")
-          print("| arch | card | configurations | measured | runner |")
+          if shards == 1:
+              # A gate's budget has to hold on the slower card, so what the cards
+              # disagree by is part of the answer.
+              print("\n## Card-to-card spread\n")
+              print("| arch | config | slower total | faster total | spread |")
+              print("| --- | --- | --: | --: | --: |")
+              for (arch, config), got in keyed:
+                  if len(got) < 2:
+                      continue
+                  totals = sorted(r["total_s"] for r in got)
+                  lo, hi = totals[0], totals[-1]
+                  pct = (hi - lo) / lo * 100 if lo else 0
+                  print(f"| {arch} | {config} | {hms(hi)} | {hms(lo)} | {hms(hi - lo)} ({pct:.1f}%) |")
+          else:
+              # Sharded: the wall clock a gate pays is the SLOWEST shard, because
+              # the shards run at the same time on different cards. The sum is
+              # what it costs the lab, and the gap between slowest and mean is
+              # how unevenly pytest-split divided the work.
+              print(f"\n## What {shards} workers buy\n")
+              print("| arch | config | slowest shard | mean shard | card time (sum) | imbalance |")
+              print("| --- | --- | --: | --: | --: | --: |")
+              for (arch, config), got in keyed:
+                  totals = [r["total_s"] for r in got]
+                  slowest, mean, total = max(totals), sum(totals) / len(totals), sum(totals)
+                  imb = (slowest - mean) / mean * 100 if mean else 0
+                  print(f"| {arch} | {config} | **{hms(slowest)}** | {hms(int(mean))} "
+                        f"| {hms(total)} | +{imb:.0f}% |")
+              print("\nThe gate waits for the slowest shard; the sum is what the lab pays.")
+
+          # What each worker spent in total, which is what this run occupied its
+          # card for -- as opposed to what any one configuration would cost a gate.
+          print("\n## What each worker spent\n")
+          print(f"| arch | {label} | configurations | measured | runner |")
           print("| --- | --: | --: | --: | --- |")
-          cards = {}
+          workers = {}
           for r in rows:
-              cards.setdefault((r["arch"], str(r["card"])), []).append(r)
-          for (arch, card), got in sorted(cards.items()):
+              workers.setdefault((r["arch"], str(r["card"])), []).append(r)
+          for (arch, worker), got in sorted(workers.items()):
               spent = sum(r["total_s"] for r in got)
-              print(f"| {arch} | {card} | {len(got)} | {hms(spent)} | {got[0]['runner']} |")
+              print(f"| {arch} | {worker} | {len(got)} | {hms(spent)} | {got[0]['runner']} |")
 
           missing = [r for r in rows if r["producer_rc"] or r["consumer_rc"]]
           if missing:
