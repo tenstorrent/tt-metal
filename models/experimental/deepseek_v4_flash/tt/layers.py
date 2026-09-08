@@ -455,6 +455,7 @@ class LinearDecode(DeepSeekV4Module):
         self.fused_rms_norm_eps = None
         self.fused_rms_norm_gamma = None
         self.output_core_grid = None
+        self.cache_file_name = cache_file_name
 
         if keep_weights_in_l1 and use_prefetcher:
             raise ValueError(
@@ -908,6 +909,7 @@ class LinearDecode(DeepSeekV4Module):
         return a_memory_config
 
     def forward(self, x: ttnn.Tensor, *, mesh_coords=None) -> ttnn.Tensor:
+        print(f"Linear Decode with cache_file_name: {self.cache_file_name}")
         x, m, use_rm_hs = self._prepare_decode_activation(x)
         if self.fused_rms_norm_eps is not None and not use_rm_hs:
             # The epilogue's statistic is a scalar reduction over a whole tile, so it is this
@@ -917,12 +919,13 @@ class LinearDecode(DeepSeekV4Module):
                 "fused RMSNorm needs the replicated ROW_MAJOR activation (a one-row tile), but this "
                 "call was handed a tiled width-sharded one"
             )
-        m_out = m if use_rm_hs else ((m + self.tile_height - 1) // self.tile_height) * self.tile_height
+        tile_height = 1 if x.layout == ttnn.ROW_MAJOR_LAYOUT else self.tile_height
+        m_out = m if use_rm_hs else ((m + tile_height - 1) // tile_height) * tile_height
         if self.packed_weight_tensor is not None:
             # Packed placement is the source of truth: a preceding packed projection may
             # have left this activation on a different zone/core count.
             if not use_rm_hs:
-                tile_height = x.get_tile().tile_shape[0]
+                tile_height = 1 if x.layout == ttnn.ROW_MAJOR_LAYOUT else x.get_tile().tile_shape[0]
                 input_memory_config = self.get_input_memory_config(x.shape[-2], x.shape[-1], tile_height)
                 same_core_grid = x.is_sharded() and (
                     tile_height < ttnn.TILE_SIZE
@@ -1350,6 +1353,12 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
         if self.sharded:
             b, s, t, d = x.shape
             rows = b * s * t
+            # A row-major matmul-decode result has physical height 1, while RMSNorm
+            # consumes whole 32-row tiles. Move through interleaved memory before
+            # tilizing; directly resharding it to a 32-row shard is invalid.
+            if x.layout == ttnn.ROW_MAJOR_LAYOUT:
+                x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             # The width-sharded L1 layout gives every core the *full* height (one
             # tile-width each, so only ``d // TILE_SIZE`` cores), which means its L1
             # footprint grows with the row count. That is a win for the single-token

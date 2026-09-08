@@ -125,31 +125,17 @@ profiles:
       sdpa_k_chunk_size: 32
       sdpa_max_cores_per_head_batch: 2
       sdpa_exp_approx_mode: false
-      # Run q_a and kv as ONE matmul over their concatenated weight (halved again
-      # in _qkv) instead of two. One dispatch and one activation read instead of
-      # two, but it only works with the prefetcher off: the fused 1536-wide weight
-      # cuts into 3-tile rows per B core and so shares no page size with the
-      # model's single decode GCB, which is why it cannot be streamed.
-      #   null  -> fuse wherever the prefetcher is off (what the code intended)
-      #   false -> never fuse; the two projections stay separate (current default,
-      #            so the prefetched and L1 paths run the same op sequence)
-      #   true  -> always fuse; rejected if the prefetcher is on, since that would
-      #            hang rather than merely slow down
-      # env: DEEPSEEK_V4_FUSE_QA_KV (0/1/auto)
-      fuse_qa_kv_proj: false
       # Keep the q_a and kv projection weights resident in L1 instead of
-      # re-copying them from DRAM per call. Applies to the fused concatenated
-      # weight when fuse_qa_kv_proj is on, and to each unfused projection when
-      # it is off (including TP-sharded q_a/kv). Note it competes with SDPA's
+      # re-copying them from DRAM per call. Note it competes with SDPA's
       # static reduction CBs, so raising sdpa_max_cores_per_head_batch may need
       # this off. env: DEEPSEEK_V4_KEEP_WEIGHTS_IN_L1
       keep_qa_kv_weights_in_l1: false
       # How q_a and kv are partitioned when tp_size > 1. Ignored at TP1.
-      #   fused_replicated_full — one concatenated matmul, replicated on every rank
-      #   balanced              — each projection N-sharded, then all-gather
-      #   fused_balanced / fused_replicated / dedicated / replicated — see attention.py
+      #   replicated — each projection full-width on every rank
+      #   balanced   — each projection N-sharded, then all-gather
+      #   dedicated  — q_a on rank 0, kv on rank 1
       # env: DEEPSEEK_V4_QKV_TP_STRATEGY
-      qkv_tp_strategy: fused_replicated_full
+      qkv_tp_strategy: replicated
 
     decode:
       # On-device weight precision for the whole stack.
@@ -218,7 +204,7 @@ profiles:
   #
   # The 32-chip decode demo / CLI use two 1x4 tensor-parallel stages
   # (tp_size=4); the remaining chips are left idle for this latency-oriented
-  # path. Under that layout, q_a and kv stay unfused and replicated on
+  # path. Under that layout, q_a and kv stay replicated on
   # every rank; ``q_b`` stays head-sharded TP4 (see ``attention`` below).
   # Expert-parallel sharding of the 256 routed experts
   # (64 per chip of a stage) is still not here; when it is, it belongs as an
@@ -259,12 +245,9 @@ profiles:
       experts_block_size: 2
 
     attention:
-      # Unfused q_a and kv, replicated full-width on every rank of the 1x4 stage
+      # q_a and kv, replicated full-width on every rank of the 1x4 stage
       # (q_a [4096, 1024] k=2 n=32, kv [4096, 512] k=4 n=16) and prefetched
       # through the shared 32-tile decode GCB. ``q_b`` stays N-sharded TP4.
-      # Fusion is off: a concatenated 1536-wide matmul cannot share a
-      # page size with the decode GCB.
-      fuse_qa_kv_proj: false
       qkv_tp_strategy: replicated
       keep_qa_kv_weights_in_l1: false
 
