@@ -12,6 +12,7 @@
 set -uo pipefail
 LLK=~/tt-metal/tt_metal/tt-llk; PT=$LLK/tests/python_tests; SRC=$LLK/tests/sources
 PACKC=$LLK/tt_llk_wormhole_b0/llk_lib/llk_pack_common.h
+CORE=$PT/helpers/perf/core.py
 OUT="${OUT:-$HOME/alignfix}"
 RUNS="${RUNS:-20}"; LF="${LF:-1024}"
 # name:N   ("none" = unmodified). What N means depends on MODE:
@@ -23,14 +24,17 @@ RUNS="${RUNS:-20}"; LF="${LF:-1024}"
 # On config 5742 one math nop removed the bistability and ran 9% faster; the compiler
 # restructured the math loop (+24 bytes for the first nop). This sweeps all configs.
 MODE="${MODE:-p2align}"
+# DUMP=1 also writes one row per (variant, run) with the L1_TO_L1 cycles to
+# $OUT/<pass>_runs.csv, so per-config medians can be compared across passes.
+DUMP="${DUMP:-0}"
 PASSES="${PASSES:-baseline:none align0:0 align12:3}"
 export RUNNER_TEMP="${RUNNER_TEMP:-$HOME/llk-wh-build}"
 
 mkdir -p "$OUT"; cd "$PT"; source "$LLK/tests/.venv/bin/activate"
 say() { echo "=== $* -- $(date -u +%H:%M:%SZ) ==="; }
-restore() { cd "$PT"; git checkout -- perf_math_matmul.py "$SRC/math_matmul_perf.cpp" "$PACKC" 2>/dev/null; }
+restore() { cd "$PT"; git checkout -- perf_math_matmul.py "$SRC/math_matmul_perf.cpp" "$PACKC" "$CORE" 2>/dev/null; }
 
-git diff --quiet -- perf_math_matmul.py "$SRC/math_matmul_perf.cpp" "$PACKC" \
+git diff --quiet -- perf_math_matmul.py "$SRC/math_matmul_perf.cpp" "$PACKC" "$CORE" \
   || { echo "FATAL: tree dirty"; exit 1; }
 # Arm the cleanup only after the check, so aborting cannot revert another run.
 trap 'restore; echo "=== restored ==="' EXIT
@@ -43,6 +47,30 @@ run_pass() {
     restore
     sed -i "s/^    configuration\.run(perf_report)\$/    configuration.run(perf_report, run_count=$RUNS)/" perf_math_matmul.py
     grep -q "run_count=$RUNS" perf_math_matmul.py || { echo "FATAL: run_count sed"; exit 1; }
+    if [ "$DUMP" = 1 ]; then
+python3 - "$CORE" <<'PY'
+import sys
+p = sys.argv[1]; t = open(p).read()
+OLD = "            stats_df = get_stats(ProfilerData.concat(variant_raw_data))\n"
+NEW = """            _d = __import__("os").environ.get("TS_DUMP")
+            if _d and run_type == PerfRunType.L1_TO_L1:
+                _raw = ProfilerData.concat(variant_raw_data).raw()
+                _tl = _raw[_raw["marker"] == "TILE_LOOP"]
+                _s = _tl[(_tl["thread"] == "unpack") & (_tl["type"] == "ZONE_START")].sort_values("run_index")
+                _e = _tl[(_tl["thread"] == "pack") & (_tl["type"] == "ZONE_END")].sort_values("run_index")
+                if len(_s) and len(_s) == len(_e):
+                    pd.DataFrame({"variant_id": self.variant_id, "run_index": _s["run_index"].values,
+                                  "cycles": _e["timestamp"].values - _s["timestamp"].values}).to_csv(
+                        _d, mode="a", header=not __import__("os").path.exists(_d), index=False)
+""" + OLD
+assert t.count(OLD) == 1, f"core.py anchor matched {t.count(OLD)} times"
+open(p, "w").write(t.replace(OLD, NEW))
+PY
+        [ $? -eq 0 ] || { echo "FATAL: core.py patch failed"; exit 1; }
+        export TS_DUMP="$OUT/${NAME}_runs.csv"; rm -f "$TS_DUMP"
+    else
+        unset TS_DUMP
+    fi
     if [ "$LF" != "1024" ]; then
         sed -i "s/^            LOOP_FACTOR(1024),\$/            LOOP_FACTOR($LF),/" perf_math_matmul.py
     fi
@@ -76,7 +104,7 @@ PY
       -m perf --perf-run-types L1_TO_L1 -k perf_math_matmul . > "$OUT/${NAME}_compile.log" 2>&1
     CHIP_ARCH=wormhole pytest -q --override-ini=log_cli=false --compile-consumer -n 15 \
       -m perf --perf-run-types L1_TO_L1 -k perf_math_matmul . > "$OUT/${NAME}_run.log" 2>&1
-    say "pass $NAME rc=$?"
+    say "pass $NAME rc=$?  runs_rows=$([ -n "${TS_DUMP:-}" ] && wc -l < "$TS_DUMP" 2>/dev/null || echo -)"
     rm -rf "$OUT/$NAME"; cp -r "$LLK/perf_data" "$OUT/$NAME" 2>/dev/null
 }
 
@@ -84,3 +112,4 @@ for P in $PASSES; do run_pass "$P"; done
 say DONE
 echo
 "$LLK/.claude/scripts/perf_align_fix_report.py" "$OUT"
+[ "$DUMP" = 1 ] && "$LLK/.claude/scripts/perf_median_gate_report.py" "$OUT"

@@ -28,7 +28,7 @@ PT=$LLK/tests/python_tests
 SRC=$LLK/tests/sources
 SCRIPTS=$LLK/.claude/scripts
 PATCHED=(perf_math_matmul.py helpers/profiler.py "$SRC/math_matmul_perf.cpp"
-         "$LLK/tt_llk_wormhole_b0/llk_lib/llk_pack_common.h")
+         "$LLK/tt_llk_wormhole_b0/llk_lib/llk_pack_common.h" helpers/perf/core.py)
 LOCK="${LOCK:-$HOME/.llk_perf_lab.lock}"
 WAIT_MAX="${WAIT_MAX:-7200}"
 
