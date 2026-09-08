@@ -513,7 +513,7 @@ inline void calculate_reduce(
         LLK_ASSERT(block_ct_dim * block_rt_dim <= MAX_DEST_TILES, "row reduce block does not fit in Dest");
 
         if constexpr (POOL_TYPE == PoolType::AVG) {
-            reduce_row_load_reciprocal(block_ct_dim * REDUCE_COLS_PER_TILE);
+            reduce_row_load_reciprocal(block_ct_dim * REDUCE_COLS_PER_TILE /* num_cols */);
         }
         reduce_row_block<POOL_TYPE, FORMAT>(block_ct_dim, block_rt_dim);
     }
