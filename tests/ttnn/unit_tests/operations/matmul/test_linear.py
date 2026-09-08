@@ -276,6 +276,68 @@ def test_linear_fused_activation_numerical_stability(device, activation):
     assert not torch.isinf(out_torch).any(), f"{activation.op_type} produced Inf"
 
 
+def test_linear_softplus_with_bias_and_core_grid(device):
+    """Regression test for issues #55266 and #55263.
+
+    Passing the string activation "softplus" together with an explicit bias and a
+    core_grid (which routes through the fused program-config path) previously:
+      - raised "Invalid number of activation parameters: 3" because
+        string_to_unary_with_param("softplus") produced a vestigial 3rd parameter
+        rejected by get_activation_params() (issue #55263), and
+      - once that was worked around, silently zeroed every in-threshold output
+        because the fused-bias kernel path did not forward activation_param2
+        (beta_reciprocal) to the SOFTPLUS SFPU op (issue #55266).
+    """
+    torch.manual_seed(0)
+    batch_size, m_size, k_size, n_size = 1, 32, 1024, 1024
+
+    torch_input_tensor_a = torch_random((batch_size, 1, m_size, k_size), -0.1, 0.1, dtype=torch.float32)
+    torch_input_tensor_b = torch_random((k_size, n_size), -0.1, 0.1, dtype=torch.float32)
+    torch_bias = torch_random((n_size,), -0.1, 0.1, dtype=torch.float32)
+
+    torch_output_tensor = torch.nn.functional.linear(
+        torch_input_tensor_a, torch_input_tensor_b.T.contiguous(), bias=torch_bias
+    )
+    torch_output_tensor = get_golden_function_for_activation("softplus")(torch_output_tensor)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
+    )
+    bias = ttnn.from_torch(
+        torch_bias.reshape((1, n_size)),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    # bias + string "softplus" activation + core_grid forces the fused-bias-activation
+    # kernel path, exercising both previously-buggy code paths at once.
+    output_tensor = ttnn.linear(
+        input_tensor_a,
+        input_tensor_b,
+        bias=bias,
+        activation="softplus",
+        core_grid=ttnn.CoreGrid(y=batch_size, x=6),
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    # Softplus is strictly positive; a fully-zeroed result (the #55266 symptom) must fail here.
+    assert not torch.all(output_tensor == 0), "SOFTPLUS output is all zero: beta_reciprocal not forwarded to kernel"
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.05 * k_size,
+        rtol=0.1 * k_size,
+        frobenius_threshold=0.01 * k_size,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )
+
+
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [32, 64])
 @pytest.mark.parametrize("k_size", [1024])
