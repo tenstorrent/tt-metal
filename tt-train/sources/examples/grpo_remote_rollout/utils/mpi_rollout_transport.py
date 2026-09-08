@@ -67,6 +67,7 @@ _FAILURE: Final = 7
 _WEIGHTS_STAGED: Final = 8
 _POLICY_ACTIVATED: Final = 9
 _RESULT_ACK: Final = 10
+_REQUEST_ACK: Final = 11
 
 
 class _ByteChannel(Protocol):
@@ -112,6 +113,11 @@ class _PendingCommand:
 @dataclass(frozen=True)
 class _ResultAck:
     """Credit returned only after the trainer consumes a completed rollout."""
+
+
+@dataclass(frozen=True)
+class _RequestAck:
+    """Credit returned only after the worker consumes a prompt lease."""
 
 
 def _send_frame(channel: _ByteChannel, peer_rank: int, header_tag: int, body_tag: int, frame: _Frame) -> None:
@@ -293,6 +299,7 @@ class MPIRolloutTrainerTransport(TrainerRolloutTransport):
         self._channel = channel or _TtnnByteChannel()
         self._outbound = _ClosableQueue[_PendingCommand](capacity)
         self._results = _ClosableQueue[EngineEvent](capacity)
+        self._request_credits = BoundedSemaphore(capacity)
         self._deferred_events: deque[EngineEvent] = deque()
         self._failure = _ProgressFailure()
         self._started = False
@@ -307,7 +314,13 @@ class MPIRolloutTrainerTransport(TrainerRolloutTransport):
         self._sender.start()
 
     def submit(self, lease: PromptGroupLease, *, timeout: float | None = None) -> None:
-        self._enqueue(lease, timeout)
+        if not self._request_credits.acquire(timeout=timeout):
+            raise TimeoutError("timed out waiting for prompt queue credit")
+        try:
+            self._enqueue(lease, timeout)
+        except BaseException:
+            self._request_credits.release()
+            raise
 
     def quiesce(self, target_version: PolicyVersion, *, timeout: float | None = None) -> None:
         self._enqueue(QuiescePolicy(target_version), timeout)
@@ -413,6 +426,9 @@ class MPIRolloutTrainerTransport(TrainerRolloutTransport):
                 if frame.kind == _CLOSE_ACK:
                     self._results.close()
                     return
+                if frame.kind == _REQUEST_ACK:
+                    self._request_credits.release()
+                    continue
                 if frame.kind == _RESULT:
                     value: EngineEvent = ResultReady(_decode_result(frame.body))
                 elif frame.kind == _FAILURE:
@@ -441,7 +457,7 @@ class MPIRolloutWorkerTransport(WorkerRolloutTransport):
         self._peer_rank = int(peer_rank)
         self._channel = channel or _TtnnByteChannel()
         self._requests = _ClosableQueue[RolloutCommand](capacity)
-        self._outbound = _ClosableQueue[EngineEvent](capacity)
+        self._outbound = _ClosableQueue[EngineEvent | _RequestAck](capacity)
         self._result_credits = BoundedSemaphore(capacity)
         self._failure = _ProgressFailure()
         self._started = False
@@ -460,7 +476,10 @@ class MPIRolloutWorkerTransport(WorkerRolloutTransport):
         if not self._started:
             raise RuntimeError("call start() before receiving rollouts")
         try:
-            return self._requests.get(timeout)
+            command = self._requests.get(timeout)
+            if isinstance(command, PromptGroupLease):
+                self._outbound.put(_RequestAck(), None)
+            return command
         except RolloutTransportClosed:
             self._failure.raise_if_set()
             raise
@@ -529,6 +548,8 @@ class MPIRolloutWorkerTransport(WorkerRolloutTransport):
                     frame = _Frame(_WEIGHTS_STAGED, _encode_lifecycle_event(value))
                 elif isinstance(value, PolicyActivated):
                     frame = _Frame(_POLICY_ACTIVATED, _encode_lifecycle_event(value))
+                elif isinstance(value, _RequestAck):
+                    frame = _Frame(_REQUEST_ACK, b"")
                 else:
                     raise TypeError(f"unsupported rollout event {type(value).__name__}")
                 _send_frame(

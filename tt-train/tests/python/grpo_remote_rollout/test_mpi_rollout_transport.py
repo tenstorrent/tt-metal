@@ -214,3 +214,34 @@ def test_completed_rollout_capacity_includes_mpi_buffering():
     publisher.join(timeout=5)
     assert not worker_closer.is_alive()
     assert not publisher.is_alive()
+
+
+def test_prompt_capacity_includes_mpi_buffering():
+    trainer_channel, worker_channel = _channels()
+    trainer = MPIRolloutTrainerTransport(peer_rank=1, capacity=1, channel=trainer_channel)
+    worker = MPIRolloutWorkerTransport(peer_rank=0, capacity=1, channel=worker_channel)
+    trainer.start()
+    worker.start()
+
+    trainer.submit(_lease())
+    second_submitted = Event()
+
+    def submit_second():
+        trainer.submit(_lease())
+        second_submitted.set()
+
+    submitter = Thread(target=submit_second)
+    submitter.start()
+    assert not second_submitted.wait(timeout=0.1)
+
+    assert worker.receive(timeout=5).group_id == "group-1"
+    assert second_submitted.wait(timeout=5)
+    assert worker.receive(timeout=5).group_id == "group-1"
+
+    worker_closer = Thread(target=worker.close)
+    worker_closer.start()
+    trainer.close()
+    worker_closer.join(timeout=5)
+    submitter.join(timeout=5)
+    assert not worker_closer.is_alive()
+    assert not submitter.is_alive()
