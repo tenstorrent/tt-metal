@@ -3453,11 +3453,25 @@
       "notes": [
         "Host algorithm override must replan auxiliary recipes and reject unsupported algorithms."
       ]
+    },
+    {
+      "id": "T175",
+      "kind": "pytest",
+      "source": "tests/ttnn/unit_tests/kernel_lib/reduce/test_reduce_helpers.py",
+      "family": "Reduce helper migration regressions",
+      "factories": [],
+      "tests": [
+        "test_reduce_helpers_complete_input_space",
+        "test_reduce_plan_sequence_repeated_input_cb"
+      ],
+      "notes": [
+        "Verify the complete helper matrix, including exact physical-output padding zeros needed by fused statistics consumers."
+      ]
     }
   ],
   "migration_regressions": {
-    "added_test_definitions": 9,
-    "added_collected_cases": 234,
+    "added_test_definitions": 11,
+    "added_collected_cases": 345,
     "note": "The original report describes the base inventory; current runner also includes these migration regressions."
   }
 }
