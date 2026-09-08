@@ -856,7 +856,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_QUASAR_NOC_API_VERSION
-        // Set the NOC API version for Quasar (simulator and silicon).
+        // Set the NOC API version for Quasar.
         // Default: 2 (use NOC API v2)
         // Usage: export TT_METAL_QUASAR_NOC_API_VERSION=1
         case EnvVarID::TT_METAL_QUASAR_NOC_API_VERSION:

@@ -389,7 +389,7 @@ class RunTimeOptions {
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
 
-    // NOC API version for Quasar (simulator and silicon)
+    // NOC API version for Quasar
     uint32_t quasar_noc_api_version = 2;
 
     // To be used for NUMA node based thread binding
