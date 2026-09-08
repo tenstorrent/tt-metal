@@ -180,26 +180,35 @@ class TtXtts(LightweightModule):
             min_new_tokens=min_new_tokens,
         )
 
-        # Warmup primes folded cond-bias (from_device is fatal inside a trace).
-        lat_in = latents
         voc = self.decoder.decoder
-        warm_wav = voc(ttnn.clone(lat_in), g)
-        if warm_wav.is_allocated():
-            ttnn.deallocate(warm_wav)
-        ttnn.synchronize_device(dev)
-        vtid = ttnn.begin_trace_capture(dev, cq_id=0)
-        wav_dev = voc(ttnn.clone(lat_in), g)
-        ttnn.end_trace_capture(dev, vtid, cq_id=0)
-        ttnn.synchronize_device(dev)
-        t0 = time.perf_counter()
-        ttnn.execute_trace(dev, vtid, blocking=True)
-        vocoder_replay_s = time.perf_counter() - t0
-        ttnn.release_trace(dev, vtid)
+        if latents.shape[1] == 0:
+            # Empty generation: a step-0 STOP, or a budget too small for any code to own a latent
+            # (latents_buf[i] holds code i-1's latent, so n codes need n+1 steps). There is
+            # nothing to vocode, and the upsampler would build a program config with
+            # per_core_M = 0 and divide by it. Return the empty-audio contract instead.
+            wav_dev = ttnn.from_torch(
+                torch.zeros(1, 1, 0), device=dev, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+            vocoder_replay_s = 0.0
+        else:
+            # Warmup primes folded cond-bias (from_device is fatal inside a trace).
+            warm_wav = voc(ttnn.clone(latents), g)
+            if warm_wav.is_allocated():
+                ttnn.deallocate(warm_wav)
+            ttnn.synchronize_device(dev)
+            vtid = ttnn.begin_trace_capture(dev, cq_id=0)
+            wav_dev = voc(ttnn.clone(latents), g)
+            ttnn.end_trace_capture(dev, vtid, cq_id=0)
+            ttnn.synchronize_device(dev)
+            t0 = time.perf_counter()
+            ttnn.execute_trace(dev, vtid, blocking=True)
+            vocoder_replay_s = time.perf_counter() - t0
+            ttnn.release_trace(dev, vtid)
         # Release only after release_trace — never evict under a live trace.
         voc.generator.release_conditioning()
         voc.upsampler.release_cache()
-        if lat_in.is_allocated():
-            ttnn.deallocate(lat_in)
+        if latents.is_allocated():
+            ttnn.deallocate(latents)
         if g.is_allocated():
             ttnn.deallocate(g)
         replay_s = setup_replay_s + decode_replay_s + vocoder_replay_s

@@ -16,7 +16,11 @@ class TtSampler:
         self.top_k = int(top_k) if top_k and top_k < vocab_size else 0
         self.rep = float(repetition_penalty)
         self.top_p = float(top_p)
-        self._nucleus = 0.0 < self.top_p < 1.0 and self.top_k > 0
+        self._nucleus = 0.0 < self.top_p < 1.0
+        # Sorted candidate window the cutoffs are computed over. top-k sets it; with top-k
+        # disabled (0, or >= vocab) a requested top_p still has to be honoured, so the window
+        # becomes the whole vocabulary and the kth threshold falls out inert.
+        self._window = self.top_k or (vocab_size if self._nucleus else 0)
         self._neg = ttnn.from_torch(
             torch.full((1, vocab_size), NEG_INF), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
@@ -67,9 +71,9 @@ class TtSampler:
         if self.temperature != 1.0:
             L = ttnn.multiply(L, 1.0 / self.temperature)
 
-        if self.top_k:
-            vals = ttnn.topk(L, self.top_k, dim=-1, largest=True, sorted=True)[0]
-            kth = ttnn.slice(vals, [0, self.top_k - 1], [1, self.top_k])
+        if self._window:
+            vals = ttnn.topk(L, self._window, dim=-1, largest=True, sorted=True)[0]
+            kth = ttnn.slice(vals, [0, self._window - 1], [1, self._window])
             thr = kth
             if self._nucleus:
                 probs = ttnn.softmax(vals, dim=-1)
@@ -91,18 +95,24 @@ class TtSampler:
             self._mark(token)
         return token
 
-    def _apply_penalty_temp_topk(self, logits):
-        """Apply repetition penalty, temperature, and top-k/p to logits."""
+    def _apply_penalty_temp_topk(self, logits, bias=None):
+        """Apply stop bias, repetition penalty, temperature, and top-k/p to logits."""
         L = ttnn.typecast(ttnn.reshape(logits, [1, self.v]), ttnn.bfloat16)
+        if bias is not None:
+            # Suppress BEFORE candidate filtering: a masked token must not hold a top-k/top-p
+            # slot, or the nucleus collapses onto it and leaves no audio candidate. Masking after
+            # is worse than useless -- bf16(NEG_INF) is MORE negative than the fp32 bias, so the
+            # suppressed token comes back out of argmax as the largest value.
+            L = ttnn.add(L, ttnn.typecast(bias, ttnn.bfloat16))
         if self.rep != 1.0:
             pos = ttnn.gt(L, 0.0)
             penalized = ttnn.where(pos, ttnn.multiply(L, 1.0 / self.rep), ttnn.multiply(L, self.rep))
             L = ttnn.where(ttnn.gt(self.seen, 0.5), penalized, L)
         if self.temperature > 0.0 and self.temperature != 1.0:
             L = ttnn.multiply(L, 1.0 / self.temperature)
-        if self.top_k:
-            vals = ttnn.topk(L, self.top_k, dim=-1, largest=True, sorted=True)[0]
-            kth = ttnn.slice(vals, [0, self.top_k - 1], [1, self.top_k])
+        if self._window:
+            vals = ttnn.topk(L, self._window, dim=-1, largest=True, sorted=True)[0]
+            kth = ttnn.slice(vals, [0, self._window - 1], [1, self._window])
             thr = kth
             if self._nucleus:
                 probs = ttnn.softmax(vals, dim=-1)
@@ -116,10 +126,8 @@ class TtSampler:
 
     def pick_dev(self, logits, gumbel=None, bias=None):
         """Argmax-sample on device with optional Gumbel noise and stop bias."""
-        L = self._apply_penalty_temp_topk(logits)
+        L = self._apply_penalty_temp_topk(logits, bias)
         Lf = ttnn.typecast(L, ttnn.float32)
-        if bias is not None:
-            Lf = ttnn.add(Lf, bias)
         if self.temperature > 0.0 and gumbel is not None:
             Lf = ttnn.add(Lf, gumbel)
         tok = ttnn.argmax(Lf, dim=-1)

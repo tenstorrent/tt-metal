@@ -24,8 +24,13 @@ def _load_tokenizer():
 def preprocess_text(text, lang=DEFAULT_LANGUAGE):
     """Tokenize lowercased text with language tag and space markers."""
     # vocab Whitespace pre-tokenizer discards spaces; [SPACE] must be substituted before BPE.
+    # split()/join collapses every whitespace run to one space first. The pre-tokenizer drops
+    # newlines, tabs, CRLF and NBSP without leaving a [SPACE] behind, so pasted multiline text
+    # would reach the model with its word boundaries missing; runs collapse too, so "a  b" is
+    # one [SPACE] rather than two.
     tokenizer = _load_tokenizer()
-    txt = f"[{lang}]{text.strip().lower()}".replace(" ", "[SPACE]")
+    txt = " ".join(text.lower().split())
+    txt = f"[{lang}]{txt}".replace(" ", "[SPACE]")
     ids = tokenizer.encode(txt).ids
     return torch.tensor(ids, dtype=torch.long).unsqueeze(0)
 
