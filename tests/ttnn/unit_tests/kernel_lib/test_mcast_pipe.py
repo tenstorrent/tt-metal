@@ -62,8 +62,7 @@ def _run_pipe(
     """recv_rect = ((rx0,ry0),(rx1,ry1)) logical; sender_logical = (sx,sy) logical.
     sender_noc selects which NoC the sender mcasts on: 0 (reader) or 1 (writer). On NoC1 the
     hardware needs start=high-corner / end=low-corner; the test always passes the rect in
-    CANONICAL (low->high) order, so a green NoC1 run proves McastRect<NOC_ID> owns the per-NoC corner
-    swap (precomputed in its ctor; the old verbatim-passthrough would mis-encode the rect on NoC1)."""
+    logical order; the host helper emits prepared bounds in the selected NoC routing order."""
     (rx0, ry0), (rx1, ry1) = recv_rect
     sx, sy = sender_logical
     data_ready_mode = VARIANTS[variant]
@@ -378,11 +377,7 @@ def test_control_only_flag_value(device, control_value, expected_value):
     )
 
 
-# ---------- NoC1 corner-ordering: McastRect must own the per-NoC start/end swap ----------
-# Sender mcasts on NoC1, where the hardware wants start=high-corner / end=low-corner. The rect is
-# passed in CANONICAL (low->high) order regardless of NoC, so a PASS proves the Pipe derives the
-# routing-correct ordering from NOC_ID via McastRect<NOC_ID> (corners precomputed in its ctor). With
-# the old verbatim-passthrough this would mis-encode the rect on NoC1 (degenerate box -> wrong/hang).
+# ---------- NoC1 prepared corner ordering (receivers use the opposite NoC) ----------
 @pytest.mark.parametrize("variant", COVERAGE_VARIANTS)
 @pytest.mark.parametrize("rect_name", list(RECTS.keys()))
 def test_noc1_sender_corner_order(device, variant, rect_name):
@@ -416,14 +411,10 @@ def test_pre_handshake(device, rect_name, n_iters):
     )
 
 
-# ========== RUNTIME FAN-OUT: the fan-out is derived from the runtime rect area, not a template arg ==========
-# With NUM_ACTIVE_RECEIVER_CORES removed, the sender binary bakes NO recipient count — the fan-out comes
-# purely from McastRect::area(), and the rect corners are runtime args. So the SAME compiled kernel must
-# broadcast correctly to rects of DIFFERENT areas chosen at runtime. This sweeps three distinct,
-# non-power-of-2-friendly areas (2, 8, 8-as-4x2) through one build; a PASS proves the fan-out adapts from
-# the runtime area alone (a stale compile-time count would mis-size num_dests and corrupt/hang).
+# ========== HOST-PREPARED FAN-OUT: distinct rectangles produce matching CT counts ==========
+# Each helper prepares the rectangle and its uniform count; the kernel performs no area calculation.
 @pytest.mark.parametrize("rect_name", ["1x2", "1x8", "4x2"])
-def test_runtime_fanout(device, rect_name):
+def test_prepared_fanout(device, rect_name):
     _run_pipe(
         device,
         variant="flag_linked",
@@ -432,7 +423,7 @@ def test_runtime_fanout(device, rect_name):
         payload_tiles=2,
         n_iters=4,
         pre_handshake=False,
-        ack_count=None,  # ack_count=0 (dense): ack tracks the runtime fan-out too
+        ack_count=None,  # Default readiness equals the prepared remote fan-out.
     )
 
 
@@ -574,7 +565,7 @@ def test_split_count(device, payload_tiles):
 
 
 # On Blackhole, logical workers x=0..7 map to virtual x=1..7,10, so this receiver rectangle crosses
-# non-worker NoC columns 8 and 9. McastRect::area() must exclude those columns for the hardware fan-out,
+# non-worker NoC columns 8 and 9. Host preparation must exclude those columns for the hardware fan-out,
 # while the consumer-ready wait must remain the smaller explicit subset: all 8 receive, only 4 ack.
 # This is the case a Blackhole-only area correction would still hang if fan-out and ACK count were
 # conflated.
@@ -803,7 +794,7 @@ def _run_rotating_line(
         ),
     ]
 
-    # CT: [cb] + McastArgs<1,4> block (7 words) + [num_rounds, payload_pages, page_bytes] + TA(in) + TA(out)
+    # CT: [cb] + McastArgs<1,4> block (10 words) + [num_rounds, payload_pages, page_bytes] + TA(in) + TA(out)
     ct = [cb] + list(mc.compile_time_args()) + [span, payload_pages, page_bytes]
     ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
@@ -942,7 +933,7 @@ def _run_fixed_line(
         ),
     ]
 
-    # CT: [cb] + McastArgs<1,4> block (7 words) + [num_blocks, payload_pages, page_bytes] + TA(in) + TA(out)
+    # CT: [cb] + McastArgs<1,4> block (10 words) + [num_blocks, payload_pages, page_bytes] + TA(in) + TA(out)
     ct = [cb] + list(mc.compile_time_args()) + [NB, payload_pages, page_bytes]
     ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
@@ -1105,7 +1096,7 @@ def _run_raw_pipe(device, recv_rect, sender_logical, payload_tiles, n_iters, pre
         cb_dst,
         DATA_READY,
         CONSUMED,
-        ACK_EQUALS_FANOUT,
+        num_recv,
         payload_pages,
         page_bytes,
         n_iters,
@@ -1113,7 +1104,7 @@ def _run_raw_pipe(device, recv_rect, sender_logical, payload_tiles, n_iters, pre
     ]
     sender_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     sender_rt = ttnn.RuntimeArgs()
-    sender_rt[sx][sy] = [input_tensor.buffer_address(), 0, vx0, vy0, vx1, vy1]
+    sender_rt[sx][sy] = [input_tensor.buffer_address(), 0, vx0, vy0, vx1, vy1, num_recv, num_recv + 1, 2]
     sender_k = ttnn.KernelDescriptor(
         kernel_source=f"{KERNEL_DIR}/pipe_raw_sender.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,

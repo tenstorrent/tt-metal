@@ -10,6 +10,8 @@
 #include <variant>
 #include <vector>
 
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_common.hpp"
+
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -23,7 +25,7 @@ enum class DataReadyMode : uint32_t { Flag = 0, Counter = 1 };
 // Indicates that no consumer-ready semaphore is configured.
 static constexpr uint32_t UNUSED_SEM_ID = 0xFFFFFFFFu;
 
-// The kernel derives the acknowledgment count from each sender's multicast fanout.
+// The host resolves this default from each sender's multicast fanout.
 static constexpr uint32_t ACK_EQUALS_FANOUT = 0xFFFFFFFFu;
 
 struct McastConfig {
@@ -159,9 +161,7 @@ private:
     uint32_t line_index_(const tt::tt_metal::CoreCoord& core) const;
     uint32_t sender_index_for_line_(uint32_t line) const;
     tt::tt_metal::CoreCoord line_coord_(const tt::tt_metal::CoreCoord& core, uint32_t i) const;
-    std::vector<uint32_t> noc_ordered_bbox_(const std::vector<std::pair<uint32_t, uint32_t>>& coordinates) const;
     std::vector<uint32_t> line_rect_(const tt::tt_metal::CoreCoord& core) const;
-    std::vector<uint32_t> rotating_rt_(const tt::tt_metal::CoreCoord& core) const;
     bool is_receiver_(const tt::tt_metal::CoreCoord& core) const;
     uint32_t sender_round_(const tt::tt_metal::CoreCoord& core) const;
 
@@ -180,6 +180,11 @@ private:
     uint32_t span_ = 1;
     uint32_t receiver_span_ = 1;
     std::vector<std::vector<tt::tt_metal::CoreCoord>> sender_lines_;
+    // Per-line NoC bounds followed, in rotating mode, by the ordered virtual sender coordinates.
+    std::vector<std::vector<uint32_t>> prepared_topology_;
+    dataflow_kernel_lib::SenderTransferMode transfer_mode_ = dataflow_kernel_lib::SenderTransferMode::Invalid;
+    uint32_t uniform_remote_count_ = 0;
+    uint32_t uniform_loopback_count_ = 0;
     bool has_remote_receivers_ = false;
     uint32_t ack_count_ = 0;
     bool owns_sems_ = true;
@@ -269,9 +274,6 @@ private:
     bool in_rect_(const tt::tt_metal::CoreCoord& core) const;
     bool is_receiver_(const tt::tt_metal::CoreCoord& core) const;
     uint32_t sender_round_(const tt::tt_metal::CoreCoord& core) const;
-    std::vector<std::pair<uint32_t, uint32_t>> rect_virt_coords_() const;
-    std::vector<uint32_t> rect_corners_() const;
-    std::vector<uint32_t> rotating_rt_() const;
 
     tt::tt_metal::IDevice* device_;
     tt::tt_metal::CoreRangeSet participating_;
@@ -284,7 +286,12 @@ private:
     uint32_t ry1_ = 0;
     uint32_t area_ = 1;
     std::vector<tt::tt_metal::CoreCoord> senders_;
+    // NoC bounds followed, in rotating mode, by the ordered virtual sender coordinates.
+    std::vector<uint32_t> prepared_topology_;
     bool sender_in_rect_ = true;
+    dataflow_kernel_lib::SenderTransferMode transfer_mode_ = dataflow_kernel_lib::SenderTransferMode::Invalid;
+    uint32_t uniform_remote_count_ = 0;
+    uint32_t uniform_loopback_count_ = 0;
     bool has_remote_receivers_ = false;
     bool owns_sems_ = true;
     uint32_t ack_count_ = 0;

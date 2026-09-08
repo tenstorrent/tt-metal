@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -12,10 +12,6 @@
 namespace ttnn::kernel_lib::host {
 namespace detail {
 
-constexpr uint32_t CAN_SEND = 1u << 0;
-constexpr uint32_t CAN_RECEIVE = 1u << 1;
-constexpr uint32_t NO_SENDER_ROUND = 0xFFFFFFFFu;
-
 std::pair<uint32_t, uint32_t> virt_coord(tt::tt_metal::IDevice* device, const tt::tt_metal::CoreCoord& logical) {
     const auto worker = device->worker_core_from_logical_core(logical);
     return {static_cast<uint32_t>(worker.x), static_cast<uint32_t>(worker.y)};
@@ -24,40 +20,79 @@ std::pair<uint32_t, uint32_t> virt_coord(tt::tt_metal::IDevice* device, const tt
 uint32_t mcast_flags(const McastConfig& cfg, std::optional<bool> pre_handshake_override = std::nullopt) {
     uint32_t flags = 0;
     if (pre_handshake_override.value_or(cfg.handshake)) {
-        flags |= 0x1u;
+        flags |= dataflow_kernel_lib::mcast_wire::PRE_HANDSHAKE;
     }
     if (cfg.data_ready == DataReadyMode::Counter) {
-        flags |= 0x2u;
+        flags |= dataflow_kernel_lib::mcast_wire::COUNTER_SIGNAL;
+    }
+    if (cfg.noc == tt::tt_metal::NOC::NOC_1) {
+        flags |= dataflow_kernel_lib::mcast_wire::NOC1;
     }
     return flags;
 }
 
 void append_role_args(std::vector<uint32_t>& args, bool can_send, bool can_receive, uint32_t sender_round) {
-    args.push_back((can_send ? CAN_SEND : 0u) | (can_receive ? CAN_RECEIVE : 0u));
+    args.push_back(
+        (can_send ? dataflow_kernel_lib::mcast_wire::CAN_SEND : 0u) |
+        (can_receive ? dataflow_kernel_lib::mcast_wire::CAN_RECEIVE : 0u));
     args.push_back(sender_round);
 }
 
 std::vector<uint32_t> noc_ordered_bbox(
-    tt::tt_metal::NOC noc, const std::vector<std::pair<uint32_t, uint32_t>>& coordinates) {
-    uint32_t xlo = coordinates[0].first;
-    uint32_t xhi = coordinates[0].first;
-    uint32_t ylo = coordinates[0].second;
-    uint32_t yhi = coordinates[0].second;
-    for (const auto& coordinate : coordinates) {
-        xlo = std::min(xlo, coordinate.first);
-        xhi = std::max(xhi, coordinate.first);
-        ylo = std::min(ylo, coordinate.second);
-        yhi = std::max(yhi, coordinate.second);
-    }
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::NOC noc,
+    const tt::tt_metal::CoreCoord& logical_start,
+    const tt::tt_metal::CoreCoord& logical_end) {
+    // Logical-to-virtual worker translation is monotonic independently on each axis on supported
+    // architectures. Two opposite logical corners therefore bound the whole dense rectangle,
+    // even when virtual coordinates have gaps (such as Blackhole columns 8 and 9).
+    const auto start = virt_coord(device, logical_start);
+    const auto end = virt_coord(device, logical_end);
+    const uint32_t xlo = std::min(start.first, end.first);
+    const uint32_t xhi = std::max(start.first, end.first);
+    const uint32_t ylo = std::min(start.second, end.second);
+    const uint32_t yhi = std::max(start.second, end.second);
     if (noc == tt::tt_metal::NOC::NOC_1) {
         return {xhi, yhi, xlo, ylo};
     }
     return {xlo, ylo, xhi, yhi};
 }
 
+void append_sender_coords(
+    std::vector<uint32_t>& args, tt::tt_metal::IDevice* device, const std::vector<tt::tt_metal::CoreCoord>& senders) {
+    args.reserve(args.size() + 2u * senders.size());
+    for (const auto& sender : senders) {
+        const auto coordinate = virt_coord(device, sender);
+        args.push_back(coordinate.first);
+        args.push_back(coordinate.second);
+    }
+}
+
+void append_prepared_args(
+    std::vector<uint32_t>& args,
+    dataflow_kernel_lib::SenderTransferMode transfer_mode,
+    bool sender,
+    uint32_t remote_count,
+    bool includes_sender,
+    uint32_t configured_ack_count) {
+    if (transfer_mode != dataflow_kernel_lib::SenderTransferMode::TransferModeUnknown) {
+        return;
+    }
+    if (!sender) {
+        args.insert(args.end(), {0u, 0u, 0u, static_cast<uint32_t>(dataflow_kernel_lib::SenderTransferMode::Invalid)});
+        return;
+    }
+    args.insert(
+        args.end(),
+        {remote_count,
+         remote_count + 1u,
+         configured_ack_count == ACK_EQUALS_FANOUT ? remote_count : configured_ack_count,
+         static_cast<uint32_t>(dataflow_kernel_lib::mcast_wire::classify(remote_count, includes_sender))});
+}
+
 }  // namespace detail
 
-std::vector<uint32_t> absent_mcast_compile_time_args() { return {0u}; }
+std::vector<uint32_t> absent_mcast_compile_time_args() { return {dataflow_kernel_lib::mcast_wire::ABSENT}; }
 
 Mcast1D::Mcast1D(
     tt::tt_metal::IDevice* device,
@@ -120,6 +155,13 @@ Mcast1D::Mcast1D(
             span_);
     }
 
+    prepared_topology_.reserve(sender_lines_.size());
+    for (const auto& line : sender_lines_) {
+        auto& topology = prepared_topology_.emplace_back(line_rect_(line.front()));
+        if (rotating_sender_) {
+            detail::append_sender_coords(topology, device_, line);
+        }
+    }
     std::vector<tt::tt_metal::CoreRange> participating_ranges = receiver_grid.ranges();
     bool have_fanout = false;
     bool uniform_fanout = true;
@@ -151,6 +193,12 @@ Mcast1D::Mcast1D(
         }
     }
     TT_FATAL(have_fanout, "Mcast1D: at least one sender is required");
+    // Fixed-area lines have only two possible counts: differing membership changes fanout by one.
+    transfer_mode_ = uniform_fanout
+                         ? dataflow_kernel_lib::mcast_wire::classify(first_fanout, first_fanout < receiver_span_)
+                         : dataflow_kernel_lib::SenderTransferMode::TransferModeUnknown;
+    uniform_remote_count_ = uniform_fanout ? first_fanout : 0u;
+    uniform_loopback_count_ = uniform_fanout ? first_fanout + 1u : 0u;
     if (cfg_.ack_count_override.has_value()) {
         TT_FATAL(
             *cfg_.ack_count_override <= minimum_fanout,
@@ -191,37 +239,39 @@ std::vector<tt::tt_metal::SemaphoreDescriptor> Mcast1D::owned_semaphores() const
 }
 
 std::vector<uint32_t> Mcast1D::compile_time_args(std::optional<bool> pre_handshake) const {
-    // TODO: Share this CT argument layout and count with kernel McastArgs.
     return {
-        1u,
+        dataflow_kernel_lib::mcast_wire::PREPARED_RECTANGLE,
         has_remote_receivers_ ? 1u : 0u,
         data_ready_id_,
         consumer_ready_id_,
         ack_count(),
         detail::mcast_flags(cfg_, pre_handshake),
-        rotating_sender_ ? span_ : 0u};
+        rotating_sender_ ? span_ : 0u,
+        static_cast<uint32_t>(transfer_mode_),
+        uniform_remote_count_,
+        uniform_loopback_count_};
 }
 
 uint32_t Mcast1D::ack_count() const { return ack_count_; }
 
 std::vector<uint32_t> Mcast1D::runtime_args(const tt::tt_metal::CoreCoord& core) const {
-    // TODO: Share this RT argument layout and count with McastArgs.
     if (!grid_.contains(core)) {
-        std::vector<uint32_t> args(4u + (rotating_sender_ ? 2u * span_ : 0u), 0u);
-        detail::append_role_args(args, false, false, detail::NO_SENDER_ROUND);
+        std::vector<uint32_t> args(
+            dataflow_kernel_lib::mcast_wire::roles_offset(rotating_sender_ ? span_ : 0u, transfer_mode_), 0u);
+        detail::append_role_args(args, false, false, dataflow_kernel_lib::mcast_wire::NO_SENDER_ROUND);
         return args;
     }
 
     std::vector<uint32_t> args;
-    if (rotating_sender_) {
-        args = rotating_rt_(core);
-    } else if (is_sender(core)) {
-        args = line_rect_(core);
+    if (rotating_sender_ || is_sender(core)) {
+        args = prepared_topology_[line_index_(core)];
     } else {
         const auto sender = sender_of_(core);
         const auto virtual_sender = virt_(sender);
         args = {virtual_sender.first, virtual_sender.second, 0, 0};
     }
+    detail::append_prepared_args(
+        args, transfer_mode_, is_sender(core), num_receivers(core), receiver_grid_.contains(core), ack_count_);
     detail::append_role_args(args, is_sender(core), is_receiver_(core), sender_round_(core));
     return args;
 }
@@ -339,33 +389,8 @@ tt::tt_metal::CoreCoord Mcast1D::line_coord_(const tt::tt_metal::CoreCoord& core
                                             : tt::tt_metal::CoreCoord{core.x, origin_y_ + i};
 }
 
-std::vector<uint32_t> Mcast1D::noc_ordered_bbox_(const std::vector<std::pair<uint32_t, uint32_t>>& coordinates) const {
-    return detail::noc_ordered_bbox(cfg_.noc, coordinates);
-}
-
 std::vector<uint32_t> Mcast1D::line_rect_(const tt::tt_metal::CoreCoord& core) const {
-    std::vector<std::pair<uint32_t, uint32_t>> coordinates;
-    coordinates.reserve(receiver_span_);
-    for (uint32_t i = 0; i < receiver_span_; ++i) {
-        coordinates.push_back(virt_(line_coord_(core, i)));
-    }
-    return noc_ordered_bbox_(coordinates);
-}
-
-std::vector<uint32_t> Mcast1D::rotating_rt_(const tt::tt_metal::CoreCoord& core) const {
-    const uint32_t line = line_index_(core);
-    std::vector<std::pair<uint32_t, uint32_t>> receiver_coordinates;
-    receiver_coordinates.reserve(receiver_span_);
-    for (uint32_t i = 0; i < receiver_span_; ++i) {
-        receiver_coordinates.push_back(virt_(line_coord_(core, i)));
-    }
-    std::vector<uint32_t> runtime_args = noc_ordered_bbox_(receiver_coordinates);
-    for (const auto& sender : sender_lines_[line]) {
-        const auto coordinate = virt_(sender);
-        runtime_args.push_back(coordinate.first);
-        runtime_args.push_back(coordinate.second);
-    }
-    return runtime_args;
+    return detail::noc_ordered_bbox(device_, cfg_.noc, line_coord_(core, 0), line_coord_(core, receiver_span_ - 1));
 }
 
 bool Mcast1D::is_receiver_(const tt::tt_metal::CoreCoord& core) const {
@@ -377,11 +402,12 @@ bool Mcast1D::is_receiver_(const tt::tt_metal::CoreCoord& core) const {
 
 uint32_t Mcast1D::sender_round_(const tt::tt_metal::CoreCoord& core) const {
     if (!rotating_sender_) {
-        return is_sender(core) ? 0u : detail::NO_SENDER_ROUND;
+        return is_sender(core) ? 0u : dataflow_kernel_lib::mcast_wire::NO_SENDER_ROUND;
     }
     const auto& senders = sender_lines_[line_index_(core)];
     const auto it = std::find(senders.begin(), senders.end(), core);
-    return it == senders.end() ? detail::NO_SENDER_ROUND : static_cast<uint32_t>(std::distance(senders.begin(), it));
+    return it == senders.end() ? dataflow_kernel_lib::mcast_wire::NO_SENDER_ROUND
+                               : static_cast<uint32_t>(std::distance(senders.begin(), it));
 }
 
 Mcast2D::Mcast2D(
@@ -410,12 +436,14 @@ Mcast2D::Mcast2D(
     ry1_ = static_cast<uint32_t>(receiver_box.end_coord.y);
     area_ = (rx1_ - rx0_ + 1) * (ry1_ - ry0_ + 1);
 
+    prepared_topology_ = detail::noc_ordered_bbox(device_, cfg_.noc, receiver_box.start_coord, receiver_box.end_coord);
     std::vector<tt::tt_metal::CoreRange> participating_ranges = mcast_rect.ranges();
     uint32_t minimum_fanout = 0;
     if (rotating_sender_) {
         const auto& effective_sender_grid =
             rotating_config->sender_grid.has_value() ? *rotating_config->sender_grid : mcast_rect;
         senders_ = senders_from_grid_(effective_sender_grid, rotating_config->sender_order);
+        detail::append_sender_coords(prepared_topology_, device_, senders_);
         sender_ = senders_.front();
         sender_in_rect_ = in_rect_(sender_);
 
@@ -432,6 +460,10 @@ Mcast2D::Mcast2D(
                 participating_ranges.emplace_back(rotating_sender, rotating_sender);
             }
         }
+        transfer_mode_ = uniform_fanout ? dataflow_kernel_lib::mcast_wire::classify(first_fanout, sender_in_rect_)
+                                        : dataflow_kernel_lib::SenderTransferMode::TransferModeUnknown;
+        uniform_remote_count_ = uniform_fanout ? first_fanout : 0u;
+        uniform_loopback_count_ = uniform_fanout ? first_fanout + 1u : 0u;
         const auto& ack_count_override = cfg_.ack_count_override;
         ack_count_ = ack_count_override.value_or(uniform_fanout ? first_fanout : ACK_EQUALS_FANOUT);
         TT_FATAL(
@@ -442,6 +474,9 @@ Mcast2D::Mcast2D(
     } else {
         sender_in_rect_ = receiver_box.contains(sender_);
         const uint32_t receivers = sender_in_rect_ ? (area_ - 1) : area_;
+        transfer_mode_ = dataflow_kernel_lib::mcast_wire::classify(receivers, sender_in_rect_);
+        uniform_remote_count_ = receivers;
+        uniform_loopback_count_ = receivers + 1u;
         minimum_fanout = receivers;
         has_remote_receivers_ = receivers > 0;
         const auto& ack_count_override = cfg_.ack_count_override;
@@ -485,28 +520,29 @@ std::vector<tt::tt_metal::SemaphoreDescriptor> Mcast2D::owned_semaphores() const
 }
 
 std::vector<uint32_t> Mcast2D::compile_time_args(std::optional<bool> pre_handshake) const {
-    // TODO: Share this CT argument layout and count with McastArgs.
     return {
-        1u,
+        dataflow_kernel_lib::mcast_wire::PREPARED_RECTANGLE,
         has_remote_receivers_ ? 1u : 0u,
         data_ready_id_,
         consumer_ready_id_,
         ack_count_,
         detail::mcast_flags(cfg_, pre_handshake),
-        rotating_sender_ ? num_senders() : 0u};
+        rotating_sender_ ? num_senders() : 0u,
+        static_cast<uint32_t>(transfer_mode_),
+        uniform_remote_count_,
+        uniform_loopback_count_};
 }
 
 std::vector<uint32_t> Mcast2D::runtime_args(const tt::tt_metal::CoreCoord& core) const {
-    // TODO: Share this RT argument layout and count with McastArgs.
     std::vector<uint32_t> args;
-    if (rotating_sender_) {
-        args = rotating_rt_();
-    } else if (is_sender(core)) {
-        args = rect_corners_();
+    if (rotating_sender_ || is_sender(core)) {
+        args = prepared_topology_;
     } else {
         const auto virtual_sender = detail::virt_coord(device_, sender_);
         args = {virtual_sender.first, virtual_sender.second, 0, 0};
     }
+    detail::append_prepared_args(
+        args, transfer_mode_, is_sender(core), num_receivers(core), in_rect_(core), ack_count_);
     detail::append_role_args(args, is_sender(core), is_receiver_(core), sender_round_(core));
     return args;
 }
@@ -585,34 +621,11 @@ bool Mcast2D::is_receiver_(const tt::tt_metal::CoreCoord& core) const {
 
 uint32_t Mcast2D::sender_round_(const tt::tt_metal::CoreCoord& core) const {
     if (!rotating_sender_) {
-        return is_sender(core) ? 0u : detail::NO_SENDER_ROUND;
+        return is_sender(core) ? 0u : dataflow_kernel_lib::mcast_wire::NO_SENDER_ROUND;
     }
     const auto it = std::find(senders_.begin(), senders_.end(), core);
-    return it == senders_.end() ? detail::NO_SENDER_ROUND : static_cast<uint32_t>(std::distance(senders_.begin(), it));
-}
-
-std::vector<std::pair<uint32_t, uint32_t>> Mcast2D::rect_virt_coords_() const {
-    std::vector<std::pair<uint32_t, uint32_t>> coordinates;
-    coordinates.reserve(area_);
-    for (uint32_t y = ry0_; y <= ry1_; ++y) {
-        for (uint32_t x = rx0_; x <= rx1_; ++x) {
-            coordinates.push_back(detail::virt_coord(device_, tt::tt_metal::CoreCoord{x, y}));
-        }
-    }
-    return coordinates;
-}
-
-std::vector<uint32_t> Mcast2D::rect_corners_() const { return detail::noc_ordered_bbox(cfg_.noc, rect_virt_coords_()); }
-
-std::vector<uint32_t> Mcast2D::rotating_rt_() const {
-    const auto rectangle_coordinates = rect_virt_coords_();
-    std::vector<uint32_t> runtime_args = detail::noc_ordered_bbox(cfg_.noc, rectangle_coordinates);
-    for (const auto& sender : senders_) {
-        const auto coordinate = detail::virt_coord(device_, sender);
-        runtime_args.push_back(coordinate.first);
-        runtime_args.push_back(coordinate.second);
-    }
-    return runtime_args;
+    return it == senders_.end() ? dataflow_kernel_lib::mcast_wire::NO_SENDER_ROUND
+                                : static_cast<uint32_t>(std::distance(senders_.begin(), it));
 }
 
 }  // namespace ttnn::kernel_lib::host

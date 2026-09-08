@@ -166,7 +166,7 @@ void py_module(nb::module_& mod) {
             "runtime_args",
             &kh::Mcast1D::runtime_args,
             nb::arg("core"),
-            R"doc(Per-core runtime args. Fixed: 6 words. Rotating: 6 + 2*rotating_span words. The final two words encode this core's roles and sender phase.)doc")
+            R"doc(Per-core runtime args. Uniform: 6 + 2*rotating_span words. Mixed sender classes add four prepared-descriptor words before the roles. Fixed senders have rotating_span=0. The final two words encode this core's roles and sender phase.)doc")
         .def("is_sender", &kh::Mcast1D::is_sender, nb::arg("core"))
         .def("num_receivers", &kh::Mcast1D::num_receivers, nb::arg("core"))
         .def("ack_count", &kh::Mcast1D::ack_count, R"doc(The sender's handshake ACK wait-count on the wire.)doc")
@@ -206,7 +206,7 @@ void py_module(nb::module_& mod) {
             "runtime_args",
             &kh::Mcast2D::runtime_args,
             nb::arg("core"),
-            R"doc(Per-core runtime args. Fixed: 6 words. Rotating: 6 + 2*rotating_span words. The final two words encode this core's roles and sender phase.)doc")
+            R"doc(Per-core runtime args. Uniform: 6 + 2*rotating_span words. Mixed sender classes add four prepared-descriptor words before the roles. Fixed senders have rotating_span=0. The final two words encode this core's roles and sender phase.)doc")
         .def("is_sender", &kh::Mcast2D::is_sender, nb::arg("core"))
         .def("num_receivers", &kh::Mcast2D::num_receivers, nb::arg("core"))
         .def(

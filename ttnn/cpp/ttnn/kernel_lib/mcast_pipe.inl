@@ -24,37 +24,30 @@ template <
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
-    bool ROTATING_SENDER>
-SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
-    SenderPipe(const Noc& noc, const McastRect<NOC_ID>& dest, uint32_t consumer_ack_count) :
-    noc_(noc), dest_(dest), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID) {
-    // Catch a NoC mismatch early (only meaningful under --dev): the precomputed routing corners and
-    // my_x/my_y are baked for NOC_ID, so a `noc` running a different NoC would mcast to the wrong
-    // corners / mis-test containment.
+    bool ROTATING_SENDER,
+    SenderTransferMode TRANSFER_MODE>
+SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    TRANSFER_MODE>::SenderPipe(const Noc& noc, const SenderRuntimeArguments& runtime_args) :
+    noc_(noc),
+    bounds_(runtime_args.bounds),
+    data_ready_(DATA_READY_SEM_ID),
+    consumer_ready_(CONSUMER_READY_SEM_ID),
+    transfer_mode_(runtime_args.transfer_mode),
+    num_dests_excl_(runtime_args.remote_count),
+    num_dests_incl_(runtime_args.loopback_count),
+    ack_count_(runtime_args.ack_count) {
     ASSERT(noc_.get_noc_id() == NOC_ID);
-    // `consumer_ready` is NOT kernel-initialized: remote receivers increment it with no
-    // happens-before relative to this ctor, so a ctor set(0) would clobber an early ack and hang.
-    // Its initial 0 comes from host `CreateSemaphore(..., 0)`.
-    //
-    // `data_ready` is NOT initialized here either. send() asserts VALID locally right before it
-    // broadcasts the flag (signal_ready_), so a ctor set would be redundant; leaving the cell at its
-    // host-init INVALID keeps the resting state clean for a rotating core that also receives on it.
-    // Whether this sender's own core lies in the receiver rect is fixed at construction (my coords
-    // and the rect are both constant), so compute it ONCE here rather than per send().
-    in_rect_ = my_x[NOC_ID] >= dest_.xlo() && my_x[NOC_ID] <= dest_.xhi() && my_y[NOC_ID] >= dest_.ylo() &&
-               my_y[NOC_ID] <= dest_.yhi();
-    // Fan-out, derived from the rect area (num_dests == area ± source) — precomputed so send()
-    // branch-selects between two constants with no arithmetic:
-    //   * EXCLUDE-source count: area minus self if this sender is in its own box;
-    //   * INCLUDE-source (loopback) count: +1 for the sender's own self-copy.
-    num_dests_excl_ = dest_.area() - (in_rect_ ? 1u : 0u);
-    num_dests_incl_ = num_dests_excl_ + 1u;
-    // Degenerate self-only box (a 1x1 rect that IS the sender): no receivers, send() does a local
-    // copy. (`area==1 && in_rect` => excl==0.)
-    degenerate_ = (num_dests_excl_ == 0u);
-    // Handshake ack count: the dense default IS the EXCLUDE fan-out (every landing core acks);
-    // a divergent caller overrides with its smaller active-core count.
-    ack_count_ = (consumer_ack_count == ACK_EQUALS_FANOUT) ? num_dests_excl_ : consumer_ack_count;
+    ASSERT(runtime_args.transfer_mode != SenderTransferMode::TransferModeUnknown);
+    ASSERT(mcast_wire::concrete(runtime_args.transfer_mode));
+    ASSERT(TRANSFER_MODE == SenderTransferMode::TransferModeUnknown || TRANSFER_MODE == runtime_args.transfer_mode);
+    ASSERT((runtime_args.transfer_mode == SenderTransferMode::LocalCopy) == (runtime_args.remote_count == 0));
+    // Never initialize sender cells: doing so can clobber an early receiver acknowledgement.
 }
 
 template <
@@ -63,39 +56,89 @@ template <
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
-    bool ROTATING_SENDER>
+    bool ROTATING_SENDER,
+    SenderTransferMode TRANSFER_MODE>
 template <SourceL1Guard SOURCE_GUARD>
-FORCE_INLINE void
-SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::send(
-    uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
-    // Degenerate: no receiver cores. If the sender is in its own box and lands a copy elsewhere, do
-    // a local copy (a loopback to just self may hang); else nothing. Same aliasing test as the
-    // loopback mode below: src == dst means the copy is already in place.
-    if (degenerate_) {
-        if (in_rect_ && src_l1 != dst_l1) {
+FORCE_INLINE void SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    TRANSFER_MODE>::send(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
+    if constexpr (TRANSFER_MODE == SenderTransferMode::TransferModeUnknown) {
+        switch (transfer_mode_) {
+            case SenderTransferMode::LocalCopy:
+                return send_for_transfer_mode_<SenderTransferMode::LocalCopy, SOURCE_GUARD>(src_l1, dst_l1, size);
+            case SenderTransferMode::MulticastExcludeSource:
+                return send_for_transfer_mode_<SenderTransferMode::MulticastExcludeSource, SOURCE_GUARD>(
+                    src_l1, dst_l1, size);
+            case SenderTransferMode::MulticastIncludeSource:
+                return send_for_transfer_mode_<SenderTransferMode::MulticastIncludeSource, SOURCE_GUARD>(
+                    src_l1, dst_l1, size);
+            default: ASSERT(false); return;
+        }
+    } else {
+        send_for_transfer_mode_<TRANSFER_MODE, SOURCE_GUARD>(src_l1, dst_l1, size);
+    }
+}
+
+template <
+    uint8_t NOC_ID,
+    uint32_t DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE,
+    uint32_t CONSUMER_READY_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER,
+    SenderTransferMode TRANSFER_MODE>
+template <SenderTransferMode MODE, SourceL1Guard SOURCE_GUARD>
+FORCE_INLINE void SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    TRANSFER_MODE>::send_for_transfer_mode_(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
+    if constexpr (MODE == SenderTransferMode::LocalCopy) {
+        if (src_l1 != dst_l1) {
             local_copy_(src_l1, dst_l1, size);
-            // Same guard the loopback fence applies, for the same reason: the sender never calls
-            // receive() on itself, so nothing else proves the copy landed before a same-core consumer
-            // observes the caller's publication. ACKED, not merely SENT.
             noc_.async_write_barrier();
         }
-        return;
+    } else if constexpr (MODE == SenderTransferMode::MulticastExcludeSource) {
+        send_impl_<SOURCE_GUARD>(false, src_l1, dst_l1, size);
+    } else {
+        static_assert(MODE == SenderTransferMode::MulticastIncludeSource);
+        send_impl_<SOURCE_GUARD>(src_l1 != dst_l1, src_l1, dst_l1, size);
     }
+}
+
+template <
+    uint8_t NOC_ID,
+    uint32_t DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE,
+    uint32_t CONSUMER_READY_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER,
+    SenderTransferMode TRANSFER_MODE>
+template <SourceL1Guard SOURCE_GUARD>
+FORCE_INLINE void SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    TRANSFER_MODE>::send_impl_(bool loopback, uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
     if constexpr (PRE_HANDSHAKE) {
         consumer_ready_.wait(ack_count_);
         consumer_ready_.set(0);
     }
-    // Loopback iff the sender is in the box AND lands its own copy somewhere other than its source
-    // (src == dst means the copy is already in place; never self-overwrite in place). The
-    // in-box test is precomputed in the ctor; only the src/dst aliasing varies per send.
-    const bool loopback = in_rect_ && src_l1 != dst_l1;
-    // Branch-select between the two precomputed fan-out counts (no arithmetic): the loopback path
-    // adds the sender's own self-copy (+1), which never acks, so the consumer_ready wait above stays
-    // on ack_count_ regardless.
     const uint32_t mcast_dests = loopback ? num_dests_incl_ : num_dests_excl_;
-    send_data_(src_l1, dst_l1, size, loopback, mcast_dests);
-    signal_ready_(loopback, mcast_dests);  // the signal rides the same mode as the data
-    // The post-signal fence also provides source L1 protection.
+    send_data_(loopback, src_l1, dst_l1, size, mcast_dests);
+    // Preserve baseline Counter accounting too, including its known include-source count issue.
+    signal_ready_(loopback, mcast_dests);
     fence_<SOURCE_GUARD>(loopback);
     // Rotating sender: put our own flag cell back to INVALID now that the broadcast is flushed (the
     // fence above proved the cell is done as the set_multicast source). Otherwise this core's next
@@ -112,11 +155,22 @@ template <
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
-    bool ROTATING_SENDER>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
-    send_signal(uint32_t value) {
-    if (degenerate_) {
-        return;  // nobody to signal
+    bool ROTATING_SENDER,
+    SenderTransferMode TRANSFER_MODE>
+void SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    TRANSFER_MODE>::send_signal(uint32_t value) {
+    if constexpr (TRANSFER_MODE == SenderTransferMode::LocalCopy) {
+        return;
+    } else if constexpr (TRANSFER_MODE == SenderTransferMode::TransferModeUnknown) {
+        if (transfer_mode_ == SenderTransferMode::LocalCopy) {
+            return;
+        }
     }
     if constexpr (PRE_HANDSHAKE) {
         consumer_ready_.wait(ack_count_);
@@ -127,8 +181,8 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         ASSERT(value == VALID);
     }
-    signal_ready_(/*loopback=*/false, num_dests_excl_, value);
-    fence_<SourceL1Guard::Guard>(/*loopback=*/false);
+    signal_ready_(false, num_dests_excl_, value);
+    fence_<SourceL1Guard::Guard>(false);
     // A rotating sender receives on this same flag cell in another round. Clear the local multicast
     // source after the fence proves it is no longer in use, or that later receive_signal() can consume
     // this core's own stale value instead of waiting for the next sender.
@@ -143,11 +197,17 @@ template <
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
-    bool ROTATING_SENDER>
-FORCE_INLINE void
-SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
-    send_data_(uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests) {
-    const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
+    bool ROTATING_SENDER,
+    SenderTransferMode TRANSFER_MODE>
+FORCE_INLINE void SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    TRANSFER_MODE>::send_data_(bool loopback, uint32_t src_l1, uint32_t dst_l1, uint32_t size, uint32_t mcast_dests) {
+    const auto& r = bounds_;  // Already in routing order, prepared by the host.
     UnicastEndpoint src_ep;
     MulticastEndpoint dst_ep;
     const typename noc_traits_t<UnicastEndpoint>::src_args_type src_args{.addr = src_l1};
@@ -170,11 +230,17 @@ template <
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
-    bool ROTATING_SENDER>
-FORCE_INLINE void
-SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
-    signal_ready_(bool loopback, uint32_t mcast_dests, uint32_t value) {
-    const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
+    bool ROTATING_SENDER,
+    SenderTransferMode TRANSFER_MODE>
+FORCE_INLINE void SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    TRANSFER_MODE>::signal_ready_(bool loopback, uint32_t mcast_dests, uint32_t value) {
+    const auto& r = bounds_;  // Already in routing order, prepared by the host.
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         data_ready_.inc_multicast(noc_, r.sx, r.sy, r.ex, r.ey, /*value=*/1, mcast_dests);  // monotone +1
         if constexpr (ROTATING_SENDER) {
@@ -203,11 +269,17 @@ template <
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
-    bool ROTATING_SENDER>
+    bool ROTATING_SENDER,
+    SenderTransferMode TRANSFER_MODE>
 template <SourceL1Guard SOURCE_GUARD>
-FORCE_INLINE void
-SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::fence_(
-    bool loopback) {
+FORCE_INLINE void SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    TRANSFER_MODE>::fence_(bool loopback) {
     // A real sender loopback always needs ACKED completion: this protects the locally published
     // destination as well as the source lifetime, independent of SOURCE_GUARD.
     if (loopback) {
@@ -233,9 +305,16 @@ template <
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
-    bool ROTATING_SENDER>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
-    local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
+    bool ROTATING_SENDER,
+    SenderTransferMode TRANSFER_MODE>
+void SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    TRANSFER_MODE>::local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
     // PRECONDITION: src_l1 != dst_l1 (send() owns that test, so it can pair the copy with its fence).
     // Issued on the write channel so it settles under the caller's / the pipe's own write accounting;
     // the completion wait belongs to send().
@@ -335,14 +414,16 @@ namespace detail {
 
 template <uint32_t CT_BASE, uint32_t RT_BASE>
 bool McastArgsImpl<true, CT_BASE, RT_BASE>::should_send(uint32_t round) const {
-    return can_send() && sender_index(round) == get_arg_val<uint32_t>(next_runtime_args_offset() - 1u);
+    return can_send() &&
+           sender_index(round) == get_arg_val<uint32_t>(next_runtime_args_offset() - mcast_wire::PHASE_FROM_END);
 }
 
 template <uint32_t CT_BASE, uint32_t RT_BASE>
 typename McastArgsImpl<true, CT_BASE, RT_BASE>::SenderPipe McastArgsImpl<true, CT_BASE, RT_BASE>::sender(
     const Noc& noc) const {
     ASSERT(can_send());
-    return SenderPipe(noc, rect(), ack_count);
+    static_assert(sender_noc == noc_index, "Host multicast NoC does not match sending kernel NoC");
+    return SenderPipe(noc, sender_runtime_arguments());
 }
 
 template <uint32_t CT_BASE, uint32_t RT_BASE>
@@ -358,7 +439,8 @@ template <uint32_t CT_BASE, uint32_t RT_BASE>
 typename McastArgsImpl<true, CT_BASE, RT_BASE>::ReceiverPipe McastArgsImpl<true, CT_BASE, RT_BASE>::receiver(
     const Noc& noc) const {
     ASSERT(can_receive());
-    const uint32_t* coords = reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + (rotating ? 4 : 0)));
+    const uint32_t* coords =
+        reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + mcast_wire::sender_coords_offset(rotating_span)));
     return ReceiverPipe(noc, coords);
 }
 
@@ -372,12 +454,24 @@ McastArgsImpl<true, CT_BASE, RT_BASE>::optional_receiver(const Noc& noc) const {
 }
 
 template <uint32_t CT_BASE, uint32_t RT_BASE>
-McastRect<> McastArgsImpl<true, CT_BASE, RT_BASE>::rect() const {
-    return McastRect(
-        get_arg_val<uint32_t>(RT_BASE + 0),
-        get_arg_val<uint32_t>(RT_BASE + 1),
-        get_arg_val<uint32_t>(RT_BASE + 2),
-        get_arg_val<uint32_t>(RT_BASE + 3));
+SenderRuntimeArguments McastArgsImpl<true, CT_BASE, RT_BASE>::sender_runtime_arguments() const {
+    const NocBounds bounds{
+        get_arg_val<uint32_t>(RT_BASE + mcast_wire::SX),
+        get_arg_val<uint32_t>(RT_BASE + mcast_wire::SY),
+        get_arg_val<uint32_t>(RT_BASE + mcast_wire::EX),
+        get_arg_val<uint32_t>(RT_BASE + mcast_wire::EY)};
+    if constexpr (transfer_mode == SenderTransferMode::TransferModeUnknown) {
+        constexpr uint32_t base = RT_BASE + mcast_wire::prepared_offset(rotating_span);
+        return {
+            bounds,
+            get_arg_val<uint32_t>(base + mcast_wire::REMOTE),
+            get_arg_val<uint32_t>(base + mcast_wire::LOOPBACK),
+            ack_count == ACK_EQUALS_FANOUT ? get_arg_val<uint32_t>(base + mcast_wire::ACK) : ack_count,
+            static_cast<SenderTransferMode>(get_arg_val<uint32_t>(base + mcast_wire::MODE))};
+    } else {
+        static_assert(ack_count != ACK_EQUALS_FANOUT, "Uniform prepared sender requires a resolved CT readiness count");
+        return {bounds, remote_count, loopback_count, ack_count, transfer_mode};
+    }
 }
 
 }  // namespace detail
