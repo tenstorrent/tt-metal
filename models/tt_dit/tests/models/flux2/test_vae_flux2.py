@@ -14,6 +14,7 @@ from ....parallel.config import Flux2VaeParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
+from .device_params import line_params_flux2, single_device_params_flux2
 
 _LAYERS_PER_BLOCK = 1  # pruned from pretrained (2) to keep host run fast
 
@@ -99,43 +100,13 @@ def prep_data(
     return tt_latents
 
 
-# The Flux2 VAE uses conv2d, which needs L1_SMALL buffers on every mesh.
-_L1_SMALL = 65536
-
-# Multi-device rows: fabric, plus require_exact_physical_num_devices so each row self-skips
-# unless the mesh it asks for is exactly what the machine has. One command then picks 2x2 on a
-# 4-chip QuietBox and 4x8 on a galaxy, with no per-SKU -k filters in the CI legs.
-_MULTI_DEVICE_PARAMS = {
-    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-    "l1_small_size": _L1_SMALL,
-    "require_exact_physical_num_devices": True,
-}
-
-# The single-device row takes NO fabric, and deliberately no require_exact either, so it runs on
-# every machine rather than only on a literal one-chip host.
-#
-# No fabric because FABRIC_1D on a 1-device submesh of a multi-chip box cannot work: fabric is
-# scoped to the mesh ("Fabric initialized on 1 devices") but router sync still waits on a router
-# on another chip whose peer was never configured, so the handshake stays at STARTED and times
-# out in fabric_firmware_initializer.cpp. Seen on run 33655962297, where the 2x2 case a second
-# later initialized fabric on all 4 devices and passed -- the links were healthy, the 1-device
-# fabric was the problem.
-#
-# No fabric is also simply correct here: every CCL path this decoder can take is a no-op on a
-# 1-device axis -- CCLManager.all_gather returns early when shape[mesh_axis] == 1, _all_gather_hw
-# when both factors are 1, vae_all_gather when the cluster axis is 1 -- so no CCL op is ever
-# issued and fabric is dead weight. test_vae_ltx.py reaches the same conclusion for its own
-# single-chip row.
-_SINGLE_DEVICE_PARAMS = {"l1_small_size": _L1_SMALL}
-
-
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
-        [(1, 1), _SINGLE_DEVICE_PARAMS],
-        [(2, 2), _MULTI_DEVICE_PARAMS],
-        [(1, 8), _MULTI_DEVICE_PARAMS],
-        [(4, 8), _MULTI_DEVICE_PARAMS],
+        [(1, 1), single_device_params_flux2],
+        [(2, 2), line_params_flux2],
+        [(1, 8), line_params_flux2],
+        [(4, 8), line_params_flux2],
     ],
     ids=["1x1", "2x2", "1x8", "4x8"],
     indirect=["mesh_device", "device_params"],

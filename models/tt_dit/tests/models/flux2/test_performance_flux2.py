@@ -14,12 +14,7 @@ from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
-from .test_pipeline_flux2 import line_params_8k_flux2, line_params_flux2, ring_params_8k_flux2
-
-_REQ_EXACT = {"require_exact_physical_num_devices": True}
-line_params_flux2_perf = {**line_params_flux2, **_REQ_EXACT}
-line_params_8k_flux2_perf = {**line_params_8k_flux2, **_REQ_EXACT}
-ring_params_8k_flux2_perf = {**ring_params_8k_flux2, **_REQ_EXACT}
+from .device_params import line_params_8k_flux2_perf, line_params_flux2_perf, ring_params_8k_flux2_perf
 
 NUM_INFERENCE_STEPS = 50
 NUM_PERF_RUNS = 3

@@ -12,6 +12,7 @@ from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.flux2.prompt_encoder import PromptEncoder
 from ....utils.check import assert_quality
+from .device_params import prompt_encoder_params_flux2
 
 
 @pytest.mark.parametrize(
@@ -24,7 +25,7 @@ from ....utils.check import assert_quality
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    [prompt_encoder_params_flux2],
     indirect=True,
 )
 def test_encode(mesh_device: ttnn.MeshDevice) -> None:
@@ -77,7 +78,7 @@ def test_encode(mesh_device: ttnn.MeshDevice) -> None:
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    [prompt_encoder_params_flux2],
     indirect=True,
 )
 def test_upsample(mesh_device: ttnn.MeshDevice) -> None:

@@ -20,14 +20,7 @@ from ....parallel.manager import CCLManager
 from ....utils import cache, tensor
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
-from .test_pipeline_flux2 import line_params_8k_flux2, line_params_flux2, ring_params_8k_flux2
-
-_TRACE_REGION_SIZE = 31_000_000
-_REQ_EXACT = {"require_exact_physical_num_devices": True}
-line_params_flux2_transformer = {**line_params_flux2, "trace_region_size": _TRACE_REGION_SIZE, **_REQ_EXACT}
-line_params_8k_flux2_transformer = {**line_params_8k_flux2, "trace_region_size": _TRACE_REGION_SIZE}
-ring_params_8k_flux2_transformer = {**ring_params_8k_flux2, "trace_region_size": _TRACE_REGION_SIZE}
-ring_params_8k_flux2_req_exact = {**ring_params_8k_flux2, **_REQ_EXACT}
+from .device_params import line_params_flux2_transformer, ring_params_8k_flux2, ring_params_8k_flux2_req_exact
 
 
 class ModelLocationGenerator(Protocol):
