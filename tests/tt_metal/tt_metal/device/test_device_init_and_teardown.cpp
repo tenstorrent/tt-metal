@@ -189,4 +189,40 @@ TEST_F(TdpLimitEnvFixture, CPU_MalformedEnvVarThrows) {
     EXPECT_ANY_THROW(llrt::RunTimeOptions());
 }
 
+constexpr const char* kSimulatorCqWaitClocksEnvVar = "TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS";
+
+class SimulatorCqWaitClocksEnvFixture : public ::testing::Test {
+protected:
+    void SetUp() override {
+        const char* previous = getenv(kSimulatorCqWaitClocksEnvVar);
+        previous_ = previous != nullptr ? std::optional<std::string>(previous) : std::nullopt;
+    }
+
+    void TearDown() override {
+        if (previous_.has_value()) {
+            setenv(kSimulatorCqWaitClocksEnvVar, previous_->c_str(), /*overwrite=*/1);
+        } else {
+            unsetenv(kSimulatorCqWaitClocksEnvVar);
+        }
+    }
+
+private:
+    std::optional<std::string> previous_;
+};
+
+TEST_F(SimulatorCqWaitClocksEnvFixture, CPU_ParsesPositiveDecimalValue) {
+    unsetenv(kSimulatorCqWaitClocksEnvVar);
+    EXPECT_EQ(llrt::RunTimeOptions().get_simulator_cq_wait_clocks(), 1u);
+
+    setenv(kSimulatorCqWaitClocksEnvVar, "64", /*overwrite=*/1);
+    EXPECT_EQ(llrt::RunTimeOptions().get_simulator_cq_wait_clocks(), 64u);
+}
+
+TEST_F(SimulatorCqWaitClocksEnvFixture, CPU_RejectsInvalidValues) {
+    for (const char* value : {"", "0", "-1", "0x40", "12abc", "4294967296"}) {
+        setenv(kSimulatorCqWaitClocksEnvVar, value, /*overwrite=*/1);
+        EXPECT_ANY_THROW(llrt::RunTimeOptions()) << "value: " << value;
+    }
+}
+
 }  // namespace tt::tt_metal
