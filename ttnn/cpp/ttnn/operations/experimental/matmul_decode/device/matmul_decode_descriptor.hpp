@@ -46,6 +46,7 @@ struct MatmulDecodeParams {
     bool rms_norm = false;
     std::optional<float> rms_norm_gamma = std::nullopt;
     float rms_norm_epsilon = 1.0e-6F;
+    uint32_t rms_norm_group_size = 0;
 };
 
 struct MatmulDecodeInputs {
