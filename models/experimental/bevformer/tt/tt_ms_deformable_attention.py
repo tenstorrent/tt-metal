@@ -148,7 +148,10 @@ class TTMSDeformableAttention:
             device: TTNN device for tensor operations
             params: Pre-computed TTNN parameters containing linear layer weights and biases.
                 Should include: value_proj, sampling_offsets, attention_weights, output_proj
-            spatial_shapes: Feature-map (H, W) per level. Fixed for the lifetime of the module.
+            spatial_shapes: Feature-map (H, W) per level. Fixed for the lifetime of the
+                module: the sampling-offset normalizer is built from it here and forward
+                takes no shapes of its own. Features at a different resolution require a
+                new instance.
 
         Raises:
             ValueError: If the configuration or spatial shapes are invalid.

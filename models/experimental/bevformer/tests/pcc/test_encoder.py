@@ -167,7 +167,6 @@ def test_bevformer_encoder_forward(
         bev_h=bev_h,
         bev_w=bev_w,
         spatial_shapes=spatial_shapes,
-        batch_size=batch_size,
         **encoder_kwargs,
     )
 
