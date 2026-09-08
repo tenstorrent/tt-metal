@@ -642,7 +642,13 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
     }
 
     if (!c.use_welford) {
-        add_dfb(spec, SCALER, sizes.in2_dfb_size, c.bfloat16_tile_size, tt::DataFormat::Float16_b);
+        const uint32_t auxiliary_tile_size = tt::tile_size(c.reduce_auxiliary_format);
+        add_dfb(
+            spec,
+            SCALER,
+            c.reduce_auxiliary_tiles * auxiliary_tile_size,
+            auxiliary_tile_size,
+            c.reduce_auxiliary_format);
 
         // The pre-all-gather compute kernel folds epsilon into the post-all-gather stage instead, so
         // it never reads an epsilon tile.
@@ -1336,6 +1342,7 @@ void add_kernel_and_work_unit_specs(
             .hw_config = writer_hw,
         };
         kernel.advanced_options.num_runtime_varargs = num_varargs;
+        kernel.advanced_options.compile_time_varargs = c.reduce_auxiliary_args;
         add_writer_defines(kernel, c);
         bind_writer_resources(kernel, c);
         return kernel;
@@ -1382,6 +1389,8 @@ void add_kernel_and_work_unit_specs(
             .runtime_arg_schema = compute_schema(is_all_to_all_worker),
             .hw_config = c.compute_hw,
         };
+        kernel.advanced_options.compile_time_varargs = c.reduce_compute_args;
+        kernel.compile_time_args.emplace("reduce_auxiliary_tiles", c.reduce_auxiliary_tiles);
         add_compute_defines(kernel, c, is_all_to_all_worker);
         bind_compute_resources(kernel, c, is_all_to_all_worker);
         set_compute_unpack_modes(kernel, spec, c);

@@ -313,6 +313,11 @@ struct SpecConfig {
     tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;
     m2::ComputeHardwareConfig compute_hw;
 
+    std::vector<uint32_t> reduce_compute_args;
+    std::vector<uint32_t> reduce_auxiliary_args;
+    uint32_t reduce_auxiliary_tiles = 1;
+    tt::DataFormat reduce_auxiliary_format = tt::DataFormat::Float16_b;
+
     // Fused-activation preprocessor definitions for the compute kernel
     m2::KernelSpec::CompilerOptions::Defines activation_defines;
 };

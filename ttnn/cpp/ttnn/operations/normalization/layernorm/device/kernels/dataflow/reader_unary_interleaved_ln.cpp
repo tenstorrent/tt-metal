@@ -108,25 +108,9 @@ void kernel_main() {
 
     // Generate constant tiles for layernorm compute
 #ifndef USE_WELFORD
-    {
-        constexpr uint32_t partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
-        // Push count shared with the compute kernel's dfb_scaler pop count (issue #48487).
-        constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tt::constants::TILE_WIDTH);
-
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb::scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW,
-            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
-
-        if constexpr (num_scaler_tiles == 2) {
-            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                dfb::scaler,
-                ckernel::PoolType::SUM,
-                ckernel::ReduceDim::REDUCE_ROW,
-                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(partial_last_tile_cols);
-        }
-    }
+    using ReduceAuxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<ReduceAuxiliary>();
 #endif
 
     const uint32_t eps = get_arg(args::eps);

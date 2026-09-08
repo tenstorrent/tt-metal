@@ -17,6 +17,7 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/compute_kernel_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
 #include "experimental/kernel_args.h"
 
@@ -37,9 +38,6 @@ void kernel_main() {
     constexpr auto blk = get_arg(args::blk);
     constexpr auto num_cores_y = get_arg(args::num_cores_y);
     constexpr bool unpack_fp32_active = get_arg(args::unpack_fp32_active) != 0;
-    // Accurate mode only supports SUM; with the reader's scaler of 1.0, SUM and AVG are equivalent.
-    constexpr auto reduce_type = unpack_fp32_active ? PoolType::SUM : PoolType::AVG;
-    constexpr auto reduce_fp32_mode = unpack_fp32_active ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
     constexpr uint32_t onetile = 1;
 
@@ -112,18 +110,13 @@ void kernel_main() {
          * sum(x**2)
          */
         // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
-        compute_kernel_lib::reduce<
-            reduce_type,
-            ReduceDim::REDUCE_ROW,
-            dfb::x2,
-            dfb::reduce,
-            dfb::out,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-            reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        using SquareCall =
+            ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, dfb::x2, dfb::reduce, dfb::out>;
+        compute_kernel_lib::reduce<SquareCall>();
         dfb_inp.pop_front(Wt);
-        dfb_reduce.pop_front(1);
     }
+
+    dfb_reduce.pop_front(ttnn::kernel_lib::ReduceCallArgs<0>::auxiliary_tile_count);
 
     // On a merge core, do a final sum over the column's partial statistics and write the result to
     // the output buffer. Only the merge-core build binds that output buffer, so the whole block is
