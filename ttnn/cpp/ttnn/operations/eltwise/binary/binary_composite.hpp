@@ -281,6 +281,8 @@ Tensor situ_glu(
     const Tensor& up,
     float beta1,
     float beta2,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 }  // namespace ttnn

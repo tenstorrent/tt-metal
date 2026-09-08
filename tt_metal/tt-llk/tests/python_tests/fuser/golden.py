@@ -70,24 +70,35 @@ class Golden:
         use_srcb: bool = False,
     ) -> torch.Tensor:
         operand = node.src_b if use_srcb else node.src_a
+        dimensions = (
+            operand.dimensions
+            if operand is not None
+            else operation.max_output_dimensions
+        )
+        tile_count = (
+            operand.tile_count
+            if operand is not None
+            else (dimensions[0] // operation.tile_shape.total_row_dim())
+            * (dimensions[1] // operation.tile_shape.total_col_dim())
+        )
         t_matrix = get_golden_generator(TransposeGolden)
         if node.transpose_faces == Transpose.Yes:
             tensor = t_matrix.transpose_faces_multi_tile(
                 tensor,
                 config.sentinel.golden_math_format,
-                operand.tile_count,
+                tile_count,
                 tilize=True,
                 untilize=True,
-                input_dimensions=operand.dimensions,
+                input_dimensions=dimensions,
             )
         if node.transpose_within_face == Transpose.Yes:
             tensor = t_matrix.transpose_within_faces_multi_tile(
                 tensor,
                 config.sentinel.golden_math_format,
-                operand.tile_count,
+                tile_count,
                 tilize=True,
                 untilize=True,
-                input_dimensions=operand.dimensions,
+                input_dimensions=dimensions,
             )
         return tensor
 

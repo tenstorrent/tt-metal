@@ -206,6 +206,8 @@ void wait_for_go_message() {
 }
 
 #if !defined(COMPILE_FOR_TRISC)
+#include "noc_address_backend.h"
+
 FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) {
     go_msg_t go_message;
     go_message.all = go_message_in->all;
@@ -214,11 +216,8 @@ FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) 
 #else
     constexpr uint32_t dispatch_message_stride = NOC_STREAM_REG_SPACE_SIZE;
 #endif
-    uint64_t addr = NOC_XY_ADDR(
-        NOC_X(go_message.master_x),
-        NOC_Y(go_message.master_y),
-        DISPATCH_MESSAGE_ADDR + dispatch_message_stride * go_message.dispatch_message_offset);
-    return addr;
+    const uint32_t local_addr = DISPATCH_MESSAGE_ADDR + dispatch_message_stride * go_message.dispatch_message_offset;
+    return noc_address_backend::dispatch_address(go_message.master_x, go_message.master_y, local_addr);
 }
 
 FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_index) {
@@ -272,6 +271,9 @@ bool is_message_go() {
 #define EARLY_RETURN_FOR_DEBUG_EXIT
 #endif
 
+// NOTE: the tt-llk test harness keeps a synchronized copy of this function in
+// tt_metal/tt-llk/tests/helpers/include/boot.h, so its firmware boots in the same gathering
+// configuration this one does. test_gathering_config.py fails if the two drift apart; edit both.
 inline __attribute__((always_inline)) void configure_gathering() {
 #if defined(ARCH_BLACKHOLE) && !defined(ENABLE_GATHERING)
     // Workaround for tt-metal#16439, making sure gathering multiple instructions issued to Tensix is disabled

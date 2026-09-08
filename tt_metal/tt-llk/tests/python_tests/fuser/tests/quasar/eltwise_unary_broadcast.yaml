@@ -5,9 +5,6 @@ operands:
   - name: "input_A"
     dims: [256, 256]
     format: "Float16_b"
-  - name: "input_B"
-    dims: [256, 256]
-    format: "Float16_b"
   - name: "output_col"
     dims: [256, 256]
     format: "Float16_b"
@@ -21,8 +18,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
         operation: "UnaryBroadcast"
         unpacker: "UnaryBroadcastUnpacker"
         broadcast_type: "COL"
@@ -34,8 +30,7 @@ operations:
 
   - math:
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
         operation: "UnaryBroadcast"
         unpacker: "UnaryBroadcastUnpacker"
         broadcast_type: "ROW"
@@ -47,8 +42,7 @@ operations:
 
   - math:
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
         operation: "UnaryBroadcast"
         unpacker: "UnaryBroadcastUnpacker"
         broadcast_type: "SCALAR"

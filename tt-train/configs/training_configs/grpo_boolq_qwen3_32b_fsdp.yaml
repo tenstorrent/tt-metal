@@ -1,7 +1,7 @@
 # Qwen3-32B GRPO + FSDP on a 32-card Blackhole galaxy.
 #
 # Run:
-#   python3 boolq/boolq_training_example.py --model qwen3 --model_source Qwen/Qwen3-32B \
+#   python3 boolq/boolq_training_example.py --model qwen3 \
 #     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
 #
 # Lazy parameter init (default on Qwen3 FSDP) shards each param on load; eager full-replication would OOM.
@@ -9,6 +9,12 @@
 # model_config is omitted: the architecture is streamed from --model_source.
 
 training_config:
+  # Only max_sequence_length is read from here (to bound generation); the Qwen3
+  # architecture itself comes from the HuggingFace config of the model source.
+  # We point at qwen3_17b.yaml to inherit its max_sequence_length: 2048.
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_17b.yaml"
+  model_source: "Qwen/Qwen3-32B"
+
   optimizer:
     type: MorehAdamW
     lr: 5.0e-6
@@ -32,6 +38,9 @@ training_config:
     max_completion_length: 256
     num_generations: 8
     warmup_steps: 0
+    log_completions: false
+    num_completions_to_print: 0
+    report_to: none
 
 device_config:
   enable_fsdp: true

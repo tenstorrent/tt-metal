@@ -141,7 +141,7 @@ struct FabricEriscDatamoverKernelConfig {
 tt::tt_metal::KernelHandle generate_erisc_datamover_kernel(const FabricEriscDatamoverKernelConfig& edm_kernel_config);
 
 /**
- * Call before CreateDevices to enable fabric, which uses the specified number of routing planes.
+ * Call before creating unit meshes to enable fabric with the specified number of routing planes.
  * Currently, setting num_routing_planes dictates how many routing planes the fabric should be active on
  * for that init sequence. The number of routing planes fabric will be initialized on will be the max
  * of all the values specified by different clients. If a client wants to initialize fabric on all the

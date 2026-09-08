@@ -760,26 +760,22 @@ def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, u
     assert tt_output_tensor.shape == torch.Size(output_shape)
 
 
-@pytest.mark.xfail(
-    reason="Test that the previously supported reshape accounting for the physical shape is no longer possible"
-)
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
         ([32, 256], [1, 256]),
     ],
 )
-def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
+def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape, expect_error):
+    """Reshape against a replicated tensor's physical shape is rejected: the logical
+    volumes differ, and only the logical shape is considered."""
     torch_input_tensor = torch.randn(input_shape)
     mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper, device=mesh_device
     )
-    tt_output_tensor = ttnn.reshape(tt_input_tensor, ttnn.Shape(output_shape))
-
-    for tensor_shard in ttnn.get_device_tensors(tt_output_tensor):
-        tt_output_tensor = ttnn.to_torch(tensor_shard)
-        assert tt_output_tensor.shape == torch.Size(output_shape)
+    with expect_error(RuntimeError, r"Attempting to reshape between two shapes with different volumes"):
+        ttnn.reshape(tt_input_tensor, ttnn.Shape(output_shape))
 
 
 @pytest.mark.timeout(320)
@@ -1018,7 +1014,13 @@ def test_reshape_rm_nonclean_misaligned_last_dim(device, input_shape, output_sha
     [
         ((48, 65), (24, 130)),  # dest_page=260B — multi-slot staging
         # Issue #50191 width: 8 fixed slots would exceed L1; factory must shrink.
-        ((200002, 1), (2, 100001)),
+        # The dest page drives that (dest_slot_size_bytes = ((200002 - 1) & MASK_64) + 80 =
+        # 200080, so 8 slots is 1,600,640 B against 1,499,136 B of L1), so the source only needs
+        # to supply the same total in whole pages: 22 x 9091
+        # keeps the 2 active cores and the non-clean alignment but drops the source page count
+        # from 200002 to 22.  The old (200002, 1) form spent 754 s under ttsim on two-byte page
+        # transactions for the same bytes (#53228).
+        ((22, 9091), (2, 100001)),
     ],
     ids=["dest_page_260B", "dest_page_200002B_issue_width"],
 )

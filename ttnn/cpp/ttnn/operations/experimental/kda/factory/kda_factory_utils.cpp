@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <enchantum/enchantum.hpp>
+#include <set>
 
 #include <tt-metalium/work_split.hpp>
 #include <tt_stl/assert.hpp>

@@ -81,8 +81,8 @@ void kernel_main() {
     // mcast args
     const uint32_t weights_mcast_sender_noc_x = get_arg(args::weights_mcast_sender_noc_x);
     const uint32_t weights_mcast_sender_noc_y = get_arg(args::weights_mcast_sender_noc_y);
-    Semaphore<> weights_mcast_sender_sem(sem::weights_mcast_sender);
-    Semaphore<> weights_mcast_receiver_sem(sem::weights_mcast_receiver);
+    Semaphore weights_mcast_sender_sem(sem::weights_mcast_sender);
+    Semaphore weights_mcast_receiver_sem(sem::weights_mcast_receiver);
     DataflowBuffer cb_weight_obj(dfb::weights);
 #ifdef SPLIT_READER
     DataflowBuffer cb_reader_indices_obj(dfb::reader_indices);

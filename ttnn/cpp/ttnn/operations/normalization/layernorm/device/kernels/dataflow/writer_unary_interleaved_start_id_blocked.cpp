@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -10,24 +11,19 @@
 namespace generic = norm::kernel_util::generic;
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t Wt = get_arg_val<uint32_t>(1);
-    uint32_t num_tile_rows = get_arg_val<uint32_t>(2);
-    uint32_t tile_offset = get_arg_val<uint32_t>(3);
+    uint32_t Wt = get_arg(args::Wt);
+    uint32_t num_tile_rows = get_arg(args::num_tile_rows);
+    uint32_t tile_offset = get_arg(args::writer_start);
 
-    constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
-    constexpr auto dst_args = TensorAccessorArgs<1>();
-
-    // CB index - configurable via named compile-time args for kernel chaining support
-    constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
+    constexpr auto blk = get_arg(args::block_size);  // needed for correctness of softmax/LN kernels
     constexpr uint32_t onetile = 1;
 
     Noc noc;
-    DataflowBuffer dfb_out0(dfb_id_out0);
+    DataflowBuffer dfb_out0(dfb::out);
 
     const uint32_t tile_bytes = dfb_out0.get_tile_size();
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 
     uint32_t tile_id = tile_offset;
     for (uint32_t h = 0; h < num_tile_rows; h++) {

@@ -157,7 +157,7 @@ may bypass math entirely.
 ## Repair PerfRunType paths
 
 1. Read the C++ kernel, correctness harness, perf harness, and latest
-   `perf_data/<test>/<test>.post.csv`.
+   `perf_data/latest/<test>/<test>.post.csv`.
 2. Map every producer/consumer handshake:
    - SrcA and SrcB dvalid between unpack and math
    - destination dvalid between unpack/math and pack

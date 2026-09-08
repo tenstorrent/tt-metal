@@ -15,18 +15,6 @@
 using namespace ckernel::math;
 
 /**
- * @brief Enable or disable FP32 accumulation in the destination register for both FPU and SFPU.
- *
- * @param enable: True to enable FP32 dest accumulation, false to disable.
- */
-inline void _llk_math_set_fp32_dest_acc_(bool enable)
-{
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(enable);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(enable);
-}
-
-/**
  * @brief Configure the math (FPU) thread's ALU control registers for the given source data formats.
  *
  * Programs the source A/B ALU formats, enables INT8 math when either source is Int8/Int32, and sets FP32 dest
@@ -63,8 +51,12 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
 
-    // Establish the operand-driven baseline for the Src zero-substitution flag.
-    _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
+    // Establish the operand-driven baseline for the Src zero-substitution flag. This is a SrcA+SrcB format
+    // change, so refresh both format caches before applying (the no-arg configurator and the compute-op
+    // asserts read them; refreshing here is what keeps them from ever going stale).
+    src_zero_flag_srca_fmt = srca_data_format;
+    src_zero_flag_srcb_fmt = srcb_data_format;
+    _configure_default_zero_flag_state_();
 }
 
 /**
@@ -164,8 +156,11 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(srca_data_format);
     }
 
-    // Re-establish the operand-driven baseline (clears stale op-state) for the new SrcA format.
-    _configure_default_zero_flag_state_(srca_data_format, src_zero_flag_srcb_fmt);
+    // Re-establish the operand-driven baseline for the new SrcA format. This reconfig is the only place the
+    // SrcA format changes, so refresh its cache here -- unconditionally, even when the flag value is
+    // unchanged -- which is what keeps the cache coherent for the no-arg configurator and the compute asserts.
+    src_zero_flag_srca_fmt = srca_data_format;
+    _configure_default_zero_flag_state_();
 }
 
 /**
@@ -201,8 +196,11 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(srcb_data_format);
     }
 
-    // Re-establish the operand-driven baseline (clears stale op-state) for the new SrcB format.
-    _configure_default_zero_flag_state_(src_zero_flag_srca_fmt, srcb_data_format);
+    // Re-establish the operand-driven baseline for the new SrcB format. This reconfig is the only place the
+    // SrcB format changes, so refresh its cache here -- unconditionally, even when the flag value is
+    // unchanged -- which is what keeps the cache coherent for the no-arg configurator and the compute asserts.
+    src_zero_flag_srcb_fmt = srcb_data_format;
+    _configure_default_zero_flag_state_();
 }
 
 /**
@@ -242,8 +240,12 @@ inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
     }
 
-    // Re-establish the operand-driven baseline (clears stale op-state) for the new formats.
-    _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
+    // Re-establish the operand-driven baseline for the new formats. This reconfig changes both SrcA and
+    // SrcB, so refresh both caches here (unconditionally) to keep them coherent for the no-arg configurator
+    // and the compute asserts.
+    src_zero_flag_srca_fmt = srca_data_format;
+    src_zero_flag_srcb_fmt = srcb_data_format;
+    _configure_default_zero_flag_state_();
 }
 
 /**

@@ -1,5 +1,5 @@
-# gh-aw-metadata: {"schema_version":"v4","frontmatter_hash":"9f80de314b0b570e00ef75d60495e1b7e6527a5c6cbf0ca5fa99e3f35a9a280d","body_hash":"adc25b4f7124ed1f790e22576a5db3f46465ba4857289dae1d56f83cda437c7c","compiler_version":"v0.86.2","strict":true,"agent_id":"copilot","agent_model":"claude-sonnet-5","engine_versions":{"copilot":"1.0.79"}}
-# gh-aw-manifest: {"version":1,"secrets":["GH_AW_GITHUB_MCP_SERVER_TOKEN","GH_AW_GITHUB_TOKEN","GITHUB_TOKEN"],"actions":[{"repo":"actions/cache","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/cache/restore","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/cache/save","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/checkout","sha":"3d3c42e5aac5ba805825da76410c181273ba90b1","version":"v7.0.1"},{"repo":"actions/download-artifact","sha":"3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c","version":"v8.0.1"},{"repo":"actions/github-script","sha":"3a2844b7e9c422d3c10d287c895573f7108da1b3","version":"v9.0.0"},{"repo":"actions/upload-artifact","sha":"043fb46d1a93c77aae656e7c1c64a875d1fc6a0a","version":"v7.0.1"},{"repo":"github/gh-aw-actions/setup","sha":"6aab9e5b5c91c615506061f09bedd81a23babe3c","version":"v0.86.2"}],"skills":["blozano-tt/skills/llk-perf-audit-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/llk-race-audit-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-comment-hygiene-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-l1-memory-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-model-bringup-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-multichip-ccl-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-perf-claim-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-precision-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-review-core@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-review-router@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-test-coverage-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-trace-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-vllm-serving-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/ttnn-op-kernel-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2"],"containers":[{"image":"ghcr.io/github/gh-aw-firewall/agent:0.27.44","digest":"sha256:0d727725c737b58c7bdf51f640cffb928385ec46517e0917c7f1a02f1bada8b4","pinned_image":"ghcr.io/github/gh-aw-firewall/agent:0.27.44@sha256:0d727725c737b58c7bdf51f640cffb928385ec46517e0917c7f1a02f1bada8b4"},{"image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.27.44","digest":"sha256:b50fbadba138f6e9aba94aca09711335c489bb3b15861220cb66f6092e042dc7","pinned_image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.27.44@sha256:b50fbadba138f6e9aba94aca09711335c489bb3b15861220cb66f6092e042dc7"},{"image":"ghcr.io/github/gh-aw-firewall/squid:0.27.44","digest":"sha256:83e48bbe12c634be8c228a576832fe45f66c529ac3659db92bddbcf2eeb6d627","pinned_image":"ghcr.io/github/gh-aw-firewall/squid:0.27.44@sha256:83e48bbe12c634be8c228a576832fe45f66c529ac3659db92bddbcf2eeb6d627"},{"image":"ghcr.io/github/gh-aw-mcpg:v0.4.9","digest":"sha256:e5a1569aeaf41820fa7bdee3e94468cae448133cdbf00119ad24f5b74db1ab9f","pinned_image":"ghcr.io/github/gh-aw-mcpg:v0.4.9@sha256:e5a1569aeaf41820fa7bdee3e94468cae448133cdbf00119ad24f5b74db1ab9f"},{"image":"ghcr.io/github/gh-aw-node","digest":"sha256:0d9f1fb5fd6610c0ac1f5194a38e45a8a1e81f8a390d5142d8e4e6f26a4b3196","pinned_image":"ghcr.io/github/gh-aw-node@sha256:0d9f1fb5fd6610c0ac1f5194a38e45a8a1e81f8a390d5142d8e4e6f26a4b3196"},{"image":"ghcr.io/github/github-mcp-server:v1.9.0","digest":"sha256:881b53d6f75f69bdbc1b5b10fc2f1361717c19054143b3a8529fb5c32061a50e","pinned_image":"ghcr.io/github/github-mcp-server:v1.9.0@sha256:881b53d6f75f69bdbc1b5b10fc2f1361717c19054143b3a8529fb5c32061a50e"}],"has_pull_request":true}
+# gh-aw-metadata: {"schema_version":"v4","frontmatter_hash":"5abb2bd0266cdf40677348499e8a51fdfdb3c0ca62f7c129fd24a34da39017b9","body_hash":"826a60216f57cddf6a86058b23162016693d5df5b7c133058fadb1cb851b56be","compiler_version":"v0.86.2","strict":true,"agent_id":"copilot","agent_model":"claude-sonnet-5","engine_versions":{"copilot":"1.0.79"}}
+# gh-aw-manifest: {"version":1,"secrets":["GH_AW_GITHUB_MCP_SERVER_TOKEN","GH_AW_GITHUB_TOKEN","GITHUB_TOKEN"],"actions":[{"repo":"actions/cache","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/cache/restore","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/cache/save","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/checkout","sha":"3d3c42e5aac5ba805825da76410c181273ba90b1","version":"v7.0.1"},{"repo":"actions/download-artifact","sha":"3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c","version":"v8.0.1"},{"repo":"actions/github-script","sha":"3a2844b7e9c422d3c10d287c895573f7108da1b3","version":"v9.0.0"},{"repo":"actions/upload-artifact","sha":"043fb46d1a93c77aae656e7c1c64a875d1fc6a0a","version":"v7.0.1"},{"repo":"github/gh-aw-actions/setup","sha":"6aab9e5b5c91c615506061f09bedd81a23babe3c","version":"v0.86.2"}],"skills":["blozano-tt/skills/llk-perf-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/llk-race-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-comment-hygiene-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-l1-memory-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-model-bringup-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-multichip-ccl-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-perf-claim-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-precision-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-review-core@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-review-router@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-split-pr-by-codeowners@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-test-coverage-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-trace-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-vllm-serving-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/ttnn-op-kernel-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"],"containers":[{"image":"ghcr.io/github/gh-aw-firewall/agent:0.27.44","digest":"sha256:0d727725c737b58c7bdf51f640cffb928385ec46517e0917c7f1a02f1bada8b4","pinned_image":"ghcr.io/github/gh-aw-firewall/agent:0.27.44@sha256:0d727725c737b58c7bdf51f640cffb928385ec46517e0917c7f1a02f1bada8b4"},{"image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.27.44","digest":"sha256:b50fbadba138f6e9aba94aca09711335c489bb3b15861220cb66f6092e042dc7","pinned_image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.27.44@sha256:b50fbadba138f6e9aba94aca09711335c489bb3b15861220cb66f6092e042dc7"},{"image":"ghcr.io/github/gh-aw-firewall/squid:0.27.44","digest":"sha256:83e48bbe12c634be8c228a576832fe45f66c529ac3659db92bddbcf2eeb6d627","pinned_image":"ghcr.io/github/gh-aw-firewall/squid:0.27.44@sha256:83e48bbe12c634be8c228a576832fe45f66c529ac3659db92bddbcf2eeb6d627"},{"image":"ghcr.io/github/gh-aw-mcpg:v0.4.9","digest":"sha256:e5a1569aeaf41820fa7bdee3e94468cae448133cdbf00119ad24f5b74db1ab9f","pinned_image":"ghcr.io/github/gh-aw-mcpg:v0.4.9@sha256:e5a1569aeaf41820fa7bdee3e94468cae448133cdbf00119ad24f5b74db1ab9f"},{"image":"ghcr.io/github/gh-aw-node","digest":"sha256:0d9f1fb5fd6610c0ac1f5194a38e45a8a1e81f8a390d5142d8e4e6f26a4b3196","pinned_image":"ghcr.io/github/gh-aw-node@sha256:0d9f1fb5fd6610c0ac1f5194a38e45a8a1e81f8a390d5142d8e4e6f26a4b3196"},{"image":"ghcr.io/github/github-mcp-server:v1.9.0","digest":"sha256:881b53d6f75f69bdbc1b5b10fc2f1361717c19054143b3a8529fb5c32061a50e","pinned_image":"ghcr.io/github/github-mcp-server:v1.9.0@sha256:881b53d6f75f69bdbc1b5b10fc2f1361717c19054143b3a8529fb5c32061a50e"}],"has_pull_request":true}
 # This file was automatically generated by gh-aw (v0.86.2). DO NOT EDIT. To debug this workflow, load the skill at https://github.com/github/gh-aw/blob/main/debug.md
 #
 #    ___                   _   _
@@ -52,6 +52,8 @@
 name: "Tenstorrent Skills Reviewer"
 on:
   pull_request:
+    branches:
+      - main
     paths:
       - ttnn/**
       - tt_metal/**
@@ -147,7 +149,7 @@ jobs:
           GH_AW_INFO_FRONTMATTER_EMOJI: "🔷"
           GH_AW_COMPILED_STRICT: "true"
           GH_AW_INFO_FEATURES: '{"gh-aw-detection":true}'
-          GH_AW_INFO_SKILLS: '["blozano-tt/skills/tt-review-core@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-review-router@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/ttnn-op-kernel-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-l1-memory-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-model-bringup-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-multichip-ccl-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-trace-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-precision-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-test-coverage-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/llk-race-audit-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/llk-perf-audit-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-vllm-serving-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-perf-claim-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2","blozano-tt/skills/tt-comment-hygiene-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2"]'
+          GH_AW_INFO_SKILLS: '["blozano-tt/skills/tt-review-core@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-review-router@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/ttnn-op-kernel-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-l1-memory-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-model-bringup-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-multichip-ccl-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-trace-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-precision-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-test-coverage-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/llk-race-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/llk-perf-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-vllm-serving-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-perf-claim-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-comment-hygiene-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207","blozano-tt/skills/tt-split-pr-by-codeowners@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"]'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -265,7 +267,7 @@ jobs:
           GH_AW_INFO_ENGINE_ID: "copilot"
           GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
           GH_AW_SKILL_DIR: ".github/skills"
-          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-review-core@31e612028d6b50a5cf5916c869c636fa4dea2eb2"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-review-core@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -279,7 +281,7 @@ jobs:
           GH_AW_INFO_ENGINE_ID: "copilot"
           GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
           GH_AW_SKILL_DIR: ".github/skills"
-          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-review-router@31e612028d6b50a5cf5916c869c636fa4dea2eb2"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-review-router@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -293,7 +295,7 @@ jobs:
           GH_AW_INFO_ENGINE_ID: "copilot"
           GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
           GH_AW_SKILL_DIR: ".github/skills"
-          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/ttnn-op-kernel-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/ttnn-op-kernel-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -307,7 +309,7 @@ jobs:
           GH_AW_INFO_ENGINE_ID: "copilot"
           GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
           GH_AW_SKILL_DIR: ".github/skills"
-          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-l1-memory-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-l1-memory-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -321,7 +323,7 @@ jobs:
           GH_AW_INFO_ENGINE_ID: "copilot"
           GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
           GH_AW_SKILL_DIR: ".github/skills"
-          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-model-bringup-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-model-bringup-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -335,7 +337,7 @@ jobs:
           GH_AW_INFO_ENGINE_ID: "copilot"
           GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
           GH_AW_SKILL_DIR: ".github/skills"
-          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-multichip-ccl-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-multichip-ccl-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -349,7 +351,7 @@ jobs:
           GH_AW_INFO_ENGINE_ID: "copilot"
           GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
           GH_AW_SKILL_DIR: ".github/skills"
-          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-trace-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-trace-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -363,7 +365,7 @@ jobs:
           GH_AW_INFO_ENGINE_ID: "copilot"
           GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
           GH_AW_SKILL_DIR: ".github/skills"
-          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-precision-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-precision-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -377,7 +379,7 @@ jobs:
           GH_AW_INFO_ENGINE_ID: "copilot"
           GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
           GH_AW_SKILL_DIR: ".github/skills"
-          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-test-coverage-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-test-coverage-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -391,7 +393,7 @@ jobs:
           GH_AW_INFO_ENGINE_ID: "copilot"
           GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
           GH_AW_SKILL_DIR: ".github/skills"
-          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/llk-race-audit-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/llk-race-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -405,7 +407,7 @@ jobs:
           GH_AW_INFO_ENGINE_ID: "copilot"
           GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
           GH_AW_SKILL_DIR: ".github/skills"
-          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/llk-perf-audit-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/llk-perf-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -419,7 +421,7 @@ jobs:
           GH_AW_INFO_ENGINE_ID: "copilot"
           GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
           GH_AW_SKILL_DIR: ".github/skills"
-          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-vllm-serving-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-vllm-serving-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -433,7 +435,7 @@ jobs:
           GH_AW_INFO_ENGINE_ID: "copilot"
           GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
           GH_AW_SKILL_DIR: ".github/skills"
-          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-perf-claim-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-perf-claim-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -447,7 +449,21 @@ jobs:
           GH_AW_INFO_ENGINE_ID: "copilot"
           GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
           GH_AW_SKILL_DIR: ".github/skills"
-          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-comment-hygiene-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-comment-hygiene-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { setupGlobals } = require('${{ runner.temp }}/gh-aw/actions/setup_globals.cjs');
+            setupGlobals(core, github, context, exec, io, getOctokit);
+            const { main } = require('${{ runner.temp }}/gh-aw/actions/install_frontmatter_skills.cjs');
+            await main();
+      - name: Install frontmatter skill 15
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_AW_INFO_ENGINE_ID: "copilot"
+          GH_AW_GH_SKILL_AGENT_NAME: "github-copilot"
+          GH_AW_SKILL_DIR: ".github/skills"
+          GH_AW_FRONTMATTER_SKILLS: "blozano-tt/skills/tt-split-pr-by-codeowners@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207"
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -740,7 +756,13 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number || fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_number }}
         name: Pre-fetch PR diff and review comments
-        run: "set -euo pipefail\nmkdir -p /tmp/gh-aw/agent\nCURRENT_HEAD_SHA=\"${PR_HEAD_SHA:-}\"\nif [ -z \"$CURRENT_HEAD_SHA\" ]; then\n  CURRENT_HEAD_SHA=$(gh pr view \"$PR_NUMBER\" --repo \"$EXPR_GITHUB_REPOSITORY\" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)\nfi\nCACHE_HEAD_SHA=\"\"\nif [ -f /tmp/gh-aw/agent/pr-data-head-sha.txt ]; then\n  CACHE_HEAD_SHA=\"$(tr -d '\\n' < /tmp/gh-aw/agent/pr-data-head-sha.txt)\"\nfi\n# Skip fetch only when cache data matches current PR head commit.\nif [ -n \"$CURRENT_HEAD_SHA\" ] && [ \"$CURRENT_HEAD_SHA\" = \"$CACHE_HEAD_SHA\" ] && [ -f /tmp/gh-aw/agent/pr-diff.patch ] && [ -f /tmp/gh-aw/agent/pr-meta.json ] && [ -f /tmp/gh-aw/agent/pr-review-comments.json ]; then\n  LINES=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)\n  COMMENT_COUNT=$(jq 'length' /tmp/gh-aw/agent/pr-review-comments.json)\n  echo \"Cache hit: using pre-fetched PR data for head ${CURRENT_HEAD_SHA} (${LINES} diff lines, ${COMMENT_COUNT} review comments)\"\nelse\n  set +e\n  gh pr diff \"$PR_NUMBER\" --repo \"$EXPR_GITHUB_REPOSITORY\" \\\n      --exclude '**/*.lock.yml' \\\n      --exclude '**/generated/**' \\\n      --exclude '**/dist/**' \\\n      --exclude '**/build/**' \\\n      > /tmp/gh-aw/agent/pr-diff.full 2>/tmp/gh-aw/agent/pr-diff.err\n  DIFF_EXIT=$?\n  set -e\n  if [ $DIFF_EXIT -ne 0 ]; then\n    echo \"::error::gh pr diff failed (exit $DIFF_EXIT): $(cat /tmp/gh-aw/agent/pr-diff.err)\" >&2\n    exit 1\n  fi\n  head -n \"${PR_DIFF_MAX_LINES}\" /tmp/gh-aw/agent/pr-diff.full > /tmp/gh-aw/agent/pr-diff.patch\n  LINES=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)\n  gh pr view \"$PR_NUMBER\" \\\n    --repo \"$EXPR_GITHUB_REPOSITORY\" \\\n    --json number,title,body,headRefName,headRefOid,additions,deletions,changedFiles,files \\\n    > /tmp/gh-aw/agent/pr-meta.json\n  if [ -z \"$CURRENT_HEAD_SHA\" ]; then\n    CURRENT_HEAD_SHA=\"$(jq -r '.headRefOid // empty' /tmp/gh-aw/agent/pr-meta.json)\"\n  fi\n  gh api \"repos/$EXPR_GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments\" \\\n    --paginate \\\n    --jq '.[] | {id, path, line: (.line // .original_line), body: .body[:200], user: .user.login}' \\\n    2>/dev/null | jq -s '.' > /tmp/gh-aw/agent/pr-review-comments.json \\\n    || echo '[]' > /tmp/gh-aw/agent/pr-review-comments.json\n  if [ -n \"$CURRENT_HEAD_SHA\" ]; then\n    printf '%s\\n' \"$CURRENT_HEAD_SHA\" > /tmp/gh-aw/agent/pr-data-head-sha.txt\n  else\n    rm -f /tmp/gh-aw/agent/pr-data-head-sha.txt\n  fi\n  COMMENT_COUNT=$(jq 'length' /tmp/gh-aw/agent/pr-review-comments.json)\n  echo \"Pre-fetched PR diff (${LINES} lines), metadata, and ${COMMENT_COUNT} existing review comments for head ${CURRENT_HEAD_SHA:-unknown}\"\nfi"
+        run: "set -euo pipefail\nmkdir -p /tmp/gh-aw/agent\nCURRENT_HEAD_SHA=\"${PR_HEAD_SHA:-}\"\nif [ -z \"$CURRENT_HEAD_SHA\" ]; then\n  CURRENT_HEAD_SHA=$(gh pr view \"$PR_NUMBER\" --repo \"$EXPR_GITHUB_REPOSITORY\" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)\nfi\nCACHE_HEAD_SHA=\"\"\nif [ -f /tmp/gh-aw/agent/pr-data-head-sha.txt ]; then\n  CACHE_HEAD_SHA=\"$(tr -d '\\n' < /tmp/gh-aw/agent/pr-data-head-sha.txt)\"\nfi\n# Skip fetch only when cache data matches current PR head commit.\nif [ -n \"$CURRENT_HEAD_SHA\" ] && [ \"$CURRENT_HEAD_SHA\" = \"$CACHE_HEAD_SHA\" ] && [ -f /tmp/gh-aw/agent/pr-diff.patch ] && [ -f /tmp/gh-aw/agent/pr-meta.json ] && [ -f /tmp/gh-aw/agent/pr-review-comments.json ] && [ -n \"$(jq -r '.baseRefName // empty' /tmp/gh-aw/agent/pr-meta.json 2>/dev/null)\" ]; then\n  LINES=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)\n  COMMENT_COUNT=$(jq 'length' /tmp/gh-aw/agent/pr-review-comments.json)\n  echo \"Cache hit: using pre-fetched PR data for head ${CURRENT_HEAD_SHA} (${LINES} diff lines, ${COMMENT_COUNT} review comments)\"\nelse\n  set +e\n  gh pr diff \"$PR_NUMBER\" --repo \"$EXPR_GITHUB_REPOSITORY\" \\\n      --exclude '**/*.lock.yml' \\\n      --exclude '**/generated/**' \\\n      --exclude '**/dist/**' \\\n      --exclude '**/build/**' \\\n      > /tmp/gh-aw/agent/pr-diff.full 2>/tmp/gh-aw/agent/pr-diff.err\n  DIFF_EXIT=$?\n  set -e\n  if [ $DIFF_EXIT -ne 0 ]; then\n    echo \"::error::gh pr diff failed (exit $DIFF_EXIT): $(cat /tmp/gh-aw/agent/pr-diff.err)\" >&2\n    exit 1\n  fi\n  head -n \"${PR_DIFF_MAX_LINES}\" /tmp/gh-aw/agent/pr-diff.full > /tmp/gh-aw/agent/pr-diff.patch\n  LINES=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)\n  gh pr view \"$PR_NUMBER\" \\\n    --repo \"$EXPR_GITHUB_REPOSITORY\" \\\n    --json number,title,body,baseRefName,headRefName,headRefOid,additions,deletions,changedFiles,files,author,reviewRequests \\\n    > /tmp/gh-aw/agent/pr-meta.json\n  if [ -z \"$CURRENT_HEAD_SHA\" ]; then\n    CURRENT_HEAD_SHA=\"$(jq -r '.headRefOid // empty' /tmp/gh-aw/agent/pr-meta.json)\"\n  fi\n  gh api \"repos/$EXPR_GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments\" \\\n    --paginate \\\n    --jq '.[] | {id, path, line: (.line // .original_line), body: .body[:200], user: .user.login}' \\\n    2>/dev/null | jq -s '.' > /tmp/gh-aw/agent/pr-review-comments.json \\\n    || echo '[]' > /tmp/gh-aw/agent/pr-review-comments.json\n  if [ -n \"$CURRENT_HEAD_SHA\" ]; then\n    printf '%s\\n' \"$CURRENT_HEAD_SHA\" > /tmp/gh-aw/agent/pr-data-head-sha.txt\n  else\n    rm -f /tmp/gh-aw/agent/pr-data-head-sha.txt\n  fi\n  COMMENT_COUNT=$(jq 'length' /tmp/gh-aw/agent/pr-review-comments.json)\n  echo \"Pre-fetched PR diff (${LINES} lines), metadata, and ${COMMENT_COUNT} existing review comments for head ${CURRENT_HEAD_SHA:-unknown}\"\nfi\n"
+      - env:
+          EXPR_GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          SPLIT_MIN_CHANGED_FILES: "20"
+        name: Pre-fetch CODEOWNERS inputs for the split check
+        run: "set -euo pipefail\n# The agent shell has no GH_TOKEN -- gh-aw strips credentials before the\n# agent step and `tools.github` runs in local MCP mode, which does not\n# authenticate the CLI. Every gh call the split check needs therefore\n# happens here, where the token exists, and the agent only reads files.\nOUT=/tmp/gh-aw/agent\nrm -f \"$OUT/split-check.enabled\"\n\n# This check is advisory. Every failure below disables it and returns 0:\n# a split proposal is worth less than the domain review, so nothing here\n# may fail the job.\n[ -f \"$OUT/pr-meta.json\" ] || { echo \"No pr-meta.json; split check disabled\"; exit 0; }\n\nCHANGED=$(jq -r '.changedFiles // 0' \"$OUT/pr-meta.json\" 2>/dev/null || echo 0)\ncase \"$CHANGED\" in ''|null|*[!0-9]*) CHANGED=0 ;; esac\nif [ \"$CHANGED\" -lt \"$SPLIT_MIN_CHANGED_FILES\" ]; then\n  echo \"Split check skipped: ${CHANGED} changed files < ${SPLIT_MIN_CHANGED_FILES}\"\n  exit 0\nfi\n\nPR_NUMBER=$(jq -r '.number // empty' \"$OUT/pr-meta.json\")\nBASE=$(jq -r '.baseRefName // empty' \"$OUT/pr-meta.json\")\nHEAD_SHA=$(jq -r '.headRefOid // empty' \"$OUT/pr-meta.json\")\nif [ -z \"$PR_NUMBER\" ] || [ -z \"$BASE\" ]; then\n  echo \"::warning::pr-meta.json has no number/baseRefName; split check disabled\"\n  exit 0\nfi\n\n# /tmp/gh-aw/agent is cached across runs on this PR. Re-fetching a\n# 3000-file list on every push is the expensive part, so reuse it when it\n# was built for this same head commit.\nif [ -n \"$HEAD_SHA\" ] && [ -f \"$OUT/pr-split-context.json\" ] && [ -f \"$OUT/pr-files.txt\" ] \\\n   && [ -f \"$OUT/CODEOWNERS.base\" ] \\\n   && [ \"$(jq -r '.head_sha // empty' \"$OUT/pr-split-context.json\" 2>/dev/null)\" = \"$HEAD_SHA\" ]; then\n  touch \"$OUT/split-check.enabled\"\n  echo \"Split check: reusing cached inputs for head ${HEAD_SHA}\"\n  exit 0\nfi\n\n# CODEOWNERS: first found of three locations, on the BASE branch, raw\n# media type. Default JSON leaves .content empty above 1MB while GitHub\n# loads a CODEOWNERS up to 3MB, so a valid large file would read as\n# missing. An empty file parses as zero rules and reports every path\n# unowned -- \"no approvals needed\" off a transient failure -- so abort\n# instead of leaving one behind.\nFOUND=\"\"\nfor p in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do\n  if gh api -H \"Accept: application/vnd.github.raw\" \\\n       \"repos/$EXPR_GITHUB_REPOSITORY/contents/$p?ref=$BASE\" \\\n       > \"$OUT/CODEOWNERS.base\" 2>/dev/null && [ -s \"$OUT/CODEOWNERS.base\" ]; then\n    FOUND=\"$p\"; break\n  fi\ndone\nif [ -z \"$FOUND\" ]; then\n  rm -f \"$OUT/CODEOWNERS.base\"\n  echo \"::warning::No CODEOWNERS found on ${BASE}; split check disabled for this run\"\n  exit 0\nfi\n\n# pr-meta.json's `files` comes from `gh pr view --json files`, which\n# builds files(first: 100) and does not paginate -- it caps silently at\n# 100, on exactly the wide PRs this check targets. Fetch it properly.\nif ! gh api --paginate \"repos/$EXPR_GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100\" \\\n       --jq '.[].filename' > \"$OUT/pr-files.txt\" 2>/dev/null; then\n  rm -f \"$OUT/pr-files.txt\" \"$OUT/CODEOWNERS.base\"\n  echo \"::warning::Could not list PR files; split check disabled for this run\"\n  exit 0\nfi\nFETCHED=$(wc -l < \"$OUT/pr-files.txt\")\n\n# Rulesets, not classic branch protection: the latter needs\n# administration:read, which this workflow does not hold. On this repo\n# two overlapping pull_request rulesets compose most-restrictive, and\n# rulesets is the reading that answers correctly.\nRULES=$(gh api \"repos/$EXPR_GITHUB_REPOSITORY/rules/branches/$BASE\" 2>/dev/null || echo '[]')\nREQUIRED=$(printf '%s' \"$RULES\" | jq '[.[]? | select(.type==\"pull_request\")\n        | .parameters.required_approving_review_count] | max // 0' 2>/dev/null || echo 0)\n# Fall back to no floor rather than a malformed --argjson, which would\n# abort the step and take the whole review down with it.\ncase \"$REQUIRED\" in ''|null|*[!0-9]*) REQUIRED=0 ;; esac\n\n# Whether code-owner review is enforced at all on this base. The split\n# check counts CODEOWNERS approvals, so where no rule requires them the\n# whole proposal is moot -- and `on: pull_request` here has path filters\n# but no branch filter, so bases without a pull_request rule do reach us.\nOWNER_REVIEW=$(printf '%s' \"$RULES\" | jq '[.[]? | select(.type==\"pull_request\")\n        | .parameters.require_code_owner_review] | any' 2>/dev/null || echo false)\ncase \"$OWNER_REVIEW\" in true|false) ;; *) OWNER_REVIEW=false ;; esac\n\n# Approvals already in. GitHub credits an approval toward the branch\n# floor whether or not the approver owns anything, so take every\n# approver, not just owners.\nAPPROVED=$(gh api --paginate \"repos/$EXPR_GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews\" \\\n  --jq '[.[] | select(.state==\"APPROVED\") | .user.login]' 2>/dev/null \\\n  | jq -rs 'add // [] | unique | join(\",\")' 2>/dev/null || echo \"\")\n\n# Spell the author the way CODEOWNERS does. blozano-tt/skills#6 made\n# --exclude accept a bare login too, so this is belt and braces rather\n# than load-bearing -- but it costs nothing and matches SKILL.md.\nAUTHOR=$(jq -r '.author.login // empty' \"$OUT/pr-meta.json\")\n[ -n \"$AUTHOR\" ] && AUTHOR=\"@$AUTHOR\"\nREQUESTED=$(jq -c '[.reviewRequests[]? | (.name // .login)]' \"$OUT/pr-meta.json\" 2>/dev/null || echo '[]')\ncase \"$REQUESTED\" in '') REQUESTED='[]' ;; esac\n\njq -n --arg base \"$BASE\" --arg codeowners \"$FOUND\" --arg head_sha \"$HEAD_SHA\" \\\n      --argjson changed \"$CHANGED\" --argjson fetched \"$FETCHED\" \\\n      --argjson required \"$REQUIRED\" --argjson owner_review \"$OWNER_REVIEW\" \\\n      --arg author \"$AUTHOR\" --arg approved \"$APPROVED\" \\\n      --argjson requested \"$REQUESTED\" \\\n      '{base: $base, codeowners_path: $codeowners, head_sha: $head_sha,\n        changed_files: $changed, files_fetched: $fetched,\n        required_approvals: $required, owner_review_required: $owner_review,\n        author: $author, already_approved: $approved,\n        requested_reviewers: $requested}' \\\n  > \"$OUT/pr-split-context.json\"\ntouch \"$OUT/split-check.enabled\"\necho \"Split check enabled: ${FETCHED}/${CHANGED} files, CODEOWNERS at ${FOUND} on ${BASE}, floor ${REQUIRED}, code-owner review required: ${OWNER_REVIEW}\""
 
       - name: Download container images
         run: bash "${RUNNER_TEMP}/gh-aw/actions/download_docker_images.sh" ghcr.io/github/gh-aw-firewall/agent:0.27.44@sha256:0d727725c737b58c7bdf51f640cffb928385ec46517e0917c7f1a02f1bada8b4 ghcr.io/github/gh-aw-firewall/api-proxy:0.27.44@sha256:b50fbadba138f6e9aba94aca09711335c489bb3b15861220cb66f6092e042dc7 ghcr.io/github/gh-aw-firewall/squid:0.27.44@sha256:83e48bbe12c634be8c228a576832fe45f66c529ac3659db92bddbcf2eeb6d627 ghcr.io/github/gh-aw-mcpg:v0.4.9@sha256:e5a1569aeaf41820fa7bdee3e94468cae448133cdbf00119ad24f5b74db1ab9f ghcr.io/github/gh-aw-node@sha256:0d9f1fb5fd6610c0ac1f5194a38e45a8a1e81f8a390d5142d8e4e6f26a4b3196 ghcr.io/github/github-mcp-server:v1.9.0@sha256:881b53d6f75f69bdbc1b5b10fc2f1361717c19054143b3a8529fb5c32061a50e
@@ -1090,6 +1112,7 @@ jobs:
         # --allow-tool shell(ls)
         # --allow-tool shell(printf)
         # --allow-tool shell(pwd)
+        # --allow-tool shell(python3)
         # --allow-tool shell(safeoutputs:*)
         # --allow-tool shell(sort)
         # --allow-tool shell(tail)
@@ -1143,7 +1166,7 @@ jobs:
           fi
           # shellcheck disable=SC1003,SC2016,SC2086
           awf --config "${RUNNER_TEMP}/gh-aw/awf-config.json" --container-workdir "${GITHUB_WORKSPACE}" --mount "${RUNNER_TEMP}/gh-aw:${RUNNER_TEMP}/gh-aw:ro" --mount "${RUNNER_TEMP}/gh-aw:/host${RUNNER_TEMP}/gh-aw:ro" ${GH_AW_TOOL_CACHE_MOUNT:+--mount "$GH_AW_TOOL_CACHE_MOUNT"} ${GH_AW_DOCKER_HOST:+--docker-host "$GH_AW_DOCKER_HOST"} --env-all --exclude-env ACTIONS_ID_TOKEN_REQUEST_TOKEN --exclude-env ACTIONS_ID_TOKEN_REQUEST_URL --exclude-env COPILOT_GITHUB_TOKEN --exclude-env GITHUB_MCP_SERVER_TOKEN --exclude-env MCP_GATEWAY_API_KEY --mount /tmp/gh-aw:/tmp/gh-aw:rw --log-level info --skip-pull \
-            -- /bin/bash -c 'set +o histexpand; export PATH="${RUNNER_TEMP}/gh-aw/mcp-cli/bin:$PATH" && : "${RUNNER_TOOL_CACHE:?RUNNER_TOOL_CACHE must be set}"; GH_AW_TOOL_CACHE="$RUNNER_TOOL_CACHE"; export PATH="$(find "$GH_AW_TOOL_CACHE" -maxdepth 5 -type d -name bin 2>/dev/null | tr '\''\n'\'' '\'':'\'')$PATH"; [ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; [ -n "$ERLANG_HOME" ] && export PATH="$ERLANG_HOME/bin:$PATH" || true && GH_AW_NODE_EXEC="${GH_AW_NODE_BIN:-}"; if [ -z "$GH_AW_NODE_EXEC" ] || [ ! -x "$GH_AW_NODE_EXEC" ]; then GH_AW_NODE_EXEC="$(command -v node 2>/dev/null || true)"; fi; if [ -z "$GH_AW_NODE_EXEC" ]; then echo "node runtime missing on this runner — check runtimes.node in workflow YAML" >&2; exit 127; fi; GH_AW_NPM_GLOBAL_ROOT="$(npm root -g 2>/dev/null || true)"; if [ -n "$GH_AW_NPM_GLOBAL_ROOT" ]; then export NODE_PATH="${GH_AW_NPM_GLOBAL_ROOT}${NODE_PATH:+:${NODE_PATH}}"; fi; "$GH_AW_NODE_EXEC" "${RUNNER_TEMP}/gh-aw/actions/copilot_harness.cjs" "${RUNNER_TEMP}/gh-aw/bin/copilot" --add-dir /tmp/gh-aw/ --log-level all --log-dir /tmp/gh-aw/sandbox/agent/logs/ --disable-builtin-mcps --no-ask-user --allow-tool github --allow-tool safeoutputs --allow-tool '\''shell(cat)'\'' --allow-tool '\''shell(date)'\'' --allow-tool '\''shell(echo)'\'' --allow-tool '\''shell(find)'\'' --allow-tool '\''shell(github:*)'\'' --allow-tool '\''shell(grep)'\'' --allow-tool '\''shell(head)'\'' --allow-tool '\''shell(ls)'\'' --allow-tool '\''shell(printf)'\'' --allow-tool '\''shell(pwd)'\'' --allow-tool '\''shell(safeoutputs:*)'\'' --allow-tool '\''shell(sort)'\'' --allow-tool '\''shell(tail)'\'' --allow-tool '\''shell(uniq)'\'' --allow-tool '\''shell(wc)'\'' --allow-tool '\''shell(yq)'\'' --allow-tool write --allow-all-paths --add-dir "${GITHUB_WORKSPACE}" --prompt-file /tmp/gh-aw/aw-prompts/prompt.txt' 2>&1 | tee -a /tmp/gh-aw/agent-stdio.log
+            -- /bin/bash -c 'set +o histexpand; export PATH="${RUNNER_TEMP}/gh-aw/mcp-cli/bin:$PATH" && : "${RUNNER_TOOL_CACHE:?RUNNER_TOOL_CACHE must be set}"; GH_AW_TOOL_CACHE="$RUNNER_TOOL_CACHE"; export PATH="$(find "$GH_AW_TOOL_CACHE" -maxdepth 5 -type d -name bin 2>/dev/null | tr '\''\n'\'' '\'':'\'')$PATH"; [ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; [ -n "$ERLANG_HOME" ] && export PATH="$ERLANG_HOME/bin:$PATH" || true && GH_AW_NODE_EXEC="${GH_AW_NODE_BIN:-}"; if [ -z "$GH_AW_NODE_EXEC" ] || [ ! -x "$GH_AW_NODE_EXEC" ]; then GH_AW_NODE_EXEC="$(command -v node 2>/dev/null || true)"; fi; if [ -z "$GH_AW_NODE_EXEC" ]; then echo "node runtime missing on this runner — check runtimes.node in workflow YAML" >&2; exit 127; fi; GH_AW_NPM_GLOBAL_ROOT="$(npm root -g 2>/dev/null || true)"; if [ -n "$GH_AW_NPM_GLOBAL_ROOT" ]; then export NODE_PATH="${GH_AW_NPM_GLOBAL_ROOT}${NODE_PATH:+:${NODE_PATH}}"; fi; "$GH_AW_NODE_EXEC" "${RUNNER_TEMP}/gh-aw/actions/copilot_harness.cjs" "${RUNNER_TEMP}/gh-aw/bin/copilot" --add-dir /tmp/gh-aw/ --log-level all --log-dir /tmp/gh-aw/sandbox/agent/logs/ --disable-builtin-mcps --no-ask-user --allow-tool github --allow-tool safeoutputs --allow-tool '\''shell(cat)'\'' --allow-tool '\''shell(date)'\'' --allow-tool '\''shell(echo)'\'' --allow-tool '\''shell(find)'\'' --allow-tool '\''shell(github:*)'\'' --allow-tool '\''shell(grep)'\'' --allow-tool '\''shell(head)'\'' --allow-tool '\''shell(ls)'\'' --allow-tool '\''shell(printf)'\'' --allow-tool '\''shell(pwd)'\'' --allow-tool '\''shell(python3)'\'' --allow-tool '\''shell(safeoutputs:*)'\'' --allow-tool '\''shell(sort)'\'' --allow-tool '\''shell(tail)'\'' --allow-tool '\''shell(uniq)'\'' --allow-tool '\''shell(wc)'\'' --allow-tool '\''shell(yq)'\'' --allow-tool write --allow-all-paths --add-dir "${GITHUB_WORKSPACE}" --prompt-file /tmp/gh-aw/aw-prompts/prompt.txt' 2>&1 | tee -a /tmp/gh-aw/agent-stdio.log
         env:
           AWF_REFLECT_ENABLED: 1
           COPILOT_AGENT_RUNNER_TYPE: STANDALONE

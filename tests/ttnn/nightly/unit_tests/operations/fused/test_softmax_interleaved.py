@@ -23,6 +23,8 @@ from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     ttnn_scale_mask_softmax_in_place,
 )
 
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
 
 TEST_PADDING_VALUE = -42
 

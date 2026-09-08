@@ -410,9 +410,15 @@ measure_iteration() {
             ${PYTEST_VARIANT_ARGS+"${PYTEST_VARIANT_ARGS[@]}"} "./$TEST.py"
     )
 
-    local csv="$perf_data/$TEST/$TEST.csv"
+    # Where a sweep lands depends on the commit being measured, and a compare
+    # normally straddles the change: newer trees write perf_data/runs/<tag>/ and
+    # point perf_data/latest at it, older ones write perf_data/<test>/ directly.
+    local csv="$perf_data/latest/$TEST/$TEST.csv"
     if [ ! -f "$csv" ]; then
-        csv="$(find "$llk" -path "*/perf_data/$TEST/$TEST.csv" | head -1)"
+        csv="$perf_data/$TEST/$TEST.csv"
+    fi
+    if [ ! -f "$csv" ]; then
+        csv="$(find "$llk" -path "*/perf_data/*$TEST/$TEST.csv" | head -1)"
     fi
     if [ -z "$csv" ] || [ ! -f "$csv" ]; then
         die "no perf CSV from ${sha:0:12} (${side}). Was every case deselected -- does

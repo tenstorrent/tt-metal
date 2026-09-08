@@ -419,7 +419,7 @@ constexpr uint8_t DFB_INIT_TIMING_WORDS_PER_SLOT = 16;
 constexpr uint32_t DFB_INIT_TIMING_REGION_BYTES =
     static_cast<uint32_t>(DFB_INIT_TIMING_NUM_SLOTS) * static_cast<uint32_t>(DFB_INIT_TIMING_WORDS_PER_SLOT) *
     sizeof(uint32_t);
-// Cached L1 byte offset for host reads (DEBUG_VALID_L1_ADDR allows [0, 4 MiB)).
+// Cached L1 byte offset for host reads (Tensix L1 window is [0, 4 MiB)).
 // Device writes use MEM_L1_UNCACHED_BASE + this offset so TL1 is updated without L2 flush.
 constexpr uint32_t DFB_INIT_TIMING_L1_BYTE_OFFSET =
     (4u * 1024u * 1024u) - DFB_INIT_TIMING_REGION_BYTES;

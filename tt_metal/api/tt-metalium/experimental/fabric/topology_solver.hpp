@@ -417,6 +417,17 @@ public:
     bool minimize_same_rank_groups_used() const { return minimize_same_rank_groups_used_; }
 
     /**
+     * @brief HARD cap: the mapping may occupy at most @p k distinct same-rank global groups (host partitions).
+     *
+     * The solver chooses WHICH k groups (never pinned to a specific, possibly-unroutable cover). Register the
+     * global groups via set_same_rank_groups_constraint first so the cap has a partition to bind. A capacity
+     * feasibility check (can k groups hold all targets?) runs at solve time; a provably infeasible cap is skipped
+     * with a warning and the soft set_minimize_same_rank_groups_used fallback (if enabled) applies. 0 = no cap.
+     */
+    void set_max_same_rank_groups_used(std::size_t k) { max_same_rank_groups_used_ = k; }
+    std::size_t max_same_rank_groups_used() const { return max_same_rank_groups_used_; }
+
+    /**
      * @brief Get forbidden (target, global) pairs that are invalid even when no required constraints exist
      *
      * Used when add_forbidden_constraint is called for a target with no valid_mappings_ entry.
@@ -478,6 +489,9 @@ private:
 
     // Opt-in objective: minimize number of distinct same-rank global groups (host partitions) used.
     bool minimize_same_rank_groups_used_ = false;
+
+    // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
+    std::size_t max_same_rank_groups_used_ = 0;
 
     // Deprecated: many-to-many pinning no longer reserves globals exclusively for a target set.
     // Kept for compatibility with older constraint merges that extended an existing reservation.
@@ -794,6 +808,9 @@ struct ConstraintIndexData {
     // Opt-in objective: minimize the number of distinct same-rank global groups (host partitions) used.
     bool minimize_same_rank_groups_used = false;
 
+    // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
+    std::size_t max_same_rank_groups_used = 0;
+
     /**
      * @brief Construct ConstraintIndexData from MappingConstraints and GraphIndexData
      *
@@ -913,6 +930,7 @@ struct TopologySatConstraintView {
     const std::vector<std::set<size_t>>& same_rank_groups;
     const std::vector<size_t>& target_to_group;
     bool minimize_same_rank_groups_used = false;
+    std::size_t max_same_rank_groups_used = 0;
 
     template <typename TargetNode, typename GlobalNode>
     explicit TopologySatConstraintView(const ConstraintIndexData<TargetNode, GlobalNode>& c) :
@@ -923,7 +941,8 @@ struct TopologySatConstraintView {
         global_to_same_rank_group(c.global_to_same_rank_group),
         same_rank_groups(c.same_rank_groups),
         target_to_group(c.target_to_group),
-        minimize_same_rank_groups_used(c.minimize_same_rank_groups_used) {}
+        minimize_same_rank_groups_used(c.minimize_same_rank_groups_used),
+        max_same_rank_groups_used(c.max_same_rank_groups_used) {}
 
     bool is_valid_mapping(size_t target_idx, size_t global_idx) const {
         if (target_idx < forbidden_global_indices.size() && !forbidden_global_indices[target_idx].empty()) {

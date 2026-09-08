@@ -19,6 +19,8 @@
 
 - name: ttnn nightly conv tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 150
@@ -34,14 +36,12 @@
 
 - name: ttnn nightly matmul tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  ai_summary:
+    authoritative_job_status: true
   skus:
-    wh_n150_civ2:
-      timeout: 50
     wh_n300_civ2:
       timeout: 50
     bh_p100:
-      timeout: 50
-    bh_p150b_civ2:
       timeout: 50
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
@@ -50,13 +50,9 @@
 - name: ttnn nightly fused tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
-    wh_n150_civ2:
-      timeout: 65
     wh_n300_civ2:
       timeout: 65
     bh_p100:
-      timeout: 65
-    bh_p150b_civ2:
       timeout: 65
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
@@ -64,14 +60,12 @@
 
 - name: ttnn nightly reduction tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/reduction -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  ai_summary:
+    authoritative_job_status: true
   skus:
-    wh_n150_civ2:
-      timeout: 45
     wh_n300_civ2:
       timeout: 45
     bh_p100:
-      timeout: 45
-    bh_p150b_civ2:
       timeout: 45
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
@@ -79,7 +73,9 @@
 
 - name: ttnn nightly experimental tests (wormhole)
   # test_moe_grouped_topk hangs on Wormhole (TODO: file issue + restore). Exclude on WH only.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk" -m "not requires_host_iommu" --timeout=600'
+  # Ignore experimental/fft: WH-B0 only, needs a dedicated per-file job; registering that
+  # job requires a time_budget.yaml bump that fork PRs cannot land.
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft -xv -k "not performance and not test_moe_grouped_topk" -m "not requires_host_iommu" --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 65
@@ -91,13 +87,29 @@
 
 - name: ttnn nightly experimental tests (blackhole)
   # Host-IOMMU tests are selected by the viommu job below and excluded from these non-IOMMU SKUs.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance" -m "not requires_host_iommu" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft -xv -k "not performance" -m "not requires_host_iommu" --timeout=600'
   skus:
     bh_p100:
       timeout: 60
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 40
   owner_id: U080FKG7KEU # Utku Aydonat
+  team: ttnn
+  category: experimental
+
+- name: ttnn attn_res_weighted_reduce_nc unit tests
+  # The test file sits in a directory no group suite globs, so this row is the only thing
+  # that runs it. That is deliberate: the op is brought up and measured on Blackhole P150b
+  # alone, and every group suite that would otherwise collect it runs -x on SKUs it has
+  # never executed on, where a failure would abort tests belonging to someone else.
+  # The per-test timeout sits below the step timeout so a hang is reported as a
+  # pytest stack dump rather than an opaque step kill, with room left over for the
+  # report to be written.
+  cmd: 'pytest tests/ttnn/unit_tests/operations/experimental/test_attn_res_weighted_reduce_nc.py -xv --timeout=60'
+  skus:
+    bh_p150b_civ2:
+      timeout: 3
+  owner_id: U09LK84G4TF # Nikola Milicevic
   team: ttnn
   category: experimental
 
@@ -107,6 +119,7 @@
   cmd: |
     pytest \
       tests/ttnn/nightly/unit_tests/operations/experimental \
+      --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft \
       tests/ttnn/nightly/unit_tests/operations/sdpa \
       -m requires_host_iommu -xv --timeout=600
   skus:
@@ -141,6 +154,25 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   category: pool
+
+- name: ttnn kernel-lib eltwise chain tests
+  cmd: >-
+    pytest tests/ttnn/unit_tests/kernel_lib -xv
+    --ignore=tests/ttnn/unit_tests/kernel_lib/test_chain_perf.py
+    --ignore=tests/ttnn/unit_tests/kernel_lib/test_chain_skip_compute_perf.py
+    --timeout=600
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    wh_n300_civ2:
+      timeout: 10
+    bh_p100:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U08ADLJ4PLP # Aleksandar Stancov
+  team: ttnn
+  category: kernel_lib
 
 - name: ttnn nightly eltwise tests group 1
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 1 -xv -m "not disable_fast_runtime_mode" --timeout=600'
@@ -212,13 +244,9 @@
 - name: ttnn nightly moreh tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
-    wh_n150_civ2:
-      timeout: 45
     wh_n300_civ2:
       timeout: 45
     bh_p100:
-      timeout: 45
-    bh_p150b_civ2:
       timeout: 45
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
@@ -276,6 +304,8 @@
 
 - name: ttnn nightly data_movement tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 50
@@ -303,6 +333,8 @@
 - name: ttnn nightly data_movement tests (post-commit suite)
   # Measured: bh_p100 ~28 min, bh_p150b ~57 min, wh_n300 ~66 min, wh_n150 ~89 min.
   cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=300'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 120

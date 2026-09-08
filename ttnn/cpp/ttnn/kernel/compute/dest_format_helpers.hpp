@@ -38,7 +38,7 @@ ALWI void copy_tile_init_with_dt(uint32_t icb, uint32_t transpose = 0) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format_srca(icb);
 #endif
-    copy_tile_to_dst_init_short(icb, transpose);
+    copy_init(icb, transpose);
 }
 
 ALWI void add_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {

@@ -118,6 +118,10 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
  * | Template   | configure_remap      | Whether to (re)configure BH DEST remap (BH only)    | bool      | true/false                | False (default true)  |
  * | Template   | is_fp32_dest_acc_en  | DEST accumulation mode                              | bool      | true/false                | False                 |
  * | Function   | ocb                  | Output circular buffer identifier                   | uint32_t  | 0 to 31                   | True                  |
+ *
+ * NOTE: When a row is processed in multiple blocks, every block must use the same block_ct_dim;
+ * full_ct_dim must be divisible by block_ct_dim. Remainder blocks are unsupported because the L1 column offset
+ * is computed as block_c_index * block_ct_dim.
  */
 // clang-format on
 template <
@@ -170,6 +174,10 @@ ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_L
  * | Template   | is_fp32_dest_acc_en | DEST accumulation mode                     | bool      | true/false                | False                   |
  * | Function   | icb                 | Input circular buffer identifier           | uint32_t  | 0 to 31                   | True                    |
  * | Function   | ocb                 | Output circular buffer identifier          | uint32_t  | 0 to 31                   | True                    |
+ *
+ * NOTE: When a row is processed in multiple blocks, every block must use the same block_ct_dim;
+ * full_ct_dim must be divisible by block_ct_dim. Remainder blocks are unsupported because the L1 column offset
+ * is computed as block_c_index * block_ct_dim.
  */
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
@@ -195,6 +203,10 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __
  * | Template   | is_fp32_dest_acc_en | DEST accumulation mode            | bool     | true/false                | False               |
  * | Function   | icb                 | Input circular buffer identifier  | uint32_t | 0 to 31                   | True                |
  * | Function   | ocb                 | Output circular buffer identifier | uint32_t | 0 to 31                   | True                |
+ *
+ * NOTE: When a row is processed in multiple blocks, every block must use the same block_ct_dim;
+ * full_ct_dim must be divisible by block_ct_dim. Remainder blocks are unsupported because the L1 column offset
+ * is computed as block_c_index * block_ct_dim.
  */
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
@@ -226,7 +238,11 @@ ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t cal
  * | Function   | icb          | Input circular buffer identifier            | uint32_t  | 0 to 31                   | True                |
  * | Function   | block_rt_dim | Height of a single block in tiles           | uint32_t  | >= 1                      | True                |
  * | Function   | ocb          | Output circular buffer identifier           | uint32_t  | 0 to 31                   | True                |
- * | Function   | block_c_index | Index of the currently processed block     | uint32_t  | >= 0                      | False               |
+ * | Function   | block_c_index | Index of the currently processed block     | uint32_t  | 0 to (full_ct_dim / block_ct_dim) - 1 | False |
+ *
+ * NOTE: When a row is processed in multiple blocks, every block must use the same block_ct_dim;
+ * full_ct_dim must be divisible by block_ct_dim. Remainder blocks are unsupported because the L1 column offset
+ * is computed as block_c_index * block_ct_dim.
  */
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
@@ -287,8 +303,12 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
  * | Template   | dense              | Packs two 2 face tiles in a single 4 face region                             | bool      | true/false                              | False (default false) |
  * | Function   | ocb                | Output circular buffer identifier                                            | uint32_t  | 0 to 31                                 | True                  |
  * | Function   | block_rt_dim       | Height of a single block in tiles                                            | uint32_t  | >= 1                                    | False (default=1)     |
- * | Function   | block_c_index      | Block column index (used when full_ct_dim > block_ct_dim)                    | uint32_t  | >= 0                                    | False (default=0)     |
+ * | Function   | block_c_index      | Block column index (used when full_ct_dim > block_ct_dim)                    | uint32_t  | 0 to (full_ct_dim / block_ct_dim) - 1   | False (default=0)     |
  * | Function   | tile_dst_offset    | Runtime offset for the index of the tile in the dest from which to pack      | uint32_t  | 0 to 7 (0 to 3 if fp32 dest is enabled) | False (default=0)     |
+ *
+ * NOTE: When a row is processed in multiple blocks, every block must use the same block_ct_dim;
+ * full_ct_dim must be divisible by block_ct_dim. Remainder blocks are unsupported because the L1 column offset
+ * is computed as block_c_index * block_ct_dim.
  *
  * NOTE: Face geometry (face_r_dim, num_faces) is derived from the output circular buffer metadata configured on
  * the host via CircularBufferConfig::set_unpack_face_geometry / CBFormatDescriptor::face_geometry.

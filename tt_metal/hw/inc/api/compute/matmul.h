@@ -113,6 +113,31 @@ ALWI void matmul_init(
 
 // clang-format off
 /**
+ * (Quasar) Undo the automatic MxFp4 -> MxFp4_2x_B src-format selection applied by matmul_init.
+ *
+ * matmul_init overrides an MxFp4 operand's unpacker OUT_DATA_FORMAT and ALU format to the 2x-packed
+ * MxFp4_2x_B, diverging from the op-agnostic unpack_dst_format[] table. That override PERSISTS: the
+ * non-matmul unpack inits never reprogram OUT_DATA_FORMAT, and reconfig_data_format is silently
+ * skipped for a same-format operand. So a kernel that feeds the SAME MxFp4 buffer to matmul and then
+ * to a non-matmul op (datacopy/SFPU/eltwise) MUST call mm_uninit(in0, in1) after the matmuls and
+ * before the next op, or that op will keep unpacking the buffer as MxFp4_2x_B and produce garbage.
+ * A no-op on non-MxFp4 operands and on non-Quasar architectures.
+ *
+ * | Argument  | Description                                            | Type     | Valid Range | Required |
+ * |-----------|--------------------------------------------------------|----------|-------------|----------|
+ * | in0_cb_id | First input CB used in the matmul (same as matmul_init)| uint32_t | 0 to 31     | True     |
+ * | in1_cb_id | Second input CB used in the matmul                     | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
+ALWI void mm_uninit(uint32_t in0_cb_id, uint32_t in1_cb_id) {
+#ifdef ARCH_QUASAR
+    UNPACK((llk_unpack_AB_matmul_uninit(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_matmul_uninit(in0_cb_id, in1_cb_id)));
+#endif
+}
+
+// clang-format off
+/**
  * Performs tile-sized matrix multiplication *C=A\*B* between the tiles in two
  * specified input CBs and accumulates the result to DST (DST += C). The DST register buffer
  * must be in acquired state via *acquire_dst* call. This call is blocking and

@@ -80,6 +80,9 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     repeat/codegen/repeat_codegen_supported.cpp
     repeat/repeat.cpp
     repeat_interleave/repeat_interleave.cpp
+    repeat_interleave/codegen/repeat_interleave_codegen_device_operation.cpp
+    repeat_interleave/codegen/repeat_interleave_codegen_program_factory.cpp
+    repeat_interleave/codegen/repeat_interleave_codegen_supported.cpp
     reshape_on_device/device/reshape_op.cpp
     reshape_on_device/device/reshape_tile_program_factory.cpp
     reshape_on_device/device/reshape_rm_program_factory.cpp
@@ -184,7 +187,11 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     gather/gather.cpp
     gather/device/gather_device_operation.cpp
     gather/device/gather_program_factory.cpp
+    gather/codegen/gather_codegen_device_operation.cpp
+    gather/codegen/gather_codegen_program_factory.cpp
+    gather/codegen/gather_codegen_supported.cpp
     gather/tosa/gather_tosa.cpp
+    concat/device/concat_tiled_unaligned_program_factory.cpp
 )
 
 set(TTNN_OP_DATA_MOVEMENT_API_HEADERS

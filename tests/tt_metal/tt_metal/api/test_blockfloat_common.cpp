@@ -5,10 +5,13 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include "impl/data_format/blockfloat_common.hpp"
+#include <array>
 #include <bit>
 #include <memory>
 
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <umd/device/types/arch.hpp>
+#include "jit_build/data_format.hpp"
 
 namespace {
 
@@ -87,3 +90,23 @@ INSTANTIATE_TEST_SUITE_P(
     )  // Values
     // clang-format on
 );
+
+// FP8_E4M3 is supported on Blackhole and Quasar but not Wormhole. Verify the arch guard in
+// get_single_pack_src_format() matches that: QUASAR and BLACKHOLE pass, WORMHOLE_B0 throws.
+// Host-only: calls the public get_pack_src_formats() wrapper, no device required.
+TEST(DataFormatFp8ArchGuard, Fp8E4m3PackSrcFormatPerArch) {
+    const std::array<tt::DataFormat, 1> fp8_formats{tt::DataFormat::Fp8_e4m3};
+    constexpr auto unpack_dst = tt::DataFormat::Float16_b;
+
+    EXPECT_NO_THROW(tt::get_pack_src_formats(
+        fp8_formats,
+        unpack_dst,
+        /*fp32_dest_acc_en=*/true,
+        /*bfp8_pack_precise=*/false,
+        /*int_fpu_en=*/false,
+        tt::ARCH::QUASAR));
+
+    EXPECT_NO_THROW(tt::get_pack_src_formats(fp8_formats, unpack_dst, true, false, false, tt::ARCH::BLACKHOLE));
+
+    EXPECT_ANY_THROW(tt::get_pack_src_formats(fp8_formats, unpack_dst, true, false, false, tt::ARCH::WORMHOLE_B0));
+}

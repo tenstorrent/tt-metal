@@ -40,11 +40,11 @@ Tensor hypot_composite_wrapper(const Tensor& a, const Tensor& b, const std::opti
 
 // Common broadcasting and performance documentation for binary operations
 constexpr auto BINARY_BROADCAST_DOC = R"doc(
-        Binary elementwise operations, C=op(A,B), support input tensors A and B in row major and tile layout, in interleaved or sharded format (height, width or block sharded), in DRAM or L1. A and B are completely independent, and can have different tensor specs.
+        Binary elementwise operations, C=op(A,B), support input tensors A and B in tile and row major layouts (unless dtype requires specific layout, e.g. BFLOAT8_B or BFLOAT4_B), in interleaved or sharded format (height, width or block sharded), in DRAM or L1. A and B are independent, and can have different tensor specs, with restrictions as in notes below.
 
         Broadcast of A and B operands is supported up to dimension 5 (DNCHW). Any dimensions of size 1 in either A or B will be expanded to match the other input, and data will be duplicated along that dimension. For example, if the shape of A is [2,1,1,32] and B is [1,16,8,1], the output shape will be [2,16,8,32]. The size of dimensions higher than 5 must match between A and B.
 
-        The output C also supports row major and tile layout, interleaved or sharded format (height, width or block sharded), in DRAM or L1. The tensor spec of C is independent of A and B, and can be explicitly set using the optional output tensor input; if not provided, the operation will attempt a best decision at an appropriate tensor spec. The dimensions of C, or equivalently the optional output tensor, must match the broadcast-matched size of A and B.
+        The output C supports the same layouts and formats as A and B, under the same dtype restriction. For operations that return a new tensor, the layout and memory configuration of C are independent of A and B. The memory configuration can be set with memory_config, and the full tensor spec with output_tensor where the operation takes one; if neither is given, the operation will attempt a best decision at an appropriate tensor spec. The dimensions of C, or of output_tensor if given, must match the broadcast-matched size of A and B. By default, C takes the dtype of A unless an operation-specific rule applies: comparison ops return a boolean mask, and a mixed float pair follows A rather than the wider dtype. There is no boolean dtype, so the mask is carried as 1 for true and 0 for false in the output dtype. Where supported, the output dtype can be overridden by the dtype argument or output_tensor. In-place operations write into A, so C is A and keeps its layout, memory configuration and dtype.
 
         Performance considerations:
         Elementwise operations operate natively in tile format, tiled tensors are preferred as an input, and row-major tensors are tilized and untilized during the operation.
@@ -72,7 +72,13 @@ constexpr auto kDivideInplaceDtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32";
 constexpr auto kMixedFloatFamilyFootnote =
     R"doc(Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.)doc";
 constexpr auto kSameDtypeRequiredFootnote = R"doc(Operands must have the same dtype.)doc";
+constexpr auto kInt32FloatScalarPromotionNote =
+    R"doc(An INT32 tensor with a floating-point scalar is promoted to FLOAT32 before computation, including integral-valued floats such as `2.0`. The default output dtype is FLOAT32. Use an integer scalar (for example, `2` instead of `2.0`) to retain integer-scalar semantics.)doc";
 constexpr auto kIscloseMixedDtypeFootnote = R"doc(The only allowed mixed-dtype pair is FLOAT32 with BFLOAT16.)doc";
+constexpr auto kRelationalDtypeFootnote =
+    R"doc(Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.
+
+            UINT8 inputs are cast to UINT16 before device execution and the output follows that dtype. The in-place comparison ops do not cast, so they keep A's dtype.)doc";
 constexpr auto kMulDtypeFootnote =
     R"doc(Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.
 
@@ -93,9 +99,10 @@ constexpr auto kDivideFastApproxPostNote =
         When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero.
         When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.)doc";
 constexpr auto kDivFastApproxPostNote =
-    R"doc(With INT32 inputs, rounding_mode `None` produces a FLOAT32 output, while `floor` and `trunc` produce an INT32 output.
-        When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero for fast approximation.
-        When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero (accurate mode).)doc";
+    R"doc(With INT32 tensor operands or an INT32 tensor and an integer scalar, rounding_mode `None` produces a FLOAT32 output and output datatype conversion is not supported, while `floor` and `trunc` produce an INT32 output.
+        For these INT32 operands with rounding_mode `floor` or `trunc`, division by zero and INT32_MIN / -1 are undefined, regardless of :attr:`fast_and_approximate_mode`.
+        For floating-point division (including promoted INT32 inputs), when :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero for fast approximation.
+        When :attr:`fast_and_approximate_mode` is `False` (default), floating-point division properly handles division by zero (accurate mode).)doc";
 constexpr auto kMultiplyInplaceFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
         When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
@@ -870,6 +877,9 @@ void bind_situ_glu(nb::module_& mod, const std::string& description, const std::
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): the cores every composed step runs on. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub-device whose worker cores to run on, as an alternative to
+                spelling them out in :attr:`sub_core_grids`. Mutually exclusive with it. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -886,6 +896,13 @@ void bind_situ_glu(nb::module_& mod, const std::string& description, const std::
                  - TILE
 
             Implemented for Blackhole only.
+
+            Restricting the cores forces the intermediates to the output's memory space, because the
+            L1 placement this picks on a full grid is unsafe next to a concurrently running op. For
+            the same reason a core restriction rejects an interleaved-L1 output, whether asked for
+            through :attr:`memory_config` or inherited from an interleaved-L1 :attr:`input_tensor_a`:
+            such a buffer takes L1 on the cores restricted away. Sharded L1 is accepted -- its shard
+            spec confines it.
         )doc",
         std::string(Name),
         "ttnn." + std::string(Name),
@@ -901,7 +918,9 @@ void bind_situ_glu(nb::module_& mod, const std::string& description, const std::
         nb::arg("beta1"),
         nb::arg("beta2"),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
 }
 
 template <ttnn::unique_string Name, typename Fn>
@@ -1137,6 +1156,7 @@ void bind_div(
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             fast_and_approximate_mode (bool, optional): `true` if input_tensor_b is non-zero for fast approximation, else `false` for accurate division (Only if the input tensor is not ComplexTensor). Defaults to `false`.
             rounding_mode (string, optional): can be `None`, `floor` and `trunc` (only if the input tensor is not ComplexTensor). Defaults to `None`.
+            dtype (ttnn.DataType, optional): dtype of the output tensor. Integer division with `rounding_mode=None` only accepts `None` or `ttnn.float32`. Defaults to the dtype of :attr:`input_tensor_a`, or FLOAT32 when an INT32 input is promoted by a floating-point scalar.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
@@ -1882,7 +1902,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::remainder),
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
         detail::kFloatAndInt32UInt32Dtypes,
-        detail::kSameDtypeRequiredFootnote);
+        fmt::format("{}\n\n{}", detail::kSameDtypeRequiredFootnote, detail::kInt32FloatScalarPromotionNote));
 
     detail::bind_binary_operation_with_fast_approx<"add">(
         mod,
@@ -1940,7 +1960,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::eq),
         ". ",
         detail::kRelationalDtypes,
-        detail::kMixedFloatFamilyFootnote);
+        detail::kRelationalDtypeFootnote);
 
     detail::bind_binary_operation<"ne">(
         mod,
@@ -1950,7 +1970,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::ne),
         ". ",
         detail::kRelationalDtypes,
-        detail::kMixedFloatFamilyFootnote);
+        detail::kRelationalDtypeFootnote);
 
     detail::bind_binary_operation<"lt">(
         mod,
@@ -1960,7 +1980,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::lt),
         ". ",
         detail::kRelationalDtypes,
-        detail::kMixedFloatFamilyFootnote);
+        detail::kRelationalDtypeFootnote);
 
     detail::bind_binary_operation<"le">(
         mod,
@@ -1970,7 +1990,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::le),
         ". ",
         detail::kRelationalDtypes,
-        detail::kMixedFloatFamilyFootnote);
+        detail::kRelationalDtypeFootnote);
 
     detail::bind_binary_operation<"gt">(
         mod,
@@ -1980,7 +2000,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::gt),
         ". ",
         detail::kRelationalDtypes,
-        detail::kMixedFloatFamilyFootnote);
+        detail::kRelationalDtypeFootnote);
 
     detail::bind_binary_operation<"ge">(
         mod,
@@ -1990,7 +2010,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::ge),
         ". ",
         detail::kRelationalDtypes,
-        detail::kMixedFloatFamilyFootnote);
+        detail::kRelationalDtypeFootnote);
 
     detail::bind_binary_operation<"logical_and">(
         mod,
@@ -2323,7 +2343,7 @@ void py_module(nb::module_& mod) {
             const std::optional<tt::tt_metal::SubDeviceId>&>(&ttnn::div),
         detail::kFloatAndInt32Dtypes,
         detail::kDivideDtypeFootnote,
-        detail::kDivFastApproxPostNote);
+        fmt::format("{}\n\n{}", detail::kDivFastApproxPostNote, detail::kInt32FloatScalarPromotionNote));
 
     detail::bind_binary_composite_overload<"div_no_nan">(
         mod,
@@ -2380,7 +2400,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOverloadScalarFn>(&ttnn::fmod),
         static_cast<detail::BinaryOverloadTensorFn>(&ttnn::fmod),
         detail::kFloatAndInt32Dtypes,
-        detail::kSameDtypeRequiredFootnote);
+        fmt::format("{}\n\n{}", detail::kSameDtypeRequiredFootnote, detail::kInt32FloatScalarPromotionNote));
 
     detail::bind_inplace_operation<"gt_">(
         mod,

@@ -11,7 +11,8 @@ construction. The dicts are:
     FPU_MAP              op name to (factory(schema), checks), set via _fpu_map class attr
     UNPACKER_MAP         unpacker name to (factory(schema), checks), set via _unpacker_map class attr
     PACKER_MAP           packer name to (class, checks), set via _packer_map class attr
-    OUTPUT_DIMS          op name to lambda(src_a, src_b), set via _output_dims class attr
+    OUTPUT_DIMS          op name to lambda(in0, in1), set via _output_dims class attr
+    UNARY/BINARY_SFPU_OPS  set of supported MathOperation, set via _sfpu_ops class attr
 """
 
 from typing import Annotated, ClassVar, List, Literal, Optional, Tuple
@@ -59,15 +60,33 @@ SUPPORTED_TILE_SIZES = {
     (32, 16),
 }
 
+SFPU_TILE_SIZES = {
+    (16, 32),
+    (32, 16),
+    (32, 32),
+}
+
 
 def reject(condition, message):
     return (condition, message)
 
 
+def format_tile_dims(shapes) -> str:
+    return ", ".join(str(tuple(shape)) for shape in shapes)
+
+
 def require_src_a_tiles(*shapes):
     return reject(
-        lambda s, a, b: a.tile_shape.tile_dims not in shapes,
-        f"Only {shapes} tiles are supported for this operation",
+        lambda s, a, b: a is not None and a.tile_shape.tile_dims not in shapes,
+        f"Only {format_tile_dims(shapes)} tiles are supported for this operation",
+    )
+
+
+def require_dest_tiles(*shapes):
+    return reject(
+        lambda s, a, b: s._dest_tile_shape is None
+        or s._dest_tile_shape.tile_dims not in shapes,
+        f"Only {format_tile_dims(shapes)} dest tiles are supported for this operation",
     )
 
 
@@ -132,7 +151,17 @@ NO_BROADCAST_ACC_TO_DEST = reject(
 INT32_NEEDS_UNPACK_TO_DEST = reject(
     lambda s, a, b: a.data_format == DataFormat.Int32
     and s.unpack_to_dest != UnpackToDest.Yes,
-    "Int32 src_a requires unpack_to_dest: Yes (SrcA/SrcB registers are 19-bit wide)",
+    "Int32 in0 requires unpack_to_dest: Yes (SrcA/SrcB registers are 19-bit wide)",
+)
+
+IN0_REQUIRED = reject(
+    lambda s, a, b: a is None,
+    "in0 is required: this operation reads an operand from L1",
+)
+
+IN1_REQUIRED = reject(
+    lambda s, a, b: b is None,
+    "in1 is required: this operation reads a second operand",
 )
 
 NO_REUSE_DEST = reject(
@@ -156,12 +185,16 @@ REDUCE_PARAMS_REQUIRED = reject(
 )
 
 MATMUL_OPERAND_DIMS = reject(
-    lambda s, a, b: a.dimensions[1] != b.dimensions[0],
-    "Matmul: incompatible dimensions for src_a and src_b",
+    lambda s, a, b: a is not None
+    and b is not None
+    and a.dimensions[1] != b.dimensions[0],
+    "Matmul: incompatible dimensions for in0 and in1",
 )
 
 MATMUL_INNER_TILE_DIMS = reject(
-    lambda s, a, b: (
+    lambda s, a, b: a is not None
+    and b is not None
+    and (
         a.tile_shape.total_col_dim() != b.tile_shape.total_row_dim()
         or a.tile_shape.tile_dims == (16, 16)
         or b.tile_shape.tile_dims not in ((32, 32), (32, 16), (16, 32))
@@ -172,12 +205,15 @@ MATMUL_INNER_TILE_DIMS = reject(
 )
 
 SUPPORTED_SRC_A_TILE = reject(
-    lambda s, a, b: a.tile_shape.tile_dims not in SUPPORTED_TILE_SIZES,
-    "Unsupported src_a tile shape",
+    lambda s, a, b: a is not None
+    and a.tile_shape.tile_dims not in SUPPORTED_TILE_SIZES,
+    "Unsupported in0 tile shape",
 )
 
 TRANSPOSE_NEEDS_FULL_TILE = reject(
-    lambda s, a, b: s.has_transpose and a.tile_shape.tile_dims != (32, 32),
+    lambda s, a, b: a is not None
+    and s.has_transpose
+    and a.tile_shape.tile_dims != (32, 32),
     "Only (32, 32) tiles are supported with transpose",
 )
 
@@ -193,13 +229,15 @@ SCALAR_BCAST_NO_TRANSPOSE_FACES = reject(
 )
 
 NO_COL_ROW_BCAST_32X16 = reject(
-    lambda s, a, b: s.broadcast_type in (BroadcastType.Column, BroadcastType.Row)
+    lambda s, a, b: a is not None
+    and s.broadcast_type in (BroadcastType.Column, BroadcastType.Row)
     and a.tile_shape.tile_dims == (32, 16),
     "32x16 tiles are not supported for eltwise with column/row broadcast",
 )
 
 DATACOPY_TILE_32X32_ONLY = reject(
-    lambda s, a, b: a.tile_shape.tile_dims != (32, 32)
+    lambda s, a, b: a is not None
+    and a.tile_shape.tile_dims != (32, 32)
     and (
         s.has_transpose
         or s.broadcast_type in (BroadcastType.Column, BroadcastType.Row)
@@ -241,7 +279,6 @@ PACK_NO_L1_ACC = reject(
 ELTWISE_DIMS = lambda a, b: (min(a[0], b[0]), min(a[1], b[1]))
 MATMUL_DIMS = lambda a, b: (a[0], b[1])
 SRC_A_DIMS = lambda a, b: a
-SRC_B_DIMS = lambda a, b: b
 
 
 class UnarySfpuMathSchema(BaseModel):
@@ -270,11 +307,17 @@ class UnarySfpuMathSchema(BaseModel):
             try:
                 v = MathOperation[v]
             except KeyError:
-                raise ValueError(f"Unknown operation: {v}")
+                valid_ops = sorted(op.name for op in cls._sfpu_ops)
+                raise ValueError(
+                    f"Unknown operation: {v}, expected one of: {', '.join(valid_ops)}"
+                )
         if not isinstance(v, MathOperation):
             raise ValueError(f"Invalid operation: {v}")
         if v not in cls._sfpu_ops:
-            raise ValueError(f"{v.name} is not a supported unary SFPU operation")
+            valid_ops = sorted(op.name for op in cls._sfpu_ops)
+            raise ValueError(
+                f"{v.name} is not a supported unary SFPU operation, expected one of: {', '.join(valid_ops)}"
+            )
         return v
 
     def to_node(self, operands):
@@ -318,11 +361,17 @@ class BinarySfpuMathSchema(BaseModel):
             try:
                 v = MathOperation[v]
             except KeyError:
-                raise ValueError(f"Unknown operation: {v}")
+                valid_ops = sorted(op.name for op in cls._sfpu_ops)
+                raise ValueError(
+                    f"Unknown operation: {v}, expected one of: {', '.join(valid_ops)}"
+                )
         if not isinstance(v, MathOperation):
             raise ValueError(f"Invalid operation: {v}")
         if v not in cls._sfpu_ops:
-            raise ValueError(f"{v.name} is not a supported binary SFPU operation")
+            valid_ops = sorted(op.name for op in cls._sfpu_ops)
+            raise ValueError(
+                f"{v.name} is not a supported binary SFPU operation, expected one of: {', '.join(valid_ops)}"
+            )
         return v
 
     def to_node(self, operands):
@@ -352,6 +401,7 @@ class FpuMathSchemaBase(BaseModel):
     _fpu_map: ClassVar[dict] = {}
     _unpacker_map: ClassVar[dict] = {}
     _output_dims: ClassVar[dict] = {}
+    _dest_tile_shape: Optional[TileShape] = None
 
     type: Literal["Fpu"]
     operation: str
@@ -368,8 +418,8 @@ class FpuMathSchemaBase(BaseModel):
     math_fidelity: MathFidelity = MathFidelity.LoFi
     unpack_to_dest: UnpackToDest = UnpackToDest.No
     reduce_to_tile: bool = False
-    src_a: str = Field(..., min_length=1)
-    src_b: str = Field(..., min_length=1)
+    in0: Optional[str] = None
+    in1: Optional[str] = None
 
     @property
     def has_transpose(self) -> bool:
@@ -382,7 +432,10 @@ class FpuMathSchemaBase(BaseModel):
     @classmethod
     def validate_operation(cls, v):
         if v not in cls._fpu_map:
-            raise ValueError(f"Unknown FPU operation: {v}")
+            valid_ops = sorted(cls._fpu_map.keys())
+            raise ValueError(
+                f"Unknown FPU operation: {v}, expected one of: {', '.join(valid_ops)}"
+            )
         return v
 
     @model_validator(mode="after")
@@ -398,7 +451,10 @@ class FpuMathSchemaBase(BaseModel):
     @classmethod
     def validate_unpacker(cls, v):
         if v is not None and v not in cls._unpacker_map:
-            raise ValueError(f"Unknown unpacker: {v}")
+            valid_ops = sorted(cls._unpacker_map.keys())
+            raise ValueError(
+                f"Unknown unpacker: {v}, expected one of: {', '.join(valid_ops)}"
+            )
         return v
 
     @field_validator("math_fidelity", mode="before")
@@ -414,24 +470,26 @@ class FpuMathSchemaBase(BaseModel):
         return v
 
     def to_node(self, operands):
-        src_a = operands.get(self.src_a)
-        src_a.is_input = True
-        src_b = operands.get(self.src_b)
-        src_b.is_input = True
+        src_a = None
+        if self.in0 is not None:
+            src_a = operands.get(self.in0)
+            src_a.is_input = True
+        src_b = None
+        if self.in1 is not None:
+            src_b = operands.get(self.in1)
+            src_b.is_input = True
 
         factory, checks = type(self)._fpu_map[self.operation]
 
-        if checks is not None:
-            for check, error_msg in checks:
+        if self.unpacker is not None:
+            _, unpacker_checks = type(self)._unpacker_map[self.unpacker]
+            for check, error_msg in unpacker_checks:
                 if check(self, src_a, src_b):
                     raise ValueError(error_msg)
 
-        if self.unpacker is not None:
-            _, checks = type(self)._unpacker_map[self.unpacker]
-            if checks is not None:
-                for check, error_msg in checks:
-                    if check(self, src_a, src_b):
-                        raise ValueError(error_msg)
+        for check, error_msg in checks:
+            if check(self, src_a, src_b):
+                raise ValueError(error_msg)
 
         fpu = factory(self)
 
@@ -463,10 +521,10 @@ class FpuMathSchemaBase(BaseModel):
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         fn = type(self)._output_dims.get(self.operation)
-        if fn is None:
+        if fn is None or self.in0 is None:
             return None
-        src_a = operands.get(self.src_a).dimensions
-        src_b = operands.get(self.src_b).dimensions
+        src_a = operands.get(self.in0).dimensions
+        src_b = operands.get(self.in1).dimensions if self.in1 is not None else src_a
         return fn(src_a, src_b)
 
 
@@ -485,8 +543,11 @@ class PackSchema(BaseModel):
     @field_validator("packer", mode="after")
     @classmethod
     def validate_packer(cls, v):
-        if cls._packer_map and v not in cls._packer_map:
-            raise ValueError(f"Unknown packer: {v}")
+        if v not in cls._packer_map:
+            valid_ops = sorted(cls._packer_map.keys())
+            raise ValueError(
+                f"Unknown packer: {v}, expected one of: {', '.join(valid_ops)}"
+            )
         return v
 
     def to_node(self, operands):
@@ -494,10 +555,9 @@ class PackSchema(BaseModel):
         output.is_output = True
 
         packer_cls, checks = type(self)._packer_map[self.packer]
-        if checks is not None:
-            for check, error_msg in checks:
-                if check(self, output):
-                    raise ValueError(error_msg)
+        for check, error_msg in checks:
+            if check(self, output):
+                raise ValueError(error_msg)
 
         return PackNode(
             packer=packer_cls(),
@@ -509,11 +569,11 @@ class PackSchema(BaseModel):
 
 
 class OperationSchemaBase(BaseModel):
-    """Base schema for a fused operation with one output and one or more math nodes.
+    """Base schema for a fused operation: one or more math nodes and one or more packs.
 
-    Each architecture subclass adds its own math and pack list fields.
-    Blackhole also overrides _arch_validate() for tilize detection and _arch_kwargs()
-    to forward the bh_tilize flag to L1Operation.
+    Each architecture subclass adds its own math and pack list fields. Blackhole also
+    overrides _arch_validate() to reject mixed unpackers with UnpackerTilizeA, and
+    _arch_kwargs() to forward the bh_tilize flag to L1Operation.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -526,7 +586,7 @@ class OperationSchemaBase(BaseModel):
 
     @model_validator(mode="after")
     def validate_operation(self) -> "OperationSchemaBase":
-        if not any(isinstance(e, PackSchema) for e in self.pack):
+        if not self.pack_schemas:
             raise ValueError("pack list must contain at least one Pack entry")
         if not isinstance(self.pack[-1], PackSchema):
             raise ValueError("pack list must end with a Pack entry")
@@ -548,6 +608,11 @@ class OperationSchemaBase(BaseModel):
                 "Dst must already contain data"
             )
 
+    @property
+    def pack_schemas(self) -> List[PackSchema]:
+        """The Pack entries of this operation, without the interleaved SFPU nodes."""
+        return [entry for entry in self.pack if isinstance(entry, PackSchema)]
+
     def _arch_validate(self):
         pass
 
@@ -564,10 +629,10 @@ class OperationSchemaBase(BaseModel):
         output_tile_shapes = []
 
         for m in self.math:
-            if not hasattr(m, "src_a"):
+            if getattr(m, "in0", None) is None:
                 continue
-            src_a_ts = operands.get(m.src_a).tile_shape
-            src_b_ts = operands.get(m.src_b).tile_shape
+            src_a_ts = operands.get(m.in0).tile_shape
+            src_b_ts = operands.get(m.in1).tile_shape if m.in1 is not None else src_a_ts
 
             if m.operation in ("Matmul", "MatmulNoMop"):
                 out_tile_dims = (
@@ -578,16 +643,14 @@ class OperationSchemaBase(BaseModel):
             else:
                 if src_a_ts.tile_dims != src_b_ts.tile_dims:
                     raise ValueError(
-                        f"src_a tile shape {src_a_ts.tile_dims} != src_b tile shape "
+                        f"in0 tile shape {src_a_ts.tile_dims} != in1 tile shape "
                         f"{src_b_ts.tile_dims} for {m.operation}"
                     )
                 output_tile_shapes.append(src_a_ts)
 
-        pack_schemas = [e for e in self.pack if isinstance(e, PackSchema)]
-
         if not output_tile_shapes:
             output_tile_shapes = [
-                operands.get(e.output).tile_shape for e in pack_schemas
+                operands.get(e.output).tile_shape for e in self.pack_schemas
             ]
 
         first = output_tile_shapes[0]
@@ -598,7 +661,7 @@ class OperationSchemaBase(BaseModel):
                     f"Got {first.tile_dims} and {ts.tile_dims}"
                 )
 
-        for entry in pack_schemas:
+        for entry in self.pack_schemas:
             pack_ts = operands.get(entry.output).tile_shape
             if pack_ts.tile_dims != first.tile_dims:
                 raise ValueError(
@@ -639,19 +702,32 @@ class OperationSchemaBase(BaseModel):
             p._block_size = self.block_size
         for m in self.math:
             m._block_size = self.block_size
+            if isinstance(m, FpuMathSchemaBase):
+                m._dest_tile_shape = tile_shape
 
-        pack_nodes = [p.to_node(operands) for p in self.pack]
+        pack_nodes = []
+        for i, p in enumerate(self.pack):
+            try:
+                pack_nodes.append(p.to_node(operands))
+            except ValueError as e:
+                raise ValueError(f"Pack entry {i + 1}\n    {e}") from None
 
-        math_ops = [m.to_node(operands) for m in self.math]
+        math_ops = []
+        for i, m in enumerate(self.math):
+            node_type = getattr(m, "type", type(m).__name__)
+            try:
+                math_ops.append(m.to_node(operands))
+            except ValueError as e:
+                raise ValueError(f"Math node {i + 1} ({node_type})\n    {e}") from None
 
         has_sfpu = any(isinstance(node, SfpuNode) for node in math_ops)
         has_fpu = any(isinstance(node, FpuNode) for node in math_ops)
         if has_sfpu and not has_fpu:
             dims = tile_shape.tile_dims
-            if dims not in ((16, 32), (32, 32), (32, 16)):
+            if dims not in SFPU_TILE_SIZES:
                 raise ValueError(
                     f"Tile shape {dims} is not supported for SFPU operations. "
-                    f"Supported: [(16, 32), (32, 16), (32, 32)]"
+                    f"Supported: {format_tile_dims(sorted(SFPU_TILE_SIZES))}"
                 )
 
         max_out_dims = self._calculate_max_output_dimensions(operands)
@@ -684,11 +760,7 @@ class OperationSchemaBase(BaseModel):
                 dims.append(op_dims)
 
         if not dims:
-            dims = [
-                operands.get(e.output).dimensions
-                for e in self.pack
-                if isinstance(e, PackSchema)
-            ]
+            dims = [operands.get(e.output).dimensions for e in self.pack_schemas]
 
         bound_r = min(d[0] for d in dims)
         bound_c = min(d[1] for d in dims)

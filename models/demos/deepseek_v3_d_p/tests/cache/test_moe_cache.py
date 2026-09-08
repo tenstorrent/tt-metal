@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+
 import shutil
 from pathlib import Path
 
@@ -38,6 +39,18 @@ def cleanup_cache():
     report_and_clear()
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_mode = params["gate_mode"]
+
+    if not on_ci:
+        return False
+    if gate_mode != GateComputeMode.DEVICE:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
@@ -163,7 +176,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     # === Path 2: Cold Cache (build + load) ===
     init_checker(CACHE_DIR)
     assert not TtMoe.check_cache_complete(
-        CACHE_DIR, layer_idx=0, experts_per_chip=experts_per_chip
+        CACHE_DIR, layer_idx=0, experts_per_chip=experts_per_chip, routed_expert_weights_dtype=ttnn.bfloat16
     ), "Cache should be empty before build"
 
     logger.info(f"Building cache to {CACHE_DIR}...")
@@ -186,7 +199,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
 
     init_checker(CACHE_DIR)
     assert TtMoe.check_cache_complete(
-        CACHE_DIR, layer_idx=0, experts_per_chip=experts_per_chip
+        CACHE_DIR, layer_idx=0, experts_per_chip=experts_per_chip, routed_expert_weights_dtype=ttnn.bfloat16
     ), "Cache should be complete after build"
 
     logger.info("Path 2: Creating TtMoe from cold cache...")
