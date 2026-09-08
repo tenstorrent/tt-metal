@@ -16,6 +16,7 @@
 #include "api/tensor/tensor_accessor.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "experimental/kernel_args.h"
 
@@ -26,19 +27,15 @@ void kernel_main() {
 
     constexpr uint32_t Ht = get_arg(args::Ht);
     constexpr uint32_t Wt = get_arg(args::Wt);
-    constexpr uint32_t scaler_bits = get_arg(args::scaler_bits);
     constexpr bool use_welford = get_arg(args::use_welford) != 0;
 
-    constexpr DataFormat reduce_format = get_dataformat(dfb::in);
-    constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format>();
-    constexpr uint32_t row_chunk = use_welford ? 1
-                                               : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
-                                                                       : compute_kernel_lib::DEST_AUTO_LIMIT);
+    // Each planned batch is one complete column, including Welford.
+    constexpr uint32_t row_chunk = 1;
 
     constexpr uint32_t onetile = 1;
 
-    float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     const auto tensor_accessor = TensorAccessor(tensor::input);
 

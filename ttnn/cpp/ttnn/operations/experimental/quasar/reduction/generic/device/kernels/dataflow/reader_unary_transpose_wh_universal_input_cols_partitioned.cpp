@@ -10,6 +10,7 @@
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 void kernel_main() {
@@ -23,7 +24,6 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t HtWt = get_compile_time_arg_val(2);
 
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
     constexpr bool use_welford = get_compile_time_arg_val(4) != 0;
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
@@ -32,20 +32,19 @@ void kernel_main() {
     // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
     // per chunk, which would feed the Welford kernel tiles from the wrong columns.
     // Int32 SFPU max keeps one acc DST per column plus one shared work DST (DEST_AUTO_LIMIT - 1).
-    constexpr DataFormat reduce_format = get_dataformat(cb_id_in0);
-    constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format>();
-    constexpr uint32_t row_chunk = use_welford ? 1
-                                               : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
-                                                                       : compute_kernel_lib::DEST_AUTO_LIMIT);
+    // Each planned batch is one complete column, including Welford.
+    constexpr uint32_t row_chunk = 1;
 
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
-    float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
-
     constexpr auto tensor_args = TensorAccessorArgs<5>();
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
+        ttnn::kernel_lib::ReduceAuxiliaryArgs<tensor_args.next_compile_time_args_offset()>,
+        cb_id_in2>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
 
     Noc noc;

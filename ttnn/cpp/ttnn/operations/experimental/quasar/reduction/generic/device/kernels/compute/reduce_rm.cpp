@@ -24,6 +24,7 @@
 // from the reader's pre-fill, so they contribute nothing to the running sum.
 //
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 #ifdef REDUCE_POST_MUL
@@ -38,46 +39,35 @@ constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
 constexpr uint32_t cb_out = tt::CBIndex::c_3;
 constexpr uint32_t cb_acc = tt::CBIndex::c_5;
 
-// One reduce() call over the (ht_in_chunk × wt_in_chunk × NC) block currently staged in cb_tile_in.
-// is_last_chunk == true packs the final result into cb_out (with optional post-mul); otherwise the
-// partial is left in cb_acc at index chunk_idx and accumulation continues on the next call.
-FORCE_INLINE void reduce_block(
-    uint32_t ht_in_chunk, uint32_t wt_in_chunk, uint32_t NC, uint32_t chunk_idx, bool is_last_chunk) {
-    if (is_last_chunk) {
-        compute_kernel_lib::reduce<
-            REDUCE_OP,
-            REDUCE_DIM,
-            cb_tile_in,
-            cb_scaler,
-            cb_out,
-            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-            compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::Accumulate::at(cb_acc, chunk_idx),
+template <uint32_t Index>
+FORCE_INLINE void reduce_chunk() {
+    using Call = ttnn::kernel_lib::
+        BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallAtT<7, Index>, cb_tile_in, cb_scaler, cb_out, cb_acc>;
+    compute_kernel_lib::reduce<Call>(
 #ifdef REDUCE_POST_MUL
-            [](uint32_t dst_idx) {
-                constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
-                binop_with_scalar_tile_init();
-                mul_unary_tile(dst_idx, post_mul_scaler_bits);
-            }
+        [](uint32_t dst_idx) {
+            constexpr auto bits = get_compile_time_arg_val(3);
+            binop_with_scalar_tile_init();
+            mul_unary_tile(dst_idx, bits);
+        }
 #else
-            compute_kernel_lib::NoOp{}
+        compute_kernel_lib::NoOp{}
 #endif
-        );
+    );
+}
+
+FORCE_INLINE void reduce_block(uint32_t chunk_idx, bool is_last_chunk) {
+    constexpr uint32_t call_count = get_compile_time_arg_val(6);
+    if constexpr (call_count == 1) {
+        reduce_chunk<0>();
     } else {
-        compute_kernel_lib::reduce<
-            REDUCE_OP,
-            REDUCE_DIM,
-            cb_tile_in,
-            cb_scaler,
-            cb_acc,
-            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-            compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::Accumulate::at(cb_acc, chunk_idx),
-            compute_kernel_lib::NoOp{});
+        if (chunk_idx == 0) {
+            reduce_chunk<0>();
+        } else if (is_last_chunk) {
+            reduce_chunk<call_count - 1>();
+        } else {
+            reduce_chunk<1>();
+        }
     }
 }
 
@@ -109,7 +99,7 @@ void kernel_main() {
 
                 compute_kernel_lib::tilize<wt_tiles_per_chunk, cb_rm, cb_tile_in>(
                     ht_in_chunk, ht_in_chunk * tt::constants::TILE_HEIGHT);
-                reduce_block(ht_in_chunk, wt_tiles_per_chunk, NC, chunk_idx, is_last_chunk);
+                reduce_block(chunk_idx, is_last_chunk);
                 ++chunk_idx;
             }
         }
@@ -134,7 +124,7 @@ void kernel_main() {
 
                 compute_kernel_lib::tilize<wt_tiles_per_chunk, cb_rm, cb_tile_in>(
                     ht_in_chunk, ht_in_chunk * tt::constants::TILE_HEIGHT);
-                reduce_block(ht_in_chunk, wt_tiles_per_chunk, NC, chunk_idx, is_last_chunk);
+                reduce_block(chunk_idx, is_last_chunk);
                 ++chunk_idx;
             }
         }

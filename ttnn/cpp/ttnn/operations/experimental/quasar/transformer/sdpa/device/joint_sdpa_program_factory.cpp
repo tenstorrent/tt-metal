@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
 #include "ttnn/operations/experimental/quasar/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -463,9 +464,13 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
             .dfb_spec_name = MASK_IN, .accessor_name = "mask_in", .endpoint_type = DFBEndpointType::PRODUCER});
     }
 
+    const auto reduction_auxiliary = ttnn::kernel_lib::host::ReduceAuxiliaryArgs(
+                                         {0, {{1.0F, ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow, 32}}})
+                                         .get_compile_time_args();
     KernelSpec writer{
         .unique_id = WRITER,
-        .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/joint_writer.cpp",
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/joint_writer.cpp",
         .compiler_options = {.defines = writer_defines},
         .dfb_bindings = writer_dfbs,
         .tensor_bindings =
@@ -499,6 +504,7 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
                   "local_q_start",
                   "local_q_end"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .advanced_options = {.compile_time_varargs = reduction_auxiliary},
     };
 
     Group<DFBBinding> compute_dfbs = {

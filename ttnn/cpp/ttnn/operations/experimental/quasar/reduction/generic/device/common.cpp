@@ -18,6 +18,80 @@
 #include <ttnn/tensor/layout/page_config.hpp>
 
 namespace ttnn::prim::qsr {
+ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
+    const tt::tt_metal::TensorSpec& input,
+    const tt::tt_metal::TensorSpec& output,
+    tt::tt_metal::ReduceOpMath math,
+    tt::tt_metal::ReduceOpDim dim,
+    float scalar,
+    ReduceFp32Mode fp32_mode,
+    const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware,
+    uint32_t Ht,
+    uint32_t Wt,
+    uint32_t NC,
+    bool identity_padded,
+    const RmPlan* row_major) {
+    using namespace tt::tt_metal;
+    namespace rh = ttnn::kernel_lib::host;
+    const auto tile = input.tile();
+    const uint32_t tile_h = tile.get_height();
+    const uint32_t tile_w = tile.get_width();
+    const TensorLayout input_layout(input.data_type(), PageConfig(Layout::TILE, tile), MemoryConfig{});
+    const TensorLayout output_layout(output.data_type(), PageConfig(Layout::TILE, output.tile()), MemoryConfig{});
+    const uint32_t axis_tiles = dim == ReduceOpDim::W ? Wt : Ht;
+    const uint32_t chunk_tiles =
+        row_major ? (dim == ReduceOpDim::W ? row_major->wt_tiles_per_chunk : row_major->ht_tiles_per_chunk)
+                  : axis_tiles;
+    const uint32_t num_chunks = row_major ? tt::div_up(axis_tiles, chunk_tiles) : 1;
+    const uint32_t descriptors = std::min(num_chunks, 3U);
+    std::vector<rh::ReduceCbConfig> calls;
+    for (uint32_t i = 0; i < descriptors; ++i) {
+        uint32_t h = Ht * tile_h;
+        uint32_t w = Wt * tile_w;
+        uint32_t batches = NC;
+        if (row_major) {
+            // W staging pads every chunk to the same width; H's final chunk is shorter.
+            h = dim == ReduceOpDim::W
+                    ? tile_h
+                    : (i + 1 == descriptors ? axis_tiles - (num_chunks - 1) * chunk_tiles : chunk_tiles) * tile_h;
+            w = dim == ReduceOpDim::W ? chunk_tiles * tile_w : tile_w;
+            batches = 1;
+        } else if (dim == ReduceOpDim::H) {
+            batches *= Wt;
+            w = tile_w;
+            if (!identity_padded) {
+                h = input.logical_shape()[input.logical_shape().rank() - 2];
+            }
+        } else if (dim == ReduceOpDim::W && !identity_padded) {
+            w = input.logical_shape()[input.logical_shape().rank() - 1];
+        }
+        const Shape input_shape{batches, 1, h, w};
+        const Shape output_shape{batches, 1, dim == ReduceOpDim::W ? h : 1U, dim == ReduceOpDim::H ? w : 1U};
+        calls.emplace_back(
+            0,
+            rh::ReduceCallConfig{
+                TensorSpec(input_shape, input_layout),
+                TensorSpec(output_shape, output_layout),
+                math,
+                dim,
+                scalar,
+                fp32_mode,
+                row_major ? std::optional<std::size_t>{} : 2 * tt::tt_metal::tile_size(input.data_type())});
+    }
+    auto sequence = rh::make_reduce_sequence_plan(calls, {1, 3, 2}, hardware);
+    if (row_major) {
+        for (auto& call : sequence.calls) {
+            // Tilize pushes tiles individually. Pop the same way so a short final
+            // chunk cannot leave the circular-buffer pointer misaligned on reuse.
+            call.plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
+        }
+        if (num_chunks > 1) {
+            sequence.calls.back().accumulation_index = num_chunks - 1;
+        }
+    }
+    return sequence;
+}
+
 RmPlan make_rm_plan(
     const tt::tt_metal::Shape& padded_shape,
     const tt::tt_metal::Shape& logical_shape,
