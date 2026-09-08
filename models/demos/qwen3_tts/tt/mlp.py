@@ -501,10 +501,30 @@ class MLP(LightweightModule):
         if seq_len >= 1024:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
+        # seq <= SHORT_SEQ_LIMIT (32) is exactly ONE tile row, which is the only thing the
+        # DRAM-sharded chain asks of M — and every decode config above is already built
+        # with `m=32` / `m_tiles=1`, so this is a reuse, not a new config. Attention has
+        # taken the DRAM-sharded path at this bucket all along
+        # (`use_dram_shard_qkv = ... or seq_len <= short_seq_limit`, attention.py); the MLP
+        # was left on `_short_seq_*_progcfg`, which is 1D mcast on the FULL 64-core grid
+        # and therefore drives in0_block_w to K_tiles/64 = 1. Shipped bucket-32 window vs
+        # the same shapes on the DRAM-sharded chain:
+        #
+        #   gate  32x2048x6144  1D c64 ibw=1  94 us (46.5 %) -> DRAM-sharded  58 us (75.4 %)
+        #   up    32x2048x6144  1D c64 ibw=1  94 us          -> DRAM-sharded  58 us
+        #   down  32x6144x2048  1D c64        98 us (44.6 %) -> DRAM-sharded  64 us (77.0 %)
+        #
+        # QWEN3_TTS_SHORT_SEQ_DRAM_MLP=0 keeps the 1D path.
+        _dram_chain = is_decode or (
+            seq_len <= self.short_seq_limit
+            and seq_len == 32
+            and os.environ.get("QWEN3_TTS_SHORT_SEQ_DRAM_MLP", "1") != "0"
+        )
+
         # Decode path: DRAM-sharded chain. Now enabled for all tp_size values.
         # TP>1: each chip runs its per-chip (smaller) DRAM-sharded matmuls, then all_reduce
         # on the down output combines partial sums.
-        if is_decode and seq_len < 1024:
+        if _dram_chain and seq_len < 1024:
             # Width-shard x once, reuse for both gate and up. Skip the I→S if the
             # caller already gave us a tensor in the matching shard config (e.g. piped
             # from a sharded layernorm in decoder_layer).
