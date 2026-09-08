@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <memory>
 #include <map>
+#include <optional>
 #include <vector>
 #include <unordered_set>
 #include <unordered_map>
@@ -112,6 +113,11 @@ struct AsicPinningGroup {
     }
 };
 
+// What a descriptor says an inter-mesh channel count means: STRICT a requirement, RELAXED a preference.
+// Mirrors proto::Policy, so that consumers reading a descriptor's policy do not have to take a dependency
+// on the generated proto enum (which is only forward-declared in this header).
+enum class InterMeshChannelPolicy : uint8_t { Strict, Relaxed };
+
 // TODO: Try make efficient by storing stringviews?
 class MeshGraphDescriptor {
 public:
@@ -209,6 +215,16 @@ public:
         const auto& ids = instances_by_name(name);
         return get_instance(ids[0]).type;
     }
+
+    // The descriptor's inter-mesh channel policy, or nullopt when it states none. Taken from the first
+    // FABRIC connection, which speaks for all of them since validation forbids mixing policies within one
+    // descriptor, and falling back to the top-level graph topology when there are no connections.
+    //
+    // Callers must decide what "unspecified" means for them rather than reading it as STRICT: a descriptor
+    // that is silent should not override a sibling that is not. Per-connection policies are not supported
+    // downstream, which is why this is one value for the whole descriptor.
+    // https://github.com/tenstorrent/tt-metal/issues/49960
+    std::optional<InterMeshChannelPolicy> inter_mesh_policy() const;
 
     // Calculate chip count from device_topology dimensions for a mesh instance
     // Returns the product of all dimensions in device_topology.dims()

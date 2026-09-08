@@ -224,6 +224,32 @@ std::vector<std::string> MeshGraphDescriptor::get_all_mesh_names() const {
     return out;
 }
 
+std::optional<InterMeshChannelPolicy> MeshGraphDescriptor::inter_mesh_policy() const {
+    // Anything that is not RELAXED is taken as STRICT, including INVALID_POLICY, which is what the rest of
+    // the stack has always defaulted to.
+    const auto from_proto = [](proto::Policy policy) {
+        return policy == proto::Policy::RELAXED ? InterMeshChannelPolicy::Relaxed : InterMeshChannelPolicy::Strict;
+    };
+
+    if (has_connections_of_type("FABRIC")) {
+        const auto& fabric_connections = connections_by_type("FABRIC");
+        if (!fabric_connections.empty()) {
+            return from_proto(get_connection(fabric_connections[0]).policy);
+        }
+    }
+
+    // No connections to read, so the top-level graph topology is the only place a policy can be stated.
+    const auto& top_level_instance = top_level();
+    if (top_level_instance.kind == NodeKind::Graph) {
+        const auto* graph_desc = std::get<const proto::GraphDescriptor*>(top_level_instance.desc);
+        if (graph_desc != nullptr && graph_desc->has_graph_topology() && graph_desc->graph_topology().has_channels()) {
+            return from_proto(graph_desc->graph_topology().channels().policy());
+        }
+    }
+
+    return std::nullopt;
+}
+
 std::unordered_map<MeshId, std::string> MeshGraphDescriptor::mesh_id_to_instance_name() const {
     std::unordered_map<MeshId, std::string> mesh_id_to_name;
     for (const auto global_id : all_meshes()) {
@@ -817,6 +843,11 @@ void MeshGraphDescriptor::validate_legacy_requirements(
         }
     }
 
+    // Mixed policies are unsupported downstream: the solver applies one inter_mesh_validation_mode to
+    // every seam, and control plane fatals when both intermesh maps are non-empty. Both production
+    // entry points (MeshGraph, generate_rank_bindings) pass backwards_compatible so they hit this check.
+    // https://github.com/tenstorrent/tt-metal/issues/49960
+    //
     // Check that connections in the same graph don't mix STRICT and RELAXED policies
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.connections_size() == 0) {

@@ -20,6 +20,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <tuple>
 #include <vector>
 #include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
@@ -2001,6 +2002,24 @@ std::map<AsicID, std::size_t> free_chips_bordering_region(
     return boundary;
 }
 
+// The number of ethernet links leaving `region` for chips that are neither occupied nor part of the
+// region itself: the width still available to whatever has to be placed against it later. Same
+// unfiltered-graph requirement as above.
+std::size_t free_links_out_of_region(
+    const std::unordered_set<AsicID>& region,
+    const std::unordered_set<AsicID>& occupied,
+    const AdjacencyGraph<AsicID>& physical_graph) {
+    std::size_t links = 0;
+    for (const AsicID& region_chip : region) {
+        for (const AsicID& neighbor : physical_graph.get_neighbors(region_chip)) {
+            if (!occupied.contains(neighbor) && !region.contains(neighbor)) {
+                ++links;
+            }
+        }
+    }
+    return links;
+}
+
 // The number of ethernet links running between two disjoint footprints, counting parallel links
 // separately. Also derived from the unfiltered graph, for the same reason as above.
 std::size_t count_links_between(
@@ -2067,8 +2086,8 @@ std::optional<GlobalMeshId> select_next_mesh(
 }
 
 // The candidate placements for `mesh_id` given what is already placed: every placement of every grouping
-// variant accepted for this mesh that is disjoint from the regions already taken and that meets every
-// mesh-level edge to an already-placed neighbour with enough ethernet links.
+// variant accepted for this mesh that is disjoint from the regions already taken and that reaches every
+// mesh-level edge to an already-placed neighbour.
 //
 // Disjointness is enforced by the solve rather than filtered afterwards, so an overlapping placement is
 // never constructed. Adjacency is enforced in two halves, because the solver counts mapped nodes and the
@@ -2076,19 +2095,16 @@ std::optional<GlobalMeshId> select_next_mesh(
 // neighbour's boundary, which is necessary but not sufficient, and the exact link count is then checked
 // on each finished placement.
 //
-// TODO: honour the descriptor's inter-mesh channel policy instead of treating every count as a hard
-// requirement. Today a seam must carry the full mesh-level edge multiplicity whatever the descriptor
-// said. That is right for STRICT but too strong for RELAXED, where the mapper treats the count as a
-// preference and only warns when a seam comes up short (see the "Check channel counts (strict mode)"
-// gate in topology_solver.tpp). So placement is currently stricter than a RELAXED descriptor asks and
-// can report no placement at all where the mapper would have accepted one. Under RELAXED the floor
-// should drop to a single link -- the mesh-level edge still means the two regions touch -- with the
-// count kept as a preference: candidates carrying the requested channels are returned ahead of those
-// that fall short, so the search tries a fully-provisioned seating first and only settles for a thinner
-// seam if that fails. Read the policy off the descriptor the way MeshGraph does, from the first FABRIC
-// connection (MGD validation forbids mixing policies within one descriptor), falling back to the
-// top-level graph topology. AdjacencyGuidedPlacement.RelaxedSeamStillPlacesWhenChannelsFallShort covers
-// this and fails until it is done.
+// What a seam must carry depends on the descriptor's inter-mesh channel policy, and follows what the
+// mapper does with the same policy (see check_local_consistency and compute_candidate_cost in
+// topology_solver.tpp):
+//
+//   STRICT  - the mesh-level edge multiplicity is a hard requirement. A seam carrying fewer links than
+//             the descriptor asked for is not a placement at all.
+//   RELAXED - the count is a preference. The hard part is only that the two regions touch, which is what
+//             the mesh-level edge means; the count comes back as candidate ordering, so a seating that
+//             honours it is tried before one that falls short. Filtering on it instead would make
+//             placement stricter than the mapper, which accepts a narrow seam here and warns.
 std::vector<PsdPlacement> next_step_pool(
     const GlobalMeshId& mesh_id,
     const AssignedMeshes& assignment,
@@ -2096,6 +2112,7 @@ std::vector<PsdPlacement> next_step_pool(
     const AdjacencyGraph<GlobalMeshId>& mesh_level_graph,
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    bool relaxed_inter_mesh_policy,
     std::size_t max_placements_per_variant) {
     const auto groupings_it = global_mesh_groupings.find(mesh_id);
     if (groupings_it == global_mesh_groupings.end()) {
@@ -2116,6 +2133,10 @@ std::vector<PsdPlacement> next_step_pool(
         // Free chips bordering the neighbour's region. Keys are candidate chips for this mesh; values
         // are how many links each one has into the region, which the bound below needs.
         std::map<AsicID, std::size_t> boundary;
+        // What the descriptor asked this seam to carry, and the floor a placement actually has to clear.
+        // They are the same under STRICT. Under RELAXED the floor is a single link, because touching is
+        // the only hard part, while requested_links stays as asked and ranks candidates instead.
+        std::size_t requested_links = 0;
         std::size_t required_links = 0;
         std::size_t min_boundary_chips = 0;
     };
@@ -2135,7 +2156,8 @@ std::vector<PsdPlacement> next_step_pool(
             // Placed, but shares no mesh-level edge with this mesh, so it constrains nothing here.
             continue;
         }
-        const std::size_t required_links = required_it->second;
+        const std::size_t requested_links = required_it->second;
+        const std::size_t required_links = relaxed_inter_mesh_policy ? 1 : requested_links;
         std::map<AsicID, std::size_t> boundary =
             free_chips_bordering_region(placed.placement.asics, occupied, physical_graph);
         std::size_t max_links_per_chip = 0;
@@ -2152,12 +2174,39 @@ std::vector<PsdPlacement> next_step_pool(
         Seam seam;
         seam.neighbor_asics = &placed.placement.asics;
         seam.boundary = std::move(boundary);
+        seam.requested_links = requested_links;
         seam.required_links = required_links;
         seam.min_boundary_chips = (required_links + max_links_per_chip - 1) / max_links_per_chip;
         seams.push_back(std::move(seam));
     }
 
-    std::vector<PsdPlacement> pool;
+    // Under RELAXED the counts still have to steer the search, or the first mesh -- which has no seam yet,
+    // so nothing to rank it by -- would take whatever chips enumeration happened to offer and strand the
+    // meshes after it on whatever links were left. So a candidate is also ranked on the room it keeps for
+    // the neighbours not yet placed, capped by what they will ask for so that capacity nobody needs earns
+    // nothing. This is the least-constraining-value idea in the TODO on place_remaining_meshes, applied to
+    // the one thing a seam cares about.
+    std::size_t pending_links = 0;
+    if (relaxed_inter_mesh_policy) {
+        for (const auto& [neighbor, links] : required_links_by_neighbor) {
+            if (!assignment_has_mesh(assignment, neighbor)) {
+                pending_links += links;
+            }
+        }
+    }
+
+    // A candidate and the two numbers RELAXED ranks it by. Both stay zero under STRICT, where the pool is
+    // returned in enumeration order and nothing is ranked at all.
+    struct RankedPlacement {
+        PsdPlacement placement;
+        // Of what the placed seams asked for, how much this seating actually carries. Capped per seam, so
+        // a link the descriptor never asked for does not pay for one it did.
+        std::size_t honoured_links = 0;
+        // Free links out of this seating towards the neighbours still to be placed, capped by pending_links.
+        std::size_t headroom_links = 0;
+    };
+
+    std::vector<RankedPlacement> pool;
     for (const GroupingInfo& grouping : groupings_it->second) {
         const std::vector<GroupingChipId>& grouping_nodes = grouping.adjacency_graph.get_nodes();
         if (grouping_nodes.empty()) {
@@ -2207,19 +2256,44 @@ std::vector<PsdPlacement> next_step_pool(
             // The cardinality constraint bounds how many of our chips touch the neighbour, not how many
             // links they carry between them, so the real count is settled here.
             bool seams_satisfied = true;
+            std::size_t honoured_links = 0;
             for (const Seam& seam : seams) {
-                if (count_links_between(candidate.asics, *seam.neighbor_asics, physical_graph) < seam.required_links) {
+                const std::size_t links = count_links_between(candidate.asics, *seam.neighbor_asics, physical_graph);
+                if (links < seam.required_links) {
                     seams_satisfied = false;
                     break;
                 }
+                honoured_links += std::min(links, seam.requested_links);
             }
             if (!seams_satisfied) {
                 continue;
             }
-            pool.push_back(std::move(candidate));
+
+            RankedPlacement ranked;
+            if (relaxed_inter_mesh_policy) {
+                ranked.honoured_links = honoured_links;
+                ranked.headroom_links =
+                    std::min(free_links_out_of_region(candidate.asics, occupied, physical_graph), pending_links);
+            }
+            ranked.placement = std::move(candidate);
+            pool.push_back(std::move(ranked));
         }
     }
-    return pool;
+
+    if (relaxed_inter_mesh_policy) {
+        // Stable, so candidates that rank equally keep enumeration order and the search stays reproducible
+        // from the MGD and PSD alone.
+        std::stable_sort(pool.begin(), pool.end(), [](const RankedPlacement& a, const RankedPlacement& b) {
+            return std::tie(b.honoured_links, b.headroom_links) < std::tie(a.honoured_links, a.headroom_links);
+        });
+    }
+
+    std::vector<PsdPlacement> candidates;
+    candidates.reserve(pool.size());
+    for (RankedPlacement& ranked : pool) {
+        candidates.push_back(std::move(ranked.placement));
+    }
+    return candidates;
 }
 
 // Completes `assignment` into a placement for every remaining mesh.
@@ -2238,6 +2312,7 @@ AssignedMeshes place_remaining_meshes(
     const AdjacencyGraph<GlobalMeshId>& mesh_level_graph,
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    bool relaxed_inter_mesh_policy,
     std::size_t& nodes_expanded,
     std::size_t node_budget) {
     // TODO: seed from MGD pinnings when present, and order seed candidates by
@@ -2274,11 +2349,13 @@ AssignedMeshes place_remaining_meshes(
         mesh_level_graph,
         physical_graph,
         physical_system_descriptor,
+        relaxed_inter_mesh_policy,
         /*max_placements_per_variant=*/0);  // TRY ALL, but then see if you need to cap it
 
     // TODO: value ordering — try the least-constraining candidate first (the one leaving
     // the most live candidates for this mesh's unplaced neighbours), then prefer fewer hosts spanned.
-    // Candidates are currently tried in enumeration order.
+    // Under STRICT candidates are still tried in enumeration order; under RELAXED next_step_pool
+    // already ranks them, but only by seam width, which is one part of least-constraining.
 
     for (PsdPlacement& candidate : candidates) {
         // Budget is on search nodes expanded rather than wall clock, so a failure is reproducible from
@@ -2303,6 +2380,7 @@ AssignedMeshes place_remaining_meshes(
             mesh_level_graph,
             physical_graph,
             physical_system_descriptor,
+            relaxed_inter_mesh_policy,
             nodes_expanded,
             node_budget);
         if (!completed.empty()) {
@@ -2322,6 +2400,7 @@ AssignedMeshes start_adjacency_guided_dfs(
     const AdjacencyGraph<GlobalMeshId>& mesh_level_graph,
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    bool relaxed_inter_mesh_policy,
     std::size_t node_budget) {
     // Owned here so every branch shares one counter.
     std::size_t nodes_expanded = 0;
@@ -2335,6 +2414,7 @@ AssignedMeshes start_adjacency_guided_dfs(
         mesh_level_graph,
         physical_graph,
         physical_system_descriptor,
+        relaxed_inter_mesh_policy,
         nodes_expanded,
         node_budget);
 
@@ -2427,11 +2507,30 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::solve_adjacency_guided_pla
         }
     }
 
+    // One inter-mesh channel policy for the whole solve, which is all the rest of the stack supports: the
+    // mapper applies a single validation mode to every seam. Descriptors merged together are required to
+    // agree (validate_shared_inter_mesh_policy, called where they are assembled), so the first one to state
+    // a policy speaks for the set and the rest either match it or state nothing. A set that states nothing
+    // stays STRICT, matching MeshGraph's default.
+    bool relaxed_inter_mesh_policy = false;
+    for (const MeshGraphDescriptor* descriptor : mesh_graph_descriptors) {
+        const auto policy = descriptor->inter_mesh_policy();
+        if (policy.has_value()) {
+            relaxed_inter_mesh_policy = (*policy == InterMeshChannelPolicy::Relaxed);
+            break;
+        }
+    }
+
     // Adjacency-guided DFS: the placement chosen for each global mesh ID. The mesh-level graph is what
     // enumerates the meshes, which is sound because its builder seeds a node per mesh before adding any
     // connection edges, so a mesh with no intermesh links is still a node with an empty neighbour list.
     auto mesh_placements = start_adjacency_guided_dfs(
-        global_mesh_groupings, merged.mesh_level_graph_, physical_graph, physical_system_descriptor, node_budget);
+        global_mesh_groupings,
+        merged.mesh_level_graph_,
+        physical_graph,
+        physical_system_descriptor,
+        relaxed_inter_mesh_policy,
+        node_budget);
 
     // Drop the mesh keying the caller does not consume and return the placements as a flat list.
     std::vector<PsdPlacement> placements;
