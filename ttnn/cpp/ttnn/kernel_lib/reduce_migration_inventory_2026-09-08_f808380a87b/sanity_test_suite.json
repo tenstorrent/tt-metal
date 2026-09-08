@@ -617,18 +617,18 @@
     },
     {
       "kind": "pytest",
-      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py",
       "family": "Moreh group_norm",
       "id": "SM022",
-      "full_suite_group": "T053",
+      "full_suite_group": "T172",
       "tests": [
-        "test_moreh_group_norm[compute_mean_rstd=True-affine=True-eps=1e-05-HW=[23, 23]-C_num_groups=[4, 1]-N=2]"
+        "test_moreh_group_norm_reduce_boundaries[fp32_dest_acc_en=False-affine=True-groups=1-small]"
       ],
       "kernel_ids": [
         "S059",
         "DP004"
       ],
-      "selection": "Groupnorm small algorithm; N=2,C=4,groups=1,H=W=23, affine and statistics checked.",
+      "selection": "Groupnorm small algorithm; N=2,C=4,groups=1,H=W=23, affine and statistics checked; direct case avoids the upstream helper\u2019s unconditional skip.",
       "lane": "common",
       "hardware": "One device; see the test for core-grid requirements.",
       "expected_cases": 1,
@@ -636,23 +636,23 @@
       "factories": [
         "F059"
       ],
-      "test_line": 289,
-      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py:289"
+      "test_line": 18,
+      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py:18"
     },
     {
       "kind": "pytest",
-      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py",
       "family": "Moreh group_norm",
       "id": "SM023",
-      "full_suite_group": "T053",
+      "full_suite_group": "T172",
       "tests": [
-        "test_moreh_group_norm[compute_mean_rstd=True-affine=True-eps=1e-05-HW=[512, 512]-C_num_groups=[4, 1]-N=2]"
+        "test_moreh_group_norm_reduce_boundaries[fp32_dest_acc_en=False-affine=True-groups=1-large]"
       ],
       "kernel_ids": [
         "S058",
         "DP003"
       ],
-      "selection": "Groupnorm large algorithm; N=2,C=4,groups=1,H=W=512 exceeds resident L1 buffers.",
+      "selection": "Groupnorm large algorithm; N=2,C=4,groups=1,H=W=500, affine and statistics checked; direct case avoids the upstream helper\u2019s unconditional skip.",
       "lane": "common",
       "hardware": "One device; see the test for core-grid requirements.",
       "expected_cases": 1,
@@ -660,8 +660,8 @@
       "factories": [
         "F059"
       ],
-      "test_line": 289,
-      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py:289"
+      "test_line": 18,
+      "test_evidence": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py:18"
     },
     {
       "kind": "pytest",

@@ -8,6 +8,9 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
+
+#include <algorithm>
 #include <bit>
 #include <cmath>
 
@@ -104,18 +107,16 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
         num_groups);
     const auto num_inner_tiles = (num_channels / num_groups) * Ht * Wt;
 
-    const auto f_c = static_cast<float>(num_channels) / static_cast<float>(num_groups);
-    const auto f_ht = static_cast<float>(origin_h) / static_cast<float>(TILE_HEIGHT);
-    const auto f_wt = static_cast<float>(origin_w) / static_cast<float>(TILE_WIDTH);
-    float scaler = 1.0f / (static_cast<float>(TILE_WIDTH) * std::sqrt(f_c * f_ht * f_wt));
-
     const bool gamma_has_value = gamma.has_value();
     const bool beta_has_value = beta.has_value();
     const bool mean_has_value = mean.has_value();
     const bool rstd_has_value = rstd.has_value();
 
-    constexpr uint32_t MAX_BLOCK_SIZE = 8;
-    const uint32_t block_size = get_block_size(num_inner_tiles, MAX_BLOCK_SIZE);
+    // The shared kernel uses j as a DEST index and j + 1 for a mask.
+    // Respect the smaller FP32 destination bank and leave room for that mask.
+    const uint32_t dst_tiles = (dst_full_sync_en ? 16U : 8U) / (fp32_dest_acc_en ? 2U : 1U);
+    const uint32_t max_block_size = std::min(8U, (do_mask_h || do_mask_w) ? dst_tiles / 2 : dst_tiles);
+    const uint32_t block_size = get_block_size(num_inner_tiles, max_block_size);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -140,7 +141,6 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     uint32_t in0_t = num_inner_tiles;                         // input
-    const uint32_t in1_t = 1;                                 // scaler
     const uint32_t in2_t = 1;                                 // epsilon
     const uint32_t in3_t = gamma_has_value ? block_size : 0;  // gamma
     const uint32_t in4_t = beta_has_value ? block_size : 0;   // beta
@@ -153,18 +153,59 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
 
     const uint32_t im0_t = 1;                                                         // E[x]
     uint32_t im1_t = num_inner_tiles;                                                 // x - E[x]
-    uint32_t im2_t = 1;                                                               // (x - E[x])^2
     const uint32_t im3_t = 1;                                                         // Sum[(x - E[x])^2]
     const uint32_t im4_t = 1;                                                         // E[(x - E[x])^2] = Var[x]
     const uint32_t im5_t = 1;                                                         // 1.0/(sqrt(Var[x] + eps))
     const uint32_t im6_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
-    const uint32_t im7_t = 2;                                                         // Sum[x]
+    constexpr uint32_t reduce_block_tiles = 8;
+    const uint32_t im7_t = std::min(num_inner_tiles, 2 * reduce_block_tiles - 1);  // resident reduction block
 
     const auto cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const auto single_tile_size = tt::tile_size(cb_data_format);
 
+    namespace reduce_host = ttnn::kernel_lib::host;
+    const uint32_t reduce_elements = (num_channels / num_groups) * origin_h * origin_w;
+    const TensorLayout reduce_layout(input.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    const uint32_t num_blocks = std::max(1U, num_inner_tiles / reduce_block_tiles);
+    const uint32_t num_descriptors = std::min(num_blocks, 3U);
+    std::vector<reduce_host::ReduceCbConfig> moment_calls;
+    for (uint32_t i = 0; i < num_descriptors; ++i) {
+        const uint32_t block_tiles =
+            i + 1 == num_descriptors ? num_inner_tiles - (num_blocks - 1) * reduce_block_tiles : reduce_block_tiles;
+        const uint32_t width = is_lastdim_layernorm && i + 1 == num_descriptors
+                                   ? origin_w - (num_blocks - 1) * reduce_block_tiles * 32
+                                   : block_tiles * 32;
+        moment_calls.emplace_back(
+            0,
+            reduce_host::ReduceCallConfig{
+                TensorSpec(Shape{32, width}, reduce_layout),
+                TensorSpec(is_lastdim_layernorm ? Shape{32, 1} : Shape{1, 1}, reduce_layout),
+                ReduceOpMath::SUM,
+                is_lastdim_layernorm ? ReduceOpDim::W : ReduceOpDim::HW,
+                1.0F / static_cast<float>(reduce_elements),
+                ReduceFp32Mode::Fast,
+                im7_t * single_tile_size});
+    }
+    auto moment_sequence = reduce_host::make_reduce_sequence_plan(
+        moment_calls,
+        {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2},
+        {.arch = device->arch(),
+         .fp32_dest_acc_en = fp32_dest_acc_en,
+         .dst_full_sync_en = dst_full_sync_en,
+         .available_l1_bytes = 32 * single_tile_size});
+    moment_sequence.calls.back().accumulation_index = num_blocks - 1;
+    for (auto& call : moment_sequence.calls) {
+        call.plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+    }
+    const auto* auxiliary = moment_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const uint32_t in1_t = moment_sequence.auxiliary.tiles.size();
+    const auto append_moment_args = [&](auto& args) {
+        args.insert(args.end(), {reduce_block_tiles, im7_t, in1_t});
+        moment_sequence.append_to(args);
+    };
+
     const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t + im0_t +
-                           im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
+                           im1_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
                           single_tile_size;
     const auto available_L1 = device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const bool use_large_algorithm = cb_usage >= available_L1;
@@ -173,7 +214,6 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
         log_info(LogTest, "Large moreh_group_norm algorithm is selected.");
         in0_t = block_size;
         im1_t = 2 * block_size;
-        im2_t = 2 * block_size;
     } else {
         log_info(LogTest, "Small moreh_group_norm algorithm is selected.");
     }
@@ -182,7 +222,8 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
 
     // Push CBs — only create when num_tiles > 0 (mirrors CreateCircularBuffer helper behavior)
     push_cb_if_nonzero(desc, in0_t, all_cores, tt::CBIndex::c_0, cb_data_format, single_tile_size);    // input
-    push_cb_if_nonzero(desc, in1_t, all_cores, tt::CBIndex::c_1, cb_data_format, single_tile_size);    // scaler
+    push_cb_if_nonzero(
+        desc, in1_t, all_cores, tt::CBIndex::c_1, auxiliary->data_format, auxiliary->page_size);       // scaler
     push_cb_if_nonzero(desc, in2_t, all_cores, tt::CBIndex::c_2, cb_data_format, single_tile_size);    // eps
     push_cb_if_nonzero(desc, in3_t, all_cores, tt::CBIndex::c_3, cb_data_format, single_tile_size);    // gamma
     push_cb_if_nonzero(desc, in4_t, all_cores, tt::CBIndex::c_4, cb_data_format, single_tile_size);    // beta
@@ -193,7 +234,6 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
     push_cb_if_nonzero(desc, out2_t, all_cores, tt::CBIndex::c_18, cb_data_format, single_tile_size);  // rstd
     push_cb_if_nonzero(desc, im0_t, all_cores, tt::CBIndex::c_24, cb_data_format, single_tile_size);   // E[x]
     push_cb_if_nonzero(desc, im1_t, all_cores, tt::CBIndex::c_25, cb_data_format, single_tile_size);   // x - E[x]
-    push_cb_if_nonzero(desc, im2_t, all_cores, tt::CBIndex::c_26, cb_data_format, single_tile_size);   // (x - E[x])^2
     push_cb_if_nonzero(
         desc, im3_t, all_cores, tt::CBIndex::c_27, cb_data_format, single_tile_size);  // Sum[(x - E[x])^2]
     push_cb_if_nonzero(desc, im4_t, all_cores, tt::CBIndex::c_28, cb_data_format, single_tile_size);  // Var[x]
@@ -214,6 +254,7 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
 
     KernelDescriptor::CompileTimeArgs reader_ct_args{
         static_cast<uint32_t>(gamma_has_value), static_cast<uint32_t>(beta_has_value)};
+    moment_sequence.append_auxiliary_to(reader_ct_args);
     TensorAccessorArgs(input.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(gamma_has_value ? gamma->buffer() : nullptr).append_to(reader_ct_args);
     TensorAccessorArgs(beta_has_value ? beta->buffer() : nullptr).append_to(reader_ct_args);
@@ -243,8 +284,7 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    KernelDescriptor::Defines compute_defines = {
-        {"REDUCE_OP", "PoolType::AVG"}, {"REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"}};
+    KernelDescriptor::Defines compute_defines;
 
     const char* compute_kernel_file =
         use_large_algorithm
@@ -267,6 +307,7 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
         static_cast<uint32_t>(rstd_has_value),
         static_cast<uint32_t>(is_lastdim_layernorm),
         static_cast<uint32_t>(is_group_norm)};
+    append_moment_args(compute_desc_1.compile_time_args);
     compute_desc_1.defines = compute_defines;
     compute_desc_1.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
@@ -293,6 +334,7 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
             static_cast<uint32_t>(rstd_has_value),
             static_cast<uint32_t>(is_lastdim_layernorm),
             static_cast<uint32_t>(is_group_norm)};
+        append_moment_args(compute_desc_2.compile_time_args);
         compute_desc_2.defines = compute_defines;
         compute_desc_2.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
@@ -340,7 +382,6 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
             {input_buf,
              gamma_buf,
              beta_buf,
-             std::bit_cast<uint32_t>(scaler),
              std::bit_cast<uint32_t>(eps),
              tile_offset,
              num_rows_per_core,

@@ -93,9 +93,26 @@ audit.
   tile-add loop. Retained the two-dimensional source mask around the power
   transform. Native build, SM020, and all 20 full T051 cases passed. Results:
   `generated/test_reports/reduce-migration-h6zf0w0c/summary.json`.
-- In progress: shared Moreh layer/group normalization kernels. Layer-norm
-  SM026/SM027 passed. Group-norm SM022/SM023 hit an unconditional upstream skip
-  inside the test helper ("libstdc++ issue"); direct coverage is being added.
+- Shared Moreh layer/group normalization forward (S058/S059, DP003/DP004,
+  DP008/DP009): mean and variance now use bounded planned reductions, replacing
+  the handwritten tile-add loops. W tails use planner masks; HW retains the
+  two-dimensional source masks. Removed the squared-tile scratch buffer.
+  Native build and all four sanity cases passed. Existing layer-norm forward
+  T054 cases passed (22 passed, 23 upstream skips); results in
+  `generated/test_reports/reduce-migration-0br1k4us/summary.json`.
+- Added T172 direct normalization boundary coverage: 24 group-norm and 16
+  layer-norm cases, all passed. These check output, mean and reciprocal standard
+  deviation with poisoned padding, small/large paths, affine parameters, and
+  both destination accumulation formats. They exposed two issues fixed here:
+  group-norm block sizes exceeded FP32 destination capacity; width-reduction
+  statistics need a full tile transpose before the writer consumes them.
+  Results: `generated/test_reports/reduce-migration-7tbxlkvi/summary.json`
+  and `/tmp/reduce-moreh-layer-norm-boundaries-20260908-r2.log`.
+- Replaced SM022/SM023's unconditionally skipped group-norm tests with exact
+  cases from T172. Both now execute and pass; results in
+  `generated/test_reports/reduce-migration-yj0k8o8w/summary.json`. Original
+  full-suite skips remain visible. The full runner now contains six added test
+  definitions and 217 added parameterized cases beyond the base inventory.
 
 ## Remaining work
 

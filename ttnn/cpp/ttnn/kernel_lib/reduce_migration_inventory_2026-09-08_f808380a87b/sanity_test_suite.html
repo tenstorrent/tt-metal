@@ -164,13 +164,13 @@ python scripts/run_reduce_migration_sanity.py
 </article>
 <article class="card case" id="SM022" data-lane="common"><h3>SM022 — Moreh group_norm</h3>
 <p><b>Primary kernels:</b> S059, DP004 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F059</p>
-<p>Groupnorm small algorithm; N=2,C=4,groups=1,H=W=23, affine and statistics checked.</p><p>One device; see the test for core-grid requirements.</p>
-<p><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py#L289">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py</a></p><pre><code>test_moreh_group_norm[compute_mean_rstd=True-affine=True-eps=1e-05-HW=[23, 23]-C_num_groups=[4, 1]-N=2]</code></pre>
+<p>Groupnorm small algorithm; N=2,C=4,groups=1,H=W=23, affine and statistics checked; direct case avoids the upstream helper’s unconditional skip.</p><p>One device; see the test for core-grid requirements.</p>
+<p><a href="../../../../../tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py</a> (current branch)</p><pre><code>test_moreh_group_norm_reduce_boundaries[fp32_dest_acc_en=False-affine=True-groups=1-small]</code></pre>
 </article>
 <article class="card case" id="SM023" data-lane="common"><h3>SM023 — Moreh group_norm</h3>
 <p><b>Primary kernels:</b> S058, DP003 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F059</p>
-<p>Groupnorm large algorithm; N=2,C=4,groups=1,H=W=512 exceeds resident L1 buffers.</p><p>One device; see the test for core-grid requirements.</p>
-<p><a href="https://github.com/tenstorrent/tt-metal/blob/f808380a87b320e24457c600cc79b05d7a0b8f73/tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py#L289">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_group_norm.py</a></p><pre><code>test_moreh_group_norm[compute_mean_rstd=True-affine=True-eps=1e-05-HW=[512, 512]-C_num_groups=[4, 1]-N=2]</code></pre>
+<p>Groupnorm large algorithm; N=2,C=4,groups=1,H=W=500, affine and statistics checked; direct case avoids the upstream helper’s unconditional skip.</p><p>One device; see the test for core-grid requirements.</p>
+<p><a href="../../../../../tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py">tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_normalization_reduce_boundaries.py</a> (current branch)</p><pre><code>test_moreh_group_norm_reduce_boundaries[fp32_dest_acc_en=False-affine=True-groups=1-large]</code></pre>
 </article>
 <article class="card case" id="SM024" data-lane="common"><h3>SM024 — Moreh group_norm</h3>
 <p><b>Primary kernels:</b> S060, S062, DP005, DP007 · <b>Lane:</b> <code>common</code> · <b>Factories:</b> F060, F061</p>

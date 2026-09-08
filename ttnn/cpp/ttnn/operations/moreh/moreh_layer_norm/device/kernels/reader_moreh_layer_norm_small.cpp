@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -15,7 +16,6 @@ void kernel_main() {
     const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
     const auto num_inner = get_arg_val<uint32_t>(i++);
     const auto tile_offset = get_arg_val<uint32_t>(i++);
-    const auto scaler = get_arg_val<uint32_t>(i++);
     const auto eps = get_arg_val<uint32_t>(i++);
     const auto mask_h = get_arg_val<uint32_t>(i++);
     const auto mask_w = get_arg_val<uint32_t>(i++);
@@ -32,7 +32,8 @@ void kernel_main() {
     const auto input_data_format = get_dataformat(cb_id_input);
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
-    constexpr auto input_args = TensorAccessorArgs<1>();
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<1>;
+    constexpr auto input_args = TensorAccessorArgs<Auxiliary::next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
@@ -48,9 +49,8 @@ void kernel_main() {
     const auto beta_addrg = TensorAccessor(beta_args, beta_addr);
 #endif
 
-    DataflowBuffer dfb_scaler(cb_id_scaler);
     DataflowBuffer dfb_eps(cb_id_eps);
-    fill_cb_with_value(dfb_scaler, scaler);
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     fill_cb_with_value(dfb_eps, eps);
 
 #ifdef DO_MASK_H

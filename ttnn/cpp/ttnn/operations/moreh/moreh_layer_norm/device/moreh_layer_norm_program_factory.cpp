@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
+
+#include <algorithm>
 #include <bit>
 #include <string>
 #include <vector>
@@ -131,7 +134,6 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     uint32_t in0_t = num_inner;                                   // input
-    const uint32_t in1_t = 1;                                     // scaler
     const uint32_t in2_t = 1;                                     // epsilon
     const uint32_t in3_t = gamma_has_value ? 2 * block_size : 0;  // gamma
     const uint32_t in4_t = beta_has_value ? 2 * block_size : 0;   // beta
@@ -144,21 +146,67 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
 
     const uint32_t im0_t = 1;                                                         // E[x]
     uint32_t im1_t = num_inner;                                                       // x - E[x]
-    uint32_t im2_t = 1;                                                               // (x - E[x])^2
     const uint32_t im3_t = 1;                                                         // Sum[(x - E[x])^2]
     const uint32_t im4_t = 1;                                                         // E[(x - E[x])^2] = Var[x]
     const uint32_t im5_t = 1;                                                         // 1.0/(sqrt(Var[x] + eps))
     const uint32_t im6_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
-    const uint32_t im7_t = 2;                                                         // Sum[x]
+    constexpr uint32_t reduce_block_tiles = 8;
+    const uint32_t im7_t = std::min(num_inner, 2 * reduce_block_tiles - 1);  // resident reduction block
 
     const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto single_tile_size = tt::tile_size(cb_data_format);
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
     const auto intermed_single_tile_size = tt::tile_size(intermed_cb_format);
 
+    namespace reduce_host = ttnn::kernel_lib::host;
+    uint32_t reduce_elements = 1;
+    for (uint32_t i = input_rank - normalized_dims; i < input_rank; ++i) {
+        reduce_elements *= input_shape_without_padding[i];
+    }
+    const TensorLayout reduce_layout(
+        fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    const uint32_t num_blocks = std::max(1U, num_inner / reduce_block_tiles);
+    const uint32_t num_descriptors = std::min(num_blocks, 3U);
+    std::vector<reduce_host::ReduceCbConfig> moment_calls;
+    for (uint32_t i = 0; i < num_descriptors; ++i) {
+        const uint32_t block_tiles =
+            i + 1 == num_descriptors ? num_inner - (num_blocks - 1) * reduce_block_tiles : reduce_block_tiles;
+        const uint32_t width = is_lastdim_layer_norm && i + 1 == num_descriptors
+                                   ? origin_W - (num_blocks - 1) * reduce_block_tiles * 32
+                                   : block_tiles * 32;
+        moment_calls.emplace_back(
+            0,
+            reduce_host::ReduceCallConfig{
+                TensorSpec(Shape{32, width}, reduce_layout),
+                TensorSpec(is_lastdim_layer_norm ? Shape{32, 1} : Shape{1, 1}, reduce_layout),
+                ReduceOpMath::SUM,
+                is_lastdim_layer_norm ? ReduceOpDim::W : ReduceOpDim::HW,
+                1.0F / static_cast<float>(reduce_elements),
+                ReduceFp32Mode::Fast,
+                im7_t * intermed_single_tile_size});
+    }
+    auto moment_sequence = reduce_host::make_reduce_sequence_plan(
+        moment_calls,
+        {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2},
+        {.arch = device->arch(),
+         .fp32_dest_acc_en = fp32_dest_acc_en,
+         .dst_full_sync_en = dst_full_sync_en,
+         .available_l1_bytes = 32 * intermed_single_tile_size});
+    moment_sequence.calls.back().accumulation_index = num_blocks - 1;
+    for (auto& call : moment_sequence.calls) {
+        call.plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+    }
+    const auto* auxiliary = moment_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const uint32_t in1_t = moment_sequence.auxiliary.tiles.size();
+    const auto append_moment_args = [&](auto& args) {
+        args.insert(args.end(), {reduce_block_tiles, im7_t, in1_t});
+        moment_sequence.append_to(args);
+    };
+
     const uint32_t cb_usage =
-        ((in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t) * single_tile_size) +
-        ((im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) * intermed_single_tile_size);
+        ((in0_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t) * single_tile_size) +
+        ((im0_t + im1_t + im3_t + im4_t + im5_t + im6_t + im7_t) * intermed_single_tile_size) +
+        in1_t * auxiliary->page_size;
     const uint32_t available_L1 =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const bool use_large_algorithm = cb_usage >= available_L1;
@@ -167,7 +215,6 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
         log_info(tt::LogTest, "Large moreh_layer_norm algorithm is selected.");
         in0_t = 2 * block_size;
         im1_t = 2 * block_size;
-        im2_t = 2 * block_size;
     } else {
         log_info(tt::LogTest, "Small moreh_layer_norm algorithm is selected.");
     }
@@ -193,7 +240,7 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     };
 
     push_cb(static_cast<uint8_t>(CBIndex::c_0), in0_t, cb_data_format);       // input
-    push_cb(static_cast<uint8_t>(CBIndex::c_1), in1_t, cb_data_format);       // scaler
+    push_cb(static_cast<uint8_t>(CBIndex::c_1), in1_t, auxiliary->data_format);  // scaler
     push_cb(static_cast<uint8_t>(CBIndex::c_2), in2_t, cb_data_format);       // epsilon
     push_cb(static_cast<uint8_t>(CBIndex::c_3), in3_t, cb_data_format);       // gamma
     push_cb(static_cast<uint8_t>(CBIndex::c_4), in4_t, cb_data_format);       // beta
@@ -204,7 +251,6 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     push_cb(static_cast<uint8_t>(CBIndex::c_18), out2_t, cb_data_format);     // rstd
     push_cb(static_cast<uint8_t>(CBIndex::c_24), im0_t, intermed_cb_format);  // E[x]
     push_cb(static_cast<uint8_t>(CBIndex::c_25), im1_t, intermed_cb_format);  // x - E[x]
-    push_cb(static_cast<uint8_t>(CBIndex::c_26), im2_t, intermed_cb_format);  // (x - E[x])^2
     push_cb(static_cast<uint8_t>(CBIndex::c_27), im3_t, intermed_cb_format);  // Sum[(x - E[x])^2]
     push_cb(static_cast<uint8_t>(CBIndex::c_28), im4_t, intermed_cb_format);  // E[(x - E[x])^2] = Var[x]
     push_cb(static_cast<uint8_t>(CBIndex::c_29), im5_t, intermed_cb_format);  // 1.0/(sqrt(Var[x] + eps))
@@ -215,6 +261,7 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     KernelDescriptor::CompileTimeArgs reader_compile_time_args{block_size};
+    moment_sequence.append_auxiliary_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
@@ -240,12 +287,6 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     }
     if (do_mask_w) {
         reader_defines_map["DO_MASK_W"] = "1";
-    }
-    compute_defines_map["REDUCE_OP"] = "PoolType::AVG";
-    if (is_lastdim_layer_norm) {
-        compute_defines_map["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
-    } else {
-        compute_defines_map["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
     }
     if (fp32_dest_acc_en) {
         reader_defines_map["FP32_DEST_ACC_EN"] = "1";
@@ -298,6 +339,7 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
         static_cast<uint32_t>(rstd_has_value),
         static_cast<uint32_t>(is_lastdim_layer_norm),
         static_cast<uint32_t>(is_groupnorm)};
+    append_moment_args(compute_desc_1.compile_time_args);
     compute_desc_1.defines = compute_defines;
     compute_desc_1.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
@@ -324,6 +366,7 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
             static_cast<uint32_t>(rstd_has_value),
             static_cast<uint32_t>(is_lastdim_layer_norm),
             static_cast<uint32_t>(is_groupnorm)};
+        append_moment_args(compute_desc_2.compile_time_args);
         compute_desc_2.defines = compute_defines;
         compute_desc_2.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
@@ -336,20 +379,6 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    float scaler_f = 0.0f;
-    if (normalized_dims == 1) {
-        scaler_f = 1.0f / static_cast<float>(origin_W);
-    } else {
-        uint32_t reduce_size = 1;
-        for (uint32_t i = input_rank - normalized_dims; i < input_rank; i++) {
-            auto size = input_shape_without_padding[i];
-            reduce_size *= size;
-        }
-
-        scaler_f = 1.0f / std::sqrt(static_cast<float>(reduce_size));
-    }
-    const uint32_t scaler_u = std::bit_cast<uint32_t>(scaler_f);
-
     const uint32_t e_u = std::bit_cast<uint32_t>(eps);  // epsilon
 
     auto* const input_buf = input.buffer();
@@ -379,8 +408,7 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
         }
 
         reader_desc.emplace_runtime_args(
-            core,
-            {input_buf, gamma_buf, beta_buf, num_rows_per_core, num_inner, tile_offset, scaler_u, e_u, mask_h, mask_w});
+            core, {input_buf, gamma_buf, beta_buf, num_rows_per_core, num_inner, tile_offset, e_u, mask_h, mask_w});
 
         writer_desc.emplace_runtime_args(
             core,
