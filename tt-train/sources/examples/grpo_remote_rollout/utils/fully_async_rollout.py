@@ -72,14 +72,15 @@ class FullyAsyncRolloutClient:
         if self._feeder_error is not None:
             raise RuntimeError("prompt feeder failed") from self._feeder_error
         result = self._transport.receive_result()
-        print(
-            f"[fully-async trainer] received {result.group_id} from behavior policy "
-            f"version {result.behavior_version}",
-            flush=True,
-        )
         payload = result.request_payload
         if not isinstance(payload, dict):
             raise RuntimeError(f"rollout {result.group_id!r} did not return its request payload")
+        print(
+            f"[fully-async trainer] received {result.group_id}: prompts={len(payload['prompts'])}, "
+            f"completions={len(result.output.tokens)}, behavior_logprob_rows={len(result.output.logprobs)}, "
+            f"behavior_version={result.behavior_version}",
+            flush=True,
+        )
         return FullyAsyncRolloutBatch(
             prompts=[[int(token) for token in row] for row in payload["prompts"]],
             extra_columns={name: list(values) for name, values in payload["extra_columns"].items()},

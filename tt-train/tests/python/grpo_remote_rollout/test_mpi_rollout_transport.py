@@ -183,3 +183,34 @@ def test_progress_threads_connect_coordinator_to_rollout_engine():
     sender_bridge.send_weights.assert_called_once_with(weights)
     sender_bridge.barrier.assert_called_once_with()
     assert engine.snapshot().active_version == 4
+
+
+def test_completed_rollout_capacity_includes_mpi_buffering():
+    trainer_channel, worker_channel = _channels()
+    trainer = MPIRolloutTrainerTransport(peer_rank=1, capacity=1, channel=trainer_channel)
+    worker = MPIRolloutWorkerTransport(peer_rank=0, capacity=1, channel=worker_channel)
+    trainer.start()
+    worker.start()
+
+    worker.publish(_result())
+    second_published = Event()
+
+    def publish_second():
+        worker.publish(_result())
+        second_published.set()
+
+    publisher = Thread(target=publish_second)
+    publisher.start()
+    assert not second_published.wait(timeout=0.1)
+
+    assert trainer.receive_result(timeout=5).group_id == "group-1"
+    assert second_published.wait(timeout=5)
+    assert trainer.receive_result(timeout=5).group_id == "group-1"
+
+    worker_closer = Thread(target=worker.close)
+    worker_closer.start()
+    trainer.close()
+    worker_closer.join(timeout=5)
+    publisher.join(timeout=5)
+    assert not worker_closer.is_alive()
+    assert not publisher.is_alive()

@@ -18,7 +18,7 @@ import json
 import struct
 from collections import deque
 from dataclasses import dataclass
-from threading import Event, Lock, Thread
+from threading import BoundedSemaphore, Event, Lock, Thread
 from time import monotonic
 from typing import Final, Protocol
 
@@ -66,6 +66,7 @@ _STAGE_WEIGHTS: Final = 6
 _FAILURE: Final = 7
 _WEIGHTS_STAGED: Final = 8
 _POLICY_ACTIVATED: Final = 9
+_RESULT_ACK: Final = 10
 
 
 class _ByteChannel(Protocol):
@@ -104,8 +105,13 @@ class _Frame:
 
 @dataclass(frozen=True)
 class _PendingCommand:
-    command: RolloutCommand
+    command: RolloutCommand | _ResultAck
     sent: Event
+
+
+@dataclass(frozen=True)
+class _ResultAck:
+    """Credit returned only after the trainer consumes a completed rollout."""
 
 
 def _send_frame(channel: _ByteChannel, peer_rank: int, header_tag: int, body_tag: int, frame: _Frame) -> None:
@@ -346,6 +352,10 @@ class MPIRolloutTrainerTransport(TrainerRolloutTransport):
             remaining = None if deadline is None else max(0.0, deadline - monotonic())
             event = self._receive_raw_event(remaining)
             if isinstance(event, ResultReady):
+                # Returning the credit here, rather than when the MPI receiver
+                # buffers the frame, makes capacity an end-to-end bound on
+                # completed rollouts (including data eagerly buffered by MPI).
+                self._enqueue(_ResultAck(), remaining)
                 return event.result
             self._deferred_events.append(event)
 
@@ -371,8 +381,10 @@ class MPIRolloutTrainerTransport(TrainerRolloutTransport):
                     frame = _Frame(_REQUEST, _encode_lease(command))
                 elif isinstance(command, QuiescePolicy):
                     frame = _Frame(_QUIESCE, struct.pack("<q", command.target_version))
-                else:
+                elif isinstance(command, StagePolicyWeights):
                     frame = _Frame(_STAGE_WEIGHTS, struct.pack("<q", command.version))
+                else:
+                    frame = _Frame(_RESULT_ACK, b"")
                 _send_frame(
                     self._channel,
                     self._peer_rank,
@@ -430,6 +442,7 @@ class MPIRolloutWorkerTransport(WorkerRolloutTransport):
         self._channel = channel or _TtnnByteChannel()
         self._requests = _ClosableQueue[RolloutCommand](capacity)
         self._outbound = _ClosableQueue[EngineEvent](capacity)
+        self._result_credits = BoundedSemaphore(capacity)
         self._failure = _ProgressFailure()
         self._started = False
         self._receiver = Thread(target=self._receive_loop, name="rollout-mpi-request", daemon=True)
@@ -454,7 +467,15 @@ class MPIRolloutWorkerTransport(WorkerRolloutTransport):
 
     def publish_event(self, event: EngineEvent, *, timeout: float | None = None) -> None:
         self._failure.raise_if_set()
-        self._outbound.put(event, timeout)
+        owns_credit = isinstance(event, ResultReady)
+        if owns_credit and not self._result_credits.acquire(timeout=timeout):
+            raise TimeoutError("timed out waiting for completed-rollout queue credit")
+        try:
+            self._outbound.put(event, timeout)
+        except BaseException:
+            if owns_credit:
+                self._result_credits.release()
+            raise
 
     def publish(self, result: RolloutResult, *, timeout: float | None = None) -> None:
         self.publish_event(ResultReady(result), timeout=timeout)
@@ -482,6 +503,9 @@ class MPIRolloutWorkerTransport(WorkerRolloutTransport):
                     command = QuiescePolicy(struct.unpack("<q", frame.body)[0])
                 elif frame.kind == _STAGE_WEIGHTS:
                     command = StagePolicyWeights(struct.unpack("<q", frame.body)[0])
+                elif frame.kind == _RESULT_ACK:
+                    self._result_credits.release()
+                    continue
                 else:
                     raise RuntimeError(f"unexpected rollout request frame kind {frame.kind}")
                 self._requests.put(command, None)

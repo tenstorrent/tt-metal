@@ -4,7 +4,7 @@ training_config:
   # replace this value; both ranks load the same source.
   model_id: "pyromind/Qwen3-0.6B-gsm8k"
   seed: 0
-  rollout_queue_capacity: 2
+  rollout_queue_capacity: 1
   optimizer:
     type: MorehAdamW
     lr: 1.0e-5
@@ -22,7 +22,7 @@ training_config:
     logging_steps: 1
     checkpointing: false
     checkpoint_interval: 100
-    prompts_to_train: 4
+    prompts_to_train: 6
     temperature: 1.0
     max_completion_length: 64
     num_generations: 2
