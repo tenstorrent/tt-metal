@@ -918,6 +918,57 @@ def test_l1_interleaved_near_capacity(device, enabled_program_cache):
     assert l1_pressure.is_allocated()
 
 
+@pytest.mark.parametrize("shape", [(1, 1, 64, 256), (1, 1, 37, 288)])
+@pytest.mark.parametrize("gamma_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("gamma_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_layer_norm_bfp8_compensated_subtraction_tile_stride(device, shape, gamma_dtype, gamma_layout):
+    # Each BFP8 tile has its own exponent section. Advancing the unpacker's W
+    # counter instead of the CB page address corrupts tiles 1-3 of every block.
+    torch.manual_seed(0)
+    width = shape[-1]
+    torch_input = torch.rand(shape, dtype=torch.float32)
+    torch_weight = torch.rand((width,), dtype=torch.float32)
+    torch_bias = torch.rand((width,), dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    affine_shape = (1, 1, width // 32, 32) if gamma_layout == ttnn.ROW_MAJOR_LAYOUT else (1, 1, 1, width)
+    weight = ttnn.from_torch(torch_weight.reshape(affine_shape), dtype=gamma_dtype, layout=gamma_layout, device=device)
+    bias = ttnn.from_torch(torch_bias.reshape(affine_shape), dtype=gamma_dtype, layout=gamma_layout, device=device)
+    reference = torch.nn.functional.layer_norm(
+        ttnn.to_torch(input_tensor).float(),
+        (width,),
+        weight=ttnn.to_torch(weight).float().reshape(width),
+        bias=ttnn.to_torch(bias).float().reshape(width),
+        eps=1e-12,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    output = ttnn.layer_norm(
+        input_tensor,
+        epsilon=1e-12,
+        weight=weight,
+        bias=bias,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+        compute_kernel_config=compute_config,
+        recip_tensor=create_recip_tensor(device, width, use_welford=True),
+    )
+    actual = ttnn.to_torch(output).float()
+    assert torch.isfinite(actual).all()
+    # Check each tile separately so correct first tiles cannot hide subsequent
+    # tiles with misaddressed mantissas or shared exponents.
+    for tile_start in range(0, width, 32):
+        torch.testing.assert_close(
+            actual[..., tile_start : tile_start + 32],
+            reference[..., tile_start : tile_start + 32],
+            rtol=0.02,
+            atol=0.05,
+        )
+
+
 @run_for_blackhole("Blackhole selects the tile backend for parameter-free BFP8 LayerNorm")
 def test_layer_norm_tile_backend_does_not_require_reciprocal(device):
     torch.manual_seed(20260824)

@@ -65,8 +65,22 @@ ALWI void sub_bcast_cols_compensated(
     std::uint32_t input_tile,
     std::uint32_t dst_tile,
     std::uint32_t tile_count) {
+#if defined(TRISC_MATH) || defined(TRISC_UNPACK)
+    const auto input_format = static_cast<DataFormat>(unpack_src_format[get_operand_id(input_cb)]);
+    if (input_format == DataFormat::Bfp8 || input_format == DataFormat::Bfp8_b) {
+        // The blocked unpacker advances W within one tensor, which cannot skip
+        // the separate exponent section in each BFP8 tile. Issue single-tile
+        // calls so the CB page size determines every input address. The input
+        // CB is compile-time constant, leaving the BF16/FP32 fast path intact.
+        for (std::uint32_t tile = 0; tile < tile_count; ++tile) {
+            MATH((llk_math_sub_bcast_cols_compensated(input_cb, dst_tile + tile, 1)));
+            UNPACK((llk_unpack_AB_sub_bcast_col_custom(input_cb, split_mean_cb, input_tile + tile, 0, 1)));
+        }
+        return;
+    }
     MATH((llk_math_sub_bcast_cols_compensated(input_cb, dst_tile, tile_count)));
     UNPACK((llk_unpack_AB_sub_bcast_col_custom(input_cb, split_mean_cb, input_tile, 0 /*tile_index_b*/, tile_count)));
+#endif
 }
 
 }  // namespace ckernel
