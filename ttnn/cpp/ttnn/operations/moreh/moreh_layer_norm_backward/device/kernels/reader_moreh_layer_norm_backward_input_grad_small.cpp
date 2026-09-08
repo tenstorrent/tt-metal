@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -122,14 +124,9 @@ void kernel_main() {
     const auto gamma_addrg = TensorAccessor(tensor::gamma);
 #endif
 
-    union {
-        float f;
-        uint32_t u;
-    } scaler;
-    scaler.f = 1.0f;
-    DataflowBuffer dfb_scaler(dfb::scaler);
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     DataflowBuffer dfb_n_recip_n(dfb::n_recip_n);
-    fill_cb_with_value(dfb_scaler, scaler.u);
     fill_cb_with_value(dfb_n_recip_n, n);
     fill_cb_with_value(dfb_n_recip_n, recip_n);
 

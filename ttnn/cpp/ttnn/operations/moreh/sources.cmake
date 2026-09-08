@@ -2,6 +2,7 @@
 # Module owners should update this file when adding/removing/renaming source files.
 
 set(TTNN_OP_MOREH_SRCS
+    moreh_reduce.hpp
     moreh_abs_pow/device/moreh_abs_pow_device_operation.cpp
     moreh_abs_pow/device/moreh_abs_pow_program_factory.cpp
     moreh_abs_pow/moreh_abs_pow.cpp
@@ -42,6 +43,7 @@ set(TTNN_OP_MOREH_SRCS
     moreh_layer_norm_backward/device/moreh_layer_norm_backward_gamma_beta_grad_program_factory.cpp
     moreh_layer_norm_backward/device/moreh_layer_norm_backward_input_grad_device_operation.cpp
     moreh_layer_norm_backward/device/moreh_layer_norm_backward_input_grad_program_factory.cpp
+    moreh_layer_norm_backward/device/kernels/moreh_norm_backward_reduce.hpp
     moreh_layer_norm_backward/moreh_layer_norm_backward.cpp
     moreh_layer_norm/device/moreh_layer_norm_device_operation.cpp
     moreh_layer_norm/device/moreh_layer_norm_program_factory.cpp

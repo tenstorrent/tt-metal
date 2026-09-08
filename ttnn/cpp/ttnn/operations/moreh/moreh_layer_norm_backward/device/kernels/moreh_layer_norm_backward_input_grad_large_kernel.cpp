@@ -6,7 +6,7 @@
 // input_grad factories, on the large-algorithm path. Both bind the same resource names, so a change
 // to this kernel's binding vocabulary or argument schema has to land on both factories together.
 
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "moreh_norm_backward_reduce.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
@@ -20,6 +20,9 @@ void kernel_main() {
     constexpr auto origin_H = get_arg(args::origin_H);
     constexpr auto origin_W = get_arg(args::origin_W);
     constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto block_tiles = get_arg(args::reduce_block_tiles);
+    constexpr auto buffer_tiles = get_arg(args::reduce_buffer_tiles);
+    constexpr auto num_blocks = Wt < block_tiles ? 1 : Wt / block_tiles;
     constexpr bool is_lastdim_layernorm = get_arg(args::is_lastdim_layernorm) == 1;
     constexpr bool is_groupnorm = get_arg(args::is_groupnorm) == 1;
 
@@ -61,9 +64,11 @@ void kernel_main() {
     DataflowBuffer dfb_tmp2_obj(dfb::tmp2);  // tmp2
     DataflowBuffer dfb_tmp3_obj(dfb::tmp3);  // tmp3
 
+    DataflowBuffer reduce_dy(dfb::reduce_dy);
+    DataflowBuffer reduce_ydy(dfb::reduce_ydy);
     constexpr uint32_t onetile = 1;
 
-    dfb_scaler_obj.wait_front(onetile);  // comes from the reader
+    dfb_scaler_obj.wait_front(get_arg(args::reduce_aux_tiles));  // comes from the reader
     dfb_n_recip_n_obj.wait_front(2);     // comes from the reader
 
     constexpr uint32_t TILE_H = 32;
@@ -87,48 +92,49 @@ void kernel_main() {
 
         // Compute y
         // y = (x - mean) * rstd
-        constexpr auto dfb_dyadd = dfb::tmp1;
-        auto& dfb_dyadd_obj = dfb_tmp1_obj;
-        constexpr auto dfb_ydyadd = dfb::tmp2;
-        auto& dfb_ydyadd_obj = dfb_tmp2_obj;
-        for (uint32_t wt = 0; wt < Wt; wt++) {
-            // Compute xmm
-            // x - mean
-            constexpr auto dfb_xmm = dfb::tmp3;
-            auto& dfb_xmm_obj = dfb_tmp3_obj;
-            tile_regs_acquire();
-            dfb_x_obj.wait_front(onetile);  // comes from the reader
-            dfb_xmm_obj.reserve_back(onetile);
+        for (uint32_t block = 0; block < num_blocks; ++block) {
+            const uint32_t current_tiles = block + 1 == num_blocks ? Wt - block * block_tiles : block_tiles;
+            reduce_dy.reserve_back(buffer_tiles);
+            reduce_ydy.reserve_back(buffer_tiles);
+            for (uint32_t tile = 0; tile < current_tiles; ++tile) {
+                const uint32_t wt = block * block_tiles + tile;
+                // Compute xmm
+                // x - mean
+                constexpr auto dfb_xmm = dfb::tmp3;
+                auto& dfb_xmm_obj = dfb_tmp3_obj;
+                tile_regs_acquire();
+                dfb_x_obj.wait_front(onetile);  // comes from the reader
+                dfb_xmm_obj.reserve_back(onetile);
 
-            if (is_lastdim_layernorm) {
-                sub_bcast_cols_init_with_dt(dfb_x_obj, dfb_mean_obj);
-                sub_tiles_bcast_cols(dfb::x, dfb::mean, 0, 0, dst0);
-            } else {
-                sub_bcast_scalar_init_with_dt(dfb_x_obj, dfb_mean_obj);
-                sub_tiles_bcast_scalar(dfb::x, dfb::mean, 0, 0, dst0);
-            }
-            tile_regs_commit();
+                if (is_lastdim_layernorm) {
+                    sub_bcast_cols_init_with_dt(dfb_x_obj, dfb_mean_obj);
+                    sub_tiles_bcast_cols(dfb::x, dfb::mean, 0, 0, dst0);
+                } else {
+                    sub_bcast_scalar_init_with_dt(dfb_x_obj, dfb_mean_obj);
+                    sub_tiles_bcast_scalar(dfb::x, dfb::mean, 0, 0, dst0);
+                }
+                tile_regs_commit();
 
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, dfb_xmm_obj);
+                tile_regs_wait();
+                pack_tile_with_dt(dst0, dfb_xmm_obj);
 
-            dfb_x_obj.pop_front(onetile);
-            dfb_xmm_obj.push_back(onetile);
-            tile_regs_release();
+                dfb_x_obj.pop_front(onetile);
+                dfb_xmm_obj.push_back(onetile);
+                tile_regs_release();
 
-            // Compute y
-            // (x - mean) * rstd and mask(optional)
-            tile_regs_acquire();
-            dfb_xmm_obj.wait_front(onetile);
-            dfb_y_obj.reserve_back(onetile);
+                // Compute y
+                // (x - mean) * rstd and mask(optional)
+                tile_regs_acquire();
+                dfb_xmm_obj.wait_front(onetile);
+                dfb_y_obj.reserve_back(onetile);
 
-            if (is_lastdim_layernorm) {
-                mul_bcast_cols_init_with_dt(dfb_xmm_obj, dfb_rstd_obj);
-                mul_tiles_bcast_cols(dfb_xmm, dfb::rstd, 0, 0, dst0);
-            } else {
-                mul_bcast_scalar_init_with_dt(dfb_xmm_obj, dfb_rstd_obj);
-                mul_tiles_bcast_scalar(dfb_xmm, dfb::rstd, 0, 0, dst0);
-            }
+                if (is_lastdim_layernorm) {
+                    mul_bcast_cols_init_with_dt(dfb_xmm_obj, dfb_rstd_obj);
+                    mul_tiles_bcast_cols(dfb_xmm, dfb::rstd, 0, 0, dst0);
+                } else {
+                    mul_bcast_scalar_init_with_dt(dfb_xmm_obj, dfb_rstd_obj);
+                    mul_tiles_bcast_scalar(dfb_xmm, dfb::rstd, 0, 0, dst0);
+                }
 
 #ifdef DO_MASK_H
             if (need_to_do_mask_h(wt, origin_Ht, origin_Wt)) {
@@ -246,104 +252,30 @@ void kernel_main() {
             tile_regs_release();
 #endif  // GAMMA_HAS_VALUE
 
-            // Compute dyadd
             dfb_dycopy_obj.wait_front(onetile);
-            if (wt == 0) {
-                tile_regs_acquire();
-                dfb_dyadd_obj.reserve_back(onetile);
-
-                copy_tile_init_with_dt(dfb_dycopy_obj);
-                copy_tile(dfb::dycopy, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, dfb_dyadd_obj);
-
-                dfb_dyadd_obj.push_back(onetile);
-                tile_regs_release();
-            } else {
-                tile_regs_acquire();
-                dfb_dyadd_obj.wait_front(onetile);
-                dfb_dyadd_obj.reserve_back(onetile);
-
-                add_tiles_init_with_dt(dfb_dyadd_obj, dfb_dycopy_obj);
-                add_tiles(dfb_dyadd, dfb::dycopy, 0, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, dfb_dyadd_obj);
-
-                dfb_dyadd_obj.pop_front(onetile);
-                dfb_dyadd_obj.push_back(onetile);
-                tile_regs_release();
-            }
-            // We don't pop dycopy here.
-
-            // Compute ydy and ydyadd
-            constexpr auto dfb_ydy = dfb::tmp3;
-            auto& dfb_ydy_obj = dfb_tmp3_obj;
-            // Compute ydy
-            tile_regs_acquire();
             dfb_y_obj.wait_front(onetile);
-            dfb_ydy_obj.reserve_back(onetile);
-
+            tile_regs_acquire();
+            copy_tile_init_with_dt(dfb_dycopy_obj);
+            copy_tile(dfb::dycopy, 0, dst0);
             mul_tiles_init_with_dt(dfb_y_obj, dfb_dycopy_obj);
-            mul_tiles(dfb::y, dfb::dycopy, 0, 0, dst0);
+            mul_tiles(dfb::y, dfb::dycopy, 0, 0, dst1);
             tile_regs_commit();
-
             tile_regs_wait();
-            pack_tile_with_dt(dst0, dfb_ydy_obj);
-
+            pack_reconfig_data_format(dfb::reduce_dy);
+            pack_tile<true>(dst0, dfb::reduce_dy, tile);
+            pack_reconfig_data_format(dfb::reduce_ydy);
+            pack_tile<true>(dst1, dfb::reduce_ydy, tile);
+            tile_regs_release();
             dfb_y_obj.pop_front(onetile);
             dfb_dycopy_obj.pop_front(onetile);
-            dfb_ydy_obj.push_back(onetile);
-            tile_regs_release();
-
-            // Compute ydyadd
-            if (wt == 0) {
-                tile_regs_acquire();
-                dfb_ydy_obj.wait_front(onetile);
-                dfb_ydyadd_obj.reserve_back(onetile);
-
-                copy_tile_init_with_dt(dfb_ydy_obj);
-                copy_tile(dfb_ydy, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, dfb_ydyadd_obj);
-
-                dfb_ydy_obj.pop_front(onetile);
-                dfb_ydyadd_obj.push_back(onetile);
-                tile_regs_release();
-            } else {
-                tile_regs_acquire();
-                dfb_ydy_obj.wait_front(onetile);
-                dfb_ydyadd_obj.wait_front(onetile);
-                dfb_ydyadd_obj.reserve_back(onetile);
-
-                add_tiles_init_with_dt(dfb_ydyadd_obj, dfb_ydy_obj);
-                add_tiles(dfb_ydyadd, dfb_ydy, 0, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, dfb_ydyadd_obj);
-
-                dfb_ydy_obj.pop_front(onetile);
-                dfb_ydyadd_obj.pop_front(onetile);
-                dfb_ydyadd_obj.push_back(onetile);
-                tile_regs_release();
             }
-        }  // Wt loop
-
-        // Compute dysum
-        // Sum[dy]
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb_dyadd, dfb::scaler, dfb::dysum>(
-            compute_kernel_lib::ReduceInputBlockShape::single());
-
-        // Compute ydysum
-        // Sum[y * dy]
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb_ydyadd, dfb::scaler, dfb::ydysum>(
-            compute_kernel_lib::ReduceInputBlockShape::single());
+            reduce_dy.push_back(buffer_tiles);
+            reduce_ydy.push_back(buffer_tiles);
+            reduce_moreh_grad_block<dfb::reduce_dy, dfb::dysum, dfb::tmp1>(block, num_blocks);
+            reduce_moreh_grad_block<dfb::reduce_ydy, dfb::ydysum, dfb::tmp2>(block, num_blocks);
+            reduce_dy.pop_front(buffer_tiles);
+            reduce_ydy.pop_front(buffer_tiles);
+        }
 
         // Compute recip_nrstd
         // rstd / n -> tmp3
@@ -639,7 +571,7 @@ void kernel_main() {
         dfb_mean_obj.pop_front(onetile);
         dfb_rstd_obj.pop_front(onetile);
     }  // NCHt loop
-    dfb_scaler_obj.pop_front(onetile);
+    dfb_scaler_obj.pop_front(get_arg(args::reduce_aux_tiles));
     dfb_n_recip_n_obj.pop_front(2);
 
 #if defined(DO_MASK_H) || defined(DO_MASK_W)
