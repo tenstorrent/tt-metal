@@ -21,7 +21,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk
+from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
 
 # DSA indexer weight names are owned by TtIndexer.WEIGHT_NAMES (single source of truth). A
@@ -479,13 +480,13 @@ class TtIndexer:
 
     def _tp_all_reduce_via_gather(self, t):
         """All-reduce over TP via gather (dim 1) + local reduce, instead of _tp_rs_ag's reduce-scatter
-        (dim 3) + all-gather. For a narrow dim-3 width (e.g. wts' H_idx=32) that doesn't divide evenly
+        (dim 3) + all-gather. For a narrow dim-3 width (e.g. weights' H_idx=32) that doesn't divide evenly
         into tile-sized TP shards, _tp_rs_ag's reduce-scatter hits ttnn's composite fallback
         (use_composite_reduce_scatter) and balloons into ~30 tilize/pad/slice ops. Gathering on dim 1 —
         the batch/placeholder axis, always size 1 here — has no tile-alignment constraint, so it always
         takes the fused fast path; fast_reduce_nc then sums the gathered TP axis locally (pure on-device
         compute, no fabric traffic). Mirrors ttMLA._kv_stem's kv_a_proj_with_mqa all-reduce (mla.py:
-        917-929), measured cheaper even on an 18x-wider tensor than wts."""
+        917-929), measured cheaper even on an 18x-wider tensor than weights."""
         if self.tp_factor == 1:
             return t
         assert self._weights_all_gather_output is not None
@@ -652,6 +653,23 @@ class TtIndexer:
             **slot_kwargs,
         )
 
+    def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
+        """Return the model-gated Blackhole config for an indexer matmul."""
+        if not is_blackhole():
+            return None
+        entry = get_matmul_config(weight_name, seq_len_local)
+        candidates = entry if isinstance(entry, list) else [entry]
+        return next(
+            (
+                cfg
+                for cfg in candidates
+                if cfg is not None
+                and cfg.get("num_heads") in (None, self.config.num_attention_heads)
+                and cfg.get("q_lora_rank") in (None, getattr(self.config, "q_lora_rank", None))
+            ),
+            None,
+        )
+
     def write_k(
         self,
         hidden_states,
@@ -675,11 +693,13 @@ class TtIndexer:
         ``actual_end`` (end of the chunk's real tokens) clamps the write to them, so a chunk padding past
         the cache end needs only its real tokens to fit. forward() reads back the same prefix
         (``valid_pos``)."""
+        wk_cfg = self._resolve_mm_cfg("indexer.wk", seq_len)
         k = ttnn.linear(
             hidden_states,
             self._idx_wk,
             compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+            **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
         )  # per-chip partial [1, 1, S/sp, D_idx]
         k = self._tp_rs_ag(k)  # all-reduce over TP
         k = ttnn.layer_norm(
@@ -698,12 +718,14 @@ class TtIndexer:
         # compacted stride (_index_cache_layers) so it matches the cache_batch_idx computed in forward().
         cache_layer_idx = self._cache_slot(cache_layer_idx)
         k = self._bc_rope_pe(k, rope_tensors, start_pos, metadata=metadata)  # [1, 1, S/sp, D_idx] bf16
+        k_hadamard_cfg = self._resolve_mm_cfg("indexer.k_hadamard", seq_len)
         k_h = ttnn.matmul(
             k,
             self._index_hadamard,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
+            **({"program_config": k_hadamard_cfg["program_config"]} if k_hadamard_cfg is not None else {}),
         )
         ttnn.deallocate(k)
         k = k_h
@@ -806,11 +828,13 @@ class TtIndexer:
         )
 
         # Q stem: the shared q_a latent (qr) -> indexer wq_b.
+        wq_b_cfg = self._resolve_mm_cfg("indexer.wq_b", seq_len)
         q = ttnn.linear(
             qr,
             self._idx_wq_b,
             compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wq_b_cfg["out_mem_config"] if wq_b_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+            **({"program_config": wq_b_cfg["program_config"]} if wq_b_cfg is not None else {}),
             # Preserve the unquantized values through Hadamard, then materialize BFP8 once below.
             dtype=ttnn.bfloat16,
         )  # [1, 1, S/sp, H_idx*D_idx] — ALL heads (wq_b replicated); queries stay SP-sharded (rotation-safe)
@@ -819,35 +843,40 @@ class TtIndexer:
         )  # [1, H_idx, S/sp, D_idx] — all heads resident
         # block-cyclic indexed rope (same op/tables as the key rope + MLA q_pe)
         q_dev = self._bc_rope_pe(q, rope_tensors, start_pos, metadata=metadata)
+        q_hadamard_cfg = self._resolve_mm_cfg("indexer.q_hadamard", seq_len)
         q_h = ttnn.matmul(
             q_dev,
             self._index_hadamard,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
+            **({"program_config": q_hadamard_cfg["program_config"]} if q_hadamard_cfg is not None else {}),
         )
         ttnn.deallocate(q_dev)
         q_dev = q_h
 
         # weights_proj: device stem -> FULL all-reduce over tp (all H_idx heads, matching the replicated
         # wq_b heads) -> scale -> [1, 1, S/sp, H_idx].
-        wts = ttnn.linear(
+        wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
+        weights = ttnn.linear(
             hidden_states,
             self._idx_wproj,
             compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+            **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
         )
         # H_idx=32 doesn't divide evenly into tile-sized TP=4 shards (8 < tile width), so _tp_rs_ag's
         # dim-3 reduce-scatter would hit ttnn's composite fallback (~30 extra tilize/pad/slice ops, see
         # use_composite_reduce_scatter). Gather-then-local-reduce on dim 1 has no such tile constraint.
-        wts = self._tp_all_reduce_via_gather(wts)  # full all-reduce over tp -> all H_idx head-weights, replicated
+        weights = self._tp_all_reduce_via_gather(
+            weights
+        )  # full all-reduce over tp -> all H_idx head-weights, replicated
         # Indexer softmax scale = index_head_dim**-0.5 (NO mscale), matching the reference IndexerCPU
         # (model.py: softmax_scale = head_dim**-0.5). Distinct from MLA's qk_head_dim*mscale**2 scale —
         # though as a uniform positive multiplier it cannot change the top-k selection regardless.
-        wts = ttnn.multiply(wts, a.index_n_heads**-0.5 * a.index_head_dim**-0.5)  # [1,1,S/sp,H_idx] repl on tp
-
-        # indexer_score wants per-head weights [1, H_idx, S/sp, 1]; wts is [1, 1, S/sp, H_idx].
-        weights = ttnn.permute(wts, (0, 3, 2, 1))
+        weights = ttnn.multiply(
+            weights, a.index_n_heads**-0.5 * a.index_head_dim**-0.5
+        )  # [1,1,S/sp,H_idx] repl on tp
 
         # TP×SP query parallelism (rope-then-split). q_dev/weights were roped on the FULL S/sp slab
         # (block-cyclic-correct, cluster_axis=sp_axis), so every row already carries its true position; now
@@ -863,7 +892,7 @@ class TtIndexer:
                 weights,
             )  # release the full-S slabs once TP-split (mesh_partition allocates new)
             q_dev = ttnn.mesh_partition(q_dev, dim=2, cluster_axis=self.tp_axis)  # [1,H_idx,S/(sp·tp),D_idx]
-            weights = ttnn.mesh_partition(weights, dim=2, cluster_axis=self.tp_axis)  # [1,H_idx,S/(sp·tp),1]
+            weights = ttnn.mesh_partition(weights, dim=2, cluster_axis=self.tp_axis)  # [1,1,S/(sp·tp),H_idx]
             ttnn.deallocate(q_full)
             ttnn.deallocate(weights_full)
             sq_local = seq_len // self.tp_factor

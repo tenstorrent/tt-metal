@@ -29,6 +29,7 @@ from models.common.utility_functions import run_for_blackhole, skip_with_llk_ass
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import to_device
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import (
     _global_inputs,
@@ -313,15 +314,13 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len, bounds_source):
     q_rows = sp * GLM52_Q_PER_CHIP
     chunk_start = kv_len - q_rows
     q_host = torch.randn((1, GLM52_INDEX_HEADS, q_rows, GLM52_INDEX_DIM), dtype=torch.bfloat16)
-    w_host = torch.randn((1, GLM52_INDEX_HEADS, q_rows, 1), dtype=torch.bfloat16)
+    w_host = torch.randn((1, 1, q_rows, GLM52_INDEX_HEADS), dtype=torch.bfloat16)
 
     sp_shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(2, None))
     q_dev = ttnn.from_torch(
         q_host, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, mesh_mapper=sp_shard
     )
-    w_dev = ttnn.from_torch(
-        w_host, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard
-    )
+    w_dev = to_device(w_host, mesh_device, mesh_mapper=sp_shard)
     # The production GLM-5.2 cache is 1 Mi tokens wide, ND-sharded in DRAM,
     # and has one slot per full indexer layer. The fused program is compiled
     # from this *capacity* (not kv_len): kv_len bounds the populated prefix,

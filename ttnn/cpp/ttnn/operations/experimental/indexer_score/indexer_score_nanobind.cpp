@@ -29,7 +29,7 @@ void bind_indexer_score(nb::module_& mod) {
         R"doc(
         DeepSeek-V3.2 DSA / GLM-5 lightning-indexer scorer.
 
-        score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]
+        score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,0,t,:]) * weights[b,0,s,h]
 
         ReLU(q.kT) gated by the learned per-head weights and summed over ALL Hi
         index heads into one shared selection row [B, 1, Sq, T]. For MiniMax M3's
@@ -38,8 +38,8 @@ void bind_indexer_score(nb::module_& mod) {
         Args:
             q: [B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)
             k: [B, 1, T, D] bf16 or bfp8_b tiled, single shared head
-            weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale
-                pre-folded)
+            weights: [B, 1, Sq, Hi] bf16 tiled learned per-head gates (scale
+                pre-folded).
             chunk_start_idx: absolute global position of rank 0's query row 0
                 (rank 0 = lowest seq_shard_axes[0] (SP) coord; causality: key t
                 visible to query s iff t <= chunk_start + s). OMIT on a mesh ->
@@ -223,7 +223,7 @@ void bind_indexer_score(nb::module_& mod) {
             q: [B, Hi, Sq, D] bf16/bfp8_b tiled (post non-interleaved RoPE); see indexer_score_dsa
             k: [B, 1, T, D] bf16/bfp8_b tiled PERSISTENT all-gather OUTPUT buffer, T = sp*sll. B must be 1
                 when cache_batch_idx is set; the gather fills remote SP shards in place
-            weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale pre-folded)
+            weights: [B, 1, Sq, Hi] bf16 tiled learned per-head gates (scale pre-folded)
             k_local: [B, 1, sll, D] bf16/bfp8_b tiled, interleaved or ND-sharded DRAM -- this chip's SP
                 shard and the all-gather INPUT; sll = T/sp; must match k's dtype
             ag_multi_device_global_semaphore: list of the all-gather's out-ready global semaphores; requires

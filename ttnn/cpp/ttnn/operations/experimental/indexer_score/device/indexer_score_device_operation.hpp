@@ -90,8 +90,8 @@ namespace ttnn::experimental {
 // second axis's seq offset). The two axis roles map internally to (cluster_axis, seq_subshard_axis).
 
 // DeepSeek-V3.2 DSA / GLM-5 (ttnn.experimental.indexer_score_dsa):
-//   score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]
-// q [B,Hi,Sq,D], k [B,1,T,D], weights [B,Hi,Sq,1] -> score [B,1,Sq,T] (all heads relu'd + summed).
+//   score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,0,t,:]) * weights[b,0,s,h]
+// q [B,Hi,Sq,D], k [B,1,T,D], weights [B,1,Sq,Hi] -> score [B,1,Sq,T] (all heads relu'd + summed).
 // cache_batch_idx/kv_len/chunk_start_idx are re-applied each dispatch and hash-excluded (no recompile); see
 // the nanobind docs for their full semantics. OMIT chunk_start_idx on a mesh (deduced as T - sp_ring*Sq).
 ttnn::Tensor indexer_score_dsa(

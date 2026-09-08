@@ -3,8 +3,8 @@
 
 """
 Correctness of the ring-fused indexer_score op (ttnn.experimental.ring_indexer_score_dsa) on Blackhole.
-The legacy suite covers the LoudBox 2x4 -> 1x4 axis ring; full-mesh coverage uses the complete 2x4 as one
-snake and adds exact-physical 2x2 plus opt-in 8x4 Galaxy gates. One op co-schedules the ring_attention
+Coverage includes a LoudBox 2x4 -> 1x4 axis ring, the complete 2x4 mesh, exact-physical 2x2, and opt-in
+8x4 Galaxy gates. One op co-schedules the ring_attention
 all-gather with the score; the reader gates each K band on only the SP shards it touches and dual-sources its
 own slab from k_local. Checked against the same DSA references as the two-op path, including both K layouts,
 indexed caches, straddle, kv_len, program-cache reuse, placement, and host validation.
@@ -22,6 +22,7 @@ import ttnn
 
 from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import (
     assert_indexer_match,
+    to_device,
     glx_config,
     indexer_score_dsa_ref,
     _global_inputs,
@@ -43,6 +44,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.ring_in
     _close_ring4_ccl,
     _persistent_buffer,
     _shard_k,
+    _to_tp_inner_reconstructed,
     RING,
     SP_AXIS,
     CHUNK_GLOBAL,
@@ -81,7 +83,7 @@ def _fused_dev_inputs(submesh, q_g, w_g, k_host, *, k_dtype=ttnn.bfloat16):
     both k_local and k_gathered (the op requires them equal)."""
     shard = ttnn.ShardTensorToMesh(submesh, dim=2)
     q_dev = ttnn.from_torch(q_g, device=submesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
-    w_dev = ttnn.from_torch(w_g, device=submesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
+    w_dev = to_device(w_g, submesh, mesh_mapper=shard)
     k_local = _shard_k(submesh, k_host, dtype=k_dtype)  # [B,1,sll,D] per chip (the all-gather INPUT)
     # Indexed mode gathers one selected input slot into slot 0; batch-1 scratch also covers the ordinary B=1 path.
     k_gathered = _persistent_buffer(submesh, torch.zeros_like(k_host[:1]), dtype=k_dtype)
@@ -133,7 +135,7 @@ def _full_mesh_inputs(mesh, q_g, w_g, k_host, *, k_dtype=ttnn.bfloat16):
     """Canonical flat row-major sequence shards plus a complete-mesh replicated gather scratch."""
     shard = ttnn.ShardTensorToMesh(mesh, dim=2)
     q_dev = ttnn.from_torch(q_g, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
-    w_dev = ttnn.from_torch(w_g, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
+    w_dev = to_device(w_g, mesh, mesh_mapper=shard)
     k_local = ttnn.from_torch(k_host, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=k_dtype, mesh_mapper=shard)
     k_gathered = ttnn.from_torch(
         torch.zeros_like(k_host[:1]),
@@ -692,39 +694,6 @@ LB_SPTP_CHUNK_LOCAL = LB_SPTP_CHUNK // LB_SPTP_SP
 LB_SPTP_K_CHUNK = 320
 
 
-def _to_tp_inner_reconstructed(
-    k_natural,
-    *,
-    sp=LB_SPTP_SP,
-    tp=LB_SPTP_TP,
-    chunk_local=LB_SPTP_CHUNK_LOCAL,
-):
-    """Pack natural K in the physical order produced by a TP-inner then SP-outer gather."""
-    capacity = k_natural.shape[2]
-    assert capacity % (sp * tp) == 0
-    assert chunk_local % tp == 0
-    physical_shard_capacity = capacity // sp
-    tp_stripe_capacity = physical_shard_capacity // tp
-    stripe_chunk = chunk_local // tp
-    assert tp_stripe_capacity % stripe_chunk == 0
-
-    physical_to_logical = []
-    for sp_rank in range(sp):
-        physical_offset = torch.arange(physical_shard_capacity)
-        tp_rank = physical_offset // tp_stripe_capacity
-        within_tp = physical_offset % tp_stripe_capacity
-        slab = within_tp // stripe_chunk
-        within_chunk = within_tp % stripe_chunk
-        logical = (slab * sp + sp_rank) * chunk_local + tp_rank * stripe_chunk + within_chunk
-        physical_to_logical.append(logical)
-    physical_to_logical = torch.cat(physical_to_logical)
-    assert torch.equal(torch.sort(physical_to_logical).values, torch.arange(capacity))
-
-    reconstructed = k_natural.clone()
-    reconstructed[0, 0] = k_natural[0, 0, physical_to_logical]
-    return reconstructed
-
-
 def _sptp_loudbox_inputs(
     mesh,
     k_capacity,
@@ -862,7 +831,7 @@ def _sptp_loudbox_output(out):
 
 @pytest.mark.parametrize("tp_sharded", [False, True], ids=["control", "tp_sharded"])
 def test_indexer_score_sptp_loudbox_tp_sharded_kv_repro(tp_sharded):
-    """Reduced SP2 x TP4 fused score; the TP-enabled variant hung before the mapping fix."""
+    """Score a TP-inner reconstructed K cache on a LoudBox SP2 x TP4 mesh."""
     if ttnn.get_num_devices() != 8:
         pytest.skip("SP2 x TP4 fused indexer reproduction requires an exact eight-device LoudBox")
     assert LB_SPTP_CHUNK_LOCAL == 640
@@ -1198,9 +1167,7 @@ def test_indexer_score_ring8_partial_readiness_reference_cache_hit(mesh_device):
         q_dev = ttnn.from_torch(
             q_g, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard
         )
-        w_dev = ttnn.from_torch(
-            w_g, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard
-        )
+        w_dev = to_device(w_g, mesh_device, mesh_mapper=sp_shard)
         k_local = ttnn.from_torch(
             k_bc,
             device=mesh_device,
