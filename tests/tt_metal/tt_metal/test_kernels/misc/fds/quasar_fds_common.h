@@ -54,6 +54,12 @@ inline void finish(status_ptr status, uint32_t l1_address, uint32_t num_slots, u
 
 inline status_ptr begin_dispatch(uint32_t l1_address, uint32_t num_slots) {
     status_ptr status = begin(l1_address, num_slots);
+    // Interrupts are disabled defensively, for a sharper version of the reason below: a kernel that
+    // died while armed would leave a level standing on this node, and the level is derived rather
+    // than latched, so no later program could quiet it by acknowledging anything. Out of reset
+    // every threshold and every count is zero, which is a firing condition, so this also covers a
+    // node whose enable register was set before its groups were configured.
+    overlay::FdsDispatch::fds_config_interrupt_en(0);
     // Auto dispatch is disabled defensively: a kernel that died between enabling it and its
     // teardown would leave the output multiplexer on the queue path, turning every later direct
     // write on this engine into silence far from the fault. The outbox parks on the output bus,
@@ -70,6 +76,9 @@ inline status_ptr begin_dispatch(uint32_t l1_address, uint32_t num_slots) {
 
 inline status_ptr begin_worker(uint32_t l1_address, uint32_t num_slots) {
     status_ptr status = begin(l1_address, num_slots);
+    // Same defensive interrupt disable as begin_dispatch, for the same reason: this register map
+    // has its own enable register and its own all-zero reset state.
+    overlay::FdsNeo::fds_config_interrupt_en(0);
     // Same defensive disable as begin_dispatch, and the same limit on what it can reset. The
     // outbox park matters more on this map: zero is input register 0, and a stale zero outbox
     // under a mistimed enable would divert a status-clearing write into the queue and emit it as
