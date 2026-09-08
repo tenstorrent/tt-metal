@@ -2,81 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 from pathlib import Path
 from shutil import copyfile
 
 from tracy import *
-from tracy.common import PROFILER_DEVICE_SIDE_LOG
+from tracy.perf_counter_multipass import plan_perf_counter_capture, run_perf_counter_passes
 from tracy.serve_wasm import launch_server_subprocess, point_embed_at_trace
-
-# Bit positions match PROFILE_PERF_COUNTERS_* in tt_metal/tools/profiler/perf_counters.hpp.
-# l1_2 to l1_5 are Blackhole-only (its L1 has more client ports behind the mux).
-PERF_COUNTER_GROUP_BITS = {
-    "fpu": 0,
-    "pack": 1,
-    "unpack": 2,
-    "l1_0": 3,
-    "l1_1": 4,
-    "instrn": 5,
-    "l1_2": 6,
-    "l1_3": 7,
-    "l1_4": 8,
-    "l1_5": 9,
-}
-PERF_COUNTER_L1_GROUPS = {"l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"}
-# Measured on Blackhole BRISC firmware: 3 groups of readout code fit, 4 overflow .text.
-PERF_COUNTER_MAX_GROUPS_PER_PASS = 3
-# PERF_COUNTER_PROFILER_ID in perf_counters.hpp: the timer_id the firmware tags counter rows with.
-PERF_COUNTER_MARKER_ID = "9090"
-
-
-def schedule_perf_counter_passes(requested_groups, max_groups_per_pass=PERF_COUNTER_MAX_GROUPS_PER_PASS):
-    """Split counter groups into passes: at most one L1 bank (shared mux) and max_groups_per_pass groups
-    (BRISC firmware fit) per pass. Returns a list of passes, each an ordered list of group names."""
-    seen = list(dict.fromkeys(g.lower() for g in requested_groups))  # dedup, preserve order
-    l1 = [g for g in seen if g in PERF_COUNTER_L1_GROUPS]
-    non_l1 = [g for g in seen if g not in PERF_COUNTER_L1_GROUPS]
-    total = len(l1) + len(non_l1)
-    if total == 0:
-        return []
-    # Enough passes to give every L1 bank its own pass AND keep each pass within the group cap.
-    num_passes = max(len(l1), math.ceil(total / max_groups_per_pass))
-    passes = [[] for _ in range(num_passes)]
-    for i, g in enumerate(l1):  # one L1 bank per pass
-        passes[i].append(g)
-    for g in non_l1:  # fill remaining slots, least-full pass first
-        target = min((p for p in passes if len(p) < max_groups_per_pass), key=len)
-        target.append(g)
-    return [p for p in passes if p]
-
-
-def arch_l1_groups(is_blackhole, is_quasar=False):
-    """L1 counter groups an architecture has: Blackhole's 2-NOC L1 exposes banks 2-5 as well. Quasar has no
-    tt_perf_cnt bank on its L1 (its l1_client event counter is selected with TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL)."""
-    if is_quasar:
-        return []
-    return ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"] if is_blackhole else ["l1_0", "l1_1"]
-
-
-def perf_counter_groups_to_bitfield(groups):
-    """OR the PROFILE_PERF_COUNTERS_* bits for a list of group names."""
-    bits = 0
-    for g in groups:
-        bits |= 1 << PERF_COUNTER_GROUP_BITS[g.lower()]
-    return bits
-
-
-def merge_perf_counter_device_logs(pass_csvs, out_csv):
-    """Merge per-pass device logs: pass 0 whole, later passes contribute only their perf-counter rows."""
-    merged = list(Path(pass_csvs[0]).read_text().splitlines(keepends=True))
-    for extra in pass_csvs[1:]:
-        for line in Path(extra).read_text().splitlines(keepends=True):
-            # column 4 is timer_id; perf-counter rows carry PERF_COUNTER_MARKER_ID there.
-            fields = line.split(",")
-            if len(fields) > 4 and fields[4].strip() == PERF_COUNTER_MARKER_ID:
-                merged.append(line)
-    Path(out_csv).write_text("".join(merged))
 
 
 def main():
@@ -349,84 +280,9 @@ def main():
     # only honors the TT_METAL_PROFILE_PERF_COUNTERS mask it inherits via env.
     inherited_mask = options.noCapture and "TT_METAL_PROFILE_PERF_COUNTERS" in os.environ
     if options.perf_counter_groups and not inherited_mask:
-        # Detect device arch: Blackhole has L1 banks 2-4 (2-NOC), WH/GS only 0-1.
-        declared_arch = next(
-            (os.environ.get(v) for v in ("TT_METAL_DEVICE_ARCH", "TT_ARCH_NAME", "ARCH_NAME") if os.environ.get(v)),
-            None,
+        options.perf_counter_pass_bitfields = plan_perf_counter_capture(
+            options.perf_counter_groups, options.perf_counter_multipass, can_replay=not options.noCapture
         )
-        if declared_arch is None:
-            try:
-                import ttnn
-
-                device = ttnn.open_device(device_id=0)
-                declared_arch = str(device.arch()).split(".")[-1]
-                ttnn.close_device(device)
-            except Exception:
-                logger.debug("Failed to detect device arch via ttnn")
-        is_blackhole = declared_arch is not None and declared_arch.strip().lower() == "blackhole"
-        is_quasar = declared_arch is not None and declared_arch.strip().lower() == "quasar"
-        if declared_arch is None and any(g.lower() == "all" for g in options.perf_counter_groups):
-            raise ValueError(
-                "Cannot resolve counter group 'all' without the device architecture (detection failed); "
-                "set TT_METAL_DEVICE_ARCH or ARCH_NAME, or list the groups explicitly."
-            )
-
-        # Resolve requested group names; "all" expands to the arch's full set.
-        arch_l1 = arch_l1_groups(is_blackhole, is_quasar)
-        resolved = []
-        for group in options.perf_counter_groups:
-            g = group.lower()
-            if g == "all":
-                resolved = ["fpu", "pack", "unpack", "instrn"] + arch_l1
-                break
-            elif g in PERF_COUNTER_GROUP_BITS:
-                resolved.append(g)
-            else:
-                logger.warning(
-                    f"Unknown counter group '{group}'. " f"Valid groups: {', '.join(PERF_COUNTER_GROUP_BITS)}, all"
-                )
-        resolved = list(dict.fromkeys(resolved))
-
-        # Reject L1 groups on Quasar (no L1 tt_perf_cnt bank there) and BH-only groups elsewhere.
-        if is_quasar and (set(resolved) & PERF_COUNTER_L1_GROUPS):
-            raise ValueError(
-                "Quasar has no L1 performance counter bank; drop the l1_* groups and use "
-                "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL for the l1_client event counter."
-            )
-        bh_only = sorted(set(resolved) & {"l1_2", "l1_3", "l1_4", "l1_5"})
-        if bh_only and not is_blackhole:
-            raise ValueError(
-                f"Performance counter groups {', '.join(bh_only)} are supported only on Blackhole, "
-                f"but device arch is {declared_arch or 'undeclared'}."
-            )
-
-        # Schedule into passes: L1 banks share one mux (<=1 L1/pass), BRISC firmware fits a limited
-        # number of groups/pass. A single pass sets the mask directly; multiple passes need opt-in.
-        passes = schedule_perf_counter_passes(resolved)
-        if len(passes) <= 1:
-            bitfield = perf_counter_groups_to_bitfield(resolved)
-            if bitfield > 0:
-                os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
-                logger.info(f"Setting performance counter groups: {resolved} (bitfield: {bitfield})")
-        else:
-            plan = "\n".join(
-                f"  pass {i + 1}: {', '.join(p)}  (bitfield {perf_counter_groups_to_bitfield(p)})"
-                for i, p in enumerate(passes)
-            )
-            if options.noCapture:
-                raise ValueError(
-                    f"--no-capture-tool cannot replay the workload; these groups need {len(passes)} passes:\n{plan}"
-                )
-            if not options.perf_counter_multipass:
-                raise ValueError(
-                    f"Requested counter groups {resolved} need {len(passes)} capture passes "
-                    f"(L1 banks share one mux; BRISC firmware fits <= {PERF_COUNTER_MAX_GROUPS_PER_PASS} "
-                    f"groups/pass):\n{plan}\n"
-                    "Re-run with --perf-counter-multipass to replay the workload once per pass and merge "
-                    "the results, or request fewer groups."
-                )
-            options.perf_counter_pass_bitfields = [perf_counter_groups_to_bitfield(p) for p in passes]
-            logger.info(f"Multi-pass perf-counter capture ({len(passes)} passes):\n{plan}")
 
     if not (
         options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores or options.perf_counter_groups
@@ -547,31 +403,8 @@ def main():
                     sys.exit(4)
 
             if pass_bitfields and len(pass_bitfields) > 1:
-                device_log = generate_logs_folder(outputFolder) / PROFILER_DEVICE_SIDE_LOG
-                pass_dir = generate_logs_folder(outputFolder) / "perf_counter_passes"
-                pass_dir.mkdir(parents=True, exist_ok=True)
-                pass_logs = []
-                for i, bitfield in enumerate(pass_bitfields):
-                    logger.info(f"Perf-counter pass {i + 1}/{len(pass_bitfields)} (bitfield {bitfield})")
-                    if device_log.is_file():
-                        device_log.unlink()  # fresh per pass so each snapshot holds only that pass
-                    pass_env = dict(envVars)
-                    pass_env["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
-                    run_workload(pass_env)
-                    if device_log.is_file():
-                        snap = pass_dir / f"pass_{i}.csv"
-                        copyfile(device_log, snap)
-                        pass_logs.append(snap)
-                    else:
-                        logger.error(f"Device log missing after perf-counter pass {i + 1}: {device_log}")
-                if len(pass_logs) != len(pass_bitfields):
-                    logger.error(
-                        f"Only {len(pass_logs)}/{len(pass_bitfields)} perf-counter passes produced a device log; "
-                        "not merging a partial capture"
-                    )
+                if not run_perf_counter_passes(run_workload, envVars, pass_bitfields, outputFolder):
                     sys.exit(4)
-                merge_perf_counter_device_logs(pass_logs, device_log)
-                logger.info(f"Merged {len(pass_logs)} perf-counter pass logs into {device_log}")
             else:
                 run_workload(envVars)
 
