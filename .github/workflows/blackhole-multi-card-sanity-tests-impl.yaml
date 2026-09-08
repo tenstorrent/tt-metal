@@ -61,6 +61,10 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          # Same commit as the tests, the binaries and the image: an unpinned
+          # matrix load can select tests from one revision and run them against
+          # another on a targeted run.
+          ref: ${{ inputs.ref || github.sha }}
           sparse-checkout: |
             .github
             tests/pipeline_reorg

@@ -267,6 +267,10 @@ jobs:
     name: "Resolve the ref to a commit"
     runs-on: ubuntu-slim
     timeout-minutes: 5
+    # Only a read-only commits lookup happens here, so drop the workflow-wide
+    # write grants: naming one scope sets every other to none.
+    permissions:
+      contents: read
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
