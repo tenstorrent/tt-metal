@@ -347,11 +347,9 @@ class TPGatedDeltaNet:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
             )
-            if self.conv_hist_packed is None:
-                self.conv_hist_packed = zeros
-            else:
-                ttnn.copy(zeros, self.conv_hist_packed)
-                ttnn.deallocate(zeros)
+            # Decode bucketing re-allocates the GDN state at widths 1,2,...,Bmax, changing self.B; _store keeps the
+            # buffer's stable address while its shape matches, otherwise recreates it.
+            self._store_conv_hist_packed(zeros)
             self._hist_packed_valid = True
         # fp32 recurrent state by default (QWEN35_GDN_STATE_BF16=1 reverts)
         if os.environ.get("QWEN35_GDN_STATE_BF16") != "1":
@@ -1496,12 +1494,19 @@ class TPGatedDeltaNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
         )
-        if self.conv_hist_packed is None:
-            self.conv_hist_packed = packed  # stable address for traced decode
-        else:
+        self._store_conv_hist_packed(packed)
+        self._hist_packed_valid = True
+
+    def _store_conv_hist_packed(self, packed):
+        """Copy `packed` into conv_hist_packed in place (keeping the stable trace address) when the shape matches,
+        else replace the buffer. Decode bucketing re-allocates the state at widths 1..Bmax, changing the shape."""
+        if self.conv_hist_packed is not None and tuple(self.conv_hist_packed.shape) == tuple(packed.shape):
             ttnn.copy(packed, self.conv_hist_packed)
             ttnn.deallocate(packed)
-        self._hist_packed_valid = True
+        else:
+            if self.conv_hist_packed is not None:
+                ttnn.deallocate(self.conv_hist_packed)
+            self.conv_hist_packed = packed
 
     def _norm_weight_1d(self):
         """tw["norm_w"] as the 1-D [Dv] bf16 tensor the fused op wants (built once)."""
