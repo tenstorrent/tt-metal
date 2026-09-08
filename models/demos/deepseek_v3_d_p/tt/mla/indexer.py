@@ -494,6 +494,7 @@ class TtIndexer:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
+            compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
         )
 
     def _tp_all_gather(self, t, dim):

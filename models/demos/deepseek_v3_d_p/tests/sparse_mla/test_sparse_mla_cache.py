@@ -233,6 +233,34 @@ def test_glm52_persistent_indexer_indices_are_replaced_without_deallocation(monk
     assert latest_full is full_outputs[6]
 
 
+def test_indexer_gate_reduce_scatter_uses_fp32_accumulation(monkeypatch):
+    """The sequence reduce-scatter must preserve the previous gate reduction's FP32 accumulation."""
+    compute_config = object()
+    reduced = object()
+    call = {}
+
+    def fake_reduce_scatter(tensor, **kwargs):
+        call.update(kwargs)
+        return reduced
+
+    tt_ccl = SimpleNamespace(
+        get_and_cycle_rs_semaphore_handles=lambda **kwargs: "rs_semaphores",
+        get_and_cycle_barrier_semaphore_handle=lambda **kwargs: "barrier_semaphore",
+    )
+    indexer = SimpleNamespace(
+        tp_factor=4,
+        tp_axis=1,
+        tt_ccl=tt_ccl,
+        ccl_num_links=2,
+        tp_ccl_topology="topology",
+        hifi4_fp32_compute_kernel_config=compute_config,
+    )
+    monkeypatch.setattr(ttnn.experimental, "reduce_scatter_minimal_async", fake_reduce_scatter)
+
+    assert TtIndexer._tp_reduce_scatter_sequence(indexer, object()) is reduced
+    assert call["compute_kernel_config"] is compute_config
+
+
 def test_matches_config_rejects_dense():
     """A dense DeepSeek-V3 / R1-style config (no index_* fields) must not look sparse."""
     dense = SimpleNamespace(q_lora_rank=1536, hidden_size=7168)
