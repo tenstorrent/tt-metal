@@ -895,17 +895,18 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                       : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
 
     // Floating DIV_FLOOR: fuse quotient + floor into one SFPU op (skip FLOOR postprocess).
-    // Scalar RHS + FLOAT32 also hoists one reciprocal per tile batch (needs fp32 DEST so the
-    // stored recip is not truncated). Other float dtypes use the fused tile op without the hoist.
+    // Scalar RHS hoists one reciprocal per tile batch into fp32 DEST (do not RNE 1/s).
     // INT32 keeps the dedicated div_int32_floor path from OpConfig.
+    TT_FATAL(
+        !(op_type == BinaryOpType::DIV_FLOOR && tt::tt_metal::is_floating_point(a_dtype) &&
+          tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR),
+        "ttnn.floor_div is not supported for floating-point dtypes on Quasar: SFPU floor "
+        "(ckernel_sfpu_rounding_ops) is unimplemented. Fused Markstein floor_div is Wormhole/Blackhole only.");
     const bool use_fused_float_floor_div = op_type == BinaryOpType::DIV_FLOOR &&
                                            tt::tt_metal::is_floating_point(a_dtype) &&
-                                           // Quasar has the Compute API symbols but no fused SFPU body
-                                           // (_floor_body_ / rounding_ops are WH/BH). Keep DIV+FLOOR
-                                           // postprocess there; exact-multiple tests skip Quasar.
                                            tt::tt_metal::hal::get_arch() != tt::ARCH::QUASAR;
-    const bool use_scalar_float_floor_div =
-        use_fused_float_floor_div && operation_attributes.scalar.has_value() && a_dtype == DataType::FLOAT32;
+    const bool use_scalar_float_floor_div = use_fused_float_floor_div && operation_attributes.scalar.has_value() &&
+                                            tt::tt_metal::is_floating_point(a_dtype);
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
     if (use_scalar_float_floor_div) {
         compute_kernel_defines["BINARY_SFPU_OP"] = "floor_div_binary_scalar_tile";
@@ -1228,13 +1229,19 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                             // Quant SFPU kernels compute on the fp32 input in DST; keep fp32 dest
                             // accumulation regardless of the (possibly narrow, e.g. uint8) output format.
                             operation_attributes.is_quant_op;
+    // Cached reciprocal for SCALAR_RHS_ONCE must not round-trip through 16-bit DEST.
+    // Do not RNE the reciprocal; keep it fp32 and let the packer narrow the floored output.
+    if (use_scalar_float_floor_div) {
+        fp32_dest_acc_en = true;
+    }
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     uint32_t src0interim_cb_index = tt::CBIndex::c_3;
     uint32_t src1interim_cb_index = tt::CBIndex::c_4;
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
     if (is_sfpu_op) {
         if (op_type != BinaryOpType::POWER) {
@@ -1245,18 +1252,24 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             unpack_to_dest_mode[tt::CBIndex::c_5] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[tt::CBIndex::c_6] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         } else {
-            unpack_to_dest_mode[src0_cb_index] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src1_cb_index] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src0interim_cb_index] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src1interim_cb_index] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[tt::CBIndex::c_5] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[tt::CBIndex::c_6] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src0_cb_index] = (a_dtype == DataType::FLOAT32)
+                                                     ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                     : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src1_cb_index] = (b_dtype == DataType::FLOAT32)
+                                                     ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                     : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src0interim_cb_index] = (a_dtype == DataType::FLOAT32)
+                                                            ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                            : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src1interim_cb_index] = (b_dtype == DataType::FLOAT32)
+                                                            ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                            : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[tt::CBIndex::c_5] = (a_dtype == DataType::FLOAT32)
+                                                        ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                        : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[tt::CBIndex::c_6] = (b_dtype == DataType::FLOAT32)
+                                                        ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                        : tt::tt_metal::UnpackToDestMode::Default;
         }
     }
 

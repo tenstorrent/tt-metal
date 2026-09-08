@@ -217,17 +217,29 @@ inline void calculate_sfpu_binary_div(
 constexpr std::uint32_t kScalarFloorDivScalarDst = 1;
 constexpr std::uint32_t kScalarFloorDivRecipDst = 3;
 
-// Markstein residual, skipped when the quotient or the divisor is non-finite.
-// Finite / ±inf is signed zero; refining that as 0*inf produces NaN.
+// Markstein residual, skipped when the quotient or the divisor is non-finite:
+// finite / ±inf is signed zero and refining that as 0*inf produces NaN. exp==255
+// also matches a NaN divisor, whose result is fixed up by floor_div_preserve_nan.
+// Compare exponents, not values: sfpi lowers `abs(in1) != inf` to a subtraction,
+// and inf - inf is NaN, which compares unequal and re-enables the residual.
 sfpi_inline sfpi::vFloat markstein_div_quotient(sfpi::vFloat in0, sfpi::vFloat in1, sfpi::vFloat r) {
     sfpi::vFloat result = in0 * r;
-    v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
-        v_if(sfpi::exexp(in1, sfpi::ExponentMode::Biased) != 255) {
-            sfpi::vFloat e = in0 - result * in1;
-            result = result + e * r;
-        }
-        v_endif;
+    v_if(
+        sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255 && sfpi::exexp(in1, sfpi::ExponentMode::Biased) != 255) {
+        sfpi::vFloat e = in0 - result * in1;
+        result = result + e * r;
     }
+    v_endif;
+    return result;
+}
+
+sfpi_inline sfpi::vFloat floor_div_preserve_nan(sfpi::vFloat in0, sfpi::vFloat in1, sfpi::vFloat result) {
+    // IEEE NaN: exp==255 and mantissa != 0. sfpi::is_nan can miss bf16-expanded encodings.
+    // Applied last so it overrides the quotient, the div-by-zero inf and floor.
+    constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+    v_if((sfpi::as<sfpi::vUInt>(in0) & 0x7FFFFFFFu) > 0x7F800000u) { result = nan; }
+    v_endif;
+    v_if((sfpi::as<sfpi::vUInt>(in1) & 0x7FFFFFFFu) > 0x7F800000u) { result = nan; }
     v_endif;
     return result;
 }
@@ -261,6 +273,7 @@ inline void calculate_sfpu_binary_floor_div(
         if constexpr (!is_fp32_dest_acc_en) {
             result = float32_to_bf16_rne(result);
         }
+        result = floor_div_preserve_nan(in0, in1, result);
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
     }
@@ -269,6 +282,10 @@ inline void calculate_sfpu_binary_floor_div(
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_store_scalar_recip(
     const std::uint32_t dst_index_in0, const std::uint32_t /*dst_index_in1*/, const std::uint32_t dst_index_out) {
+    static_assert(
+        is_fp32_dest_acc_en,
+        "scalar floor_div reciprocal must live in fp32 DEST; 16-bit DEST truncates 1/s and "
+        "reintroduces exact-multiple floor errors. Do not RNE the reciprocal.");
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
     sfpi::vFloat s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     sfpi::vFloat r = sfpu_reciprocal_iter<2>(s);
@@ -281,6 +298,7 @@ inline void calculate_sfpu_store_scalar_recip(
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_floor_div_scalar(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    static_assert(is_fp32_dest_acc_en, "scalar floor_div requires fp32 DEST so the cached reciprocal is not truncated");
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
     // Reload in1/r each iteration: _floor_body_ claims all four sfpi GP LRegs, so
     // values hoisted above dst_reg++ cannot live across the loop.
@@ -293,6 +311,7 @@ inline void calculate_sfpu_binary_floor_div_scalar(
         if constexpr (!is_fp32_dest_acc_en) {
             result = float32_to_bf16_rne(result);
         }
+        result = floor_div_preserve_nan(in0, in1, result);
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
     }

@@ -420,6 +420,69 @@ def test_binary_floor_div_finite_over_inf(tensor_tensor, device):
 
 
 @pytest.mark.skipif(is_quasar(), reason="fused float floor_div is WH/BH only")
+@pytest.mark.parametrize("tensor_tensor", [False, True])
+@pytest.mark.parametrize(
+    "torch_dtype,ttnn_dtype",
+    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)],
+)
+def test_binary_floor_div_finite_over_nan(torch_dtype, ttnn_dtype, tensor_tensor, device):
+    # Residual skip uses exexp==255, which also matches NaN. torch.floor_divide(x, nan) is NaN.
+    host = torch.tensor([1.0, -2.0, 3.0, -4.0], dtype=torch_dtype).repeat(256).reshape(1, 1, 32, 32)
+    nan = float("nan")
+    input_tensor = ttnn.from_torch(host, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if tensor_tensor:
+        rhs = ttnn.from_torch(torch.full_like(host, nan), dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        output_tensor = ttnn.floor_div(input_tensor, rhs)
+        golden_tensor = torch.floor_divide(host, torch.full_like(host, nan))
+    else:
+        output_tensor = ttnn.floor_div(input_tensor, value=nan)
+        golden_tensor = torch.floor_divide(host, torch.tensor(nan, dtype=torch_dtype))
+    got = ttnn.to_torch(output_tensor).to(torch.float32)
+    golden = golden_tensor.to(torch.float32)
+    if tensor_tensor and ttnn_dtype == ttnn.bfloat16:
+        pytest.xfail("bf16 NaN is flushed to 0 before SFPU, so tensor-tensor hits the div-by-zero inf path")
+    assert torch.isnan(golden).all(), "golden must be all-NaN so this test actually checks NaN propagation"
+    assert torch.isnan(got).all(), f"expected all-NaN, got unique values {got.unique()}"
+
+
+@pytest.mark.skipif(is_quasar(), reason="fused float floor_div is WH/BH only")
+def test_binary_floor_div_scalar_recip_dest_slot(device):
+    # SCALAR_RHS_ONCE caches the reciprocal in DEST tile 3 and reuses it across
+    # LHS tiles in one dest acquire (fp32 dest holds 4 tiles: lhs0, scalar, lhs1, recip).
+    # If the consumer read a different DEST index, exact multiples would not round-trip.
+    divisor = 41
+    values = torch.tensor([k * divisor for k in (1, 2, 3, 4, -1, -2)], dtype=torch.float32)
+    host = values.repeat(342)[:2048].reshape(1, 1, 64, 32)
+    input_tensor = ttnn.from_torch(host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.floor_div(input_tensor, value=divisor)
+    golden_tensor = torch.floor_divide(host, torch.tensor(divisor, dtype=torch.float32))
+    assert torch.equal(ttnn.to_torch(output_tensor), golden_tensor)
+
+
+@pytest.mark.skipif(is_quasar(), reason="fused float floor_div is WH/BH only")
+def test_binary_floor_div_scalar_all_row_groups(device):
+    # Fill every DEST row-group (8 faces × 32) with a distinct exact multiple so a
+    # rematerialized SFPLOAD after dst_reg++ cannot hide behind a uniform tile.
+    divisor = 41
+    ks = torch.arange(1, 1025, dtype=torch.float32)
+    host = (ks * divisor).reshape(1, 1, 32, 32)
+    input_tensor = ttnn.from_torch(host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.floor_div(input_tensor, value=divisor)
+    golden_tensor = torch.floor_divide(host, torch.tensor(divisor, dtype=torch.float32))
+    assert torch.equal(ttnn.to_torch(output_tensor), golden_tensor)
+
+
+@pytest.mark.skipif(is_quasar(), reason="fused float floor_div is WH/BH only")
+def test_binary_floor_div_bf16_scalar_large_quotient(device):
+    # SCALAR_RHS_ONCE forces fp32 DEST; packer must still RNE 259 to bf16 (260), not trunc to 258.
+    host = torch.full((1, 1, 32, 32), 1816, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.floor_div(input_tensor, value=7)
+    golden_tensor = torch.floor_divide(host, torch.tensor(7, dtype=torch.bfloat16))
+    assert torch.equal(ttnn.to_torch(output_tensor), golden_tensor)
+
+
+@pytest.mark.skipif(is_quasar(), reason="fused float floor_div is WH/BH only")
 def test_binary_floor_div_bf16_large_quotient(device):
     # 1816/7 = 259.428...; floor is 259, which is not a bf16 integer (ULP=2 in this range).
     # Truncating the fp32 floor to bf16 would store 258; RNE matches torch (260).

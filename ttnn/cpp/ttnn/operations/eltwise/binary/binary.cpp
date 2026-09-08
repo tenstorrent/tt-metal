@@ -17,6 +17,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include <tt-metalium/hal.hpp>
 
 // Implementation macros for binary operations (must match declarations in binary.hpp)
@@ -1226,6 +1227,9 @@ Tensor floor_div(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    TT_FATAL(
+        !(tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR && tt::tt_metal::is_floating_point(lhs.dtype())),
+        "ttnn.floor_div is not supported for floating-point dtypes on Quasar: SFPU floor is unimplemented.");
     return ttnn::detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -1246,7 +1250,19 @@ Tensor floor_div(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    TT_FATAL(
+        !(tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR && tt::tt_metal::is_floating_point(lhs.dtype())),
+        "ttnn.floor_div is not supported for floating-point dtypes on Quasar: SFPU floor is unimplemented.");
     const float rhs_f = std::visit([](auto value) -> float { return static_cast<float>(value); }, rhs);
+    if (std::isnan(rhs_f)) {
+        return ttnn::full(
+            lhs.logical_shape(),
+            std::numeric_limits<float>::quiet_NaN(),
+            lhs.dtype(),
+            lhs.layout(),
+            *lhs.device(),
+            memory_config.value_or(lhs.memory_config()));
+    }
     if (rhs_f == 0.0f) {
         auto resolved_sub_core_grids = sub_core_grids;
         if (sub_device_id.has_value()) {
