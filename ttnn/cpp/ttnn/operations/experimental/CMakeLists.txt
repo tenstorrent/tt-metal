@@ -31,6 +31,7 @@ add_subdirectory(quasar)
 add_subdirectory(reduction)
 
 # metalium-developers-sdpa
+add_subdirectory(cache_bundle_allocation)
 add_subdirectory(high_bw_all_gather)
 add_subdirectory(indexer_score)
 add_subdirectory(kda)
@@ -91,6 +92,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::MatmulDecode
         TTNN::Ops::Experimental::Quasar
         TTNN::Ops::Experimental::Reduction
+        TTNN::Ops::Experimental::CacheBundleAllocation
         TTNN::Ops::Experimental::HighBwAllGather
         TTNN::Ops::Experimental::IndexerScore
         TTNN::Ops::Experimental::KDA
@@ -144,6 +146,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MatmulDecode>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Quasar>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reduction>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::CacheBundleAllocation>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::HighBwAllGather>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexerScore>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkLargeIndices>

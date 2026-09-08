@@ -391,6 +391,8 @@ ttnn/cpp/ttnn/operations/experimental/padded_slice/ @tenstorrent/metalium-develo
 ttnn/cpp/ttnn/operations/experimental/padded_slice/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/paged_cache/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/cpp/ttnn/operations/experimental/paged_cache/**/CMakeLists.txt @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/cache_bundle_allocation/ @tenstorrent/metalium-developers-sdpa
+ttnn/cpp/ttnn/operations/experimental/cache_bundle_allocation/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/quasar/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn/operations/experimental/quasar/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/reduction/ @tenstorrent/metalium-developers-mmfusedreduce
@@ -507,6 +509,7 @@ tests/ttnn/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-develop
 tests/ttnn/unit_tests/operations/experimental/test_attn_res_*.py @tenstorrent/metalium-developers-ds-prefill
 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa
+tests/ttnn/unit_tests/operations/transformers/test_update_cache_bundle_allocation.py @tenstorrent/metalium-developers-sdpa
 
 # OP docs examples
 tests/ttnn/docs_examples/test_backward_examples.py @tenstorrent/metalium-developers-eltwise
