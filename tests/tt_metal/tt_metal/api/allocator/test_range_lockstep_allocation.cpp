@@ -187,6 +187,25 @@ TEST_F(HybridAllocatorTest, ScopesDependenciesOnADirectBufferCreate) {
     EXPECT_TRUE(scoped->is_allocated());
 }
 
+// A sub-region view shares its parent's allocation, so the query must agree on both. view()
+// rebuilds BufferShardingArgs from the specs alone, which drops anything held outside them.
+TEST_F(HybridAllocatorTest, SurvivesASubRegionView) {
+    auto* device = this->devices_[0]->get_devices()[0];
+    constexpr DeviceAddr kPages = 4;
+    auto args = BufferShardingArgs(
+        ShardSpecBuffer(CoreRangeSet(CoreCoord(0, 0)), {1, kPages}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, kPages}),
+        TensorMemoryLayout::WIDTH_SHARDED);
+    range_lockstep::set_range_lockstep_allocation(args, true);
+
+    auto buffer = Buffer::create(device, kPages * HYBRID_TEST_PAGE_SIZE, HYBRID_TEST_PAGE_SIZE, BufferType::L1, args);
+    ASSERT_TRUE(range_lockstep::is_range_lockstep_allocation(*buffer));
+
+    auto view = buffer->view(BufferRegion(HYBRID_TEST_PAGE_SIZE, HYBRID_TEST_PAGE_SIZE));
+    ASSERT_NE(view, buffer) << "expected a real sub-region view, not the parent back";
+    EXPECT_TRUE(range_lockstep::is_range_lockstep_allocation(*view))
+        << "the view reports default lockstep while sharing a range lockstep allocation";
+}
+
 // Only the L1 branch of allocate_buffer reads the flag, so anywhere else it would be a no-op that
 // is_range_lockstep_allocation() still reports as enabled.
 TEST_F(HybridAllocatorTest, RejectsNonL1Buffers) {

@@ -560,15 +560,16 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
 
     TT_FATAL(!per_core_allocation_, "Buffer::view() with sub-regions is not supported for per-core allocated buffers");
 
+    // A view takes the parent's address rather than allocating, so the flag changes nothing about
+    // placement here. It is carried anyway so is_range_lockstep_allocation() agrees on a buffer and
+    // its views; the parent's specs come along unchanged, so the setter's guards still hold.
+    auto sharding_args = BufferShardingArgs(buffer_distribution_spec_, shard_spec_, buffer_layout_);
+    if (range_lockstep_allocation_) {
+        experimental::range_lockstep_allocation::set_range_lockstep_allocation(sharding_args, true);
+    }
+
     auto buffer = Buffer::create(
-        device_,
-        address_,
-        region.size,
-        page_size_,
-        buffer_type_,
-        BufferShardingArgs(buffer_distribution_spec_, shard_spec_, buffer_layout_),
-        bottom_up_,
-        sub_device_id_);
+        device_, address_, region.size, page_size_, buffer_type_, sharding_args, bottom_up_, sub_device_id_);
 
     std::shared_ptr<const BufferPageMapping> new_page_mapping;
     if (is_sharded(buffer_layout_)) {
