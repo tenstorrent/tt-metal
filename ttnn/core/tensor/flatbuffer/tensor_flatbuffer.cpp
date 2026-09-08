@@ -253,14 +253,21 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
 Tensor from_flatbuffer(
     const ttnn::flatbuffer::Tensor* fb_tensor,
     ttsl::Span<std::byte> tensor_data,
-    const tt::tt_metal::MemoryPin& memory_pin) {
+    const tt::tt_metal::MemoryPin& memory_pin,
+    bool host_only) {
     auto spec = ttnn::from_flatbuffer(fb_tensor->tensor_spec());
 
     const auto* mesh_shape = fb_tensor->mesh_shape();
     TT_FATAL(mesh_shape != nullptr, "Mesh shape is required for tensor");
     const tt::tt_metal::distributed::MeshShape ttnn_mesh_shape = from_flatbuffer(mesh_shape);
 
-    auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(ttnn_mesh_shape);
+    auto distributed_buffer =
+        host_only ? tt::tt_metal::DistributedHostBuffer::create(
+                        ttnn_mesh_shape,
+                        ttnn_mesh_shape,
+                        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(ttnn_mesh_shape.dims()),
+                        /*context=*/nullptr)
+                  : tt::tt_metal::DistributedHostBuffer::create(ttnn_mesh_shape);
     for (size_t i = 0; i < fb_tensor->shards()->size(); ++i) {
         const auto* shard = fb_tensor->shards()->Get(i);
 

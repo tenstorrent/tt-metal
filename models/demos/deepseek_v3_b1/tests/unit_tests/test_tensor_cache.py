@@ -1295,16 +1295,71 @@ class TestSramCompressedRoundTrip:
         # ``cache_dir`` is reserved by the fixture but never written: ephemeral path bypasses disk entirely.
         assert not (cache_dir / "objects").exists()
 
-    def test_get_or_create_rejects_sram_target(self, cache_dir, device):
+    def test_get_or_create_rejects_sram_target(self, cache_dir, device, expect_error):
         """Generic ``TensorCache.get_or_create`` must redirect SRAM targets to the dedicated wrapper."""
         cache = TensorCache(cache_dir)
         core_grid = _build_l1_core_grid(device, self.NUM_CORES)
         memory_config = _make_sram_l1_per_core_mem_config(self.K, self.N, core_grid)
         fp = self._build_fingerprint(device, assigner=_make_sram_assigner(), memory_config=memory_config)
-        with pytest.raises(TypeError, match="SramCompressedTensorTarget"):
+        with expect_error(TypeError, "SramCompressedTensorTarget"):
             cache.get_or_create(
                 fp,
                 device,
                 preprocess=lambda t: t,
                 raw_tensors={},
             )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "mapper,shape",
+    [
+        (ReplicateMeshMapper(), (32, 256)),
+        (ShardMeshMapper(dim=0), (256, 256)),
+        (Shard2dMeshMapper(dims=(0, 1)), (128, 512)),
+    ],
+)
+def test_host_only_tensor_cache(tmp_path, dtype, mapper, shape):
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    memory = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    target = TensorTarget(
+        name="weight",
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory,
+        tile_shape=(32, 32),
+        mesh_mapper_config=mapper,
+    )
+    fingerprint = _make_fingerprint(target=target)
+    cache = TensorCache(tmp_path)
+    value = (torch.arange(shape[0] * shape[1]).reshape(shape) % 277 - 138).to(torch.bfloat16) / 64
+    cold = cache.get_or_create(
+        fingerprint,
+        ttnn.MeshShape(4, 2),
+        move_to_device=False,
+        raw_tensors=lambda: {"weight": value},
+        preprocess=lambda tensors: tensors,
+    )
+
+    def unexpected_callback(*args):
+        raise AssertionError("warm host cache must not load or transform weights")
+
+    warm = cache.get_or_create(
+        fingerprint,
+        ttnn.MeshShape(4, 2),
+        move_to_device=False,
+        raw_tensors=unexpected_callback,
+        preprocess=unexpected_callback,
+    )
+    cold_shards = ttnn.get_device_tensors(cold)
+    warm_shards = ttnn.get_device_tensors(warm)
+    assert len(cold_shards) == len(warm_shards) == 8
+    for expected, actual in zip(cold_shards, warm_shards):
+        assert tuple(actual.shape) == tuple(expected.shape) == (32, 256)
+        assert actual.dtype == expected.dtype == dtype
+        assert actual.layout == expected.layout == ttnn.TILE_LAYOUT
+        assert torch.equal(ttnn.to_torch(actual), ttnn.to_torch(expected))

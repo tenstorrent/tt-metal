@@ -108,7 +108,8 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor, 
     dump_tensor_flatbuffer_impl(file_name, tensor, mode);
 }
 
-Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device) {
+Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device, bool host_only) {
+    TT_FATAL(!host_only || device == nullptr, "Host-only tensor loading cannot target a device");
     int fd = open(file_name.c_str(), O_RDONLY | O_CLOEXEC);
     TT_FATAL(fd != -1, "Cannot open \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));
     auto cleanup = ttsl::make_cleanup([fd]() { close(fd); });
@@ -153,7 +154,8 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDev
         (reinterpret_cast<uintptr_t>(data_region) & (kFlatbufferAlignment - 1)) == 0,
         "Tensor data pointer must be 8-byte aligned!");
 
-    Tensor tensor = ttnn::from_flatbuffer(fb_tensor, ttsl::Span<std::byte>(data_region, data_size), memory_pin);
+    Tensor tensor =
+        ttnn::from_flatbuffer(fb_tensor, ttsl::Span<std::byte>(data_region, data_size), memory_pin, host_only);
     if (device != nullptr) {
         tensor = tensor.to_device(device, tensor.tensor_spec().memory_config());
     }

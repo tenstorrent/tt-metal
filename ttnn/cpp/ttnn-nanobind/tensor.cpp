@@ -672,9 +672,10 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             )doc")
         .def(
             "load_tensor_flatbuffer",
-            nb::overload_cast<const std::string&, MeshDevice*>(&load_tensor_flatbuffer),
+            nb::overload_cast<const std::string&, MeshDevice*, bool>(&load_tensor_flatbuffer),
             nb::arg("file_name"),
             nb::arg("device") = nullptr,
+            nb::arg("host_only") = false,
             R"doc(
                 Load tensor to file using FlatBuffer format with inline file storage.
             )doc");

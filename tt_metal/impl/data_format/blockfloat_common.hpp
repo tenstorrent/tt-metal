@@ -12,6 +12,9 @@
 #include <optional>
 #include <vector>
 
+// BFP exponent sections use this alignment on Wormhole, Blackhole, and Quasar.
+constexpr uint32_t BFP_EXPONENT_ALIGNMENT = 16;
+
 constexpr int log2(int n) { return (n <= 1) ? 0 : std::bit_width(static_cast<unsigned>(n)) - 1; }
 
 namespace tt {

@@ -2,14 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "blockfloat_common.hpp"
 #include <tt-metalium/tile.hpp>
 #include <algorithm>
 #include <stdexcept>
 #include <iostream>
 
 #include <tt_stl/assert.hpp>
-#include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
 #include "math.hpp"
 #include "tt_backend_api_types.hpp"
 #include <tt_stl/reflection.hpp>
@@ -68,7 +67,7 @@ Tile::Tile(std::array<uint32_t, 2> tile_shape, bool transpose_tile) : tile_shape
 }
 
 uint32_t Tile::get_tile_size(const DataFormat& format) const {
-    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    constexpr uint32_t l1_alignment = BFP_EXPONENT_ALIGNMENT;
     uint32_t aligned_exp_size = tt::round_up(face_shape[0] * num_faces, l1_alignment);
     switch (format) {
         case DataFormat::Bfp2:

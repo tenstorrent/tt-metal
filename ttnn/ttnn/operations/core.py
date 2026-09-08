@@ -570,9 +570,12 @@ ttnn.attach_golden_function(ttnn.reallocate, golden_function=_golden_function)
 
 
 @ttnn.register_python_operation(name="ttnn.load_tensor")
-def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice = None) -> ttnn.Tensor:
+def load_tensor(
+    file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice = None, host_only: bool = False
+) -> ttnn.Tensor:
     """
-    Load tensor from a file.
+    Load tensor from a file. ``host_only=True`` avoids hardware context initialization
+    for single-host preprocessing and requires ``device=None``.
 
     Args:
         file_name (str | pathlib.Path): the file name.
@@ -590,7 +593,7 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice 
     if not file_name.is_file():
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file is not a file.")
 
-    return ttnn._ttnn.tensor.load_tensor_flatbuffer(str(file_name), device)
+    return ttnn._ttnn.tensor.load_tensor_flatbuffer(str(file_name), device, host_only)
 
 
 @ttnn.register_python_operation(name="ttnn.dump_tensor")

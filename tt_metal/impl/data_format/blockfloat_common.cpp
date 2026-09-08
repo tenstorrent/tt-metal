@@ -10,8 +10,6 @@
 #include <tt_stl/assert.hpp>
 #include "blockfloat_common.hpp"
 #include "constants.hpp"
-#include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
 #include "math.hpp"
 #include "tile.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
@@ -360,7 +358,7 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     auto subtile_rows = face_H;
     auto subtile_cols = face_W;
 
-    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    constexpr uint32_t l1_alignment = BFP_EXPONENT_ALIGNMENT;
     bool exponent_padding = (subtile_rows * subtiles_in_tile_col * subtiles_in_tile_row) < l1_alignment;
 
     int num_float_in_tile = tile_HW;

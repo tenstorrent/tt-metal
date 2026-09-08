@@ -817,6 +817,14 @@ void py_module(nb::module_& mod) {
            TensorToMesh: A mapper providing the desired sharding.
    )doc");
     mod.def(
+        "create_mesh_mapper",
+        [](const MeshShape& mesh_shape, const MeshMapperConfig& config) -> nbh::unique_ptr<TensorToMesh> {
+            return nbh::steal_rewrap_unique<TensorToMesh>(create_mesh_mapper(mesh_shape, config));
+        },
+        nb::arg("mesh_shape"),
+        nb::arg("config"),
+        "Create a single-host tensor mapper without opening a device.");
+    mod.def(
         "compute_distribution_to_mesh_mapping",
         [](const tt::tt_metal::distributed::MeshShape& distribution_shape,
            const tt::tt_metal::distributed::MeshShape& mesh_shape)

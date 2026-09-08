@@ -104,6 +104,21 @@ class TensorCacheProtocol(Protocol):
 def build_mesh_mapper_for_target(target: TensorTarget, device):
     """Reconstruct the runtime mesh_mapper from the declarative config + device."""
     mapper_config = target.mesh_mapper_config
+    if isinstance(device, ttnn.MeshShape):
+        if isinstance(mapper_config, ReplicateMeshMapper):
+            config = ttnn.MeshMapperConfig([ttnn.PlacementReplicate()], ttnn.MeshShape([device.mesh_size()]))
+        elif isinstance(mapper_config, ShardMeshMapper):
+            config = ttnn.MeshMapperConfig(
+                [ttnn.PlacementShard(mapper_config.dim)], ttnn.MeshShape([device.mesh_size()])
+            )
+        elif isinstance(mapper_config, Shard2dMeshMapper):
+            config = ttnn.MeshMapperConfig(
+                [ttnn.PlacementReplicate() if dim is None else ttnn.PlacementShard(dim) for dim in mapper_config.dims],
+                device,
+            )
+        else:
+            raise TypeError(f"Unknown mesh mapper config type: {type(mapper_config)}")
+        return ttnn.create_mesh_mapper(device, config)
     if isinstance(mapper_config, ReplicateMeshMapper):
         return ttnn.ReplicateTensorToMesh(device)
     if isinstance(mapper_config, ShardMeshMapper):
@@ -229,7 +244,10 @@ class TensorCache:
         return dest
 
     def _load(self, paths: ContentAddressedStoragePaths, device, *, move_to_device: bool = True) -> ttnn.Tensor:
-        return ttnn.load_tensor(paths.data_path, device=device if move_to_device else None)
+        host_only = isinstance(device, ttnn.MeshShape)
+        if host_only and move_to_device:
+            raise ValueError("MeshShape cache preparation requires move_to_device=False")
+        return ttnn.load_tensor(paths.data_path, device=device if move_to_device else None, host_only=host_only)
 
     def _store_fused(
         self,
