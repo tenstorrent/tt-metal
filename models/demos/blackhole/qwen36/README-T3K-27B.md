@@ -361,6 +361,11 @@ step. **Decode** is per-user throughput in the steady state. Both are the values
 All 8 traced ISLs, batch 1, greedy. **8/8 passed in 28m17s** (tt-metal `4724ad6dc08`,
 `HF_MODEL=Qwen/Qwen3.6-27B`, `MESH_DEVICE=T3K`).
 
+> **This table is the plain single-token decode baseline — run it with `QWEN36_SPEC=0`.**
+> Single-user TP decode now runs [MTP speculative decode](#mtp-speculative-decode) by DEFAULT,
+> which more than doubles the ISL-128 decode rate. Only ISL 128 has been measured under spec
+> decode; the other seven rows are baseline-only and would each need their own A/B.
+
 | ISL | Gen tokens | TTFT | Decode | ms/tok |
 | --- | --- | --- | --- | --- |
 | 128 | 50 | 0.73 s | 17.87 tok/s | 56.0 |
@@ -383,6 +388,58 @@ fixed per-call overhead (trace replay, embedding gather, LM-head readback), not 
 layers take `max(chunk, 4096)`. 4k is therefore the first ISL that fills a whole attention chunk, and
 it is the shape the matmul program configs were swept at. Below it you pay the fixed-overhead floor;
 above 32k the quadratic term takes over.
+
+### MTP speculative decode
+
+Every Qwen3.6 checkpoint ships a single-layer MTP (multi-token prediction) head (`mtp.*`) that
+reuses the main embedding and LM head. It is the speculative-decode drafter, and it is built
+automatically whenever those weights are present — single-user TP decode uses it by default.
+
+The head drafts K tokens autoregressively; the base model verifies all of them in ONE traced
+K+1-token chunk forward; accepted tokens are committed by pointing the Gated DeltaNet recurrent
+state at the accepted slot (no rollback, no re-processing). Rejected positions in the paged KV are
+corrected implicitly — they are never attended and get overwritten on the next iteration.
+
+Greedy, batch 1. `QWEN36_SPEC=0` opts out; it also falls back to plain decode automatically if
+sampling is not pure greedy (temperature, repetition penalty or no-repeat-ngram set), since
+losslessness is only defined against a greedy target.
+
+MEASURED at ISL 128 on T3K/27B, both legs on one build, back to back:
+
+| | plain (`QWEN36_SPEC=0`) | MTP spec decode | |
+| --- | --- | --- | --- |
+| decode | 16.93 tok/s | **38.82 tok/s** | **2.29x** |
+| TTFT | 0.63 s | 5.56 s | drafter-KV warm + trace captures |
+
+K=6, acceptance 4.00/6 -> **5.00 committed tokens/iter**. Per iteration (ms):
+
+| draft | verify | reseed | readback | commit | accept | other | total |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 34.06 | 82.54 | 5.94 | 2.02 | 1.79 | 0.03 | 1.05 | **127.45** |
+
+Verify is 65% of the iteration and is the phase that grows with context, so longer prompts need
+their own measurement. The TTFT cost is real and worth weighing before enabling spec decode for
+short requests.
+
+**Losslessness is the property that makes the speedup meaningful.** Committed tokens come from the
+target's own verify rows, so spec decode must reproduce the plain greedy trajectory token for
+token rather than merely a plausible one — a high acceptance rate alone would not prove that.
+`tests/test_spec_lossless.py` is that gate; `tests/test_spec_determinism.py` pins run-to-run
+identity.
+
+Two Wormhole-specific limits, both documented in `docs/mtp-v2-port.md`:
+
+* **K is 6 on Wormhole, 11 on Blackhole.** The fused multi-pos verify SDPA
+  (`sdpa_decode(spec_multi_pos_tiles=...)`, which reads KV once per group of 4 candidates instead
+  of once per candidate) is gated to Blackhole: `TPAttention._SPEC_SDPA_L1_FIT`'s cores-per-head
+  split was fitted to Blackhole's 110-core grid. Wormhole falls through to the legacy per-candidate
+  verify, so the draft chain's tail stops paying for itself sooner. Acceptance is high at every K
+  (79% at depth 4), so this is a cost problem, not a drafter-quality one. Re-tuning that table for
+  an 8x8 grid is the largest remaining lever, and the one that matters most at long ISL.
+* `test_sdpa_decode_spec_multi_pos.py` fails its 13 `spec_multi_pos_tiles=11` cases on Wormhole:
+  the circular buffers need 1,448,192 B per core against 1,393,440 B of available L1. The op
+  raises `TT_FATAL` rather than returning wrong data, and the arch gate above means the model
+  never requests that configuration on Wormhole.
 
 ### Against the 9B
 
@@ -411,3 +468,26 @@ pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced" --timeo
 
 Each case logs a `ttft=... decode=... tok/s` line and appends to `generated/benchmark_data/`. Drop
 `-k "traced"` to include the batched (B=8 / B=32) and non-traced `paged_*` cases.
+
+Single-user TP decode runs MTP speculative decode by default, so the ladder above measures spec
+decode unless you set `QWEN36_SPEC=0`. To reproduce the A/B — baseline first, so both legs land on
+one build:
+
+```bash
+# baseline
+QWEN36_SPEC=0 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128 and not 128k" --timeout=0
+# spec decode, with the per-phase timing breakdown
+QWEN36_SPEC_TIMING=1 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128 and not 128k" --timeout=0
+```
+
+`traced_128` is a substring of `traced_128k`, hence the `and not 128k`. `QWEN36_SPEC_DRAFT_LEN`
+overrides K if you want to re-walk the K sweep.
+
+The gates, all on T3K unless noted:
+
+```bash
+pytest models/demos/blackhole/qwen36/tests/test_spec_lossless.py -v -s     # spec == plain greedy
+pytest models/demos/blackhole/qwen36/tests/test_spec_determinism.py -v -s  # run-to-run identity
+pytest models/demos/blackhole/qwen36/tests/test_mtp_tp.py -v -s            # drafter PCC vs torch ref
+MESH_DEVICE=N150 pytest models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py -v -s
+```
