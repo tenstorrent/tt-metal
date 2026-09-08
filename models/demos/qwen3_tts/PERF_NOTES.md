@@ -1372,6 +1372,78 @@ still need the plain interleaved norm.
 ---
 
 
+## 3.aa `all_gather_async` with caller-owned semaphores — `QWEN3_TTS_CCL_ASYNC` (default ON, `=0` to revert)
+
+This is 6.2's first item, and it works. `ttnn.all_gather` recreates its semaphores and
+worker setup on every call; `ttnn.experimental.all_gather_async` takes caller-owned
+`GlobalSemaphore`s instead. Because it is a **1:1 op swap** it avoids the op-count tax that
+killed 6.1 (below).
+
+**Measured, N300, medians of 3, `QWEN3_TTS_HOST_PROF=1`:**
+
+| | OFF | ON | delta |
+|---|--:|--:|--:|
+| `cp_trace` wall | 25.976 / 25.976 / 25.973 | **25.498 / 25.529 / 25.495** | **-0.478 ms (-1.8 %)** |
+| `talker_trace` (control) | 10.846 | 10.831 | unchanged |
+| `decode_cp` device ops | 3221 | **3221** | **0** |
+| `decode_cp` device kernel | 26.578 ms | 26.406 ms | -0.173 ms |
+| — the CCL rows | 150 ops, 2.832 ms, 18.9 us mean | 150 ops, **2.623 ms**, 17.5 us mean | -0.209 ms |
+| `decode_cp` op-to-op gap | 3.453 ms | 3.280 ms | -0.173 ms |
+
+The win lands on **both** sides — device time *and* gap — which is the signature of removing
+per-call setup rather than moving bytes faster. **Bit-exact**: the demo WAV is md5-identical
+(`97b0f70debafb7ee96e06d50d5699f96`), as it must be, since all-gather is pure data movement.
+
+N300 only in effect: on N150 `tp_size == 1`, so `tp_all_reduce` returns early and there are no
+CCLs to speed up.
+
+### How the semaphores are handled
+
+Two AG sets and two barrier semaphores, created once per device and cycled round-robin --
+the scheme in `models/tt_transformers/tt/ccl.py` (`TT_CCL`). They are **device allocations
+and must exist before `begin_trace_capture`**; the cache fills on the first call, which
+lands in the eager warmup that always precedes capture here. Cycling two-deep is what stops
+two back-to-back gathers in one trace reusing a semaphore that may not have been reset --
+the CP frame issues 140 of them.
+
+### The tuning knobs were swept and ALL are negative
+
+Every remaining 6.2 idea, measured as **medians of 3 captures** of `cp_layer_decode`
+(AG mean us per gather):
+
+| config | captures | median | verdict |
+|---|---|--:|---|
+| **op defaults** | 25.2 / 24.9 / 25.0 | **25.0** | **best** |
+| `num_workers_per_link=2` | 25.9 / 34.8 / 25.8 | 25.9 | no |
+| semaphores in `L1_SMALL` | 26.5 / 26.2 / 25.9 | 26.2 | no |
+| `use_optimal_ccl_for_llama` | 26.2 / 25.1 / 26.5 | 26.2 | no |
+| workers=2 + `L1_SMALL` | 26.1 / 26.3 / 26.4 | 26.3 | no |
+| `chunks_per_sync` 2 / 10 | (single) 27.8 / 27.9 | — | no effect |
+| `num_buffers_per_channel` 2 / 4 | (single) 27.0 / 26.2 | — | no |
+| `sub_core_grids` 2x2 | (single) 29.0 | — | worse |
+| `sub_core_grids` 1x1, 2x1 | **throws** | — | impossible |
+
+So the op's own defaults are already right for a 72 KB gather, and the reference's 10/2/2
+really is Llama-payload tuning. The knobs stay env-overridable
+(`QWEN3_TTS_CCL_CHUNKS_PER_SYNC`, `..._WORKERS_PER_LINK`, `..._BUFFERS_PER_CHANNEL`,
+`QWEN3_TTS_CCL_SUBCORE`, `QWEN3_TTS_CCL_SEM_L1_SMALL`, `QWEN3_TTS_CCL_LLAMA_OPT`) for
+future re-checks only.
+
+**6.2's "pin `sub_core_grids`" cannot be done at all**: below 4 cores the op throws
+`Not enough cores available on the subdevice or device for the requested ... number of
+links 1` (`all_gather_async_default_program_factory.cpp:205`), and 4 cores is slower than
+letting it choose. There is no smaller grid to pin to, so that idea is closed, including as
+a way to damp the variance.
+
+**Methodology warning from this sweep.** A first pass with ONE capture per config ranked
+`num_workers_per_link=2`, `L1_SMALL` and `use_optimal_ccl_for_llama` as ~-9 % wins. All three
+evaporated at n=3 -- the single baseline capture had simply drawn a high 27.6 us. A
+single capture cannot rank configs for this op (see section 4: the swing is ~2x, and one arm
+here threw a 34.8 us outlier, 39 % above its own median). Screening at n=1 to build a
+shortlist saves nothing, because everything on the shortlist has to be re-run anyway.
+
+---
+
 ## 4. Measurement methodology — read before comparing reports
 
 **A per-op ratio identifies a candidate; only a frame measurement prices it.** Two
@@ -1394,6 +1466,18 @@ The shared mistake is treating a *ratio* as a *constraint*. Specifically:
   (60-210 us of gap per op), which is not present in a captured trace.
 
 Use per-op captures to *rank* and to A/B one op against itself. Quote frame numbers.
+
+**In a traced replay every extra op costs ~1 us of dispatch, whatever its device time.**
+This is the third distinct way a per-op capture misled a prediction here, and the only one
+that flipped a **sign**. Porting the CP's 2-chip all-reduce to the Talker (6.1) trades two
+CCL ops for four (`all_gather + slice + slice + add`) and measured **-15 us/layer** in the
+eager `talker_layer_decode_traced` window -- yet **+0.120 ms/frame** in the real trace.
++4 ops x 28 layers = +112 ops at ~1 us each = +0.11 ms, i.e. the entire regression.
+
+An eager single-block capture cannot see this: every op there already sits behind
+150-430 us of host gap, so two extra small ops look free. It is also why this model's
+history is full of `-56 ops` / `-84 transposes` commits -- **op count is a first-class cost
+here.** Any change that trades op count for device time must be priced in a trace.
 
 
 **N300 CCL timings swing ~2x run to run.** The same `ttnn.all_gather` of a 64 KB payload
@@ -1433,6 +1517,40 @@ tt-perf-report --start-signpost start --end-signpost stop "$CSV"
 Use the **full** test name — `-k talker_layer_prefill` matches all three buckets and puts
 three windows in one capture — and one `-k` per Tracy run, since the CSV is picked by
 newest timestamp.
+
+### A fresh report file is not a fresh measurement
+
+`qwen3_tts_block_report.sh` cached each Tracy capture unconditionally — an existing
+`.rpt` with a `100.0 %` line was reused forever — so re-running the script re-assembled
+old captures under a new file mtime. On 2026-09-07 that produced an N300 block report
+dated 15:23 whose every Talker window came from a **2026-09-01** capture: zero bfp8
+matmuls, no decode head split, HiFi4 where the CP now defaults to HiFi3. The driver had
+not used `-A`; the plain path did this.
+
+Two independent ways the same report lied at once, worth knowing as a pattern:
+
+1. **Stale captures** (above) — fixed: a cached capture is reused only when it is newer
+   than every `.py` under `models/demos/qwen3_tts`, and `-f` forces re-capture.
+2. **A harness that does not build the deployed config.** `_make_talker_layer` passed
+   `weight_dtype=ttnn.bfloat16` explicitly, so no Talker window ever saw bfp8 however
+   fresh the capture — while the CP windows *did*, because `code_predictor.py` reads
+   `QWEN3_TTS_BF8_WEIGHTS` internally. And the report's decode window was
+   `test_talker_layer_decode`, the eager fallback with `cur_pos_tensor=None`, which
+   gates off both the head split and `k_keep_decode_layout` — the graph the demo never
+   runs. Fixed: dtype follows the flag, and `test_talker_layer_decode_traced` is in the
+   selector list with the eager one relabelled.
+
+The report header now carries `Commit:`, `Tree:` (dirty or clean), `Config:` (effective
+flag values) and `Capture:` (the span of capture mtimes, with an explicit
+`*** STALE ***` warning when the oldest predates HEAD). **Check those four lines before
+quoting any block report.** Content cross-check that costs nothing: Talker decode
+windows must show `x BFP8` matmuls and `NLPCreateQKVHeadsDecode`, and the deployed
+decode window must carry exactly ONE Transpose.
+
+Sanity anchors for the deployed single Talker layer, 2026-09-07 at HEAD: N300 32 device
+ops / 359 us, N150 28 / 448 us. The 4-op difference is exactly the two TP=2 all-reduces
+(ReduceScatter + AllGather each) that N150 does not pay. N300's 32 ops also match the
+per-layer slice of the 28-layer `decode_talker` window independently.
 
 ### The prefill / decode perf report
 
@@ -1550,6 +1668,7 @@ export TT_VISIBLE_DEVICES=0 \
 | Lowering RoPE math fidelity | 41.4 (LoFi) vs 43.4 (HiFi4) | Same. Not a fidelity problem. |
 | ~~`nlp_create_qkv_heads_decode` instead of the sharded prefill-style split~~ | ~~13.3 us vs 2 us~~ | **Overturned 2026-09-07 — see 3.x.** The 13.3 us does not reproduce: in-model the op is 2.2 us against 1.9 us for the sharded split. The likely cause of the old number is the input sharding — the op validates `num_kv_heads % input_cores == 0`, so probing it on an 8-core-wide xqkv (rather than the `num_kv_heads`-core spec the model builds) fails or falls back. It is now a flag, `QWEN3_TTS_DECODE_HEAD_SPLIT`. |
 | The same decode-layout head split ported to the **CodePredictor** | worked: -0.58 ms (-2.2 %) N300, -0.51 ms (-1.9 %) N150, bit-exact | **Written, measured, reverted 2026-09-07 — see 3.y.** Not a negative result: it is a real, reproducible, bit-exact win that was judged too small for the two qkv column orders (+20 MiB/chip), the permanent N150/N300 divergence and the three coupled behaviours it added to `_layer_forward`. Section 3.y holds the numbers, the four TTNN gotchas it uncovered, and the one TTNN fix that would make it worth redoing. |
+| Porting the CP's 2-chip all-reduce to the **Talker** (old 6.1) | per-layer -15 us; frame **+0.120 ms** | **Rejected — it is slower.** The eager per-layer window inverted the sign: +4 ops/layer x 28 = +112 ops of trace dispatch outweighs a CCL saving that shrinks to ~14 us at the Talker's 2048-wide payload. See 6.1 and section 4. |
 | `bfloat8_b` for the N300 CP **QKV** weight (`wqkv_kvgi`) | 24.5 -> **24.6 us** on the op; frame 25.94 -> 25.92 ms (inside the 0.04 ms spread) | **Zero gain — do not retry.** It looks like an oversight (it is the only CP matmul weight not honouring `QWEN3_TTS_BF8_WEIGHTS`, and N150's own `wqkv_ds` is already bfp8_b) and it looks bandwidth-bound (59.2 % of DRAM peak against 6.2 % FLOPs). Both readings are wrong. Halving the weight bytes moved the DRAM **figure** 59.4 % -> 29.7 % and the **time** not at all: DRAM % is achieved bandwidth over peak, so it halves whenever bytes halve at constant time — it is a utilisation reading, never a ceiling. This matmul is interleaved on **64** cores at M=1 tile and is latency/overhead-bound. The four CP matmuls that *did* gain from `198fc86bba8` are all DRAM-**sharded** on 12 cores (`DRAM:width+ds`) at 28-40 % DRAM — a different regime. The bf16 there is deliberate. |
 | Running the CodePredictor at TP=1 (replicated) on N300 to delete all CCLs | est. matmul growth +103 us vs CCL saving -107 us | Net ~zero for a large, risky change. |
 | DRAM-sharding the CP QKV matmul | ~2 us | N is padded 2048 -> 2304, so it needs an S2I + slice that eats the gain. |
@@ -1561,7 +1680,23 @@ export TT_VISIBLE_DEVICES=0 \
 
 ## 6. What to do next — ranked
 
-### 6.1 Port the 2-chip all-reduce to the Talker  *(largest remaining N300 win)*
+### 6.1 Port the 2-chip all-reduce to the Talker — **MEASURED AND REJECTED (2026-09-08)**
+
+> **Do not attempt this.** Measured both ways in one session, medians of 3:
+> per-layer `talker_layer_decode_traced` **0.377 -> 0.360 ms (-15 us/layer)**, but frame-level
+> `talker_trace` **10.829 -> 10.949 ms (+0.120 ms/frame)** — it makes the Talker *slower*.
+> `cp_trace` was unchanged (~25.95) in both arms, confirming the flag was Talker-only.
+>
+> The 2-chip form trades 2 CCL ops for 4, so +4 ops x 28 layers = **+112 ops** in the traced
+> replay at ~1 us of dispatch each = +0.11 ms — the whole regression (see section 4).
+> It wins on the CP only because the CP gathers 1152-wide partials, where one `all_gather`
+> is 22 us against `RS+AG`'s ~50 us; the Talker gathers 2048-wide, its single gather costs
+> **36 us**, the CCL saving shrinks to ~14 us, and the op-count tax tips it negative.
+>
+> The real CCL win is **3.aa** (`all_gather_async`), which is a 1:1 op swap and therefore
+> pays no op-count tax: **-0.478 ms/frame on `cp_trace`, bit-exact.**
+> The stale analysis below is kept only for the payload reasoning.
+
 
 The Talker still calls `tp_all_reduce` (i.e. `ttnn.all_reduce`). In its decode layer that is
 **~197 us — about 30 % of the window**, and it is the reason Talker decode numbers are so
@@ -1588,7 +1723,14 @@ switching them wholesale.
 > `all_gather` swung to 66-70 us; that swing is real (see 4) but it is not the steady state.
 > Measure both forms in the same session before spending the change.
 
-### 6.2 Reduce the remaining CCL cost
+### 6.2 Reduce the remaining CCL cost — **DONE, see 3.aa** (one win, two dead ends)
+
+> `all_gather_async` with pre-created semaphores: **shipped, -0.478 ms/frame, bit-exact**
+> (3.aa). `use_l1_small_for_semaphores`: measured, no gain. Pinning `sub_core_grids`:
+> impossible — the op throws below 4 cores and is slower at 4. The variance question is
+> still open, but not addressable through the grid.
+> What is left in this neighbourhood is a kernel-level change, not a call-site one.
+
 
 Even in the 1-CCL form the all-gather is 34-70 us for 64 KB, on **1 core**. This is pure
 fabric latency, not bandwidth. Worth trying:
