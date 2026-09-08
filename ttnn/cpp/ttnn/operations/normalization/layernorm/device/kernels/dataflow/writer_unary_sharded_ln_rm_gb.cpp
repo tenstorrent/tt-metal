@@ -63,10 +63,11 @@ void kernel_main() {
 
 #ifndef USE_WELFORD
     {
-        const uint32_t scalar_w_bits = get_arg(args::scalar_w);
-        float scalar_w_f = __builtin_bit_cast(float, scalar_w_bits);
-        dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-            scalar_w_f);
+        using LocalArgs = ttnn::kernel_lib::ReduceAuxiliaryArgs<0>;
+        using ScaledArgs = ttnn::kernel_lib::ReduceAuxiliaryArgs<LocalArgs::next_compile_time_args_offset()>;
+        using IdentityArgs = ttnn::kernel_lib::ReduceAuxiliaryArgs<ScaledArgs::next_compile_time_args_offset()>;
+        using LocalAuxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<LocalArgs, dfb::scaler>;
+        dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<LocalAuxiliary>();
 
         const uint32_t eps = get_arg(args::eps);
         DataflowBuffer dfb_eps_obj(dfb::eps);
@@ -77,11 +78,14 @@ void kernel_main() {
 #endif
 
         if constexpr (is_all_to_all_worker) {
-            const uint32_t scalar_c_bits = get_arg(args::scalar_c);
-            float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
-            dataflow_kernel_lib::
-                prepare_reduce_scaler<dfb::scaler_global, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW>(
-                    scalar_c_f);
+            // Packed BF16 identity marks cores that must not apply the global scale twice.
+            if (get_arg(args::scalar_c) == 0x3f803f80U) {
+                using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<IdentityArgs, dfb::scaler_global>;
+                dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+            } else {
+                using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ScaledArgs, dfb::scaler_global>;
+                dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+            }
         }
     }
 #endif

@@ -13,11 +13,27 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #ifdef DO_COL_MASK
 #include "ttnn/operations/normalization/kernel_util/compute/col_mask.h"
 #endif
 
 // SPLIT REDUCE across Cores
+template <uint32_t Input, uint32_t Auxiliary, uint32_t Output>
+ALWI void reduce_local_shard(uint32_t valid_tiles) {
+    using Full = ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, Input, Auxiliary, Output>;
+    using Tail = ttnn::kernel_lib::BoundReduceCallArgs<
+        ttnn::kernel_lib::ReduceCallArgs<Full::next_compile_time_args_offset()>,
+        Input,
+        Auxiliary,
+        Output>;
+    if (valid_tiles == Full::columns) {
+        compute_kernel_lib::reduce<Full>();
+    } else {
+        compute_kernel_lib::reduce<Tail>();
+    }
+}
+
 void kernel_main() {
     constexpr auto num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
     constexpr auto block_w = get_arg(args::block_w);
@@ -173,30 +189,12 @@ void kernel_main() {
     dfb_x2.push_back(num_tiles_per_block);
     dfb_x2.wait_front(num_tiles_per_block);
     // E[x] over the masked input.
-    compute_kernel_lib::reduce<
-        PoolType::AVG,
-        ReduceDim::REDUCE_ROW,
-        dfb_x2_id,
-        dfb_scaler_id,
-        dfb_ex_partial2_id,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-        compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
-        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+    reduce_local_shard<dfb_x2_id, dfb_scaler_id, dfb_ex_partial2_id>(num_reduce_tiles_per_block_h);
     dfb_x2.pop_front(num_tiles_per_block);
     reconfig_data_format(dfb_in_id, dfb_in_id);
 #else
     // E[x],
-    compute_kernel_lib::reduce<
-        PoolType::AVG,
-        ReduceDim::REDUCE_ROW,
-        dfb_in_id,
-        dfb_scaler_id,
-        dfb_ex_partial2_id,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-        compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
-        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+    reduce_local_shard<dfb_in_id, dfb_scaler_id, dfb_ex_partial2_id>(num_reduce_tiles_per_block_h);
     reconfig_data_format(dfb_in_id, dfb_in_id);
 #endif  // DO_COL_MASK
 #else
@@ -254,15 +252,7 @@ void kernel_main() {
 #endif  // RMSNORM
 
     // RMS E(x2) #Layernorm //E(x) and E(x^2)
-    compute_kernel_lib::reduce<
-        PoolType::AVG,
-        ReduceDim::REDUCE_ROW,
-        dfb_x2_id,
-        dfb_scaler_id,
-        dfb_ex_partial2_id,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
-        compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
-        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+    reduce_local_shard<dfb_x2_id, dfb_scaler_id, dfb_ex_partial2_id>(num_reduce_tiles_per_block_h);
     reconfig_data_format(dfb_x2_id, dfb_scaler_id);
     dfb_x2.pop_front(num_tiles_per_block);
 
@@ -307,7 +297,7 @@ void kernel_main() {
 #endif
     // The single scaler tile is waited once (by the E[x] reduce on the LayerNorm path or the E[x^2]
     // reduce on the RMSNorm path) but never popped; pop it once here so the buffer is left balanced.
-    dfb_scaler.pop_front(1);
+    dfb_scaler.pop_front(get_arg(args::reduce_auxiliary_tiles));
 #ifdef DO_COL_MASK
     // The column mask is waited once near the top of the kernel (on every core) and read by tile index
     // at every masking site; pop its block_w tiles once here so the buffer is left balanced.

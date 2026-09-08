@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
+
 #include <string>
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
@@ -355,6 +357,54 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .writer_noc = writer_noc,
         .compute_hw = to_compute_hardware_config(device->arch(), compute_kernel_config),
     };
+    if (!use_welford) {
+        namespace rh = ttnn::kernel_lib::host;
+        rh::ReduceAuxiliaryPlan local_auxiliary{1, {}};
+        if (!is_post_all_gather) {
+            const TensorLayout layout(
+                fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{});
+            const rh::ReduceHardwareConfig hardware{
+                device->arch(), fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()};
+            const uint32_t last_tiles = tt::div_up(logical_K, tile_width) - (grid.num_blocks - 1) * block_wt;
+            // The existing elementwise column mask also zeros output padding.
+            // Describe full tiles here; the final shard can own fewer tiles.
+            for (uint32_t tiles : {block_wt, last_tiles}) {
+                auto plan = rh::make_reduce_plan(
+                    TensorSpec(Shape{block_ht * 32, tiles * 32}, layout),
+                    TensorSpec(Shape{block_ht * 32, 1}, layout),
+                    ReduceOpMath::SUM,
+                    ReduceOpDim::W,
+                    winv,
+                    ReduceFp32Mode::Fast,
+                    hardware,
+                    block_ht * block_wt * single_tile_size);
+                plan.input_policy = compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop;
+                plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
+                plan.input_row_stride_tiles = block_wt;
+                rh::ReduceCallPlan call{
+                    .input_cb_id = 0,
+                    .auxiliary_cb_id = 1,
+                    .auxiliary_tile_offset = static_cast<uint32_t>(local_auxiliary.tiles.size()),
+                    .output_cb_id = 2,
+                    .accumulator_cb_id = std::nullopt,
+                    .plan = plan};
+                rh::ReduceCallArgs(call).append_to(config.reduce_compute_args);
+                local_auxiliary.tiles.insert(
+                    local_auxiliary.tiles.end(), plan.auxiliary_tiles.begin(), plan.auxiliary_tiles.end());
+                config.reduce_auxiliary_format = plan.find_cb(rh::ReduceCbRole::Auxiliary)->data_format;
+            }
+        } else {
+            local_auxiliary.tiles.push_back({winv, rh::ReduceAuxiliaryTileType::FirstRow, 32});
+        }
+        config.reduce_auxiliary_tiles = local_auxiliary.tiles.size();
+        rh::ReduceAuxiliaryArgs(local_auxiliary).append_to(config.reduce_auxiliary_args);
+        // The cross-core raw reduction either applies the global scale or
+        // carries a first-stage scaled result through with an identity scaler.
+        rh::ReduceAuxiliaryArgs({1, {{cinv, rh::ReduceAuxiliaryTileType::FirstRow, 32}}})
+            .append_to(config.reduce_auxiliary_args);
+        rh::ReduceAuxiliaryArgs({1, {{1.0F, rh::ReduceAuxiliaryTileType::FirstRow, 32}}})
+            .append_to(config.reduce_auxiliary_args);
+    }
     if (operation_attributes.fused_activation.has_value()) {
         const auto& act = operation_attributes.fused_activation.value();
         // The inner tile loop variable in the sharded compute kernels is "w" (dst register index).

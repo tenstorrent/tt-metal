@@ -23,6 +23,7 @@
 #include "api/compute/layernorm.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "experimental/kernel_args.h"
 
 ALWI void ACQ() {
@@ -98,8 +99,9 @@ void kernel_main() {
          * RMSNorm reduces sum(x**2) directly into dfb::var for the rsqrt computation.
          * Uses auto-batched STREAMING mode - library handles buffer lifecycle.
          */
-        compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, dfb::stats, dfb::reduce, dfb::var>(
-            compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
+        using Call = ttnn::kernel_lib::
+            BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, dfb::stats, dfb::reduce, dfb::var>;
+        compute_kernel_lib::reduce<Call>();
 
         /*
          * 1/sqrt(var + eps)

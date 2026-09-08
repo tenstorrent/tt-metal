@@ -4,6 +4,7 @@
 
 #include "layernorm_pre_all_gather_device_operation.hpp"
 #include "layernorm_distributed_metal2_helpers.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -75,6 +76,26 @@ constexpr const char* PRE2D_COMPUTE_KERNEL =
     "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
     "layernorm_pre_allgather_2d.cpp";
 
+ttnn::kernel_lib::host::ReducePlan make_pre_norm_reduce_plan(
+    uint32_t logical_width,
+    DataType intermediate_dtype,
+    DataType output_dtype,
+    bool accurate,
+    const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware) {
+    using namespace ttnn::kernel_lib::host;
+    auto plan = make_reduce_plan(
+        TensorSpec(
+            Shape{32, logical_width}, TensorLayout(intermediate_dtype, PageConfig(Layout::TILE), MemoryConfig{})),
+        TensorSpec(Shape{32, 1}, TensorLayout(output_dtype, PageConfig(Layout::TILE), MemoryConfig{})),
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F,
+        accurate ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast,
+        hardware);
+    plan.input_policy = compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop;
+    return plan;
+}
+
 }  // namespace
 
 // =============================================================================
@@ -143,7 +164,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
 
     const uint32_t double_buffer_constant = 2;
     const uint32_t in0_tiles = Wt * double_buffer_constant;
-    const uint32_t in1_tiles = 1;  // reduce scalar
     const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
     const uint32_t fused_tiles = Wt;                           // a + b
 
@@ -206,7 +226,20 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     ////////////////////////////////////////////////////////////////////////////
     m2::Group<m2::DataflowBufferSpec> dfbs;
     dfbs.push_back(make_dfb(PRE1D_INPUT, in0_tiles, in_single_tile_size, in_data_format));
-    dfbs.push_back(make_dfb(PRE1D_REDUCE, in1_tiles, scaler_tile_size, scaler_cb_data_format));
+    namespace rh = ttnn::kernel_lib::host;
+    const auto reduce_plan = make_pre_norm_reduce_plan(
+        a.logical_shape()[-1],
+        fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
+        output.dtype(),
+        unpack_fp32_active,
+        {device->arch(),
+         fp32_dest_acc_en,
+         operation_attributes.compute_kernel_config.dst_full_sync_en,
+         device->l1_size_per_core()});
+    const auto reduce_compute_args = rh::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
+    const auto reduce_auxiliary_args =
+        rh::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();
+    dfbs.push_back(make_dfb(PRE1D_REDUCE, reduce_plan.auxiliary_tiles.size(), scaler_tile_size, scaler_cb_data_format));
     if (fuse_pre_add) {
         // Residual b. Sized in the residual's own data format so a residual with a different dtype
         // than the input is read correctly; add_tiles handles the per-operand format.
@@ -239,6 +272,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
         .compile_time_args = {{"blk", block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "Wt", "tile_offset"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
     };
     if (fuse_pre_add) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
@@ -276,10 +310,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
                 m2::DFBBinding{
                     .dfb_spec_name = PRE1D_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
             },
-        .compile_time_args =
-            {{"Wt", Wt}, {"blk", block_size}, {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
+        .compile_time_args = {{"Wt", Wt}, {"blk", block_size}, {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
         .hw_config = compute_hw,
+        .advanced_options = {.compile_time_varargs = reduce_compute_args},
     };
     // x^2 and the fused a + b are private to the compute kernel: it packs into them and unpacks them
     // back, so it is the buffer's only endpoint on both sides.
@@ -443,7 +477,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
 
     const uint32_t double_buffer_constant = 2;
     const uint32_t in0_tiles = Wt * double_buffer_constant;
-    const uint32_t in1_tiles = 1;  // reduce scalar
     const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
     const uint32_t fused_tiles = Wt;                           // a + b
 
@@ -512,7 +545,20 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     ////////////////////////////////////////////////////////////////////////////
     m2::Group<m2::DataflowBufferSpec> dfbs;
     dfbs.push_back(make_dfb(PRE2D_INPUT, in0_tiles, in_single_tile_size, in_data_format));
-    dfbs.push_back(make_dfb(PRE2D_REDUCE, in1_tiles, scaler_tile_size, scaler_cb_data_format));
+    namespace rh = ttnn::kernel_lib::host;
+    const auto reduce_plan = make_pre_norm_reduce_plan(
+        tiles_per_core_y * tile_width,
+        fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
+        fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
+        unpack_fp32_active,
+        {device->arch(),
+         fp32_dest_acc_en,
+         operation_attributes.compute_kernel_config.dst_full_sync_en,
+         device->l1_size_per_core()});
+    const auto reduce_compute_args = rh::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
+    const auto reduce_auxiliary_args =
+        rh::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();
+    dfbs.push_back(make_dfb(PRE2D_REDUCE, reduce_plan.auxiliary_tiles.size(), scaler_tile_size, scaler_cb_data_format));
     if (fuse_pre_add) {
         // Residual b. Sized in the residual's own data format so a residual with a different dtype
         // than the input is read correctly; add_tiles handles the per-operand format.
@@ -570,6 +616,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
             {.runtime_arg_names =
                  {"NCHt", "Wt", "tile_offset", "is_merge_core", "reduce_core_noc_x", "reduce_core_noc_y", "y"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
     };
     if (fuse_pre_add) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
@@ -632,6 +679,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                  {"num_cores_y", cores_y},
                  {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
             .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+            .advanced_options = {.compile_time_varargs = reduce_compute_args},
         };
         bind_self_loop(compute, PRE2D_X2, "x2");
         if (fuse_pre_add) {

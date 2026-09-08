@@ -233,21 +233,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
                     .dfb_spec_name = PREWF_INPUT,
                     .accessor_name = "inp",
                     .endpoint_type = m2::DFBEndpointType::PRODUCER},
-                // This reader is shared with the 1D factory, where this buffer really is the
-                // reduce-scalar buffer it pushes a tile into. Here the same buffer is the compute
-                // kernel's post-Welford transpose scratch, which the compute kernel also fills and
-                // drains itself; the reader takes the producer role and the compute kernel the
-                // consumer role, which is the only endpoint pair a buffer instance can have.
-                m2::DFBBinding{
-                    .dfb_spec_name = PREWF_SCRATCH,
-                    .accessor_name = "reduce",
-                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PREWF_INPUT_T, .accessor_name = "src"}},
         .compile_time_args = {{"blk", block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "Wt", "tile_offset"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
+    reader.compiler_options.defines.emplace("USE_WELFORD", "1");
     if (fuse_pre_add) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
             .dfb_spec_name = PREWF_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::PRODUCER});
@@ -278,10 +270,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
                     .accessor_name = "in0",
                     .endpoint_type = m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{
-                    .dfb_spec_name = PREWF_SCRATCH,
-                    .accessor_name = "scratch",
-                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{
                     .dfb_spec_name = PREWF_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
             },
         .compile_time_args =
@@ -295,6 +283,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
     // The reciprocal table has no FIFO traffic at all: the kernel reads it by base pointer. It is
     // that kernel's only endpoint, so it takes both roles.
     bind_self_loop(compute, PREWF_RECIP, "recip");
+    bind_self_loop(compute, PREWF_SCRATCH, "scratch");
     if (fuse_pre_add) {
         compute.dfb_bindings.push_back(m2::DFBBinding{
             .dfb_spec_name = PREWF_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::CONSUMER});

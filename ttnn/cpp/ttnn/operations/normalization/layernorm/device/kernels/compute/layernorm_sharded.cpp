@@ -14,11 +14,27 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #ifdef DO_COL_MASK
 #include "ttnn/operations/normalization/kernel_util/compute/col_mask.h"
 #endif
 
 // SPLIT REDUCE across Cores
+template <uint32_t Input, uint32_t Auxiliary, uint32_t Output>
+ALWI void reduce_local_shard(uint32_t valid_tiles) {
+    using Full = ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, Input, Auxiliary, Output>;
+    using Tail = ttnn::kernel_lib::BoundReduceCallArgs<
+        ttnn::kernel_lib::ReduceCallArgs<Full::next_compile_time_args_offset()>,
+        Input,
+        Auxiliary,
+        Output>;
+    if (valid_tiles == Full::columns) {
+        compute_kernel_lib::reduce<Full>();
+    } else {
+        compute_kernel_lib::reduce<Tail>();
+    }
+}
+
 void kernel_main() {
     // An idle core sits in a hole of a non-rectangular shard grid. It carries this program's dataflow
     // buffers so the reduction's multicast has somewhere to land, and does no work of its own, so its
@@ -265,16 +281,7 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_reduce_input = dfb_in_id;
 #endif
     // E[x],
-    compute_kernel_lib::reduce<
-        PoolType::AVG,
-        ReduceDim::REDUCE_ROW,
-        dfb_ex_reduce_input,
-        dfb_scaler_id,
-        dfb_ex_partial_id,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-        compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
-        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+    reduce_local_shard<dfb_ex_reduce_input, dfb_scaler_id, dfb_ex_partial_id>(num_reduce_tiles_per_block_h);
 #ifdef DO_COL_MASK
     dfb_mask_scratch.pop_front(num_tiles_per_block);
 #endif
@@ -409,16 +416,7 @@ void kernel_main() {
     dfb_xmm2.wait_front(num_tiles_per_block);
 
     // Var(x)
-    compute_kernel_lib::reduce<
-        PoolType::AVG,
-        ReduceDim::REDUCE_ROW,
-        dfb_xmm2_id,
-        dfb_scaler_id,
-        dfb_ex_partial2_id,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-        compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
-        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+    reduce_local_shard<dfb_xmm2_id, dfb_scaler_id, dfb_ex_partial2_id>(num_reduce_tiles_per_block_h);
     reconfig_data_format(dfb_xmm2_id, dfb_scaler_id);
     dfb_xmm2.pop_front(num_tiles_per_block);
 
@@ -452,6 +450,10 @@ void kernel_main() {
         reconfig_data_format(dfb_xmm2_id, dfb_scaler_id);
 
         if (enable_sqrt) {
+            // The planned auxiliary buffer can be FP32; epsilon is BF16.
+            // Configure its format explicitly before leaving the reduce path.
+            reconfig_data_format(dfb_ex2_id, dfb_eps);
+            DataflowBuffer(dfb_eps).wait_front(1);
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
                 // 1/[sqrt(Var + eps)],
                 dfb_ex2.wait_front(1);
@@ -606,7 +608,7 @@ void kernel_main() {
 #endif
     // The single scaler tile is waited by both reductions (E[x] and Var[x]) but never popped;
     // pop it once at the end so the buffer is left balanced.
-    dfb_scaler.pop_front(1);
+    dfb_scaler.pop_front(get_arg(args::reduce_auxiliary_tiles));
     if constexpr (is_allgather_worker) {
         // The global-reduce scaler tile is pushed once (only on all-gather worker cores) and read by
         // tile index across the E[x] and Var[x] global reductions without being popped. Pop it once
