@@ -2379,6 +2379,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         prepared.pop("compile_output", None)
         kv_cache = prepared["kv_cache"]
         on_device_sampling = prepared["on_device_sampling"]
+        # Staged batch for this trace. ``tokens`` lives in
+        # _prepare_decode_trace_text, not here (this phase only receives
+        # ``prepared``), so the sampling-trace guard below reads the batch that
+        # phase recorded rather than the token tensors.
+        prepared_batch = prepared.get("batch", 1)
 
         tt_out_trace = []
         trace_ids = {}
@@ -2417,21 +2422,41 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             _maybe_acknowledge_trace_buffers_corruptible(self, tt_out_trace[-1])
 
             if sampling_trace_enabled:
-                # NOTE: sampling trace can be keyed depending on sampling params,
-                # this traces only for the current ones.
-                # tt_out_tok feeds the sampled token back into the decode token
-                # buffer (device_inputs[0]) for the next traced step. Only do this
-                # for models that rely on on-device token feedback. Models that
-                # re-stage decode inputs from host every step (e.g. gemma4, via
-                # _tt_vllm_always_refresh_decode_trace_inputs) don't, and their
-                # token buffer is not shaped as a sampling output (gemma4's is
-                # rank-2; ttnn.sampling requires a rank-4 preallocated output) —
-                # pass None so sampling allocates its own output.
-                tt_out_tok = self._decode_token_feedback_buffer(self.model[i], device_inputs[i])
-                # skip_precompile=True in both cases: either _prepare_decode_trace_text pre-compiled the
-                # sampling pipeline (before any trace was live), or the caller passed skip_precompile and
-                # is asserting the program cache is already warm for this variant.
-                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=tt_out_tok, skip_precompile=True)
+                # Sampling traces bind a specific logits tensor (and its batch).
+                # Only capture when decode batch matches the sampling module's
+                # wired max batch — smaller decode buckets (e.g. Gemma4 B=1)
+                # must sample eagerly so a prior B=max sampling trace is not
+                # replayed against a different logits allocation.
+                sampling_max = getattr(getattr(sampling_module, "tt_sampling", None), "max_batch_size", None)
+                decode_batch = int(prepared_batch)
+                if sampling_max is not None and decode_batch is not None and decode_batch != int(sampling_max):
+                    logger.info(
+                        "Skipping sampling-trace capture for decode_batch={} "
+                        "(sampling max_batch_size={}); will sample eagerly",
+                        decode_batch,
+                        sampling_max,
+                    )
+                else:
+                    # NOTE: sampling trace can be keyed depending on sampling params,
+                    # this traces only for the current ones.
+                    # tt_out_tok feeds the sampled token back into the decode token
+                    # buffer (device_inputs[0]) for the next traced step. Only do this
+                    # for models that rely on on-device token feedback. Models that
+                    # re-stage decode inputs from host every step (e.g. gemma4, via
+                    # _tt_vllm_always_refresh_decode_trace_inputs) don't, and their
+                    # token buffer is not shaped as a sampling output (gemma4's is
+                    # rank-2; ttnn.sampling requires a rank-4 preallocated output) —
+                    # pass None so sampling allocates its own output.
+                    tt_out_tok = self._decode_token_feedback_buffer(self.model[i], device_inputs[i])
+                    # skip_precompile=True in both cases: either _prepare_decode_trace_text
+                    # pre-compiled the sampling pipeline (before any trace was live), or the
+                    # caller passed skip_precompile and is asserting the program cache is
+                    # already warm for this variant.
+                    sampling_module.capture_trace(
+                        logits=tt_out_trace[i],
+                        tt_out_tok=tt_out_tok,
+                        skip_precompile=True,
+                    )
         logger.info("Done Capturing Decode Trace")
 
         return trace_ids, tt_out_trace, *device_inputs
