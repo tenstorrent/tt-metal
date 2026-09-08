@@ -781,7 +781,7 @@ std::size_t prewarm_manifest_offline(const std::string& out_root, const std::str
 
 void wait_for_prewarm() {
     // ProgramImpl::compile may run on more than one thread; serialize the join so only one thread
-    // joins the prewarm thread (joining a std::thread from two threads is UB).
+    // joins the prewarm thread (joining a std::jthread from two threads is UB).
     std::lock_guard<std::mutex> lk(g_prewarm_join_mutex);
     if (g_prewarm_thread.joinable()) {
         g_prewarm_thread.join();
