@@ -3,8 +3,8 @@
 
 """
 Correctness of the ring-fused indexer_score op (ttnn.experimental.ring_indexer_score_dsa) on Blackhole.
-The legacy suite covers the LoudBox 2x4 -> 1x4 axis ring; full-mesh coverage uses the complete 2x4 as one
-snake and adds exact-physical 2x2 plus opt-in 8x4 Galaxy gates. One op co-schedules the ring_attention
+Coverage includes a LoudBox 2x4 -> 1x4 axis ring, the complete 2x4 mesh, exact-physical 2x2, and opt-in
+8x4 Galaxy gates. One op co-schedules the ring_attention
 all-gather with the score; the reader gates each K band on only the SP shards it touches and dual-sources its
 own slab from k_local. Checked against the same DSA references as the two-op path, including both K layouts,
 indexed caches, straddle, kv_len, program-cache reuse, placement, and host validation.
@@ -43,6 +43,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.ring_in
     _close_ring4_ccl,
     _persistent_buffer,
     _shard_k,
+    _to_tp_inner_reconstructed,
     RING,
     SP_AXIS,
     CHUNK_GLOBAL,
@@ -88,10 +89,10 @@ def _fused_dev_inputs(submesh, q_g, w_g, k_host, *, k_dtype=ttnn.bfloat16):
     return q_dev, w_dev, k_local, k_gathered
 
 
-def _open_full_mesh_ccl(mesh_shape):
-    """Open the complete physical 2D mesh with the torus links needed by the snake's closing edge."""
+def _open_full_mesh_ccl(mesh_shape, *, fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY):
+    """Open the complete physical 2D mesh with the requested fabric configuration."""
     ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        fabric_config,
         ttnn.FabricReliabilityMode.STRICT_INIT,
         None,
         ttnn.FabricTensixConfig.DISABLED,
@@ -679,6 +680,291 @@ def test_indexer_score_full_mesh_loudbox_accuracy_placement_and_cache_reuse(bloc
     if ttnn.get_num_devices() != 8:
         pytest.skip("2x4 full-mesh indexer coverage requires the exact physical eight-device LoudBox")
     _run_full_mesh_accuracy_case((2, 4), block_cyclic=block_cyclic)
+
+
+# ---- 2D SP x TP LoudBox: TP-inner reconstructed KV -----------------------------------------------
+LB_SPTP_SP = 2
+LB_SPTP_TP = 4
+LB_SPTP_SP_AXIS = 0
+LB_SPTP_TP_AXIS = 1
+LB_SPTP_HEADS = 32
+LB_SPTP_CHUNK = 1280
+LB_SPTP_CHUNK_LOCAL = LB_SPTP_CHUNK // LB_SPTP_SP
+LB_SPTP_K_CHUNK = 320
+
+
+def _sptp_loudbox_inputs(
+    mesh,
+    k_capacity,
+    seed,
+    *,
+    sp=LB_SPTP_SP,
+    tp=LB_SPTP_TP,
+    sp_axis=LB_SPTP_SP_AXIS,
+    tp_axis=LB_SPTP_TP_AXIS,
+    heads=LB_SPTP_HEADS,
+    chunk_global=LB_SPTP_CHUNK,
+):
+    chunk_local = chunk_global // sp
+    q_host, k_natural, w_host = _global_inputs(heads, chunk_global, k_capacity, seed=seed)
+    k_reconstructed = _to_tp_inner_reconstructed(k_natural, sp=sp, tp=tp, chunk_local=chunk_local)
+    mesh_shape = [0, 0]
+    mesh_shape[sp_axis] = sp
+    mesh_shape[tp_axis] = tp
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    sp_shard = ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh_shape), dims=tuple(shard_dims))
+    k_local = ttnn.from_torch(
+        k_reconstructed,
+        device=mesh,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        mesh_mapper=sp_shard,
+    )
+    k_gathered = ttnn.from_torch(
+        torch.zeros_like(k_natural),
+        device=mesh,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+    q_dev = ttnn.from_torch(
+        q_host,
+        device=mesh,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        mesh_mapper=sp_shard,
+    )
+    w_dev = ttnn.from_torch(
+        w_host,
+        device=mesh,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=sp_shard,
+    )
+    q_dev = ttnn.mesh_partition(q_dev, dim=2, cluster_axis=tp_axis)
+    w_dev = ttnn.mesh_partition(w_dev, dim=2, cluster_axis=tp_axis)
+    return q_host, k_natural, w_host, q_dev, k_local, k_gathered, w_dev
+
+
+def _sptp_loudbox_ref(
+    q_host,
+    k_natural,
+    w_host,
+    chunk_start,
+    *,
+    sp=LB_SPTP_SP,
+    tp=LB_SPTP_TP,
+    sp_axis=LB_SPTP_SP_AXIS,
+    tp_axis=LB_SPTP_TP_AXIS,
+):
+    chunk_local = q_host.shape[2] // sp
+    q_per_device = chunk_local // tp
+    mesh_shape = [0, 0]
+    mesh_shape[sp_axis] = sp
+    mesh_shape[tp_axis] = tp
+    refs = []
+    for mesh_row in range(mesh_shape[0]):
+        for mesh_col in range(mesh_shape[1]):
+            coord = (mesh_row, mesh_col)
+            sp_rank = coord[sp_axis]
+            tp_rank = coord[tp_axis]
+            q_start = sp_rank * chunk_local + tp_rank * q_per_device
+            q_slice = slice(q_start, q_start + q_per_device)
+            refs.append(
+                indexer_score_dsa_ref(
+                    q_host[:, :, q_slice, :],
+                    k_natural,
+                    w_host[:, :, q_slice, :],
+                    chunk_start + q_start,
+                )
+            )
+    return torch.cat(refs, dim=2)
+
+
+def _run_sptp_loudbox_score(
+    semaphores,
+    subdevice_id,
+    q_dev,
+    k_local,
+    k_gathered,
+    w_dev,
+    *,
+    chunk_start,
+    kv_len,
+    tp_sharded,
+    sp_axis=LB_SPTP_SP_AXIS,
+    tp_axis=LB_SPTP_TP_AXIS,
+    topology=ttnn.Topology.Linear,
+    num_links=1,
+    chunk_local=LB_SPTP_CHUNK_LOCAL,
+):
+    return ttnn.experimental.ring_indexer_score_dsa(
+        q_dev,
+        k_gathered,
+        w_dev,
+        k_local,
+        semaphores,
+        cluster_axis=sp_axis,
+        topology=topology,
+        num_links=num_links,
+        ag_sub_device_id=subdevice_id,
+        chunk_start_idx=chunk_start,
+        kv_len=kv_len,
+        seq_subshard_axis=tp_axis,
+        block_cyclic_sp_axis=sp_axis,
+        block_cyclic_chunk_local=chunk_local,
+        block_cyclic_cache_tp_sharded=tp_sharded,
+        program_config=ttnn.IndexerScoreProgramConfig(
+            q_chunk_size=32,
+            k_chunk_size=LB_SPTP_K_CHUNK,
+            head_group_size=0,
+        ),
+    )
+
+
+def _sptp_loudbox_output(out):
+    shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(out.cpu())]
+    return torch.cat(shards, dim=2)
+
+
+@pytest.mark.parametrize("tp_sharded", [False, True], ids=["control", "tp_sharded"])
+def test_indexer_score_sptp_loudbox_tp_sharded_kv_repro(tp_sharded):
+    """Score a TP-inner reconstructed K cache on a LoudBox SP2 x TP4 mesh."""
+    if ttnn.get_num_devices() != 8:
+        pytest.skip("SP2 x TP4 fused indexer reproduction requires an exact eight-device LoudBox")
+    assert LB_SPTP_CHUNK_LOCAL == 640
+    assert LB_SPTP_CHUNK_LOCAL // LB_SPTP_TP == 160
+    assert LB_SPTP_K_CHUNK // 32 == 10
+
+    mesh, semaphores, subdevice_id, stall_group = _open_full_mesh_ccl(
+        (LB_SPTP_SP, LB_SPTP_TP), fabric_config=ttnn.FabricConfig.FABRIC_1D
+    )
+    try:
+        q_host, k_natural, w_host, q_dev, k_local, k_gathered, w_dev = _sptp_loudbox_inputs(
+            mesh, LB_SPTP_CHUNK, seed=42
+        )
+        out = _run_sptp_loudbox_score(
+            semaphores,
+            subdevice_id,
+            q_dev,
+            k_local,
+            k_gathered,
+            w_dev,
+            chunk_start=0,
+            kv_len=LB_SPTP_CHUNK,
+            tp_sharded=tp_sharded,
+        )
+        ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
+        out_host = _sptp_loudbox_output(out)
+        reference = _sptp_loudbox_ref(q_host, k_natural, w_host, chunk_start=0)
+        assert_indexer_match(out_host, reference, LB_SPTP_CHUNK, LB_SPTP_CHUNK, check_neg=True)
+    finally:
+        _close_full_mesh_ccl(mesh)
+
+
+def test_indexer_score_sptp_loudbox_tp_sharded_multislab_partial_prefix_cache_reuse():
+    """Cover TP-stripe resets inside a KC unit and runtime-scalar cache hits."""
+    if ttnn.get_num_devices() != 8:
+        pytest.skip("SP2 x TP4 fused indexer reproduction requires an exact eight-device LoudBox")
+    k_capacity = 3 * LB_SPTP_CHUNK
+    # Each TP stripe is 15 tiles wide, so the KC=10 unit at physical offset 10 crosses a stripe
+    # boundary. At kv_len=960 its first five columns are invalid and its last five reset to valid keys.
+    assert (k_capacity // (LB_SPTP_SP * LB_SPTP_TP)) // 32 == 15
+
+    mesh, semaphores, subdevice_id, stall_group = _open_full_mesh_ccl(
+        (LB_SPTP_SP, LB_SPTP_TP), fabric_config=ttnn.FabricConfig.FABRIC_1D
+    )
+    try:
+        q_host, k_natural, w_host, q_dev, k_local, k_gathered, w_dev = _sptp_loudbox_inputs(mesh, k_capacity, seed=43)
+        mesh.enable_program_cache()
+        entries_before = mesh.num_program_cache_entries()
+        entries_after_compile = None
+        for dispatch, (chunk_start, kv_len) in enumerate(((0, 960), (LB_SPTP_CHUNK, 1920))):
+            out = _run_sptp_loudbox_score(
+                semaphores,
+                subdevice_id,
+                q_dev,
+                k_local,
+                k_gathered,
+                w_dev,
+                chunk_start=chunk_start,
+                kv_len=kv_len,
+                tp_sharded=True,
+            )
+            ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
+            out_host = _sptp_loudbox_output(out)
+            ttnn.deallocate(out)
+
+            reference = _sptp_loudbox_ref(q_host, k_natural[:, :, :kv_len], w_host, chunk_start=chunk_start)
+            assert_indexer_match(out_host[:, :, :, :kv_len], reference, LB_SPTP_CHUNK, kv_len, check_neg=True)
+            if dispatch == 0:
+                entries_after_compile = mesh.num_program_cache_entries()
+                assert entries_after_compile > entries_before
+            else:
+                assert (
+                    mesh.num_program_cache_entries() == entries_after_compile
+                ), "changing kv_len/chunk_start recompiled the fused Ring program"
+    finally:
+        _close_full_mesh_ccl(mesh)
+
+
+def test_indexer_score_sptp_loudbox_ring_partial_readiness():
+    """Exercise TP-inner K on two four-rank rings, including the AG midpoint readiness gate."""
+    if ttnn.get_num_devices() != 8:
+        pytest.skip("SP4 x TP2 fused indexer readiness coverage requires an exact eight-device LoudBox")
+    sp, tp = 4, 2
+    sp_axis, tp_axis = 1, 0
+    chunk_global = LB_SPTP_CHUNK
+    chunk_local = chunk_global // sp
+    k_capacity = 3 * chunk_global
+    kv_len = 960
+    assert chunk_local // tp == 160
+    assert (k_capacity // (sp * tp)) // 32 == 15
+
+    mesh, semaphores, subdevice_id, stall_group = _open_full_mesh_ccl((tp, sp))
+    try:
+        q_host, k_natural, w_host, q_dev, k_local, k_gathered, w_dev = _sptp_loudbox_inputs(
+            mesh,
+            k_capacity,
+            seed=44,
+            sp=sp,
+            tp=tp,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            chunk_global=chunk_global,
+        )
+        out = _run_sptp_loudbox_score(
+            semaphores,
+            subdevice_id,
+            q_dev,
+            k_local,
+            k_gathered,
+            w_dev,
+            chunk_start=0,
+            kv_len=kv_len,
+            tp_sharded=True,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            topology=ttnn.Topology.Ring,
+            num_links=2,
+            chunk_local=chunk_local,
+        )
+        ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
+        out_host = _sptp_loudbox_output(out)
+        reference = _sptp_loudbox_ref(
+            q_host,
+            k_natural[:, :, :kv_len],
+            w_host,
+            chunk_start=0,
+            sp=sp,
+            tp=tp,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+        )
+        assert_indexer_match(out_host[:, :, :, :kv_len], reference, chunk_global, kv_len, check_neg=True)
+    finally:
+        _close_full_mesh_ccl(mesh)
 
 
 @pytest.mark.skipif(
