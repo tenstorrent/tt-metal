@@ -170,3 +170,40 @@ public:
         return reader_.get_noc_addr(physical_tensor_page, byte_offset);
     }
 };
+
+// Load only a local page interval from a replicated allocator row. The CB still spans the
+// row, so the existing accessor can index local pages directly. Read from a 32-byte-aligned
+// source/destination offset, then compact only the requested SP-strided entries in place.
+// Callers must ensure [local_begin, local_end) consists of allocated pages on this rank.
+template <typename NocType, typename TableAccessor>
+inline void load_paged_kv_table_range(
+    NocType& noc,
+    const TableAccessor& table,
+    uint32_t table_l1,
+    uint32_t slot,
+    uint32_t sp_size,
+    uint32_t sp_rank,
+    uint32_t local_begin,
+    uint32_t local_end) {
+    if (local_begin == local_end) {
+        return;
+    }
+    const uint32_t first = local_begin * sp_size + sp_rank;
+    const uint32_t end = (local_end - 1) * sp_size + sp_rank + 1;
+    const uint32_t aligned_first = first & ~7u;
+    const uint32_t offset = aligned_first * sizeof(uint32_t);
+    noc.async_read(
+        table,
+        CoreLocalMem<uint32_t>(table_l1 + offset),
+        (end - aligned_first) * sizeof(uint32_t),
+        {.page_id = slot, .offset_bytes = offset},
+        {});
+    noc.async_read_barrier();
+    invalidate_l1_cache();
+    if (sp_size > 1) {
+        auto* entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_l1);
+        for (uint32_t i = local_begin, p = first; i < local_end; ++i, p += sp_size) {
+            entries[i] = entries[p];
+        }
+    }
+}

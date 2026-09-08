@@ -54,7 +54,7 @@ struct ZeroPaddedKvCacheDeviceOperation {
         // attributes. Both are set together or both empty.
         std::optional<Tensor> slot_idx;
         std::optional<Tensor> valid_global;
-        // Optional uint16 logical-page -> physical-bundle table. When present, cache is the shared
+        // Optional replicated uint32 [slots,max_pages] allocator table. When present, cache is the shared
         // pool [physical_bundles*num_layers,1,kv_cache_page_size,D]; the table selects the request.
         std::optional<Tensor> page_bundle_indices;
 

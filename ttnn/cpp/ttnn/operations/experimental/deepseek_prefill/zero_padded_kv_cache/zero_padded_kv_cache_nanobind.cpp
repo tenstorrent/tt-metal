@@ -38,10 +38,11 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
             + layer_idx. ``valid_global`` and ``slot_idx`` stay out of the program hash, so
             successive chunks reuse one cached program.
 
-            ``page_bundle_indices`` enables a shared paged cache. It is a uint16 ROW_MAJOR DRAM
-            table mapping this request's logical local pages to physical bundles in a pool shaped
-            ``[physical_bundles*num_layers, 1, kv_cache_page_size, D]``. In this mode the table
-            selects the request, so scalar ``slot_idx`` must be zero.
+            ``page_bundle_indices`` enables a shared paged cache. It is a replicated uint32 ROW_MAJOR DRAM
+            table with shape [slots,max_pages]. Local page i on SP rank r uses table[slot_idx, i*SP+r]
+            to select a physical bundle in a pool shaped
+            ``[physical_bundles*num_layers, 1, kv_cache_page_size, D]``. Both scalar and
+            device-metadata ``slot_idx`` select the table row.
 
             Two call forms (identical results):
               - scalar: ``(cache, slot_idx, layer_idx, num_layers, valid_global, chunk_size_global,

@@ -44,6 +44,7 @@ static void run_writer() {
 
     Noc noc;
 
+    uint32_t slot = get_common_arg_val<uint32_t>(9);
     ZeroPadChipWork w;
     if constexpr (HasMeta) {
         // NoC-read slot_idx and valid_global, each element 0 of its own 1-element uint32 tensor:
@@ -56,10 +57,12 @@ static void run_writer() {
         const auto s_slot = TensorAccessor(meta_args, slot_idx_addr);
         noc.async_read(s_slot, cb_meta, 4, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        const uint32_t slot = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
+        invalidate_l1_cache();
+        slot = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
         const auto s_valid = TensorAccessor(meta_args, valid_global_addr);
         noc.async_read(s_valid, cb_meta, 4, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
+        invalidate_l1_cache();
         const uint32_t valid_global = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
         cb_meta.push_back(1);
         w = zero_pad_compute_chip_work(slot, valid_global);
@@ -75,12 +78,19 @@ static void run_writer() {
         CircularBuffer table_cb(page_table_cb);
         page_table_l1 = table_cb.get_write_ptr();
         const auto table = TensorAccessor(page_bundle_args, page_bundle_indices_addr);
-        noc.async_read(
-            table, CoreLocalMem<uint16_t>(page_table_l1), page_bundle_count * sizeof(uint16_t), {.page_id = 0}, {});
-        noc.async_read_barrier();
-        invalidate_l1_cache();
+        const uint32_t first = w.base_local_tile / page_size_rows;
+        const uint32_t end = w.count != 0 ? (w.base_local_tile + w.count + page_size_rows - 1) / page_size_rows : first;
+        load_paged_kv_table_range(
+            noc,
+            table,
+            page_table_l1,
+            slot,
+            get_common_arg_val<uint32_t>(1),
+            get_common_arg_val<uint32_t>(0),
+            first,
+            end);
     }
-    const PagedKVAccessor<decltype(s)> paged_cache{
+    const PagedKVAccessor<decltype(s), uint32_t> paged_cache{
         s, page_table_l1, page_size_rows, page_num_layers, 1, page_layer_idx};
 
     // UNCONDITIONAL: compute always pushes Wt out tiles -> always consume them. Write the masked

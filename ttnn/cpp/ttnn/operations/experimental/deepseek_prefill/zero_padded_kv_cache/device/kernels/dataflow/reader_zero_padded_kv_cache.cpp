@@ -51,6 +51,7 @@ static void run_reader() {
 
     Noc noc;
 
+    uint32_t slot = get_common_arg_val<uint32_t>(9);
     ZeroPadChipWork w;
     if constexpr (HasMeta) {
         // NoC-read slot_idx and valid_global, each element 0 of its own 1-element uint32 tensor:
@@ -63,10 +64,12 @@ static void run_reader() {
         const auto s_slot = TensorAccessor(meta_args, slot_idx_addr);
         noc.async_read(s_slot, cb_meta, 4, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        const uint32_t slot = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
+        invalidate_l1_cache();
+        slot = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
         const auto s_valid = TensorAccessor(meta_args, valid_global_addr);
         noc.async_read(s_valid, cb_meta, 4, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
+        invalidate_l1_cache();
         const uint32_t valid_global = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
         cb_meta.push_back(1);
         w = zero_pad_compute_chip_work(slot, valid_global);
@@ -82,27 +85,40 @@ static void run_reader() {
         CircularBuffer table_cb(page_table_cb);
         page_table_l1 = table_cb.get_write_ptr();
         const auto table = TensorAccessor(page_bundle_args, page_bundle_indices_addr);
-        noc.async_read(
-            table, CoreLocalMem<uint16_t>(page_table_l1), page_bundle_count * sizeof(uint16_t), {.page_id = 0}, {});
-        noc.async_read_barrier();
-        invalidate_l1_cache();
+        const uint32_t first = w.base_local_tile / page_size_rows;
+        const uint32_t end = w.first_partial != 0 ? first + 1 : first;
+        load_paged_kv_table_range(
+            noc,
+            table,
+            page_table_l1,
+            slot,
+            get_common_arg_val<uint32_t>(1),
+            get_common_arg_val<uint32_t>(0),
+            first,
+            end);
     }
-    const PagedKVAccessor<decltype(s)> paged_cache{
+    const PagedKVAccessor<decltype(s), uint32_t> paged_cache{
         s, page_table_l1, page_size_rows, page_num_layers, 1, page_layer_idx};
 
     // Read the Wt width-tiles of this chip's boundary seq-tile into the src CB. When this chip has no
     // pad work (count==0 -> base_local_tile==0) this reads the slot's base tile; the writer discards it.
     CircularBuffer src(src_cb);
     src.reserve_back(w.Wt);
-    for (uint32_t i = 0; i < w.Wt; ++i) {
-        if constexpr (has_paged_cache) {
-            const auto cursor = paged_cache.cursor(w.base_local_tile);
-            const uint64_t src_noc_addr =
-                paged_cache.get_shard_row_noc_addr(cursor, (cursor.row_in_bundle * w.Wt + i) * cache_tile_bytes);
-            noc_async_read(src_noc_addr, src.get_write_ptr() + i * cache_tile_bytes, cache_tile_bytes);
-        } else {
-            noc.async_read(
-                s, src, cache_tile_bytes, {.page_id = base_page + i}, {.offset_bytes = i * cache_tile_bytes});
+    if (has_paged_cache && w.first_partial == 0) {
+        // Idle/full-tile-only ranks need no cache data. Do not dereference an unallocated page.
+        noc.async_write_zeros(src, w.Wt * cache_tile_bytes);
+        noc.write_zeros_l1_barrier();
+    } else {
+        for (uint32_t i = 0; i < w.Wt; ++i) {
+            if constexpr (has_paged_cache) {
+                const auto cursor = paged_cache.cursor(w.base_local_tile);
+                const uint64_t src_noc_addr =
+                    paged_cache.get_shard_row_noc_addr(cursor, (cursor.row_in_bundle * w.Wt + i) * cache_tile_bytes);
+                noc_async_read(src_noc_addr, src.get_write_ptr() + i * cache_tile_bytes, cache_tile_bytes);
+            } else {
+                noc.async_read(
+                    s, src, cache_tile_bytes, {.page_id = base_page + i}, {.offset_bytes = i * cache_tile_bytes});
+            }
         }
     }
     noc.async_read_barrier();

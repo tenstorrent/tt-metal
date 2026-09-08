@@ -26,8 +26,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::zero_padded_kv_cache
 //
 // Cache slot is addressed users-outer, layers-inner: batch_idx = slot_idx * num_layers + layer_idx.
 // With page_bundle_indices, cache is instead a shared ND-sharded pool shaped
-// [physical_bundles*num_layers,1,kv_cache_page_size,D]. The uint16 table selects the request and maps
-// logical local pages to physical bundles; scalar slot_idx must be zero.
+// [physical_bundles*num_layers,1,kv_cache_page_size,D]. The replicated uint32 ROW_MAJOR DRAM table has shape
+// [slots,max_pages]. Local page i on SP rank r uses table[slot_idx, i*SP+r].
+// Both scalar and device-metadata slot_idx select the table row.
 // valid_global and slot_idx stay out of the program hash, so successive chunks reuse one cached
 // program. In-place: returns a handle to `cache`. Two call forms (identical results):
 

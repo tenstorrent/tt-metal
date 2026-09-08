@@ -28,6 +28,7 @@ void kernel_main() {
 
     const uint32_t cache_addr = get_arg_val<uint32_t>(0);
     const uint32_t page_bundle_indices_addr = get_arg_val<uint32_t>(1);
+    const uint32_t slot = get_common_arg_val<uint32_t>(9);
     const ZeroPadRowMajorChipWork w = zero_pad_compute_row_major_chip_work();
     if (w.count == 0) {
         return;
@@ -43,12 +44,19 @@ void kernel_main() {
         CircularBuffer table_cb(page_table_cb);
         page_table_l1 = table_cb.get_write_ptr();
         const auto table = TensorAccessor(page_bundle_args, page_bundle_indices_addr);
-        noc.async_read(
-            table, CoreLocalMem<uint16_t>(page_table_l1), page_bundle_count * sizeof(uint16_t), {.page_id = 0}, {});
-        noc.async_read_barrier();
-        invalidate_l1_cache();
+        const uint32_t first = w.base_local_row / page_size_rows;
+        const uint32_t end = (w.base_local_row + w.count + page_size_rows - 1) / page_size_rows;
+        load_paged_kv_table_range(
+            noc,
+            table,
+            page_table_l1,
+            slot,
+            get_common_arg_val<uint32_t>(1),
+            get_common_arg_val<uint32_t>(0),
+            first,
+            end);
     }
-    const PagedKVAccessor<decltype(cache)> paged_cache{
+    const PagedKVAccessor<decltype(cache), uint32_t> paged_cache{
         cache, page_table_l1, page_size_rows, page_num_layers, 1, page_layer_idx};
 
     noc.async_write_zeros(zero, row_page_bytes);

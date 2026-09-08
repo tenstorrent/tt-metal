@@ -68,8 +68,8 @@ uint32_t logical_local_cache_tokens(
     const ZeroPaddedKvCacheDeviceOperation::operation_attributes_t& args,
     const ZeroPaddedKvCacheDeviceOperation::tensor_args_t& tensor_args) {
     if (tensor_args.has_paged_cache()) {
-        return static_cast<uint32_t>(
-            tensor_args.page_bundle_indices->logical_volume() * static_cast<uint64_t>(args.kv_cache_page_size));
+        const uint32_t sp = tensor_args.cache.device()->shape()[args.cluster_axis];
+        return ((tensor_args.page_bundle_indices->logical_shape()[1] + sp - 1) / sp) * args.kv_cache_page_size;
     }
     return tensor_args.cache.padded_shape()[-2];
 }
@@ -91,7 +91,7 @@ void validate_paged_cache(
         table.storage_type() == StorageType::DEVICE && table.buffer() != nullptr,
         "page_bundle_indices must be allocated on device");
     TT_FATAL(table.device() == cache.device(), "page_bundle_indices must be on the same device as cache");
-    TT_FATAL(table.dtype() == DataType::UINT16, "page_bundle_indices must have uint16 dtype");
+    TT_FATAL(table.dtype() == DataType::UINT32, "page_bundle_indices must have uint32 dtype");
     TT_FATAL(table.layout() == Layout::ROW_MAJOR, "page_bundle_indices must use ROW_MAJOR layout");
     TT_FATAL(table.padded_shape() == table.logical_shape(), "page_bundle_indices must not be padded");
     TT_FATAL(
@@ -99,9 +99,8 @@ void validate_paged_cache(
         "page_bundle_indices must be DRAM interleaved");
     const auto& table_shape = table.logical_shape();
     TT_FATAL(
-        table_shape.rank() == 4 && table_shape[0] == 1 && table_shape[1] == 1 && table_shape[2] == 1 &&
-            table_shape[3] > 0,
-        "page_bundle_indices must have shape [1,1,1,num_logical_bundles] (got {})",
+        table_shape.rank() == 2 && table_shape[0] > 0 && table_shape[1] >= cache.device()->shape()[args.cluster_axis],
+        "page_bundle_indices must have shape [slots,max_pages] with at least one page per SP rank (got {})",
         table_shape);
 
     const auto& cache_shape = cache.logical_shape();
@@ -114,11 +113,6 @@ void validate_paged_cache(
         "Paged cache flat page count {} must be positive and divisible by num_layers {}",
         cache_shape[0],
         args.num_layers);
-    const uint32_t physical_bundles = cache_shape[0] / args.num_layers;
-    TT_FATAL(
-        physical_bundles <= (1u << 16),
-        "uint16 page_bundle_indices support at most 65536 physical bundles (got {})",
-        physical_bundles);
     const auto nd = cache.nd_shard_spec();
     TT_FATAL(nd.has_value(), "Paged cache must use an ND-sharded memory config");
     const auto& shard = nd->shard_shape;
@@ -201,7 +195,8 @@ void validate_runtime_args(
     if (!tensor_args.slot_idx.has_value()) {
         if (tensor_args.has_paged_cache()) {
             TT_FATAL(
-                args.slot_idx == 0, "Paged cache uses page_bundle_indices to select the request; slot_idx must be 0");
+                args.slot_idx < tensor_args.page_bundle_indices->logical_shape()[0],
+                "slot_idx out of range for page table slots");
         } else {
             const uint32_t num_slots = cache.padded_shape()[0] / args.num_layers;
             TT_FATAL(
@@ -243,12 +238,29 @@ void validate_runtime_args(
     // valid_global <= capacity, so the window never rounds past the cache (well-formed block-cyclic
     // caches hold whole slabs, so capacity is a multiple of chunk_size_global and thus of pad_align).
     TT_FATAL(
-        global_capacity % args.pad_align == 0,
+        tensor_args.has_paged_cache() || global_capacity % args.pad_align == 0,
         "global cache capacity ({}) must be a multiple of pad_align ({})",
         global_capacity,
         args.pad_align);
     // valid_global is a host value only on the scalar path.
     if (!tensor_args.valid_global.has_value()) {
+        if (tensor_args.has_paged_cache()) {
+            const uint64_t pad_end =
+                tt::round_up(static_cast<uint64_t>(args.valid_global), static_cast<uint64_t>(args.pad_align));
+            const uint32_t max_pages = tensor_args.page_bundle_indices->logical_shape()[1];
+            const uint64_t slab = pad_end / args.chunk_size_global;
+            const uint32_t boundary = (pad_end / chunk_local) % sp_factor;
+            for (uint32_t rank = 0; rank < sp_factor; ++rank) {
+                const uint64_t local_end =
+                    slab * chunk_local +
+                    (rank < boundary ? chunk_local : (rank == boundary ? pad_end % chunk_local : 0u));
+                const uint32_t local_pages = (max_pages + sp_factor - 1 - rank) / sp_factor;
+                TT_FATAL(
+                    local_end <= static_cast<uint64_t>(local_pages) * args.kv_cache_page_size,
+                    "pad window exceeds page table capacity on SP rank {}",
+                    rank);
+            }
+        }
         TT_FATAL(
             args.valid_global <= global_capacity,
             "valid_global ({}) exceeds cache capacity ({})",
@@ -421,14 +433,14 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
             }}},
         });
         if (has_paged_cache) {
-            const uint32_t table_bytes = tensor_args.page_bundle_indices->logical_volume() * sizeof(uint16_t);
+            const uint32_t table_bytes = tensor_args.page_bundle_indices->logical_shape()[1] * sizeof(uint32_t);
             const uint32_t aligned_table_bytes = (table_bytes + 31u) & ~31u;
             desc.cbs.push_back(CBDescriptor{
                 .total_size = aligned_table_bytes,
                 .core_ranges = all_cores,
                 .format_descriptors = {{CBFormatDescriptor{
                     .buffer_index = kPageTableCbIndexWriter,
-                    .data_format = tt::DataFormat::RawUInt16,
+                    .data_format = tt::DataFormat::UInt32,
                     .page_size = aligned_table_bytes,
                 }}},
             });
@@ -449,7 +461,7 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
              args.kv_cache_page_size,
              args.num_layers,
              args.layer_idx,
-             has_paged_cache ? static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_volume()) : 0u});
+             has_paged_cache ? static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_shape()[1]) : 0u});
         writer.config = WriterConfigDescriptor{};
         writer.common_runtime_args = common_runtime_args;
         writer.emplace_runtime_args(
@@ -482,10 +494,10 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
         add_cb(kMetaCbIndexWriter, tt::DataFormat::UInt32, kMetadataBytes, 1);
     }
     if (has_paged_cache) {
-        const uint32_t table_bytes = tensor_args.page_bundle_indices->logical_volume() * sizeof(uint16_t);
+        const uint32_t table_bytes = tensor_args.page_bundle_indices->logical_shape()[1] * sizeof(uint32_t);
         const uint32_t aligned_table_bytes = (table_bytes + 31u) & ~31u;
-        add_cb(kPageTableCbIndex, tt::DataFormat::RawUInt16, aligned_table_bytes, 1);
-        add_cb(kPageTableCbIndexWriter, tt::DataFormat::RawUInt16, aligned_table_bytes, 1);
+        add_cb(kPageTableCbIndex, tt::DataFormat::UInt32, aligned_table_bytes, 1);
+        add_cb(kPageTableCbIndexWriter, tt::DataFormat::UInt32, aligned_table_bytes, 1);
     }
 
     // Reader: reads cache (TensorAccessor) + builds mask.
@@ -517,7 +529,7 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
          args.kv_cache_page_size / TILE_HEIGHT,
          args.num_layers,
          args.layer_idx,
-         has_paged_cache ? static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_volume()) : 0u});
+         has_paged_cache ? static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_shape()[1]) : 0u});
     reader.config = ReaderConfigDescriptor{};
     reader.common_runtime_args = common_runtime_args;
     reader.emplace_runtime_args(
@@ -562,7 +574,7 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
          args.kv_cache_page_size / TILE_HEIGHT,
          args.num_layers,
          args.layer_idx,
-         has_paged_cache ? static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_volume()) : 0u});
+         has_paged_cache ? static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_shape()[1]) : 0u});
     writer.config = WriterConfigDescriptor{};
     writer.common_runtime_args = common_runtime_args;
     writer.emplace_runtime_args(
