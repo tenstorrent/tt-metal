@@ -86,7 +86,7 @@ int term_cols() {
     return 120;
 }
 
-// Raw-ish stdin so single keypresses (f/s/d/g/q) switch views without Enter.
+// Raw-ish stdin so single keypresses (f/s/d/n/a/g/q) switch views without Enter.
 // Restored by the destructor so a Ctrl-C or normal exit leaves the terminal sane.
 class RawMode {
 public:
@@ -135,7 +135,11 @@ char poll_key() {
 // slot 3 of the ARC sample is overloaded, so unpack is unavailable whenever SFPU is
 // measured, and a column that reads n/a on the shipping firmware is worse than none.
 // Re-adding is a metric enum entry and a render line -- the data is already in the shm.
-enum class Metric { Fpu, Sfpu, Dispatch, All };
+//
+// NoC is the newest entry and the only one whose availability varies per producer: the
+// bytes exist on firmware bundle 152's 10-byte per-core sample and not on the 8-byte one,
+// so a chip without SIGNAL_SRC_NOC renders n/a rather than 0%.
+enum class Metric { Fpu, Sfpu, Dispatch, Noc, All };
 
 // WHICH SIGNAL IS THE THIRD COLUMN? The schema has always carried signal_sources for this
 // and the viewer has always ignored it, so a producer publishing instruction-issue activity
@@ -169,6 +173,7 @@ const char* metric_name(Metric m) {
         case Metric::Fpu: return "FPU";
         case Metric::Sfpu: return "SFPU";
         case Metric::Dispatch: return "DISPATCH";
+        case Metric::Noc: return "NOC (busier direction)";
         case Metric::All: return "ALL (F/S/D)";
     }
     return "?";
@@ -180,6 +185,16 @@ uint16_t metric_p1000(const ttnvtop::PerCoreView& v, Metric m) {
         case Metric::Fpu: return v.compute_busy_p1000;
         case Metric::Sfpu: return v.sfpu_busy_p1000;
         case Metric::Dispatch: return v.dispatch_busy_p1000;
+        // In and out are independent occupancies of two separate NIUs, so they do not sum
+        // to 100% and adding them would produce a "utilisation" over 1000 per-mille. One
+        // meter therefore shows the BUSIER DIRECTION -- the one that would be the limit --
+        // and kP1000Invalid in either propagates, because a half-measured core is not a
+        // core measured at the other direction's value.
+        case Metric::Noc:
+            if (v.noc_in_p1000 == ttnvtop::kP1000Invalid || v.noc_out_p1000 == ttnvtop::kP1000Invalid) {
+                return ttnvtop::kP1000Invalid;
+            }
+            return std::max(v.noc_in_p1000, v.noc_out_p1000);
         case Metric::All: return v.compute_busy_p1000;  // unused in All mode
     }
     return 0;
@@ -193,6 +208,16 @@ constexpr int kMeterInnerW = 9;
 constexpr int kMeterOuterW = 15;  // "NNN[" + inner + "]" + gap
 
 std::string render_meter(uint32_t idx, uint16_t p1000) {
+    // NOT MEASURED IS NOT ZERO, and this is the whole reason the schema carries a
+    // sentinel: an empty bar reading "0.0%" is indistinguishable from a genuinely idle
+    // core, and for a signal the producer never sampled that is a lie the user cannot
+    // see through. Same call the chip header makes for F/S without SIGNAL_SRC_COMPUTE.
+    if (p1000 == ttnvtop::kP1000Invalid) {
+        std::ostringstream na;
+        na << kAnsiDim << std::setw(3) << idx << kAnsiReset << "[" << kPctGray << std::string(kMeterInnerW - 3, ' ')
+           << "n/a" << kAnsiReset << "]";
+        return na.str();
+    }
     const double pct = static_cast<double>(p1000) / 10.0;
     char pctbuf[16];
     std::snprintf(pctbuf, sizeof(pctbuf), "%.1f%%", pct);
@@ -791,7 +816,7 @@ int main(int argc, char* argv[]) {
 
     const auto render_period = std::chrono::milliseconds(1000 / kRenderHz);
     RawMode raw_mode;             // restores the terminal on scope exit
-    Metric metric = Metric::Fpu;  // f/s/d switch; FPU is the htop-CPU% analogue
+    Metric metric = Metric::Fpu;  // f/s/d/n switch; FPU is the htop-CPU% analogue
     bool meter_view = true;       // 'g' toggles back to the spatial NoC grid
     while (!g_stop.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_for(render_period);
@@ -799,6 +824,7 @@ int main(int argc, char* argv[]) {
             case 'f': metric = Metric::Fpu; break;
             case 's': metric = Metric::Sfpu; break;
             case 'd': metric = Metric::Dispatch; break;
+            case 'n': metric = Metric::Noc; break;
             case 'a': metric = Metric::All; break;
             case 'g': meter_view = !meter_view; break;
             case 'q': g_stop.store(true, std::memory_order_relaxed); continue;
@@ -883,7 +909,7 @@ int main(int argc, char* argv[]) {
             << (metric == Metric::Dispatch ? third_metric_name(chip_sources) : metric_name(metric)) << "%" << kAnsiReset
             << "\n"
             << kAnsiDim << "  [f] FPU  [s] SFPU  [d] "
-            << (third_metric_name(chip_sources)[0] == 'A' ? "activity" : "dispatch") << "  [a] all   [g] "
+            << (third_metric_name(chip_sources)[0] == 'A' ? "activity" : "dispatch") << "  [n] NoC%  [a] all   [g] "
             << (meter_view ? "NoC grid" : "meters") << "   [q] quit     saturation: " << kAnsiReset << kPctGray
             << "idle" << kAnsiReset << " " << kPctGreen << "low" << kAnsiReset << " " << kPctYellow << "mid"
             << kAnsiReset << " " << kPctRed << "hot" << kAnsiReset << "\n";
@@ -937,6 +963,7 @@ int main(int argc, char* argv[]) {
                 // schema has specified this behaviour from the start and nothing implemented
                 // it.
                 const bool has_compute = (h->signal_sources & ttnvtop::SIGNAL_SRC_COMPUTE) != 0;
+                const bool has_noc = (h->signal_sources & ttnvtop::SIGNAL_SRC_NOC) != 0;
                 out << "   " << kMetricFpuCol << "F ";
                 if (has_compute) {
                     out << af << "%";
@@ -976,7 +1003,15 @@ int main(int argc, char* argv[]) {
                                        cores[idx].dispatch_busy_p1000)
                                 << " ";
                         } else {
-                            out << render_meter(static_cast<uint32_t>(idx), metric_p1000(cores[idx], metric)) << " ";
+                            // A producer that never sampled NOC leaves the fields at 0, not
+                            // at the sentinel -- the SHM collector does exactly that. So the
+                            // chip's declared sources, not the per-core value, decide whether
+                            // this is a reading at all. Same gate as has_compute above.
+                            uint16_t p = metric_p1000(cores[idx], metric);
+                            if (metric == Metric::Noc && !has_noc) {
+                                p = ttnvtop::kP1000Invalid;
+                            }
+                            out << render_meter(static_cast<uint32_t>(idx), p) << " ";
                         }
                     }
                     out << "\n";

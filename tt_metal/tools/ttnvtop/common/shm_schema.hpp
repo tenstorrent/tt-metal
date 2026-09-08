@@ -32,9 +32,21 @@ namespace ttnvtop {
 //       slot rails from the M3 mailbox, and whole-card power built from each
 //       die's TDP plus the ARC's fixed VP/VPH/GDDR figure. Fits in the tail
 //       padding v4 already had, so the struct stays 96 bytes.
-constexpr uint16_t kShmVersion = 5;
+//   v6 (2026-09-08): took PerCoreView::reserved_1 for per-core NOC in/out
+//       OCCUPANCY, which firmware bundle 152 added as two bytes on the end of
+//       a now-10-byte per-core sample. Deliberately not the noc*_mbps fields:
+//       this is a ratio, and a ratio in a field named mbps is a mislabel. The
+//       struct stays 40 bytes, so a v5 reader sees the same layout it always
+//       did for every field it knows about.
+constexpr uint16_t kShmVersion = 6;
 
 constexpr char kShmMagic[4] = {'T', 'T', 'U', 'T'};
+
+// "NOT A READING", for any per-mille field. Distinct from 0, which means measured and
+// idle -- the whole point of having a sentinel is that a viewer can print n/a instead of
+// a 0% that reads as idle. Shared here rather than kept in one producer because it is
+// part of the wire contract: a reader has to know it to honour it.
+constexpr uint16_t kP1000Invalid = 0xFFFF;
 
 // Bitfield for UtilShmHeader::signal_sources.
 enum SignalSource : uint32_t {
@@ -62,6 +74,13 @@ enum SignalSource : uint32_t {
     // core that unpacked nothing. Pack has a slot of its own and is always sampled.
     SIGNAL_SRC_PACK = 1u << 3,
     SIGNAL_SRC_UNPACK = 1u << 4,
+    // Per-core NOC in/out occupancy, in noc_in_p1000 / noc_out_p1000. Declared separately
+    // because it is the one per-core signal whose PRESENCE depends on the frame geometry
+    // rather than on the build: firmware that publishes an 8-byte per-core sample carries
+    // no NOC bytes at all, and the two bytes at that offset belong to the next core. A
+    // producer that did not read them leaves the fields at kP1000Invalid and clears this
+    // bit; a reader without the bit must render n/a, never 0%.
+    SIGNAL_SRC_NOC = 1u << 5,
 };
 
 // Written once at collector startup; `last_update_us` refreshed every tick.
@@ -153,7 +172,19 @@ struct PerCoreView {
     uint16_t noc1_out_mbps;
     uint32_t samples_seen;
     uint32_t last_kernel_id;
-    uint32_t reserved_1;
+    // NOC occupancy: the fraction of the sample window this core's NOC endpoint was
+    // moving data, per-mille like every other rate here. NOT the noc*_mbps fields above
+    // and not convertible to them without a clock and a link width -- those name bytes
+    // per second, these name a ratio, and putting one in the other's field is the
+    // mislabel this schema documents at length elsewhere.
+    //
+    // In and out are separate NIUs and independent occupancies: each is 0..1000 of the
+    // window on its own, so they do not sum to 1000 and a viewer must not add them.
+    //
+    // kP1000Invalid means not measured -- either the producer never sampled NOC, or the
+    // firmware's per-core sample is too short to carry it. See SIGNAL_SRC_NOC.
+    uint16_t noc_in_p1000;
+    uint16_t noc_out_p1000;
 };
 static_assert(sizeof(PerCoreView) == 40, "PerCoreView must be 40 bytes");
 
