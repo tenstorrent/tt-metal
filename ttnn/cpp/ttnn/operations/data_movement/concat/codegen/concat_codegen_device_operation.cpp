@@ -103,9 +103,13 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> ConcatCodegenDeviceOp
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    const auto& input_tensor = tensor_args.input_tensors.at(0);
-    int ideal_dev_clock_cycles = operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
-    return {{input_tensor}, output_tensor, ideal_dev_clock_cycles};
+    const auto& input_tensors = tensor_args.input_tensors;
+    // concat_op=true bills the read against the concatenated output rather than input 0, which is
+    // the only input the unflagged model would see -- an N-way concat would be under-counted by
+    // roughly the input count. Matches the native op's model so the two paths stay comparable.
+    int ideal_dev_clock_cycles = operations::data_movement::common_tm_bw_model(
+        input_tensors.at(0), output_tensor, false, 0, false, false, false, true);
+    return {input_tensors, output_tensor, ideal_dev_clock_cycles};
 }
 
 ConcatCodegenDeviceOperation::tensor_return_value_t concat_codegen(

@@ -18,9 +18,9 @@ namespace ttnn::prim {
 // (build_concat_rm / build_concat_rm_nonwidth_nway).
 inline constexpr uint32_t kConcatNonWidthBatch = 4;
 // Default write_batch for the width RM builders (build_concat_rm_width /
-// build_concat_rm_width_nway); their reader is unbatched (2-tensor) or reads
-// with a separate, unscaled read_batch=1 (N-way), so only write_batch (and the
-// CB depth it drives) is scaled for L1 fit.
+// build_concat_rm_width_nway). Both readers take it as their read batch too, so the
+// CB depth it drives is actually pipelined; the 2-tensor reader falls back to single
+// pages on its staged path, where a batch would need scratch per page.
 inline constexpr uint32_t kConcatWidthWriteBatch = 4;
 // Bounded by dataflow-RISC stack, not by runtime-arg words. The width N-way reader
 // holds four uint32_t[N] plus a bool[N] = 17*N bytes of frame, against a guaranteed

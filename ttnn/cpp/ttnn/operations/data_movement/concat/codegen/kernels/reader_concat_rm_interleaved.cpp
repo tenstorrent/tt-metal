@@ -76,8 +76,8 @@ void kernel_main() {
         uint32_t l1_offset = 0;
 
         for (uint32_t t = 0; t < batch; t++) {
-            // seq_concat_next() advances the cursor and leaves seq.curr_tensor naming the
-            // tensor the returned page belongs to, so read it before the next call.
+            // seq_concat_next() advances the cursor, so afterwards seq.curr_tensor names the
+            // NEXT page's tensor: capture it first to pick this page's TensorAccessor.
             const uint32_t read_tensor = seq.curr_tensor;
             const uint32_t page_id = seq_concat_next(seq);
             if (read_tensor == 0) {
