@@ -376,9 +376,9 @@ class TtIndexer:
                 if first_layer_idx is None
                 else full_indexer_rank(config, first_layer_idx + self.layer_num) - base
             )
-        # Stable, worst-case TP gather outputs.  Indexer layers execute serially, so TT_CCL shares each
-        # buffer across them.  This keeps the high-bandwidth gathers allocation-free and their output
-        # address fixed on the hot forward path.
+        # Stable, worst-case TP gather outputs. Indexer layers execute serially, so they share each
+        # buffer through TT_CCL. Allocate on first use because distributed ops may return a tensor owned
+        # by a child mesh; high_bw_all_gather requires its persistent output to have that exact owner.
         self._k_all_gather_output = None
         self._topk_indices_all_gather_output = None
         if self.tp_factor > 1:
@@ -392,18 +392,6 @@ class TtIndexer:
             assert self.index_args.index_head_dim % (self.tp_factor * ttnn.TILE_SIZE) == 0, (
                 "the TP-local index head dimension must be tile aligned for high_bw_all_gather; "
                 f"got {self.index_args.index_head_dim // self.tp_factor}"
-            )
-            self._k_all_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
-                name="indexer_k_all_reduce",
-                shape=[1, 1, self.active_seq_len_local, self.index_args.index_head_dim],
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            self._topk_indices_all_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
-                name="indexer_topk_indices",
-                shape=[1, 1, self.active_seq_len_local, self.index_topk_capacity],
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
             )
         self._upload_weights(idx_host)
         # DS block-cyclic uses the interleaved rotary_embedding_indexed op, but DS weights emit the
@@ -444,6 +432,21 @@ class TtIndexer:
 
     # Inlined TP/SP collectives — the indexer owns its own copy so it depends on tt_ccl, not on ttMLA
     # (the dense MLA forward keeps its own equivalents; both go through the same tt_ccl handles).
+    def _get_high_bw_all_gather_buffer(self, *, name, shape, dtype, layout, device):
+        """Return a shared persistent output owned by the collective input's exact mesh."""
+        key = (name, tuple(shape), dtype, layout, device.id())
+        output = self.tt_ccl.mla_high_bw_all_gather_buffers.get(key)
+        if output is None or not output.is_allocated():
+            output = ttnn.empty(
+                shape,
+                dtype=dtype,
+                layout=layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.tt_ccl.mla_high_bw_all_gather_buffers[key] = output
+        return output
+
     def _tp_rs_ag(self, t, rs_only=False):
         """All-reduce over TP = reduce-scatter (dim 3) then all-gather; rs_only stops after the RS."""
         if self.tp_factor == 1:
@@ -461,8 +464,14 @@ class TtIndexer:
         )
         if rs_only:
             return t
-        assert self._k_all_gather_output is not None
         assert tuple(t.shape) == (1, 1, self.active_seq_len_local, self.index_args.index_head_dim // self.tp_factor)
+        self._k_all_gather_output = self._get_high_bw_all_gather_buffer(
+            name="indexer_k_all_reduce",
+            shape=[1, 1, self.active_seq_len_local, self.index_args.index_head_dim],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=t.device(),
+        )
         return ttnn.experimental.high_bw_all_gather(
             t,
             dim=3,
@@ -492,12 +501,18 @@ class TtIndexer:
         if self.tp_factor == 1:
             return t
         assert dim == 2, "TtIndexer only regathers TP-split sequence rows"
-        assert self._topk_indices_all_gather_output is not None
         assert tuple(t.shape) == (
             1,
             1,
             self.active_seq_len_local // self.tp_factor,
             self.index_topk_capacity,
+        )
+        self._topk_indices_all_gather_output = self._get_high_bw_all_gather_buffer(
+            name="indexer_topk_indices",
+            shape=[1, 1, self.active_seq_len_local, self.index_topk_capacity],
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=t.device(),
         )
         return ttnn.experimental.high_bw_all_gather(
             t,
@@ -589,11 +604,12 @@ class TtIndexer:
         assert (
             index_kbuf.shape[2] % ttnn.TILE_SIZE == 0
         ), f"the TP-local index cache slab must be tile aligned for high_bw_all_gather; got {index_kbuf.shape[2]}"
-        out = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
+        out = self._get_high_bw_all_gather_buffer(
             name="indexer_kbuf_tp_replicate",
             shape=[1, 1, index_kbuf.shape[2] * self.tp_factor, index_kbuf.shape[3]],
             dtype=index_kbuf.dtype,
             layout=index_kbuf.layout,
+            device=index_kbuf.device(),
         )
         return ttnn.experimental.high_bw_all_gather(
             index_kbuf,
