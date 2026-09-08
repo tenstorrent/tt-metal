@@ -204,3 +204,26 @@ constexpr uint32_t kTokenDelivered = 11;
 constexpr uint32_t kMismatchedGo = 2;
 constexpr uint32_t kMatchedGo = 3;
 }  // namespace fds_outbox
+
+// Status slots and failure codes shared by the interrupt kernels, whose protocol lives in
+// quasar_fds_interrupt.h. Slot 0 is the result word as everywhere else. The interrupt count in
+// slot 1 doubles as the handler's flag: the handler bumps it last, so a kernel that sees it move
+// knows the handler ran to the end, and the kernels wait on it rather than on a separate word.
+namespace fds_interrupt_status {
+constexpr uint32_t kSlotInterruptCount = 1;
+// The PLIC source the handler claimed. Kernels that make no claim check put something else in
+// slot 2 and name it themselves.
+constexpr uint32_t kSlotClaimedSource = 2;
+
+// The armed interrupt never arrived.
+constexpr uint32_t kTimeoutInterrupt = 0x5A5A0070;
+// One arrived inside a window that had to stay quiet.
+constexpr uint32_t kUnexpectedInterrupt = 0x5A5A0071;
+// The claim named a source other than 16 + the group under test.
+constexpr uint32_t kWrongSource = 0x5A5A0072;
+// mcause was not a machine external interrupt.
+constexpr uint32_t kWrongCause = 0x5A5A0073;
+// mhartid landed outside the PLIC's context range, so no context offset could be computed and
+// nothing was armed at all.
+constexpr uint32_t kBadHartContext = 0x5A5A0074;
+}  // namespace fds_interrupt_status
