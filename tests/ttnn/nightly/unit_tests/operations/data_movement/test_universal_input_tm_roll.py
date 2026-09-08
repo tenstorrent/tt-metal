@@ -26,6 +26,11 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 _PCC = 0.9999
 
+# Largest N for which arange(N) is exact in each dtype, i.e. how big a distinct-per-element fill can
+# get before values start aliasing. bfloat16 has 8 significand bits, float32 has 24.
+_EXACT_ARANGE_LIMIT = {torch.bfloat16: 256, torch.float32: 2**24}
+_TTNN_DTYPE = {torch.bfloat16: ttnn.bfloat16, torch.float32: ttnn.float32}
+
 
 # ─── shard-config helpers ─────────────────────────────────────────────────────
 
@@ -79,19 +84,28 @@ def run_roll(device, torch_input, layout, mem_config, shifts, dims):
     assert_with_pcc(ref.float(), got.float(), _PCC)
 
 
-def run_roll_exact(device, shape, sh, sw, grid_x, grid_y, tensor_layout, orientation, shifts, dims, layout):
+def run_roll_exact(
+    device, shape, sh, sw, grid_x, grid_y, tensor_layout, orientation, shifts, dims, layout, dtype=torch.bfloat16
+):
     """Roll on an explicit grid_x-by-grid_y core grid, compared bit-exactly.
 
     Every element gets a distinct value, so a gather that reads the right offset from the *wrong*
-    core cannot coincide with the expected result. Values stay inside bfloat16's exactly
-    representable integer range (0..256), which is what lets this assert equality instead of PCC.
+    core cannot coincide with the expected result. The fill has to stay exact in `dtype` for that
+    to hold, which caps the element count (see `_EXACT_ARANGE_LIMIT`) — bfloat16 suffices for the
+    small row-major shapes and keeps the 2-byte `cell_size` / `row_pitch_bytes` pitch under test,
+    while a tilized shape needs float32 simply to fit.
+
+    Also asserts the native sharded factory really ran. `native_ok` in `roll.cpp` is
+    shape-dependent, and every sharded fallback reshards back to the input's config, so the output
+    memory config alone would not reveal a config that had stopped reaching the factory under test.
     """
     compute_grid = device.compute_with_storage_grid_size()
     if grid_x > compute_grid.x or grid_y > compute_grid.y:
         pytest.skip(f"Device grid ({compute_grid.x}x{compute_grid.y}) too small for {grid_x}x{grid_y}")
     numel = int(torch.tensor(shape).prod())
-    assert numel <= 256, f"{numel} elements would alias in bfloat16; keep the distinct fill exact"
-    torch_input = torch.arange(numel, dtype=torch.float32).reshape(shape).to(torch.bfloat16)
+    limit = _EXACT_ARANGE_LIMIT[dtype]
+    assert numel <= limit, f"{numel} elements would alias in {dtype} (limit {limit}); fill must stay exact"
+    torch_input = torch.arange(numel, dtype=torch.float32).reshape(shape).to(dtype)
     spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}),
         (sh, sw),
@@ -99,11 +113,45 @@ def run_roll_exact(device, shape, sh, sw, grid_x, grid_y, tensor_layout, orienta
     )
     mem_config = ttnn.MemoryConfig(tensor_layout, ttnn.BufferType.L1, spec)
     ttnn_input = ttnn.from_torch(
-        torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem_config
+        torch_input, dtype=_TTNN_DTYPE[dtype], layout=layout, device=device, memory_config=mem_config
     )
-    got = ttnn.to_torch(ttnn.roll(ttnn_input, list(shifts), list(dims)).cpu())
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        ttnn_output = ttnn.roll(ttnn_input, list(shifts), list(dims))
+    finally:
+        captured = ttnn.graph.end_graph_capture()
+    # `roll.cpp` dispatches one roll_sharded per non-zero shift, so don't pin the count — the point
+    # is that nothing *else* ran. Both sharded fallbacks would add device ops here: the TILE one an
+    # untilize/tilize pair, the RM one an interleaved slice/concat round-trip.
+    device_ops = [n for n in ttnn.graph.extract_calltrace(captured) if n.endswith("DeviceOperation")]
+    assert device_ops and set(device_ops) == {"RollDeviceOperation"}, (
+        f"expected only the native sharded roll factory, got {device_ops} — this config stopped "
+        f"reaching the code path this test covers"
+    )
+    assert ttnn_output.memory_config() == mem_config, (
+        f"native sharded roll must preserve the input memory config, "
+        f"got {ttnn_output.memory_config()} vs {mem_config}"
+    )
+
+    got = ttnn.to_torch(ttnn_output.cpu())
     ref = torch.roll(torch_input, list(shifts), list(dims))
-    assert torch.equal(ref.float(), got.float())
+    if not torch.equal(ref.float(), got.float()):
+        # Name the configuration and a few offending elements: a wrong shard -> core map fails on
+        # some grid shapes and not others, so the grid and orientation are the diagnostic.
+        bad = (ref.float() != got.float()).nonzero()
+        sample = "; ".join(
+            f"{tuple(idx.tolist())} expected {ref[tuple(idx.tolist())].item():g}, "
+            f"got {got[tuple(idx.tolist())].item():g}"
+            for idx in bad[:4]
+        )
+        pytest.fail(
+            f"roll differs from torch.roll in {len(bad)}/{ref.numel()} elements\n"
+            f"  shape={list(shape)} shard=({sh}, {sw}) grid={grid_x}x{grid_y} dtype={dtype}\n"
+            f"  {tensor_layout} {orientation} {layout}\n"
+            f"  shifts={list(shifts)} dims={list(dims)}\n"
+            f"  first mismatches: {sample}"
+        )
 
 
 # ─── DRAM / L1 interleaved — backward compatibility ──────────────────────────
@@ -449,11 +497,12 @@ def test_roll_col_major_height_sharded(device, shape, sh, sw, shifts, dims, layo
 
 
 # On a single row (or single column) of cores the ROW_MAJOR and COL_MAJOR enumerations agree, so
-# HEIGHT/WIDTH + COL_MAJOR only diverge once the grid is genuinely 2D. These three tests pin the
+# HEIGHT/WIDTH + COL_MAJOR only diverge once the grid is genuinely 2D. These tests pin the
 # shard -> core map for each sharded layout: HEIGHT on a multi-row grid used to gather whole shards
 # from the wrong core, WIDTH used to index past the end of the per-core transfer table and segfault
 # inside the program factory, and BLOCK — the one layout whose shard grid matches its core grid —
-# was and stays correct.
+# was and stays correct. The map itself is layout-independent, but each case is run untilized and
+# tilized so a regression in the surrounding cell_h/cell_w and row-pitch arithmetic is caught too.
 
 
 @pytest.mark.parametrize("grid_x,grid_y", [(8, 2), (2, 8), (4, 4)])
@@ -482,22 +531,57 @@ def test_roll_col_major_height_sharded_multi_row_grid(device, grid_x, grid_y, sh
     )
 
 
-@pytest.mark.parametrize("grid_x,grid_y", [(8, 1), (4, 2), (2, 4), (1, 8)])
-@pytest.mark.parametrize("shifts,dims", [([2], [3]), ([1], [2])])
-def test_roll_col_major_width_sharded(device, grid_x, grid_y, shifts, dims):
-    """WIDTH_SHARDED + COL_MAJOR: 8 shards of 2 columns over 8 cores."""
+@pytest.mark.parametrize("grid_x,grid_y", [(4, 2), (2, 4)])
+@pytest.mark.parametrize("shifts,dims", [([32], [2]), ([32], [3])])
+def test_roll_col_major_height_sharded_multi_row_grid_tile(device, grid_x, grid_y, shifts, dims):
+    """Same shard -> core map, TILE layout: 8 shards of one tile-row over 8 cores.
+
+    The mapping code is layout-independent, so this is the tilized twin of the test above rather
+    than a separate code path — it guards against a tile-only regression in cell_h/cell_w handling.
+    """
     run_roll_exact(
         device,
-        [1, 1, 8, 16],
-        sh=8,
-        sw=2,
+        [1, 1, 256, 64],
+        sh=32,
+        sw=64,
+        grid_x=grid_x,
+        grid_y=grid_y,
+        tensor_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,
+        shifts=shifts,
+        dims=dims,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=torch.float32,  # 8 tile-rows of shards cannot fit inside bfloat16's exact range
+    )
+
+
+@pytest.mark.parametrize("grid_x,grid_y", [(8, 1), (4, 2), (2, 4), (1, 8)])
+@pytest.mark.parametrize(
+    "layout,shape,sh,sw,dtype,shifts,dims",
+    [
+        # Row-major: 2-byte cells, shard row padded from 4B up to the 16B L1 alignment.
+        (ttnn.ROW_MAJOR_LAYOUT, [1, 1, 8, 16], 8, 2, torch.bfloat16, [2], [3]),
+        (ttnn.ROW_MAJOR_LAYOUT, [1, 1, 8, 16], 8, 2, torch.bfloat16, [1], [2]),
+        # Tilized twin: whole-tile cells, and the width split puts shard columns on other cores.
+        (ttnn.TILE_LAYOUT, [1, 1, 64, 256], 64, 32, torch.float32, [32], [3]),
+        (ttnn.TILE_LAYOUT, [1, 1, 64, 256], 64, 32, torch.float32, [32], [2]),
+    ],
+)
+def test_roll_col_major_width_sharded(device, grid_x, grid_y, layout, shape, sh, sw, dtype, shifts, dims):
+    """WIDTH_SHARDED + COL_MAJOR: 8 shards spread across the width, over 8 cores."""
+    run_roll_exact(
+        device,
+        shape,
+        sh=sh,
+        sw=sw,
         grid_x=grid_x,
         grid_y=grid_y,
         tensor_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         orientation=ttnn.ShardOrientation.COL_MAJOR,
         shifts=shifts,
         dims=dims,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=layout,
+        dtype=dtype,
     )
 
 
@@ -509,21 +593,33 @@ def test_roll_col_major_width_sharded(device, grid_x, grid_y, shifts, dims):
         (ttnn.ShardOrientation.COL_MAJOR, 2, 4),
     ],
 )
-@pytest.mark.parametrize("shifts,dims", [([2], [3]), ([4], [2])])
-def test_roll_block_sharded_orientations(device, orientation, grid_x, grid_y, shifts, dims):
+@pytest.mark.parametrize(
+    "layout,shape,sh,sw,dtype,shifts,dims",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, [1, 1, 16, 16], 8, 4, torch.bfloat16, [2], [3]),
+        (ttnn.ROW_MAJOR_LAYOUT, [1, 1, 16, 16], 8, 4, torch.bfloat16, [4], [2]),
+        # Tilized twin: both shard dimensions are split, in whole-tile cells.
+        (ttnn.TILE_LAYOUT, [1, 1, 64, 128], 32, 32, torch.float32, [32], [3]),
+        (ttnn.TILE_LAYOUT, [1, 1, 64, 128], 32, 32, torch.float32, [32], [2]),
+    ],
+)
+def test_roll_block_sharded_orientations(
+    device, orientation, grid_x, grid_y, layout, shape, sh, sw, dtype, shifts, dims
+):
     """BLOCK_SHARDED in both orientations still matches torch.roll exactly."""
     run_roll_exact(
         device,
-        [1, 1, 16, 16],
-        sh=8,
-        sw=4,
+        shape,
+        sh=sh,
+        sw=sw,
         grid_x=grid_x,
         grid_y=grid_y,
         tensor_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         orientation=orientation,
         shifts=shifts,
         dims=dims,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=layout,
+        dtype=dtype,
     )
 
 

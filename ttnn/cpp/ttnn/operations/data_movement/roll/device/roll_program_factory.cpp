@@ -284,7 +284,7 @@ RollPlan compute_roll_plan(
     for (const auto& p : col_pieces) {
         const uint32_t copy_bytes = p.len * cell_size;
         bool have_run = false;
-        uint32_t run_dst_core = 0, run_src_core = 0;
+        uint32_t run_dst_core = 0, run_src_core = 0, run_src_shard = 0;
         uint32_t run_src_off = 0, run_dst_off = 0, run_num = 0;
         auto flush = [&]() {
             if (!have_run) {
@@ -292,7 +292,7 @@ RollPlan compute_roll_plan(
             }
             all_transfers[run_dst_core].push_back(RollTransferDesc{
                 .src_physical_core = physical_cores[run_src_core / grid_cols][run_src_core % grid_cols],
-                .src_dram_shard_idx = core_to_shard(run_src_core),
+                .src_dram_shard_idx = run_src_shard,
                 .src_l1_offset = run_src_off,
                 .dst_offset = run_dst_off,
                 .copy_size = copy_bytes,
@@ -304,8 +304,9 @@ RollPlan compute_roll_plan(
         };
         for (uint32_t r = 0; r < H_cells; r++) {
             const uint32_t src_row = is_last_dim ? r : rolled_src_row(r);
+            const uint32_t src_shard = shard_index(src_row, p.src_col);
             const uint32_t dst_core = shard_to_core(shard_index(r, p.dst_col));
-            const uint32_t src_core = shard_to_core(shard_index(src_row, p.src_col));
+            const uint32_t src_core = shard_to_core(src_shard);
             const uint32_t src_off = local_offset(src_row, p.src_col);
             const uint32_t dst_off = local_offset(r, p.dst_col);
             // Extend the run only if cores match and both offsets advance by exactly one pitch.
@@ -318,6 +319,7 @@ RollPlan compute_roll_plan(
                 have_run = true;
                 run_dst_core = dst_core;
                 run_src_core = src_core;
+                run_src_shard = src_shard;
                 run_src_off = src_off;
                 run_dst_off = dst_off;
                 run_num = 1;
@@ -455,7 +457,9 @@ RollPlan compute_roll_plan(
                 src_shards.push_back(td.src_dram_shard_idx);
             }
         }
-        TT_ASSERT(
+        // Not TT_ASSERT: that compiles out in Release, and exceeding 2 sources does not trap — the
+        // reader would index past `src_base[2]` and emit silently wrong data.
+        TT_FATAL(
             src_shards.size() <= 2,
             "Native sharded roll DRAM RM: dst shard {} needs {} src shards; caller should have filtered via "
             "dram_rm_roll_needs_extra_source_shards.",
