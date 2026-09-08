@@ -117,20 +117,27 @@ sfpi_inline sfpi::vFloat _reciprocal_compat_(const sfpi::vFloat in)
 // 1/in, carrying the sign that _reciprocal_compat_ drops.
 //
 // The primitive above forces the sign bit and so returns |1/in|; it is only half of a reciprocal,
-// and every caller that wants 1/in owes it the negate below. Spelled out at each call site that
-// step is easy to leave out, and leaving it out is silent -- the result stays correct for positive
-// inputs and is wrong only in sign for negative ones. Prefer this wrapper; take the bare primitive
-// only where the magnitude is the intent.
+// and every caller that wants 1/in owes it the sign restore below. Spelled out at each call site
+// that step is easy to leave out, and leaving it out is silent -- the result stays correct for
+// positive inputs and is wrong only in sign for negative ones. Prefer this wrapper; take the bare
+// primitive only where the magnitude is the intent.
+//
+// SFPSETSGN (sfpi::copysgn) rather than v_if(in < 0.0) { out = -out; }. The comparison form is
+// what this wrapper replaced, and it works: measured on Blackhole silicon it does fire on a
+// delivered -0.0, so reciprocal_compat(-0.0) is -inf either way, and the two forms are
+// bit-identical over the SDPA, sampling and compat-unary suites. But SFPSETCC is specified only
+// "provided that VC is neither negative zero nor any kind of NaN" (VectorUnit.md), so that
+// agreement is behaviour outside the contract and not a property to rest a documented 1/in on --
+// note the pole guard above needs setsgn(in, 0) precisely because the *equality* comparison does
+// NOT admit -0.0. Moving the sign bit needs no comparison at all, which sidesteps both, and costs
+// one instruction where the predicated negate cost three (SFPSETCC/SFPMOV/SFPENCC): measured
+// -32 to -64 cycles/tile across the swept ReciprocalCompat and RsqrtCompat perf variants.
+//
+// test_reciprocal_compat_negative_zero_regression in the LLK suite is what holds the pole down.
 template <int max_iter = 3>
 sfpi_inline sfpi::vFloat _reciprocal_compat_signed_(const sfpi::vFloat in)
 {
-    sfpi::vFloat out = _reciprocal_compat_<max_iter>(in);
-    v_if (in < 0.0)
-    {
-        out = -out;
-    }
-    v_endif;
-    return out;
+    return sfpi::copysgn(_reciprocal_compat_<max_iter>(in), in);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en>

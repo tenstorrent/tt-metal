@@ -895,6 +895,121 @@ def test_sqrt_custom_infinity_regression(request):
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# reciprocal_compat(-0.0): the sign restore at the pole, deliberately outside the edge sweep
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# _reciprocal_compat_signed_ promises 1/in, and the primitive it wraps returns |1/in|, so the
+# whole promise rests on the restore. Two SFPSETCC behaviours the ISA leaves unspecified
+# ("provided that VC is neither negative zero nor any kind of NaN") decide the answer at -0.0,
+# and they pull in opposite directions:
+#
+#   `setsgn(in, 0) == 0.0F` in the pole guard is written that way because a bare `in == 0.0F`
+#   does NOT admit -0.0 -- measured: it leaves -0.0 at the saturated 1.70135e38 instead of an
+#   infinity. So the zero comparison behaves like an all-32-bits-zero test.
+#
+#   `in < 0.0` in the restore DOES fire on -0.0 -- so the sign comparison behaves like a
+#   sign-bit test. Same measurement that puts sign(-0.0) at -1 and heaviside(-0.0) at 0 in
+#   _EDGE_KNOWN_DIVERGENCES above.
+#
+# Both are outside the documented contract, so neither is a property to lean on silently. The
+# kernel takes the sign bit with SFPSETSGN (sfpi::copysgn) rather than a comparison, which is
+# inside the contract and is one instruction rather than three; this test is what holds that
+# in place, and it fails if the restore reverts to a comparison AND the comparison behaviour
+# changes -- which is exactly the pair that would otherwise go unnoticed.
+#
+# ONE COMBINATION: Float32 -> Float32 at dest_acc=Yes. negative_zero_delivered() is the gate --
+# only the unpack-to-dest path puts a real -0.0 in the LREG, everywhere else the datacopy
+# flattens it to +0.0 and the assertion would pass vacuously. The output leg has to be 32-bit
+# too, or the bf16 narrowing on the way to L1 hides which infinity came back.
+@pytest.mark.nightly
+def test_reciprocal_compat_negative_zero_regression():
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+
+    # If this ever goes False the pipeline stopped delivering -0.0 and the assertion below
+    # would be testing +0.0 -- fail loudly rather than quietly testing nothing.
+    assert negative_zero_delivered(formats.input_format, dest_acc), (
+        "Float32 at dest_acc=Yes no longer delivers a real -0.0 to the LREG; re-derive the "
+        "combination this regression test runs on before editing it."
+    )
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    # A positive control in the same tile: +0.0 must stay +inf. A restore that over-fires
+    # (copying the wrong sign, or negating unconditionally) breaks this one, not the probe.
+    src_A = torch.full((num_elements,), 1.0, dtype=torch.float32)
+    src_A[0] = -0.0
+    src_A[1] = 0.0
+    src_B = torch.zeros(num_elements, dtype=torch.float32)
+    tile_cnt = 1
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=MathOperation.ReciprocalCompat),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+
+    res = torch.tensor(configuration.run().result, dtype=torch.float32)
+    bits = res.view(torch.int32)
+
+    assert bits[0].item() & 0xFFFFFFFF == 0xFF800000, (
+        f"reciprocal_compat(-0.0) returned 0x{bits[0].item() & 0xFFFFFFFF:08X} "
+        f"({res[0].item()!r}), expected -inf (0xFF800000). _reciprocal_compat_ returns "
+        "|1/in|, so this is the sign restore in _reciprocal_compat_signed_ failing at the "
+        "pole. A 0x7F800000 here means the restore did not fire on a delivered -0.0; a "
+        "0xFEFFFD9E means the pole guard did not fire either."
+    )
+    assert bits[1].item() & 0xFFFFFFFF == 0x7F800000, (
+        f"reciprocal_compat(+0.0) returned 0x{bits[1].item() & 0xFFFFFFFF:08X} "
+        f"({res[1].item()!r}), expected +inf. The restore is over-firing: it must move the "
+        "input's sign bit, not set one."
+    )
+    # The rest of the tile is 1.0, whose reciprocal must stay positive and near 1.0. Catches a
+    # restore widened to every lane. Tolerance, not equality: _reciprocal_compat_ is a
+    # magic-seed Newton-Raphson approximation, so 1/1.0 lands near 1.0, not exactly on it.
+    assert torch.all(bits[2:] >= 0), (
+        "reciprocal_compat(1.0) came back negative on some lane; the sign restore is "
+        "firing outside the negative inputs."
+    )
+    assert torch.allclose(res[2:], torch.tensor(1.0), rtol=1e-3, atol=0.0), (
+        f"reciprocal_compat(1.0) is no longer ~1.0 on the lanes around the probe "
+        f"(max deviation {(res[2:] - 1.0).abs().max().item():.6g})."
+    )
+
+
 # Integer unary SFPU ops. Each has a dedicated integer kernel and runs through the
 # shared driver with the input unpacked straight to DST (dest_acc=Yes is required for
 # the 32-bit int path). Golden is exact (no PCC/tolerance).
