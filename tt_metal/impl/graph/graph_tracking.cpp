@@ -123,7 +123,10 @@ void track_program_l1(GraphTracker& tracker, detail::ProgramImpl& program, const
     }
     // Scratchpads stack on the same program-scope L1 region as the dataflow buffers, one region per
     // binding: kernels may only share a scratchpad spec across disjoint cores.
-    const auto& hal = MetalContext::instance().hal();
+    // The program's own context, not the default one. A program built on a mock device sizes
+    // kernels_ from that device's HAL, which registers fewer programmable core types than a real
+    // Blackhole with DRAM cores enabled; the default context's count then runs off the end.
+    const auto& hal = MetalContext::instance(program.get_context_id()).hal();
     for (uint32_t core_type = 0; core_type < hal.get_programmable_core_type_count(); core_type++) {
         for (const auto& [_, kernel] : program.get_kernels(core_type)) {
             for (const auto& scratchpad : kernel->scratchpad_binding_handles()) {
