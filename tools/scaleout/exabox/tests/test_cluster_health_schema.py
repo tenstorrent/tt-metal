@@ -136,6 +136,24 @@ class TestRejects(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, r"^duration_s:"):
                     validate_record(bad)
 
+    def test_pass_pct_accepted_for_physical(self):
+        record = self._dry_run()
+        record["pass_pct"] = 92.5
+        validate_record(record, file_written=False)
+
+    def test_pass_pct_rejected_out_of_range(self):
+        record = self._dry_run()
+        record["pass_pct"] = 120
+        with self.assertRaisesRegex(ValueError, r"^pass_pct:"):
+            validate_record(record)
+
+    def test_pass_pct_rejected_for_fabric(self):
+        record = self._dry_run()
+        record["test_type"] = "fabric"
+        record["pass_pct"] = 90
+        with self.assertRaisesRegex(ValueError, r"^pass_pct:"):
+            validate_record(record)
+
     def test_rank_binding_missing_mesh_id(self):
         record = self._dry_run()
         record["topology"] = {"rank_bindings": [{"rank": 0}]}
