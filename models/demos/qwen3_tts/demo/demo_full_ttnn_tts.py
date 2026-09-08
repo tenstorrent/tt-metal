@@ -203,9 +203,11 @@ def run_full_ttnn_tts(
             # Capture the ECAPA traces once, before the first speaker-embedding call
             # and before the heavier CP/Talker captures — the same ordering
             # init_server_context relies on (traces captured later can land on
-            # trace_region positions overlapping executed ones). Off by default:
-            # a capture costs ~1 s and a one-shot run cannot amortise it.
-            if os.environ.get("QWEN3_TTS_SE_TRACE", "0") != "0":
+            # trace_region positions overlapping executed ones). On by default
+            # (QWEN3_TTS_SE_TRACE=0 disables): the speaker embedding goes 1469.9 -> 6.4 ms.
+            # Note the capture itself costs ~1.75 s, so a single-request run does not
+            # amortise it -- total wall time is a wash (51.63 s against 51.54 s).
+            if os.environ.get("QWEN3_TTS_SE_TRACE", "1") != "0":
                 se = model.speaker_encoder
                 cap_start = time.time()
                 se.capture_se_block_traces()
