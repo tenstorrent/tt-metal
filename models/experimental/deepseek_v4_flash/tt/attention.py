@@ -1249,28 +1249,16 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             self.kv_proj.set_output_core_grid(
                 ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
             )
-        # q_a's RMSNorm rides in the q_a matmul's own epilogue when the op can take it.
-        self.fuse_q_a_norm = (
-            self.packed_weights is None
-            and not self.dedicated_qkv_ranks
-            and not self.balanced_qkv
-            and self.q_a_proj.can_fuse_rms_norm()
-        )
-        if self.fuse_q_a_norm:
-            # Destination of the q_a mcast: a filled rectangle so NOC multicast is legal,
-            # and q_a's producer cores sit on it. The generic row-wise 64-core set can be
-            # ragged on Blackhole.
-            self.q_b_proj = projection("q_b_proj", cache_suffix=".rect", rectangle_b_grid=True)
-        else:
-            self.q_b_proj = projection("q_b_proj")
-        if self.fuse_q_a_norm:
-            self.q_a_proj.enable_fused_rms_norm(self.eps, weights["q_a_norm.weight"])
+        self.q_b_proj = projection("q_b_proj")
         self.o_b_proj = projection("o_b_proj")
-        self.q_a_norm = (
-            None
-            if self.fuse_q_a_norm
-            else DeepSeekV4RMSNorm(weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"), sharded=True)
+        # q_a's learned RMSNorm stays standalone. q_b's unweighted norm is per query
+        # head, so its grouped matmul epilogue is the compatible fusion point.
+        self.q_a_norm = DeepSeekV4RMSNorm(
+            weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"), sharded=True
         )
+        self.fuse_q_b_norm = self.q_b_proj.can_fuse_rms_norm()
+        if self.fuse_q_b_norm:
+            self.q_b_proj.enable_fused_rms_norm(self.eps, 1.0, group_size=self.head_dim)
         self.fuse_kv_norm = (
             self.packed_weights is None
             and not self.dedicated_qkv_ranks
@@ -1709,18 +1697,21 @@ class DeepSeekV4Attention(DeepSeekV4Module):
 
         if qkv_tokens is not tokens:
             ttnn.deallocate(qkv_tokens)
-        # ``None`` when the q_a matmul normalized its own output (see __init__): what comes
-        # back is then already ``q_a``, one replica per q_b B core.
-        q_a = q_a_raw if self.q_a_norm is None else self.q_a_norm(q_a_raw)
-        if q_a.layout == ttnn.ROW_MAJOR_LAYOUT:
-            q_a = ttnn.to_memory_config(q_a, ttnn.DRAM_MEMORY_CONFIG)
-            q_a = ttnn.to_layout(q_a, ttnn.TILE_LAYOUT)
-        q = self.q_b_proj(q_a)  # [1, 1, B, H*Dh]
+        q_a = self.q_a_norm(q_a_raw)
+        # The grouped epilogue needs q_b's one-row replicated-A path. Unsupported q_b
+        # layouts keep the tiled width-sharded activation and standalone per-head norm.
+        q_b_input = self.q_b_proj.to_replicated_rm_hs_activation(q_a) if self.fuse_q_b_norm else q_a
+        q = self.q_b_proj(q_b_input)  # [1, 1, B, H*Dh]
+        if q_b_input is not q_a:
+            ttnn.deallocate(q_b_input)
+        if q.layout == ttnn.ROW_MAJOR_LAYOUT:
+            # Fused q_b leaves one physical row per token. SDPA-decode matches its
+            # tile-padded sink against Q's padded head count, so Q must be tiled.
+            q = ttnn.to_layout(ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG), ttnn.TILE_LAYOUT)
         q = ttnn.reshape(q, [1, tokens_n, h, dh], memory_config=width_sharded_l1_config(tokens_n * h, dh, self.device))
 
-        # Query normalization is per head, so it must run after reshaping H*Dh into
-        # separate Dh rows. Fusing it into q_b would normalize across all heads.
-        q = _rms_norm_unweighted(q, self.eps)
+        if not self.fuse_q_b_norm:
+            q = _rms_norm_unweighted(q, self.eps)
         q = _apply_rope(q, cos, sin, self.rot, self.rope_dim)  # [1, B, H, Dh]
 
         # kv_proj runs here rather than beside q_a_proj: one GCB is one FIFO, so a
