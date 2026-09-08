@@ -22,9 +22,10 @@ kernels, decode.
 
 *What this model is, and what it is graded against.* It carries only what the HF config and the
 checkpoint cannot tell you: target hardware, TP/SP split, chunk size and sequence length, user
-count, data formats, PCC thresholds, golden trace location. Anything readable from `config.json` —
-dims, layer count, attention family, rope parameters, vocab, norm eps, expert counts, checkpoint
-quantization — is **not** in the spec; read it from the config and assert it (see D1).
+count, data formats, the two PCC thresholds (`acceptance.pcc_target`, `acceptance.pcc_lower_bound`,
+§4), golden trace location. Anything readable from `config.json` — dims, layer count, attention
+family, rope parameters, vocab, norm eps, expert counts, checkpoint quantization — is **not** in the
+spec; read it from the config and assert it (see D1).
 
 The **spec is binding**. Every value in it must be respected exactly, at every stage; no convention
 in this document overrides it. Where an existing implementation in the repo conflicts with the spec,
@@ -156,6 +157,18 @@ the per-module goldens they dump are fp16, and the golden trace P1-P2 compare ag
 disk as fp16. This is a fixed convention, not a per-model choice. The package you borrow a reference
 or a golden runner from might **not** follow it — its casts are shape-tuned, not structural (§2.3),
 so replace them rather than carrying them over.
+
+**Two PCC numbers, from the spec, for every component.** The spec's `acceptance` block carries
+`pcc_target` (0.99) and `pcc_lower_bound` (0.85). They apply unchanged to every test in every
+Testing table below — each `*_vs_ref` module test, the decoder layer, the whole model, and the
+per-layer KV check.
+
+- `pcc_target` is what every component **aims for**. A component at or above it is finished; move
+  on.
+- `pcc_lower_bound` is the **assert** in every test. A component below it is not accepted, the
+  stage's Testing table is red, and the work is not done, try to fix before anything else.
+- **Between the two** the test passes, accept it and record the measured value and the reason
+in the `README.md` PCC status table (§8).
 
 - **E — Exploration**
 
@@ -399,9 +412,10 @@ the model does not have.
 
 **Testing** — the decoder test suite written in D2. No new tests.
 
-**Goal** D3 passes when every applicable test in the decoder test suite passes, with each block in
-ttnn wherever its math can be composed from ttnn ops and a logged torch CPU fallback only where it
-cannot.
+**Goal** D3 passes when every applicable test in the decoder test suite passes at or above
+`pcc_lower_bound`, every component below `pcc_target` has its measured value and reason recorded
+(§4), each block is in ttnn wherever its math can be composed from ttnn ops, and a torch CPU
+fallback is logged only where it cannot.
 
 ---
 
@@ -460,9 +474,10 @@ cannot.
 
 **Testing** — the model test suite written in M2, plus the decoder test suite as a regression.
 
-**Goal** M3 passes when every test in the model test suite passes, with each new block in ttnn
-wherever its math can be composed from ttnn ops and a logged torch CPU fallback only where it
-cannot, and the decoder test suite still green.
+**Goal** M3 passes when every test in the model test suite passes at or above `pcc_lower_bound`,
+every new component below `pcc_target` has its measured value and reason recorded (§4), each new
+block is in ttnn wherever its math can be composed from ttnn ops, a torch CPU fallback is logged
+only where it cannot, and the decoder test suite is still green.
 
 ---
 
@@ -480,8 +495,9 @@ cannot, and the decoder test suite still green.
 | `gpt_oss_d_p/tests/unit/test_mxfp4_loader.py` | Dequantized expert weights against a reference dequantization of the packed blocks + scales. Only if the checkpoint is quantized. Host-only. |
 | `minimax_m3/tests/galaxy_prefill_kv_pcc.py`, run `PREFILL_CHUNKED=0` | Every layer's on-device K/V after a one-shot real-weights prefill, against the CPU golden trace. First test where real weights, full layer count, target parallelism and MoE all interact. Also reports throughput. |
 
-**Goal** P1 passes when the loader test passes and the one-shot per-layer KV PCC clears the spec's
-threshold — with the D3 and M3 random-weight tables still green.
+**Goal** P1 passes when the loader test passes and the one-shot per-layer KV PCC is at or above
+`pcc_lower_bound` on every layer — aiming for `pcc_target`, with the minimum recorded in `README.md`
+— and the D3 and M3 random-weight tables are still green.
 
 ---
 
@@ -498,7 +514,8 @@ threshold — with the D3 and M3 random-weight tables still green.
 |---|---|
 | `minimax_m3/tests/galaxy_prefill_kv_pcc.py`, run `PREFILL_CHUNKED=1` | Per-layer K/V after a **multi-chunk** prefill against the same golden trace P1 used one-shot — i.e. chunk N attending the prefix chunks 0..N-1 left in the cache produces the same result as processing the whole sequence at once. |
 
-**Goal** P2 passes when the chunked run reaches the same per-layer PCC as P1's one-shot run.
+**Goal** P2 passes when the chunked run is at or above `pcc_lower_bound` on every layer and reaches
+the same per-layer PCC as P1's one-shot run.
 
 ---
 
@@ -624,7 +641,8 @@ aimed at the inputs instead of the stages.
 
 ## 8. Definition of done in terms of this model bringup
 
-- [ ] Every module has a `*_vs_ref` test at or above its `unit_pcc` threshold
+- [ ] Every module has a `*_vs_ref` test asserting at the spec's `pcc_lower_bound`; every module below
+  `pcc_target` has its measured PCC and the reason in the `README.md` PCC status table
 - [ ] Full model runs at target mesh shape with real weights; per-layer KV PCC recorded in `README.md`
 - [ ] Runtime asserts on out-of-contract chunk ranges
 - [ ] `README.md` records architecture, reuse-vs-fresh, PCC status, run commands, and known gaps

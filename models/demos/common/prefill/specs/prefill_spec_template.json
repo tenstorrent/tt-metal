@@ -2,6 +2,7 @@
   "_comment": "BINDING prefill spec. Only carries what the HF config and the checkpoint CANNOT tell you, plus the few targets the bring-up is graded against. Anything readable from config.json - dims, layer count, attention family, rope, vocab, norm eps, expert counts, checkpoint quantization - is NOT here; read it from the config. Where any existing implementation in the repo conflicts with this file, this file wins.",
 
   "model_name": "",
+  "hf_repo": "",
 
   "target_hw": "",
   "_target_hw_options": ["bh_galaxy", "wh_galaxy", "bh_loudbox", "bh_quietbox", "single_bh"],
@@ -37,6 +38,8 @@
   },
 
   "acceptance": {
-    "pcc": null
+    "_note": "Two spec-wide PCC numbers, applied unchanged to every component test. pcc_target is what every component aims for, while pcc_lower_bound is the assert in every test and below it, the component is not accepted and the stage does not pass. Between the two, the test passes but the component is accepted only after all corectness knobs have been tried",
+    "pcc_target": 0.99,
+    "pcc_lower_bound": 0.85
   }
 }
