@@ -56,6 +56,7 @@ from models.common.models.qwen25_coder_32b.model import (
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.common.tests.demos.run_helpers import (
+    eval_decode_trace_mode,
     load_eval_repeat_prompts_batch32,
     run_eval_repeat_batch32,
     run_perf_benchmark,
@@ -943,6 +944,34 @@ def _run_token_accuracy(model, mesh_device, expected):
     assert meas_top5 >= min_top5, f"Top-5 accuracy {top5:.1f}% (ceil {meas_top5}) below threshold {min_top5:.1f}%"
 
 
+def _warmup_demo_executor(executor, *, kv_cache, page_table):
+    """Compile eager programs and capture the configured traces before the first real request.
+
+    Since #52724 trace capture is reachable only through the warmup coordinator: ``compile_prefill``
+    registers capture plans but ``TraceCompiler.capture_all()`` runs from ``warmup_model_*(enable_trace=True)``,
+    and the traced execution paths reject an uncaptured trace instead of falling back to eager. Every
+    other migrated demo crosses this barrier once per freshly built executor; without it the first
+    traced request raises ``TraceCoverageError`` (issue #54685).
+    """
+    config = executor.config
+    prefill_kwargs = {
+        "kv_cache": kv_cache,
+        "can_sample_on_device": config.device_sampling_enabled,
+    }
+    decode_kwargs = {
+        "kv_cache": kv_cache,
+        "max_batch_size": int(executor.model.config.max_batch_size),
+        "num_blocks": int(page_table.shape[-1]),
+        "can_sample_on_device": config.device_sampling_enabled,
+    }
+    executor.warmup_model_decode(enable_trace=False, **decode_kwargs)
+    executor.warmup_model_prefill(enable_trace=False, **prefill_kwargs)
+    if config.trace.prefill_enabled:
+        executor.warmup_model_prefill(enable_trace=True, **prefill_kwargs)
+    if config.trace.decode_enabled:
+        executor.warmup_model_decode(enable_trace=True, **decode_kwargs)
+
+
 def _run_perf_benchmark(
     model,
     mesh_device,
@@ -1017,6 +1046,7 @@ def _run_perf_benchmark(
         kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
         kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
         page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+        _warmup_demo_executor(traced_executor, kv_cache=kv_cache, page_table=page_table)
 
         # Decode-token budget, clamped to the KV-cache headroom. Prompts bucket to ~128 and we keep a
         # 16-token margin, so the high-water decode position stays inside max_seq_len.
@@ -1163,11 +1193,22 @@ def _run_eval_repeat_batch32(model, mesh_device):
 
     # Fresh traced executor + zeroed KV cache per repeat (driver owns the lifecycle), so the rotated
     # batches are fully independent — see run_eval_repeat_batch32 for why reuse corrupts the 3rd repeat.
+    # eval-32 is a cross-batch determinism gate, not a TTFT gate: run prefill eager and trace decode
+    # only, like the qwen3_32b / llama33_70b / qwen25_72b eval-32 legs. Under trace_mode="all" the
+    # planner's batched 1024-token prefill wave (two prompts padding to the same bucket) needs a
+    # (regular-batched, 2, 1024) trace the generic warmup sweep does not capture (#54685).
     def make_executor():
-        return TracedQwen25Coder32BExecutor(model, mesh_device)
+        return TracedQwen25Coder32BExecutor(
+            model,
+            mesh_device,
+            ondevice_decode_loop=sampling_params is not None,
+            trace_mode=eval_decode_trace_mode(os.environ.get("EVAL_DECODE_MODE", "traced")),
+        )
 
     def allocate_kv_cache(executor):
-        return executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
+        kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
+        _warmup_demo_executor(executor, kv_cache=kv_cache, page_table=page_table)
+        return kv_cache
 
     # TTTv1 ci-eval-32 numeric prompts (parity).
     prompts = load_eval_repeat_prompts_batch32()

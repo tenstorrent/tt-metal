@@ -104,3 +104,27 @@ def test_demo_allocates_kv_cache_with_vllm_shape_compatibility_arguments():
 def test_perf_and_eval_use_traced_model_owned_wrapper():
     assert _calls("_run_perf_benchmark", "TracedQwen25Coder32BExecutor")
     assert _calls("_run_eval_repeat_batch32", "TracedQwen25Coder32BExecutor")
+
+
+def test_eval_repeat_traces_decode_only_and_warms_up_before_trace_activation():
+    call = _calls("_run_eval_repeat_batch32", "TracedQwen25Coder32BExecutor")[0]
+    trace_mode = next(keyword for keyword in call.keywords if keyword.arg == "trace_mode")
+    ondevice_decode_loop = next(keyword for keyword in call.keywords if keyword.arg == "ondevice_decode_loop")
+
+    assert ast.unparse(trace_mode.value) == "eval_decode_trace_mode(os.environ.get('EVAL_DECODE_MODE', 'traced'))"
+    assert ast.unparse(ondevice_decode_loop.value) == "sampling_params is not None"
+    # Each freshly built executor must cross the warmup/capture barrier before its first request.
+    assert _calls("_run_eval_repeat_batch32", "_warmup_demo_executor")
+    assert _calls("_run_perf_benchmark", "_warmup_demo_executor")
+
+
+def test_warmup_helper_compiles_eager_then_captures_both_phases():
+    source = ast.unparse(_function("_warmup_demo_executor"))
+
+    assert "warmup_model_decode(enable_trace=False" in source
+    assert "warmup_model_prefill(enable_trace=False" in source
+    assert "warmup_model_prefill(enable_trace=True" in source
+    assert "warmup_model_decode(enable_trace=True" in source
+    assert source.index("warmup_model_decode(enable_trace=False") < source.index(
+        "warmup_model_prefill(enable_trace=True"
+    )
