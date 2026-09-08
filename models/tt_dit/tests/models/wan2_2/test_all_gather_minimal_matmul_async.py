@@ -753,6 +753,22 @@ def test_linear(
                 assert check_result[n][c][i]["relative_rmse"] < 0.02
 
 
+_cache_identity_executions = 0
+
+
+@pytest.fixture(scope="module")
+def require_cache_identity_executed():
+    # This regression is the only guard against the device-cache aliasing bug the suite exists
+    # to catch. Both params require an exact 8- or 32-device SKU and skip otherwise, so on any
+    # other box every param skips and a plain `pytest` run reports "passed" with zero coverage.
+    # This finalizer fails such a fully-skipped run so the guard cannot silently self-disable.
+    yield
+    assert _cache_identity_executions > 0, (
+        "test_linear_cache_identity was skipped on every parametrization; the AGMM program-cache "
+        "identity regression did not execute. Run on an exactly-8 or exactly-32 device SKU."
+    )
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
@@ -778,7 +794,9 @@ def test_linear(
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_linear_cache_identity(mesh_device):
+def test_linear_cache_identity(mesh_device, require_cache_identity_executed):
+    global _cache_identity_executions
+    _cache_identity_executions += 1
     # Keep both activation variants in one process so they can expose program-cache aliasing.
     submesh = _create_cluster_submesh(mesh_device, cluster_axis=1)
     common = dict(
