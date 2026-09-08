@@ -57,7 +57,9 @@ TensorSpec concat_output_spec(
 
 ConcatCodegenParams concat_codegen_params(
     const std::vector<Tensor>& input_tensors, uint32_t dim, const MemoryConfig& output_mem_config) {
-    const ttnn::Shape& out_shape = concat_output_spec(input_tensors, dim, output_mem_config).logical_shape();
+    // logical_shape() hands back a reference into the spec, so the spec has to outlive out_shape.
+    const TensorSpec out_spec = concat_output_spec(input_tensors, dim, output_mem_config);
+    const ttnn::Shape& out_shape = out_spec.logical_shape();
     uint64_t total_out_elems = 1;
     for (int i = 0; i < out_shape.rank(); ++i) {
         total_out_elems *= out_shape[i];

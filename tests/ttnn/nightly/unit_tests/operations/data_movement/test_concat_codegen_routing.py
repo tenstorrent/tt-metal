@@ -422,6 +422,32 @@ def test_concat_codegen_declines_mixed_memory_config_above_two_inputs(device, ex
         _force_codegen(xs, dim=2)
 
 
+def test_concat_routes_two_input_mixed_placement_staged_copy_to_codegen(device):
+    # Only N > 2 is held to one memory config, so a two-input list can mix them -- and then input
+    # 1's destination offset, which is input 0's stick size, has to clear input 1's own transport
+    # alignment rather than input 0's. A 16 B L1 stick followed by a 64 B DRAM stick fills both
+    # physical pages yet is not a legal DRAM endpoint, so input 1 stages through scratch. Native
+    # reads that same offset with input 1's transport and returns shifted data, so this class is
+    # held on codegen at every size instead of being demoted on staged volume, and torch is the
+    # only usable reference for it.
+    def make(width, mem):
+        host = (torch.arange(8192 * width, dtype=torch.float32).reshape(1, 8192, width) / 64.0).to(torch.bfloat16)
+        return host, ttnn.from_torch(
+            host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem
+        )
+
+    h0, x0 = make(8, ttnn.L1_MEMORY_CONFIG)
+    h1, x1 = make(32, ttnn.DRAM_MEMORY_CONFIG)
+    xs = [x0, x1]
+    want = torch.cat([h0, h1], dim=2)
+    assert_equal(want, ttnn.to_torch(_force_codegen(xs, dim=2)))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.concat(xs, dim=2)
+    assert_equal(want, ttnn.to_torch(out))
+    msg = "routed a mixed-placement staged-copy case to native (program cache grew); native misreads it"
+    assert device.num_program_cache_entries() == entries_before, msg
+
+
 def test_concat_codegen_declines_mismatched_dtype(device, expect_error):
     xs = [
         ttnn.from_torch(

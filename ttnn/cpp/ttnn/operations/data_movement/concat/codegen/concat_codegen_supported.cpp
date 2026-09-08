@@ -71,6 +71,22 @@ uint32_t rm_width_2in_staged_row_bytes(const Tensor& in0, const Tensor& in1) {
     return (in0_direct ? 0 : in0_stick) + (in1_direct ? 0 : in1_stick);
 }
 
+// Native's last-dim alignment fixup tests each input's stick against that input's own alignment
+// (concat.cpp's dim_aligned) and never against where the stick lands in the output row. When both
+// sticks fill their own pages but input0's size is not a multiple of input1's transport alignment,
+// native skips its transpose fallback and its width reader issues input1's read to a destination
+// that transport cannot address, returning shifted data. Only mixed placement reaches this: one
+// shared memory config makes every offset a multiple of the shared alignment.
+bool native_rm_width_2in_misreads(const Tensor& in0, const Tensor& in1) {
+    const auto* src0 = in0.buffer();
+    const auto* src1 = in1.buffer();
+    const uint32_t in0_stick = static_cast<uint32_t>(src0->page_size());
+    const uint32_t in1_stick = static_cast<uint32_t>(src1->page_size());
+    return in0_stick == static_cast<uint32_t>(src0->aligned_page_size()) &&
+           in1_stick == static_cast<uint32_t>(src1->aligned_page_size()) &&
+           in0_stick % static_cast<uint32_t>(src1->alignment()) != 0;
+}
+
 bool rm_width_2in_unaligned_staged_copy_volume(const std::vector<Tensor>& input_tensors, uint32_t dim) {
     if (input_tensors.size() != 2) {
         return false;
@@ -246,6 +262,12 @@ bool fits_live_l1(
 }
 
 bool is_demoted(const std::vector<Tensor>& input_tensors, uint32_t dim) {
+    const uint32_t ndim = input_tensors[0].logical_shape().rank();
+    const bool is_width = (dim == ndim - 1);
+    // A demotion is a perf choice, so it may only choose between answers that are both correct.
+    if (is_width && input_tensors.size() == 2 && native_rm_width_2in_misreads(input_tensors[0], input_tensors[1])) {
+        return false;
+    }
     if (rm_width_2in_unaligned_staged_copy_volume(input_tensors, dim)) {
         return true;
     }
@@ -256,8 +278,6 @@ bool is_demoted(const std::vector<Tensor>& input_tensors, uint32_t dim) {
     // shared transport alignment. Only the remaining per-input scratch-staged
     // byte copy pays the measured regression, so demote width-dim N-way
     // concat only when that fallback would actually fire.
-    const uint32_t ndim = input_tensors[0].logical_shape().rank();
-    const bool is_width = (dim == ndim - 1);
     if (!is_width || input_tensors.size() <= 2) {
         return false;
     }
