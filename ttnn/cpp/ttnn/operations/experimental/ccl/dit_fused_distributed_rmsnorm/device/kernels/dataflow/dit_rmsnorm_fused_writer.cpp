@@ -108,12 +108,13 @@ void kernel_main() {
     // Populate compute's reduce-scalar / epsilon / trans_mat CBs before any AG
     // or output work — compute blocks on these at its very top. Independent of
     // fabric (uses this writer's own NoC), so it overlaps the fabric handshake.
+    using SumAuxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<transmat_args.next_compile_time_args_offset()>;
+    using AvgAuxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<SumAuxiliary::next_compile_time_args_offset()>;
     dit_rmsnorm_generate_scalars_and_transmat<
-        reduce_scalar_sum_cb,
-        reduce_scalar_avg_cb,
+        SumAuxiliary,
+        AvgAuxiliary,
         epsilon_cb,
         transformation_mat_cb,
-        reduce_factor,
         static_cast<bool>(fuse_rope)>(epsilon_bits, TensorAccessor(transmat_args, transformation_mat_addr));
 
     // =================== TP>1: stats fabric AG ===================

@@ -41,6 +41,7 @@
 #include "api/compute/transpose_dest.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 void kernel_main() {
     // === Compile-time args ===
@@ -132,6 +133,15 @@ void kernel_main() {
     static_assert(norm_type == 0u, "Welford LayerNorm (norm_type=1) is not yet implemented in the compute kernel");
 
     constexpr uint32_t stats_dest_cb = (is_tp_1 != 0) ? stats_gathered_cb : stats_local_cb;
+    using PreArgs = ttnn::kernel_lib::ReduceCallArgs<44>;
+    using PreCall =
+        ttnn::kernel_lib::BoundReduceCallArgs<PreArgs, pre_intermediate_cb, reduce_scalar_sum_cb, stats_dest_cb>;
+    using PostCall = ttnn::kernel_lib::BoundReduceCallArgs<
+        ttnn::kernel_lib::ReduceCallArgs<PreArgs::next_compile_time_args_offset()>,
+        stats_gathered_cb,
+        reduce_scalar_avg_cb,
+        reduce_result_cb>;
+
     // Per-row post reduce reads ring_size tiles. With packed AG enabled the
     // ring_size tiles live in stats_transposed_gathered_cb (post-transpose);
     // otherwise (is_tp_1) the local reduce uses stats_gathered_cb directly.
@@ -249,12 +259,7 @@ void kernel_main() {
                     cb_pre_intermediate.push_back(1);
                     PACK((llk_pack_reconfig_l1_acc(0)));
 
-                    compute_kernel_lib::reduce<
-                        PoolType::SUM,
-                        ReduceDim::REDUCE_ROW,
-                        pre_intermediate_cb,
-                        reduce_scalar_sum_cb,
-                        stats_dest_cb>(compute_kernel_lib::ReduceInputBlockShape::single());
+                    compute_kernel_lib::reduce<PreCall>();
                 }
             } else {
                 uint32_t input_tiles_waited = 0;
@@ -307,12 +312,7 @@ void kernel_main() {
 
                         // Row/head reduce → 1 stat tile. SUM (col 0 = sum). Post phase
                         // divides by H_full or head_dim via the AVG scalar.
-                        compute_kernel_lib::reduce<
-                            PoolType::SUM,
-                            ReduceDim::REDUCE_ROW,
-                            pre_intermediate_cb,
-                            reduce_scalar_sum_cb,
-                            stats_dest_cb>(compute_kernel_lib::ReduceInputBlockShape::single());
+                        compute_kernel_lib::reduce<PreCall>();
                     }
                 }
             }
@@ -385,16 +385,7 @@ void kernel_main() {
                         };
                         {
                             if constexpr (per_head_norm != 0) {
-                                compute_kernel_lib::reduce<
-                                    PoolType::AVG,
-                                    ReduceDim::REDUCE_ROW,
-                                    stats_gathered_cb,
-                                    reduce_scalar_avg_cb,
-                                    reduce_result_cb>(
-                                    compute_kernel_lib::ReduceInputBlockShape::single(),
-                                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                                    compute_kernel_lib::NoAccumulation{},
-                                    eps_rsqrt);
+                                compute_kernel_lib::reduce<PostCall>(eps_rsqrt);
                             } else if constexpr (stats_tiles_cols > 1) {
                                 // Sum the ring_size gathered partial-sum tiles with an FPU
                                 // eltwise add (dst-accumulate) instead of the matmul-based
@@ -483,16 +474,7 @@ void kernel_main() {
                             } else {
                                 // TP=1: a single gathered tile; the matmul reduce is fine
                                 // (no multi-chunk x ring hang at ring_size==1).
-                                compute_kernel_lib::reduce<
-                                    PoolType::AVG,
-                                    ReduceDim::REDUCE_ROW,
-                                    stats_gathered_cb,
-                                    reduce_scalar_avg_cb,
-                                    reduce_result_cb>(
-                                    compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols),
-                                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                                    compute_kernel_lib::NoAccumulation{},
-                                    eps_rsqrt);
+                                compute_kernel_lib::reduce<PostCall>(eps_rsqrt);
                             }
 
                             cb_reduce_result.wait_front(1);

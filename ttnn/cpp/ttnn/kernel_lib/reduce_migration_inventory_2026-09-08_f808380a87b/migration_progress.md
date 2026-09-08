@@ -263,3 +263,9 @@ Validation: native build passed (`/tmp/reduce-sdpa-auxiliary-build-20260908.log`
 Both KDA factories now plan their normalization reductions and auxiliary buffers. Recurrence keeps its independent all-ones matrix constant and gets a separate reduction auxiliary buffer. Indexer score's fallback MAX uses a planned call; its specialized batched MAX path remains intact. Both regular and ring factories serialize compatible compute/reader arguments, including the non-pooling configuration.
 
 Validation: native builds passed (`/tmp/reduce-kda-build-20260908.log`, `/tmp/reduce-indexer-build-v2-20260908.log`). Device compilation and numerical behavior are unverified here because their tests require Blackhole.
+
+## Remaining fused collective reductions
+
+Attn-res gather softmax now binds a planned SUM for both local statistics reductions. DiT fused distributed RMSNorm uses planned local/post-gather calls and host auxiliary recipes. It retains fused square/L1 accumulation to fit its existing pipeline, and retains the packed-statistics add/transpose branch with its documented GMPOOL packer workaround.
+
+Validation: native build passed (`/tmp/reduce-ccl-final-build-20260908.log`). Device checks remain unverified: attn-res requires a Blackhole 2x4 mesh and DiT fused tests require Galaxy.

@@ -32,21 +32,15 @@
 // dereferenced when fuse_rope is true; callers without RoPE may pass any
 // TensorAccessor (it is never read).
 template <
-    uint32_t sum_cb,
-    uint32_t avg_cb,
+    typename SumAuxiliary,
+    typename AvgAuxiliary,
     uint32_t eps_cb,
     uint32_t transmat_cb,
-    uint32_t reduce_factor,
     bool fuse_rope,
     typename TMatAccessor>
 FORCE_INLINE void dit_rmsnorm_generate_scalars_and_transmat(uint32_t eps_bits, const TMatAccessor& tmat_acc) {
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<sum_cb, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        avg_cb,
-        ckernel::PoolType::AVG,
-        ckernel::ReduceDim::REDUCE_ROW,
-        reduce_factor>();
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<SumAuxiliary>();
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<AvgAuxiliary>();
     generate_bcast_col_scalar(CircularBuffer(eps_cb), eps_bits);
 
     if constexpr (fuse_rope) {
