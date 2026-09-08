@@ -489,6 +489,8 @@ std::vector<std::optional<Tensor>> assign_bw(
     const std::optional<MemoryConfig>& /*output_mem_config*/,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<ttnn::Tensor>> grad_tensor_res = {std::nullopt};
+    // Passthrough gradient, see #53874: no eltwise backward op relocates it.
+    // With no preallocated input_grad, grad is returned and keeps its own config.
     grad_tensor_res[0] = input_grad.has_value() ? ttnn::assign(grad_tensor, input_grad.value()) : grad_tensor;
     return grad_tensor_res;
 }
