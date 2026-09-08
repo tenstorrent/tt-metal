@@ -5,8 +5,10 @@
 of :class:`~utils.weight_bridge.WeightBridge`.
 
 Gotchas:
-- Both constructors call ``bridge.connect()``, a two-rank handshake that blocks
-  until the peer constructs its own object -- so both ranks must construct.
+- Both classes require an explicit ``connect()`` call after construction, on
+  both ranks. The two-rank handshake blocks until the peer also calls
+  ``connect()`` -- interleave heavy local setup between construction and
+  ``connect()`` to overlap the two ranks' work.
 - Server-side callback (``generate_fn`` / ``on_weights_received``) failures are
   not caught: the server dies, the client's blocking recv never returns, MPI
   aborts the world. That is the intended failure mode; do not wrap in try/except.
@@ -68,9 +70,11 @@ class MPIRolloutServer:
         self.peer_rank: int = int(peer_rank)
         self._generate_fn: GenerateFn = generate_fn
         self._on_weights_received: Optional[OnWeightsReceivedFn] = on_weights_received
-
-        # connect() blocks until the peer constructs its MPIRolloutClient.
         self._bridge: WeightBridge = bridge
+
+    def connect(self) -> None:
+        """Two-rank handshake with the peer's ``MPIRolloutClient.connect()``.
+        Blocks until the peer calls its matching ``connect()``."""
         self._bridge.connect()
 
     def serve_forever(self) -> None:
@@ -114,8 +118,8 @@ class MPIRolloutServer:
 class MPIRolloutClient:
     """Blocking inference RPC client, runs on the ttml rank.
 
-    The constructor's ``bridge.connect()`` blocks until the peer constructs its
-    :class:`MPIRolloutServer`.
+    Construction is non-blocking; call :meth:`connect` on both ranks after
+    each side has finished its heavy local setup to run the handshake.
     """
 
     def __init__(
@@ -131,8 +135,11 @@ class MPIRolloutClient:
             raise RuntimeError(f"MPIRolloutClient: peer_rank must be TTT_RANK={TTT_RANK} (got {peer_rank}).")
 
         self.peer_rank: int = int(peer_rank)
-
         self._bridge: WeightBridge = bridge
+
+    def connect(self) -> None:
+        """Two-rank handshake with the peer's ``MPIRolloutServer.connect()``.
+        Blocks until the peer calls its matching ``connect()``."""
         self._bridge.connect()
 
     def remote_generate(
