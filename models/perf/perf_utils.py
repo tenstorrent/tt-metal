@@ -20,13 +20,21 @@ def get_branch_and_hash():
     """Branch and commit for the report header.
 
     A prebuilt test image carries the source tree without `.git`, so GitPython
-    raises instead of returning metadata. Fall back to what CI already exports
-    rather than failing a perf merge over two header lines.
+    raises instead of returning metadata. Fall back to what CI exports rather than
+    failing a perf merge over two header lines, preferring TT_METAL_TESTED_SHA when
+    the caller has told us which commit is actually under test.
     """
     try:
         repo = git.Repo(search_parent_directories=True)
     except (git.exc.InvalidGitRepositoryError, git.exc.NoSuchPathError):
-        return environ.get("GITHUB_REF_NAME", "unknown"), environ.get("GITHUB_SHA", "unknown")
+        # TT_METAL_TESTED_SHA takes precedence where a caller knows which commit is
+        # under test: GITHUB_SHA is the ref the workflow ran on, which is not the
+        # tested commit when the caller passes an explicit ref, and attributing a
+        # perf result to the wrong revision is worse than having no metadata.
+        return (
+            environ.get("GITHUB_REF_NAME", "unknown"),
+            environ.get("TT_METAL_TESTED_SHA") or environ.get("GITHUB_SHA", "unknown"),
+        )
 
     branch = "detached HEAD" if repo.head.is_detached else str(repo.active_branch)
     return branch, repo.head.object.hexsha

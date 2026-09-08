@@ -110,6 +110,10 @@ jobs:
         # in place is only importable from /work/tools.
         PYTHONPATH: /work:/work/ttnn:/work/tools
         TTNN_CONFIG_OVERRIDES: '{"validate_program_args": true}'
+        # This bucket merges device perf results, and the image carries no .git, so
+        # the merge cannot read the commit from the tree. GITHUB_SHA is the ref the
+        # workflow ran on rather than the commit under test, so pass the tested one.
+        TT_METAL_TESTED_SHA: ${{ inputs.ref || github.sha }}
       volumes:
         # The image owns /work, so no bind mount: one would mask the payload. A
         # single-path entry is an anonymous volume on an unused path.

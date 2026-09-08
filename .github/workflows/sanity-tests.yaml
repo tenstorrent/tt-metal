@@ -257,8 +257,38 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   # NOTE: build-artifact.yaml handles platform parsing internally.
   # Just pass platform and enable-lto inputs directly.
+  # `ref` is documented as a commit SHA, but nothing enforces that and
+  # actions/checkout accepts a branch or tag. The producer requires a full
+  # 40-character SHA for source-ref, because a ref that can move would recompute
+  # the same image tag over different source. Resolve once here so build-artifact
+  # and both bakes pin the identical immutable commit; resolving separately per job
+  # would reintroduce the mismatch on a branch that moves mid-run.
+  resolve-ref:
+    name: "Resolve the ref to a commit"
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF: ${{ inputs.ref }}
+          FALLBACK: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$REF" ]; then
+            SHA="$FALLBACK"
+          else
+            SHA=$(gh api "repos/${REPO}/commits/${REF}" --jq '.sha')
+          fi
+          printf '%s' "$SHA" | grep -qE '^[0-9a-f]{40}$' \
+            || { echo "::error::could not resolve '${REF:-HEAD}' to a full commit sha, got '${SHA}'"; exit 1; }
+          echo "sha=${SHA}" | tee -a "$GITHUB_OUTPUT"
+
   build-artifact:
-    needs: check-harbor
+    needs: [check-harbor, resolve-ref]
     # A failed/errored check-harbor must not skip the whole pipeline: an empty
     # harbor-prefix output already means "fall back to direct GHCR pulls".
     if: ${{ !cancelled() }}
@@ -282,7 +312,7 @@ jobs:
       # CI-internal only: consumers of these packages all run in docker images that
       # already stage SFPI, so skip the redundant download. Never set for release builds.
       use-system-sfpi: true
-      ref: ${{ inputs.ref || github.sha }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
       checkout-filter: tree:0
 
   resolve-docker-pull-refs:
@@ -299,7 +329,7 @@ jobs:
       llk-ci-docker-image: ${{ needs.build-artifact.outputs.llk-ci-docker-image }}
 
   bake-env-ci-test-wheel:
-    needs: build-artifact
+    needs: [build-artifact, resolve-ref]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     uses: ./.github/workflows/build-prebuilt-tests-image.yaml
     permissions:
@@ -317,10 +347,10 @@ jobs:
       checkout-source: true
       build-args: PROFILE=wheel
       # Must match what build-artifact was given, or src/ and the wheel disagree.
-      source-ref: ${{ inputs.ref || github.sha }}
+      source-ref: ${{ needs.resolve-ref.outputs.sha }}
 
   bake-env-dev-full:
-    needs: build-artifact
+    needs: [build-artifact, resolve-ref]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     uses: ./.github/workflows/build-prebuilt-tests-image.yaml
     permissions:
@@ -337,7 +367,7 @@ jobs:
       image-name: prebuilt-tests-env-image
       checkout-source: true
       build-args: PROFILE=full
-      source-ref: ${{ inputs.ref || github.sha }}
+      source-ref: ${{ needs.resolve-ref.outputs.sha }}
 
   # Single SKU list that gates every suite (L2-nightly style). Each impl filters this list against
   # its own tests yaml via prepare_test_matrix.py, so an empty intersection just yields no jobs.
@@ -525,7 +555,7 @@ jobs:
     # bake-env-dev-full is in needs but deliberately absent from the if: above.
     # A failed bake leaves the ref empty and the leg falls back to the artifact
     # path, which a gate on the bake would turn into a skipped suite instead.
-    needs: [resolve-docker-pull-refs, build-artifact, generate-sku-matrix, bake-env-dev-full]
+    needs: [resolve-docker-pull-refs, build-artifact, generate-sku-matrix, bake-env-dev-full, resolve-ref]
     secrets: inherit
     if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && needs.build-artifact.result == 'success' && (needs.generate-sku-matrix.outputs.run-wormhole == 'true' || needs.generate-sku-matrix.outputs.run-blackhole == 'true') && toJSON(inputs.run-ops-sanity-tests) != 'false' }}
     uses: ./.github/workflows/ops-sanity-impl.yaml
@@ -539,7 +569,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      ref: ${{ inputs.ref || github.sha }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
 
   # UMD sanity (Blackhole only)
   umd-sanity-tests:
