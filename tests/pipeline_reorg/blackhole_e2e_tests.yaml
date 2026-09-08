@@ -249,19 +249,6 @@
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
-- id: bh-p300-disaggregated-prefill-op-tests
-  name: Disaggregated prefill op tests
-  model-name: disaggregated_prefill
-  cmd: |
-    exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or fabric2d) and not single-1 and (not test_prefill_dispatch or ((bf16_in and tile and bf16_out) or (fp8_scaled_in and row_major and fp8_out)))" -m "not extended_model" || exit_code=$?
-    exit $exit_code
-  skus:
-    bh_p300:
-      timeout: 10
-  owner_id: U094PKWHNJ0 # Petar Milojevic
-  team: models
-
 - id: bh-qb2-disaggregated-prefill-op-tests
   name: Disaggregated prefill op tests
   model-name: disaggregated_prefill
