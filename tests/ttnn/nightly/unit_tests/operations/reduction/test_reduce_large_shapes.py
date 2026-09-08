@@ -14,6 +14,8 @@ import ttnn
 
 from tests.ttnn.unit_tests.operations.test_utils import compute_kernel_options, compute_kernel_ids
 from tests.ttnn.unit_tests.operations.reduce.test_cumprod import test_cumprod_normal as _cumprod_normal
+from tests.ttnn.unit_tests.operations.reduce.test_cumprod import test_cumprod_backward as _cumprod_backward
+from tests.ttnn.unit_tests.operations.reduce.test_cumprod import test_cumprod_preallocated as _cumprod_preallocated
 from tests.ttnn.unit_tests.operations.reduce.test_fast_reduce_nc import test_fast_reduce_nc as _fast_reduce_nc
 from tests.ttnn.unit_tests.operations.reduce.test_intimg import test_cumsum_channel_last as _cumsum_channel_last
 from tests.ttnn.unit_tests.operations.reduce.test_sum import test_sum_subcores as _sum_subcores
@@ -30,6 +32,31 @@ from tests.ttnn.unit_tests.operations.reduce.test_sum import test_sum_subcores a
 )
 def test_cumprod_large(dim, shape, dtypes, device):
     _cumprod_normal(dim, shape, dtypes, device)
+
+
+@pytest.mark.parametrize("dim", [0, 2, -1])
+@pytest.mark.parametrize("shape", [[1000, 32, 32]])
+@pytest.mark.parametrize(
+    "dtypes",
+    [
+        (torch.float32, None),
+        (torch.bfloat16, ttnn.float32),
+    ],
+)
+def test_cumprod_backward_large(dim, shape, dtypes, device):
+    _cumprod_backward(dim, shape, dtypes, device)
+
+
+@pytest.mark.parametrize("dim", [0, 2, -1])
+@pytest.mark.parametrize("shape", [[1000, 32, 32]])
+@pytest.mark.parametrize(
+    "dtypes",
+    [
+        (torch.float32, None),
+    ],
+)
+def test_cumprod_preallocated_large(dim, shape, dtypes, device):
+    _cumprod_preallocated(dim, shape, dtypes, device)
 
 
 @pytest.mark.parametrize(
