@@ -3,46 +3,47 @@
 set -e
 
 LOGDIR="."
-ITERS="${ITERS:-5}"
+ITERATIONS=5
 PYTHON="$(command -v python3 || command -v python)"
-DEPLOYMENT=0
-DEPLOYMENT_CYCLES=5
+SKIP_RESET=0
 CONTINUE_ON_FAILURE=0
+RESET_CMD="tt-smi -glx_reset"
 
 usage() {
 	cat << EOF
-Usage: $0 [--output <logdir>] [--deployment] [--continue-on-failure] [--no-eth-links]
+Usage: $0 [--output <logdir>] [--iterations <n>] [--skip-reset] [--continue-on-failure] [--no-eth-links]
 
 Run the deployment test suite (Ethernet, DRAM, PCIe read/write).
 Must be run from the repository root with the tests already built.
 Everything printed to the console is also written to a single log file per run.
 
+An iteration is a board reset followed by one run of each test.
+
 Optional:
     --output <logdir>                       Directory where the log file is written
                                             (default: current directory)
-    --deployment                            Run $DEPLOYMENT_CYCLES deployment cycles, each starting with a
-                                            board reset. Stops after a cycle fails.
-                                            Forces ITERS=1.
-    --continue-on-failure                   Run all $DEPLOYMENT_CYCLES cycles even if a cycle fails
-                                            (implies --deployment)
+    --iterations <n>                        Number of iterations to run (default: $ITERATIONS).
+                                            Stops after an iteration fails.
+    --skip-reset                            Do not reset the boards before each iteration.
+                                            Use to stress the tests without resets in between.
+    --continue-on-failure                   Run all iterations even if one fails
     --no-eth-links                          Do not require a specific number of Ethernet links per
-                                            chip (sets ETH_TEST_EXPECTED_LINKS=0). Use on partially
-                                            cabled systems, otherwise 10 links per chip are expected.
+                                            chip. Use on partially cabled systems, otherwise
+                                            10 links per chip are expected.
     -h                                      Display this help message and exit
 
-Environment variables:
-    ITERS                                   Number of iterations of each test (default: 5,
-                                            ignored in deployment mode)
-
 Examples:
-    Regular run (all tests, $ITERS iterations each, logs in ./logs):
+    Deployment qualification ($ITERATIONS reset-and-test iterations), logs in ./logs:
         $0 --output ./logs
 
-    Deployment run ($DEPLOYMENT_CYCLES reset cycles, one iteration per test per cycle):
-        $0 --output ./logs --deployment
+    Quick health check (one reset-and-test iteration):
+        $0 --output ./logs --iterations 1
 
-    Deployment run on a partially cabled system, without stopping on failure:
-        $0 --output ./logs --continue-on-failure --no-eth-links
+    Stress run of 20 iterations without resets, collecting every failure:
+        $0 --output ./logs --iterations 20 --skip-reset --continue-on-failure
+
+    Run on a partially cabled system:
+        $0 --output ./logs --no-eth-links
 EOF
 }
 
@@ -54,11 +55,18 @@ do
 		LOGDIR="$2"
 		shift
 		;;
-	--deployment)
-		DEPLOYMENT=1
+	--iterations)
+		if [ -z "$2" ]; then echo "Missing argument to $1"; exit 1; fi
+		case "$2" in
+		''|*[!0-9]*|0) echo "$1 must be a positive integer, got '$2'"; exit 1 ;;
+		esac
+		ITERATIONS="$2"
+		shift
+		;;
+	--skip-reset)
+		SKIP_RESET=1
 		;;
 	--continue-on-failure)
-		DEPLOYMENT=1
 		CONTINUE_ON_FAILURE=1
 		;;
 	--no-eth-links)
@@ -159,49 +167,41 @@ run_reset() {
 	fi
 }
 
-# run_test: runs a command $ITERS times.
+# run_test <label> <command...>: runs a test once and records its result.
 run_test() {
-	for i in $(seq "$ITERS")
-	do
-		emit_section "$MESSAGE: iteration $i/$ITERS"
-		run_logged "$@"
-		if [ "$rc" -ne 0 ]
-		then
-			failures=$((failures + 1))
-			emit_status "$MESSAGE iteration $i:" failed
-		else
-			passes=$((passes + 1))
-			emit_status "$MESSAGE iteration $i:" passed
-		fi
-	done
+	label="$1"
+	shift
+	emit_section "$label"
+	run_logged "$@"
+	if [ "$rc" -ne 0 ]
+	then
+		failures=$((failures + 1))
+		emit_status "$label:" failed
+		return 1
+	fi
+	passes=$((passes + 1))
+	emit_status "$label:" passed
+	return 0
 }
 
-# run_tests: runs all tests.
+# run_tests: runs one round of every test.
 # Sets last_eth_ok, last_dram_ok, last_pcie_read_ok, last_pcie_write_ok (1=pass, 0=fail).
 # Returns 1 if any test failed, 0 otherwise.
 run_tests() {
 	failures=0
 	passes=0
-	prev_failures=0
 
-	MESSAGE='Ethernet tests'
-	run_test $PYTHON tests/tt_metal/tt_metal/deployment/eth/test_runner.py
-	last_eth_ok=$([ "$failures" -eq "$prev_failures" ] && echo 1 || echo 0)
-	prev_failures=$failures
+	run_test 'Ethernet tests' $PYTHON tests/tt_metal/tt_metal/deployment/eth/test_runner.py &&
+		last_eth_ok=1 || last_eth_ok=0
 
-	MESSAGE='DRAM tests'
-	run_test $PYTHON tests/tt_metal/tt_metal/deployment/dram/test_runner.py
-	last_dram_ok=$([ "$failures" -eq "$prev_failures" ] && echo 1 || echo 0)
-	prev_failures=$failures
+	run_test 'DRAM tests' $PYTHON tests/tt_metal/tt_metal/deployment/dram/test_runner.py &&
+		last_dram_ok=1 || last_dram_ok=0
 
-	MESSAGE='PCIe read test'
-	run_test ./build/tools/mem_bench --benchmark_filter='Device Reading Host/1073741824/32768/1/0/0/iterations:5/manual_time' --device-id=0
-	last_pcie_read_ok=$([ "$failures" -eq "$prev_failures" ] && echo 1 || echo 0)
-	prev_failures=$failures
+	run_test 'PCIe read test' ./build/tools/mem_bench --benchmark_filter='Device Reading Host/1073741824/32768/1/0/0/iterations:5/manual_time' --device-id=0 &&
+		last_pcie_read_ok=1 || last_pcie_read_ok=0
 
-	MESSAGE='PCIe write test'
-	run_test ./build/tools/mem_bench --benchmark_filter='Device Writing Host/1073741824/32768/0/1/0/iterations:5/manual_time' --device-id=0
-	last_pcie_write_ok=$([ "$failures" -eq "$prev_failures" ] && echo 1 || echo 0)
+	run_test 'PCIe write test' ./build/tools/mem_bench --benchmark_filter='Device Writing Host/1073741824/32768/0/1/0/iterations:5/manual_time' --device-id=0 &&
+		last_pcie_write_ok=1 || last_pcie_write_ok=0
 
 	emit_section 'Test results'
 
@@ -219,17 +219,14 @@ run_tests() {
 	return 0
 }
 
-RESET_CMD="tt-smi -glx_reset"
-
-if [ "$DEPLOYMENT" -eq 1 ]
+if [ "$SKIP_RESET" -eq 1 ]
 then
-	ITERS=1
-	MODE="deployment ($DEPLOYMENT_CYCLES cycles, $RESET_CMD before each)"
+	MODE="$ITERATIONS iteration(s), no board reset"
 else
-	MODE="single pass ($ITERS iterations per test)"
+	MODE="$ITERATIONS iteration(s), $RESET_CMD before each"
 fi
 
-emit_banner "DEPLOYMENT TEST RUN"
+emit_banner "DEPLOYMENT TESTS RUN"
 emit "$(printf '%-12s %s' 'Date:' "$(date)")"
 emit "$(printf '%-12s %s' 'Host:' "$(hostname)")"
 emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write')"
@@ -237,57 +234,54 @@ emit "$(printf '%-12s %s' 'Mode:' "$MODE")"
 emit "$(printf '%-12s %s' 'Run log:' "$RUN_LOG")"
 emit "$RULE_HEAVY"
 
-if [ "$DEPLOYMENT" -eq 1 ]
-then
-	deployment_failures=0
-	cycles_run=0
-	depl_eth_pass=0
-	depl_dram_pass=0
-	depl_pcie_read_pass=0
-	depl_pcie_write_pass=0
+iteration_failures=0
+iterations_run=0
+eth_pass=0
+dram_pass=0
+pcie_read_pass=0
+pcie_write_pass=0
 
-	for cycle in $(seq 1 "$DEPLOYMENT_CYCLES")
-	do
-		emit_banner "DEPLOYMENT CYCLE $cycle/$DEPLOYMENT_CYCLES"
-		run_reset "Resetting boards ($RESET_CMD)..."
-		if run_tests
-		then
-			emit_banner "CYCLE $cycle PASSED"
-		else
-			deployment_failures=$((deployment_failures + 1))
-			emit_banner "CYCLE $cycle FAILED"
-		fi
-		cycles_run=$((cycles_run + 1))
-		depl_eth_pass=$((depl_eth_pass + last_eth_ok))
-		depl_dram_pass=$((depl_dram_pass + last_dram_ok))
-		depl_pcie_read_pass=$((depl_pcie_read_pass + last_pcie_read_ok))
-		depl_pcie_write_pass=$((depl_pcie_write_pass + last_pcie_write_ok))
-		if [ "$CONTINUE_ON_FAILURE" -eq 0 ] && [ "$deployment_failures" -gt 0 ]
-		then
-			emit "Stopping: cycle $cycle failed."
-			break
-		fi
-	done
-
-	emit_banner "DEPLOYMENT TEST SUITE - RESULTS SUMMARY (${cycles_run}/${DEPLOYMENT_CYCLES} cycles ran)"
-	emit "$(printf '%-20s %s' 'Host:'            "$(hostname)")"
-	emit "$RULE_LIGHT"
-	emit "$(printf '%-20s %s' 'Ethernet tests:'  "$depl_eth_pass/$cycles_run cycles passed")"
-	emit "$(printf '%-20s %s' 'DRAM tests:'      "$depl_dram_pass/$cycles_run cycles passed")"
-	emit "$(printf '%-20s %s' 'PCIe read test:'  "$depl_pcie_read_pass/$cycles_run cycles passed")"
-	emit "$(printf '%-20s %s' 'PCIe write test:' "$depl_pcie_write_pass/$cycles_run cycles passed")"
-	emit "$RULE_LIGHT"
-	if [ "$deployment_failures" -gt 0 ]
+for iteration in $(seq 1 "$ITERATIONS")
+do
+	emit_banner "ITERATION $iteration/$ITERATIONS"
+	if [ "$SKIP_RESET" -eq 0 ]
 	then
-		emit_bold "$(printf '%-20s %s' 'Overall:' "$((cycles_run - deployment_failures))/$cycles_run cycles passed")"
-		emit "$RULE_HEAVY"
-		emit "Run log: $RUN_LOG"
-		exit 1
+		run_reset "Resetting boards ($RESET_CMD)..."
 	fi
-	emit_bold "$(printf '%-20s %s' 'Overall:' "All $cycles_run cycles passed")"
+	if run_tests
+	then
+		emit_banner "ITERATION $iteration PASSED"
+	else
+		iteration_failures=$((iteration_failures + 1))
+		emit_banner "ITERATION $iteration FAILED"
+	fi
+	iterations_run=$((iterations_run + 1))
+	eth_pass=$((eth_pass + last_eth_ok))
+	dram_pass=$((dram_pass + last_dram_ok))
+	pcie_read_pass=$((pcie_read_pass + last_pcie_read_ok))
+	pcie_write_pass=$((pcie_write_pass + last_pcie_write_ok))
+	if [ "$CONTINUE_ON_FAILURE" -eq 0 ] && [ "$iteration_failures" -gt 0 ]
+	then
+		emit "Stopping: iteration $iteration failed."
+		break
+	fi
+done
+
+emit_banner "DEPLOYMENT TEST SUITE - RESULTS SUMMARY (${iterations_run}/${ITERATIONS} iterations ran)"
+emit "$(printf '%-20s %s' 'Host:'            "$(hostname)")"
+emit "$RULE_LIGHT"
+emit "$(printf '%-20s %s' 'Ethernet tests:'  "$eth_pass/$iterations_run iterations passed")"
+emit "$(printf '%-20s %s' 'DRAM tests:'      "$dram_pass/$iterations_run iterations passed")"
+emit "$(printf '%-20s %s' 'PCIe read test:'  "$pcie_read_pass/$iterations_run iterations passed")"
+emit "$(printf '%-20s %s' 'PCIe write test:' "$pcie_write_pass/$iterations_run iterations passed")"
+emit "$RULE_LIGHT"
+if [ "$iteration_failures" -gt 0 ]
+then
+	emit_bold "$(printf '%-20s %s' 'Overall:' "$((iterations_run - iteration_failures))/$iterations_run iterations passed")"
 	emit "$RULE_HEAVY"
 	emit "Run log: $RUN_LOG"
-	exit 0
+	exit 1
 fi
-
-run_tests
+emit_bold "$(printf '%-20s %s' 'Overall:' "All $iterations_run iterations passed")"
+emit "$RULE_HEAVY"
+emit "Run log: $RUN_LOG"
