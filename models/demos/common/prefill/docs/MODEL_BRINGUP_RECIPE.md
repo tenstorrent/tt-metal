@@ -3,8 +3,8 @@
 
 # Prefill model bring-up recipe
 
-End-to-end path from a HuggingFace checkpoint to a model served by the
-`models/demos/common/prefill` engine.
+Path from a HuggingFace checkpoint to a model running chunked prefill on the
+`models/demos/common/prefill` engine, validated against a CPU golden trace.
 
 **Scope:** first working implementation — package scaffold, torch oracle, module-by-module PCC
 bring-up, full model, KV cache, real weights, chunked prefill. Bring-up **ends at P2**.
