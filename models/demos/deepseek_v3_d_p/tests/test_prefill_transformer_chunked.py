@@ -1795,13 +1795,17 @@ def run_chunked_transformer_updated(
             for c in range(n_chunks)
         ]
 
-        def _fwd_meta():
+        def _fwd_meta(host_start=None):
+            # host_start is for the TT_GLM_META_NO_TRACE isolation only: it supplies the SAME per-chunk
+            # values the scalar path gets, so a component switched back to its host-scalar form is fed a
+            # correct value rather than the metadata path's unset default. Without it, "force scalar"
+            # experiments silently compare against garbage.
             return transformer.forward(
                 trace_input,
                 tt_kvpe_cache,
                 actual_isl=CHUNK,
-                actual_start=None,
-                actual_end=None,
+                actual_start=host_start,
+                actual_end=None,  # metadata carries the clamp; write_k rejects a host actual_end here
                 cache_user_id=0,
                 return_intermediates=False,
                 metadata=trace_metadata,
@@ -1841,7 +1845,7 @@ def run_chunked_transformer_updated(
                     # differences at once: metadata-vs-host scalars, and replay-vs-eager. This knob splits
                     # them -- if the gap survives here, it is the metadata math and trace is innocent.
                     # (That is exactly what it showed for tp_shard_kv at multi-chunk.)
-                    _fwd_meta()
+                    _fwd_meta(host_start=kv_actual)
                 else:
                     trace_controller.replay()
                 ttnn.synchronize_device(mesh_device)
