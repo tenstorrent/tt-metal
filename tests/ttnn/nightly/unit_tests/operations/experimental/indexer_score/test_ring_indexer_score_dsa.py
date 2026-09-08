@@ -22,6 +22,7 @@ import ttnn
 
 from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import (
     assert_indexer_match,
+    to_device,
     glx_config,
     indexer_score_dsa_ref,
     _global_inputs,
@@ -82,7 +83,7 @@ def _fused_dev_inputs(submesh, q_g, w_g, k_host, *, k_dtype=ttnn.bfloat16):
     both k_local and k_gathered (the op requires them equal)."""
     shard = ttnn.ShardTensorToMesh(submesh, dim=2)
     q_dev = ttnn.from_torch(q_g, device=submesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
-    w_dev = ttnn.from_torch(w_g, device=submesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
+    w_dev = to_device(w_g, submesh, mesh_mapper=shard)
     k_local = _shard_k(submesh, k_host, dtype=k_dtype)  # [B,1,sll,D] per chip (the all-gather INPUT)
     # Indexed mode gathers one selected input slot into slot 0; batch-1 scratch also covers the ordinary B=1 path.
     k_gathered = _persistent_buffer(submesh, torch.zeros_like(k_host[:1]), dtype=k_dtype)
@@ -134,7 +135,7 @@ def _full_mesh_inputs(mesh, q_g, w_g, k_host, *, k_dtype=ttnn.bfloat16):
     """Canonical flat row-major sequence shards plus a complete-mesh replicated gather scratch."""
     shard = ttnn.ShardTensorToMesh(mesh, dim=2)
     q_dev = ttnn.from_torch(q_g, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
-    w_dev = ttnn.from_torch(w_g, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
+    w_dev = to_device(w_g, mesh, mesh_mapper=shard)
     k_local = ttnn.from_torch(k_host, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=k_dtype, mesh_mapper=shard)
     k_gathered = ttnn.from_torch(
         torch.zeros_like(k_host[:1]),
@@ -1166,9 +1167,7 @@ def test_indexer_score_ring8_partial_readiness_reference_cache_hit(mesh_device):
         q_dev = ttnn.from_torch(
             q_g, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard
         )
-        w_dev = ttnn.from_torch(
-            w_g, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard
-        )
+        w_dev = to_device(w_g, mesh_device, mesh_mapper=sp_shard)
         k_local = ttnn.from_torch(
             k_bc,
             device=mesh_device,
