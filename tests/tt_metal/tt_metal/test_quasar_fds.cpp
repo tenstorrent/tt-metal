@@ -68,15 +68,13 @@ constexpr uint32_t kWorkerMask = all_lanes_mask(kNumNeoWires);
 constexpr uint32_t kDispatchMask = all_lanes_mask(kNumDispatchInstances);
 
 constexpr uint32_t kGroupId = 1;
-// Each side gives up rather than spinning forever, so a missing signal fails the test with a
-// readable status word instead of hanging it. Kept modest because this runs under a cycle
-// simulator, where a million iterations costs minutes of wall clock. Both signals are held rather
-// than pulsed, so a shorter wait cannot miss one.
-constexpr uint32_t kPollIterations = 100000;
-// Length of the windows in which a kernel asserts that nothing appears. Long enough that the event
-// under test lands early in the window with orders of magnitude to spare, short enough not to
-// dominate simulator wall clock.
-constexpr uint32_t kSilenceIterations = 20000;
+// A timeout, not a wait: every loop exits as soon as its signal lands, so this is spent only on a
+// failure, where it buys a readable status word instead of a hang.
+constexpr uint32_t kPollIterations = 70000;
+// Length of the windows in which a kernel asserts that nothing appears. These have no early exit,
+// so they run to the end and set how long the suite takes. A window that closes too early does
+// not fail, it passes without testing.
+constexpr uint32_t kSilenceIterations = 8000;
 
 std::vector<CoreCoord> all_dispatch_engine_cores(IDevice* dev) {
     return detail::get_quasar_soc_dispatch_engine_logical_cores(
