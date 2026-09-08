@@ -23,14 +23,13 @@ On-device modules (Mimi encode/decode stays on CPU and is not in these tests):
                           -k talker_layer_decode          eager fallback (cache sliced to 1)
                           -k talker_layer_decode_traced   DEPLOYED path (full-cache SDPA)
   CodePredictor layer     -k cp_layer_prefill | cp_layer_decode
-  Speaker TDNN 128→512    -k speaker_tdnn   (partial — see note below)
-  Speaker SERes2Net       -k speaker_block  (partial — see note below)
+  Speaker TDNN 128→512    -k speaker_tdnn          traced device-conv (k=5 im2col)
+  Speaker SERes2Net       -k speaker_block         traced device-conv (one block)
+  Speaker full ECAPA      -k speaker_encoder       DEPLOYED ``capture_forward_trace``
 
-For a **full** speaker-encoder op list use ``test_qwen3_tts_perf_report.py -k
-test_speaker_encoder`` (or ``qwen3_tts_perf_report.sh -w speaker_encoder``).
-The two Speaker lines above profile untraced slices with synthetic weights:
-``speaker_tdnn`` runs k>1 conv on the host (default host-fuse) so Tracy sees only
-ReLU; ``speaker_block`` profiles one SERes2Net block, not entry TDNN / MFA / ASP / FC.
+Speaker windows replay a Metal trace with ``_se_device_conv`` on (the demo's
+``QWEN3_TTS_SE_TRACE=1`` path). Eager device-conv is ~7x slower than host-fuse
+and is not what these tests measure.
 
 Run **one** ``-k`` per Tracy capture. Do not use ``-k talker_layer_prefill`` —
 that substring matches all three buckets.
@@ -83,16 +82,22 @@ DEMO_CP_KV_MAX = 32
 DEMO_SPEAKER_T = 384
 
 
+# Speaker-encoder Metal traces (im2col + matmul for k>1 convs) need a real trace
+# region. The demo uses 200 MB; without it capture_forward_trace fails to allocate.
+_TRACE_REGION = 200_000_000
+
+
 def _open_device():
     mesh_shape = {"N150": (1, 1), "N300": (1, 2)}.get(os.environ.get("MESH_DEVICE"))
+    kwargs = dict(l1_small_size=32768, trace_region_size=_TRACE_REGION)
     if mesh_shape is None:
-        return ttnn.open_device(device_id=0, l1_small_size=32768), None
+        device = ttnn.open_device(device_id=0, **kwargs)
+        device.enable_program_cache()
+        return device, None
     if mesh_shape != (1, 1):
         ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(*mesh_shape),
-        l1_small_size=32768,
-    )
+    device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape), **kwargs)
+    device.enable_program_cache()
     return device, mesh_shape
 
 
@@ -172,8 +177,6 @@ def _talker_matmul_dtype():
     single-layer windows profiled a dtype the demo no longer runs — gate/up read
     116 us here against 92 us in the model.
     """
-    import os
-
     return ttnn.bfloat8_b if os.environ.get("QWEN3_TTS_BF8_WEIGHTS", "1") != "0" else ttnn.bfloat16
 
 
@@ -244,6 +247,34 @@ def _profile_forward(device, fn):
     ttnn.synchronize_device(device)
     signpost("start")
     fn()
+    ttnn.synchronize_device(device)
+    signpost("stop")
+
+
+def _enable_traced_device_conv(enc):
+    """Same flags ``capture_forward_trace`` forces: every conv on device, no nested SE traces."""
+    enc._se_host_fuse = True
+    enc._se_device_asp = True
+    enc._se_device_conv = True
+    enc._se_traces_active = False
+
+
+def _profile_traced_forward(device, fn):
+    """Capture a Metal trace of ``fn``, then replay it once between start/stop.
+
+    Eager device-conv is ~7x slower than the host path; the win only shows up under
+    ``execute_trace``. Matches the demo's ``QWEN3_TTS_SE_TRACE=1`` / ``SE_DEVICE_CONV`` path.
+    """
+    fn()
+    ttnn.synchronize_device(device)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    try:
+        fn()
+    finally:
+        ttnn.end_trace_capture(device, tid, cq_id=0)
+    ttnn.synchronize_device(device)
+    signpost("start")
+    ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
     ttnn.synchronize_device(device)
     signpost("stop")
 
@@ -504,41 +535,62 @@ def _synthetic_speaker_tdnn_sd():
     }
 
 
-def _synthetic_speaker_block_sd():
-    """Random weights for one SERes2Net block (block 1, 512-ch).
+def _synthetic_speaker_block_sd(block_idx: int = 1):
+    """Random weights for one SERes2Net block (512-ch).
 
     Matches HF: TDNN1/2 are k=1 (device linear); Res2Net parts are k=3 dilated.
     """
     torch.manual_seed(0)
     c, res2_k, scale, se_mid = 512, 3, 8, 128
     part = c // scale
+    p = f"speaker_encoder.blocks.{block_idx}."
     sd = {
-        "speaker_encoder.blocks.1.tdnn1.conv.weight": torch.randn(c, c, 1),
-        "speaker_encoder.blocks.1.tdnn1.conv.bias": torch.zeros(c),
-        "speaker_encoder.blocks.1.tdnn2.conv.weight": torch.randn(c, c, 1),
-        "speaker_encoder.blocks.1.tdnn2.conv.bias": torch.zeros(c),
-        "speaker_encoder.blocks.1.se_block.conv1.weight": torch.randn(se_mid, c, 1),
-        "speaker_encoder.blocks.1.se_block.conv1.bias": torch.zeros(se_mid),
-        "speaker_encoder.blocks.1.se_block.conv2.weight": torch.randn(c, se_mid, 1),
-        "speaker_encoder.blocks.1.se_block.conv2.bias": torch.zeros(c),
+        f"{p}tdnn1.conv.weight": torch.randn(c, c, 1),
+        f"{p}tdnn1.conv.bias": torch.zeros(c),
+        f"{p}tdnn2.conv.weight": torch.randn(c, c, 1),
+        f"{p}tdnn2.conv.bias": torch.zeros(c),
+        f"{p}se_block.conv1.weight": torch.randn(se_mid, c, 1),
+        f"{p}se_block.conv1.bias": torch.zeros(se_mid),
+        f"{p}se_block.conv2.weight": torch.randn(c, se_mid, 1),
+        f"{p}se_block.conv2.bias": torch.zeros(c),
     }
     for i in range(scale - 1):
-        sd[f"speaker_encoder.blocks.1.res2net_block.blocks.{i}.conv.weight"] = torch.randn(part, part, res2_k)
-        sd[f"speaker_encoder.blocks.1.res2net_block.blocks.{i}.conv.bias"] = torch.zeros(part)
+        sd[f"{p}res2net_block.blocks.{i}.conv.weight"] = torch.randn(part, part, res2_k)
+        sd[f"{p}res2net_block.blocks.{i}.conv.bias"] = torch.zeros(part)
     return sd
 
 
-def test_speaker_tdnn(device):
-    """SpeakerEncoder entry TDNN (128→512) at demo-like mel length T=384.
+def _synthetic_speaker_encoder_sd():
+    """Entry TDNN + 3 SERes2Net + MFA + ASP + FC — same graph as the demo encoder."""
+    sd = dict(_synthetic_speaker_tdnn_sd())
+    for idx in (1, 2, 3):
+        sd.update(_synthetic_speaker_block_sd(idx))
+    c = 512
+    mfa = c * 3
+    sd["speaker_encoder.mfa.conv.weight"] = torch.randn(mfa, mfa, 1)
+    sd["speaker_encoder.mfa.conv.bias"] = torch.zeros(mfa)
+    # ASP tdnn is conv([x; mean; std]) → [1536, 4608, 1]; ASP conv is k=1 1536→1536.
+    sd["speaker_encoder.asp.tdnn.conv.weight"] = torch.randn(mfa, mfa * 3, 1)
+    sd["speaker_encoder.asp.tdnn.conv.bias"] = torch.zeros(mfa)
+    sd["speaker_encoder.asp.conv.weight"] = torch.randn(mfa, mfa, 1)
+    sd["speaker_encoder.asp.conv.bias"] = torch.zeros(mfa)
+    sd["speaker_encoder.fc.weight"] = torch.randn(2048, mfa * 2)
+    sd["speaker_encoder.fc.bias"] = torch.zeros(2048)
+    return sd
 
-    Partial / misleading for perf work: k>1 conv runs on the host under default
-    host-fuse, so the Tracy window is essentially ReLU only. Use
-    ``test_speaker_encoder`` in ``test_qwen3_tts_perf_report.py`` for the full
-    traced ECAPA forward.
+
+@pytest.mark.timeout(600)
+def test_speaker_tdnn(device):
+    """SpeakerEncoder entry TDNN (128→512) at demo-like T=384, on-device + traced.
+
+    k=5 reflect-pad conv as im2col + matmul (``_se_device_conv``), captured as a
+    Metal trace and replayed between signposts — the same path
+    ``capture_forward_trace`` uses. Eager device-conv is not this window.
     """
     from models.demos.qwen3_tts.tt.speaker_encoder import SpeakerEncoder, SpeakerEncoderConfig
 
     enc = SpeakerEncoder(device, _synthetic_speaker_tdnn_sd(), config=SpeakerEncoderConfig())
+    _enable_traced_device_conv(enc)
     mel_ncl = torch.randn(1, 128, DEMO_SPEAKER_T)
     x = enc._torch_ncl_to_ttnn_nlc(mel_ncl)
     w = enc.pytorch_weights["blocks.0.conv.weight"]
@@ -547,25 +599,41 @@ def test_speaker_tdnn(device):
     def _fwd():
         return enc._time_delay_net_block(x, w, b, dilation=1)
 
-    _profile_forward(device, _fwd)
-    print(f"[speaker_tdnn] blocks.0 128→512 seq={DEMO_SPEAKER_T}")
+    _profile_traced_forward(device, _fwd)
+    print(f"[speaker_tdnn] blocks.0 128→512 seq={DEMO_SPEAKER_T} device_conv+trace")
 
 
+@pytest.mark.timeout(600)
 def test_speaker_block(device):
-    """One SpeakerEncoder SERes2Net block (512-ch) at demo-like mel length T=384.
-
-    Partial: one block only, synthetic weights, untraced — huge host op-to-op gaps
-    and no entry TDNN / MFA / ASP / FC. Use ``test_speaker_encoder`` for the full
-    encoder on the deployed ``capture_forward_trace`` path.
-    """
+    """One SERes2Net block at T=384, on-device + traced (device-conv for k=3 branches)."""
     from models.demos.qwen3_tts.tt.speaker_encoder import SpeakerEncoder, SpeakerEncoderConfig
 
-    enc = SpeakerEncoder(device, _synthetic_speaker_block_sd(), config=SpeakerEncoderConfig())
+    enc = SpeakerEncoder(device, _synthetic_speaker_block_sd(1), config=SpeakerEncoderConfig())
+    _enable_traced_device_conv(enc)
     mel_ncl = torch.randn(1, 512, DEMO_SPEAKER_T)
     x = enc._torch_ncl_to_ttnn_nlc(mel_ncl)
 
     def _fwd():
         return enc._se_res2net_block(x, block_idx=1, scale=8)
 
-    _profile_forward(device, _fwd)
-    print(f"[speaker_block] SERes2Net block_idx=1 channels=512 seq={DEMO_SPEAKER_T}")
+    _profile_traced_forward(device, _fwd)
+    print(f"[speaker_block] SERes2Net block_idx=1 channels=512 seq={DEMO_SPEAKER_T} device_conv+trace")
+
+
+@pytest.mark.timeout(900)
+def test_speaker_encoder(device):
+    """Full ECAPA ``_forward_device`` Metal-trace replay (demo ``SE_TRACE=1`` path).
+
+    ``capture_forward_trace`` forces device conv/ASP so entry TDNN, 3× SERes2Net,
+    MFA, ASP and FC stay on device inside the trace. Mel length is the demo's T=384.
+    """
+    from models.demos.qwen3_tts.tt.speaker_encoder import SpeakerEncoder, SpeakerEncoderConfig
+
+    enc = SpeakerEncoder(device, _synthetic_speaker_encoder_sd(), config=SpeakerEncoderConfig())
+    enc.capture_forward_trace(DEMO_SPEAKER_T)
+    tid = enc._fwd_traces[DEMO_SPEAKER_T]["trace_id"]
+    signpost("start")
+    ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(device)
+    signpost("stop")
+    print(f"[speaker_encoder] capture_forward_trace mel_T={DEMO_SPEAKER_T}")
