@@ -13,6 +13,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 
@@ -143,7 +144,19 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
 
     // Normalization scalar CBs
     auto cb_reduce_ones_scalar = tt::CBIndex::c_17;
-    add_cb(cb_reduce_ones_scalar, scores_page_size, 1, scores_data_format);
+    namespace rh = ttnn::kernel_lib::host;
+    const TensorLayout reduce_layout(scores.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    auto reduce_plan = rh::make_reduce_plan(
+        TensorSpec(Shape{tile_height, operation_attributes.n_activated_experts}, reduce_layout),
+        TensorSpec(Shape{tile_height, 1}, reduce_layout),
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        {device->arch(), false, false, device->l1_size_per_core()});
+    reduce_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+    const auto* auxiliary = reduce_plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    add_cb(cb_reduce_ones_scalar, auxiliary->page_size, auxiliary->page_count, auxiliary->data_format);
 
     auto cb_epsilon_scalar = tt::CBIndex::c_18;
     add_cb(cb_epsilon_scalar, scores_page_size, 1, scores_data_format);
@@ -219,7 +232,9 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
         {"cb_gathered_sigmoid", cb_gathered_sigmoid},
     };
 
-    std::vector<uint32_t> compute_compile_time_args = {};
+    std::vector<uint32_t> compute_compile_time_args =
+        rh::ReduceCallArgs(reduce_plan, {cb_gathered_sigmoid, cb_reduce_ones_scalar, cb_reduce_intermediate})
+            .get_compile_time_args();
 
     // Writer kernel compile time arguments
     std::map<std::string, uint32_t> writer_named_compile_time_args = {
@@ -263,6 +278,7 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
     std::vector<uint32_t> writer_compile_time_args = {};
     tt::tt_metal::TensorAccessorArgs(output_weights.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_indices.buffer()).append_to(writer_compile_time_args);
+    rh::ReduceAuxiliaryArgs({cb_reduce_ones_scalar, reduce_plan.auxiliary_tiles}).append_to(writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build kernels

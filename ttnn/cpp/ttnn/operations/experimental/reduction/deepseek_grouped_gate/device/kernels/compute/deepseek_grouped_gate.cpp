@@ -17,7 +17,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 namespace blocks {
 void sigmoid(uint32_t cb_in_scores, uint32_t cb_sigmoid_scores, uint32_t width_tiles) {
@@ -312,13 +312,8 @@ void normalize_scores() {
     CircularBuffer cb_reciprocal(cb_reciprocal_sums);
     CircularBuffer cb_normalized(cb_normalized_scores);
     // 1. Sum row (experts) to get row vector of sums [1, 32]
-    compute_kernel_lib::reduce<
-        PoolType::SUM,
-        ReduceDim::REDUCE_ROW,
-        cb_gathered_sigmoid,
-        cb_reduce_ones_scalar,
-        cb_reduce_intermediate,
-        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(compute_kernel_lib::ReduceInputBlockShape::single());
+    using Call = ttnn::kernel_lib::ReduceCallArgs<0>;
+    compute_kernel_lib::reduce<Call>();
 
     // 2. Add epsilon to intermediate results
     cb_epsilon.wait_front(1);
