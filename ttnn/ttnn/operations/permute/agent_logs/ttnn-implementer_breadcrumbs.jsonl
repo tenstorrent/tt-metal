@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/permute/test_permute.py","modes":["--dev","default"],"cases":10,"ts":"2026-09-08T16:25:52+00:00"}
