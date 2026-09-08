@@ -58,7 +58,6 @@ class TTBEVFormerLayer:
         batch_first (bool): Whether batch dimension is first
         spatial_shapes: Multi-scale feature shapes [num_levels, 2]
         bev_shape: BEV grid shape [1, 2] containing [bev_h, bev_w]
-        bev_reference_points: 2D BEV reference points on device [B, num_queries, 1, 2]
         **kwargs: Additional arguments
     """
 
@@ -78,7 +77,6 @@ class TTBEVFormerLayer:
         *,
         spatial_shapes,
         bev_shape,
-        bev_reference_points,
         **kwargs,
     ):
         self.device = device
@@ -88,7 +86,6 @@ class TTBEVFormerLayer:
         self.use_spatial_cross_attention = use_spatial_cross_attention
         self.batch_first = batch_first
         self.feedforward_channels = feedforward_channels
-        self.bev_reference_points = bev_reference_points
 
         # Temporal Self-Attention
         if use_temporal_self_attention and hasattr(params, "temporal_self_attention"):
@@ -135,6 +132,7 @@ class TTBEVFormerLayer:
         reference_points_cam=None,
         bev_mask=None,
         rebatch_plan=None,
+        bev_reference_points=None,
         **kwargs,
     ):
         """
@@ -151,14 +149,15 @@ class TTBEVFormerLayer:
             reference_points_cam: Camera reference points [num_cams, B, num_queries, D, 2]
             bev_mask: Validity mask for camera projections [num_cams, B, num_queries, D]
             rebatch_plan: Shared SCA rebatch plan for this frame
+            bev_reference_points: 2D BEV reference points on device [B, num_queries, 1, 2].
+                Batch-dependent, so the encoder supplies it per forward rather than
+                baking it into the layer.
 
         Returns:
             Updated BEV features [B, num_queries, embed_dims]
         """
         if use_signpost:
             signpost(header="TTNN BEVFormerLayer Forward Start")
-
-        bev_reference_points = self.bev_reference_points
 
         if use_signpost:
             signpost(header="BEVLayer Tensor Setup Complete")
@@ -298,11 +297,17 @@ class TTBEVFormerEncoder:
         feedforward_channels (int): FFN intermediate channel size
         batch_first (bool): Whether batch dimension is first
         z_cfg (Dict[str, Any]): Z-axis configuration for point sampling
-        bev_h (int): BEV grid height
-        bev_w (int): BEV grid width
-        spatial_shapes: Multi-scale feature shapes [num_levels, 2]
-        batch_size (int): Batch size for the reference-point grid
+        bev_h (int): BEV grid height. Architectural — the trained BEV query embedding is
+            sized bev_h*bev_w, so a different grid needs different weights.
+        bev_w (int): BEV grid width. See bev_h.
+        spatial_shapes: Multi-scale feature shapes [num_levels, 2]. Fixed for the lifetime
+            of the encoder and its attention modules, which build their offset normalizers
+            from it at construction. Feeding features at a different resolution requires a
+            new encoder instance; it cannot be changed between forwards.
         **kwargs: Additional arguments
+
+    Batch size is not a constructor argument: it is read from bev_query on every forward,
+    so one instance serves a varying batch size without reconstruction.
     """
 
     def __init__(
@@ -322,11 +327,10 @@ class TTBEVFormerEncoder:
         feedforward_channels: int = 1024,
         batch_first: bool = True,
         z_cfg: Dict[str, Any] = None,
-        bev_h: int = 30,
-        bev_w: int = 30,
         *,
+        bev_h: int,
+        bev_w: int,
         spatial_shapes,
-        batch_size: int = 1,
         **kwargs,
     ):
         self.device = device
@@ -368,23 +372,22 @@ class TTBEVFormerEncoder:
         self.feedforward_channels = feedforward_channels
         self.bev_h = bev_h
         self.bev_w = bev_w
-        self.batch_size = batch_size
         self.spatial_shapes = spatial_shapes
         self.bev_shape = torch.tensor([[bev_h, bev_w]], dtype=torch.long)
 
-        self.reference_points_3d = generate_reference_points(
+        # The grid itself is batch-independent: batch size only broadcasts the leading
+        # dimension. Build it once for bs=1 and derive every other batch size from it.
+        self._reference_points_3d_unbatched = generate_reference_points(
             bev_h=bev_h,
             bev_w=bev_w,
             z_cfg=z_cfg,
-            batch_size=batch_size,
+            batch_size=1,
             dtype=torch.float32,
         )
-        self.bev_reference_points = ttnn.from_torch(
-            self.reference_points_3d[:, :, 0, :2].unsqueeze(2),
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
+        # Keyed by batch size so a steady-state batch size pays the broadcast and the
+        # host-to-device transfer once, not per frame.
+        self._reference_points_cache = {}
+        self._cache_reference_points(1)
 
         # Build transformer layers
         self.layers = []
@@ -407,10 +410,35 @@ class TTBEVFormerEncoder:
                 batch_first=batch_first,
                 spatial_shapes=spatial_shapes,
                 bev_shape=self.bev_shape,
-                bev_reference_points=self.bev_reference_points,
                 **kwargs,
             )
             self.layers.append(layer)
+
+    def _cache_reference_points(self, batch_size: int):
+        """Build and cache the reference-point tensors for one batch size."""
+        # expand() is a stride-0 view, but from_torch needs contiguous memory, so the
+        # copy happens either way; contiguous() keeps it explicit and to one place.
+        reference_points_3d = (
+            self._reference_points_3d_unbatched
+            if batch_size == 1
+            else self._reference_points_3d_unbatched.expand(batch_size, -1, -1, -1).contiguous()
+        )
+        bev_reference_points = ttnn.from_torch(
+            reference_points_3d[:, :, 0, :2].unsqueeze(2),
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        entry = (reference_points_3d, bev_reference_points)
+        self._reference_points_cache[batch_size] = entry
+        return entry
+
+    def _reference_points_for(self, batch_size: int):
+        """Reference points for a batch size, building them on first use."""
+        entry = self._reference_points_cache.get(batch_size)
+        if entry is None:
+            entry = self._cache_reference_points(batch_size)
+        return entry
 
     def forward(
         self,
@@ -449,10 +477,11 @@ class TTBEVFormerEncoder:
 
         # Validate runtime tensor dimensions against the configured model geometry.
         bs, num_queries, _ = bev_query.shape
-        assert bs == self.batch_size, f"batch_size {bs} != encoder batch_size {self.batch_size}"
         assert (
             num_queries == self.bev_h * self.bev_w
         ), f"num_queries {num_queries} != bev_h*bev_w {self.bev_h * self.bev_w}"
+
+        reference_points_3d, bev_reference_points = self._reference_points_for(bs)
 
         shapes = self.spatial_shapes
         if key is not None:
@@ -501,7 +530,7 @@ class TTBEVFormerEncoder:
             # Returns: reference_points_cam [num_cams, B, num_queries, num_points, 2] (pixel coordinates)
             #          bev_mask [num_cams, B, num_queries, num_points] (validity mask)
             reference_points_cam, bev_mask = point_sampling_3d_to_2d_ttnn(
-                reference_points=self.reference_points_3d,
+                reference_points=reference_points_3d,
                 pc_range=self.pc_range,
                 lidar2img=lidar2img,
                 img_metas=img_metas,
@@ -534,6 +563,7 @@ class TTBEVFormerEncoder:
                 reference_points_cam=reference_points_cam,
                 bev_mask=bev_mask,
                 rebatch_plan=rebatch_plan,
+                bev_reference_points=bev_reference_points,
                 **kwargs,
             )
             if use_signpost:
@@ -561,6 +591,6 @@ class TTBEVFormerEncoder:
             f"num_heads={self.num_heads}, num_levels={self.num_levels}, "
             f"num_points={self.num_points}, num_cams={self.num_cams}, "
             f"pc_range={self.pc_range}, num_points_in_pillar={self.num_points_in_pillar}, "
-            f"bev_h={self.bev_h}, bev_w={self.bev_w}, batch_size={self.batch_size}, "
+            f"bev_h={self.bev_h}, bev_w={self.bev_w}, "
             f"feedforward_channels={self.feedforward_channels}, z_cfg={self.z_cfg}"
         )
