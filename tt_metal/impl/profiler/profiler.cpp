@@ -594,7 +594,8 @@ bool doAllDispatchCoresComeAfterNonDispatchCores(
     std::vector<CoreCoord> virtual_dispatch_cores;
     virtual_dispatch_cores.reserve(logical_dispatch_cores.size());
     for (const CoreCoord& core : logical_dispatch_cores) {
-        const CoreCoord virtual_dispatch_core = device->virtual_core_from_logical_core(core, dispatch_core_type);
+        const CoreCoord virtual_dispatch_core =
+            device->virtual_core_from_logical_core(core, dispatch_core_type);
         virtual_dispatch_cores.push_back(virtual_dispatch_core);
     }
 

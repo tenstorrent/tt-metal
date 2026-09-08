@@ -76,10 +76,11 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters PERF
      {PerfCounterType::MATH_NOT_SCOREBOARD_STALLED, 272}}};
 constexpr std::size_t NUM_PACK_COUNTERS = 5;
 
-// INSTRN readout: sel = class*4+thread (cfg,sync,thcon,xsearch,instissue,math,unpack,pack), 32-35
+// INSTRN readout: sel = class*4+thread (cfg,sync,thcon,xsearch,instissue,math,unpack,pack; the xsearch slots 12-15
+// are tied to 0 in the RTL and are not exposed), 32-35
 // per-thread any-stall, 36-50 thread-ORed backend-stage stall conditions (sampled downstream of the
 // ibuffer, so they can exceed the any-stall counts); grants (sel >= 256) = the thread's ibuffer dequeues.
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 55> instrn_counters PERF_COUNTER_TABLE = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 51> instrn_counters PERF_COUNTER_TABLE = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_2, 2},
@@ -92,10 +93,6 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 55> instrn_counters P
      {PerfCounterType::THCON_INSTRN_AVAILABLE_1, 9},
      {PerfCounterType::THCON_INSTRN_AVAILABLE_2, 10},
      {PerfCounterType::THCON_INSTRN_AVAILABLE_3, 11},
-     {PerfCounterType::XSEARCH_INSTRN_AVAILABLE_0, 12},
-     {PerfCounterType::XSEARCH_INSTRN_AVAILABLE_1, 13},
-     {PerfCounterType::XSEARCH_INSTRN_AVAILABLE_2, 14},
-     {PerfCounterType::XSEARCH_INSTRN_AVAILABLE_3, 15},
      {PerfCounterType::INSTISSUE_INSTRN_AVAILABLE_0, 16},
      {PerfCounterType::INSTISSUE_INSTRN_AVAILABLE_1, 17},
      {PerfCounterType::INSTISSUE_INSTRN_AVAILABLE_2, 18},
@@ -135,4 +132,4 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 55> instrn_counters P
      {PerfCounterType::THREAD_INSTRUCTIONS_1, 257},
      {PerfCounterType::THREAD_INSTRUCTIONS_2, 258},
      {PerfCounterType::THREAD_INSTRUCTIONS_3, 259}}};
-constexpr std::size_t NUM_INSTRN_COUNTERS = 55;
+constexpr std::size_t NUM_INSTRN_COUNTERS = 51;

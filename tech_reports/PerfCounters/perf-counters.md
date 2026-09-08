@@ -236,7 +236,7 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 
 ### Quasar only
 
-Quasar NEOs expose counters the tt-1xx cores do not: a fourth thread, the XSEARCH and INSTISSUE instruction classes, fifteen stall reasons OR-reduced across the threads, a third unpacker and per-thread unpacker and source-write splits. The same engine computes these and reports N/A for them on Wormhole and Blackhole.
+Quasar NEOs expose counters the tt-1xx cores do not: a fourth thread, the INSTISSUE instruction class, fifteen stall reasons OR-reduced across the threads, a third unpacker and per-thread unpacker and source-write splits. The same engine computes these and reports N/A for them on Wormhole and Blackhole.
 
 | Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
 |---|---|---|---|
@@ -251,10 +251,6 @@ Quasar NEOs expose counters the tt-1xx cores do not: a fourth thread, the XSEARC
 | THCON Instrn Avail Rate T1 (%) | `thcon_instrn_avail_t1_pct` | `THCON_INSTRN_AVAILABLE_1 / instrn cycles` | THCON instructions pending on thread 1. Quasar only (four threads; the MATH class also counts instissue instructions). |
 | THCON Instrn Avail Rate T2 (%) | `thcon_instrn_avail_t2_pct` | `THCON_INSTRN_AVAILABLE_2 / instrn cycles` | THCON instructions pending on thread 2. Quasar only (four threads; the MATH class also counts instissue instructions). |
 | THCON Instrn Avail Rate T3 (%) | `thcon_instrn_avail_t3_pct` | `THCON_INSTRN_AVAILABLE_3 / instrn cycles` | THCON instructions pending on thread 3. Quasar only (four threads; the MATH class also counts instissue instructions). |
-| XSEARCH Instrn Avail Rate T0 (%) | `xsearch_instrn_avail_t0_pct` | `XSEARCH_INSTRN_AVAILABLE_0 / instrn cycles` | XSEARCH instructions pending on thread 0. Quasar only (four threads; the MATH class also counts instissue instructions). |
-| XSEARCH Instrn Avail Rate T1 (%) | `xsearch_instrn_avail_t1_pct` | `XSEARCH_INSTRN_AVAILABLE_1 / instrn cycles` | XSEARCH instructions pending on thread 1. Quasar only (four threads; the MATH class also counts instissue instructions). |
-| XSEARCH Instrn Avail Rate T2 (%) | `xsearch_instrn_avail_t2_pct` | `XSEARCH_INSTRN_AVAILABLE_2 / instrn cycles` | XSEARCH instructions pending on thread 2. Quasar only (four threads; the MATH class also counts instissue instructions). |
-| XSEARCH Instrn Avail Rate T3 (%) | `xsearch_instrn_avail_t3_pct` | `XSEARCH_INSTRN_AVAILABLE_3 / instrn cycles` | XSEARCH instructions pending on thread 3. Quasar only (four threads; the MATH class also counts instissue instructions). |
 | INSTISSUE Instrn Avail Rate T0 (%) | `instissue_instrn_avail_t0_pct` | `INSTISSUE_INSTRN_AVAILABLE_0 / instrn cycles` | INSTISSUE instructions pending on thread 0. Quasar only (four threads; the MATH class also counts instissue instructions). |
 | INSTISSUE Instrn Avail Rate T1 (%) | `instissue_instrn_avail_t1_pct` | `INSTISSUE_INSTRN_AVAILABLE_1 / instrn cycles` | INSTISSUE instructions pending on thread 1. Quasar only (four threads; the MATH class also counts instissue instructions). |
 | INSTISSUE Instrn Avail Rate T2 (%) | `instissue_instrn_avail_t2_pct` | `INSTISSUE_INSTRN_AVAILABLE_2 / instrn cycles` | INSTISSUE instructions pending on thread 2. Quasar only (four threads; the MATH class also counts instissue instructions). |

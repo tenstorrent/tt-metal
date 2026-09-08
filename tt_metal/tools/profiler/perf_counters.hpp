@@ -231,7 +231,8 @@ enum PerfCounterType : std::uint16_t {
     PACK_INSTRN_AVAILABLE_3,
     THREAD_STALLS_3,
     THREAD_INSTRUCTIONS_3,
-    // Instruction classes that only exist on Quasar
+    // Instruction classes that only exist on Quasar. XSEARCH reads 0 on every op (its INSTRN sels are tied off in
+    // the RTL), so it is not in the Quasar table; the enumerators stay so the ordinals below do not shift.
     XSEARCH_INSTRN_AVAILABLE_0,
     XSEARCH_INSTRN_AVAILABLE_1,
     XSEARCH_INSTRN_AVAILABLE_2,

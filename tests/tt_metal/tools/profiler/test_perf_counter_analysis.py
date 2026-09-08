@@ -28,7 +28,7 @@ from tracy.perf_counter_analysis import (
     quasar_l1_client_label,
 )
 
-QUASAR_INSTRN_CLASSES = ("CFG", "SYNC", "THCON", "XSEARCH", "INSTISSUE", "MATH", "UNPACK", "PACK")
+QUASAR_INSTRN_CLASSES = ("CFG", "SYNC", "THCON", "INSTISSUE", "MATH", "UNPACK", "PACK")
 
 QUASAR_CAPTURE_TYPES = (
     ["FPU_COUNTER", "SFPU_COUNTER", "MATH_COUNTER"]
@@ -90,7 +90,7 @@ QUASAR_EXPECTED_METRICS = [
     "SrcA Stall Math Rate",
     "SrcA Stall Math Share",
     "Dest Stall Pack Rate",
-    "XSEARCH Instrn Avail Rate T0",
+    "THCON Instrn Avail Rate T1",
     "INSTISSUE Instrn Avail Rate T3",
     "CFG Instrn Avail Rate T3",
     "Unpacker2 Busy T0 Util",
@@ -173,7 +173,7 @@ def test_quasar_capture_produces_quasar_metrics_device_only():
 
 
 def test_blackhole_capture_gets_no_quasar_columns():
-    quasar_only = {n for n in QUASAR_CAPTURE_TYPES if "XSEARCH" in n or "INSTISSUE" in n or n.endswith("_3")}
+    quasar_only = {n for n in QUASAR_CAPTURE_TYPES if "INSTISSUE" in n or n.endswith("_3")}
     quasar_only |= {n for n in QUASAR_CAPTURE_TYPES if "STALL_" in n or n.startswith("L1_CLIENT_")}
     bh_types = [n for n in QUASAR_CAPTURE_TYPES if n not in quasar_only]
     df = make_capture(bh_types, "BRISC", 1)
@@ -181,11 +181,7 @@ def test_blackhole_capture_gets_no_quasar_columns():
     stats = compute_perf_counter_metrics(df, "blackhole", total_compute_cores=1)["per_op_stats"]
     agg_metrics, _ = compute_device_only_metrics(df, "blackhole")
     for keys in (stats.keys(), agg_metrics.keys()):
-        leaked = [
-            k
-            for k in keys
-            if "XSEARCH" in k or "INSTISSUE" in k or "T3" in k or "Thread 3" in k or k.startswith("L1_CLIENT_")
-        ]
+        leaked = [k for k in keys if "INSTISSUE" in k or "T3" in k or "Thread 3" in k or k.startswith("L1_CLIENT_")]
         assert not leaked, leaked
 
 

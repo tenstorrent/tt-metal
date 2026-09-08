@@ -1671,19 +1671,27 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_LLK_SANITIZER_WARN
         // Usage: export TT_METAL_LLK_SANITIZER_WARN=1
-        case EnvVarID::TT_METAL_LLK_SANITIZER_WARN: this->sanitizer_settings.warn = is_env_enabled(value); break;
+        case EnvVarID::TT_METAL_LLK_SANITIZER_WARN:
+            this->sanitizer_settings.warn = is_env_enabled(value);
+            break;
 
         // TT_METAL_LLK_SANITIZER_ERROR
         // Usage: export TT_METAL_LLK_SANITIZER_ERROR=1
-        case EnvVarID::TT_METAL_LLK_SANITIZER_ERROR: this->sanitizer_settings.error = is_env_enabled(value); break;
+        case EnvVarID::TT_METAL_LLK_SANITIZER_ERROR:
+            this->sanitizer_settings.error = is_env_enabled(value);
+            break;
 
         // TT_METAL_LLK_SANITIZER_INFO
         // Usage: export TT_METAL_LLK_SANITIZER_INFO=1
-        case EnvVarID::TT_METAL_LLK_SANITIZER_INFO: this->sanitizer_settings.info = is_env_enabled(value); break;
+        case EnvVarID::TT_METAL_LLK_SANITIZER_INFO:
+            this->sanitizer_settings.info = is_env_enabled(value);
+            break;
 
         // TT_METAL_LLK_SANITIZER_FAULT
         // Usage: export TT_METAL_LLK_SANITIZER_FAULT=1
-        case EnvVarID::TT_METAL_LLK_SANITIZER_FAULT: this->sanitizer_settings.fault = is_env_enabled(value); break;
+        case EnvVarID::TT_METAL_LLK_SANITIZER_FAULT:
+            this->sanitizer_settings.fault = is_env_enabled(value);
+            break;
 
         // TT_METAL_LLK_SANITIZER_INTERNAL
         // Enables LLK developer internal mode.
@@ -2316,9 +2324,7 @@ std::string RunTimeOptions::get_watcher_hash() const {
 }
 
 std::string RunTimeOptions::get_sanitizer_hash() const {
-    auto optional_hash = [](const std::optional<bool>& optional) {
-        return optional.has_value() ? std::to_string(*optional) : "nullopt";
-    };
+    auto optional_hash = [](const std::optional<bool>& optional) { return optional.has_value() ? std::to_string(*optional) : "nullopt"; };
 
     const auto& san = get_sanitizer_settings();
     std::string hash_str;

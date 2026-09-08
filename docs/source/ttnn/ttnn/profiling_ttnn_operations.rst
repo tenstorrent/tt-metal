@@ -182,10 +182,10 @@ A metric whose counters do not exist on the running architecture reports N/A (bl
 
 *Quasar-Only Metrics*
 
-These come from counters that only Quasar's NEOs expose (four threads, the XSEARCH and INSTISSUE instruction classes, thread-ORed stall reasons, a third unpacker and the l1_client CSR). They are computed by the same shared engine (``tools/tracy/perf_metrics_common.py``) and read N/A on Wormhole and Blackhole rather than a fake 0%.
+These come from counters that only Quasar's NEOs expose (four threads, the INSTISSUE instruction class, thread-ORed stall reasons, a third unpacker and the l1_client CSR). They are computed by the same shared engine (``tools/tracy/perf_metrics_common.py``) and read N/A on Wormhole and Blackhole rather than a fake 0%.
 
 - **Thread 3 Stall Rate (%)** and **T3 Instrn Issue Rate (%)**: ``THREAD_STALLS_3 / ref_cnt`` and ``THREAD_INSTRUCTIONS_3 / ref_cnt``, the fourth-thread counterparts of the tt-1xx thread metrics.
-- **CFG/SYNC/THCON/XSEARCH/INSTISSUE/MATH/UNPACK/PACK Instrn Avail Rate T0..T3 (%)**: ``<CLASS>_INSTRN_AVAILABLE_<t> / ref_cnt`` for every (class, thread) pair the tt-1xx list above does not already cover. The MATH class counts math and instissue instructions (the RTL unions them).
+- **CFG/SYNC/THCON/INSTISSUE/MATH/UNPACK/PACK Instrn Avail Rate T0..T3 (%)**: ``<CLASS>_INSTRN_AVAILABLE_<t> / ref_cnt`` for every (class, thread) pair the tt-1xx list above does not already cover. The MATH class counts math and instissue instructions (the RTL unions them).
 - **<Reason> Stall Rate (%)**: ``<REASON> / ref_cnt`` for the 15 stall reasons the INSTRN unit reports OR-reduced across the four threads: Tile Counter Stall Pack/Unpack, Srcs Stall Pack/SFPU/Unpack, Dest Stall Pack/SFPU/Math/Unpack, SFPU/FPU Data Hazard Stall, SrcB/SrcA Stall Unpack, DValid Stall Math, SrcA Stall Math. They sample a backend stage, so they can exceed the per-thread stall counts.
 - **<Reason> Stall Share (%)**: the same reason as a fraction of the sum of every stall reason captured in the run; only reported when at least two reasons were captured.
 - **Unpacker0/1/2 Busy T0/T1 Util (%)**: ``UNPACK<u>_BUSY_THREAD<t> / ref_cnt`` per unpacker and issuing thread (Quasar runs three unpackers per thread; unpacker 2 is thread 0 only).

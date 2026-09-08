@@ -151,10 +151,11 @@ L1_ALL = (
 
 
 # ── Quasar (A0) ──
-# A NEO runs four threads and adds the XSEARCH and INSTISSUE instruction classes; its INSTRN unit reports
+# A NEO runs four threads and adds the INSTISSUE instruction class (its XSEARCH class is tied to 0 in the RTL
+# and is not exposed); its INSTRN unit reports
 # the backend stall reasons OR-reduced across the threads rather than per thread. The tt-1xx enumerators
 # already carry the same names for the counters both architectures share, so no aliasing is needed.
-QUASAR_INSTRN_CLASSES = ("CFG", "SYNC", "THCON", "XSEARCH", "INSTISSUE", "MATH", "UNPACK", "PACK")
+QUASAR_INSTRN_CLASSES = ("CFG", "SYNC", "THCON", "INSTISSUE", "MATH", "UNPACK", "PACK")
 # (class, thread) pairs the tt-1xx availability metrics above already report.
 INSTRN_AVAIL_COVERED = frozenset({("CFG", 0), ("SYNC", 0), ("THCON", 0), ("MATH", 1), ("UNPACK", 0), ("PACK", 2)})
 # Metric key stem -> INSTRN counter, one per thread-ORed stall reason.
@@ -675,10 +676,6 @@ def compute_metrics(v: CounterView) -> dict:
         "thcon_instrn_avail_t1_pct": pct(_avail("THCON", 1)),
         "thcon_instrn_avail_t2_pct": pct(_avail("THCON", 2)),
         "thcon_instrn_avail_t3_pct": pct(_avail("THCON", 3)),
-        "xsearch_instrn_avail_t0_pct": pct(_avail("XSEARCH", 0)),
-        "xsearch_instrn_avail_t1_pct": pct(_avail("XSEARCH", 1)),
-        "xsearch_instrn_avail_t2_pct": pct(_avail("XSEARCH", 2)),
-        "xsearch_instrn_avail_t3_pct": pct(_avail("XSEARCH", 3)),
         "instissue_instrn_avail_t0_pct": pct(_avail("INSTISSUE", 0)),
         "instissue_instrn_avail_t1_pct": pct(_avail("INSTISSUE", 1)),
         "instissue_instrn_avail_t2_pct": pct(_avail("INSTISSUE", 2)),
@@ -855,10 +852,6 @@ METRIC_LABELS = {
     "thcon_instrn_avail_t1_pct": "THCON Instrn Avail Rate T1",
     "thcon_instrn_avail_t2_pct": "THCON Instrn Avail Rate T2",
     "thcon_instrn_avail_t3_pct": "THCON Instrn Avail Rate T3",
-    "xsearch_instrn_avail_t0_pct": "XSEARCH Instrn Avail Rate T0",
-    "xsearch_instrn_avail_t1_pct": "XSEARCH Instrn Avail Rate T1",
-    "xsearch_instrn_avail_t2_pct": "XSEARCH Instrn Avail Rate T2",
-    "xsearch_instrn_avail_t3_pct": "XSEARCH Instrn Avail Rate T3",
     "instissue_instrn_avail_t0_pct": "INSTISSUE Instrn Avail Rate T0",
     "instissue_instrn_avail_t1_pct": "INSTISSUE Instrn Avail Rate T1",
     "instissue_instrn_avail_t2_pct": "INSTISSUE Instrn Avail Rate T2",
