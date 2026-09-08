@@ -156,11 +156,12 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 (the default) preserves legacy full-row normalization. Requires
                 ``rms_norm``; nonzero values are rejected when ``rms_norm`` is False.
 
-                When `input_tensor_a` is ROW_MAJOR and HEIGHT_SHARDED, it must be replicated on
-                the same core grid as `input_tensor_b` (shard width = K, shard height = M).
-                That path is full-width hub-mode only: each core already holds the full A, so
-                the reader fills `full_in0` from the local shard (treated as 1x32 tiles) instead
-                of gathering K-slices. `ring_gather` is rejected.
+                When `input_tensor_a` is ROW_MAJOR and HEIGHT_SHARDED, it must be replicated
+                on a core grid that contains `input_tensor_b`'s cores (shard width = K,
+                shard height = M). Extra replica cores are ignored. That path is full-width
+                hub-mode only: each B core already holds the full A, so the reader fills
+                `full_in0` from the local shard (treated as 1x32 tiles) instead of gathering
+                K-slices. `ring_gather` is rejected.
 
         Returns:
             ttnn.Tensor: the output tensor.
