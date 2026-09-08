@@ -113,6 +113,14 @@ audit.
   `generated/test_reports/reduce-migration-yj0k8o8w/summary.json`. Original
   full-suite skips remain visible. The full runner now contains six added test
   definitions and 217 added parameterized cases beyond the base inventory.
+- Shared Moreh layer/group normalization input gradients (S060/S062,
+  DP005/DP007/DP010/DP012): both small and large paths now reduce transformed
+  dy and y*dy blocks through host plans, replacing their manual tile-add loops.
+  Factories account for bounded resident blocks and planned auxiliary formats;
+  readers materialize the shared recipe. Retained masks around fused transforms.
+  Native build and all four backward sanity cases passed (SM024/25/28/29).
+  Full T053/T054 backward selections passed; results in
+  `generated/test_reports/reduce-migration-qz31vai7/summary.json`.
 
 ## Remaining work
 
