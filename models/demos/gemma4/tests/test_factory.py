@@ -448,8 +448,7 @@ def _fabric_config_for_shape(shape):
 
     if shape == (1, 1):
         return None
-    if shape[0] > 1 and shape[1] > 1:
-        return ttnn.FabricConfig.FABRIC_2D
+
     return ttnn.FabricConfig.FABRIC_1D
 
 
