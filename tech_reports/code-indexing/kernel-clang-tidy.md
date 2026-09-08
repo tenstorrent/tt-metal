@@ -342,7 +342,11 @@ builds its own `-config` for clang-tidy (`clangtidy/analyzer.py:509`), and
 passing `--config-file` alongside it makes clang-tidy abort every TU with
 "--config-file and --config are mutually exclusive".
 `tt_metal/jit_build/kernel_clang_tidy/.clang-tidy` exists only for the local
-`--run` path and mirrors the same options; keep the two in sync.
+`--run` path, where it mirrors both the selection and the options; keep the two
+in sync. Its `Checks:` key is load-bearing rather than redundant: clang-tidy's
+own default is an empty check list, so without it a local run reports nothing but
+compiler diagnostics. It leaves `clang-analyzer-*` off to match CI, which runs
+`--analyzers clang-tidy` only.
 
 ## Coverage and known gaps
 

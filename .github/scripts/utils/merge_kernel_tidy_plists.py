@@ -76,7 +76,15 @@ def _prune(args: tuple[pathlib.Path, pathlib.Path, pathlib.Path, set[Key]]) -> i
     src, root, final, owned = args
     data = plistlib.loads(src.read_bytes())
     files = data.get("files", [])
-    kept = [d for d in data.get("diagnostics", []) if _resolve(d, files) in owned]
+    # First occurrence only: a plist can repeat a finding within itself, and
+    # _scan already collapsed those when it claimed the key.
+    kept = []
+    written: set[Key] = set()
+    for d in data.get("diagnostics", []):
+        key = _resolve(d, files)
+        if key in owned and key not in written:
+            written.add(key)
+            kept.append(d)
     if not kept:
         return 0
     data["diagnostics"] = kept

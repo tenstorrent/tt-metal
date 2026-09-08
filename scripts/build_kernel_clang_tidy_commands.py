@@ -112,9 +112,9 @@ MCPU_MAP = {
     "tt-wh-tensix": ("riscv32-unknown-elf", "rv32im", "ilp32", "wh-ilp32"),
     "tt-bh": ("riscv32-unknown-elf", "rv32im", "ilp32", "bh-ilp32"),
     "tt-bh-tensix": ("riscv32-unknown-elf", "rv32im", "ilp32", "bh-ilp32"),
-    # Quasar mappings are untested; provided so entries aren't silently skipped.
-    "tt-qsr32": ("riscv32-unknown-elf", "rv32im", "ilp32", "qsr32-ilp32"),
-    "tt-qsr64": ("riscv64-unknown-elf", "rv64im", "lp64", "qsr64-lp64"),
+    # Quasar, untested. Names as emitted by qa_hal.cpp, where DM is rv64.
+    "tt-qsr32-tensix": ("riscv32-unknown-elf", "rv32im", "ilp32", "qsr32-ilp32"),
+    "tt-qsr64-rocc": ("riscv64-unknown-elf", "rv64im", "lp64", "qsr64-lp64"),
 }
 
 # riscv32 GCC/newlib type-model overrides (int32_t is `long` there; sfpi.h
@@ -258,12 +258,19 @@ def is_vendor_include(path):
     return "/sfpi/" in path.replace(os.sep, "/")
 
 
+def gcc_version_key(name):
+    """Order 10.2.0 after 9.3.0, which a lexicographic sort gets backwards."""
+    return tuple(int(p) for p in name.split(".") if p.isdigit())
+
+
 def sfpi_isystem_flags(compiler_root, multilib):
     """The SFPI toolchain's own newlib + libstdc++ header paths, for clang."""
     if compiler_root is None:
         return []
     cxx_root = compiler_root / "riscv-tt-elf" / "include" / "c++"
-    versions = sorted(d.name for d in cxx_root.iterdir() if d.is_dir()) if cxx_root.is_dir() else []
+    versions = (
+        sorted((d.name for d in cxx_root.iterdir() if d.is_dir()), key=gcc_version_key) if cxx_root.is_dir() else []
+    )
     if not versions:
         return []
     v = versions[-1]
@@ -323,7 +330,10 @@ def transform(argv, clang):
         # tt-llk headers use; clang needs real C++20 to accept them.
         out = [("-std=c++20" if a == "-std=c++17" else a) for a in out]
     out += sfpi_isystem_flags(compiler_root, multilib)
-    out += INT32_OVERRIDES
+    if mabi == "ilp32":
+        # `long` is 64-bit under LP64, so forcing int32_t to it would give the
+        # rv64 target (Quasar DM) a 64-bit int32_t.
+        out += INT32_OVERRIDES
     out += NOISE_SUPPRESSIONS
     return out
 
@@ -477,6 +487,19 @@ def self_test():
         assert "-I/opt/tenstorrent/sfpi/include" not in got, f"SFPI kept as -I for {spelling}"
         assert "-I/work/tt_metal" in got, "project includes must stay first-party"
 
+    # Every -mcpu the HAL emits must map, or those entries vanish from the
+    # report with only a skip count to show for it.
+    for cpu in ("tt-wh", "tt-wh-tensix", "tt-bh", "tt-bh-tensix", "tt-qsr32-tensix", "tt-qsr64-rocc"):
+        assert cpu in MCPU_MAP, f"{cpu} is emitted by the HAL but unmapped"
+    # int32_t is `long` only on the ilp32 targets.
+    rv64 = transform([gxx, "-c", "-mcpu=tt-qsr64-rocc", "x.cc"], "clang++")
+    assert "--target=riscv64-unknown-elf" in rv64
+    assert "-D__INT32_TYPE__=long int" not in rv64, "32-bit type model must not reach rv64"
+    rv32 = transform([gxx, "-c", "-mcpu=tt-wh-tensix", "x.cc"], "clang++")
+    assert "-D__INT32_TYPE__=long int" in rv32, "ilp32 needs the newlib type model"
+
+    assert gcc_version_key("10.2.0") > gcc_version_key("9.3.0"), "GCC versions must sort numerically"
+
     print("[kernel-clang-tidy] self-test PASSED")
     return 0
 
@@ -530,12 +553,14 @@ def main():
     seen = set()
     entries = []
     skipped_unknown_cpu = 0
+    collapsed = 0
     for e in raw:
         argv = entry_argv(e)
         if not is_sfpi_compile(argv):
             continue
         key = dedupe_key(e, args.dedupe)
         if key in seen:
+            collapsed += 1
             continue
         new_argv = transform(argv, args.clang)
         if new_argv is None:
@@ -552,6 +577,9 @@ def main():
     with open(out_db, "w") as f:
         json.dump(entries, f, indent=1)
     print(f"[kernel-clang-tidy] {len(raw)} captured commands -> {len(entries)} kernel compile entries -> {out_db}")
+    if collapsed:
+        # The coverage cost of --dedupe belongs in the CI log, not just here.
+        print(f"[kernel-clang-tidy] --dedupe {args.dedupe} collapsed {collapsed} further compile-time-arg configs")
     if skipped_unknown_cpu:
         print(f"[kernel-clang-tidy] skipped {skipped_unknown_cpu} entries with unrecognized -mcpu", file=sys.stderr)
     if not entries:
@@ -577,7 +605,10 @@ def main():
     total_findings = 0
     failed_entries = 0
     with open(findings_path, "w") as findings, concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-        futures = [pool.submit(run_tidy_entry, tidy_bin, args.config_file, args.header_filter, e) for e in entries]
+        # Absolute: each process runs in the kernel cache dir, where a relative
+        # config path does not resolve.
+        cfg = os.path.abspath(args.config_file) if args.config_file else ""
+        futures = [pool.submit(run_tidy_entry, tidy_bin, cfg, args.header_filter, e) for e in entries]
         for fut in concurrent.futures.as_completed(futures):
             entry, rc, out, err = fut.result()
             n_before = total_findings

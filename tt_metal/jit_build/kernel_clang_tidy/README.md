@@ -12,7 +12,7 @@ and driven by [`scripts/build_kernel_clang_tidy_commands.py`](../../../scripts/b
 | `codechecker.json` | CI. Checker selection, check options and scoping. |
 | `skiplist` | CI, via `codechecker.json`. Paths excluded from analysis and reporting. |
 | `review_status.yaml` | CI, at parse time. Per-path exceptions to a checker. |
-| `.clang-tidy` | Local `--run` only. Mirrors the check options from `codechecker.json`. |
+| `.clang-tidy` | Local `--run` only. Mirrors the selection and check options from `codechecker.json`. |
 
 ## Where are the mock SFPI headers?
 

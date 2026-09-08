@@ -8,10 +8,41 @@
 # --config are mutually exclusive". The options below are mirrored as
 # --checker-config entries in codechecker.json; keep the two in sync.
 #
-# No 'Checks:' key on purpose: the command-line -checks takes precedence over a
-# config-file one anyway, so it would be dead weight at best.
-#
 # Rationale for each value: tech_reports/code-indexing/kernel-clang-tidy.md.
+
+# Mirrors the --enable-all minus --disable selection in codechecker.json, so a
+# local run reports what the report does. It cannot be omitted: clang-tidy's own
+# default is an empty check list, which lints nothing but compiler diagnostics.
+# clang-analyzer-* is excluded because CI runs --analyzers clang-tidy only; it is
+# path-sensitive and much slower than the rest put together.
+Checks: >-
+  *,
+  -abseil-*,
+  -altera-*,
+  -android-*,
+  -boost-*,
+  -cert-*,
+  -clang-analyzer-*,
+  -clang-diagnostic-c++98-compat*,
+  -darwin-*,
+  -fuchsia-*,
+  -linuxkernel-*,
+  -llvmlibc-*,
+  -mpi-*,
+  -objc-*,
+  -openmp-*,
+  -zircon-*,
+  -bugprone-easily-swappable-parameters,
+  -clang-diagnostic-documentation,
+  -clang-diagnostic-extra-semi-stmt,
+  -clang-diagnostic-reserved-identifier,
+  -clang-diagnostic-unsafe-buffer-usage,
+  -clang-diagnostic-unused-parameter,
+  -hicpp-no-assembler,
+  -modernize-avoid-c-arrays,
+  -modernize-use-trailing-return-type,
+  -performance-enum-size,
+  -portability-simd-intrinsics
 
 CheckOptions:
   # clang-tidy's defaults, stated explicitly because the host .clang-tidy sets
