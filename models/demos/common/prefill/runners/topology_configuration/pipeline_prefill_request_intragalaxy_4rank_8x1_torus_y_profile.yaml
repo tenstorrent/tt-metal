@@ -1,12 +1,13 @@
 # NOTE: the TT_VISIBLE_DEVICES lists below were read off bh-glx-b03u02 and are PER-GALAXY. Another
 # 32-chip galaxy enumerates differently (verified on bh-glx-110-a04u02) and a wrong map does NOT error --
 # it builds stages that are not columns. Regenerate for your host with
-#   python /data/kmabee/mistral4_pp4_perf/scripts/gen_pp4_binding.py [--profile]
+#   python models/demos/deepseek_v3_d_p/tests/perf/gen_pipeline_binding.py [--profile]
 # PROFILING variant of pipeline_prefill_request_intragalaxy_4rank_8x1_torus_y.yaml: identical topology,
 # plus a PER-RANK TT_METAL_PROFILER_DIR. That var is read by BOTH the python profiler tooling and C++
 # (tt_metal/impl/profiler/profiler_paths.hpp), so it genuinely separates the four ranks' per-op logs;
 # without it all four write one tree and the op records interleave into nonsense. Post-process each
 # rank dir on its own with `python -m tracy --process-logs-only -o <dir> -r`.
+# The dirs below are relative to the launch cwd (TT_METAL_HOME); --profile-root overrides them.
 #
 # TORUS-Y variant of pipeline_prefill_request_intragalaxy_4rank_8x1.yaml (SP axis wraps; see that file
 # and the torus_y mesh-graph descriptor for the why).
@@ -31,10 +32,10 @@
 #   row3: 3  7  31 27      row7: 8  12 20 16
 
 rank_bindings:
-  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_METAL_PROFILER_DIR: "/data/kmabee/tt-metal-2/mistral4_perf_profile/rank0", TT_VISIBLE_DEVICES: "0,1,2,3,11,10,9,8"}}
-  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {TT_METAL_PROFILER_DIR: "/data/kmabee/tt-metal-2/mistral4_perf_profile/rank1", TT_VISIBLE_DEVICES: "4,5,6,7,15,14,13,12"}}
-  - {rank: 2, mesh_id: 2, mesh_host_rank: 0, env_overrides: {TT_METAL_PROFILER_DIR: "/data/kmabee/tt-metal-2/mistral4_perf_profile/rank2", TT_VISIBLE_DEVICES: "28,29,30,31,23,22,21,20"}}
-  - {rank: 3, mesh_id: 3, mesh_host_rank: 0, env_overrides: {TT_METAL_PROFILER_DIR: "/data/kmabee/tt-metal-2/mistral4_perf_profile/rank3", TT_VISIBLE_DEVICES: "24,25,26,27,19,18,17,16"}}
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_METAL_PROFILER_DIR: "mistral4_perf_profile/rank0", TT_VISIBLE_DEVICES: "0,1,2,3,11,10,9,8"}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {TT_METAL_PROFILER_DIR: "mistral4_perf_profile/rank1", TT_VISIBLE_DEVICES: "4,5,6,7,15,14,13,12"}}
+  - {rank: 2, mesh_id: 2, mesh_host_rank: 0, env_overrides: {TT_METAL_PROFILER_DIR: "mistral4_perf_profile/rank2", TT_VISIBLE_DEVICES: "28,29,30,31,23,22,21,20"}}
+  - {rank: 3, mesh_id: 3, mesh_host_rank: 0, env_overrides: {TT_METAL_PROFILER_DIR: "mistral4_perf_profile/rank3", TT_VISIBLE_DEVICES: "24,25,26,27,19,18,17,16"}}
 
 mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x8x1_z_chain_torus_y_graph_descriptor.textproto
 
