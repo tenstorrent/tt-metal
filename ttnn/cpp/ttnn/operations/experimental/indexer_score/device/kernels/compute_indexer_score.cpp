@@ -44,7 +44,8 @@ constexpr bool fused_stream_k = get_compile_time_arg_val(num_common_ct_args + 5)
 constexpr bool fused_ring_enabled = get_compile_time_arg_val(num_common_ct_args + 6) != 0;
 constexpr bool shard_block_cyclic = get_compile_time_arg_val(num_common_ct_args + 7) != 0;
 constexpr uint32_t shard_chunk_local = get_compile_time_arg_val(num_common_ct_args + 8);
-constexpr uint32_t shard_sp = get_compile_time_arg_val(num_common_ct_args + 9);
+constexpr uint32_t shard_key_stripes = get_compile_time_arg_val(num_common_ct_args + 9);
+constexpr uint32_t shard_physical_sp = get_compile_time_arg_val(num_common_ct_args + 10);
 
 // k-cols sharing ONE dest acquire in the blocked-custom mul (dest-bounded). One unpack context per head
 // (w[h] + ct_dim qk cols), so unpack-context sync is paid 1/ct_dim of the per-tile bcast-mul rate.
@@ -421,10 +422,12 @@ inline void stamp_masked_suffix(
     }
 }
 
-/** Causal mask for a shard-major packed unit. Its logical tile ids are monotone but may jump between
- *  block-cyclic runs, so find the prefix below the diagonal using the inverse physical mapping. */
+/** Causal and runtime-prefix mask for a shard-major packed unit. Retain the monotonic prefix walk for
+ *  contiguous/SP-only layouts. TP-striped logical tile ids can reset at stripe-capacity boundaries, so
+ *  classify every physical column independently there. */
 inline void stamp_masked_shard_major(
-    const ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_sp>& shard_span,
+    const ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_key_stripes, shard_physical_sp>&
+        shard_span,
     uint32_t q_row,
     uint32_t slot_base,
     uint32_t k_tiles_in_unit,
@@ -434,14 +437,23 @@ inline void stamp_masked_shard_major(
     const uint32_t q_row_abs = shard_span.q_tile_start() + q_row;
     const uint32_t diag_tile =
         iscore::causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
-    uint32_t valid = 0;
-    while (valid < k_tiles_in_unit && shard_span.logical_tile(valid) < diag_tile) {
-        ++valid;
-    }
     const uint32_t capacity = shard_span.capacity_tiles();
-    for (uint32_t k_col = valid; k_col < k_tiles_per_unit; ++k_col) {
-        const uint32_t logical_tile = k_col < capacity ? shard_span.logical_tile(k_col) : 0xFFFFFFFFu;
-        stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, logical_tile, diag_tile);
+    if constexpr (!shard_block_cyclic || shard_key_stripes == shard_physical_sp) {
+        uint32_t valid = 0;
+        while (valid < k_tiles_in_unit && shard_span.logical_tile(valid) < diag_tile) {
+            ++valid;
+        }
+        for (uint32_t k_col = valid; k_col < k_tiles_per_unit; ++k_col) {
+            const uint32_t logical_tile = k_col < capacity ? shard_span.logical_tile(k_col) : 0xFFFFFFFFu;
+            stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, logical_tile, diag_tile);
+        }
+    } else {
+        for (uint32_t k_col = 0; k_col < k_tiles_per_unit; ++k_col) {
+            const uint32_t logical_tile = k_col < capacity ? shard_span.logical_tile(k_col) : 0xFFFFFFFFu;
+            if (k_col >= k_tiles_in_unit || logical_tile >= shard_span.valid_k_len_tiles || logical_tile >= diag_tile) {
+                stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, logical_tile, diag_tile);
+            }
+        }
     }
 }
 
@@ -482,7 +494,7 @@ void kernel_main() {
 
     WorkUnitSpan span;
     span.set_valid_k_len_tiles(kv_len_tiles);
-    ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_sp> shard_span;
+    ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_key_stripes, shard_physical_sp> shard_span;
     shard_span.set_valid_k_len_tiles(kv_len_tiles);
 
     constexpr uint32_t unit_strip = q_tiles_per_unit * k_tiles_per_unit;  // QC x KC accumulator slots
@@ -500,7 +512,7 @@ void kernel_main() {
             uint32_t k_tiles_in_unit = 0;
             if constexpr (fused_ring_enabled) {
                 const uint32_t physical_start = get_arg_val<uint32_t>(10 + band_i);
-                shard_span.set(group, physical_start, k_len_tiles / shard_sp);
+                shard_span.set(group, physical_start, k_len_tiles / shard_physical_sp);
                 k_tiles_in_unit = shard_span.k_tiles();
             } else {
                 span.set(group, band0 + band);
