@@ -202,7 +202,7 @@ def cleanup_cache():
 
 
 def _forward(mla, mesh_device, rope_tensors, kvpe_cache, index_kv_cache, hidden):
-    """Single-shot sparse MLA forward, mirroring run_mla_inference's SP×TP input sharding."""
+    """One full-sequence chunk at offset 0, mirroring run_mla_inference's SP×TP input sharding."""
     shard_dims = [None, None]
     shard_dims[TP_AXIS], shard_dims[SP_AXIS] = -1, -2
     tt_hidden = ttnn.from_torch(
@@ -214,7 +214,11 @@ def _forward(mla, mesh_device, rope_tensors, kvpe_cache, index_kv_cache, hidden)
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
     out = mla.forward(
-        hidden_states=tt_hidden, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, index_kv_cache=index_kv_cache
+        hidden_states=tt_hidden,
+        rope_tensors=rope_tensors,
+        kvpe_cache=kvpe_cache,
+        actual_start=0,  # the modules here are built chunked; one chunk spans the whole sequence
+        index_kv_cache=index_kv_cache,
     )
     return ttnn.to_torch(
         out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
@@ -236,7 +240,7 @@ def _new_kvpe(config, mesh_device, mesh_shape):
 
 
 def _new_index_kv(config, mesh_device, mesh_shape):
-    # Caller-owned indexer key cache for the folded single-shot (block-cyclic) path: 1 layer / 1 user, so
+    # Caller-owned indexer key cache for the block-cyclic path: 1 layer / 1 user, so
     # update_padded_kv_cache's num_slots = cache_batch / layer_num stays >= 1 with the MLA's layer_num=1.
     return init_kvpe_cache(
         kvpe_cache_head_dim=config.index_head_dim,
@@ -251,6 +255,8 @@ def _new_index_kv(config, mesh_device, mesh_shape):
 
 
 def _build_mla(config, state_dict, mesh_device, weight_cache_path):
+    # Sparse has no single-shot path (ttMLA binds the block-cyclic ops from _has_indexer alone), so
+    # build chunked explicitly: one full-sequence chunk, hence active_seq_len == SEQ_LEN.
     return ttMLA(
         config,
         state_dict,
@@ -260,9 +266,8 @@ def _build_mla(config, state_dict, mesh_device, weight_cache_path):
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
         weight_cache_path=weight_cache_path,
-        # Single-shot folds onto block-cyclic: the sparse indexer/KVPE write goes through
-        # update_padded_kv_cache (num_slots = cache_batch / layer_num). The test caches are 1 layer / 1 user,
-        # so layer_num must be 1 (matches test_mla.py) or num_slots collapses to 0 and the write asserts.
+        is_chunked=True,
+        active_seq_len=SEQ_LEN,
         layer_num=1,
     )
 
@@ -292,8 +297,8 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant,
     weights = random_mla_weights(config)  # device-vs-device round-trip: config-shaped weights suffice
     mesh_shape = list(mesh_device.shape)
 
-    # Sparse single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0): indexed rope
-    # tables + a caller-owned indexer key cache, exactly like the chunked path.
+    # Sparse always runs block-cyclic; these modules are built chunked with one full-seq chunk at offset 0,
+    # so the rope tables are the indexed ones and the indexer key cache is caller-owned.
     rope_tensors = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
     )
@@ -393,6 +398,8 @@ def test_glm52_shared_layer_cache_skips_indexer(mesh_device, device_params, vari
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
         weight_cache_path=CACHE_DIR,
+        is_chunked=True,  # sparse is always block-cyclic; construction must say so
+        active_seq_len=SEQ_LEN,
     )
     assert mla_c._has_indexer and mla_c._indexer_reuse, f"{variant.name}: shared layer must be sparse + reuse"
     assert type(mla_c._indexer).__name__ == "ReuseIndexer", "shared layer must bind ReuseIndexer"
@@ -448,6 +455,8 @@ def _build_mla_tp(config, state_dict, mesh_device, *, tp_shard_kv):
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
         weight_cache_path=None,
+        is_chunked=True,  # sparse is always block-cyclic; SEQ_LEN is a single full-sequence chunk
+        active_seq_len=SEQ_LEN,
         layer_num=1,
         tp_shard_kv=tp_shard_kv,
     )
