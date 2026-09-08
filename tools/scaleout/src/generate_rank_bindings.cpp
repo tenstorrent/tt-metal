@@ -128,7 +128,8 @@ PhysicalSystemDescriptor run_psd_discovery() {
     const auto& rtoptions = context.rtoptions();
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
 
-    return tt::tt_metal::run_physical_system_discovery(*driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
+    return tt::tt_metal::run_physical_system_discovery(
+        *driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
 }
 
 // Bundle of mapper inputs, built once and shared by the single- and multi-solution paths.
@@ -207,6 +208,7 @@ TopologyMappingInputs build_topology_mapping_inputs(
     // use the same validation mode based on the mesh graph's global inter-mesh policy. In the future,
     // we should support mixed STRICT and RELAXED policies where some inter-mesh connections are
     // device-level (strict) and others are mesh-level (relaxed).
+    // https://github.com/tenstorrent/tt-metal/issues/49960
     config.inter_mesh_validation_mode = mesh_graph.is_inter_mesh_policy_relaxed()
                                             ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
                                             : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
@@ -710,9 +712,9 @@ struct ProgramArgs {
     std::map<int, std::filesystem::path> subcontext_id_to_mgd_path;
     std::optional<std::string> physical_grouping_descriptor_path;
     std::optional<std::string> output_dir;
-    bool all_solutions = false;     // --all-solutions/-a: one artifact set per solution (single-MGD only)
-    std::size_t max_solutions = 0;  // --max-solutions/-n: cap (0 = all up to solver cap); implies --all-solutions
-    bool distinct_host_sets = false;        // --distinct-host-sets/-d: one solution per unique host set
+    bool all_solutions = false;       // --all-solutions/-a: one artifact set per solution (single-MGD only)
+    std::size_t max_solutions = 0;    // --max-solutions/-n: cap (0 = all up to solver cap); implies --all-solutions
+    bool distinct_host_sets = false;  // --distinct-host-sets/-d: one solution per unique host set
     bool allow_shape_permutations = false;  // hidden: disable the solver's unique_shapes dedup
 };
 
@@ -871,10 +873,10 @@ int main(int argc, char** argv) {
             if (!std::filesystem::exists(mgd_path) || !std::filesystem::is_regular_file(mgd_path)) {
                 throw std::runtime_error("Mesh Graph Descriptor file does not exist: " + mgd_path.string());
             }
-            mgds.emplace_back(MeshGraphDescriptor(mgd_path));
+            // Matches MeshGraph in Phase 2, so what Control Plane rejects is rejected here too.
+            mgds.emplace_back(MeshGraphDescriptor(mgd_path, /*backwards_compatible=*/true));
             mgd_paths_in_order.push_back(mgd_path);
         }
-
         PhysicalGroupingDescriptor pgd = find_and_load_physical_grouping_descriptor(
             args.physical_grouping_descriptor_path.has_value()
                 ? std::optional<std::filesystem::path>(*args.physical_grouping_descriptor_path)

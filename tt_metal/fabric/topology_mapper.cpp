@@ -529,6 +529,7 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         // use the same validation mode based on the mesh graph's global inter-mesh policy. In the future,
         // we should support mixed STRICT and RELAXED policies where some inter-mesh connections are
         // device-level (strict) and others are mesh-level (relaxed).
+        // https://github.com/tenstorrent/tt-metal/issues/49960
         config.inter_mesh_validation_mode = mesh_graph_.is_inter_mesh_policy_relaxed()
                                                 ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
                                                 : ::tt::tt_fabric::ConnectionValidationMode::STRICT;

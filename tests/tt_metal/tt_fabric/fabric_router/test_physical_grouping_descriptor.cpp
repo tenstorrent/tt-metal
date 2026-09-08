@@ -1893,7 +1893,8 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_BlitzPipeline
         for (const auto& grouping : groupings) {
             if (grouping.asic_count == 8u && grouping.name == "4x2_Mesh_horizontal_flat") {
                 found_mesh_match = true;
-                EXPECT_EQ(grouping.name, "4x2_Mesh_horizontal_flat") << "Should match 4x2_Mesh_horizontal_flat grouping";
+                EXPECT_EQ(grouping.name, "4x2_Mesh_horizontal_flat")
+                    << "Should match 4x2_Mesh_horizontal_flat grouping";
                 EXPECT_EQ(grouping.asic_count, 8u) << "Should have 8 ASICs";
                 break;
             }
@@ -2743,48 +2744,6 @@ namespace {
 
 namespace utils = tt::tt_metal::experimental::tt_fabric;
 
-constexpr const char* kAdjacencyPgdPath =
-    "tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping.textproto";
-constexpr const char* kRingPgdPath = "tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto";
-constexpr const char* kSingleMeshMgdPath =
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_single_1x2_mesh.textproto";
-constexpr const char* kTwoPairPsdPath = "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto";
-constexpr const char* kLinePsdPath = "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto";
-constexpr const char* kRingPsdPath = "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_ring.textproto";
-constexpr const char* kOpenLinePsdPath = "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_line.textproto";
-constexpr const char* kLinkedMgdPath =
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_linked.textproto";
-constexpr const char* kUnlinkedMgdPath =
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_unlinked.textproto";
-constexpr const char* kRingMgdPath =
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_alternating_ring_meshes.textproto";
-constexpr const char* kMixedShapePgdPath =
-    "tests/tt_metal/tt_fabric/physical_groupings/test_mixed_shape_groupings.textproto";
-constexpr const char* kMixedShapeMgdPath =
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_mixed_shape_chain_meshes.textproto";
-constexpr const char* kSquareForkPsdPath =
-    "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_10asic_square_fork.textproto";
-constexpr const char* kStarMgdPath =
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_star_channel_count_meshes.textproto";
-constexpr const char* kStarPsdPath = "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_12asic_star.textproto";
-constexpr const char* kWideThenNarrowMgdPath =
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_pair_1x2_then_1x1.textproto";
-constexpr const char* kTwoSinglesMgdPath =
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_pair_two_1x1.textproto";
-constexpr const char* kDumbbellPsdPath = "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_5asic_dumbbell.textproto";
-constexpr const char* kNarrowThenWideMgdPath =
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_pair_1x1_then_1x2.textproto";
-constexpr const char* kWideDumbbellPsdPath = "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_dumbbell.textproto";
-constexpr const char* kUnevenLinePsdPath = "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto";
-constexpr const char* kRelaxedSeamMgdPath =
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_seam.textproto";
-constexpr const char* kRelaxedWideSeamMgdPath =
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_wide_seam.textproto";
-constexpr const char* kStrictWideSeamMgdPath =
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_strict_wide_seam.textproto";
-constexpr const char* kOnePairPgdPath =
-    "tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping_pinned_to_one_pair.textproto";
-
 // ----- pipeline steps -------------------------------------------------------------------------
 //
 // The tests below call the production functions for each stage directly, one at a time, so every
@@ -2879,9 +2838,12 @@ std::set<uint64_t> chips_in(const std::vector<std::set<uint64_t>>& footprints) {
 //   unlinked, so no second mesh could form; that is what makes the answer unique.
 TEST(AdjacencyGuidedPlacement, LinkedMeshesPlaceAdjacentlyOnLine) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kAdjacencyPgdPath)};
-    MeshGraphDescriptor mgd{std::filesystem::path(kLinkedMgdPath)};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kLinePsdPath);
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping.textproto")};
+    MeshGraphDescriptor mgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_linked.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto");
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -2927,9 +2889,12 @@ TEST(AdjacencyGuidedPlacement, LinkedMeshesPlaceAdjacentlyOnLine) {
 //   The only reason to reject is the M0[0]--M0[1] edge, which has no physical link to sit on.
 TEST(AdjacencyGuidedPlacement, LinkedMeshesFailOnDisconnectedPairs) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kAdjacencyPgdPath)};
-    MeshGraphDescriptor mgd{std::filesystem::path(kLinkedMgdPath)};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kTwoPairPsdPath);
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping.textproto")};
+    MeshGraphDescriptor mgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_linked.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -2961,9 +2926,12 @@ TEST(AdjacencyGuidedPlacement, LinkedMeshesFailOnDisconnectedPairs) {
 //   pairs, so each still takes one whole pair and the footprints match the line test's.
 TEST(AdjacencyGuidedPlacement, UnlinkedMeshesPlaceOnDisconnectedPairs) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kAdjacencyPgdPath)};
-    MeshGraphDescriptor mgd{std::filesystem::path(kUnlinkedMgdPath)};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kTwoPairPsdPath);
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping.textproto")};
+    MeshGraphDescriptor mgd{std::filesystem::path(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_unlinked.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -3048,9 +3016,12 @@ TEST(AdjacencyGuidedPlacement, AlternatingShapeRingDfsPlacesAndMapsWhereOldPacki
     const std::set<uint64_t> whole_ring = {100, 101, 102, 103, 104, 105};
 
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kRingPgdPath)};
-    MeshGraphDescriptor mgd{std::filesystem::path(kRingMgdPath)};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kRingPsdPath);
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
+    MeshGraphDescriptor mgd{std::filesystem::path(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_alternating_ring_meshes.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_ring.textproto");
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -3150,9 +3121,12 @@ TEST(AdjacencyGuidedPlacement, AlternatingShapeRingDfsPlacesAndMapsWhereOldPacki
 //   emit a disjoint-but-unroutable answer.
 TEST(AdjacencyGuidedPlacement, AlternatingShapeRingFailsWhenRingCannotClose) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kRingPgdPath)};
-    MeshGraphDescriptor mgd{std::filesystem::path(kRingMgdPath)};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kOpenLinePsdPath);
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
+    MeshGraphDescriptor mgd{std::filesystem::path(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_alternating_ring_meshes.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_line.textproto");
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -3216,9 +3190,12 @@ TEST(AdjacencyGuidedPlacement, AlternatingShapeRingFailsWhenRingCannotClose) {
 // walk that back and send C down the short branch instead.
 TEST(AdjacencyGuidedPlacement, MixedShapeChainPlacesTheOnlyWayItFits) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kMixedShapePgdPath)};
-    MeshGraphDescriptor mgd{std::filesystem::path(kMixedShapeMgdPath)};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kSquareForkPsdPath);
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_mixed_shape_groupings.textproto")};
+    MeshGraphDescriptor mgd{std::filesystem::path(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_mixed_shape_chain_meshes.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_10asic_square_fork.textproto");
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -3284,9 +3261,12 @@ TEST(AdjacencyGuidedPlacement, MixedShapeChainPlacesTheOnlyWayItFits) {
 // asks for, not every chip in the system.
 TEST(AdjacencyGuidedPlacement, StarSeamsPlaceByChannelCount) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kMixedShapePgdPath)};
-    MeshGraphDescriptor mgd{std::filesystem::path(kStarMgdPath)};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kStarPsdPath);
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_mixed_shape_groupings.textproto")};
+    MeshGraphDescriptor mgd{std::filesystem::path(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_star_channel_count_meshes.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_12asic_star.textproto");
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -3345,11 +3325,15 @@ TEST(AdjacencyGuidedPlacement, StarSeamsPlaceByChannelCount) {
 // which takes 104 is genuinely not pinned down; the test asserts that pair as a set.
 TEST(AdjacencyGuidedPlacement, TwoDescriptorsPlaceWithoutBorrowingEachOthersMeshes) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kRingPgdPath)};
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
     std::vector<MeshGraphDescriptor> mgds;
-    mgds.emplace_back(std::filesystem::path(kWideThenNarrowMgdPath));
-    mgds.emplace_back(std::filesystem::path(kTwoSinglesMgdPath));
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kDumbbellPsdPath);
+    mgds.emplace_back(
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_pair_1x2_then_1x1.textproto"));
+    mgds.emplace_back(
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_pair_two_1x1.textproto"));
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_5asic_dumbbell.textproto");
 
     // get valid groupings
     // Merged keys carry the descriptor index, so the two same-named instances stay distinct and each
@@ -3445,11 +3429,15 @@ TEST(AdjacencyGuidedPlacement, TwoDescriptorsPlaceWithoutBorrowingEachOthersMesh
 // A MeshGraph needs a cluster to build, so the mode is set directly here rather than derived.
 TEST(AdjacencyGuidedPlacement, StrictSeamSurvivesInterMeshMapping) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kRingPgdPath)};
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
     std::vector<MeshGraphDescriptor> mgds;
-    mgds.emplace_back(std::filesystem::path(kWideThenNarrowMgdPath));
-    mgds.emplace_back(std::filesystem::path(kNarrowThenWideMgdPath));
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kWideDumbbellPsdPath);
+    mgds.emplace_back(
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_pair_1x2_then_1x1.textproto"));
+    mgds.emplace_back(
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_pair_1x1_then_1x2.textproto"));
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_dumbbell.textproto");
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgds(mgds, psd);
@@ -3503,20 +3491,19 @@ TEST(AdjacencyGuidedPlacement, StrictSeamSurvivesInterMeshMapping) {
 //                                          2       4
 //
 // A seam wanting 4 channels can only be met on 101-102. A seam wanting 8 cannot be met anywhere, and
-// that is where the policy decides the outcome: STRICT has no placement, while RELAXED should still
-// place, because the count is a preference and the mesh-level edge only insists the two regions touch.
-//
-// Placement does not read the policy yet -- see the TODO on next_step_pool -- so it treats every count
-// as a requirement, which makes RelaxedSeamStillPlacesWhenChannelsFallShort below the failing one.
+// that is where the policy decides the outcome: STRICT has no placement, while RELAXED still places,
+// because the count is a preference and the mesh-level edge only insists the two regions touch.
 
 // A preference that can be met should be met: the seam wants 4 channels and only 101-102 has them.
-// Passes today, and must keep passing once the policy is read, since it is the preference half of
-// RELAXED rather than the requirement half.
+// The preference half of RELAXED, as opposed to the requirement half below.
 TEST(AdjacencyGuidedPlacement, RelaxedSeamPrefersTheFullChannelCount) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kRingPgdPath)};
-    MeshGraphDescriptor mgd{std::filesystem::path(kRelaxedSeamMgdPath)};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kUnevenLinePsdPath);
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
+    MeshGraphDescriptor mgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_seam.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -3548,9 +3535,12 @@ TEST(AdjacencyGuidedPlacement, RelaxedSeamPrefersTheFullChannelCount) {
 // relax a RELAXED count does not quietly relax a STRICT one too.
 TEST(AdjacencyGuidedPlacement, StrictSeamFailsWhenChannelsFallShort) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kRingPgdPath)};
-    MeshGraphDescriptor mgd{std::filesystem::path(kStrictWideSeamMgdPath)};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kUnevenLinePsdPath);
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
+    MeshGraphDescriptor mgd{std::filesystem::path(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_strict_wide_seam.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -3562,19 +3552,19 @@ TEST(AdjacencyGuidedPlacement, StrictSeamFailsWhenChannelsFallShort) {
         << "no link carries the 8 channels a STRICT seam requires, so there should be no placement at all";
 }
 
-// EXPECTED TO FAIL until next_step_pool reads the channel policy.
-//
 // Same unsatisfiable count as the STRICT test above, but the descriptor says RELAXED, which makes the
 // count a preference. The meshes still have to touch, and 101-102 is the widest seam on offer, so
-// placement should seat them there rather than giving up. Today placement treats the count as a hard
-// requirement regardless of policy, finds nothing that carries 8 channels and returns empty -- which is
-// stricter than the descriptor asked for, and stricter than the mapper, which would accept this seating
-// and log that the seam is narrower than requested.
+// placement seats them there rather than giving up. Treating the count as a requirement here would be
+// stricter than the descriptor asked for, and stricter than the mapper, which accepts this seating and
+// logs that the seam is narrower than requested.
 TEST(AdjacencyGuidedPlacement, RelaxedSeamStillPlacesWhenChannelsFallShort) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kRingPgdPath)};
-    MeshGraphDescriptor mgd{std::filesystem::path(kRelaxedWideSeamMgdPath)};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kUnevenLinePsdPath);
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
+    MeshGraphDescriptor mgd{std::filesystem::path(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_wide_seam.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -3603,11 +3593,56 @@ TEST(AdjacencyGuidedPlacement, RelaxedSeamStillPlacesWhenChannelsFallShort) {
                                  << mapping.error_message;
 }
 
+// Descriptors merged into one topology have to agree on the policy. The merged solve applies a single
+// policy to every seam, so a mixed set would quietly have one descriptor's policy applied to the other's
+// seams -- the same reason MGD validation rejects mixing within one descriptor. Temporary, until per-seam
+// policy is supported: https://github.com/tenstorrent/tt-metal/issues/49960
+TEST(AdjacencyGuidedPlacement, DescriptorsThatDisagreeOnInterMeshPolicyAreRejected) {
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
+    std::vector<MeshGraphDescriptor> mgds;
+    mgds.emplace_back(
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_seam.textproto"));
+    mgds.emplace_back(std::filesystem::path(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_strict_wide_seam.textproto"));
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
+
+    ASSERT_TRUE(mgds[0].inter_mesh_policy().has_value());
+    ASSERT_TRUE(mgds[1].inter_mesh_policy().has_value());
+    ASSERT_NE(*mgds[0].inter_mesh_policy(), *mgds[1].inter_mesh_policy())
+        << "the two descriptors have to disagree for this test to mean anything";
+
+    EXPECT_ANY_THROW(utils::validate_shared_inter_mesh_policy({&mgds[0], &mgds[1]}))
+        << "a RELAXED descriptor and a STRICT one cannot be merged into one topology";
+
+    // And the multi-MGD build applies it on its own, so a caller cannot reach the merge by not asking.
+    EXPECT_ANY_THROW(utils::build_physical_multi_mesh_adjacency_graph(psd, pgd, mgds))
+        << "the vector overload should reject the pair before it does any work";
+}
+
+// A descriptor that states no policy abstains rather than conflicting, so it can still be paired with one
+// that does. Otherwise a single-mesh MGD, which has no inter-mesh connection to carry a policy, could
+// never be merged with anything.
+TEST(AdjacencyGuidedPlacement, DescriptorWithNoStatedPolicyDoesNotConflict) {
+    MeshGraphDescriptor relaxed{
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_seam.textproto")};
+    MeshGraphDescriptor single{
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_single_1x2_mesh.textproto")};
+
+    ASSERT_FALSE(single.inter_mesh_policy().has_value()) << "the single-mesh descriptor states no policy";
+    EXPECT_NO_THROW(utils::validate_shared_inter_mesh_policy({&relaxed, &single}))
+        << "abstaining should not count as disagreeing with the descriptor that does state a policy";
+}
+
 TEST(AdjacencyGuidedPlacement, PgdGroupingThatPlacesIsCommittedDirectly) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kAdjacencyPgdPath)};
-    MeshGraphDescriptor mgd{std::filesystem::path(kSingleMeshMgdPath)};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kTwoPairPsdPath);
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping.textproto")};
+    MeshGraphDescriptor mgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_single_1x2_mesh.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
 
     // get valid groupings
     // The committed grouping's name is what separates the two paths: a committed PGD grouping keeps
@@ -3680,9 +3715,12 @@ TEST(AdjacencyGuidedPlacement, PgdGroupingThatPlacesIsCommittedDirectly) {
 // the check at the end of this test wants two entries, not a replacement.
 TEST(AdjacencyGuidedPlacement, PgdGroupingThatCannotCoverEveryInstanceShouldDowngrade) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(kOnePairPgdPath)};
-    MeshGraphDescriptor mgd{std::filesystem::path(kLinkedMgdPath)};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(kLinePsdPath);
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(
+        "tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping_pinned_to_one_pair.textproto")};
+    MeshGraphDescriptor mgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_linked.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto");
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
