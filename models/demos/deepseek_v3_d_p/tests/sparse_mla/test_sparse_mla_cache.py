@@ -35,6 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     resolve_has_indexer,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
@@ -178,6 +179,86 @@ def test_reuse_indexer_forward_raises(expect_error):
     rather than silently return None (which would drop the layer to a dense path)."""
     with expect_error(RuntimeError, "reused top-k"):
         ReuseIndexer().forward()
+
+
+def test_glm52_persistent_indexer_indices_are_replaced_without_deallocation(monkeypatch):
+    """A new full layer overwrites persistent scratch before the previous wrapper is replaced.
+
+    Explicitly deallocating that wrapper would invalidate the new result backed by the same buffer;
+    ordinary reference replacement must carry layer 6's indices safely into shared layer 7.
+    """
+    import models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer as transformer_module
+
+    modes = GLM52Config.indexer_types()[:8]
+    full_outputs = {layer_idx: object() for layer_idx, mode in enumerate(modes) if mode == "full"}
+    latest_full = None
+
+    class FakeLayer:
+        def __init__(self, layer_idx, mode):
+            self.layer_idx = layer_idx
+            self.mode = mode
+
+        def __call__(self, hidden, *args, indexer_indices, **kwargs):
+            nonlocal latest_full
+            if self.mode == "full":
+                assert indexer_indices is None
+                latest_full = full_outputs[self.layer_idx]
+                result = latest_full
+            else:
+                assert indexer_indices is latest_full
+                result = indexer_indices
+            return hidden, None, result
+
+    transformer = object.__new__(TtPrefillTransformer)
+    transformer.is_chunked = True
+    transformer.indexed_rope = object()
+    transformer._has_indexer = True
+    transformer.is_first_rank = False
+    transformer.indexer_types = modes
+    transformer.first_layer_idx = 0
+    transformer.layers = [FakeLayer(layer_idx, mode) for layer_idx, mode in enumerate(modes)]
+    transformer.padding_side = "right"
+    transformer.kv_only_last_layer = False
+    transformer.is_last_rank = False
+
+    monkeypatch.setattr(transformer_module, "signpost", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        ttnn,
+        "deallocate",
+        lambda tensor: pytest.fail("persistent indexer indices must not be explicitly deallocated"),
+    )
+
+    hidden = object()
+    assert transformer.forward(hidden, kvpe_cache=object(), actual_isl=0, actual_start=0) is hidden
+    assert latest_full is full_outputs[6]
+
+
+def test_indexer_gate_reduce_scatter_uses_fp32_accumulation(monkeypatch):
+    """The sequence reduce-scatter must preserve the previous gate reduction's FP32 accumulation."""
+    compute_config = object()
+    reduced = object()
+    call = {}
+
+    def fake_reduce_scatter(tensor, **kwargs):
+        call.update(kwargs)
+        return reduced
+
+    tt_ccl = SimpleNamespace(
+        get_and_cycle_rs_semaphore_handles=lambda **kwargs: "rs_semaphores",
+        get_and_cycle_barrier_semaphore_handle=lambda **kwargs: "barrier_semaphore",
+    )
+    indexer = SimpleNamespace(
+        tp_factor=4,
+        tp_axis=1,
+        tt_ccl=tt_ccl,
+        ccl_num_links=2,
+        tp_ccl_topology="topology",
+        hifi4_fp32_compute_kernel_config=compute_config,
+    )
+    monkeypatch.setattr(ttnn.experimental, "reduce_scatter_minimal_async", fake_reduce_scatter)
+
+    assert TtIndexer._tp_reduce_scatter_sequence(indexer, object()) is reduced
+    assert call["compute_kernel_config"] is compute_config
 
 
 def test_matches_config_rejects_dense():
