@@ -783,6 +783,12 @@ class CCLManager:
                 tensor.shape, dims, pad_left, pad_right, dtype=tensor.get_dtype(), t_front_pad=t_front_pad
             )
 
+        # Linear regardless of `self.topology`: a halo exchange is a line by construction -- the op
+        # resolves its forward/backward neighbours as a line and edge shards zero-pad instead of
+        # wrapping. Its startup barrier, however, sizes the multicast range from this argument while
+        # every device waits for `ring_size - 1` increments. Under Ring the two halves cover
+        # ceil((n-1)/2) and the rest, so the first shard emits no backward multicast and the last no
+        # forward one, no device ever reaches the count, and the op deadlocks on the barrier.
         return ttnn.experimental.neighbor_pad_async(
             tensor,
             dims,
@@ -793,7 +799,7 @@ class CCLManager:
             neighbor_sems,
             [barrier_sem],
             num_links=num_links,
-            topology=self.topology,
+            topology=ttnn.Topology.Linear,
             persistent_output_buffer=persistent_buf,
             logical_h=logical_h,
             t_front_pad=t_front_pad,
