@@ -240,8 +240,9 @@ class MTPDeviceGeneration:
     Args:
         keep_mask: ``[sp, 1, U, H/tp]`` ones, zero on every row generation will write. Applied to
             the union once, before level 0.
-        selects: ``K`` one-hot ``[sp, 1, U, 32*sp]`` selectors, ``selects[k]`` placing level ``k``'s
-            token at global position ``actual_end + k``. All ``K`` are host-known up front: the
+        selects: one-hot ``[sp, 1, U, 32*sp]`` selectors indexed by ABSOLUTE level, ``selects[k]``
+            placing level ``k``'s token at global position ``actual_end + k``, and ``None`` for a
+            level whose token the socket already delivered. All of them are host-known up front: the
             source row is the LM head's ``(device_id, token_offset)`` for ``actual_isl - 1``, which
             is the same row at every level.
         embed_fn: ``H^k -> [1, 1, 32*sp, H/tp]`` -- lm_head, argmax, embed, SP all-gather. The
@@ -255,30 +256,52 @@ class MTPDeviceGeneration:
         assert self.selects, "generation needs one selector per level"
 
     def deallocate(self) -> None:
+        # `selects` is indexed by ABSOLUTE level and holds None below provided_levels -- those levels
+        # generate nothing, so no selector was ever built for them.
         for t in [self.keep_mask, *self.selects]:
-            ttnn.deallocate(t)
+            if t is not None:
+                ttnn.deallocate(t)
         self.selects = []
 
 
 class MTPDeviceEmbedSource:
     """``TtMTPPredictor.forward``'s ``embeds`` callable, sourced entirely on device.
 
-    Without ``generation`` (every interior chunk) it ignores ``H^k`` entirely -- each window is a
-    row slice of the union the socket delivered. With it (the last chunk of a request) it runs the
-    device generation chain on ``H^k`` and patches the union before slicing, so level ``k``'s last
-    real row reads the token level ``k`` just generated and the earlier rows read the tokens the
-    earlier levels generated.
+    Levels below ``provided_levels`` ignore ``H^k`` entirely -- their window is a row slice of the
+    union the socket delivered. At and above it, the device generation chain runs on ``H^k`` and
+    patches the union before slicing, so level ``k``'s last real row reads the token level ``k`` just
+    generated and the earlier rows read whatever put them there: the socket, or an earlier level.
+
+    ``provided_levels == num_levels`` is a fully interior chunk and needs no ``generation`` at all;
+    ``0`` is a chunk with no successor, where every level generates. Anything between is a request
+    that ends fewer than K tokens after this chunk -- a case the retired ``is_last_chunk`` bool could
+    not express.
 
     ``generated_tokens`` is empty either way: the ids are argmaxed, embedded and consumed on device
     and never come back to host. Nothing on the runner path reads them.
     """
 
-    def __init__(self, union: MTPUnionEmbedding, mask_fn=None, generation: "Optional[MTPDeviceGeneration]" = None):
+    def __init__(
+        self,
+        union: MTPUnionEmbedding,
+        mask_fn=None,
+        generation: "Optional[MTPDeviceGeneration]" = None,
+        provided_levels: int = 0,
+    ):
         self.union = union
         self.mask_fn = mask_fn
         self.generation = generation
         self.num_levels = union.num_levels
-        self._next_level = 0
+        self.provided_levels = int(provided_levels)
+        assert (
+            0 <= self.provided_levels <= self.num_levels
+        ), f"provided_levels {self.provided_levels} outside [0, {self.num_levels}]"
+        assert (generation is None) == (self.provided_levels == self.num_levels), (
+            "generation must be present exactly when some level has to produce its own token: "
+            f"provided_levels={self.provided_levels} of {self.num_levels}, generation="
+            f"{'set' if generation is not None else 'None'}"
+        )
+        self._next_level = self.provided_levels
 
     @property
     def generated_tokens(self) -> list:
@@ -287,13 +310,17 @@ class MTPDeviceEmbedSource:
 
     def __call__(self, k: int, prev_normed):
         assert 0 <= k < self.num_levels, f"level {k} out of range [0, {self.num_levels})"
-        if self.generation is not None:
-            # Strict level order, once each. The patches are
-            # INCREMENTAL: level k's window reads positions actual_end+k-j for j in 0..k, so every
-            # earlier level's token must already be in the union.
+        if self.generation is not None and k >= self.provided_levels:
+            # Strict level order over the GENERATED range, once each. The patches are INCREMENTAL:
+            # level k's window reads positions actual_end+k-j for j in 0..k, so every earlier level's
+            # token must already be in the union -- delivered by the socket below provided_levels,
+            # patched here at or above it.
             assert k == self._next_level, f"generation must run levels in order; expected {self._next_level}, got {k}"
             self._next_level += 1
-            if k == 0:
+            if k == self.provided_levels:
+                # Once, before the FIRST generated level -- not before level 0. The mask clears only
+                # the rows generation will write; a provided level's row already holds the embedding
+                # of the id the socket delivered, and clearing it would lose it for good.
                 self.union.clear_rows(self.generation.keep_mask)
             gathered = self.generation.embed_fn(prev_normed)
             self.union.add_patch(self.generation.selects[k], gathered)
