@@ -738,7 +738,13 @@ ProgramDescriptor build_ring_program_descriptor(
         // Tensor rather than being treated as unused. cache_batch_idx_tensor may legitimately be empty
         // while chunk_start_idx_tensor is set (kv_deduped gathers a BATCH-1 slab).
         /*slot_id=*/tensors.cache_batch_idx_tensor,
-        /*kv_actual_isl=*/tensors.chunk_start_idx_tensor,
+        // SYNC with gather_valid_height_tiles above: under KV dedup (key_stripe_split > 1) the HOST
+        // deliberately returns nullopt, i.e. NO gather-extent bound, so the ring moves the full K. Handing
+        // the helper kv_actual_isl anyway makes its metadata path narrow the extent on-device instead, and
+        // the two disagree about the producer/consumer midpoint boundary this file's header calls out.
+        // Withhold it on the deduped path so both paths gather the same rows.
+        /*kv_actual_isl=*/
+        args.key_stripe_split > 1 ? std::optional<ttnn::Tensor>{} : tensors.chunk_start_idx_tensor,
         /*chunk_local_tiles=*/
         has_meta ? args.block_cyclic->chunk_local / tt::constants::TILE_HEIGHT : 0,
         /*kv_cache_num_layers=*/args.index_cache_num_layers,
