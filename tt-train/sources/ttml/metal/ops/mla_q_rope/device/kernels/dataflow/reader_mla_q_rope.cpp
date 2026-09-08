@@ -33,6 +33,9 @@ void kernel_main() {
     constexpr uint32_t tiles_per_head = get_compile_time_arg_val(4);
     constexpr uint32_t kNopeChunkTiles = get_compile_time_arg_val(5);
     constexpr uint32_t Th = Tn + Tr;
+    constexpr uint32_t kDstBatchHeads = 4U / Tr > 0U ? 4U / Tr : 1U;
+    constexpr uint32_t kTailHeads = n_heads % kDstBatchHeads;
+    constexpr uint32_t kTailPaddingTiles = (kDstBatchHeads - kTailHeads) * Tr;
 
     constexpr auto q_args = TensorAccessorArgs<6>();
     constexpr auto cos_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
@@ -90,6 +93,12 @@ void kernel_main() {
             const uint32_t head_q = q_block_base + h * tiles_per_head;
             read_full_row_tiles(cb_nope, q_gen, Tn, kNopeChunkTiles, tile_bytes, head_q);
             read_tiles_by_row(cb_q_pe, q_gen, head_q + Tn, Tr, tile_bytes, Tr);
+        }
+        if constexpr (kTailHeads != 0U) {
+            // Keep each compute group aligned to the CB boundary. These pages are
+            // consumed only to advance the pointer; their contents are never read.
+            cb_reserve_back(cb_q_pe, kTailPaddingTiles);
+            cb_push_back(cb_q_pe, kTailPaddingTiles);
         }
 
         ++sb;

@@ -165,6 +165,15 @@ INSTANTIATE_TEST_SUITE_P(
         // B * Ts = 8 blocks: exercises multi-core split and repeated batch-boundary jumps.
         MLA_QRopeShape{
             .name = "batch4_st2", .batch = 4, .seq_len = 64, .n_heads = 2, .qk_nope_dim = 32, .qk_rope_dim = 32}),
+        // More blocks than Blackhole worker cores force repeated blocks on one core.
+        // Three heads with Tr=2 exercise a short tail after one full two-head group.
+        MLA_QRopeShape{
+            .name = "tail_heads_multi_block_tr2",
+            .batch = 1,
+            .seq_len = 8192,
+            .n_heads = 3,
+            .qk_nope_dim = 32,
+            .qk_rope_dim = 64}),
     [](const ::testing::TestParamInfo<MLA_QRopeShape>& info) { return info.param.name; });
 
 class MLA_QRopeCacheTest : public ::testing::Test {
