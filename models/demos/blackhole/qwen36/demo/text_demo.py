@@ -443,6 +443,8 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
 
     # Warmup (compile prefill/verify/decode/MTP programs; results discarded).
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+    # Explicit, model-scoped: spec verify runs the fused GDN op, so decode must use the same math.
+    model.set_gdn_fused_decode(True)
     signpost("compile_decode")
     profiler.start("compile_decode")
     SpeculativeDecoder(model, page_table, draft_len=draft_len, sampling=sampling).generate(

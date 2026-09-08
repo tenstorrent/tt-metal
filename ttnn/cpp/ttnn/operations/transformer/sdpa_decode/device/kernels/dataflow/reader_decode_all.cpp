@@ -7,6 +7,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/debug/assert.h"
 #include <vector>
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
@@ -159,6 +160,16 @@ void kernel_main() {
             // bounds are applied later, by the mask.
             if constexpr (spec_multi_pos) {
                 cur_pos = index_ptr[cur_batch * spec_multi_pos_T + (spec_multi_pos_T - 1)];
+#if ASSERT_ENABLED
+                // The reader derives the group's KV scan range from the group's LAST entry and skips
+                // k-chunks that end before its FIRST, so a non-ascending group silently drops KV; this
+                // is the on-device half of a contract validate cannot see, because in spec mode the
+                // positions live in cur_pos_tensor and are only ever read here, on device.
+                const uint32_t spec_pos_base = cur_batch * spec_multi_pos_T;
+                for (uint32_t j = 0; j + 1 < spec_multi_pos_T; ++j) {
+                    ASSERT(index_ptr[spec_pos_base + j] <= index_ptr[spec_pos_base + j + 1]);
+                }
+#endif
             } else {
                 cur_pos = index_ptr[cur_batch / q_heads_parallel_factor];
             }

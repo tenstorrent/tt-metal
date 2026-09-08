@@ -1137,7 +1137,7 @@ class Qwen36Model:
         absolute positions [chunk_start, chunk_start+K) as ONE masked-bucket chunk: GDN advances in
         chunk mode (carrying recurrent state from the anchor, since _stable_state=True), full-attention
         layers write paged KV at those positions, and per-position logits + hidden are returned.
-        ``draft_tokens``: K token ids. ``page_table``: torch [1, num_blocks] identity (same as decode).
+        ``draft_tokens``: K token ids. ``page_table``: torch [1, num_blocks] block table for this sequence (identity in the demo).
         Returns (logits [K, vocab] host float, hidden [1,1,K,dim/tp] fractured device) — hidden is the
         drafter feed (spec_feed_rows: fractured final-norm output) used to reseed MTP. ADVANCES GDN +
         KV; the caller must snapshot/roll back for rejected drafts.
@@ -1366,8 +1366,10 @@ class Qwen36Model:
             device=dev,
             mesh_mapper=rep,
         )
-        # Positions are staged per replay; the [T, blocks] page table is constant (T identical rows,
-        # all candidates share the one sequence) so it is built once here.
+        # Positions are staged per replay; so are the two page-table buffers below. They are only
+        # ALLOCATED here, at the captured width, and re-staged per replay by verify_traced (same
+        # convention as the prefill traces) — so a caller with a scheduler-owned block table can
+        # change it between replays. Their rows stay identical (all candidates share one sequence).
         # Position-exact KV write (paged_update_cache at absolute slots) instead of
         # paged_fill_cache's block-aligned fill: required by the sub-tile decode-config bucket.
         self._vfy_kvpos_buf = ttnn.from_torch(
@@ -1391,6 +1393,7 @@ class Qwen36Model:
         # full-span — a full-span ttnn.slice aliases its input), the SDPA read needs this one.
         _att0 = next(layer.attention for layer in self.layers if layer.is_full_attention)
         _spec_groups = _att0.spec_sdpa_groups(T)
+        self._vfy_spec_groups = int(_spec_groups)
         self._vfy_kvpt1_buf = ttnn.from_torch(
             page_table.repeat(_spec_groups, 1).contiguous(),
             dtype=ttnn.int32,
@@ -1580,7 +1583,7 @@ class Qwen36Model:
             dn._conv_taps_stale, dn._conv_win_stale = False, True
             dn.sync_conv_win()
 
-    def verify_traced(self, draft_tokens, chunk_start, read_logits=False, clone_rows=True):
+    def verify_traced(self, draft_tokens, chunk_start, read_logits=False, clone_rows=True, page_table=None):
         """Replay the captured verify trace for `draft_tokens` at absolute `chunk_start`. Advances GDN
         in place + captures per-token slots (commit_verify_slot rolls to the accepted slot after).
         Returns (logits [T,vocab] host bf16 or None, rows [1,1,T,dim/tp] device hidden, ids [T] host
@@ -1588,8 +1591,10 @@ class Qwen36Model:
         ids alone, produced on device), on when SpeculativeDecoder.read_verify_logits needs the
         distributions. Reads the trace's ROW_MAJOR copy (_vfy_logits_rm_out, the untilize the
         in-trace argmax already pays for) with no cast; the TILE tensor would cost a host untilize
-        and the sampler converts to float32 lazily per row. No page table: candidates' blocks live
-        in persistent _vfy_kvpt_buf, built once at capture (all T rows are the same sequence).
+        and the sampler converts to float32 lazily per row. ``page_table``: torch [1, num_blocks]
+        (or [num_blocks]) block table for this sequence; when given, both persistent page-table
+        buffers are re-staged for this replay (clipped or padded to the captured width). None keeps
+        the previously staged table.
         """
         assert getattr(self, "_vfy_trace_id", None) is not None, "call capture_verify_trace first"
         T = self._vfy_T
@@ -1619,6 +1624,28 @@ class Qwen36Model:
             mesh_mapper=rep,
         )
         ttnn.copy_host_to_device_tensor(_h, self._vfy_kvpos_buf)
+
+        # Re-stage BOTH page-table forms per replay (D2), like every other trace in this file: the
+        # T-row form the per-candidate KV write consumes, and the per-candidate-group form the fused
+        # spec SDPA consumes. Rows are identical (all candidates belong to one sequence); the width is
+        # clipped or padded to the captured buffer width. A caller with a scheduler-owned block table
+        # passes it here; None keeps the table captured last time.
+        if page_table is not None:
+            pt = page_table.reshape(1, -1).to(torch.int32)
+            W = int(self._vfy_kvpt_buf.shape[-1])
+            if pt.shape[-1] > W:
+                pt = pt[:, :W]
+            elif pt.shape[-1] < W:
+                pt = torch.cat([pt, torch.zeros(1, W - pt.shape[-1], dtype=pt.dtype)], dim=1)
+            for buf, rows in ((self._vfy_kvpt_buf, T), (self._vfy_kvpt1_buf, self._vfy_spec_groups)):
+                _h = ttnn.from_torch(
+                    pt.repeat(rows, 1).contiguous(),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=None,
+                    mesh_mapper=rep,
+                )
+                ttnn.copy_host_to_device_tensor(_h, buf)
 
         # Re-arm slot capture (commit_verify_slot nulls the handle after each commit; the traced
         # device ops still write the SAME baked buffers, so just re-point the handles).
@@ -2547,6 +2574,28 @@ class Qwen36Model:
             if not layer.is_full_attention:
                 layer.attention.remap_slots(remap)
 
+    def set_gdn_fused_decode(self, enabled: bool) -> None:
+        """Select the GDN decode recurrence for EVERY GDN layer: the single fused device op
+        (``fused_recurrent_gated_delta_rule``) when ``enabled``, else the composite op chain.
+
+        Spec decode requires the fused op: the traced verify advances GDN with it, and decode must
+        use identical math or greedy near-ties flip between the two paths (acceptance measured
+        2.82 -> 2.00 / 3 when they disagreed at ~1e-5). The fused op is also faster per layer
+        (0.345 vs 0.541 ms eager) and closer to the FLA reference, but today it supports only the
+        full batch width (B == max_batch_size). This is the ONE place the switch flips: it is a
+        visible, model-scoped choice, never a side effect of building a SpeculativeDecoder, because
+        on a shared model it changes every later plain decode as well.
+        """
+        for layer in self.layers:
+            if not layer.is_full_attention:
+                layer.attention.use_fused_recurrent_decode = bool(enabled)
+
+    @property
+    def gdn_fused_decode(self) -> bool:
+        """True when every GDN layer decodes with the fused recurrent op (see set_gdn_fused_decode)."""
+        gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        return bool(gdn) and all(dn.use_fused_recurrent_decode for dn in gdn)
+
     def prefill_chunked_peruser(self, token_ids_list, page_table, valid_lens=None):
         """Batched per-user LONG-prefill (TP, eager). Runs the single-user chunk-outer path
         (prefill_traced_chunked) for each user into a B=1 GDN scratch, then stitches each user's
@@ -3461,11 +3510,12 @@ class Qwen36Model:
 
         Separate from the base caches (own page table); shape matches a base attention layer except
         for ONE EXTRA BLOCK at the end. That extra block is the spec-decode batched reseed's
-        scratch: padding rows point their whole page-table row at block ``num_blocks`` so their
-        (discarded) KV write lands somewhere harmless. A block of its own — instead of borrowing
-        the sequence's last one — lets a sequence use the full ``num_blocks x block_size`` span
-        (needed at 256k: 262016 prompt + 100 new vs 4096 x 64 = 262144). Page tables stay
-        ``num_blocks`` wide and identity, so only the reseed names the scratch block. No-op with no MTP head. Fixed address + _stable_state for decode-trace reuse.
+        scratch: padding rows point their whole page-table row at the cache's extra last block
+        (index ``num_blocks``, derived from the cache size, never from the page table's width) so
+        their (discarded) KV write lands somewhere harmless. A block of its own — instead of
+        borrowing the sequence's last one — lets a sequence use the full ``num_blocks x block_size``
+        span (needed at 256k: 262016 prompt + 100 new vs 4096 x 64 = 262144). The page table never
+        names that block; only the reseed's padding rows do. No-op with no MTP head. Fixed address + _stable_state for decode-trace reuse.
         """
         if self.mtp is None:
             return

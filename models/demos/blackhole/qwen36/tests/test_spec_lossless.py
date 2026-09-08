@@ -132,10 +132,9 @@ def test_spec_decode_matches_plain_greedy_up_to_near_ties(mesh_device, sampling_
     # that same op because the composite decode kernel disagrees with it at ~1e-5, which flips greedy
     # near-ties. Put the reference on it too, so this test measures speculation rather than the
     # difference between two GDN kernels (test_fused_recurrent_gdn.py). B==max_batch_size==1
-    # satisfies the fused path's full-batch assert.
-    for layer in model.layers:
-        if not layer.is_full_attention:
-            layer.attention.use_fused_recurrent_decode = True
+    # satisfies the fused path's full-batch assert. The switch is explicit and model-scoped
+    # (set_gdn_fused_decode), not a side effect of building the decoder.
+    model.set_gdn_fused_decode(True)
 
     # --- spec run: fresh state ---------------------------------------------------------------- #
     # Same reset recipe test_spec_determinism.py uses between runs: free + reallocate the paged KV

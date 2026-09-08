@@ -59,7 +59,9 @@ class SpeculativeDecoder:
         # K=3 is the conservative library default, kept for callers that pass no draft_len (the
         # correctness tests). The fully-batched GDN verify made verify cost ~flat in K (2.3 ms per
         # candidate — see use_fullbatch_verify in gdn/tp.py), so the demo passes the ISL-aware policy
-        # instead: K=10 up to a 4k prompt, K=6 above it (_run_tp_spec_generation). QWEN36_SPEC_DRAFT_LEN
+        # instead. Demo policy (text_demo.py): greedy K=11 up to a 4k prompt and K=7 above it; K=7 under
+        # sampling. T = K+1 must match an entry of `TPAttention._SPEC_SDPA_L1_FIT` (T in {4, 8, 12}) to
+        # take the fused SDPA plan; any other T falls back to the per-row SDPA path. QWEN36_SPEC_DRAFT_LEN
         # overrides both.
         self.K = int(draft_len if draft_len is not None else os.environ.get("QWEN36_SPEC_DRAFT_LEN", 3))
         # QWEN36_SPEC_TIMING=1: per-ITERATION breakdown (one log line per iteration + a mean at the
@@ -74,9 +76,15 @@ class SpeculativeDecoder:
             page_table_torch, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh
         )
         self._gdn = [layer.attention for layer in model.layers if not layer.is_full_attention]
-        for gdn in self._gdn:
-            # verify and decode must share GDN math or near-tie argmax flips reduce acceptance
-            gdn.use_fused_recurrent_decode = True
+        # Spec verify advances GDN with the fused recurrent op, so plain decode must use the SAME op or
+        # every greedy near-tie flips between the two paths (measured 2.82 -> 2.00 / 3 accepted when they
+        # disagreed at ~1e-5). The switch is explicit and model-scoped (model.set_gdn_fused_decode(True)),
+        # never a side effect of constructing this object: on a shared model it changes every later
+        # plain decode too, so the caller must make that choice visibly.
+        assert model.gdn_fused_decode, (
+            "SpeculativeDecoder needs model.set_gdn_fused_decode(True) before construction: verify runs "
+            "the fused GDN op, and decode must use the same math"
+        )
         self._vfy_captured = False
         # The commit phase replays one pre-captured trace per accepted-prefix index, falling back to
         # the eager per-layer commit_verify_slot loop automatically when the capture is unavailable.
@@ -101,12 +109,13 @@ class SpeculativeDecoder:
         self._p_draft_n = 0
         # Batched or eager reseed, decided in generate() from the prompt length (see the note there).
         self._batched_reseed = True
-        # The batched reseed's scratch block (its padding rows' KV sink) is the EXTRA block the MTP
-        # cache carries past the page table's span — _allocate_mtp_kv_cache allocates num_blocks + 1.
-        # It must not be one of the sequence's own blocks: stealing the last one caps the sequence at
-        # (nb - 1) * block_size, which the 256k demo case overruns by 36 tokens. The page table stays
-        # nb wide and identity, so nothing but the pad rows below ever names this block.
-        self._reseed_scratch_block = int(page_table_torch.shape[-1])
+        # The batched reseed's scratch block (its padding rows' KV sink) is the MTP cache's extra LAST
+        # block, index = cache block count - 1 (_allocate_mtp_kv_cache allocates one block past the
+        # sequence's own). It is derived from the CACHE in generate(), never from the page table's
+        # width: a vLLM block table is [B, blocks_per_request] of PHYSICAL block ids, so its width is
+        # a per-request capacity and not the block count, and a width-derived index would alias a live
+        # block belonging to some other sequence.
+        self._reseed_scratch_block = None  # set in generate() from the MTP cache, once the KV caches exist
         self._reseed_block_size = 0  # filled in generate(), once the KV caches exist
         self.total_drafted = 0
         self.total_accepted = 0  # accepted DRAFT tokens (excludes the mandatory correction/bonus)
@@ -392,7 +401,7 @@ class SpeculativeDecoder:
         is set, i.e. unless the sampling accept step needs the distributions).
         """
         lt, vhidden, ids = self.model.verify_traced(
-            tokens, p + 1, read_logits=self.read_verify_logits, clone_rows=False
+            tokens, p + 1, read_logits=self.read_verify_logits, clone_rows=False, page_table=self.page_table
         )
         return ids, vhidden, lt
 
@@ -613,20 +622,25 @@ class SpeculativeDecoder:
             dn._capture_slots = False  # the eager seed must not write the trace's slot buffers
         Lp, Hp = self._seed(first, T - 1)
 
+        # Reseed scratch = the MTP cache's extra LAST block, derived from the cache (D1). Never the
+        # page table's width: a vLLM block table is [B, blocks_per_request] of physical block ids,
+        # so its width is not the block count and a width-derived index aliases a live block. The
+        # page table must not name the scratch block anywhere, so its largest entry stays below it.
+        self._reseed_scratch_block = int(self.mtp.attention.paged_k.shape[0]) - 1
+        assert int(self.page_table.max()) < self._reseed_scratch_block, (
+            f"page table names block {int(self.page_table.max())}, but the MTP cache's scratch block is "
+            f"{self._reseed_scratch_block}; the MTP cache needs one block past every block the table uses"
+        )
+
         # Batched-reseed warmup: compiles the B=K+1 drafter forward while nothing is traced yet.
         if self._batched_reseed:
             self._reseed_block_size = self.mtp.attention.paged_k.shape[-2]
             nb = self.page_table.shape[-1]
-            # The reseed scratch is its own block PAST the page table (the MTP cache is nb + 1
-            # blocks), so the sequence gets the whole page table: it only has to fit in nb blocks,
-            # the same bound the base KV cache imposes.
+            # The reseed scratch is the cache's own extra block, so the sequence gets the whole page
+            # table: it only has to fit in nb blocks, the same bound the base KV cache imposes.
             assert T + max_new_tokens <= nb * self._reseed_block_size, (
                 f"sequence does not fit the paged KV: {nb} blocks x {self._reseed_block_size} "
                 f"cannot hold {T} prompt + {max_new_tokens} generated tokens"
-            )
-            assert self.mtp.attention.paged_k.shape[0] > self._reseed_scratch_block, (
-                f"MTP KV cache has {self.mtp.attention.paged_k.shape[0]} blocks; the batched reseed's "
-                f"scratch block {self._reseed_scratch_block} needs one more than the page table's {nb}"
             )
             self._reseed_warmup(self.K + 1, Hp.shape[-1], Hp.dtype)
 

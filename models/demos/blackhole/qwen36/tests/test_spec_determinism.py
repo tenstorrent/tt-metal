@@ -67,6 +67,10 @@ def test_spec_decode_is_deterministic(mesh_device, prompt_len):
     kv_shape = [num_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
     pt = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
 
+    # Explicit, model-scoped: spec verify runs the fused GDN op, so decode must use the same math
+    # (SpeculativeDecoder asserts it rather than flipping the flag itself).
+    model.set_gdn_fused_decode(True)
+
     outs, accepts = [], []
     for r in range(RUNS):
         model.free_kv_caches()
@@ -116,6 +120,10 @@ def test_spec_sampling_is_deterministic(mesh_device):
     prompt_ids = token_ids[0].tolist()
     kv_shape = [num_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
     pt = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+
+    # Explicit, model-scoped: spec verify runs the fused GDN op, so decode must use the same math
+    # (SpeculativeDecoder asserts it rather than flipping the flag itself).
+    model.set_gdn_fused_decode(True)
 
     def run(tag, seed):
         # Same reset recipe as the greedy test above: free + reallocate the paged KV caches and
