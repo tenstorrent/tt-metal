@@ -142,17 +142,21 @@ private:
     std::unique_ptr<MeshDeviceView> view_;
     // The view's local devices, which the view fixes when it is constructed. Held here because the
     // accessors that cross-check a property against every device would otherwise rebuild this list
-    // on every call. Refreshed when a reshape swaps the view.
+    // on every call. Rewritten when a reshape swaps the view, under the api lock.
     std::vector<IDevice*> local_devices_;
-    // Only ever read on the dispatch path, which holds the api lock.
+    // Filled on first use per range and cleared by reshape, both under the api lock, which the
+    // dispatch path also holds while it reads an entry by reference.
     mutable std::unordered_map<MeshCoordinateRange, std::vector<IDevice*>> local_devices_by_range_;
     // The mesh-wide properties that are fixed once the devices are open. Each is otherwise answered
     // by a cross-device agreement check that walks the whole mesh, and the dispatch path asks for
     // several of them once per program on every enqueue. Established as a unit (see
-    // establish_device_property_caches) so that the accessors below stay pure reads: ttnn calls them
-    // from many threads without holding the api lock. Each accessor keeps the agreement check as
-    // its unestablished path, which covers the window before initialization runs and a remote-only
-    // mesh, where there is no local device to agree with and the check raises as it always did.
+    // establish_device_property_caches) so that the accessors below never write, which is what lets
+    // ttnn call them from many threads without holding the api lock. Initialization and reshape are
+    // the only writers; reshape takes the api lock, so it cannot rewrite these under the dispatch
+    // path, but it is still the caller's job not to reshape a mesh other threads are reading. Each
+    // accessor keeps the agreement check as its unestablished path, which covers the window before
+    // initialization runs and a remote-only mesh, where there is no local device to agree with and
+    // the check raises as it always did.
     struct MeshProperties {
         uint8_t num_hw_cqs = 0;
         CoreCoord compute_with_storage_grid_size;

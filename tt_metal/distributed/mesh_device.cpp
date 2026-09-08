@@ -834,11 +834,14 @@ std::vector<IDevice*> MeshDeviceImpl::get_devices() const {
 }
 
 const std::vector<IDevice*>& MeshDeviceImpl::get_local_devices(const MeshCoordinateRange& range) const {
-    auto [entry, inserted] = local_devices_by_range_.try_emplace(range);
-    if (inserted) {
-        entry->second = view_->get_devices(range);
+    if (auto entry = local_devices_by_range_.find(range); entry != local_devices_by_range_.end()) {
+        return entry->second;
     }
-    return entry->second;
+    // Resolve before inserting: get_devices() raises for a range outside the mesh, and an entry
+    // inserted ahead of it would leave an empty device list cached for that range, which reads as
+    // "nothing to dispatch to" rather than as the error it is.
+    auto devices = view_->get_devices(range);
+    return local_devices_by_range_.emplace(range, std::move(devices)).first->second;
 }
 
 // TODO: Remove this function once we have a proper view interface
@@ -933,6 +936,11 @@ const MeshShape& MeshDeviceImpl::shape() const { return view_->shape(); }
 bool MeshDeviceImpl::is_local(const MeshCoordinate& coord) const { return view_->impl().is_local(coord); }
 
 void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
+    // Held across the whole reshape: this swaps the view and rewrites the device lists and
+    // properties derived from it, and enqueue_mesh_workload holds a reference into
+    // local_devices_by_range_ while it writes program commands.
+    auto lock = lock_api();
+
     const auto num_devices = view_->shape().mesh_size();
     TT_FATAL(new_shape.mesh_size() == num_devices, "New shape must have the same number of devices as current shape");
 
@@ -1566,8 +1574,7 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
 
     // Register the trace on any exit, including thrown exceptions, so subsequent allocations are treated
     // conservatively until the trace is released.
-    auto register_trace_on_exit =
-        ttsl::make_cleanup([this, trace_id]() { this->register_active_trace(trace_id); });
+    auto register_trace_on_exit = ttsl::make_cleanup([this, trace_id]() { this->register_active_trace(trace_id); });
 
     TT_FATAL(
         this->mesh_command_queues_[cq_id]->trace_id() == trace_id,
