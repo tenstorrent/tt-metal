@@ -59,17 +59,8 @@ void kernel_main() {
 
 #ifdef FUSE_RMS_NORM
     if (is_producer) {
-        run_full_width_rms_norm_transport(
-            get_arg_val<uint32_t>(4) != 0,
-            get_arg_val<uint32_t>(5),
-            get_arg_val<uint32_t>(6),
-            get_arg_val<uint32_t>(7),
-            get_arg_val<uint32_t>(8),
-            get_arg_val<uint32_t>(9),
-            get_arg_val<uint32_t>(10),
-            get_arg_val<uint32_t>(11),
-            get_arg_val<uint32_t>(12),
-            13);
+        // Runtime arg 4 stores the grouped-table offset; the currently active topology begins at 5.
+        run_full_width_rms_norm_transport(5);
     }
 #endif
 
