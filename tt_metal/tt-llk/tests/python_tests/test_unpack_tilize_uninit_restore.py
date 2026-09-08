@@ -5,33 +5,25 @@
 
 This exercises a gap left by the existing tilize tests: every other call site of
 `_llk_unpack_tilize_uninit_` (matmul_unpack_tilize, the fuser tilize node, the
-C++ sweep) tears down with ``num_faces=4`` / ``face_r_dim=16``. The operand's
-``num_faces``/``face_r_dim`` are threaded through uninit so it reverts
+C++ sweep) restores with ``num_faces=4`` / ``face_r_dim=16``. The operand's
+``num_faces``/``face_r_dim`` are threaded through uninit so it restores
 ``Tile_x_dim_cntx0`` to the *operand* baseline programmed by
 ``configure_unpack_AB`` (not a hardcoded 16x16, 4-face baseline).
 
 The C++ source runs two ops back-to-back on the SAME operand format:
     1. ``unpack_tilize`` of operand A (with the parameterized ``num_faces``)
-    2. ``_llk_unpack_tilize_uninit_`` (the teardown under test)
+    2. ``_llk_unpack_tilize_uninit_`` (the restore under test)
     3. a plain ``_llk_unpack_A_`` datacopy of the tilized tile, with NO
        data-format reconfig in between.
 
-Because there is no reconfig, the uninit is the only thing that resets the
-unpacker state between the two ops. If it leaves ``tilize_mode`` or
+Because there is no reconfig, the uninit restore is the only thing that resets
+the unpacker state between the two ops. If it leaves ``tilize_mode`` or
 ``Tile_x_dim_cntx0`` in a tilize-specific / wrong-faces state, the second
 datacopy reads corrupted data and the result diverges from
 ``TilizeGolden(src_A, num_faces)``.
 
-``num_faces ∈ {1, 2}`` covers non-4-face operands, for which no other tilize
-test reaches this teardown — so what these cases prove is that uninit restores
-the *operand* baseline, not a hardcoded 4-face / 16-row one.
-
-They do **not** prove SrcA tile-descriptor Z-dim preservation. ``hw_configure``
-and the uninit here are given the same ``num_faces``, so the descriptor write
-that tt-llk#1161 removed stored a bit-identical value — this test passes
-identically under both teardowns. Distinguishing them needs a pre-tilize Z-dim
-that differs from the tilize operand's ``num_faces``: see
-``test_unpack_tilize_uninit_descriptor.py``.
+``num_faces ∈ {1, 2}`` covers non-4-face operands, which no existing tilize
+test reaches.
 """
 
 import pytest

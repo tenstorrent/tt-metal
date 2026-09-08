@@ -32,13 +32,8 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
 /**
  * Tear down the tilize unpacker configuration so a subsequent operation can reprogram the unpacker.
  *
- * Face count and face row dimension are derived from the operand's CB metadata (mirroring
- * llk_unpack_tilize_init) so the restore matches the operand's tile geometry rather than a
- * hardcoded 16x16, 4-face one. Deriving face_r_dim (rather than defaulting it to FACE_R_DIM) is
- * what lets the tiny-tile (face_r_dim < 16) canonical Tile_x_dim restore reach the Compute API,
- * whose tilize_uninit / tilize_uninit_with_dt call this with the operand only. On Wormhole
- * num_faces no longer feeds a restore (the SrcA tile descriptor is left untouched — tt-llk#1161);
- * it is still passed because Blackhole's uninit needs it.
+ * Tile geometry comes from the operand's CB metadata, so the restore matches the operand rather
+ * than a hardcoded 16x16, 4-face tile.
  *
  * @param operand Input circular buffer / operand index.
  */
@@ -315,5 +310,8 @@ inline void llk_unpack_fast_tilize_block(
  */
 inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand) {
     std::uint32_t operand_id = get_operand_id(operand);
-    _llk_unpack_tilizeA_B_uninit_((std::uint32_t)unpack_dst_format[operand_id]);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
+    _llk_unpack_tilizeA_B_uninit_(
+        (std::uint32_t)unpack_dst_format[operand_id], ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
 }
