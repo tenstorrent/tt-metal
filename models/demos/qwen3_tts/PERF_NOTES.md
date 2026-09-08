@@ -1669,12 +1669,55 @@ sequence — but `k_chunk=64` leaves kv=352 as 6 chunks (384 padded rows) where 
 Prefill runs once per utterance, so this is time-to-first-audio only; TTFT already went
 141.9 -> 134.1 ms from the fused-SDPA switch.
 
-### 6.6 Talker prefill buckets 64 and 128
+### 6.6 Talker prefill buckets 64 and 128 — CLOSED for caller-side work
 
 `attention.py` has `use_dram_shard_qkv = seq_len <= 32`, with a TODO: buckets 64 and 128 need
 their own per-`m` shard configs to engage the DRAM-sharded QKV and the sharded
-`nlp_create_qkv_heads`. At seq=64 the profile shows `nlp_create_qkv_heads` at 25 us on 2 cores
-— the same single-core-ish problem already fixed elsewhere.
+`nlp_create_qkv_heads`. At seq=64 the profile shows `nlp_create_qkv_heads` at 47-49 us on 2
+cores — the same single-core-ish problem already fixed elsewhere — which is 1.3 ms of the
+16.9 ms prefill.
+
+**Resolved: the sharded head split cannot be reached from the caller at seq > 32.** Not for
+want of shard configs — `_build_sharded_nlp_memcfgs(m)` already builds `{m, head_dim}` specs
+for every bucket. Two layers had to be peeled to find the real wall
+(`test_qwen3_tts_qkv_split_outtensors.py`):
+
+| route | m=32 | m=64 / m=128 |
+|---|---|---|
+| interleaved (shipped) | bit-exact | bit-exact, 47-49 us on **2 cores** |
+| sharded via `memory_config=` | bit-exact | **refuses**: `tensor_spec.cpp:161 shard_grid_fit_error` |
+| sharded via `output_tensors=` | bit-exact | **runs, returns WRONG data** (max diff 3.3) |
+
+1. `compute_output_specs` **discards** the shard spec you pass in `memory_config` and rebuilds
+   `{TILE_HEIGHT, head_dim}` (`nlp_create_qkv_heads_device_operation.cpp:229`). One tile-row
+   per head means seq=64 wants 32 shards on the 16-core grid, hence the refusal.
+2. That is bypassable without touching ttnn: the same function returns the caller's specs
+   verbatim when three output tensors are supplied (`:201`), and the Python binding exposes it
+   as `output_tensors=` (`nlp_create_qkv_heads_nanobind.cpp:35`). No sharded-input `TT_FATAL`
+   constrains the output shard height, so it is legal on paper — and at m=32 it is bit-exact,
+   which proves the route works.
+3. At m=64 it then **produces wrong data silently**. The sharded kernel's per-head offsets come
+   from `head_size = head_tiles * single_tile_size` (`build_sharded_core_args`), one tile-row's
+   worth, with no stride across sequence tile-rows. `k_num_tiles` does scale with the shard
+   shape, so the kernel reads the right *amount* and the wrong *addresses*.
+
+So the fix is a ttnn kernel change (stride the sharded reader/writer over sequence tile-rows),
+not a config. **Do not reach for `output_tensors=` as a workaround** — it defeats the guard in
+(1) and turns a loud refusal into silent corruption.
+
+The only caller-side route left is chunking the split into 32-row calls (2 at seq=64, 4 at
+seq=128) and concatenating, which is ~+6 ops/layer for ~-29 us/layer. That is an op *increase*
+for 0.017 % of a request, so it is not taken.
+
+Two incidental findings from the same investigation:
+
+* `q_grid` / `kv_grid` in `attention.py` are built as a single 16-wide row,
+  `CoreRange((0,0), (num_heads-1, 0))`, whose bounding box is `[0-0 - 15-0]` — x=8..15 do not
+  exist on an 8x8 compute grid, while `concat_grid` three lines above correctly uses
+  `ttnn.num_cores_to_corerangeset`. It is harmless **only because** of (1): the op throws the
+  spec away. If ttnn ever honours the caller's grid, this breaks.
+* The sharded kernel reads a KV-group-interleaved fused QKV, so feeding it the plain `[Q|K|V]`
+  order returns a plausible-looking wrong answer too (see 2.1's `wqkv_kvgi`).
 
 Prefill runs once per utterance, so this matters for time-to-first-audio, not steady state.
 
