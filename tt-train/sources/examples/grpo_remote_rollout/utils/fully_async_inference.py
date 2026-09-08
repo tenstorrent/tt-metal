@@ -113,43 +113,19 @@ def _pad_logprobs(all_logprobs: List[List[float]], max_completion_length: int) -
 def _apply_bridge_dict_to_worker(
     bridge_dicts: List[dict],
     worker: TttGenerationWorker,
-) -> int:
-    """Bring the bridge's parent-mesh recv-pad dict to host once per key,
-    replicate on each submesh, and install via
-    ``worker.update_weights(per_submesh)``. Returns the number of keys
-    installed (0 if the bridge yielded an empty dict, e.g. on peer close).
+) -> None:
+    """Install the received per-submesh dicts.
 
-    Called from INSIDE the ``with bridge.poll_weights()`` /
-    ``with bridge.receive_weights()`` block so the bridge's recv-pad lock
-    is held across the D->H reads.
+    The bridge's recv pads are pre-allocated on the worker's submeshes and
+    filled by the bridge receiver thread on CQ1, so this is just a parameter
+    rebind -- no ``to_torch`` / ``from_torch`` on the main thread.
+
+    Called from INSIDE ``with bridge.poll_weights() as dicts`` so the recv
+    pad lock is held for the entire ``update_weights`` call; the bridge
+    thread cannot overwrite pads mid-install. Caller must guard on
+    ``dicts[0]`` non-empty (empty dict is yielded on peer shutdown).
     """
-    if not bridge_dicts:
-        return 0
-    parent_dict = bridge_dicts[0]
-    if not parent_dict:
-        return 0
-
-    # Bring each pad to host once (device 0's copy of the replicated tensor).
-    host_dict = {key: ttnn.to_torch(ttnn.get_device_tensors(tensor)[0]) for key, tensor in parent_dict.items()}
-    spec_dict = {key: (tensor.dtype, tensor.layout) for key, tensor in parent_dict.items()}
-
-    per_submesh: List[dict] = []
-    for submesh in worker.submeshes:
-        d = {
-            key: ttnn.from_torch(
-                host,
-                dtype=spec_dict[key][0],
-                layout=spec_dict[key][1],
-                device=submesh,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(submesh),
-            )
-            for key, host in host_dict.items()
-        }
-        per_submesh.append(d)
-
-    worker.update_weights(per_submesh)
-    return len(host_dict)
+    worker.update_weights(bridge_dicts)
 
 
 def run_inference_loop(
@@ -236,9 +212,17 @@ def run_inference_loop(
         # ``ttnn.distributed_context_duplicate()`` collectively; the two
         # ranks must call in the same order for the private contexts to
         # line up.
+        # Land recv pads directly on the worker's submeshes so the bridge
+        # thread's ``ttnn.copy_host_to_device_tensor`` writes end up exactly
+        # where ``worker.update_weights`` expects them. Main thread never
+        # does a to_torch / from_torch on install.
         _log(f"connecting ThreadedWeightBridge receiver to rank {peer_rank}...")
         _t_bridge = time.perf_counter()
-        bridge = ThreadedWeightBridge.receiver(peer_rank=peer_rank, mesh_device=parent_mesh)
+        bridge = ThreadedWeightBridge.receiver(
+            peer_rank=peer_rank,
+            mesh_device=parent_mesh,
+            submeshes=worker.submeshes,
+        )
         bridge.connect()
         _log(f"bridge connected + receiver thread started ({time.perf_counter() - _t_bridge:.1f}s)")
 
@@ -290,15 +274,14 @@ def run_inference_loop(
         _t_wait = time.perf_counter()
         while True:
             with bridge.poll_weights() as dicts:
-                if dicts is not None:
-                    n = _apply_bridge_dict_to_worker(dicts, worker)
-                    if n > 0:
-                        installed_version += 1
-                        _log(
-                            f"installed initial theta_{installed_version} ({n} keys, "
-                            f"{(time.perf_counter() - _t_wait):.1f}s wait)"
-                        )
-                        break
+                if dicts is not None and dicts[0]:
+                    _apply_bridge_dict_to_worker(dicts, worker)
+                    installed_version += 1
+                    _log(
+                        f"installed initial theta_{installed_version} ({len(dicts[0])} keys, "
+                        f"{(time.perf_counter() - _t_wait):.1f}s wait)"
+                    )
+                    break
             if time.perf_counter() - _t_wait > initial_weights_max_wait_s:
                 raise RuntimeError(
                     f"inference: no initial weights received on the bridge after "
@@ -370,15 +353,14 @@ def run_inference_loop(
 
             # Non-blocking poll for fresh weights between rollouts.
             with bridge.poll_weights() as dicts:
-                if dicts is not None:
+                if dicts is not None and dicts[0]:
                     _t_apply = time.perf_counter()
-                    n = _apply_bridge_dict_to_worker(dicts, worker)
-                    if n > 0:
-                        installed_version += 1
-                        _log(
-                            f"iter {batch_id}: installed theta_{installed_version} "
-                            f"({n} keys, apply_s={(time.perf_counter() - _t_apply):.2f}s)"
-                        )
+                    _apply_bridge_dict_to_worker(dicts, worker)
+                    installed_version += 1
+                    _log(
+                        f"iter {batch_id}: installed theta_{installed_version} "
+                        f"({len(dicts[0])} keys, apply_s={(time.perf_counter() - _t_apply):.2f}s)"
+                    )
 
             # Break on TRAINING_STOPPED.
             ev_opt = channel.poll()
