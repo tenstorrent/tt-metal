@@ -545,16 +545,18 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceColumn) {
 // REDUCE_ROW only for those three, for every format which takes a float row AVG and makes
 // only the integer one column-only.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceRow) {
+    struct BlockShape {
+        std::uint32_t ct;
+        std::uint32_t rt;
+    };
     for (auto format : {tt::DataFormat::Float16_b, tt::DataFormat::Float32}) {
         for (auto pool : {ReducePool::Sum, ReducePool::Max, ReducePool::Min}) {
-            // Int32 must unpack to Dest, which cannot stage a block, so it stays single-tile.
-            const std::uint32_t widest = supports_multi_tile_block(format) ? 2u : 1u;
-            for (std::uint32_t block_ct_dim = 1; block_ct_dim <= widest; ++block_ct_dim) {
+            for (const auto shape : {BlockShape{1, 1}, BlockShape{2, 1}, BlockShape{1, 2}, BlockShape{2, 2}}) {
                 run_single_core_sfpu_reduce(
                     this->devices_.at(0),
                     SfpuReduceConfig{
-                        .block_ct_dim = block_ct_dim,
-                        .block_rt_dim = 1,
+                        .block_ct_dim = shape.ct,
+                        .block_rt_dim = shape.rt,
                         .num_blocks = 1,
                         .axis = ReduceAxis::Row,
                         .pool = pool,
