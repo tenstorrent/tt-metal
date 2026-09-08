@@ -5,6 +5,8 @@
 #pragma once
 
 #include <optional>
+#include <tuple>
+#include <utility>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
@@ -144,6 +146,15 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->fuse_swiglu);
     }
 };
+
+// attribute_names and attribute_values() are hand-synced: same fields, same order. If they drift a
+// field silently drops out of the program-cache key, reopening the aliasing bug this key guards
+// against. Deliberately excluded from the key: fused_ternary_scalar (a runtime scalar, not a
+// program-structural attribute) and every input tensor (keyed separately by the framework).
+static_assert(
+    std::tuple_size_v<decltype(AllGatherMinimalMatmulAsyncParams::attribute_names)> ==
+        std::tuple_size_v<decltype(std::declval<const AllGatherMinimalMatmulAsyncParams>().attribute_values())>,
+    "AGMM attribute_names and attribute_values() must stay in lockstep");
 
 struct AllGatherMinimalMatmulAsyncInputs {
     Tensor input_tensor;
