@@ -447,8 +447,7 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     assert (run_dir / "perf_x" / "perf_x.csv").exists()
     # ...reachable through the stable `latest` path...
     assert (root / "perf_data" / "latest" / "perf_x" / "perf_x.csv").exists()
-    # ...and a run-level Parquet batch alongside it.
-    # Named from the run tag, not run_id: run_id is shared by every shard.
+    # ...and a run-level Parquet batch alongside it, named from the run tag.
     parquet = run_dir / "testrun-wormhole-0.parquet"
     assert parquet.exists()
     table = pq.read_table(parquet)
@@ -458,6 +457,7 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     assert set(df["arch"]) == {"wormhole"}
     assert set(df["commit_sha"]) == {"testsha"}
     assert set(df["pipeline"]) == {"nightly"}
+    assert set(df["run_id"]) == {"testrun-wormhole-0"}
 
 
 def test_combine_perf_reports_raises_on_unknown_parquet_columns(tmp_path, monkeypatch):
@@ -606,31 +606,44 @@ def test_run_tag_is_stable_within_a_process(tmp_path, monkeypatch):
     assert TestConfig.perf_run_tag() == TestConfig.perf_run_tag()
 
 
-def test_ci_run_id_still_wins_for_provenance(monkeypatch):
-    # All shards of one workflow must share run_id: it is a ROW_KEY column and
-    # the data team's notion of a run spans shards.
+def test_run_id_identifies_the_file_not_the_workflow(monkeypatch):
+    # The warehouse replays by RUN_ID, so a run_id of "999" would make each of
+    # the workflow's ten files erase the one loaded before it.
     monkeypatch.setenv("GITHUB_RUN_ID", "999")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
 
-    assert _ci_provenance()["run_id"] == "999"
+    assert _ci_provenance()["run_id"] == "999-wormhole-3"
+
+
+def test_shards_of_one_workflow_get_different_run_ids(monkeypatch):
+    monkeypatch.setenv("GITHUB_RUN_ID", "999")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+
+    monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
+    wormhole_3 = _ci_provenance()["run_id"]
+    monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-4")
+    wormhole_4 = _ci_provenance()["run_id"]
+    monkeypatch.setenv("PERF_RUN_TAG", "999-blackhole-3")
+    blackhole_3 = _ci_provenance()["run_id"]
+
+    assert len({wormhole_3, wormhole_4, blackhole_3}) == 3
+    assert all(r.startswith("999-") for r in (wormhole_3, wormhole_4, blackhole_3))
 
 
 def test_rerun_of_a_workflow_publishes_under_its_own_run_id(monkeypatch):
-    # "Re-run all/failed jobs" keeps GITHUB_RUN_ID and bumps GITHUB_RUN_ATTEMPT.
-    # Attempt 2 is a second, different measurement: sharing attempt 1's ROW_KEY
-    # (test_name, commit_sha, arch, run_id) would collide with rows already
-    # published.
+    # A re-run keeps GITHUB_RUN_ID and PERF_RUN_TAG and bumps the attempt, so
+    # attempt 2 must not replay over attempt 1's rows.
     monkeypatch.setenv("GITHUB_RUN_ID", "999")
     monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
 
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
-    assert _ci_provenance()["run_id"] == "999-2"
+    assert _ci_provenance()["run_id"] == "999-wormhole-3-2"
 
     # Attempt 1 stays bare, so rows already archived keep the identity they were
     # published with.
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
-    assert _ci_provenance()["run_id"] == "999"
+    assert _ci_provenance()["run_id"] == "999-wormhole-3"
 
 
 def test_prune_keeps_the_current_run_however_old_it_looks(tmp_path):
