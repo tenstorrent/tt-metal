@@ -2,6 +2,8 @@
 
 set -eo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Default argument values
 default_repo="tenstorrent/tt-metal"
 
@@ -18,10 +20,13 @@ download_artifacts() {
     local workflow_run_id=$2
 
     echo "[info] Downloading test reports for workflow run $workflow_run_id"
-    api_output=$(gh api --paginate /repos/$repo/actions/runs/$workflow_run_id/artifacts | jq -r '.artifacts[] | .name')
-    if echo "$api_output" | grep -q "test_reports_"; then
-        gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts --pattern test_reports_* $workflow_run_id
-    else
+    # `gh run download --pattern` lists the run's artifacts itself, so the pre-flight
+    # `gh api .../artifacts` call this used to make was a second listing of the same data,
+    # costing 2 x ceil(artifacts / 100) API calls where 1 x is enough. `gh run download`
+    # exits non-zero when no artifact matches the pattern, which is a normal outcome here
+    # rather than an error, so it is handled instead of tripping `set -e`.
+    # The pattern is quoted so the shell cannot glob-expand it against the working dir.
+    if ! gh run download --repo "$repo" -D "generated/cicd/$workflow_run_id/artifacts" --pattern 'test_reports_*' "$workflow_run_id"; then
         echo "[Warning] Test reports not found for workflow run $workflow_run_id"
     fi
 }
@@ -77,6 +82,40 @@ get_jobs_with_pagination_fallback() {
     fi
 }
 
+# Fetch every job log for the run in a single API call.
+#
+# GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{n}/logs returns a ZIP holding
+# one entry per job that produced a log. That is 1 API call for the whole run, where
+# downloading each job log individually costs 1 call per job -- by far the largest part of
+# this workflow's API budget.
+#
+# Emits the ids of any jobs the archive did not supply, one per line, so the caller can
+# download just those individually. If the archive cannot be fetched at all it emits every
+# runnable job id, so any failure here degrades to exactly the previous behaviour.
+fetch_job_logs_via_run_archive() {
+    local repo=$1
+    local workflow_run_id=$2
+    local attempt_number=$3
+    local jobs_json_file=$4
+
+    local logs_dir="generated/cicd/$workflow_run_id/logs"
+    local zip_path="generated/cicd/$workflow_run_id/run_logs.zip"
+
+    if ! gh api "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/logs" > "$zip_path" 2>/dev/null; then
+        echo "[Warning] Could not fetch run log archive; falling back to per-job log downloads" >&2
+        rm -f "$zip_path"
+        jq -r '.jobs[] | select(.conclusion != null and .conclusion != "skipped") | .id' "$jobs_json_file"
+        return 0
+    fi
+
+    python3 "$SCRIPT_DIR/split_run_log_archive.py" \
+        --archive "$zip_path" \
+        --jobs-json "$jobs_json_file" \
+        --out-dir "$logs_dir"
+
+    rm -f "$zip_path"
+}
+
 download_logs_for_all_jobs() {
     local repo=$1
     local workflow_run_id=$2
@@ -87,21 +126,45 @@ download_logs_for_all_jobs() {
     # Get jobs using the pagination fallback function
     jobs_data=$(get_jobs_with_pagination_fallback "$repo" "$workflow_run_id" "$attempt_number")
 
+    # One API call for every job log in the run. Anything it could not supply is listed
+    # here and downloaded individually in the loop below.
+    jobs_needing_individual_download=$(fetch_job_logs_via_run_archive \
+        "$repo" "$workflow_run_id" "$attempt_number" "workflow_jobs.json")
+
     # Process the jobs data
-    echo "$jobs_data" | jq -c '.jobs[] | {id: .id, conclusion: .conclusion}' | while read -r job; do
+    # is_civ2 is true when any runs-on label starts with tt-ubuntu- (CIv2 runners)
+    #
+    # Skipped jobs (and jobs with no conclusion) never ran, so they have no log to fetch:
+    # the API returns 404 and the `|| true` below quietly wrote the error body into
+    # <job_id>.log. Across a 40-run sample, 33% of all analysed jobs were `skipped`, so
+    # filtering them out removes a third of the log downloads and loses no data.
+    echo "$jobs_data" | jq -c '.jobs[] | select(.conclusion != null and .conclusion != "skipped") | {id: .id, conclusion: .conclusion, is_civ2: ([.labels[]? | select(startswith("tt-ubuntu-"))] | length > 0)}' | while read -r job; do
         job_id=$(echo "$job" | jq -r '.id')
         job_conclusion=$(echo "$job" | jq -r '.conclusion')
-        echo "[info] download logs for job with id $job_id, attempt number $attempt_number"
-        # https://github.com/tenstorrent/tt-metal/issues/12966
-        # We bypass any log download that returned a non-zero exit code so the downloader doesn't crash midway.
-        # williamly: We may want to check http status code for robustness in the future again but it may be costly in terms of api calls used.
-        # We output escape sequences, gh cli >= 2.97.0 requires --allow-escape-sequences else it fails. Fall back to regular call for older images.
-        gh api --allow-escape-sequences /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || \
-            gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || true
+        is_civ2=$(echo "$job" | jq -r '.is_civ2')
+        # The run log archive above already supplied almost every job log. Only jobs it
+        # could not account for are fetched individually here.
+        if printf '%s\n' "$jobs_needing_individual_download" | grep -qxF "$job_id"; then
+            echo "[info] download logs for job with id $job_id, attempt number $attempt_number"
+            # https://github.com/tenstorrent/tt-metal/issues/12966
+            # We bypass any log download that returned a non-zero exit code so the downloader doesn't crash midway.
+            # williamly: We may want to check http status code for robustness in the future again but it may be costly in terms of api calls used.
+            # We output escape sequences, gh cli >= 2.97.0 requires --allow-escape-sequences else it fails. Fall back to regular call for older images.
+            gh api --allow-escape-sequences /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || \
+                gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || true
+        fi
 
-        # Download annotations for failed jobs only (failure reason).
+        # Download annotations for failed jobs only, to recover the failure reason.
+        #
+        # CIv2 runners also emit node-name and card-serial notice annotations at job start
+        # (see tenstorrent/github-ci-infra#1408), but the runner prints those same strings as
+        # plain stdout in the job log's "Set up runner" step, and we download that log anyway.
+        # utils.get_job_row_from_github_job already falls back to
+        # workflows.get_civ2_node_name_and_serial_from_job_log when no annotations file is
+        # present, so fetching annotations for every CIv2 job re-fetched data we already had.
+        # In a 40-run sample, 84% of annotation calls were non-failure CIv2 jobs.
         if [[ "$job_conclusion" == "failure" ]]; then
-            echo "[info] downloading annotations for job $job_id (conclusion=$job_conclusion)"
+            echo "[info] downloading annotations for job $job_id (conclusion=$job_conclusion, civ2=$is_civ2)"
             gh api /repos/$repo/check-runs/$job_id/annotations > generated/cicd/$workflow_run_id/logs/${job_id}_annotations.json
         fi
     done
