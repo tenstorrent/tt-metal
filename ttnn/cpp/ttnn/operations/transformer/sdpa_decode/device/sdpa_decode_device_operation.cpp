@@ -279,6 +279,31 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
                         B,
                         spec_T,
                         cur_pos_shape[-1]);
+                    // Within a group the entries must be non-decreasing: the reader takes the group's
+                    // KV scan range from its LAST entry and skips k-chunks that end before its FIRST
+                    // entry, so a non-ascending group silently loses KV instead of failing. In the
+                    // (only) supported spec path the positions live in cur_pos_tensor and are read on
+                    // device, so validate cannot see them without a readback; check the host cur_pos
+                    // vector when one is supplied and leave the tensor path untouched.
+                    const auto& host_cur_pos = operation_attributes.cur_pos;
+                    if (host_cur_pos.size() == static_cast<size_t>(B) * spec_T) {
+                        for (uint32_t b = 0; b < B; b++) {
+                            for (uint32_t i = 0; i + 1 < spec_T; i++) {
+                                TT_FATAL(
+                                    host_cur_pos[b * spec_T + i] <= host_cur_pos[b * spec_T + i + 1],
+                                    "spec_multi_pos_tiles={}: cur_pos entries within candidate group {} must be "
+                                    "non-decreasing, but entry {} ({}) > entry {} ({}); the reader derives the "
+                                    "group's KV scan range from the group's last entry, so a non-ascending group "
+                                    "would silently drop KV.",
+                                    spec_T,
+                                    b,
+                                    b * spec_T + i,
+                                    host_cur_pos[b * spec_T + i],
+                                    b * spec_T + i + 1,
+                                    host_cur_pos[b * spec_T + i + 1]);
+                            }
+                        }
+                    }
                 } else {
                     TT_FATAL(
                         cur_pos_shape[-1] == B,

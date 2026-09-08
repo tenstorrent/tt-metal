@@ -143,6 +143,15 @@ void kernel_main() {
                 for (uint32_t j = 0; j < spec_multi_pos_T; ++j) {
                     spec_pos[j] = index_ptr[spec_pos_base + j];
                 }
+#if ASSERT_ENABLED
+                // The reader derives the group's KV scan range from the group's LAST entry and skips
+                // k-chunks that end before its FIRST, so a non-ascending group silently drops KV; this
+                // is the on-device half of a contract validate cannot see, because in spec mode the
+                // positions live in cur_pos_tensor and are only ever read here, on device.
+                for (uint32_t j = 0; j + 1 < spec_multi_pos_T; ++j) {
+                    ASSERT(spec_pos[j] <= spec_pos[j + 1]);
+                }
+#endif
                 // Positions are ascending within a group, so its last entry sets the KV scan range.
                 cur_pos = spec_pos[spec_multi_pos_T - 1];
             } else {
