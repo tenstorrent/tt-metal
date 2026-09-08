@@ -5,14 +5,11 @@
 // Cross-op unpacker-state restore test for `_llk_unpack_tilize_uninit_`.
 //
 // Goal: prove that after a `unpack_tilize` op, `_llk_unpack_tilize_uninit_`
-// reverts the state tilize init altered — the unpack config word-0 (tilize_mode
-// etc.) and `Tile_x_dim_cntx0` — back to the canonical operand baseline programmed
-// by `configure_unpack_AB`, so that a *following* op that uses the SAME operand
-// baseline (and therefore performs NO data-format reconfig) reads correct data.
-// The SrcA tile-descriptor (num_faces / Y-dim) is deliberately NOT touched by
-// uninit: WH tilize neither writes nor mutates it (tt-llk#1161), so it must stay
-// at the `configure_unpack_AB` baseline on its own — this test also guards that it
-// is preserved (not corrupted) across tilize+uninit.
+// restores the unpack config word-0 (tilize_mode etc.) and `Tile_x_dim_cntx0`
+// back to the canonical operand baseline programmed by
+// `configure_unpack_AB`, so that a *following*
+// op that uses the SAME operand baseline (and therefore performs NO data-format
+// reconfig) reads correct data.
 //
 // To isolate the uninit restore as the *only* state reset between the two ops,
 // this test deliberately:
@@ -30,18 +27,9 @@
 //         tile-descriptor Z-dim at a tilize-specific value, or leaves
 //         tilize_mode set), this datacopy is corrupted and the test fails.
 //
-// What the `num_faces ∈ {1, 2}` cases prove is that uninit restores word-0 and
-// `Tile_x_dim_cntx0` to the *operand* baseline rather than a hardcoded 4-face /
-// 16-row one — a case no other tilize test covers, since every other uninit call
-// site uses num_faces=4.
-//
-// What they do NOT prove is descriptor Z-dim preservation. `_llk_unpack_hw_configure_`
-// and `_llk_unpack_tilize_uninit_wrapper_` below are handed the SAME `num_faces`, so the
-// descriptor write this teardown used to perform stored a bit-identical value: the test passes
-// identically under the old (descriptor-writing) and new (descriptor-preserving)
-// teardown, for every `num_faces`. Telling the two apart needs a pre-tilize Z-dim that
-// *differs* from the tilize operand's `num_faces` — see
-// `unpack_tilize_uninit_descriptor_test.cpp`.
+// The `num_faces ∈ {1, 2}` cases specifically exercise the tile-descriptor
+// Z-dim restore (`_llk_unpack_tilize_uninit_` line restoring num_faces) that no
+// existing tilize test covers — every other uninit call site uses num_faces=4.
 
 #include <algorithm>
 #include <cstdint>
