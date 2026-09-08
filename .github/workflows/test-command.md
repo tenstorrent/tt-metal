@@ -443,16 +443,43 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
    matches, the pipeline it names is always dispatched with the inputs it specifies, on
    top of whatever else you select. Count it toward the cap of 8.
 
-   | If any changed path matches | Always dispatch | With inputs |
-   |---|---|---|
-   | `ttnn/cpp/ttnn/operations/eltwise/**` (op implementation, C++ or kernels), `tests/ttnn/unit_tests/operations/eltwise/**`, or `tests/ttnn/nightly/unit_tests/operations/eltwise/**` (test files) | `tt-metal-l2-nightly` | `additional_test_categories: eltwise` |
+   `tt-metal-l2-nightly` is mandatory whenever the diff reaches an op family that has an
+   `additional_test_categories` selector. Match **every** row of the table below against the
+   changed paths, collect the categories of all rows that match, and dispatch the pipeline
+   **once** with them comma-joined. A PR touching both
+   `ttnn/cpp/ttnn/operations/eltwise/**` and `ttnn/cpp/ttnn/operations/data_movement/**`
+   gets `additional_test_categories: eltwise,data_movement` — one dispatch carrying two
+   categories, not two dispatches, and not just the first row that matched.
 
-   The `eltwise` category runs `tests/ttnn/nightly/unit_tests/operations/eltwise` (the four
-   `ttnn nightly eltwise tests` groups in `tests/pipeline_reorg/ops_unit_tests.yaml`), which
-   no pr-gate or post-commit job covers — so a change under those paths that skips it is
-   not tested where it is most likely to break. A hint in the comment that names other
-   hardware (e.g. `/test blackhole`) narrows the *rest* of your selection, not this rule;
-   only an explicit `/test skip nightly` (or equivalent) opts out, and say so in the comment.
+   | If any changed path matches — op implementation (C++ or kernels) | …or tests | Category |
+   |---|---|---|
+   | `ttnn/cpp/ttnn/operations/eltwise/**` | `tests/ttnn/unit_tests/operations/eltwise/**`, `tests/ttnn/nightly/unit_tests/operations/eltwise/**` | `eltwise` |
+   | `ttnn/cpp/ttnn/operations/data_movement/**`, `.../copy/**`, `.../index_fill/**`, `.../point_to_point/**` | `tests/ttnn/unit_tests/operations/data_movement/**`, `tests/ttnn/nightly/unit_tests/operations/data_movement/**`, `tests/ttnn/unit_tests/operations/point_to_point/**` | `data_movement` |
+   | `ttnn/cpp/ttnn/operations/conv/**`, `.../sliding_window/**` | `tests/ttnn/nightly/unit_tests/operations/conv/**` | `conv` |
+   | `ttnn/cpp/ttnn/operations/matmul/**` | `tests/ttnn/nightly/unit_tests/operations/matmul/**` | `matmul` |
+   | `ttnn/cpp/ttnn/operations/pool/**` | `tests/ttnn/nightly/unit_tests/operations/pool/**` | `pool` |
+   | `ttnn/cpp/ttnn/operations/reduction/**` | `tests/ttnn/nightly/unit_tests/operations/reduction/**` | `reduction` |
+   | `ttnn/cpp/ttnn/operations/normalization/**` | `tests/ttnn/nightly/unit_tests/operations/fused/**` (layernorm, rmsnorm, groupnorm, softmax) | `fused` |
+   | `ttnn/cpp/ttnn/operations/transformer/**` except `sdpa*`, `.../kv_cache/**` | `tests/ttnn/nightly/unit_tests/operations/transformers/**` | `transformers` |
+   | `ttnn/cpp/ttnn/operations/transformer/sdpa/**`, `.../transformer/sdpa_decode/**` | `tests/ttnn/nightly/unit_tests/operations/sdpa/**` | `sdpa` |
+   | `ttnn/cpp/ttnn/operations/ccl/**` | `tests/ttnn/unit_tests/operations/ccl/**`, `tests/nightly/tg/ccl/**` | `ccl` |
+   | `ttnn/cpp/ttnn/operations/moreh/**` | `tests/ttnn/nightly/unit_tests/operations/moreh/**` | `moreh` |
+   | `ttnn/cpp/ttnn/operations/experimental/**` | `tests/ttnn/nightly/unit_tests/operations/experimental/**` | `experimental` |
+   | `ttnn/cpp/ttnn/operations/rand/**`, `.../randn/**`, `.../uniform/**`, `.../bernoulli/**` | `tests/ttnn/nightly/unit_tests/operations/rand/**`, `tests/ttnn/nightly/unit_tests/operations/ssm/**` | `misc` |
+   | `ttnn/cpp/ttnn/kernel_lib/**` | `tests/ttnn/unit_tests/kernel_lib/**` | `kernel_lib` |
+
+   `tests/pipeline_reorg/ops_unit_tests.yaml` is the source of truth: each entry's
+   `category:` is exactly what this input selects, and its `cmd:` is what that category
+   actually runs. If a changed directory has no row above, look it up there and use the
+   category whose `cmd` covers its tests rather than skipping the rule. Three further
+   categories (`docs_examples`, `cpp_accessor`, `cpp_lab_examples`) map to no
+   `operations/` path — pass those only when the diff touches what they test.
+
+   None of these suites are covered by a pr-gate or post-commit job, so a change under
+   those paths that skips this rule is not tested where it is most likely to break. A hint
+   in the comment that names other hardware (e.g. `/test blackhole`) narrows the *rest* of
+   your selection, not this rule; only an explicit `/test skip nightly` (or equivalent)
+   opts out, and say so in the comment.
 
 5. **Narrow each survivor to the relevant platforms _and suites_** via its inputs (next
    section). Running `runtime-unit-tests` across every SKU when only Blackhole code
@@ -482,7 +509,7 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 | `models-t1-*` | Selectable SKU | Tier-1 (highest-priority) model changes under `models/` |
 | `models-t2-*`, `models-t3-*` | Selectable SKU | Tier-2/3 model changes |
 | `perf-device-models` | Single card | Device-perf regressions from op or kernel changes |
-| `tt-metal-l2-nightly` | WH + BH | Broad L2 coverage for wide-reaching `tt_metal/` changes. **Mandatory** with `additional_test_categories: eltwise` for any change under the eltwise op or eltwise test directories (see *Mandatory selections*) |
+| `tt-metal-l2-nightly` | WH + BH | Broad L2 coverage for wide-reaching `tt_metal/` changes. **Mandatory** for any change under a `ttnn/cpp/ttnn/operations/` family or its tests, with `additional_test_categories` naming every category the change reaches (see *Mandatory selections*) |
 | `ttnn-run-sweeps` | Selectable | `ttnn/` op changes where sweep coverage is the real signal |
 | `vllm-model-tests` | Selectable SKU | vLLM serving integration |
 | `metal-run-microbenchmarks` | Single card | Low-level metal performance primitives |
@@ -555,11 +582,12 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   otherwise — the same reasoning as above, just inverted.
 
 - **`additional_test_categories` on `tt-metal-l2-nightly` is a comma-separated string**
-  (e.g. `eltwise`, or `eltwise,fused`), not a boolean toggle. Its default is `""`, which
-  under `workflow_dispatch` runs *no* op category — so a bare dispatch of this pipeline
-  tests almost nothing. Always pass the categories you mean. For the eltwise rule above
-  that is exactly `additional_test_categories: eltwise`; add further categories only when
-  the diff also reaches them (e.g. `fused` for `ttnn/cpp/ttnn/operations/fused/**`).
+  (e.g. `eltwise`, or `eltwise,data_movement`), not a boolean toggle. Its default is `""`,
+  which under `workflow_dispatch` runs *no* op category — so a bare dispatch of this
+  pipeline tests almost nothing. Always pass the categories you mean: every category the
+  mandatory table above matched, comma-joined without spaces, in a single dispatch. Do not
+  pad the list with categories the diff does not reach — each one is a full nightly suite
+  on scarce silicon.
   `run_wormhole` / `run_blackhole` both default to `true`; set one to `false` only when
   the change is provably confined to the other architecture. Leave the other
   `run_*` toggles (`run_cpp_tests`, `run_ccl_tests`, `run_didt_tests`, …) at their
