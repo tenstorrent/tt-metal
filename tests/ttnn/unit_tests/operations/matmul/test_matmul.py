@@ -4475,11 +4475,10 @@ def test_matmul_mcast_in1_single_core_h_and_w_tail(device):
     "m_tiles,n_tiles,grid,per_core_m,per_core_n,out_block_h,out_block_w,error",
     [
         (1, 9, (2, 1), 2, 8, 2, 4, r"mcast_in1 requires N .*single per_core_N block"),
-        (1, 3, (1, 1), 2, 8, 2, 4, r"logical N tail to be in the final internal W block"),
-        (3, 7, (1, 1), 8, 8, 4, 4, r"single-Y mcast_in1 sender requires the logical M tail"),
-        (7, 7, (1, 1), 8, 8, 4, 4, r"partial final H block only when per_core_M contains one internal H block"),
+        (1, 3, (1, 1), 1, 8, 1, 4, r"logical N tail to be in the final internal W block"),
+        (3, 8, (1, 1), 8, 8, 4, 4, r"per_core_M \(8\) exceeds Mt \(3\)"),
     ],
-    ids=["multiple-x-blocks", "deep-w-tail", "single-y-deep-h-tail", "single-y-multi-block-h-tail"],
+    ids=["multiple-x-blocks", "deep-w-tail", "per-core-m-exceeds-mt"],
 )
 def test_matmul_mcast_in1_rejects_unsupported_distribution(
     device,
