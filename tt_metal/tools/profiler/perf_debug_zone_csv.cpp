@@ -62,6 +62,21 @@ constexpr SyncName kSyncNames[] = {
     {"SYNC-CB-WAIT-KEY", 1008},
     {"SYNC-CB-RESERVE-KEY", 1009},
     {"SYNC-CB-POP", 1010},
+    // READING A NOC-TRACE ROW: two things a consumer has to know, because getting either wrong
+    // produces transfers that never happened rather than a visible error.
+    //
+    // 1. STATEFUL TRANSFERS CARRY NO DESTINATION. A *_WITH_STATE / *_WITH_STATE_AND_TRID event
+    //    reuses coordinates programmed earlier into a NoC register, so the address it records has
+    //    no coordinate bits and decodes to (0, 0). (0, 0) is a REAL core in NOC0, so a reader that
+    //    resolves it lands on whatever tile sits there and invents an edge. The destination is the
+    //    one from the most recent READ_SET_STATE / WRITE_SET_STATE on the SAME lane -- those DO
+    //    record the full address -- so pair forward per lane, and treat an unpaired stateful event
+    //    as unknown rather than as (0, 0).
+    //
+    // 2. DESTINATIONS ARE IN TRANSLATED SPACE, the row's own core_x/core_y is NOC0. Resolve the
+    //    destination through the translated_x/y columns of the companion coords file, never
+    //    through its noc0_x/y columns -- see write_coord_map below.
+    //
     // NOC-TRACE (noc_event_profiler.hpp) is not a synchronization event, but it is the only
     // record that names the DESTINATION of a transfer, which is what a core-to-core feed graph
     // needs. It gets an id OUTSIDE the 1000-1010 sync block precisely so the comment above still
