@@ -77,11 +77,24 @@ def test_ccl_topology_ring_on_bh_8_device_mesh(monkeypatch):
     assert default_ccl_topology(_FakeMesh(8)) == ttnn.Topology.Ring
 
 
-def test_ccl_topology_linear_on_wh_8_device_mesh(monkeypatch):
-    """T3K keeps main's validated Linear default; Ring remains an explicit opt-in."""
+def test_ccl_topology_ring_on_wh_8_device_dense_mesh(monkeypatch):
+    """T3K dense: Ring beats Linear on the 31B decode all-reduce.
+
+    Merged from ign/gemma4_support_loudbox_exps, which replaced main's Linear
+    default on Wormhole for DENSE models at >=8 devices. ``num_links=2`` is not
+    usable here (Event Order Issue on the completion signal); the topology is
+    taken under plain FABRIC_1D. Opt back out with GEMMA4_CCL_TOPOLOGY=linear.
+    """
     monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
     monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
-    assert default_ccl_topology(_FakeMesh(8), is_moe=False) == ttnn.Topology.Linear
+    assert default_ccl_topology(_FakeMesh(8), is_moe=False) == ttnn.Topology.Ring
+
+
+def test_ccl_topology_linear_on_wh_8_device_moe_mesh(monkeypatch):
+    """MoE on WH stays Linear: Ring drops 26B-A4B test_full_model below its gate."""
+    monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+    assert default_ccl_topology(_FakeMesh(8), is_moe=True) == ttnn.Topology.Linear
 
 
 def test_ccl_topology_env_override_beats_device_count(monkeypatch):

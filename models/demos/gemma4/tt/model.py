@@ -1188,6 +1188,7 @@ class Gemma4Model:
         # loop, so skip the expensive full-sequence lm_head.
         # Gate on chunk_page_table: get_last_token defaults to -1 for all direct
         # ttnn_prefill_forward callers (unit tests, demos), which still need logits.
+
         if (
             not is_decode
             and get_last_token == -1

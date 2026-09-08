@@ -42,6 +42,10 @@ Usage:
     MESH_DEVICE=P150x8 HF_MODEL=google/gemma-4-31B-it pytest \
         models/demos/gemma4/tests/e2e/test_isl_sweep.py -k "long-context-128k" -s --timeout 1800
 
+    # Long-context (defaults pick bounded/chunk for coherency):
+    MESH_DEVICE=P150x8 HF_MODEL=google/gemma-4-31B-it pytest \
+        models/demos/gemma4/demo/text_demo_v2.py -k "long-context-128k" -s --timeout 1800
+
     # Override prompts / lengths from the CLI:
     HF_MODEL=google/gemma-4-31B-it pytest \
         models/demos/gemma4/tests/e2e/test_isl_sweep.py -k "batch-1" -sv \
@@ -295,6 +299,7 @@ def run_demo_text(
         _num_layers = os.environ.get("GEMMA4_NUM_LAYERS")
         num_layers = int(_num_layers) if _num_layers else None
     batch_size = int(os.environ.get("GEMMA4_BATCH", batch_size))
+
     _decode_trace = os.environ.get("GEMMA4_DECODE_TRACE")
     if _decode_trace is not None:
         enable_trace = _decode_trace.lower() in ("1", "true", "yes")
@@ -333,21 +338,6 @@ def run_demo_text(
 
     reset_trace_prefill_seq_lens_to_default()
     trim_demo_prefill_trace_buckets(input_prompts=input_prompts, max_seq_len=max_seq_len)
-
-    if batch_size <= 1 or configured_blocks is None:
-        page_max_num_blocks = needed_blocks
-    elif bounded_sliding:
-        # ``build_hybrid_page_tables`` gives each user its own full-attention
-        # range [u*ceil(max_seq_len/block), (u+1)*...), so the pool must hold
-        # batch * ceil(max_seq_len/block). The tuned value is a *shared* pool
-        # that the non-hybrid ``create_tt_page_table`` partitions across users;
-        # using it with hybrid tables puts users 1..B-1 past the end of the pool.
-        page_max_num_blocks = max(int(configured_blocks), needed_blocks)
-    else:
-        page_max_num_blocks = configured_blocks
-    paged_attention_config = (
-        PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks) if paged_attention else None
-    )
 
     if batch_size <= 1 or configured_blocks is None:
         page_max_num_blocks = needed_blocks

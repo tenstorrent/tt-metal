@@ -20,7 +20,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
-from models.demos.gemma4.tt.compute_config import gelu_variant
+
 from models.demos.gemma4.tt.dram_sharded import (
     TILE_SIZE,
     DramShardedLinear,
@@ -188,6 +188,7 @@ class SharedMLP:
                 ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+
         if dram_shard and can_dram_shard(down_k, self.hidden_size, dtype=dtype):
             self.down_proj = DramShardedLinear(
                 down_proj_weight,
@@ -371,10 +372,18 @@ class SharedMLP:
         # gate_up WRITE — its output never goes through DRAM — not the down_proj
         # read. ``geglu_mc`` inherits whichever the matmul picked, so neither case
         # is hard-coded here.
-        # Preserve main's Accurate GeLU policy and the source tip's memory placement.
-        activated = ttnn.gelu(gate, variant=gelu_variant(), memory_config=geglu_mc)
-        hidden = ttnn.mul(activated, up, memory_config=geglu_mc)
-        activated.deallocate(True)
+        # Fuse gelu(gate)*up into one BinaryNg mul (merged from
+        # ign/gemma4_support_loudbox_exps). GELU param 0.0 is the Accurate
+        # variant, matching this repo's pinned ``gelu_variant()`` — ttnn maps
+        # GeluVariant::ACCURATE to UnaryWithParam(GELU, 0.0f) and FAST_LUT to
+        # 1.0f (unary.cpp). Keep 0.0: Gemma4 device PCC is gated on Accurate,
+        # and the fusion is what saves the op.
+        hidden = ttnn.mul(
+            gate,
+            up,
+            input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)],
+            memory_config=geglu_mc,
+        )
         gate.deallocate(True)
         up.deallocate(True)
 

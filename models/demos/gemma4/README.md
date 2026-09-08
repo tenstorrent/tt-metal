@@ -23,6 +23,7 @@ Wormhole rows are from CI (cold-start TTFT, including one-time program compile).
 | E2B     | N150 | 1×1 | 12.24 | 12.24 | 38714.7 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762105) |
 | E4B     | N150 | 1×1 |  7.95 |  7.95 | 36832.1 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762123) |
 | 26B-A4B | T3K  | 1×8 | 11.68 | 11.68 | 64186.5 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762080) |
+| 31B     | T3K  | 1×8 |  9.48 |  9.48 | 44772.1 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762120) |
 | E2B     | P150 | 1×1 | 22.82 | 22.82 | 580 [^bh-perf] | measured |
 | E4B     | P150 | 1×1 | 13.97 | 13.97 | 950 [^bh-perf] | measured |
 | 12B     | P150 | 1×1 | 15.57 | 15.57 | 1190 [^bh-perf] | measured |
@@ -365,15 +366,15 @@ Every performance change on this path ships behind a switch, so any one of them 
 | `GEMMA4_DECODE_IN0_L1`, `GEMMA4_DECODE_QKV_L1` | `1` | Keep decode activations in L1 instead of staging through DRAM. |
 | `GEMMA4_SHARDED_NORM`, `GEMMA4_NORM_KEEP_SHARDED`, `GEMMA4_PREFILL_ISLAND` | `1` | Width-sharded RMSNorm and the sharded residual islands. |
 | `GEMMA4_LM_HEAD_FIDELITY` | `hifi3_destacc` | `hifi4_destacc` restores the previous default but exposes a documented WH B0 hardware bug (#38306); HiFi3 + fp32 dest-acc measured equivalent and is silent. |
-| `GEMMA4_DECODE_SDPA_FIDELITY` | `hifi2` (op default) | Set `hifi4` to enable the measured optimization. **Do not add fp32 dest-acc to this op** — it collapses batch-1 decode PCC. |
-| `GEMMA4_PREFILL_SDPA_FIDELITY` | `hifi4` | Main's validated HiFi4 + fp32 dest-acc policy. `hifi4_nodest` enables the measured alternative that avoids #38306. |
+| `GEMMA4_DECODE_SDPA_FIDELITY` | `hifi4` | The measured optimum, taken from ign/gemma4_support_loudbox_exps. **Do not add fp32 dest-acc to this op** — it collapses batch-1 decode PCC. Set `hifi2` to fall back to the op default. |
+| `GEMMA4_PREFILL_SDPA_FIDELITY` | model-aware: `hifi4_nodest` for 31B on WH, else `hifi4` | Resolved per (arch, hidden_size) by `prefill_sdpa_mode`, which already yields loudbox's `hifi4_nodest` exactly where it was measured (WH, hidden ≥ 5376) while keeping 12B on its own `hifi4` optimum. An explicit value always wins. |
 | `GEMMA4_ATTN_WEIGHT_DTYPE` | per `precision_overrides.json` | **Unit-test sweep knob only** (`tests/unit/test_attention.py`) — it does not affect the demos. `bf16` lifts most of the outstanding 12B WH decode PCC nodes over 0.99, which is how the residual loss was attributed to bfp8 attention weights. |
 
 ### Collectives
 
 | Variable | Default | Effect |
 |---|---|---|
-| `GEMMA4_CCL_TOPOLOGY` | `ring` on BH ≥8 / `linear` otherwise | Set `ring` explicitly for the measured WH dense optimization; WH keeps main's validated Linear default. |
+| `GEMMA4_CCL_TOPOLOGY` | `ring` on ≥8 devices for dense (BH or WH) / `linear` for MoE and everything else | Ring beats Linear on the 31B decode all-reduce on both arches (WH dense taken from ign/gemma4_support_loudbox_exps; its full-model WH PCC is not yet revalidated on this branch). MoE stays Linear — Ring drops 26B-A4B `test_full_model` below its gate. `num_links=2` is not usable with Ring. |
 | `GEMMA4_CCL_SPLIT` | `1` | Split the TP all-reduce into `reduce_scatter` + `all_gather` so the worker knobs below are reachable. |
 | `GEMMA4_CCL_SYNC_RS_WORKERS`, `GEMMA4_CCL_SYNC_RS_CHUNKS` | height-aware: `2` at padded height ≥ 2048, else `1` | Reduce-scatter workers / chunks-per-sync. Decode and short prefill want 1; the tall prefill chunk wants 2. **`w=4` is a 1.5x cliff, not a plateau** — with one link, extra workers contend. Do not raise without re-sweeping, and do not confuse these with the async path's `GEMMA4_CCL_NUM_WORKERS`. |
 | `GEMMA4_CCL_ASYNC` | auto (tall prefill only) | Async RS+AG loses to sync in every decode / short-prefill arm. |

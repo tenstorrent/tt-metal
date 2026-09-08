@@ -181,11 +181,18 @@ def default_ccl_topology(mesh_device=None, is_moe: bool = False):
     Policy (when env unset):
       * **Ring** on **Blackhole** meshes with **≥8 devices** (Ring+sync beat
         Linear+sync on the P150x8 TTFT sweep at 31B/128k).
-      * **Linear** on Wormhole, including dense 1×8. Ring remains available via
-        the environment override, but is not the default until its full-model
-        PCC is revalidated.
-      * **Linear** everywhere else. Ring on 4-device BH drops 12B full-model PCC
-        well below the Linear result.
+      * **Ring** on **Wormhole** meshes with **≥8 devices** for **dense**
+        models: on the 31B decode all-reduce Ring beats Linear, and sync beats
+        async in every arm. Opening the mesh with ``FABRIC_1D_RING`` instead of
+        ``FABRIC_1D`` buys almost nothing further, so the topology is taken
+        under plain ``FABRIC_1D`` and no harness device_params change is needed.
+        ``num_links=2`` is NOT usable here — it raises "Event Order Issue:
+        expected to read back completion signal for event 27 but got 14" (see
+        default_num_links).
+      * **Linear** for **MoE** models on WH: Ring drops 26B-A4B
+        ``test_full_model`` PCC below its TEMP 0.76 gate, Linear clears it.
+      * **Linear** everywhere else. Ring on 4-device BH drops 12B full-model
+        PCC well below the Linear result.
     """
     override = os.environ.get("GEMMA4_CCL_TOPOLOGY", "").strip().lower()
     if override in ("ring", "r"):
@@ -195,7 +202,7 @@ def default_ccl_topology(mesh_device=None, is_moe: bool = False):
 
     n = mesh_device.get_num_devices() if mesh_device is not None else 0
     if n:
-        if n >= 8 and is_blackhole():
+        if n >= 8 and (is_blackhole() or not is_moe):
             return ttnn.Topology.Ring
         return ttnn.Topology.Linear
 
