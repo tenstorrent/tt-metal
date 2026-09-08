@@ -28,7 +28,7 @@ its nanobind bindings in ``matmul_decode_nanobind.cpp``. They mirror the plain-m
 bindings in ``ttnn/cpp/ttnn/operations/matmul/matmul_nanobind.cpp``.
 """
 
-from typing import Optional
+from typing import Optional, Union
 
 import ttnn
 
@@ -62,7 +62,7 @@ def matmul_decode(
     output_core_grid=None,
     output_mcast_two_hub: bool = False,
     rms_norm: bool = False,
-    rms_norm_gamma: Optional[float] = None,
+    rms_norm_gamma: Optional[Union[float, "ttnn.Tensor"]] = None,
     rms_norm_epsilon: float = 1e-6,
 ) -> "OpDescriptor":
     """Create a ``matmul_decode`` op descriptor.
@@ -91,6 +91,10 @@ def matmul_decode(
             the input mesh when this is set.
         ring_gather: Gather in0 over a pipelined closed ring instead of the two-hub gather.
             Full- and partial-width L1-resident paths only. Defaults to False.
+        rms_norm: Fuse distributed RMSNorm of the full output row. Full-width only.
+        rms_norm_gamma: Scalar or WIDTH_SHARDED TILE 1x32 gamma on the weight grid.
+            Required if ``rms_norm`` is True.
+        rms_norm_epsilon: RMSNorm epsilon.
 
     Returns:
         OpDescriptor with the matmul_decode program descriptor and IO tensors.
@@ -120,11 +124,14 @@ def matmul_decode(
         attrs.output_core_grid = output_core_grid
     attrs.output_mcast_two_hub = output_mcast_two_hub
     attrs.rms_norm = rms_norm
-    if rms_norm_gamma is not None:
-        attrs.rms_norm_gamma = rms_norm_gamma
     attrs.rms_norm_epsilon = rms_norm_epsilon
+    gamma_tensor = None
+    if isinstance(rms_norm_gamma, (int, float)):
+        attrs.rms_norm_gamma = float(rms_norm_gamma)
+    elif rms_norm_gamma is not None:
+        gamma_tensor = rms_norm_gamma
 
-    tensor_args = _prim.MatmulDecodeInputs(input_tensor_a, input_tensor_b)
+    tensor_args = _prim.MatmulDecodeInputs(input_tensor_a, input_tensor_b, gamma_tensor)
 
     factory = _prim.matmul_decode_select_program_factory(attrs, tensor_args)
 
@@ -137,6 +144,8 @@ def matmul_decode(
     program_cache_key = extend_branch_program_cache_key(h)
 
     inputs = {"input_tensor_a": input_tensor_a, "input_tensor_b": input_tensor_b}
+    if gamma_tensor is not None:
+        inputs["rms_norm_gamma"] = gamma_tensor
 
     def _alloc_outputs(slots):
         spec = _prim.MatmulDecodeDeviceOperation.compute_output_specs(attrs, tensor_args)
