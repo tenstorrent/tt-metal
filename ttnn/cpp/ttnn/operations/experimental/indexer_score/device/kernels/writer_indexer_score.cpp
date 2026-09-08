@@ -204,22 +204,37 @@ void kernel_main() {
     const uint32_t num_bands = get_arg_val<uint32_t>(5);
     // [6] max_bands (unused). [7] kv_len_tiles caps columns written per cell (full when unset).
     uint32_t kv_len_tiles = get_arg_val<uint32_t>(7);
+    // [8] per-device chunk-start (tiles); runtime so distinct values reuse one program. Only the block-pool
+    // forced-local stamp uses it; always set.
+    // [9],[10] mid-slab boundary-chip forced-local block jump (tiles); both 0 off the boundary chip.
+    uint32_t chunk_start_tiles = get_arg_val<uint32_t>(8);
+    uint32_t straddle_q_tiles = get_arg_val<uint32_t>(9);
+    uint32_t straddle_jump_tiles_rt = get_arg_val<uint32_t>(10);
     if constexpr (chunk_start_from_metadata) {
         // Take the reader's derivation, do not re-derive: kv_len_tiles decides how many output columns this
         // kernel drains, and compute produced its strips against the reader's value. One derivation, two
         // mailboxes, so the two cannot disagree.
+        //
+        // ALL FOUR, not just kv_len. The other three feed causal_diag_tile below, and on the metadata path
+        // their runtime args are baked from args.chunk_start_idx -- which is unset there, so they stay at
+        // the chunk-0 values for every chunk. Compute already reads all four from its own mailbox; the
+        // writer reading only one made its causal diagonal disagree with compute's from chunk 1 onward.
+        // Invisible on the SP-only path (tp_index == 0 and Sq == chunk_local, so nothing straddles and the
+        // stale values happen to be right); it shows up as KV PCC degrading with chunk count under
+        // tp_shard_kv.
         CircularBuffer wmeta(cb_meta_writer);
         wmeta.wait_front(1);
         invalidate_l1_cache();
-        kv_len_tiles = CoreLocalMem<volatile IndexerScoreMetadataBounds>(wmeta.get_read_ptr())->kv_len_tiles;
+        const auto bounds = CoreLocalMem<volatile IndexerScoreMetadataBounds>(wmeta.get_read_ptr());
+        kv_len_tiles = bounds->kv_len_tiles;
+        chunk_start_tiles = bounds->chunk_start_tiles;
+        straddle_q_tiles = bounds->straddle_q_tile;
+        straddle_jump_tiles_rt = bounds->straddle_jump_tiles;
         wmeta.pop_front(1);
     }
-    // [8] per-device chunk-start (tiles); runtime so distinct values reuse one program. Only the block-pool
-    // forced-local stamp uses it; always set.
-    const uint32_t chunk_start_keys = get_arg_val<uint32_t>(8) * tt::constants::TILE_WIDTH;
-    // [9],[10] mid-slab boundary-chip forced-local block jump (keys); both 0 off the boundary chip.
-    const uint32_t straddle_q_keys = get_arg_val<uint32_t>(9) * tt::constants::TILE_WIDTH;
-    const uint32_t straddle_jump_keys = get_arg_val<uint32_t>(10) * tt::constants::TILE_WIDTH;
+    const uint32_t chunk_start_keys = chunk_start_tiles * tt::constants::TILE_WIDTH;
+    const uint32_t straddle_q_keys = straddle_q_tiles * tt::constants::TILE_WIDTH;
+    const uint32_t straddle_jump_keys = straddle_jump_tiles_rt * tt::constants::TILE_WIDTH;
 
     constexpr auto out_args = TensorAccessorArgs<num_common_ct_args + 6>();
     const auto out_acc = TensorAccessor(out_args, out_addr, page_bytes);
