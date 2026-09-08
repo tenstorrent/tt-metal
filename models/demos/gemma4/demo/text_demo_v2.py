@@ -210,6 +210,42 @@ def _host_sample(logits, temperature, top_p):
     return torch.gather(sorted_idx, -1, choice)
 
 
+def _run_demo_prefill(
+    *,
+    generator,
+    input_tokens_prefill_pt,
+    page_table,
+    tt_kv_cache,
+    decoding_pos,
+    prefill_enable_trace,
+    device_sampling_params,
+    temperature,
+    top_p,
+):
+    """Run measured prefill with the same sampling path as ``run_demo_text``."""
+    import time
+
+    logger.info("Starting prefill...")
+    prefill_t0 = time.perf_counter()
+    prefill_out = generator.prefill_forward_text(
+        input_tokens_prefill_pt,
+        page_table=page_table,
+        kv_cache=tt_kv_cache,
+        prompt_lens=decoding_pos,
+        warmup_prefill=False,
+        enable_trace=prefill_enable_trace,
+        sampling_params=device_sampling_params,
+    )
+    if device_sampling_params is not None:
+        prefill_tokens, _ = prefill_out
+        prefilled_token = prefill_tokens.long()
+    else:
+        prefilled_token = _host_sample(prefill_out, temperature, top_p)
+    prefill_elapsed = time.perf_counter() - prefill_t0
+    logger.info("Prefill finished")
+    return prefilled_token, prefill_out, prefill_elapsed
+
+
 def _default_ccl_packet_bytes():
     """See :func:`models.demos.gemma4.tt.ccl.default_ccl_packet_bytes`."""
     from models.demos.gemma4.tt.ccl import default_ccl_packet_bytes
@@ -273,6 +309,64 @@ def _device_params():
         router.max_packet_payload_size_bytes = pkt_bytes
         params["fabric_router_config"] = router
     return params
+
+
+def _prepare_demo_prefill_warmup(
+    *,
+    generator,
+    tt_kv_cache,
+    sampling_params,
+    enable_trace,
+    max_seq_len,
+    model_args_list,
+    batch_size,
+    input_prompts=None,
+):
+    """Shared prefill trace buckets + on-device sampling warmup for demo paths."""
+    from models.demos.gemma4.tt.generator_trace import (
+        chunked_prefill_trace_enabled,
+        enable_single_chunk_demo_prefill_trace_bucket,
+        reset_trace_prefill_seq_lens_to_default,
+        trim_demo_prefill_trace_buckets,
+    )
+
+    reset_trace_prefill_seq_lens_to_default()
+    if input_prompts is not None:
+        trim_demo_prefill_trace_buckets(input_prompts=input_prompts, max_seq_len=max_seq_len)
+
+    prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
+    if enable_trace and not prefill_enable_trace:
+        logger.info(
+            f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
+            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
+            f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
+        )
+    if prefill_enable_trace:
+        enable_single_chunk_demo_prefill_trace_bucket(
+            max_seq_len=max_seq_len,
+            max_prefill_chunk_size=int(getattr(model_args_list[0], "max_prefill_chunk_size", 0) or 0),
+            model_args_list=model_args_list,
+            batch_size=batch_size,
+        )
+
+    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
+    can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
+    device_sampling_params = build_device_sampling_params(sampling_params, can_sample=can_sample)
+    temperature = sampling_params.get("temperature", 0)
+    greedy_only = temperature <= 0
+    log_sampling_mode(can_sample, sampling_params)
+
+    logger.info("Warming up prefill...")
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache,
+        enable_trace=prefill_enable_trace,
+        can_sample_on_device=can_sample,
+        greedy_only=greedy_only,
+    )
+    logger.info("Warmup complete")
+
+    return prefill_enable_trace, device_sampling_params
 
 
 def run_demo_text(
@@ -780,6 +874,7 @@ def _run_spec_decode(
     enable_trace=False,
     draft_len=None,
     num_layers=None,
+    input_prompts=None,
 ):
     """Single-user speculative decode: target verifies the it-assistant drafter.
 
@@ -855,6 +950,7 @@ def _run_spec_decode(
     )
     target = generator.model[0]
     model_args = generator.model_args
+    model_args_list = model_args if isinstance(model_args, (list, tuple)) else [model_args]
 
     page_table = create_tt_page_table(batch_size, paged_attention_config)
     if _spec_bounded:
@@ -893,19 +989,19 @@ def _run_spec_decode(
     input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
     logger.info("Spec-decode prefill...")
-    prefill_t0 = time.perf_counter()
-    prefill_logits = generator.prefill_forward_text(
-        input_tokens_prefill_pt,
+    _, prefill_out, prefill_elapsed = _run_demo_prefill(
+        generator=generator,
+        input_tokens_prefill_pt=input_tokens_prefill_pt,
         page_table=page_table,
-        kv_cache=tt_kv_cache,
-        prompt_lens=decoding_pos,
-        warmup_prefill=False,
-        enable_trace=prefill_enable_trace,
+        tt_kv_cache=tt_kv_cache,
+        decoding_pos=decoding_pos,
+        prefill_enable_trace=prefill_enable_trace,
+        device_sampling_params=device_sampling_params,
+        temperature=temperature,
+        top_p=top_p,
     )
-    ttnn.synchronize_device(mesh_device)
-    prefill_elapsed = time.perf_counter() - prefill_t0
-    if hasattr(prefill_logits, "deallocate"):
-        prefill_logits.deallocate(True)
+    if device_sampling_params is None and hasattr(prefill_out, "deallocate"):
+        prefill_out.deallocate(True)
 
     prompt_len = int(decoding_pos[0])
     if _draft_len_requested is None:
@@ -980,6 +1076,11 @@ def _run_spec_decode(
         f"seed={'reseed' if spec._fused_reseed else 'shift'}, "
         f"shift_seed={getattr(spec, '_fused_shift_seed', 'n/a')})..."
     )
+    # Capture the fused graph after prefill / assistant load, before the decode
+    # timer. Decode: already excludes this; wall should too so 200-token demos
+    # are not dominated by one-time compile. Setup is still logged separately.
+    if use_fused and spec._use_trace:
+        spec.prepare_fused_trace(anchor_token, anchor_pos)
     t0 = time.time()
     if use_fused:
         generated, accepts = spec.generate_fused(
@@ -1010,7 +1111,8 @@ def _run_spec_decode(
     tok_s = tok_s_u * batch_size
     ms_per_token = (steady_elapsed * 1000.0 / n_tokens) if n_tokens else 0.0
     ms_per_iter = (steady_elapsed * 1000.0 / n_iters) if n_iters else 0.0
-    wall_tok_s_u = n_tokens / elapsed if elapsed > 0 else 0.0
+    wall_elapsed = elapsed + (setup_elapsed if use_fused and spec._use_trace else 0.0)
+    wall_tok_s_u = n_tokens / wall_elapsed if wall_elapsed > 0 else 0.0
 
     logger.info(f"\n== SPEC-DECODE GENERATION ==\n{text.strip()}\n")
     logger.info("=== Speculative decoding metrics ===")
@@ -1025,6 +1127,21 @@ def _run_spec_decode(
         )
     logger.info(f"Verify iterations: {n_iters} ({ms_per_iter:.2f} ms/iter)")
     logger.info(f"Decode: {ms_per_token:.2f} ms/token @ {tok_s_u:.2f} tok/s/user " f"({tok_s:.2f} tok/s throughput)")
+    if spec._verify_time_s > 0 or spec._draft_time_s > 0:
+        logger.info(
+            f"Target verify: {spec._verify_time_s * 1000.0:.1f} ms total "
+            f"({spec._verify_time_s * 1000.0 / n_iters:.2f} ms/iter)"
+        )
+        logger.info(
+            f"MTP (drafter) parallel-token generation: {spec._draft_time_s * 1000.0:.1f} ms total "
+            f"({spec._draft_time_s * 1000.0 / n_iters:.2f} ms/iter, {draft_len} tokens/iter)"
+        )
+    else:
+        logger.info(
+            "Target-verify/MTP time split not available: draft+verify ran as ONE fused Metal "
+            "trace replay per iteration (GEMMA4_SPEC_TRACE=1/enable_trace), so the two phases "
+            "aren't separately observable on the host. Set GEMMA4_SPEC_TRACE=0 for the breakdown."
+        )
     assert n_tokens > 0, "speculative decode produced no tokens"
     return generated, accepts
 
@@ -1040,6 +1157,7 @@ def _run_spec_decode_batched(
     enable_trace,
     draft_len=None,
     num_layers=None,
+    input_prompts=None,
 ):
     """Batched (B>1) greedy speculative decode: B independent users, one shared
     batched packed verify per iteration (KV-amortization), ragged per-user
@@ -1093,6 +1211,8 @@ def _run_spec_decode_batched(
     )
     target = generator.model[0]
     model_args = generator.model_args
+    model_args_list = model_args if isinstance(model_args, (list, tuple)) else [model_args]
+    top_p = sampling_params.get("top_p", 1.0)
 
     page_table = create_tt_page_table(B, paged_attention_config)  # [B, blocks_per_user]
     if _spec_bounded:
@@ -1130,27 +1250,29 @@ def _run_spec_decode_batched(
     # Per-user prefill into each user's own KV blocks (prompts have distinct lengths).
     logger.info(f"Spec-decode batched prefill for B={B} users...")
     anchor_tokens, anchor_positions, prompt_lens = [], [], []
-    prefill_t0 = time.perf_counter()
+    prefill_elapsed = 0.0
     for b in range(B):
         in_pt, encoded, decoding_pos, p_lens = preprocess_inputs_prefill(
             [prompts[b]], tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
         )
         in_pt = torch.stack(in_pt).view(1, -1)
-        prefill_logits = generator.prefill_forward_text(
-            in_pt,
+        _, prefill_out, user_prefill_elapsed = _run_demo_prefill(
+            generator=generator,
+            input_tokens_prefill_pt=in_pt,
             page_table=page_table[b : b + 1],
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-            warmup_prefill=False,
-            enable_trace=prefill_enable_trace,
+            tt_kv_cache=tt_kv_cache,
+            decoding_pos=decoding_pos,
+            prefill_enable_trace=prefill_enable_trace,
+            device_sampling_params=device_sampling_params,
+            temperature=temperature,
+            top_p=top_p,
         )
-        if hasattr(prefill_logits, "deallocate"):
-            prefill_logits.deallocate(True)
+        prefill_elapsed += user_prefill_elapsed
+        if device_sampling_params is None and hasattr(prefill_out, "deallocate"):
+            prefill_out.deallocate(True)
         prompt_lens.append(int(decoding_pos[0]))
         anchor_positions.append(int(decoding_pos[0]) - 1)
         anchor_tokens.append(int(encoded[0][int(decoding_pos[0]) - 1]))
-    ttnn.synchronize_device(mesh_device)
-    prefill_elapsed = time.perf_counter() - prefill_t0
 
     # Clamp generation so the furthest spec position (pos + draft_len) stays in range.
     max_prompt = max(prompt_lens)
@@ -1240,6 +1362,22 @@ def _run_spec_decode_batched(
         f"Decode: {steady_s:.2f}s steady @ {tok_s:.2f} tok/s aggregate, {tok_s / B:.2f} tok/s/user "
         f"({'traced' if spec._use_trace else 'untraced'})"
     )
+    n_batched_iters = max(max((len(a) for a in accepts), default=0), 1)
+    if spec._verify_time_s > 0 or spec._draft_time_s > 0:
+        logger.info(
+            f"Target verify: {spec._verify_time_s * 1000.0:.1f} ms total "
+            f"({spec._verify_time_s * 1000.0 / n_batched_iters:.2f} ms/iter)"
+        )
+        logger.info(
+            f"MTP (drafter) parallel-token generation: {spec._draft_time_s * 1000.0:.1f} ms total "
+            f"({spec._draft_time_s * 1000.0 / n_batched_iters:.2f} ms/iter, {draft_len} tokens/iter/user)"
+        )
+    else:
+        logger.info(
+            "Target-verify/MTP time split not available: draft+verify ran as ONE fused Metal "
+            "trace replay per iteration (GEMMA4_SPEC_TRACE=1/enable_trace), so the two phases "
+            "aren't separately observable on the host. Set GEMMA4_SPEC_TRACE=0 for the breakdown."
+        )
     assert total_tokens > 0, "batched speculative decode produced no tokens"
     return outs, accepts
 

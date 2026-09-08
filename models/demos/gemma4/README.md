@@ -23,7 +23,6 @@ Wormhole rows are from CI (cold-start TTFT, including one-time program compile).
 | E2B     | N150 | 1×1 | 12.24 | 12.24 | 38714.7 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762105) |
 | E4B     | N150 | 1×1 |  7.95 |  7.95 | 36832.1 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762123) |
 | 26B-A4B | T3K  | 1×8 | 11.68 | 11.68 | 64186.5 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762080) |
-| 31B     | T3K  | 1×8 |  9.48 |  9.48 | 44772.1 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762120) |
 | E2B     | P150 | 1×1 | 22.82 | 22.82 | 580 [^bh-perf] | measured |
 | E4B     | P150 | 1×1 | 13.97 | 13.97 | 950 [^bh-perf] | measured |
 | 12B     | P150 | 1×1 | 15.57 | 15.57 | 1190 [^bh-perf] | measured |
@@ -359,6 +358,7 @@ Every performance change on this path ships behind a switch, so any one of them 
 | Variable | Default | Effect |
 |---|---|---|
 | `GEMMA4_QKV_DECODE_PROGCFG` | `1` | Swept narrow-N program config for the decode QKV matmul. **Not bit-exact** against auto (it re-chooses the blocking, hence accumulation order) but closer to an fp32 reference. `0` restores auto. |
+
 | `GEMMA4_PREFILL_MATMUL_LOFI` | `0` | LoFi on tall prefill matmuls. **Do not default this on** — it corrupts long-context generation, and a single-layer PCC cannot see the error accumulating through 60 layers × 64 prefill chunks into a 131072-token KV cache. Needs a full 128k demo gate. |
 | `GEMMA4_OPROJ_TUNED` | `0` | Tuned prefill `o_proj`. Shape-specific: a large 31B win and a 12B regression, because the pinned config's block-sharded output grid depends on `n`. Needs a per-variant gate before it can be a default. |
 | `GEMMA4_PREFILL_LONG_2D` | `1` | Cutoff-reshape 2D path above the tuned band. |

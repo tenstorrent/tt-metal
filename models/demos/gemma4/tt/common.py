@@ -97,6 +97,20 @@ def create_tt_model(
     else:
         ccl_manager = None
 
+    tp = mesh_config.tp if mesh_config is not None else 1
+    nq = int(getattr(model_args, "num_attention_heads", 0) or 0)
+    nkv = int(getattr(model_args, "num_key_value_heads", 0) or 0)
+    logger.info(
+        f"Gemma4 parallel: mesh={tuple(mesh_device.shape) if is_mesh else (1, 1)} "
+        f"devices={num_devices} decode TP={tp} DP={mesh_config.dp if mesh_config else 1} "
+        f"EP={mesh_config.ep if mesh_config else 1}"
+        + (
+            f" local_heads Q={nq // tp} KV={nkv // tp} (global Q={nq} KV={nkv})"
+            if tp > 0 and nq and nkv and nq % tp == 0 and nkv % tp == 0
+            else ""
+        )
+    )
+
     # Warm ttnn cache => skip the full HF weight load and build from .tensorbin. Hybrid: the few
     # host-consumed weights (token embedding, per-layer scalars/PLI) are served real from the
     # sidecar, the rest as dataless placeholders. Generalizes PR #50550 to gemma4 (#45400).
@@ -181,6 +195,7 @@ def create_assistant_model(
     max_local_batch_size=1,
     bounded_sliding_kv_cache=None,
     max_seq_len=None,
+    precision=None,
 ):
     """Create the Gemma4 it-assistant drafter, sharing the target's mesh/CCL.
 
@@ -253,6 +268,16 @@ def create_assistant_model(
             assistant_args.text_args.max_seq_len = int(max_seq_len)
     tensor_cache_path = str(assistant_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
 
+    # The assistant is its own checkpoint (e.g. "gemma-4-31B-it-assistant"), so
+    # its precision overrides are looked up under its own table key -- it does
+    # NOT inherit the target's resolved precision. The *-assistant entries in
+    # precision_overrides.json (bfp8 shared_mlp/attention/lm_head) come from
+    # ign/gemma4_31B_MTP_Dflash; without them the drafter runs bf16.
+    # A caller-supplied ``precision`` wins, so an explicit override is not
+    # silently replaced by the table lookup.
+    if precision is None:
+        precision = Gemma4Precision.load(assistant_path, mesh_shape, hf_config=hf_config, max_seq_len=max_seq_len)
+
     model = Gemma4AssistantModel(
         mesh_device=mesh_device,
         assistant_args=assistant_args,
@@ -283,6 +308,7 @@ def create_assistant_model(
                 and getattr(target_model, "_spec_unbounded_layer", None) is None
             )
         ),
+        precision=precision,
     )
     return assistant_args, model
 
