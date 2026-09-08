@@ -377,14 +377,21 @@ jobs:
       # Layer sizes, not the merged filesystem: a COPY followed by an rm leaves the
       # payload bytes in a lower layer while `find` sees nothing, which is exactly
       # the regression that would silently undo the saving.
-      - name: Assert the payload rides in two layers and stays small
+      - name: Assert the payload rides in the expected layers and stays small
         env:
           FULL: ${{ needs.bake-env-full.outputs.image }}
           WHEEL: ${{ needs.bake-env-wheel.outputs.image }}
           BASE: ${{ needs.build-env.outputs.ci-test-docker-image }}
-          # Release with system SFPI measures 296 MiB (full) and 250 MiB (wheel).
-          # Generous headroom: this guards against a COPYed payload, not drift.
+          # Release with system SFPI measures 501 MiB (full) and 250 MiB (wheel)
+          # beyond the base. Generous headroom: this guards against a COPYed
+          # payload, not drift.
           MAX_MIB: "600"
+          # One per layer-adding instruction in Dockerfile.prebuilt-tests-env:
+          # the pyproject COPY, the dependency RUN, seven churn-tier COPYs, the
+          # excluding COPY of the remainder, and the payload RUN. Bump this only
+          # when that file deliberately changes shape - it is what catches an
+          # accidental COPY, which is the regression that would undo the saving.
+          EXPECT_LAYERS: "11"
         run: |
           set -euo pipefail
           layers() {  # digest<TAB>size for the amd64 image, one per line
@@ -402,7 +409,7 @@ jobs:
             n=$(printf '%s' "$extra" | grep -c . || true)
             mib=$(printf '%s' "$extra" | awk -F'\t' '{s+=$2} END {printf "%d", s/1048576}')
             echo "${name}: ${n} layers beyond the base, ${mib} MiB"
-            [ "$n" -eq 2 ] || { echo "::error::${name} adds ${n} layers, expected 2 (source + payload); a new COPY would do this"; exit 1; }
+            [ "$n" -eq "$EXPECT_LAYERS" ] || { echo "::error::${name} adds ${n} layers, expected ${EXPECT_LAYERS}; an unintended COPY would do this, and a deliberate one means updating EXPECT_LAYERS"; exit 1; }
             [ "$mib" -le "$MAX_MIB" ] || { echo "::error::${name} payload is ${mib} MiB, over ${MAX_MIB}"; exit 1; }
           done
 
