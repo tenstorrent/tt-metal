@@ -37,7 +37,8 @@ TRIALS = 4096
 
 
 @pytest.mark.skipif(
-    get_chip_architecture() not in (ChipArchitecture.BLACKHOLE, ChipArchitecture.WORMHOLE),
+    get_chip_architecture()
+    not in (ChipArchitecture.BLACKHOLE, ChipArchitecture.WORMHOLE),
     reason="_llk_set_fp32_dest_acc_ exists on Blackhole and Wormhole only.",
 )
 def test_fp32_dest_acc_cfg_occupancy():
