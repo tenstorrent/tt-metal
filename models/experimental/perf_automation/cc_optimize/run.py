@@ -2842,9 +2842,11 @@ def _coverage_layers(
                     "  [optimize/cc] coverage per stack: %s%s"
                     % (
                         ", ".join("%s=%s" % (k, v) for k, v in sorted(_per_stack_cov.items())),
-                        (" | per stage: " + ", ".join("%s=%s" % (k, v) for k, v in sorted(_per_stage.items())))
-                        if _per_stage
-                        else " | no stage boundaries -> one uniform depth",
+                        (
+                            (" | per stage: " + ", ".join("%s=%s" % (k, v) for k, v in sorted(_per_stage.items())))
+                            if _per_stage
+                            else " | no stage boundaries -> one uniform depth"
+                        ),
                     ),
                     flush=True,
                 )
@@ -3174,6 +3176,27 @@ def _dr():
         _m = _ilu.module_from_spec(_spec)
         _spec.loader.exec_module(_m)
     globals()["_DR_MOD"] = _m
+    return _m
+
+
+def _ap():
+    """The agent-provider registry (agent/agent_provider.py), imported lazily and by path for the
+    same reason _dr() is: run.py is itself loaded by path with a bare sys.path."""
+    global _AP_MOD
+    try:
+        return _AP_MOD
+    except NameError:
+        pass
+    try:
+        from agent import agent_provider as _m
+    except Exception:  # noqa: BLE001
+        import importlib.util as _ilu
+
+        _p = Path(__file__).resolve().parents[1] / "agent" / "agent_provider.py"
+        _spec = _ilu.spec_from_file_location("tt_agent_provider", str(_p))
+        _m = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_m)
+    globals()["_AP_MOD"] = _m
     return _m
 
 
@@ -4262,8 +4285,10 @@ def watchdog_decide(ev: dict, agent=_watchdog_ask_agent) -> str:
     return "wait"
 
 
-def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_log: str, stall_sec: int) -> bool:
-    """Run one `claude -p` round under a forward-progress watchdog. If neither a commit nor a kernel
+def _run_round_with_watchdog(
+    cmd: list, repo_root: Path, devices: str, kernel_log: str, stall_sec: int, agent_env: dict | None = None
+) -> bool:
+    """Run one agent round under a forward-progress watchdog. If neither a commit nor a kernel
     attempt is recorded for stall_sec while the round is alive, treat it as a device wedge: SIGKILL the
     whole process group (claude + its mcp server + any hung profiler) and reset the device. Returns True
     if the round was killed as wedged, False if it exited on its own. The NEXT round re-spawns a fresh
@@ -4275,10 +4300,15 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
         _lf = subprocess.DEVNULL
     # CLEAN screen: the agent's raw stream-json transcript goes to agent_log, not the terminal —
     # the terminal shows only a periodic heartbeat. Full detail stays in the log file.
+    # A provider may need environment of its own -- one that reads its server declaration from a
+    # config DIRECTORY is told where that is here, not on the command line. Layered over cc_env
+    # rather than replacing it, so the device and path setup every round needs is untouched.
+    _env = cc_env(repo_root, devices)
+    _env.update(agent_env or {})
     proc = subprocess.Popen(
         cmd,
         cwd=str(repo_root),
-        env=cc_env(repo_root, devices),
+        env=_env,
         start_new_session=True,
         stdout=_lf,
         stderr=subprocess.STDOUT,
@@ -5222,8 +5252,13 @@ def optimize_pipeline(
         _cov_env["PERF_MCP_HITL_DIR"] = hitl_dir
         tools = [t for t in _ALLOWED_TOOLS if not (t.endswith("git_commit") or t.endswith("git_revert"))]
         tools.append("mcp__perf-mcp__hitl_gate")
-    cfg_path = repo_root / CC_DIR / f".mcp_config_{model_name}_{task}.json"
-    cfg_path.write_text(json.dumps(cfg, indent=2))
+    # WHICH AGENT DRIVES THE ROUND. The loop never reads the agent's transcript -- stdout goes to a
+    # log file and the round's outcome comes from _gate_status, which reads the MCP server's own
+    # state -- so an agent only has to reach that server and edit files. The declaration is written
+    # in whichever format the selected provider reads, and its path follows suit.
+    _prov = _ap().get(os.environ.get("PERF_MCP_AGENT_PROVIDER") or None)
+    cfg_path = _ap().mcp_config_path(_prov.name, repo_root / CC_DIR, f".mcp_config_{model_name}_{task}.json")
+    _ap().write_mcp_config(_prov.name, cfg_path, cfg["mcpServers"])
     prompt = (_HITL_PROMPT if hitl else _PROMPT).format(model=model_name, task=task, metric=metric)
     start_sha = _git(repo_root, "rev-parse", "HEAD")
     mcp_env = cfg["mcpServers"]["perf-mcp"]["env"]
@@ -5246,19 +5281,19 @@ def optimize_pipeline(
     wedge_strikes = 0
     auth_strikes = 0
     auth_recoveries = 0
-    round_cmd = [
-        _resolve_claude_bin(),
-        "-p",
-        prompt,
-        "--mcp-config",
-        str(cfg_path),
-        "--strict-mcp-config",
-        "--allowedTools",
-        *tools,
-        "--output-format",
-        "stream-json",
-        "--verbose",
-    ]
+    _round_launch = _ap().launch(
+        _prov.name,
+        prompt=prompt,
+        mcp_config=cfg_path,
+        tools=tools,
+        bin_path=_resolve_claude_bin() if _prov.name == _ap().DEFAULT_PROVIDER else None,
+    )
+    round_cmd = list(_round_launch.argv)
+    if not _prov.validated:
+        print(
+            "  [optimize/cc] agent provider %r has not been validated against a CLI that ran -- "
+            "its command shape is written from documentation" % _prov.name
+        )
     _stop_watcher = threading.Event()
     _wt = None
     if hitl:
@@ -5294,7 +5329,9 @@ def optimize_pipeline(
             print(
                 "  [optimize/cc] round %d starts with stacks still short of their band: %s" % (rounds + 1, st["short"])
             )
-        wedged = _run_round_with_watchdog(round_cmd, repo_root, devices, kernel_log, stall_sec)
+        wedged = _run_round_with_watchdog(
+            round_cmd, repo_root, devices, kernel_log, stall_sec, agent_env=_round_launch.env
+        )
         # A ROUND THAT WAS NEVER LET IN IS NOT A ROUND THAT FOUND NOTHING. A refused credential
         # produces a round that runs, writes a transcript and exits cleanly having done nothing,
         # which the loop cannot tell from an agent that looked and found no win -- so it spent all

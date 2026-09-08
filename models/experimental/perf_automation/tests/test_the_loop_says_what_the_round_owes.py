@@ -44,7 +44,9 @@ def test_an_unreadable_gate_returns_the_field_too():
 def test_the_loop_prints_it_before_starting_a_round():
     i = _SRC.index("while rounds < max_rounds:")
     seg = _SRC[i : i + 2000]
-    k = seg.index("_run_round_with_watchdog(round_cmd")
+    # anchored on the call, not on its first argument: the call gained an argument (the selected
+    # agent's own environment) and wrapped, which moved the argument to the next line.
+    k = seg.index("_run_round_with_watchdog(")
     before = seg[:k]
     assert 'st.get("short")' in before, "the round must announce its target before it runs"
     assert "still short of their band" in before

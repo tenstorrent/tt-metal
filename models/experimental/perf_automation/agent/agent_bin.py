@@ -9,16 +9,14 @@ PATH-independent (fixes-plan Point 9): env override -> PATH -> ~/.local/bin.
 Always returns a str (falls back to bare "claude") so a spawn never gets None.
 """
 
-import os
-import shutil
-
 
 def resolve_claude_bin() -> str:
-    local = os.path.expanduser("~/.local/bin/claude")
-    return (
-        os.environ.get("TT_PLANNER_AGENT_BIN")
-        or os.environ.get("CLAUDE_BIN")
-        or shutil.which("claude")
-        or (local if os.path.exists(local) else None)
-        or "claude"
-    )
+    """The default provider's CLI. Kept as a name because every spawn here already calls it.
+
+    The search itself moved to agent_provider, which does it for whichever agent is selected --
+    same order (shared override, own variable, PATH, ~/.local/bin) and the same bare-name fallback,
+    so a spawn still never gets None.
+    """
+    from .agent_provider import DEFAULT_PROVIDER, resolve_bin
+
+    return resolve_bin(DEFAULT_PROVIDER) or DEFAULT_PROVIDER

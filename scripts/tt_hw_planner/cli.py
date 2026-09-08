@@ -441,18 +441,19 @@ def _preflight_load_with_autofix(model_id: str, *, allow_fix: bool) -> bool:
     return False
 
 
-_AGENT_BIN_CANDIDATES = {
-    "cursor": (
-        "/home/ttuser/.local/bin/agent",
-        os.path.expanduser("~/.local/bin/agent"),
-        "agent",
-    ),
-    "claude": (
-        "/home/ttuser/.local/bin/claude",
-        os.path.expanduser("~/.local/bin/claude"),
-        "claude",
-    ),
-}
+# ONE OWNER FOR "WHICH AGENT, AND WHERE DOES IT LIVE". These three tables named the same providers
+# the perf_automation registry names, in a second place and with an install path typed into source.
+# They are views of that registry now, so adding an agent is one entry rather than four.
+try:
+    from models.experimental.perf_automation.agent import agent_provider as _agent_registry
+except Exception:  # noqa: BLE001
+    _agent_registry = None
+
+_AGENT_BIN_CANDIDATES = (
+    {name: tuple(_agent_registry.PROVIDERS[name].bin_names) for name in _agent_registry.provider_names()}
+    if _agent_registry
+    else {"cursor": ("cursor-agent", "agent"), "claude": ("claude",)}
+)
 
 
 def _resolve_agent_bin(provider: str) -> Optional[str]:
@@ -534,18 +535,43 @@ def _check_agent_ready(provider: str) -> Tuple[bool, str]:
         except Exception as exc:
             return False, f"Claude CLI readiness check failed: {exc}"
         return True, bin_path
+    # A provider the registry knows but this function has no bespoke probe for: check the two
+    # things every agent needs -- a CLI on disk and a way to authenticate -- rather than refusing it
+    # as unknown, which is what an agent added to the registry alone used to get.
+    if _agent_registry is not None and provider in _agent_registry.PROVIDERS:
+        spec = _agent_registry.PROVIDERS[provider]
+        if not bin_path:
+            return False, (
+                f"{spec.label} CLI not found. Install it, or point at it with "
+                f"{spec.bin_env} / TT_PLANNER_AGENT_BIN, then re-run with --auto-agent {provider}."
+            )
+        if not os.environ.get(spec.api_key_env):
+            return False, (
+                f"{spec.label} CLI found at {bin_path} but {spec.api_key_env} is not set.\n"
+                f"Export it, or log the CLI in once interactively."
+            )
+        if not spec.validated:
+            print(
+                f"  [auto] NOTE: the {spec.label} command shape is written from documentation and has "
+                f"not been validated against a CLI that ran."
+            )
+        return True, bin_path
     return False, f"unknown --auto-agent provider: {provider!r}"
 
 
-_API_KEY_ENV_VAR = {
-    "cursor": "CURSOR_API_KEY",
-    "claude": "ANTHROPIC_API_KEY",
-}
+_API_KEY_ENV_VAR = (
+    {name: _agent_registry.PROVIDERS[name].api_key_env for name in _agent_registry.provider_names()}
+    if _agent_registry
+    else {"cursor": "CURSOR_API_KEY", "claude": "ANTHROPIC_API_KEY"}
+)
 
-_PROVIDER_LABEL = {
-    "cursor": "Cursor",
-    "claude": "Anthropic (Claude)",
-}
+_PROVIDER_LABEL = (
+    {name: _agent_registry.PROVIDERS[name].label for name in _agent_registry.provider_names()}
+    if _agent_registry
+    else {"cursor": "Cursor", "claude": "Anthropic (Claude)"}
+)
+
+_AGENT_CHOICES = tuple(_AGENT_BIN_CANDIDATES)
 
 
 def _summarize_bringup_status(model_id: str) -> Tuple[Dict[str, int], List[Tuple[str, str]]]:
@@ -10337,7 +10363,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     pup.add_argument(
         "--auto-agent",
-        choices=("cursor", "claude"),
+        choices=_AGENT_CHOICES,
         default="cursor",
         help=(
             "Which coding-agent CLI drives the --auto loop. "
@@ -10700,7 +10726,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     pprom.add_argument(
         "--auto-agent",
-        choices=("cursor", "claude"),
+        choices=_AGENT_CHOICES,
         default="claude",
         help="Which coding-agent CLI drives the auto loop (default: claude).",
     )

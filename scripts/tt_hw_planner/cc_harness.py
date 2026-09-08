@@ -11,6 +11,7 @@ allowed-tools, and per-round prompt.
 The gates are owned by the domain server and are NEVER touched here — the harness only READS the
 gate's verdict and drives the subprocess. This module contains no gate logic.
 """
+
 from __future__ import annotations
 
 import json
@@ -23,7 +24,6 @@ from pathlib import Path
 from typing import Callable
 
 from ._cli_helpers.agent import resolve_claude_bin
-
 
 _HB_EVERY_S = 45
 _AGENT_LINE = "[agent] "
@@ -215,6 +215,7 @@ def run_cc_loop(
     on_heartbeat: Callable[[dict], None] | None = None,
     agent_timeout_s: int | None = None,
     max_consecutive_timeouts: int = 2,
+    provider: str | None = None,
 ) -> dict:
     """The domain-agnostic driver loop, identical in shape to the optimize engine's per-pipeline loop:
     each round ask ``gate_fn()`` (the deterministic stop authority); stop on ``halt`` or ``can_stop``;
@@ -235,6 +236,19 @@ def run_cc_loop(
     None/<=0 timeout disables the watchdog."""
     import threading
 
+    # WHICH AGENT, AND WHAT IT NEEDS ON THE COMMAND LINE. Bring-up used to spell one CLI's flags
+    # here. The registry owns them per provider, and `claude` still produces exactly this argv --
+    # asserted by test_the_default_provider_is_unchanged. Falls back to the literal shape if the
+    # registry cannot be imported, so a partial checkout keeps working.
+    _agent_env: dict = {}
+    _prov = None
+    try:
+        from models.experimental.perf_automation.agent import agent_provider as _ap
+
+        _prov = _ap.get(provider)
+    except Exception:  # noqa: BLE001
+        _ap = None
+
     rounds, can_stop, halted = 0, False, False
     timeout_s = _resolve_agent_timeout_s(agent_timeout_s)
     consecutive_timeouts = 0
@@ -249,8 +263,17 @@ def run_cc_loop(
             break
         if pre_round is not None:
             pre_round(rounds + 1, st)
-        proc = subprocess.Popen(
-            [
+        if _prov is not None:
+            _launch = _ap.launch(
+                _prov.name,
+                prompt=prompt,
+                mcp_config=mcp_config_path,
+                tools=allowed_tools,
+                bin_path=claude_bin if _prov.name == _ap.DEFAULT_PROVIDER else None,
+            )
+            _argv, _agent_env = list(_launch.argv), dict(_launch.env)
+        else:
+            _argv, _agent_env = [
                 claude_bin,
                 "-p",
                 prompt,
@@ -262,9 +285,11 @@ def run_cc_loop(
                 "--output-format",
                 "stream-json",
                 "--verbose",
-            ],
+            ], {}
+        proc = subprocess.Popen(
+            _argv,
             cwd=str(cwd),
-            env=env,
+            env=({**env, **_agent_env} if _agent_env else env),
             start_new_session=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
