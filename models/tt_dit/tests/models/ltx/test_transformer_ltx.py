@@ -1829,3 +1829,52 @@ def test_ring_sdpa_chunk_override_reaches_per_n_configs(monkeypatch):
         9728: (128, 256),
         38912: (128, 256),
     }
+
+
+def test_resolve_ring_sdpa_chunks_unset_keeps_per_n_defaults_and_handles_miss():
+    # The override test only proves the SET path; without this, an unset-default regression that
+    # dropped the tuned per-N stages back onto the fallback would pass unnoticed.
+    resolve = attention_ltx.LTXAttention.resolve_ring_sdpa_chunks
+    fallback, per_n = resolve((True, 8, 4), None)
+    assert fallback == (128, 512)
+    assert per_n == {9728: (96, 256), 38912: (192, 512)}
+    # Mesh key absent from ring_sdpa_chunk_by_n: no per-N overrides, fallback is the default chunk.
+    miss_fallback, miss_per_n = resolve((True, 2, 4), None)
+    assert miss_fallback == (256, 256)
+    assert miss_per_n == {}
+
+
+def test_ring_sdpa_defaults_reach_per_n_configs_when_env_unset(monkeypatch):
+    monkeypatch.delenv("LTX_SDPA_RING_CHUNK", raising=False)
+    monkeypatch.setattr(attention_ltx, "is_blackhole", lambda: True)
+    monkeypatch.setattr(attention_ltx, "DistributedRMSNorm", lambda **_kwargs: object())
+    monkeypatch.setattr(attention_ltx, "ColParallelLinear", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(attention_ltx, "bf16_tensor", lambda tensor, **_kwargs: tensor)
+    monkeypatch.setattr(ttnn, "init_device_compute_kernel_config", lambda *_args, **_kwargs: object())
+
+    mesh_device = SimpleNamespace(
+        compute_with_storage_grid_size=lambda: ttnn.CoreCoord(8, 8),
+        arch=lambda: ttnn.device.Arch.BLACKHOLE,
+    )
+    parallel_config = SimpleNamespace(
+        sequence_parallel=SimpleNamespace(factor=8, mesh_axis=0),
+        tensor_parallel=SimpleNamespace(factor=4, mesh_axis=1),
+    )
+
+    attention = attention_ltx.LTXAttention(
+        dim=128,
+        num_heads=8,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+    )
+
+    # Unset env: the fallback stays on the (True, 8, 4) map entry, and the per-N stages keep their
+    # tuned defaults rather than collapsing onto the fallback.
+    assert attention.ring_sdpa_program_config.q_chunk_size == 128
+    assert attention.ring_sdpa_program_config.k_chunk_size == 512
+    assert {n: (config.q_chunk_size, config.k_chunk_size) for n, config in attention._ring_pc_by_n.items()} == {
+        9728: (96, 256),
+        38912: (192, 512),
+    }
+    # An N with no tuned stage falls back to the ring program config.
+    assert attention._ring_pc_by_n.get(99999, attention.ring_sdpa_program_config) is attention.ring_sdpa_program_config
