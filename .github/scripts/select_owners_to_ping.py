@@ -27,7 +27,8 @@ Inputs (environment variables):
 
 Optional inputs, used to rank candidates by availability. Each one is a pure
 improvement: with none of them set the selection still works, it just treats
-every candidate as equally reachable and falls back to the rotation order.
+every candidate as equally reachable and the pick is random, as it was
+before.
 
   SLACK_USERS_FILE    Path to the `users.list` dump the notify job already
                       writes (${RUNNER_TEMP}/slack_users.json). Supplies each
@@ -39,8 +40,6 @@ every candidate as equally reachable and falls back to the rotation order.
                       a Slack handle directly, mirroring the workflow's own
                       lookup so the tier is computed for the person who will
                       actually be mentioned.
-  PR_NUMBER           Rotation seed. Keeps re-runs of `/codeowners ping` on one
-                      PR reaching the same people instead of a fresh pair.
 
 Outputs (appended to $GITHUB_OUTPUT):
   selected-owners        comma-separated, sorted+deduped individual logins
@@ -50,9 +49,9 @@ Outputs (appended to $GITHUB_OUTPUT):
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
+import random
 import re
 import sys
 import urllib.error
@@ -211,17 +210,6 @@ def availability_tier(user: dict | None, now_utc: int) -> int:
     return TIER_REACHABLE
 
 
-def rotation_key(seed: str, login: str) -> str:
-    """Stable, evenly-spread tiebreak between equally good candidates.
-
-    Sorting on a digest replaces the previous `random` pick with something that
-    reaches the same people when `/codeowners ping` is re-run on a PR rather than
-    spraying a new pair each time, while still spreading the load evenly across
-    PRs. It is a rotation order, not a secret.
-    """
-    return hashlib.sha256(f"{seed}:{login}".encode()).hexdigest()
-
-
 def _name_fields(user: dict) -> list[str]:
     profile = user.get("profile") or {}
     return [
@@ -267,16 +255,16 @@ class SlackDirectory:
                     users = [u for u in loaded if isinstance(u, dict)]
                 log(f"DEBUG select-owners: loaded {len(users)} Slack users for availability ranking")
             except (OSError, ValueError) as exc:
-                log(f"WARNING select-owners: could not read {path} ({exc}); ranking by rotation only")
+                log(f"WARNING select-owners: could not read {path} ({exc}); picking at random")
         else:
-            log("DEBUG select-owners: no Slack user list; ranking by rotation only")
+            log("DEBUG select-owners: no Slack user list; picking at random")
         return cls(
             users,
             github_token=os.environ.get("GITHUB_TOKEN", ""),
             slack_token=os.environ.get("SLACK_BOT_TOKEN", ""),
         )
 
-    # -- GitHub full name (only consulted when the login does not match) -------
+    # -- GitHub full name (the workflow's first matching key) ------------------
     def full_name(self, login: str) -> str:
         if login in self._full_names:
             return self._full_names[login]
@@ -299,17 +287,23 @@ class SlackDirectory:
         if override:
             return self.by_id.get(override)
 
-        lowered = login.lower()
+        # Step order and exact-case comparisons are copied from the workflow. It
+        # is tempting to try the login first and skip the GitHub call, but a
+        # display_name that happens to equal someone else's login would then
+        # resolve to a different person here than in the ping itself.
+        full_name = self.full_name(login)
+        if full_name:
+            for user in self.users:
+                profile = user.get("profile") or {}
+                if full_name in (user.get("real_name") or "", profile.get("real_name") or ""):
+                    return user
+            for user in self.users:
+                if ((user.get("profile") or {}).get("display_name") or "") == full_name:
+                    return user
+
         for user in self.users:
             profile = user.get("profile") or {}
-            if (user.get("name") or "").lower() == lowered or (profile.get("display_name") or "").lower() == lowered:
-                return user
-
-        full_name = self.full_name(login)
-        if not full_name:
-            return None
-        for user in self.users:
-            if full_name in _name_fields(user):
+            if login in (user.get("name") or "", profile.get("display_name") or ""):
                 return user
 
         # Word-by-word, and only when a word identifies exactly one person. A
@@ -372,9 +366,8 @@ class Selector:
         self.moreh_members = os.environ.get("MOREH_TEAM_MEMBERS", "")
         self.pr_author = os.environ.get("PR_AUTHOR_LOGIN", "")
 
-        # Rotation seed and availability data. Both are optional: without them
-        # every candidate ranks the same and the pick is the rotation order.
-        self.seed = os.environ.get("PR_NUMBER", "")
+        # Availability data is optional: without it every candidate ranks the
+        # same and the pick stays random.
         self.now_utc = int(datetime.now(tz=timezone.utc).timestamp())
         self.directory = SlackDirectory.from_env()
 
@@ -474,8 +467,11 @@ class Selector:
         someone: a rule where everyone is away still gets pinged. The two slots
         are then filled in tier order rather than stopping after one in-hours
         reviewer, because asking a single person halves the chance of a reply.
-        Slack presence orders people inside a tier, and `rotation_key` breaks
-        what is left so the choice is stable across re-runs on the same PR.
+        Within a tier the pick stays random, so re-running `/codeowners ping`
+        reaches a fresh pair instead of nagging the two people who already did
+        not reply. Slack presence only sorts a tier that has more candidates
+        than remaining slots, which keeps the presence calls to the one group
+        where they change the answer.
         """
         if not candidates:
             return []
@@ -483,18 +479,21 @@ class Selector:
         if not pool:
             log("All candidates are marked out of office; pinging them anyway")
             pool = list(candidates)
-        ordered = sorted(
-            pool,
-            key=lambda c: (
-                self.directory.tier(c, self.now_utc),
-                0 if self.directory.active(c) else 1,
-                rotation_key(self.seed, c),
-            ),
-        )
-        chosen = ordered[:2]
+
+        chosen: list[str] = []
+        for tier in sorted({self.directory.tier(c, self.now_utc) for c in pool}):
+            need = 2 - len(chosen)
+            if need <= 0:
+                break
+            group = [c for c in pool if self.directory.tier(c, self.now_utc) == tier]
+            random.shuffle(group)
+            if len(group) > need:
+                # Stable sort, so the shuffle above still orders equal presence.
+                group.sort(key=lambda c: 0 if self.directory.active(c) else 1)
+            chosen.extend(group[:need])
+
         for login in chosen:
-            tier = self.directory.tier(login, self.now_utc)
-            log(f"DEBUG select-owners: {login} tier={tier} active={self.directory.active(login)}")
+            log(f"DEBUG select-owners: {login} tier={self.directory.tier(login, self.now_utc)}")
         return chosen
 
     def unapproved_filtered(self, candidates: list[str]) -> list[str]:

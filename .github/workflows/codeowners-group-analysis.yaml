@@ -1806,7 +1806,6 @@ jobs:
           SLACK_USERS_FILE: ${{ runner.temp }}/slack_users.json
           SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
           GITHUB_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
-          PR_NUMBER: ${{ steps.generate-comment.outputs.pr-number }}
         run: |
           python3 .github/scripts/select_owners_to_ping.py
       - name: Send notifications
