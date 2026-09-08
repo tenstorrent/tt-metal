@@ -120,23 +120,23 @@ def split_qkv_heads_prefill(
     is_global: bool,
     tp: int = 1,
     kv_replicated: bool = False,
-    memory_config=ttnn.DRAM_MEMORY_CONFIG,
     kv_tied: bool = False,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
 ):
     """
     Split fused QKV into separate head tensors for prefill mode.
     When TP > 1, uses local head counts (global / tp).
     When kv_replicated (num_kv_heads < TP), each device has 1 KV head (GQA-assigned).
 
+    ``kv_tied`` says the input came from the Q+K weight and carries one K/V section, so the
+    op reads V from K's columns. K and V still come back as two
+    tensors, which is what the caller needs.
+
     ``memory_config`` defaults to DRAM (true prefill: seq_len can be thousands of
     tokens and would not fit L1). The packed-verify decode caller overrides it to
     L1 so the split output — and the downstream activation stream — stays
     resident on L1 (the op only emits sharded output for sharded input, so an L1
     interleaved input yields L1 interleaved output).
-
-    ``kv_tied`` says the input came from the Q+K weight and carries one K/V section, so the
-    op reads V from K's columns. K and V still come back as two
-    tensors, which is what the caller needs: K takes k_norm and RoPE, V takes v_norm.
     """
     num_local_heads = config.num_attention_heads // tp
     num_local_kv_heads = 1 if kv_replicated else config.num_key_value_heads // tp
