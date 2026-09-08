@@ -18,5 +18,14 @@ void kernel_main() {
     const uint32_t mcast_num_cores = get_arg_val<uint32_t>(arg++);  // includes the hub: the scale mcast loops back
     const uint32_t producer_index = get_arg_val<uint32_t>(arg++);
     run_full_width_rms_norm_transport(
-        is_hub, hub_x, hub_y, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, mcast_num_cores, producer_index);
+        is_hub,
+        hub_x,
+        hub_y,
+        mcast_start_x,
+        mcast_start_y,
+        mcast_end_x,
+        mcast_end_y,
+        mcast_num_cores,
+        producer_index,
+        arg);
 }

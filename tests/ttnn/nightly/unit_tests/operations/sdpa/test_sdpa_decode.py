@@ -19,6 +19,29 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
 )
 
 
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("nh", [32, 64], ids=["1_tile_row", "2_tile_rows"])
+def test_sdpa_decode_row_major_q_interleaved(device, nh):
+    """ROW_MAJOR Q in interleaved DRAM: the reader must fill cb_q_rm for compute to tilize from,
+    and must page Q by head row rather than by tile. Used to deadlock on cb_q_rm. nh=64 covers the
+    multi-band tilize, where the head rows span more than one Q tile row."""
+    run_test_sdpa_decode_single_iter(
+        device,
+        b=1,
+        nh=nh,
+        nkv=1,
+        s=128,
+        d=128,
+        dtype=ttnn.bfloat16,
+        grid_size=(8, 1),
+        q_dtype=ttnn.bfloat16,
+        cur_pos_tensor=True,
+        sharded_in=False,
+        sharded_out=False,
+        q_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
