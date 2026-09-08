@@ -189,14 +189,10 @@ def pytest_collection_modifyitems(config, items):
     FC = ttnn.FabricConfig
     DEFAULT_ALLOWED_FABRICS = frozenset({FC.DISABLED, FC.FABRIC_1D, FC.FABRIC_2D})
     # DISABLED is listed only on shapes that already own fabric-irrelevant diagnostics
-    # (currently single-chip and the P300 1x2 masked-bincount row). Do not expand it into
+    # (currently single-chip). Do not expand it into
     # communicating-test matrices merely to make this table visually symmetric.
     CI_ALLOWED_FABRICS = {
         CT.P150: {(1, 1): [FC.DISABLED, FC.FABRIC_2D]},  # single chip
-        CT.P300: {
-            (2, 1): [FC.FABRIC_2D],
-            (1, 2): [FC.DISABLED, FC.FABRIC_2D],
-        },  # 2 chips
         CT.P300_X2: {  # 4-chip QuietBox
             (4, 1): [FC.FABRIC_1D, FC.FABRIC_2D_TORUS_Y],
             (2, 2): [FC.FABRIC_2D],

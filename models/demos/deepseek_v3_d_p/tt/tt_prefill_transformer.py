@@ -487,8 +487,9 @@ class TtPrefillTransformer(LightweightModule):
             if reuse:
                 h, _, new_idx = ret
                 if mode == "full":
-                    if indexer_indices is not None:
-                        ttnn.deallocate(indexer_indices)
+                    # TP top-k all-gather results alias model-owned persistent scratch. Replacing the
+                    # Python reference is sufficient: explicitly deallocating the previous wrapper
+                    # would invalidate the same backing buffer that ``new_idx`` now references.
                     indexer_indices = new_idx
             else:
                 h, _ = ret
@@ -503,9 +504,9 @@ class TtPrefillTransformer(LightweightModule):
                 intermediates[f"layer_{i}"] = self._to_host(h)
             if read_profiler:
                 ttnn.ReadDeviceProfiler(self.mesh_device)
-        # GLM-5.2 reuse: free the last full layer's held top-k indices after the final layer.
-        if reuse and indexer_indices is not None:
-            ttnn.deallocate(indexer_indices)
+        # Drop only the temporary wrapper. The TP gather buffer remains owned by TT_CCL and is released
+        # with the model; on TP=1 normal Python reference counting releases the non-persistent result.
+        indexer_indices = None
 
         # Non-last pipeline ranks stop here: the layer slice's output activation is
         # handed to the next rank, which continues from this hidden state. The norm /
