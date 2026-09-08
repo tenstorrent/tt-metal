@@ -75,6 +75,9 @@ void process_and_sort_tiles(
         // llk_topk_sort -> inplace
         // (stable) tie-break polarity is set once per kernel from the global `largest`;
         // it must not follow `ascending`, which alternates for bitonic sequence building.
+        if constexpr (stable_sort) {
+            ckernel::topk_canonicalize_negzero_values(0);
+        }
         ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, fused, false, tie_order>(0, (int)ascending, end_phase);
         tile_regs_commit();
 

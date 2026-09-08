@@ -397,6 +397,11 @@ void kernel_main() {
                         }
                     }
                 }
+                if constexpr (network_stable) {
+                    if (cascade_level == 0) {
+                        ckernel::topk_canonicalize_negzero_values(0);
+                    }
+                }
                 ckernel::topk_local_sort<network_stable, DST_ACCUM_MODE, false, rank_stamped, tie_order>(
                     0, (int)!largest, end_phase);
 

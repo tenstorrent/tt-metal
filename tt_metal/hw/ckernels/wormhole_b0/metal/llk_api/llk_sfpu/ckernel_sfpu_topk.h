@@ -98,6 +98,13 @@ inline void calculate_topk_stamp_tile_rank_range(std::uint32_t dst_tile_index, s
     _topk_stamp_tile_rank_range_<largest>(dst_tile_index, rank_base);
 }
 
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void calculate_topk_canonicalize_negzero() {
+    if constexpr (is_fp32_dest_acc_en && !TOPK_UINT16_IN_FP32_DEST) {
+        _topk_canonicalize_negzero_value_tiles_();
+    }
+}
+
 template <bool APPROXIMATION_MODE, bool FUSED = false, bool RANK_STAMPED = false>
 inline void topk_init() {
     static_assert(!(FUSED && RANK_STAMPED), "fused and rank-stamped modes are mutually exclusive");

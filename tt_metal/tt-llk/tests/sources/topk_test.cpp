@@ -368,6 +368,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if (first_iteration)
                 {
                     // same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_local_sort from metal.
+                    if constexpr (NETWORK_STABLE_SORT)
+                    {
+                        SFPU_UNARY_CALL(
+                            dest_sync, is_fp32_dest_acc_en, calculate_topk_canonicalize_negzero, (APPROX, is_fp32_dest_acc_en), dst_index, vector_mode);
+                    }
                     SFPU_UNARY_CALL(
                         dest_sync,
                         is_fp32_dest_acc_en,

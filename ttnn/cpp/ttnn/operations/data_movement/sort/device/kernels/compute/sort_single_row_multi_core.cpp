@@ -164,6 +164,11 @@ void kernel_main() {
 
                             if (sub == 1) {
                                 // Use sort LLK only the last substage to sort the last pair of tiles - speed up
+                                if constexpr (stable) {
+                                    if (stage == 1) {
+                                        ckernel::topk_canonicalize_negzero_values(0);
+                                    }
+                                }
                                 ckernel::topk_local_sort<stable, DST_ACCUM_MODE, false, false, tie_order>(
                                     /*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                             } else {
