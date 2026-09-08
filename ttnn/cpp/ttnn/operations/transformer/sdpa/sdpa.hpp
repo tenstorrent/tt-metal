@@ -120,7 +120,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
-    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32,
+    uint32_t kv_cache_slot_idx = 0,
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,
@@ -150,11 +154,19 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     // (was metadata[1]).
     const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
-    // (user, layer)-major KV-cache batch dim (metadata path only). The readers compute the cache slot
-    // on-device as slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx (mirrors
-    // update_padded_kv_cache). Resolve to 1/0 when nullopt -> slot = slot_id[0] (existing behavior).
+    // Layer geometry for metadata cache-slot selection and paged physical bundles. The metadata
+    // readers compute slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx (mirrors
+    // update_padded_kv_cache). Defaults 1/0 preserve the existing single-layer behavior.
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
-    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    // Paged MLA cache: replicated UINT32 ROW_MAJOR [slots,max_pages] allocator table. The physical cache is
+    // [num_bundles * num_layers * num_heads, 1, kv_cache_page_size, head_dim], with
+    // flat_page = (bundle * num_layers + layer) * num_heads + head. Every UINT32
+    // table[slot,local_page*SP+rank] value must be smaller than the local num_bundles.
+    const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32,
+    uint32_t kv_cache_slot_idx = 0,
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt);
 
 struct ExecuteExpRingJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(

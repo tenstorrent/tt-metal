@@ -86,6 +86,13 @@ struct RingAttentionNeighborHaloConfig {
     uint32_t halo_tile_rows = 0;
     uint32_t source_device = 0;
 
+    const ttnn::Tensor* page_bundle_indices = nullptr;
+    uint32_t page_size_tokens = 32;
+    uint32_t page_table_slot = 0;
+    uint32_t page_table_sp_size = 1;
+    uint32_t page_table_sp_rank = 0;
+    uint32_t local_cache_tile_rows = 0;
+
     bool derives_cache_batch_on_device() const { return slot_id != nullptr; }
     bool derives_start_on_device() const { return kv_actual_isl != nullptr; }
 };
@@ -105,6 +112,11 @@ constexpr uint32_t kWriterReadySemaphoreFieldOffset = 4;
 // Metadata-enabled kernels append input_cache_batch_extent (offset 8).
 constexpr uint32_t kTensorDescriptorFieldCount = 8;
 constexpr uint32_t kMetadataTensorDescriptorFieldCount = kTensorDescriptorFieldCount + 1;
+constexpr uint32_t reader_page_table_slot_offset(uint32_t num_inputs, bool has_metadata) {
+    return kReaderRuntimeArgHeaderCount +
+           num_inputs * ((has_metadata ? kMetadataTensorDescriptorFieldCount : kTensorDescriptorFieldCount) + 2) +
+           (has_metadata ? 5 : 0) + 4;
+}
 constexpr uint32_t kInputBatchBaseFieldOffset = 5;
 // Per-(batch,head) page count each worker is allowed to gather. Defaults to the full input
 // (input_Ht * input_Wt); the fused ring_joint_sdpa path patches it down to the logical_n-valid
@@ -204,7 +216,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Opt-in two-stage fused readiness: every received shard signals once at its row midpoint and
     // once when complete. Only consumers that interpret the doubled semaphore protocol may enable it.
     bool partial_readiness_enabled = false,
-    RingAttentionRankMapping rank_mapping = {});
+    RingAttentionRankMapping rank_mapping = {},
+    std::optional<Tensor> page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32,
+    uint32_t kv_cache_slot_idx = 0,
+    uint32_t kv_cache_sp_size = 1,
+    uint32_t kv_cache_sp_rank = 0);
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,

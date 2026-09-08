@@ -14,6 +14,7 @@
 #include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/assert.h"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/paged_kv_utils.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 
@@ -1468,6 +1469,100 @@ struct PaddedAddrGenerator {
 
 template <typename ReaderType, typename TensorShapeType>
 PaddedAddrGenerator(const ReaderType&, TensorShapeType) -> PaddedAddrGenerator<ReaderType, TensorShapeType>;
+
+// Address generator for a physical page-bundle KV cache. Logical sequence tile row r selects
+// page_bundle_indices[r / page_size_tiles], then retains r % page_size_tiles within that bundle.
+// Within each bundle, the active layer's heads are contiguous, flattened as
+// (bundle * num_layers + layer) * num_heads + head. This keeps the heads read by one op on
+// consecutive round-robin DRAM banks.
+template <typename ReaderType, bool use_shard_addressing, bool optimize_separate_kv_reads = false>
+struct PagedKVAddrGenerator {
+    ReaderType reader;
+    uint32_t logical_seq_len_tiles;
+    uint32_t num_heads;
+    uint32_t num_layers;
+    uint32_t layer_idx;
+    uint32_t page_size_tiles;
+    uint32_t head_dim_tiles;
+    uint32_t bundle_ids_l1_addr;
+
+    void issue_reads(
+        const Slice& slice,
+        uint32_t end_seq_tile,
+        uint32_t dst_cb_id,
+        uint32_t dst_addr,
+        uint32_t outer_stride,
+        uint32_t inner_stride,
+        uint32_t barrier_threshold) const {
+        // Discarded calls in the non-template kernel still instantiate this method.
+        // Nonpaged programs never execute it and need no ND-sharded accessor methods.
+        if constexpr (use_shard_addressing) {
+            const uint32_t bound = logical_seq_len_tiles < end_seq_tile ? logical_seq_len_tiles : end_seq_tile;
+            const uint32_t rows = slice.get_d2_size();
+            const uint32_t cols = slice.get_d3_size();
+            const uint32_t valid_rows = slice.d2_start >= bound ? 0 : std::min(rows, bound - slice.d2_start);
+            uint32_t barrier_count = 0;
+            const PagedKVAccessor<ReaderType> paged_kv{
+                reader, bundle_ids_l1_addr, page_size_tiles, num_layers, num_heads, layer_idx};
+            typename PagedKVAccessor<ReaderType>::Cursor bundle_cursor;
+            if (valid_rows > 0) {
+                bundle_cursor = paged_kv.cursor(slice.d2_start, slice.d1);
+            }
+            const uint32_t tile_bytes = paged_kv.tensor_page_size();
+            Noc noc;
+            const auto read_contiguous = [](uint64_t src, uint32_t dst, uint32_t bytes) {
+                if (bytes <= NOC_MAX_BURST_SIZE) {
+                    noc_async_read<NOC_MAX_BURST_SIZE>(src, dst, bytes);
+                } else {
+                    noc_async_read(src, dst, bytes);
+                }
+            };
+            for (uint32_t row = 0; row < valid_rows; ++row) {
+                const uint64_t shard_row_noc_addr = paged_kv.get_shard_noc_addr(
+                    bundle_cursor, (bundle_cursor.row_in_bundle * head_dim_tiles + slice.d3_start) * tile_bytes);
+                uint32_t dst = dst_addr + row * outer_stride;
+                if constexpr (!optimize_separate_kv_reads) {
+                    for (uint32_t col = 0; col < cols; ++col) {
+                        noc_async_read(shard_row_noc_addr + col * tile_bytes, dst, tile_bytes);
+                        dst += inner_stride;
+                        if (barrier_threshold > 0 && ++barrier_count == barrier_threshold) {
+                            noc.async_read_barrier();
+                            barrier_count = 0;
+                        }
+                    }
+                } else {
+                    if (inner_stride == tile_bytes && barrier_threshold == 0 && cols > 0) {
+                        // A paged shard spans the full feature width. Non-transposed V rows
+                        // are contiguous at both endpoints, so issue one read for the row.
+                        read_contiguous(shard_row_noc_addr, dst, cols * tile_bytes);
+                    } else {
+                        if (cols > 0 && tile_bytes <= NOC_MAX_BURST_SIZE) {
+                            // All columns share one shard and transfer size. Reuse the
+                            // NoC read state while transposing the destination tiles.
+                            noc_async_read_one_packet_set_state(shard_row_noc_addr, tile_bytes);
+                        }
+                        for (uint32_t col = 0; col < cols; ++col) {
+                            if (tile_bytes <= NOC_MAX_BURST_SIZE) {
+                                noc_async_read_one_packet_with_state(
+                                    static_cast<uint32_t>(shard_row_noc_addr) + col * tile_bytes, dst);
+                            } else {
+                                noc_async_read(shard_row_noc_addr + col * tile_bytes, dst, tile_bytes);
+                            }
+                            dst += inner_stride;
+                            if (barrier_threshold > 0 && ++barrier_count == barrier_threshold) {
+                                noc.async_read_barrier();
+                                barrier_count = 0;
+                            }
+                        }
+                    }
+                }
+                bundle_cursor.advance_row(row + 1 < valid_rows);
+            }
+            zero_fill_block(
+                reader, rows - valid_rows, cols, valid_rows, dst_cb_id, dst_addr, outer_stride, inner_stride);
+        }
+    }
+};
 
 // Fetch tiles via NOC reads into a given L1 address. No CB lifecycle — caller manages
 // the reserve/push sequence on the destination CB. Used by forwarding paths that mcast before pushing.

@@ -11,11 +11,13 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/paged_kv_utils.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
 #include "ring_attention_rank_mapping.hpp"
 #include "ring_attention_prefetch_utils.hpp"
 #include <algorithm>
 #include <cstdint>
+#include <tuple>
 #include <utility>
 
 using ttnn::ccl::Topology;
@@ -46,6 +48,8 @@ enum CompileTimeArg : uint32_t {
     kOutputBankOwnedSchedule,
     kNumDramBanks,
     kPrefetchPackets,
+    kHasPageBundles,
+    kCbPageBundleId,
     kNumFixedCompileTimeArgs,
 };
 
@@ -81,11 +85,43 @@ static_assert(
 static_assert(
     !partial_readiness_enabled || (num_targets_forward_direction > 0 && num_targets_backward_direction > 0),
     "partial readiness requires both ring directions");
+constexpr bool has_page_bundles = get_compile_time_arg_val(kHasPageBundles);
+constexpr uint32_t cb_page_bundle_id = get_compile_time_arg_val(kCbPageBundleId);
 
 // Prefetch: batch multiple packets of DRAM reads before a single barrier.
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
 // CB depth must be >= 2 * prefetch_packets * packet_size_in_pages (see program_factory cb_num_pages).
 constexpr uint32_t prefetch_packets = get_compile_time_arg_val(kPrefetchPackets);
+
+// Preserve the concrete shard mapping for each paged input, including separate K/V.
+// The abstract tile accessor otherwise repeats tile-to-shard division for every read.
+template <typename Accessors>
+struct PagedInputShardAccessor {
+    const Accessors& accessors;
+    uint32_t input_idx;
+
+    uint64_t get_shard_noc_addr(uint32_t physical_page, uint32_t byte_offset = 0) const {
+        uint64_t address = 0;
+        std::apply(
+            [&](const auto&... readers) {
+                uint32_t index = 0;
+                ((input_idx == index++ ? (address = readers.get_shard_noc_addr(physical_page, byte_offset), void())
+                                       : void()),
+                 ...);
+            },
+            accessors);
+        return address;
+    }
+};
+
+template <typename Accessor>
+FORCE_INLINE uint64_t bundle_shard_noc_addr(const Accessor& accessor, uint32_t page) {
+    if constexpr (has_page_bundles) {
+        return accessor.get_shard_noc_addr(page);
+    } else {
+        return 0;
+    }
+}
 
 template <bool physically_contiguous, typename Accessor>
 FORCE_INLINE void prefetch_bank_owned_slices(
@@ -98,7 +134,15 @@ FORCE_INLINE void prefetch_bank_owned_slices(
     uint32_t output_page_base,
     uint32_t valid_pages,
     uint32_t first_bank,
-    uint32_t bank_stride) {
+    uint32_t bank_stride,
+    uint32_t bundle_table = 0,
+    uint32_t rows_per_bundle = 1,
+    uint32_t num_layers = 1,
+    uint32_t layer_idx = 0,
+    uint32_t num_heads = 1,
+    uint32_t head_idx = 0,
+    uint32_t width_tiles = 1,
+    bool bundle_noc_addresses = false) {
     ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
         output_page_base, valid_pages, first_bank, bank_stride, packet_size_in_pages);
     const auto next_packet = [&](uint32_t& pages_to_read) {
@@ -107,10 +151,13 @@ FORCE_INLINE void prefetch_bank_owned_slices(
         return accessor_page_base + first_page_offset;
     };
     if constexpr (physically_contiguous) {
+        // Relay packets are full bank-contiguous bursts. Bound their window to avoid
+        // saturating the NoC shared with score-output writes on long contexts.
+        constexpr uint32_t relay_prefetch_packets = std::min<uint32_t>(prefetch_packets, 4u);
         prefetch_batch_read_physically_contiguous_packets<
             input_tensor_page_size,
             packet_size_in_pages,
-            prefetch_packets>(
+            relay_prefetch_packets>(
             noc, cb_output, schedule.packets_remaining, cb_fifo_limit, cb_fifo_size, accessor, next_packet);
     } else {
         prefetch_batch_read_packets<input_tensor_page_size, packet_size_in_pages, prefetch_packets>(
@@ -121,7 +168,36 @@ FORCE_INLINE void prefetch_bank_owned_slices(
             cb_fifo_size,
             accessor,
             next_packet,
-            [](uint32_t first_page_id, uint32_t page) { return first_page_id + page * num_dram_banks; });
+            [&](uint32_t first_page_id, uint32_t page) {
+                const uint32_t logical_tile = first_page_id + page * num_dram_banks;
+                if constexpr (has_page_bundles) {
+                    // Packet ownership is determined by the gathered output bank. The local source
+                    // can still be an arbitrary bundle: translate each logical tile before its read.
+                    uint32_t logical_bundle, row_in_bundle, col;
+                    if (rows_per_bundle == 1 && width_tiles == 4) {
+                        // Avoid software division for 32x128 cache pages.
+                        logical_bundle = logical_tile >> 2;
+                        row_in_bundle = 0;
+                        col = logical_tile & 3;
+                    } else {
+                        const uint32_t logical_row = logical_tile / width_tiles;
+                        logical_bundle = logical_row / rows_per_bundle;
+                        row_in_bundle = logical_row % rows_per_bundle;
+                        col = logical_tile % width_tiles;
+                    }
+                    if (bundle_noc_addresses) {
+                        return ShardNocReadAddress{
+                            CoreLocalMem<volatile uint64_t>(bundle_table)[logical_bundle] +
+                            (row_in_bundle * width_tiles + col) * input_tensor_page_size};
+                    }
+                    const uint32_t bundle = CoreLocalMem<volatile uint32_t>(bundle_table)[logical_bundle];
+                    const uint32_t physical_page = (bundle * num_layers + layer_idx) * num_heads + head_idx;
+                    return ShardNocReadAddress{accessor.get_shard_noc_addr(
+                        physical_page, (row_in_bundle * width_tiles + col) * input_tensor_page_size)};
+                } else {
+                    return logical_tile;
+                }
+            });
     }
 }
 
@@ -136,6 +212,12 @@ void kernel_main() {
     constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
     constexpr uint32_t kKvMetaArgsOffset = has_metadata ? meta_args.next_compile_time_args_offset() : kMetaArgsOffset;
     constexpr auto kv_meta_args = TensorAccessorArgs<kKvMetaArgsOffset>();
+    constexpr uint32_t kPostMetaArgsOffset =
+        has_metadata ? kv_meta_args.next_compile_time_args_offset()
+                     : std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset();
+    constexpr uint32_t kPageBundleArgsOffset =
+        has_page_bundles ? kPostMetaArgsOffset : std::get<0>(inputs_args).next_compile_time_args_offset();
+    constexpr auto page_bundle_args = TensorAccessorArgs<kPageBundleArgsOffset>();
 
     ///////////////////////////////////////////////////
     // ARGS
@@ -228,6 +310,21 @@ void kernel_main() {
             input_tile_id_end);
     }
 
+    uint32_t page_bundle_indices_addr = 0;
+    uint32_t page_bundle_num_layers = 1;
+    uint32_t page_bundle_layer_idx = 0;
+    uint32_t page_bundle_size_tiles = 1;
+    uint32_t page_table_slot = 0, page_table_sp_size = 1, page_table_sp_rank = 0;
+    if constexpr (has_page_bundles) {
+        page_bundle_indices_addr = get_arg_val<uint32_t>(arg_idx++);
+        page_bundle_num_layers = get_arg_val<uint32_t>(arg_idx++);
+        page_bundle_layer_idx = get_arg_val<uint32_t>(arg_idx++);
+        page_bundle_size_tiles = get_arg_val<uint32_t>(arg_idx++);
+        page_table_slot = get_arg_val<uint32_t>(arg_idx++);
+        page_table_sp_size = get_arg_val<uint32_t>(arg_idx++);
+        page_table_sp_rank = get_arg_val<uint32_t>(arg_idx++);
+    }
+
     OpSignaler op_signaler;
     if constexpr (fuse_op) {
         op_signaler = OpSignaler(arg_idx);
@@ -241,14 +338,58 @@ void kernel_main() {
     constexpr uint32_t my_tensor_rank =
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             my_transport_rank, mesh_rows, mesh_cols, snake_orientation);
+    const auto page_bundle_reader = TensorAccessor(page_bundle_args, page_bundle_indices_addr);
+    uint32_t page_bundle_scratch = 0;
+    bool bundle_noc_addresses = false;
+    if constexpr (has_page_bundles) {
+        CircularBuffer cb_page_bundle(cb_page_bundle_id);
+        page_bundle_scratch = cb_page_bundle.get_write_ptr();
+        const uint32_t active_tiles = (input_valid_pages[0] + input_tensor_Wt[0] - 1) / input_tensor_Wt[0];
+        const uint32_t active_pages = (active_tiles + page_bundle_size_tiles - 1) / page_bundle_size_tiles;
+        load_paged_kv_table_range(
+            noc_obj,
+            page_bundle_reader,
+            page_bundle_scratch,
+            page_table_slot,
+            page_table_sp_size,
+            page_table_sp_rank,
+            0,
+            active_pages);
+        if constexpr (num_inputs == 1 && output_bank_owned_schedule) {
+            // The SP-interleaved row leaves room after compaction to cache each local
+            // bundle's NoC address. Expand backwards so unread UINT32 IDs stay intact.
+            bundle_noc_addresses =
+                input_batch_head_count[0] == 1 &&
+                get_local_cb_interface(cb_page_bundle_id).fifo_size >= active_pages * sizeof(uint64_t);
+            if (bundle_noc_addresses) {
+                auto bundle_noc_table = CoreLocalMem<volatile uint64_t>(page_bundle_scratch);
+                for (uint32_t page = active_pages; page > 0;) {
+                    --page;
+                    const uint32_t bundle = CoreLocalMem<volatile uint32_t>(page_bundle_scratch)[page];
+                    bundle_noc_table[page] = bundle_shard_noc_addr(
+                        std::get<0>(inputs_tuple), bundle * page_bundle_num_layers + page_bundle_layer_idx);
+                }
+            }
+        }
+    }
 
     // Read the local slice into the packet CB before sending it over Fabric.
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
         const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
         if constexpr (output_bank_owned_schedule) {
+            const auto& bank_input_accessor = [&]() -> decltype(auto) {
+                if constexpr (has_page_bundles && num_inputs == 1) {
+                    return std::get<0>(inputs_tuple);
+                } else if constexpr (has_page_bundles) {
+                    return PagedInputShardAccessor<decltype(inputs_tuple)>{inputs_tuple, input_idx};
+                } else {
+                    return input_tensor_addrgens[input_idx];
+                }
+            }();
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
-                const uint32_t input_page_base = input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
+                const uint32_t input_page_base =
+                    has_page_bundles ? 0u : input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
                 const uint32_t output_page_base =
                     bh_idx * output_pages_per_batch_head + my_tensor_rank * input_pages_per_batch_head;
                 if constexpr (partial_readiness_enabled) {
@@ -259,43 +400,82 @@ void kernel_main() {
                         cb_output,
                         cb_fifo_limit,
                         cb_fifo_size,
-                        input_tensor_addrgens[input_idx],
+                        bank_input_accessor,
                         input_page_base,
                         output_page_base,
                         first_pages,
                         worker_link[input_idx],
-                        num_links);
+                        num_links,
+                        page_bundle_scratch,
+                        page_bundle_size_tiles,
+                        page_bundle_num_layers,
+                        page_bundle_layer_idx,
+                        input_batch_head_count[input_idx],
+                        bh_idx,
+                        input_tensor_Wt[input_idx],
+                        bundle_noc_addresses);
                     prefetch_bank_owned_slices<false>(
                         noc_obj,
                         cb_output,
                         cb_fifo_limit,
                         cb_fifo_size,
-                        input_tensor_addrgens[input_idx],
+                        bank_input_accessor,
                         input_page_base + first_pages,
                         output_page_base + first_pages,
                         input_valid_pages[input_idx] - first_pages,
                         worker_link[input_idx],
-                        num_links);
+                        num_links,
+                        page_bundle_scratch,
+                        page_bundle_size_tiles,
+                        page_bundle_num_layers,
+                        page_bundle_layer_idx,
+                        input_batch_head_count[input_idx],
+                        bh_idx,
+                        input_tensor_Wt[input_idx],
+                        bundle_noc_addresses);
                 } else {
                     prefetch_bank_owned_slices<false>(
                         noc_obj,
                         cb_output,
                         cb_fifo_limit,
                         cb_fifo_size,
-                        input_tensor_addrgens[input_idx],
+                        bank_input_accessor,
                         input_page_base,
                         output_page_base,
                         input_valid_pages[input_idx],
                         worker_link[input_idx],
-                        num_links);
+                        num_links,
+                        page_bundle_scratch,
+                        page_bundle_size_tiles,
+                        page_bundle_num_layers,
+                        page_bundle_layer_idx,
+                        input_batch_head_count[input_idx],
+                        bh_idx,
+                        input_tensor_Wt[input_idx],
+                        bundle_noc_addresses);
                 }
             }
         } else {
-            // For a single-slot gather this starts at the sliced batch slot; otherwise 0 (full batch).
             uint32_t input_page_base = input_batch_base[input_idx];
             uint32_t tiles_read = input_tile_id_start[input_idx];
             uint32_t tiles_to_read = input_tile_id_end[input_idx];
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
+                uint32_t page_bundle_col = 0;
+                auto input_reader = input_tensor_addrgens[input_idx];
+                const PagedKVAccessor<decltype(input_reader)> paged_kv{
+                    input_reader,
+                    page_bundle_scratch,
+                    page_bundle_size_tiles,
+                    page_bundle_num_layers,
+                    input_batch_head_count[input_idx],
+                    page_bundle_layer_idx};
+                typename PagedKVAccessor<decltype(input_reader)>::Cursor bundle_cursor;
+                if constexpr (has_page_bundles) {
+                    page_bundle_col = tiles_read % input_tensor_Wt[input_idx];
+                    const uint32_t first_logical_row = tiles_read / input_tensor_Wt[input_idx];
+                    bundle_cursor = paged_kv.cursor(first_logical_row, bh_idx);
+                }
+                uint64_t page_bundle_row_noc_addr = 0;
                 prefetch_batch_read_tiles<
                     input_tensor_page_size,
                     packet_size_in_pages,
@@ -307,8 +487,25 @@ void kernel_main() {
                     tiles_to_read,
                     cb_fifo_limit,
                     cb_fifo_size,
-                    input_tensor_addrgens[input_idx],
-                    [&](uint32_t tr) { return input_page_base + tr; });
+                    input_reader,
+                    [&](uint32_t tr) {
+                        if constexpr (!has_page_bundles) {
+                            return input_page_base + tr;
+                        } else {
+                            if (page_bundle_col == 0 || page_bundle_row_noc_addr == 0) {
+                                page_bundle_row_noc_addr = input_reader.get_noc_addr(
+                                    bundle_cursor.physical_row() * input_tensor_Wt[input_idx]);
+                            }
+                            const uint64_t tile_noc_addr =
+                                page_bundle_row_noc_addr + page_bundle_col * input_tensor_page_size;
+                            page_bundle_col += contig_pages_advanced;
+                            while (page_bundle_col >= input_tensor_Wt[input_idx]) {
+                                page_bundle_col -= input_tensor_Wt[input_idx];
+                                bundle_cursor.advance_row(tr + contig_pages_advanced < tiles_to_read);
+                            }
+                            return ShardNocReadAddress{tile_noc_addr};
+                        }
+                    });
                 tiles_read = input_tile_id_start[input_idx];
                 tiles_to_read = input_tile_id_end[input_idx];
                 input_page_base += input_pages_per_batch_head;

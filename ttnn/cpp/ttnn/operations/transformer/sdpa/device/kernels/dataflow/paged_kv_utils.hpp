@@ -1,0 +1,154 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include "api/core_local_mem.h"
+#include "api/dataflow/dataflow_api.h"
+
+// Tensor accessor for a UINT32 logical-page -> physical-bundle table. Physical
+// cache pages are flattened as [bundle][layer][head], and each page contains
+// page_size_rows sequence rows. Supports random logical rows and a sequential
+// cursor that caches the current bundle-table entry.
+template <typename ReaderType>
+struct PagedKVAccessor {
+private:
+    ReaderType reader_;
+
+public:
+    uint32_t bundle_ids_l1_addr;
+    uint32_t page_size_rows;
+    uint32_t num_layers;
+    uint32_t num_heads;
+    uint32_t layer_idx;
+
+    PagedKVAccessor(
+        const ReaderType& tensor_reader,
+        uint32_t table_l1_addr,
+        uint32_t rows_per_page,
+        uint32_t layers = 1,
+        uint32_t heads = 1,
+        uint32_t selected_layer = 0) :
+        reader_(tensor_reader),
+        bundle_ids_l1_addr(table_l1_addr),
+        page_size_rows(rows_per_page),
+        num_layers(layers),
+        num_heads(heads),
+        layer_idx(selected_layer) {}
+
+    struct Cursor {
+        uint32_t bundle_ids_l1_addr = 0;
+        uint32_t page_size_rows = 1;
+        uint32_t pages_per_bundle = 1;
+        uint32_t layer_head_offset = 0;
+        uint32_t logical_bundle = 0;
+        uint32_t row_in_bundle = 0;
+        uint32_t physical_bundle_id = 0;
+
+        void reset(
+            uint32_t table_l1_addr,
+            uint32_t logical_row,
+            uint32_t rows_per_page,
+            uint32_t bundle_page_stride,
+            uint32_t page_offset_in_bundle) {
+            bundle_ids_l1_addr = table_l1_addr;
+            page_size_rows = rows_per_page;
+            pages_per_bundle = bundle_page_stride;
+            layer_head_offset = page_offset_in_bundle;
+            logical_bundle = logical_row / rows_per_page;
+            row_in_bundle = logical_row % rows_per_page;
+            load_bundle();
+        }
+
+        void load_bundle() { physical_bundle_id = CoreLocalMem<volatile uint32_t>(bundle_ids_l1_addr)[logical_bundle]; }
+
+        uint32_t physical_page() const { return physical_bundle_id * pages_per_bundle + layer_head_offset; }
+
+        uint32_t physical_row() const { return physical_page() * page_size_rows + row_in_bundle; }
+
+        // has_next_row avoids reading one table entry beyond the final traversal row.
+        void advance_row(bool has_next_row) {
+            if (++row_in_bundle == page_size_rows) {
+                row_in_bundle = 0;
+                ++logical_bundle;
+                if (has_next_row) {
+                    load_bundle();
+                }
+            }
+        }
+    };
+
+    uint32_t pages_per_bundle() const { return num_layers * num_heads; }
+
+    uint32_t layer_head_offset(uint32_t head_idx = 0) const { return layer_idx * num_heads + head_idx; }
+
+    uint32_t physical_bundle_for_row(uint32_t logical_row) const {
+        return CoreLocalMem<volatile uint32_t>(bundle_ids_l1_addr)[logical_row / page_size_rows];
+    }
+
+    uint32_t physical_page(uint32_t logical_row, uint32_t head_idx = 0) const {
+        return physical_bundle_for_row(logical_row) * pages_per_bundle() + layer_head_offset(head_idx);
+    }
+
+    uint32_t physical_row(uint32_t logical_row, uint32_t head_idx = 0) const {
+        return physical_page(logical_row, head_idx) * page_size_rows + logical_row % page_size_rows;
+    }
+
+    uint32_t tensor_page_size() const {
+        if constexpr (has_get_aligned_page_size_v<ReaderType>) {
+            return reader_.get_aligned_page_size();
+        } else {
+            return reader_.page_size;
+        }
+    }
+
+    Cursor cursor(uint32_t logical_row, uint32_t head_idx = 0) const {
+        Cursor result;
+        result.reset(bundle_ids_l1_addr, logical_row, page_size_rows, pages_per_bundle(), layer_head_offset(head_idx));
+        return result;
+    }
+
+    uint64_t get_shard_noc_addr(const Cursor& position, uint32_t byte_offset) const {
+        return reader_.get_shard_noc_addr(position.physical_page(), byte_offset);
+    }
+};
+
+// Load only a local page interval from a replicated allocator row. The CB still spans the
+// row, so the existing accessor can index local pages directly. Read from a 32-byte-aligned
+// source/destination offset, then compact only the requested SP-strided entries in place.
+// Callers must ensure [local_begin, local_end) consists of allocated pages on this rank.
+template <typename NocType, typename TableAccessor>
+inline void load_paged_kv_table_range(
+    NocType& noc,
+    const TableAccessor& table,
+    uint32_t table_l1,
+    uint32_t slot,
+    uint32_t sp_size,
+    uint32_t sp_rank,
+    uint32_t local_begin,
+    uint32_t local_end) {
+    if (local_begin == local_end) {
+        return;
+    }
+    const uint32_t first = local_begin * sp_size + sp_rank;
+    const uint32_t end = (local_end - 1) * sp_size + sp_rank + 1;
+    const uint32_t aligned_first = first & ~7u;
+    const uint32_t offset = aligned_first * sizeof(uint32_t);
+    noc.async_read(
+        table,
+        CoreLocalMem<uint32_t>(table_l1 + offset),
+        (end - aligned_first) * sizeof(uint32_t),
+        {.page_id = slot, .offset_bytes = offset},
+        {});
+    noc.async_read_barrier();
+    invalidate_l1_cache();
+    if (sp_size > 1) {
+        auto* entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_l1);
+        for (uint32_t i = local_begin, p = first; i < local_end; ++i, p += sp_size) {
+            entries[i] = entries[p];
+        }
+    }
+}

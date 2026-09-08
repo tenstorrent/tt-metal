@@ -148,6 +148,8 @@ constexpr uint32_t kWidthDimension = 3;
 // Independent performance tunables. Keep these named rather than deriving one from another: the reader prefetch
 // window and writer header pool protect different pipelines.
 constexpr uint32_t kPrefetchPackets = 4;
+constexpr uint32_t kPagedParallelReadPrefetchPackets = 16;
+constexpr uint32_t kPagedSingleInputPrefetchPackets = 2;
 constexpr uint32_t kPacketHeaderSlots = 8;
 constexpr uint32_t kDoubleBufferingFactor = 2;
 constexpr uint32_t kMaxScatterPagesPerPacket = 2;
@@ -252,6 +254,7 @@ void ring_attention_neighbor_halo_exchange_helper(
     constexpr uint32_t reader_meta_cb = tt::CB::c_in4;
     constexpr uint32_t writer_meta_cb = tt::CB::c_in5;
     constexpr uint32_t meta_cb_page_size = 32;
+    constexpr uint32_t page_table_cb = tt::CB::c_in6;
     const uint32_t packet_header_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     desc.cbs.push_back(CBDescriptor{
@@ -282,6 +285,18 @@ void ring_attention_neighbor_halo_exchange_helper(
         }
     }
 
+    if (halo.page_bundle_indices != nullptr) {
+        TT_FATAL(!halo.derives_start_on_device(), "Paged halo and slot metadata are mutually exclusive");
+        const uint32_t table_bytes = halo.page_bundle_indices->buffer()->page_size();
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = round_up_to_mul32(table_bytes),
+            .core_ranges = workers,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(page_table_cb),
+                .data_format = tt::DataFormat::RawUInt32,
+                .page_size = round_up_to_mul32(table_bytes)}}},
+        });
+    }
     const uint32_t num_inputs = input_tensors.size();
     KernelDescriptor reader_kernel{};
     reader_kernel.kernel_source =
@@ -291,7 +306,16 @@ void ring_attention_neighbor_halo_exchange_helper(
     reader_kernel.core_ranges = workers;
     reader_kernel.config = WriterConfigDescriptor{};
     reader_kernel.compile_time_args = {
-        ring_index, ring_size, data_cb, pages_per_packet, page_size, num_inputs, kPrefetchPackets, reader_meta_cb};
+        ring_index,
+        ring_size,
+        data_cb,
+        pages_per_packet,
+        page_size,
+        num_inputs,
+        kPrefetchPackets,
+        reader_meta_cb,
+        static_cast<uint32_t>(halo.page_bundle_indices != nullptr),
+        page_table_cb};
     for (uint32_t input = 0; input < num_inputs; ++input) {
         reader_kernel.compile_time_args.push_back(page_size);
     }
@@ -303,6 +327,10 @@ void ring_attention_neighbor_halo_exchange_helper(
     if (halo.derives_start_on_device()) {
         tt::tt_metal::TensorAccessorArgs(halo.slot_id->buffer()).append_to(reader_kernel.compile_time_args);
         tt::tt_metal::TensorAccessorArgs(halo.kv_actual_isl->buffer()).append_to(reader_kernel.compile_time_args);
+    }
+
+    if (halo.page_bundle_indices != nullptr) {
+        tt::tt_metal::TensorAccessorArgs(halo.page_bundle_indices->buffer()).append_to(reader_kernel.compile_time_args);
     }
 
     KernelDescriptor writer_kernel{};
@@ -371,9 +399,14 @@ void ring_attention_neighbor_halo_exchange_helper(
         for (uint32_t input = 0; input < num_inputs; ++input) {
             const auto input_shape = input_tensors[input].padded_shape();
             const auto output_shape = output_tensors[input].padded_shape();
-            const uint32_t input_heads = input_shape[kHeadDimension];
+            // Physical paging flattens heads and sequence pages into dim 0; halo
+            // descriptors continue to address the logical per-head sequence.
+            const uint32_t input_heads =
+                halo.page_bundle_indices != nullptr ? output_shape[kHeadDimension] : input_shape[kHeadDimension];
             const uint32_t input_Wt = input_shape[kWidthDimension] / tt::constants::TILE_WIDTH;
-            const uint32_t input_Ht = input_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
+            const uint32_t input_Ht = halo.page_bundle_indices != nullptr
+                                          ? halo.local_cache_tile_rows
+                                          : input_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
             const uint32_t output_Wt = output_shape[kWidthDimension] / tt::constants::TILE_WIDTH;
             const uint32_t output_Ht = output_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
             TT_FATAL(
@@ -418,7 +451,9 @@ void ring_attention_neighbor_halo_exchange_helper(
                 "input_batch_slice_idx={} out of range for input batch={}",
                 input_batch_slice_idx.value_or(0),
                 input_shape[kBatchDimension]);
-            const uint32_t batch_head_count = input_batch_slice_idx.has_value() || halo.derives_cache_batch_on_device()
+            const uint32_t batch_head_count = input_batch_slice_idx.has_value() ||
+                                                      halo.derives_cache_batch_on_device() ||
+                                                      halo.page_bundle_indices != nullptr
                                                   ? input_heads
                                                   : input_shape[kBatchDimension] * input_heads;
             const uint32_t input_batch_base = ttnn::ring_attention_all_gather_async_detail::input_batch_base_pages(
@@ -475,6 +510,18 @@ void ring_attention_neighbor_halo_exchange_helper(
         }
         for (const auto& input : input_tensors) {
             reader_args.push_back(input.buffer());
+        }
+        if (halo.page_bundle_indices != nullptr) {
+            reader_args.push_back(halo.page_bundle_indices->buffer());
+            reader_args.push_back(halo.page_table_slot);
+            reader_args.push_back(halo.page_table_sp_size);
+            reader_args.push_back(halo.page_table_sp_rank);
+            reader_args.push_back(halo.page_size_tokens / tt::constants::TILE_HEIGHT);
+            reader_args.push_back(halo.kv_cache_num_layers);
+            reader_args.push_back(halo.kv_cache_layer_idx);
+            for (const uint32_t wt : halo_input_Wt) {
+                reader_args.push_back(wt);
+            }
         }
         std::vector<uint32_t> signaler_args;
         halo_signaler.push_all_gather_fused_op_rt_args(signaler_args, num_links, link, 0);
@@ -536,7 +583,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t kv_cache_layer_idx,
     bool split_forwarding_enabled,
     bool partial_readiness_enabled,
-    RingAttentionRankMapping rank_mapping) {
+    RingAttentionRankMapping rank_mapping,
+    std::optional<Tensor> page_bundle_indices,
+    uint32_t kv_cache_page_size,
+    uint32_t kv_cache_slot_idx,
+    uint32_t kv_cache_sp_size,
+    uint32_t kv_cache_sp_rank) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
@@ -682,7 +734,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             "Partial all-gather readiness currently requires the bank-owned packet schedule");
         TT_FATAL(!split_forwarding_enabled, "Partial readiness and split forwarding cannot be enabled together");
         TT_FATAL(input_tensor.size() == 1, "Partial all-gather readiness currently supports one input tensor");
-        const auto shape = input_tensor.front().padded_shape();
+        const auto shape = page_bundle_indices.has_value() ? output_tensor.front().padded_shape()
+                                                           : input_tensor.front().padded_shape();
         const uint32_t batch_heads =
             (input_batch_slice_idx.has_value() ? 1u : shape[kBatchDimension]) * shape[kHeadDimension];
         TT_FATAL(
@@ -740,9 +793,16 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         max_payload_size_bytes);
     const uint32_t num_pages_per_packet =
         output_bank_owned_schedule ? max_pages_per_packet : std::min(max_pages_per_packet, kMaxScatterPagesPerPacket);
+    // Paged separate K/V scatters a packet across source banks. A deeper initial-read
+    // window amortizes those independent read latencies; relay reads remain capped at four.
+    const uint32_t prefetch_packets =
+        page_bundle_indices.has_value()
+            ? ((partial_readiness_enabled || input_tensors.size() == 2) ? kPagedParallelReadPrefetchPackets
+                                                                        : kPagedSingleInputPrefetchPackets)
+            : kPrefetchPackets;
     // Must be >= kDoubleBufferingFactor * prefetch_packets * num_pages_per_packet for deadlock-free buffering
     // (see PREFETCH_PACKETS in ring_attention_all_gather_reader.cpp).
-    const uint32_t cb_num_pages = kDoubleBufferingFactor * kPrefetchPackets * num_pages_per_packet;
+    const uint32_t cb_num_pages = kDoubleBufferingFactor * prefetch_packets * num_pages_per_packet;
     const tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
@@ -798,6 +858,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         slot_id.has_value() == kv_actual_isl.has_value(),
         "Ring attention metadata requires slot_id and kv_actual_isl tensors together");
     const bool has_metadata = slot_id.has_value();
+    const bool has_page_bundles = page_bundle_indices.has_value();
     const uint32_t meta_cb_index = tt::CB::c_in3;
     if (has_metadata) {
         const uint32_t meta_cb_page_size_bytes = kv_actual_isl->buffer()->page_size();
@@ -814,6 +875,22 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                     .buffer_index = static_cast<uint8_t>(meta_cb_index),
                     .data_format = tt::DataFormat::RawUInt32,
                     .page_size = meta_cb_page_size_bytes,
+                }}},
+            });
+        }
+    }
+    const uint32_t page_bundle_cb_index = tt::CB::c_in4;
+    if (has_page_bundles) {
+        const uint32_t table_bytes = static_cast<uint32_t>(page_bundle_indices->logical_shape()[1] * sizeof(uint32_t));
+        const uint32_t page_bundle_cb_page_size_bytes = round_up_to_mul32(table_bytes);
+        for (const auto& core_ranges : {sender_forward_core_ranges, sender_backward_core_ranges}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = page_bundle_cb_page_size_bytes,
+                .core_ranges = core_ranges,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(page_bundle_cb_index),
+                    .data_format = tt::DataFormat::UInt32,
+                    .page_size = page_bundle_cb_page_size_bytes,
                 }}},
             });
         }
@@ -855,7 +932,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(partial_readiness_enabled),   // kPartialReadinessEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
-            kPrefetchPackets,                                   // kPrefetchPackets
+            prefetch_packets,                                   // kPrefetchPackets
+            static_cast<uint32_t>(has_page_bundles),
+            page_bundle_cb_index,
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kReaderFixedCompileTimeArgCount,
@@ -871,6 +950,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         if (has_metadata) {
             tt::tt_metal::TensorAccessorArgs(slot_id->buffer()).append_to(args);
             tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer()).append_to(args);
+        }
+        if (has_page_bundles) {
+            tt::tt_metal::TensorAccessorArgs(page_bundle_indices->buffer()).append_to(args);
         }
         return args;
     };
@@ -1009,12 +1091,20 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         for (uint32_t i = 0; i < num_inputs; i++) {
             const auto input_tensor_shape = input_tensor[i].padded_shape();
             const auto output_tensor_shape = output_tensor[i].padded_shape();
-            const uint32_t num_heads = input_tensor_shape[kHeadDimension];
+            const uint32_t num_heads =
+                has_page_bundles ? output_tensor_shape[kHeadDimension] : input_tensor_shape[kHeadDimension];
             // single_batch_head_num_pages is always pages-per-(batch,head); independent of slicing.
-            const uint32_t full_batch_head_size = input_tensor_shape[kBatchDimension] * num_heads;
+            const uint32_t full_batch_head_size =
+                (has_page_bundles ? output_tensor_shape[kBatchDimension] : input_tensor_shape[kBatchDimension]) *
+                num_heads;
 
             const uint32_t input_tensor_Wt = input_tensor_shape[kWidthDimension] / tt::constants::TILE_WIDTH;
-            const uint32_t input_tensor_Ht = input_tensor_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
+            const uint32_t input_tensor_Ht =
+                has_page_bundles
+                    ? static_cast<uint32_t>(
+                          ((page_bundle_indices->logical_shape()[1] + kv_cache_sp_size - 1) / kv_cache_sp_size) *
+                          (kv_cache_page_size / tt::constants::TILE_HEIGHT))
+                    : input_tensor_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
             const uint32_t output_tensor_Wt = output_tensor_shape[kWidthDimension] / tt::constants::TILE_WIDTH;
             const uint32_t output_tensor_Ht = output_tensor_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
             TT_ASSERT(!(input_tensor_shape[kWidthDimension] % tt::constants::TILE_WIDTH));
@@ -1099,6 +1189,15 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             reader_args.push_back(chunk_local_tiles);
             reader_args.push_back(kv_cache_num_layers);
             reader_args.push_back(kv_cache_layer_idx);
+        }
+        if (has_page_bundles) {
+            reader_args.push_back(page_bundle_indices->buffer());
+            reader_args.push_back(kv_cache_num_layers);
+            reader_args.push_back(kv_cache_layer_idx);
+            reader_args.push_back(kv_cache_page_size / tt::constants::TILE_HEIGHT);
+            reader_args.push_back(kv_cache_slot_idx);
+            reader_args.push_back(kv_cache_sp_size);
+            reader_args.push_back(kv_cache_sp_rank);
         }
         if (fuse_op) {
             std::vector<uint32_t> signaler_args;

@@ -24,6 +24,7 @@ BH adaptation: uses init_device_compute_kernel_config instead of WormholeCompute
 
 import math
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from itertools import product
 from typing import Dict, List, Sequence, Tuple
@@ -676,18 +677,147 @@ def close_ring_joint_sdpa_runtime(runtime: RingJointSDPARuntime, *, clear_progra
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-def nd_sharded_dram_memory_config(device, head_dim):
+def nd_sharded_dram_memory_config(device, head_dim, shard_height=NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
     num_dram_banks = device.dram_grid_size().x
     core_ranges = [
         ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
     ]
     nd_shard_spec = ttnn.NdShardSpec(
-        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],
+        shard_shape=[1, 1, shard_height, head_dim],
         grid=ttnn.CoreRangeSet(core_ranges),
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
     )
     return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=nd_shard_spec)
+
+
+def upload_ring_paged_cache(host, runtime, dtype, page_size, *, shard_heads):
+    """Pack [1,heads,SP*sequence,dim] into per-device [bundle,head,page,dim] pools."""
+    batch, heads, seq, dim = host.shape
+    sp = runtime.mesh_device.shape[runtime.sp_axis]
+    tp = runtime.mesh_device.shape[runtime.tp_axis] if shard_heads else 1
+    assert batch == 1 and heads % tp == 0
+    assert page_size > 0 and page_size % ttnn.TILE_SIZE == 0
+    assert seq % (sp * page_size) == 0
+    local_heads, local_pages = heads // tp, seq // sp // page_size
+    pages = host.reshape(tp, local_heads, sp, local_pages, page_size, dim)
+    # Keep TP on a distinct tensor axis for mesh partitioning. Each local
+    # tensor has dim 1 == 1 and dim 0 flattened in [bundle,head] order.
+    pages = pages.permute(2, 3, 1, 0, 4, 5).contiguous().reshape(sp * local_pages * local_heads, tp, page_size, dim)
+    shard_dims = [None, None]
+    shard_dims[runtime.sp_axis] = 0
+    if shard_heads:
+        shard_dims[runtime.tp_axis] = 1
+    return ttnn.from_torch(
+        pages,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=runtime.mesh_device,
+        memory_config=nd_sharded_dram_memory_config(runtime.mesh_device, dim, page_size),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            runtime.mesh_device, mesh_shape=tuple(runtime.mesh_device.shape), dims=shard_dims
+        ),
+    )
+
+
+def upload_ring_page_table(runtime, seq_len, page_size):
+    sp = runtime.mesh_device.shape[runtime.sp_axis]
+    assert seq_len % (sp * page_size) == 0
+    local_pages = seq_len // sp // page_size
+    return ttnn.from_torch(
+        torch.arange(local_pages, dtype=torch.int64).repeat_interleave(sp).unsqueeze(0),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=runtime.mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(runtime.mesh_device),
+    )
+
+
+@contextmanager
+def paged_ring_addressing(runtime, expect_error):
+    """Exercise rank-specific allocation, nonzero layers, and slot changes on cached programs."""
+    original_upload = upload_ring_paged_cache
+    nonreplicated_table = None
+    runtime.mesh_device.enable_program_cache()
+
+    def page_ids(count, rank):
+        return (torch.arange(count - 1, -1, -1) + rank) % count
+
+    def upload_allocated(host, runtime, dtype, page_size, *, shard_heads):
+        b, h, seq, dim = host.shape
+        sp = runtime.mesh_device.shape[runtime.sp_axis]
+        count = seq // sp // page_size
+        logical = host.reshape(b, h, sp, count, page_size, dim)
+        # Both slots own disjoint bundles, each containing two full-width layers.
+        # Slot 0 and layer 0 stay finite zeros; only slot 1, layer 1 holds the reference.
+        physical = torch.zeros(b, h, sp, 2 * count, 2, page_size, dim, dtype=host.dtype)
+        for rank in range(sp):
+            physical[:, :, rank, count + page_ids(count, rank), 1] = logical[:, :, rank]
+        return original_upload(physical.reshape(b, h, 4 * seq, dim), runtime, dtype, page_size, shard_heads=shard_heads)
+
+    def upload_allocated_table(runtime, seq_len, page_size):
+        nonlocal nonreplicated_table
+        sp = runtime.mesh_device.shape[runtime.sp_axis]
+        count = seq_len // sp // page_size
+        ids = torch.stack([page_ids(count, rank) for rank in range(sp)], dim=1).flatten()
+        table = torch.stack((ids, ids + count))
+        shard_dims = [None, None]
+        shard_dims[runtime.sp_axis] = 0
+        nonreplicated_table = ttnn.from_torch(
+            table.repeat(sp, 1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=runtime.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                runtime.mesh_device, mesh_shape=tuple(runtime.mesh_device.shape), dims=shard_dims
+            ),
+        )
+        return ttnn.from_torch(
+            table,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=runtime.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(runtime.mesh_device),
+        )
+
+    def check_slot_switch(operation, check_full_mesh=False):
+        def invoke(*args, **kwargs):
+            kwargs.update(kv_cache_num_layers=2, kv_cache_layer_idx=1, kv_cache_slot_idx=0)
+            # Reject unsupported full-mesh paging before launching any device work.
+            if check_full_mesh:
+                with expect_error(RuntimeError, "requires an explicit cluster_axis"):
+                    operation(*args, **dict(kwargs, cluster_axis=None))
+            with expect_error(RuntimeError, "page_bundle_indices must be replicated across the complete mesh"):
+                operation(*args, **dict(kwargs, page_bundle_indices=nonreplicated_table))
+            zero_output = operation(*args, **kwargs)
+            for shard in ttnn.get_device_tensors(zero_output[0]):
+                assert torch.count_nonzero(ttnn.to_torch(shard)) == 0, "slot 0 must read its zero-filled cache"
+            entries = runtime.mesh_device.num_program_cache_entries()
+            assert entries > 0
+            kwargs["kv_cache_slot_idx"] = 1
+            output = operation(*args, **kwargs)
+            assert runtime.mesh_device.num_program_cache_entries() == entries, "slot changes must reuse the program"
+            with expect_error(RuntimeError, "page_bundle_indices must be replicated across the complete mesh"):
+                operation(*args, **dict(kwargs, page_bundle_indices=nonreplicated_table))
+            return output
+
+        return invoke
+
+    with (
+        mock.patch(f"{__name__}.upload_ring_paged_cache", upload_allocated),
+        mock.patch(f"{__name__}.upload_ring_page_table", upload_allocated_table),
+        mock.patch.object(
+            ttnn.transformer,
+            "ring_joint_scaled_dot_product_attention",
+            check_slot_switch(ttnn.transformer.ring_joint_scaled_dot_product_attention),
+        ),
+        mock.patch.object(
+            ttnn.transformer, "ring_mla", check_slot_switch(ttnn.transformer.ring_mla, check_full_mesh=True)
+        ),
+    ):
+        yield
 
 
 # ============================================================================
@@ -835,6 +965,8 @@ def call_sdpa(
     kv_actual_isl_tensor=None,
     kv_cache_num_layers=None,
     kv_cache_layer_idx=None,
+    page_bundle_indices=None,
+    kv_cache_page_size=32,
 ):
     tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
@@ -870,6 +1002,9 @@ def call_sdpa(
         kv_actual_isl_tensor=kv_actual_isl_tensor,
         kv_cache_num_layers=kv_cache_num_layers,
         kv_cache_layer_idx=kv_cache_layer_idx,
+        page_bundle_indices=page_bundle_indices,
+        kv_cache_page_size=kv_cache_page_size,
+        kv_cache_sp_axis=sp_axis if page_bundle_indices is not None else None,
     )
     return tt_out
 
@@ -930,6 +1065,7 @@ def run_ring_joint_sdpa(
     rmse_threshold=None,
     do_check=True,
     num_iterations=1,
+    paged_kv_cache=False,
 ):
     """
     Run Ring Joint Attention SDPA using direct ttnn operations with auto-detected devices.
@@ -1080,25 +1216,31 @@ def run_ring_joint_sdpa(
                 mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
             ),
         )
-        # K, V tensors use kv_dtype (can be bfloat8_b for MLA)
-        tt_K = ttnn.from_torch(
-            K,
-            dtype=kv_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_k_shard_dims
-            ),
-        )
-        tt_V = ttnn.from_torch(
-            V,
-            dtype=kv_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
-            ),
-        )
+        tt_page_table = None
+        if paged_kv_cache:
+            tt_K = upload_ring_paged_cache(K, runtime, kv_dtype, 32, shard_heads=nhk != 1)
+            tt_V = upload_ring_paged_cache(V, runtime, kv_dtype, 32, shard_heads=True)
+            tt_page_table = upload_ring_page_table(runtime, sq, 32)
+        else:
+            # K, V tensors use kv_dtype (can be bfloat8_b for MLA)
+            tt_K = ttnn.from_torch(
+                K,
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_k_shard_dims
+                ),
+            )
+            tt_V = ttnn.from_torch(
+                V,
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
+                ),
+            )
 
         # Set logical_n to the original full sequence length
         corrected_logical_n = sq
@@ -1128,6 +1270,8 @@ def run_ring_joint_sdpa(
                 topology=topology,
                 worker_sub_device_id=worker_sub_device_id,
                 ccl_column=ccl_column,
+                page_bundle_indices=tt_page_table,
+                kv_cache_page_size=32,
             )
 
             # Convert main output to torch and slice out tile-padding
@@ -1191,6 +1335,8 @@ def run_ring_joint_sdpa_model_configs(
     runtime: RingJointSDPARuntime = None,
     fp32_dest_acc_en: bool = False,
     use_attention_sink: bool = False,
+    paged_kv_cache: bool = False,
+    kv_cache_page_size: int = 32,
 ):
     """Run all q/k configs for one model while reusing shared inputs, mesh setup, and reference data."""
     qk_configs = list(qk_configs)
@@ -1291,24 +1437,30 @@ def run_ring_joint_sdpa_model_configs(
                 mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
             ),
         )
-        tt_K = ttnn.from_torch(
-            K,
-            dtype=kv_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_k_shard_dims
-            ),
-        )
-        tt_V = ttnn.from_torch(
-            V,
-            dtype=kv_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
-            ),
-        )
+        tt_page_table = None
+        if paged_kv_cache:
+            tt_K = upload_ring_paged_cache(K, runtime, kv_dtype, kv_cache_page_size, shard_heads=nhk != 1)
+            tt_V = upload_ring_paged_cache(V, runtime, kv_dtype, kv_cache_page_size, shard_heads=True)
+            tt_page_table = upload_ring_page_table(runtime, sq, kv_cache_page_size)
+        else:
+            tt_K = ttnn.from_torch(
+                K,
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_k_shard_dims
+                ),
+            )
+            tt_V = ttnn.from_torch(
+                V,
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
+                ),
+            )
         tt_attention_sink = None
         if operator_sink is not None:
             sink_shard_dims = [None, None]
@@ -1395,6 +1547,8 @@ def run_ring_joint_sdpa_model_configs(
                     worker_sub_device_id=worker_sub_device_id,
                     ccl_column=ccl_column,
                     attention_sink=tt_attention_sink,
+                    page_bundle_indices=tt_page_table,
+                    kv_cache_page_size=kv_cache_page_size,
                 )
 
                 if use_device_determinism_compare:
@@ -1471,6 +1625,7 @@ def run_ring_mla_sdpa(
     cache_batch=2,
     fp32_dest_acc_en: bool = False,
     runtime: RingJointSDPARuntime = None,
+    paged_kv_cache=False,
 ):
     """Run ring_mla where V is the first d_v columns of the single KV tensor."""
     if mesh_config.sp_size < 2:
@@ -1545,15 +1700,21 @@ def run_ring_mla_sdpa(
                 mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
             ),
         )
-        tt_KV = ttnn.from_torch(
-            KV_input,
-            dtype=kv_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_kv_shard_dims
-            ),
-        )
+        tt_page_table = None
+        if paged_kv_cache:
+            assert kv_cache_batch_idx is None, "paging and batch-indexed caches are mutually exclusive"
+            tt_KV = upload_ring_paged_cache(KV_input, runtime, kv_dtype, 32, shard_heads=False)
+            tt_page_table = upload_ring_page_table(runtime, sq, 32)
+        else:
+            tt_KV = ttnn.from_torch(
+                KV_input,
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_kv_shard_dims
+                ),
+            )
         persistent_output_buffer_kv = ttnn.from_torch(
             torch.zeros(kv_cache_batch, nhk, sq, d_k),
             dtype=kv_dtype,
@@ -1587,6 +1748,9 @@ def run_ring_mla_sdpa(
                 ccl_core_grid_offset=(ccl_column, 0),
                 use_column_major_ccl=True,
                 kv_cache_batch_idx=kv_cache_batch_idx,
+                page_bundle_indices=tt_page_table,
+                kv_cache_page_size=32,
+                kv_cache_sp_axis=sp_axis if paged_kv_cache else None,
             )
 
             tt_out_torch = ttnn.to_torch(
@@ -1680,6 +1844,8 @@ def run_ring_joint_sdpa_chunked(
     use_attention_sink: bool = False,
     runtime: RingJointSDPARuntime = None,
     reserve_llk_kernel_config: bool = True,
+    paged_kv_cache: bool = False,
+    kv_cache_page_size: int = 32,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1714,6 +1880,10 @@ def run_ring_joint_sdpa_chunked(
         assert model.nhk == 1, f"ring_mla requires one shared latent K/V head, got nhk={model.nhk}"
         assert not indexed_nd_sharded_kv_cache, "ring_mla chunked path here does not use the indexed ND-sharded cache"
         assert model.d_v <= model.d_k, f"latent V (d_v={model.d_v}) must fit within the K/V latent (d_k={model.d_k})"
+    if paged_kv_cache:
+        assert batch_size == 1, "paged caches require batch 1"
+        assert not indexed_nd_sharded_kv_cache, "paging and batch-indexed caches are mutually exclusive"
+        assert kv_cache_page_size > 0 and kv_cache_page_size % ttnn.TILE_SIZE == 0
     if use_attention_sink:
         assert not use_ring_mla, "attention sink coverage requires separate K/V ring joint SDPA"
 
@@ -1878,6 +2048,8 @@ def run_ring_joint_sdpa_chunked(
             kwargs = {}
             if memory_config is not None:
                 kwargs["memory_config"] = memory_config
+            if paged_kv_cache:
+                return upload_ring_paged_cache(k_host, runtime, kv_dtype, kv_cache_page_size, shard_heads=nhk != 1)
             return ttnn.from_torch(
                 k_host,
                 dtype=kv_dtype,
@@ -1893,6 +2065,8 @@ def run_ring_joint_sdpa_chunked(
             kwargs = {}
             if memory_config is not None:
                 kwargs["memory_config"] = memory_config
+            if paged_kv_cache:
+                return upload_ring_paged_cache(v_host, runtime, kv_dtype, kv_cache_page_size, shard_heads=True)
             return ttnn.from_torch(
                 v_host,
                 dtype=kv_dtype,
@@ -1950,6 +2124,8 @@ def run_ring_joint_sdpa_chunked(
         ring_mla_persistent_shard_dims = [None, None]  # gathered KV is replicated (full seq, single head)
 
         def upload_kv(kv_host):
+            if paged_kv_cache:
+                return upload_ring_paged_cache(kv_host, runtime, kv_dtype, kv_cache_page_size, shard_heads=False)
             return ttnn.from_torch(
                 kv_host,
                 dtype=kv_dtype,
@@ -1959,6 +2135,9 @@ def run_ring_joint_sdpa_chunked(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=ring_mla_kv_shard_dims
                 ),
             )
+
+        def upload_page_table(seq_len):
+            return upload_ring_page_table(runtime, seq_len, kv_cache_page_size)
 
         def create_ring_mla_kv_buffer(seq_len, kv_buffer_batch):
             return ttnn.from_torch(
@@ -1975,6 +2154,7 @@ def run_ring_joint_sdpa_chunked(
             f"Chunked prefill: model={model.name}, use_ring_mla={use_ring_mla}, total_seq={total_seq}, "
             f"sp_size={sp_size}, per-device Q seq_len={total_seq // sp_size}, "
             f"qk_configs={qk_configs}, "
+            f"paged_kv_cache={paged_kv_cache}, kv_cache_page_size={kv_cache_page_size}, "
             f"indexed_nd_sharded_kv_cache={indexed_nd_sharded_kv_cache}, "
             f"persistent_buffer_mode={persistent_buffer_mode}"
         )
@@ -2014,7 +2194,16 @@ def run_ring_joint_sdpa_chunked(
                     q_host, kv_host, *_ = build_kv_pad_rotation_mla_inputs(
                         K_full[:, :, :s, :], Q_chunk, K_chunk, s, sp_size, slab_rows
                     )
-                    return (s, e, b, None, upload_q(q_host), upload_kv(oversize(kv_host, nhk, d_k)), None)
+                    return (
+                        s,
+                        e,
+                        b,
+                        None,
+                        upload_q(q_host),
+                        upload_kv(oversize(kv_host, nhk, d_k)),
+                        None,
+                        upload_page_table(reuse_kv_stable_seq) if paged_kv_cache else None,
+                    )
 
                 q_host, k_host, v_host, *_ = build_kv_pad_rotation_inputs(
                     K_full[:, :, :s, :],
@@ -2034,6 +2223,7 @@ def run_ring_joint_sdpa_chunked(
                     upload_q(q_host),
                     upload_k(oversize(k_host, nhk, d_k)),
                     upload_v(oversize(v_host, nhv, d_v)),
+                    upload_page_table(reuse_kv_stable_seq) if paged_kv_cache else None,
                 )
 
             Q_chunk = Q_full[:, :, s:e, :].contiguous()
@@ -2050,6 +2240,7 @@ def run_ring_joint_sdpa_chunked(
                     upload_q(Q_chunk),
                     upload_kv(K_balanced),
                     None,
+                    upload_page_table(e) if paged_kv_cache else None,
                 )
 
             V_balanced = to_balanced_growing_cache_layout(V_full, sp_size, chunk_size, i)
@@ -2072,6 +2263,7 @@ def run_ring_joint_sdpa_chunked(
                 upload_q(Q_chunk),
                 upload_k(K_input, memory_config=k_memory_config),
                 upload_v(V_input, memory_config=v_memory_config),
+                upload_page_table(e) if paged_kv_cache else None,
             )
 
         def get_persistent_buffers(shared_persistent_buffers, chunk_persistent_buffers):
@@ -2092,6 +2284,7 @@ def run_ring_joint_sdpa_chunked(
             persistent_output_buffer_k,
             persistent_output_buffer_v,
             kv_cache_batch_idx_arg,
+            page_bundle_indices,
         ):
             try:
                 if use_ring_mla:
@@ -2114,6 +2307,9 @@ def run_ring_joint_sdpa_chunked(
                         ccl_core_grid_offset=(ccl_column, 0),
                         use_column_major_ccl=True,
                         kv_actual_isl=s if reuse_kv_buffer else None,
+                        page_bundle_indices=page_bundle_indices,
+                        kv_cache_page_size=kv_cache_page_size,
+                        kv_cache_sp_axis=sp_axis if page_bundle_indices is not None else None,
                     )
                     return tt_out
 
@@ -2139,6 +2335,8 @@ def run_ring_joint_sdpa_chunked(
                     kv_actual_isl=s if reuse_kv_buffer else None,
                     sliding_window_size=sliding_window_size,
                     attention_sink=tt_attention_sink,
+                    page_bundle_indices=page_bundle_indices,
+                    kv_cache_page_size=kv_cache_page_size,
                 )
             except Exception as exc:
                 op_name = "ring_mla" if use_ring_mla else "SDPA"
@@ -2204,6 +2402,7 @@ def run_ring_joint_sdpa_chunked(
                 tt_Q,
                 tt_K,
                 tt_V,
+                tt_page_table,
             ) = prepare_chunk_inputs(i)
             chunk_persistent_buffers = None
             if persistent_buffer_mode != "reuse_max":
@@ -2241,6 +2440,7 @@ def run_ring_joint_sdpa_chunked(
                             persistent_output_buffer_k,
                             persistent_output_buffer_v,
                             kv_cache_batch_idx_arg,
+                            tt_page_table,
                         )
 
                         if use_device_determinism_compare:
@@ -2284,6 +2484,7 @@ def run_ring_joint_sdpa_chunked(
                         persistent_output_buffer_k,
                         persistent_output_buffer_v,
                         kv_cache_batch_idx_arg,
+                        tt_page_table,
                     )
                     # do_check=False (perf/profiling): the device op above already ran for the
                     # profiler; skip the host readback and PCC comparison against ref_full.
@@ -3936,6 +4137,64 @@ def test_ring_mla_full_mesh_rejects_invalid_topology_and_placements(expect_error
         close_ring_joint_sdpa_runtime(runtime)
 
 
+@pytest.mark.parametrize("model_name", ["wan2_2_1xGLX", "mla_100k"])
+@pytest.mark.parametrize("page_size", [32, 64])
+def test_ring_joint_sdpa_paged_model_accuracy(model_name, page_size, expect_error):
+    """Check production MHA and separate-V MLA geometry with a short sequence."""
+    model = replace(MODEL_CONFIGS[model_name], seq_len=256)
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    try:
+        with paged_ring_addressing(runtime, expect_error):
+            # The runner checks reference accuracy at one iteration and replay determinism above one.
+            for iterations in (1, 2):
+                run_ring_joint_sdpa_model_configs(
+                    MESH_CONFIG,
+                    model,
+                    [(64, 128)],
+                    paged_kv_cache=True,
+                    kv_cache_page_size=page_size,
+                    num_iterations=iterations,
+                    runtime=runtime,
+                )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+@pytest.mark.parametrize("use_ring_mla", [True, False], ids=["kimi_mla", "minimax_gqa"])
+@pytest.mark.parametrize("page_size", [32, 64])
+def test_ring_attention_paged_chunked_model_accuracy(use_ring_mla, page_size, expect_error):
+    """Check production head geometry, growing caches, and replay using full-width paged shards."""
+    model = (
+        RING_MLA_CHUNKED_MODEL_CONFIGS["kimi50k"]
+        if use_ring_mla
+        else MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS["minimax3_55k"]
+    )
+    chunk_size = 128 * MESH_CONFIG.sp_size
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    try:
+        with paged_ring_addressing(runtime, expect_error):
+            # Reference accuracy, replay, then a partial K block in an oversized cache.
+            for iterations, reuse_cache in ((1, False), (2, False), (1, True)):
+                run_ring_joint_sdpa_chunked(
+                    MESH_CONFIG,
+                    model,
+                    chunk_size=chunk_size,
+                    total_seq=2 * chunk_size,
+                    qk_configs=[(32, 256)],
+                    paged_kv_cache=True,
+                    kv_cache_page_size=page_size,
+                    use_ring_mla=use_ring_mla,
+                    persistent_buffer_mode="reuse_max",
+                    num_iterations=iterations,
+                    # Oversized pad-rotation caches use the runner's single-pass perf path.
+                    reuse_kv_buffer=reuse_cache,
+                    do_check=not reuse_cache,
+                    runtime=runtime,
+                )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
 # ============================================================================
 # TRACE-SAFE METADATA PATH: metadata-path == scalar-path (bit-exact)
 # ============================================================================
@@ -4813,6 +5072,7 @@ STANDARD_MODEL_GROUPS, STANDARD_MODEL_GROUP_IDS = _generate_standard_model_group
     TEST_CONFIGS,
     ids=TEST_CONFIG_IDS,
 )
+@pytest.mark.parametrize("paged_kv_cache", [False, True], ids=["contiguous", "paged32"])
 def test_ring_joint_attention_sdpa_sweep_perf_impl(
     b,
     sq,
@@ -4828,6 +5088,7 @@ def test_ring_joint_attention_sdpa_sweep_perf_impl(
     is_balanced,
     q_dtype,
     kv_dtype,
+    paged_kv_cache,
 ):
     """
     Performance sweep test for ring joint attention SDPA.
@@ -4853,6 +5114,7 @@ def test_ring_joint_attention_sdpa_sweep_perf_impl(
         is_causal=is_causal,
         is_balanced=is_balanced,
         do_check=False,
+        paged_kv_cache=paged_kv_cache,
     )
 
 
@@ -4862,6 +5124,7 @@ def test_ring_joint_attention_sdpa_sweep_perf_impl(
     RING_MLA_TEST_CONFIGS,
     ids=RING_MLA_TEST_CONFIG_IDS,
 )
+@pytest.mark.parametrize("paged_kv_cache", [False, True], ids=["contiguous", "paged32"])
 def test_ring_mla_sweep_perf_impl(
     b,
     sq,
@@ -4875,6 +5138,7 @@ def test_ring_mla_sweep_perf_impl(
     is_balanced,
     q_dtype,
     kv_dtype,
+    paged_kv_cache,
 ):
     run_ring_mla_sdpa(
         MESH_CONFIG,
@@ -4891,6 +5155,7 @@ def test_ring_mla_sweep_perf_impl(
         kv_dtype,
         is_balanced=is_balanced,
         do_check=False,
+        paged_kv_cache=paged_kv_cache,
     )
 
 
@@ -5034,7 +5299,8 @@ def test_ring_mla_determinism(
 # === TEST 4: PERFORMANCE TABLE GENERATOR (skipped on CI) ===
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize("model_name", PERF_TEST_CONFIG_MODELS)
-def test_ring_joint_attention_create_perf_table(model_name):
+@pytest.mark.parametrize("paged_kv_cache", [False, True], ids=["contiguous", "paged32"])
+def test_ring_joint_attention_create_perf_table(model_name, paged_kv_cache):
     """
     Sweep chunk sizes for ring joint attention SDPA and print a performance table.
     Skipped on CI - run locally with tracy profiler.
@@ -5067,7 +5333,8 @@ def test_ring_joint_attention_create_perf_table(model_name):
 
     ccl_cores = full_grid_rows  # Full column height for CCL
 
-    subdir = "ttnn_ring_joint_sdpa_performance"
+    layout_id = "paged32" if paged_kv_cache else "contiguous"
+    subdir = f"ttnn_ring_joint_sdpa_performance_{layout_id}"
     perf_results = []
 
     for config, config_id in sweep_configs:
@@ -5078,7 +5345,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
             f"pytest tests/nightly/blackhole/sdpa/"
             f"test_ring_joint_sdpa.py::"
             f"test_ring_joint_attention_sdpa_sweep_perf_impl"
-            f"[{config_id}]"
+            f"[{layout_id}-{config_id}]"
         )
 
         (
@@ -5203,7 +5470,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
     # Print summary table
     print(f"\n{'='*150}")
     print(
-        f"Ring Joint Attention Performance Sweep ({model_name.upper()}): b={b}, nh={nhq} (global), s={s}, d_q={d_q}, d_v={d_v}, causal={is_causal}"
+        f"Ring Joint Attention Performance Sweep ({model_name.upper()}, {layout_id}): b={b}, nh={nhq} (global), s={s}, d_q={d_q}, d_v={d_v}, causal={is_causal}"
     )
     print(f"Architecture: {mesh_config.arch_type}, Ring size: {ring_size} devices, TP size: {mesh_config.tp_size}")
     print(f"Total MM FLOPs (all devices): {mm_flops:,} ({mm_flops/1e9:.2f} GFLOPs)")
@@ -5280,8 +5547,9 @@ else:
     MESH_CONFIG.is_galaxy and not is_high_power(),
     reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
 )
+@pytest.mark.parametrize("paged_kv_cache", [False, True], ids=["contiguous", "paged32"])
 def test_ring_joint_attention_perf_check(
-    model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin
+    model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin, paged_kv_cache
 ):
     """Measure ring joint SDPA math utilization via real-time device program records."""
     if MESH_CONFIG.sp_size != ring_size_expected:
@@ -5297,6 +5565,7 @@ def test_ring_joint_attention_perf_check(
     local_seq_len = model.seq_len
     local_nhq = model.nhq
 
+    config_id += "-paged32" if paged_kv_cache else "-contiguous"
     runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
     try:
         duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
@@ -5306,6 +5575,7 @@ def test_ring_joint_attention_perf_check(
                 model,
                 [(q_chunk_size, k_chunk_size)],
                 do_check=False,
+                paged_kv_cache=paged_kv_cache,
                 runtime=runtime,
             ),
         )
@@ -5336,7 +5606,8 @@ def test_ring_joint_attention_perf_check(
 
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_ring_mla_perf_better_than_separate_v_ring_joint():
+@pytest.mark.parametrize("paged_kv_cache", [False, True], ids=["contiguous", "paged32"])
+def test_ring_mla_perf_better_than_separate_v_ring_joint(paged_kv_cache):
     """Profile ring_mla against the existing separate-V MLA ring joint path and require a speedup."""
     model_name = "mla_100k"
     q_chunk_size = 160
@@ -5390,6 +5661,7 @@ def test_ring_mla_perf_better_than_separate_v_ring_joint():
             kv_dtype,
             is_balanced=is_balanced,
             do_check=False,
+            paged_kv_cache=paged_kv_cache,
             runtime=runtime,
         )
     )
@@ -5399,12 +5671,13 @@ def test_ring_mla_perf_better_than_separate_v_ring_joint():
             model,
             [(q_chunk_size, k_chunk_size)],
             do_check=False,
+            paged_kv_cache=paged_kv_cache,
             runtime=runtime,
         )
     )
 
     logger.info(
-        f"ring_mla perf: {ring_mla_duration_ns/1e6:.3f} ms, "
+        f"ring_mla perf ({'paged32' if paged_kv_cache else 'contiguous'}): {ring_mla_duration_ns/1e6:.3f} ms, "
         f"separate-V ring_joint: {separate_v_duration_ns/1e6:.3f} ms"
     )
     assert ring_mla_duration_ns < separate_v_duration_ns, (
@@ -5575,6 +5848,35 @@ def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, qk_configs, chun
         pcc_threshold=pcc_threshold,
         fp32_dest_acc_en=fp32_dest_acc_en,
     )
+
+
+@pytest.mark.parametrize("page_size", [32, 64])
+def test_ring_joint_attention_paged_sliding_accuracy_and_replay(page_size, expect_error):
+    """Paged halo reads preserve arbitrary page placement, sink semantics, and cache hits."""
+    chunk_size = 1024
+    model = replace(GPT_OSS_CHUNKED_MODEL, name="paged_sliding", q_chunk_sizes=[64], seq_len=chunk_size)
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, topology=Topology.Ring)
+    try:
+        with paged_ring_addressing(runtime, expect_error):
+            for chunk_id in (1, 2):
+                with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(chunk_id)}):
+                    for iterations in (1, 2):
+                        run_ring_joint_sdpa_chunked(
+                            MESH_CONFIG,
+                            model,
+                            chunk_size=chunk_size,
+                            total_seq=3 * chunk_size,
+                            qk_configs=[(64, 128)],
+                            persistent_buffer_mode="reuse_max",
+                            sliding_window_size=128,
+                            use_attention_sink=True,
+                            paged_kv_cache=True,
+                            kv_cache_page_size=page_size,
+                            num_iterations=iterations,
+                            runtime=runtime,
+                        )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
 
 
 def test_ring_joint_attention_gpt_oss_chunked_sliding_native_ring_gqa_accuracy_and_determinism():
@@ -5981,7 +6283,8 @@ def test_ring_joint_attention_minimax3_gqa_chunked_reuse_kv_hang_regression():
     CHUNKED_TEST_CONFIGS,
     ids=CHUNKED_TEST_CONFIG_IDS,
 )
-def test_ring_joint_attention_chunked_perf_impl(model_name, qk_configs, chunk_size, reuse_kv_buffer):
+@pytest.mark.parametrize("paged_kv_cache", [False, True], ids=["contiguous", "paged32"])
+def test_ring_joint_attention_chunked_perf_impl(model_name, qk_configs, chunk_size, reuse_kv_buffer, paged_kv_cache):
     """Classic separate-K/V ring joint SDPA chunked prefill without the CPU reference (profiled by
     test_ring_joint_attention_create_chunked_perf_table). reuse_kv: one oversized cache reused across
     chunks; fresh_kv: a per-chunk right-sized input."""
@@ -5994,6 +6297,7 @@ def test_ring_joint_attention_chunked_perf_impl(model_name, qk_configs, chunk_si
         qk_configs=qk_configs,
         persistent_buffer_mode="reuse_max",
         do_check=False,
+        paged_kv_cache=paged_kv_cache,
         reuse_kv_buffer=reuse_kv_buffer,
     )
 
@@ -6006,7 +6310,10 @@ def test_ring_joint_attention_chunked_perf_impl(model_name, qk_configs, chunk_si
     MINIMAX3_GQA_CHUNKED_TEST_CONFIGS,
     ids=MINIMAX3_GQA_CHUNKED_TEST_CONFIG_IDS,
 )
-def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_configs, chunk_size, reuse_kv_buffer):
+@pytest.mark.parametrize("paged_kv_cache", [False, True], ids=["contiguous", "paged32"])
+def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(
+    model_name, qk_configs, chunk_size, reuse_kv_buffer, paged_kv_cache
+):
     """Minimax3 GQA chunked prefill without the CPU reference. This mirrors the Kimi chunked
     perf harness but uses one KV head per TP shard."""
     mesh_config = MESH_CONFIG
@@ -6018,6 +6325,7 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_conf
         qk_configs=qk_configs,
         persistent_buffer_mode="reuse_max",
         do_check=False,
+        paged_kv_cache=paged_kv_cache,
         reuse_kv_buffer=reuse_kv_buffer,
     )
 
@@ -6055,7 +6363,8 @@ def test_ring_mla_chunked_accuracy(model_name, qk_configs, chunk_size):
     RING_MLA_CHUNKED_TEST_CONFIGS,
     ids=RING_MLA_CHUNKED_TEST_CONFIG_IDS,
 )
-def test_ring_mla_chunked_perf_impl(model_name, qk_configs, chunk_size, reuse_kv_buffer):
+@pytest.mark.parametrize("paged_kv_cache", [False, True], ids=["contiguous", "paged32"])
+def test_ring_mla_chunked_perf_impl(model_name, qk_configs, chunk_size, reuse_kv_buffer, paged_kv_cache):
     """ring_mla chunked prefill without the CPU reference (profiled by the perf table and check).
     reuse_kv: one oversized cache reused across chunks; fresh_kv (what the CI perf check profiles):
     a per-chunk right-sized input."""
@@ -6069,6 +6378,7 @@ def test_ring_mla_chunked_perf_impl(model_name, qk_configs, chunk_size, reuse_kv
         persistent_buffer_mode="reuse_max",
         use_ring_mla=True,
         do_check=False,
+        paged_kv_cache=paged_kv_cache,
         reuse_kv_buffer=reuse_kv_buffer,
     )
 
@@ -6149,6 +6459,7 @@ def _run_chunked_perf_table(
     subdir,
     label,
     id_suffix="",
+    paged_kv_cache=False,
 ):
     """Run chunked prefill once with tracy and print a per-chunk math-util table.
 
@@ -6177,7 +6488,12 @@ def _run_chunked_perf_table(
     num_profiled = len(chunk_indices)
 
     config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}{id_suffix}"
-    command = f"pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::{accuracy_test_name}[{config_id}]"
+    layout_id = "paged32" if paged_kv_cache else "contiguous"
+    subdir = f"{subdir}_{layout_id}"
+    label = f"{label} ({layout_id})"
+    command = (
+        f"pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::{accuracy_test_name}[{layout_id}-{config_id}]"
+    )
 
     float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]", "PM FPU UTIL (%)"]
     cols = ["ATTRIBUTES"]
@@ -6291,7 +6607,10 @@ def _run_chunked_perf_table(
     CHUNKED_CONFIGS,
     ids=CHUNKED_CONFIG_IDS,
 )
-def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_size, chunk_size):
+@pytest.mark.parametrize("paged_kv_cache", [False, True], ids=["contiguous", "paged32"])
+def test_ring_joint_attention_create_chunked_perf_table(
+    model_name, q_chunk_size, k_chunk_size, chunk_size, paged_kv_cache
+):
     """Per-chunk math-util + duration table for the classic separate-K/V chunked-prefill path,
     profiling the reuse_kv variant (one oversized cache reused across chunks). Per-chunk device time
     tracks the logical_n-bounded gather, exposing whether the gather honours that bound."""
@@ -6306,6 +6625,7 @@ def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size
         subdir="ttnn_ring_joint_sdpa_chunked_performance",
         label="Ring Joint Chunked-Prefill (reuse KV buffer)",
         id_suffix="-reuse_kv",
+        paged_kv_cache=paged_kv_cache,
     )
 
 
@@ -6317,8 +6637,9 @@ def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size
     MINIMAX3_GQA_CHUNKED_CONFIGS,
     ids=MINIMAX3_GQA_CHUNKED_CONFIG_IDS,
 )
+@pytest.mark.parametrize("paged_kv_cache", [False, True], ids=["contiguous", "paged32"])
 def test_ring_joint_attention_minimax3_gqa_create_chunked_perf_table(
-    model_name, q_chunk_size, k_chunk_size, chunk_size
+    model_name, q_chunk_size, k_chunk_size, chunk_size, paged_kv_cache
 ):
     """Per-chunk math-util + duration table for Minimax3 GQA chunked prefill."""
     _run_chunked_perf_table(
@@ -6332,6 +6653,7 @@ def test_ring_joint_attention_minimax3_gqa_create_chunked_perf_table(
         subdir="ttnn_ring_joint_sdpa_minimax3_gqa_chunked_performance",
         label="Ring Joint Minimax3 GQA Chunked-Prefill (reuse KV buffer)",
         id_suffix="-reuse_kv",
+        paged_kv_cache=paged_kv_cache,
     )
 
 
@@ -6365,7 +6687,8 @@ def compute_chunked_prefill_perf_check_utilization(
     RING_MLA_CHUNKED_CONFIGS,
     ids=RING_MLA_CHUNKED_CONFIG_IDS,
 )
-def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_size, chunk_size):
+@pytest.mark.parametrize("paged_kv_cache", [False, True], ids=["contiguous", "paged32"])
+def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_size, chunk_size, paged_kv_cache):
     """Per-chunk math-util + duration table for the ring_mla chunked-prefill path, profiling the
     reuse_kv variant (one oversized cache reused across chunks). Per-chunk device time tracks the
     logical_n-bounded gather, exposing whether the gather honours that bound."""
@@ -6380,6 +6703,7 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
         subdir="ttnn_ring_mla_chunked_performance",
         label="Ring MLA Chunked-Prefill (reuse KV buffer)",
         id_suffix="-reuse_kv",
+        paged_kv_cache=paged_kv_cache,
     )
 
 
@@ -6435,7 +6759,10 @@ else:
     MESH_CONFIG.is_galaxy and not is_high_power(),
     reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
 )
-def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
+@pytest.mark.parametrize("paged_kv_cache", [False, True], ids=["contiguous", "paged32"])
+def test_ring_mla_chunked_perf_check(
+    model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, paged_kv_cache
+):
     """Measure ring_mla chunked-prefill math utilization for the kimi 50k+5k galaxy chunk (a 5k Q
     chunk against a 50k K/V prefix), simulated on the 4-device QuietBox, via realtime profiler and assert
     within +/- RING_JOINT_PERF_MARGIN.
@@ -6466,6 +6793,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
                     use_ring_mla=True,
                     do_check=False,
                     reuse_kv_buffer=False,
+                    paged_kv_cache=paged_kv_cache,
                     runtime=runtime,
                 ),
             )
@@ -6500,8 +6828,9 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+@pytest.mark.parametrize("paged_kv_cache", [False, True], ids=["contiguous", "paged32"])
 def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
-    model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util
+    model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, paged_kv_cache
 ):
     """Measure Minimax3 GQA chunked-prefill math utilization for the production-style final chunk.
 
@@ -6517,6 +6846,7 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
     perf_chunk = n_chunks - 1
 
     config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-reuse_kv"
+    config_id += "-paged32" if paged_kv_cache else "-contiguous"
     runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
     try:
         with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
@@ -6529,6 +6859,7 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
                     qk_configs=[(q_chunk_size, k_chunk_size)],
                     persistent_buffer_mode="reuse_max",
                     do_check=False,
+                    paged_kv_cache=paged_kv_cache,
                     reuse_kv_buffer=True,
                     runtime=runtime,
                 ),
@@ -6576,7 +6907,10 @@ GPT_OSS_CHUNKED_PERF_CHECK_CONFIGS = [
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_ring_joint_attention_gpt_oss_chunked_sliding_perf_check(q_chunk_size, k_chunk_size, expected_util, margin):
+@pytest.mark.parametrize("paged_kv_cache", [False, True], ids=["contiguous", "paged32"])
+def test_ring_joint_attention_gpt_oss_chunked_sliding_perf_check(
+    q_chunk_size, k_chunk_size, expected_util, margin, paged_kv_cache
+):
     """Measure the final 5K GPT-OSS Q chunk against its 55K sliding KV cache on the CI target."""
     if MESH_CONFIG.num_devices != 8:
         pytest.skip(f"GPT-OSS sliding perf target is calibrated for the 8-chip CI ring, got {MESH_CONFIG.num_devices}")
@@ -6595,6 +6929,7 @@ def test_ring_joint_attention_gpt_oss_chunked_sliding_perf_check(q_chunk_size, k
                     qk_configs=[(q_chunk_size, k_chunk_size)],
                     persistent_buffer_mode="reuse_max",
                     do_check=False,
+                    paged_kv_cache=paged_kv_cache,
                     reuse_kv_buffer=True,
                     sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
                     use_attention_sink=True,
@@ -6618,7 +6953,7 @@ def test_ring_joint_attention_gpt_oss_chunked_sliding_perf_check(q_chunk_size, k
     lower = expected_util * (1 - margin)
     upper = expected_util * (1 + margin)
     logger.info(
-        f"GPT-OSS sliding 5K-on-55K perf: q={q_chunk_size}, k={k_chunk_size}, "
+        f"GPT-OSS sliding 5K-on-55K perf ({'paged32' if paged_kv_cache else 'contiguous'}): q={q_chunk_size}, k={k_chunk_size}, "
         f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}%, "
         f"expected={expected_util:.2f}% [{lower:.2f}, {upper:.2f}], "
         f"profiler_records={len(perf_records)}"

@@ -422,7 +422,7 @@ RingWritePlan build_ring_write_plan(
     // Chunked sliding consumes the local slab followed by its cyclic
     // predecessor. Keep that dependency on direction 1 for every device,
     // independent of the dense ring's parity-based split.
-    if (args.has_sliding_window() && tensor_args.is_chunked() && !args.is_cross) {
+    if (args.has_sliding_window() && tensor_args.is_chunked(args.kv_cache_sp_axis) && !args.is_cross) {
         plan.forward_writes_expected = 1;
         plan.backward_writes_expected = 0;
         return plan;
@@ -456,7 +456,7 @@ RingJointRuntimeDerivation build_runtime_derivation(
     const auto& q_shape = tensor_args.input_q.logical_shape();
     const uint32_t k_chunk_size = args.get_k_chunk_size();
     const uint32_t q_local_padded_N = q_shape[2];
-    const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
+    const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len(args.kv_cache_sp_axis);
     const RingJointInputParams joint_input_params = resolve_ring_joint_input_params(args, tensor_args);
 
     RingJointRuntimeDerivation derivation;
@@ -476,10 +476,10 @@ RingJointRuntimeDerivation build_runtime_derivation(
     derivation.logical_lt = tt::div_up(joint_input_params.logical_l, tt::constants::TILE_HEIGHT);
     // Cross is non-causal on chunked-shaped tensors, so kernels and the work planner use the
     // non-chunked path.
-    derivation.kernel_chunked = tensor_args.is_chunked() && !args.is_cross;
+    derivation.kernel_chunked = tensor_args.is_chunked(args.kv_cache_sp_axis) && !args.is_cross;
     // The metadata path derives kv_actual_isl on-device for chunked prefill.
     derivation.kv_pad_rotation_enabled =
-        args.has_kv_pad_rotation() || (tensor_args.has_metadata() && tensor_args.is_chunked());
+        args.has_kv_pad_rotation() || (tensor_args.has_metadata() && tensor_args.is_chunked(args.kv_cache_sp_axis));
     derivation.kernel_is_causal = args.is_causal && !derivation.kernel_chunked;
 
     TT_FATAL(
@@ -539,6 +539,7 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     const uint32_t joint_buffer_args = (joint_input_params.L != 0) ? kReaderJointBufferArgCount : 0;
     // 2 extra buffer slots for gathered_joint_k/v when the sharded-joint path is active
     const uint32_t gathered_joint_buffer_args = joint_input_params.joint_is_sharded ? 2 : 0;
+    const uint32_t paged_buffer_args = tensor_args.has_paged_kv_cache() ? 3 : 0;
     const bool enable_kv_chains = !args.has_sliding_window();
     const bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
     const uint32_t head_chain_args = use_head_chain ? kRingJointChainConfigArgCount : 0;
@@ -546,9 +547,11 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
         enable_kv_chains && k_uses_batch_chain ? (kRingJointChainConfigArgCount + kReaderBatchChainExtraArgCount) : 0;
     const uint32_t gqa_chain_args =
         enable_kv_chains && gqa_grouped_kv ? (kRingJointChainConfigArgCount + kReaderGQAChainExtraArgCount) : 0;
-    layout.reader_kv_cache_batch_idx = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args + 2;
+    layout.reader_kv_cache_batch_idx =
+        kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args + paged_buffer_args + 2;
     layout.reader_logical_nt = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args +
-                               kReaderQWorkArgCount + head_chain_args + batch_chain_args + gqa_chain_args;
+                               paged_buffer_args + kReaderQWorkArgCount + head_chain_args + batch_chain_args +
+                               gqa_chain_args;
     layout.reader_active_ring_iter_mask = layout.reader_logical_nt + 1;
     layout.writer_logical_nt = kWriterBaseArgCount;
     layout.writer_active_ring_iter_mask = layout.writer_logical_nt + 1;
@@ -575,7 +578,7 @@ void write_runtime_arg(RuntimeArgsData& args, uint32_t index, uint32_t value, co
 // dispatch is bounded) and the cache-hit override path.
 std::optional<uint32_t> compute_gather_valid_Ht(
     const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
-    if (!args.has_kv_pad_rotation() && !(tensor_args.has_metadata() && tensor_args.is_chunked())) {
+    if (!args.has_kv_pad_rotation() && !(tensor_args.has_metadata() && tensor_args.is_chunked(args.kv_cache_sp_axis))) {
         return std::nullopt;
     }
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
@@ -604,7 +607,7 @@ void apply_ring_joint_scalar_runtime_args(
     const ttnn::MeshCoordinate& mesh_dispatch_coordinate) {
     const bool patch_indexed_kv_cache = args.has_indexed_kv_cache();
     const bool patch_kv_pad_rotation = args.has_kv_pad_rotation();
-    if (!patch_indexed_kv_cache && !patch_kv_pad_rotation) {
+    if (!patch_indexed_kv_cache && !patch_kv_pad_rotation && !tensor_args.has_paged_kv_cache()) {
         return;
     }
 
@@ -630,6 +633,31 @@ void apply_ring_joint_scalar_runtime_args(
     const uint32_t neighbor_reader_tensor_descriptor_field_count =
         tensor_args.has_metadata() ? ag_rt::kNeighborReaderMetadataTensorDescriptorFieldCount
                                    : ag_rt::kNeighborReaderTensorDescriptorFieldCount;
+
+    if (tensor_args.has_paged_kv_cache()) {
+        const uint32_t slot_offset =
+            uses_neighbor_halo ? ag_rt::kNeighborReaderRuntimeArgHeaderCount +
+                                     num_ag_inputs * (ag_rt::kNeighborReaderTensorDescriptorFieldCount + 1) + 1
+                               : ag_rt::reader_page_table_slot_offset(num_ag_inputs, tensor_args.has_metadata());
+        const uint32_t sp_rank =
+            args.kv_cache_sp_axis.has_value() ? mesh_dispatch_coordinate[*args.kv_cache_sp_axis] : 0u;
+        const auto patch_reader_page_table = [&](uint32_t kernel_id) {
+            for (auto& column : GetRuntimeArgs(program, kernel_id)) {
+                for (auto& core_args : column) {
+                    if (core_args.size() > slot_offset + 2) {
+                        write_runtime_arg(core_args, slot_offset, args.kv_cache_slot_idx, "all_gather.page_table_slot");
+                        write_runtime_arg(core_args, slot_offset + 2, sp_rank, "all_gather.page_table_sp_rank");
+                    }
+                }
+            }
+        };
+        if (uses_neighbor_halo) {
+            patch_reader_page_table(kNeighborHaloReaderKernelIndex);
+        } else {
+            patch_reader_page_table(kAllGatherReaderForwardKernelIndex);
+            patch_reader_page_table(kAllGatherReaderBackwardKernelIndex);
+        }
+    }
 
     // Re-patch the fused all-gather readers to gather the single cache slot `kv_cache_batch_idx`.
     // input_batch_base is uniform across all gather cores/links, so patch every core that runs the
@@ -695,7 +723,11 @@ void apply_ring_joint_scalar_runtime_args(
                 for (auto& core_args : col_args) {
                     for (uint32_t in = 0; in < num_ag_inputs; ++in) {
                         const auto& shape = ag_inputs[in]->padded_shape();
-                        const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
+                        const uint32_t Ht =
+                            tensor_args.has_paged_kv_cache()
+                                ? static_cast<uint32_t>(
+                                      tensor_args.local_kv_seq_len(args.kv_cache_sp_axis) / tt::constants::TILE_HEIGHT)
+                                : shape[2] / tt::constants::TILE_HEIGHT;
                         const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
                         const uint32_t valid_Ht = std::min(gather_valid_Ht, Ht);
                         const uint32_t valid_pages = valid_Ht * Wt;
@@ -729,7 +761,8 @@ void apply_ring_joint_scalar_runtime_args(
             ag_rt::kValidPagesFieldOffset);
     }
 
-    if (args.has_sliding_window() && (patch_indexed_kv_cache || patch_kv_pad_rotation)) {
+    if (args.has_sliding_window() &&
+        (patch_indexed_kv_cache || patch_kv_pad_rotation || tensor_args.has_paged_kv_cache())) {
         const uint32_t runtime_ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
         const auto runtime_chunked_sliding_layout = ring_joint::build_chunked_sliding_halo_layout(
             tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
@@ -813,6 +846,16 @@ void apply_ring_joint_scalar_runtime_args(
         auto& compute_args = GetRuntimeArgs(program, kComputeKernelIndex, core);
 
         auto& reader_args = GetRuntimeArgs(program, kReaderKernelIndex, core);
+        if (tensor_args.has_paged_kv_cache()) {
+            // The table address, slot, and SP rank immediately precede the two Q-work arguments.
+            write_runtime_arg(
+                reader_args, layout.reader_kv_cache_batch_idx - 4, args.kv_cache_slot_idx, "reader.page_table_slot");
+            write_runtime_arg(
+                reader_args,
+                layout.reader_kv_cache_batch_idx - 3,
+                args.kv_cache_sp_axis.has_value() ? mesh_dispatch_coordinate[*args.kv_cache_sp_axis] : 0u,
+                "reader.page_table_sp_rank");
+        }
         if (patch_indexed_kv_cache) {
             write_runtime_arg(
                 reader_args, layout.reader_kv_cache_batch_idx, kv_cache_batch_idx, "reader.kv_cache_batch_idx");
@@ -1026,7 +1069,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t NHV = tensor_args.v_num_heads();
     const uint32_t DH = q_shape[3];
     const uint32_t q_local_padded_N = q_shape[2];
-    const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
+    const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len(args.kv_cache_sp_axis);
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t gathered_padded_N = k_shape[2];
     const uint32_t global_padded_N = kv_local_padded_N * ring_size;
@@ -1063,7 +1106,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t logical_lt = tt::div_up(logical_l, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
-    const bool kv_pad_from_metadata = tensor_args.has_metadata() && tensor_args.is_chunked();
+    const bool kv_pad_from_metadata = tensor_args.has_metadata() && tensor_args.is_chunked(args.kv_cache_sp_axis);
     const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation() || kv_pad_from_metadata;
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
     const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(args, tensor_args);
@@ -1509,12 +1552,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(joint_is_sharded),
         // Slot 39: true (unpadded) joint length in tiles (twins spatial logical_nt). The reader uses it
         // to skip joint K chunks that lie entirely beyond the real joint tail (padding).
-        // Slots 40-43: transport-to-tensor rank mapping. Tensor accessors start at slot 44.
+        // Slots 40-43: transport-to-tensor rank mapping.
         logical_lt,
         static_cast<uint32_t>(rank_mapping.full_mesh),
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
         rank_mapping.mesh_cols,
+        // Slots 44-49: paging geometry and allocator table shape. Tensor accessors start at 50.
+        static_cast<uint32_t>(tensor_args.has_paged_kv_cache()),
+        args.kv_cache_num_layers,
+        args.kv_cache_layer_idx,
+        args.kv_cache_page_size / tt::constants::TILE_HEIGHT,
+        tensor_args.page_table_sp_size(args.kv_cache_sp_axis),
+        tensor_args.has_paged_kv_cache() ? tensor_args.page_bundle_indices->logical_shape()[1] : 0u,
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -1549,6 +1599,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         if (kv_pad_from_metadata) {
             TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(reader_compile_time_args);
         }
+    }
+    if (tensor_args.has_paged_kv_cache()) {
+        TensorAccessorArgs(tensor_args.page_bundle_indices->buffer()).append_to(reader_compile_time_args);
     }
 
     /**
@@ -1902,6 +1955,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
     const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
+    const uint32_t page_bundle_table_bytes_unaligned =
+        tensor_args.has_paged_kv_cache()
+            ? static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_shape()[1] * sizeof(uint32_t))
+            : 32u;
+    const uint32_t page_bundle_table_bytes = round_up_to_mul32(page_bundle_table_bytes_unaligned);
+    const uint32_t cb_page_bundle_id = tensor_args.has_paged_kv_cache()
+                                           ? allocate_cb(page_bundle_table_bytes, 1, tt::DataFormat::UInt32)
+                                           : cb_kv_pad_derived;
 
     const std::vector<uint32_t> cb_compile_time_args = {
         cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
@@ -1909,7 +1970,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         cb_signal,   cb_out,      cb_stats_out,    cb_qk_im,         cb_out_im_A,     cb_out_im_B,
         cb_max_A,    cb_max_B,    cb_sum_A,        cb_sum_B,         cb_exp_max_diff, cb_kv_pad_derived};
     const std::vector<uint32_t> reader_cb_compile_time_args = {
-        cb_q_in, cb_k_in, cb_v_in, cb_attention_sink, cb_kv_pad_derived};
+        cb_q_in, cb_k_in, cb_v_in, cb_attention_sink, cb_kv_pad_derived, cb_page_bundle_id};
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
     writer_compile_time_args.insert(
@@ -2714,6 +2775,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             reader_args.push_back(gathered_joint_tensor_k->buffer());
             reader_args.push_back(gathered_joint_tensor_v->buffer());
         }
+        if (tensor_args.has_paged_kv_cache()) {
+            reader_args.push_back(tensor_args.page_bundle_indices->buffer());
+            reader_args.push_back(args.kv_cache_slot_idx);
+            reader_args.push_back(args.kv_cache_sp_axis.has_value() ? coord[*args.kv_cache_sp_axis] : 0u);
+        }
         reader_args.push_back(global_q_start);
         reader_args.push_back(global_q_end);
         reader_args.push_checked(
@@ -2891,6 +2957,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             .q_local_tile_rows = chunked_sliding_halo_layout.q_local_tile_rows,
             .halo_tile_rows = chunked_sliding_halo_layout.halo_tile_rows,
             .source_device = transport_rank,
+            .page_bundle_indices =
+                tensor_args.has_paged_kv_cache() ? &tensor_args.page_bundle_indices.value() : nullptr,
+            .page_size_tokens = args.kv_cache_page_size,
+            .page_table_slot = args.kv_cache_slot_idx,
+            .page_table_sp_size = tensor_args.page_table_sp_size(args.kv_cache_sp_axis),
+            .page_table_sp_rank = args.kv_cache_sp_axis.has_value() ? coord[*args.kv_cache_sp_axis] : 0u,
+            .local_cache_tile_rows = tensor_args.local_kv_seq_len(args.kv_cache_sp_axis) / tt::constants::TILE_HEIGHT,
         };
         log_debug(
             tt::LogOp,
@@ -2963,7 +3036,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // consumer implements the second-half wait.
             sdpa_fused_op_signaler->split_forwarding_enabled,
             /*partial_readiness_enabled=*/false,
-            rank_mapping);
+            rank_mapping,
+            tensor_args.page_bundle_indices,
+            args.kv_cache_page_size,
+            args.kv_cache_slot_idx,
+            tensor_args.page_table_sp_size(args.kv_cache_sp_axis),
+            args.kv_cache_sp_axis.has_value() ? coord[*args.kv_cache_sp_axis] : 0u);
     }
 
     return desc;

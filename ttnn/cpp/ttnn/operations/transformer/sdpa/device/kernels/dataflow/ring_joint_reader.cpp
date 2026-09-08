@@ -299,6 +299,10 @@ void kernel_main() {
     constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(41));
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(42);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(43);
+    constexpr bool has_page_bundles = get_compile_time_arg_val(44) == 1;
+    constexpr uint32_t page_bundle_num_layers = get_compile_time_arg_val(45);
+    constexpr uint32_t page_bundle_layer_idx = get_compile_time_arg_val(46);
+    constexpr uint32_t page_bundle_size_tiles = get_compile_time_arg_val(47);
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and joint generator uses.
@@ -308,8 +312,11 @@ void kernel_main() {
     // Sharded joint requires the gathered joint K/V buffers (only meaningful when joint K is present).
     constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
 
-    // Slots 40-43 are the rank-mapping descriptor, so tensor accessors start at slot 44.
-    constexpr auto q_args = TensorAccessorArgs<44>();
+    // Slots 40-43 are the rank mapping and 44-47 carry paged-cache structure.
+    constexpr uint32_t page_table_sp_size = get_compile_time_arg_val(48);
+    constexpr uint32_t page_table_global_pages = get_compile_time_arg_val(49);
+    constexpr uint32_t tensor_args_offset = 50;
+    constexpr auto q_args = TensorAccessorArgs<tensor_args_offset>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -321,10 +328,10 @@ void kernel_main() {
     constexpr uint32_t post_tensor_args_offset = attention_sink_args.next_compile_time_args_offset();
     // The metadata accessor (metadata path only) follows the tensor accessors and precedes the chain
     // semaphore compile args. Gate its offset on slot_from_metadata: when absent, fall back to a VALID
-    // (unused) accessor offset (q_args' slot 44) so TensorAccessorArgs<> -- instantiated unconditionally
+    // (unused) accessor offset (q_args' slot 50) so TensorAccessorArgs<> -- instantiated unconditionally
     // here -- never names a non-accessor compile arg (which would fail its internal static_assert).
     // The chain/CB compile args then start after the metadata accessor when present.
-    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 44;
+    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : tensor_args_offset;
     constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();  // slot_id accessor
     // kv_actual_isl gets its OWN accessor (a separately-allocated single-page DRAM tensor can land in a
     // different DRAM bank than slot_id, so the slot accessor's dspec reads the wrong bank for it -- the kv
@@ -335,8 +342,12 @@ void kernel_main() {
     constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
     constexpr uint32_t chains_base_no_kv_pad =
         slot_from_metadata ? meta_args.next_compile_time_args_offset() : post_tensor_args_offset;
-    constexpr uint32_t chains_base_offset =
+    constexpr uint32_t chains_base_before_page =
         kv_pad_from_metadata ? kv_meta_args.next_compile_time_args_offset() : chains_base_no_kv_pad;
+    constexpr uint32_t page_bundle_args_offset = has_page_bundles ? chains_base_before_page : tensor_args_offset;
+    constexpr auto page_bundle_args = TensorAccessorArgs<page_bundle_args_offset>();
+    constexpr uint32_t chains_base_offset =
+        has_page_bundles ? page_bundle_args.next_compile_time_args_offset() : chains_base_before_page;
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -360,6 +371,14 @@ void kernel_main() {
     if constexpr (has_gathered_joint_k) {
         gathered_joint_k_addr = get_arg_val<uint32_t>(argidx++);
         gathered_joint_v_addr = get_arg_val<uint32_t>(argidx++);
+    }
+    uint32_t page_bundle_indices_addr = 0;
+    uint32_t page_table_slot = 0;
+    uint32_t page_table_sp_rank = 0;
+    if constexpr (has_page_bundles) {
+        page_bundle_indices_addr = get_arg_val<uint32_t>(argidx++);
+        page_table_slot = get_arg_val<uint32_t>(argidx++);
+        page_table_sp_rank = get_arg_val<uint32_t>(argidx++);
     }
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
@@ -462,6 +481,36 @@ void kernel_main() {
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 4);
+    constexpr uint32_t cb_page_bundle_id = get_compile_time_arg_val(cb_arg_offset + 5);
+
+    // Fetch the selected allocator row while setting up the K/V chains. Paging and
+    // device-derived metadata are mutually exclusive, so logical_nt is final here.
+    const auto page_bundle_reader = TensorAccessor(page_bundle_args, page_bundle_indices_addr);
+    CircularBuffer cb_page_bundle(cb_page_bundle_id);
+    const uint32_t page_bundle_table_l1 = cb_page_bundle.get_write_ptr();
+    Noc page_bundle_noc;
+    uint32_t active_bundle_pages = 0;
+    uint32_t active_local_tiles = kv_local_padded_Nt;
+    if constexpr (has_page_bundles) {
+        const uint32_t rank_capacity =
+            (page_table_global_pages + page_table_sp_size - 1 - page_table_sp_rank) / page_table_sp_size;
+        if constexpr (kv_pad_rotation_enabled) {
+            const uint32_t global_slab_tiles = q_local_padded_Nt * ring_size;
+            active_local_tiles = std::min(
+                active_local_tiles, ((logical_nt + global_slab_tiles - 1) / global_slab_tiles) * q_local_padded_Nt);
+        }
+        active_bundle_pages =
+            std::min(rank_capacity, (active_local_tiles + page_bundle_size_tiles - 1) / page_bundle_size_tiles);
+        if (active_bundle_pages != 0) {
+            const uint32_t end = (active_bundle_pages - 1) * page_table_sp_size + page_table_sp_rank + 1;
+            page_bundle_noc.async_read(
+                page_bundle_reader,
+                CoreLocalMem<uint32_t>(page_bundle_table_l1),
+                end * sizeof(uint32_t),
+                {.page_id = page_table_slot},
+                {});
+        }
+    }
 
     if constexpr (slot_from_metadata || kv_pad_from_metadata) {
         Noc meta_noc;
@@ -649,12 +698,42 @@ void kernel_main() {
 
     const auto q_generator = PaddedAddrGenerator(q_reader, input_q_tile_logical);
     const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
+    if constexpr (has_page_bundles) {
+        page_bundle_noc.async_read_barrier();
+        invalidate_l1_cache();
+        if constexpr (page_table_sp_size > 1) {
+            auto* entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_bundle_table_l1);
+            for (uint32_t page = 0; page < active_bundle_pages; ++page) {
+                entries[page] = entries[page * page_table_sp_size + page_table_sp_rank];
+            }
+        }
+    }
+    // A partial final K block may extend into unallocated cache capacity. Bound paged
+    // reads to the active prefix whose bundle IDs were loaded; the rest is zero-filled.
+    const auto paged_k_generator = PagedKVAddrGenerator<decltype(local_k_reader), has_page_bundles, !v_shares_k_buffer>{
+        local_k_reader,
+        active_local_tiles,
+        NHK,
+        page_bundle_num_layers,
+        page_bundle_layer_idx,
+        page_bundle_size_tiles,
+        DHt,
+        page_bundle_table_l1};
     const auto gathered_k_generator = PaddedAddrGenerator(gathered_k_reader, gathered_k_input_tile_logical);
     const auto local_v_reader = TensorAccessor(v_args, v_addr);
     const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NHV, kv_local_padded_Nt, vDHt);
     const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
     const auto gathered_v_input_tile_logical = TensorTileShape(gathered_kv_batch_dim, NHV, gathered_padded_Nt, vDHt);
     const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
+    const auto paged_v_generator = PagedKVAddrGenerator<decltype(local_v_reader), has_page_bundles, !v_shares_k_buffer>{
+        local_v_reader,
+        active_local_tiles,
+        NHV,
+        page_bundle_num_layers,
+        page_bundle_layer_idx,
+        page_bundle_size_tiles,
+        vDHt,
+        page_bundle_table_l1};
     const auto gathered_v_generator = PaddedAddrGenerator(gathered_v_reader, gathered_v_input_tile_logical);
     [[maybe_unused]] const auto v_generators =
         VSourceGenerators<decltype(local_v_generator), decltype(gathered_v_generator)>{
@@ -994,19 +1073,27 @@ void kernel_main() {
                             k_tile_bytes,
                             true /*transpose*/);
                     };
-                    fetch_k_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
-                        kv_chunk_is_joint,
-                        joint_chunk_is_local,
-                        // Local vs gathered spatial source is keyed off the source ring id, not the
-                        // loop index, so the sliding-window plan's out-of-order K chunks resolve too.
-                        source_is_local ? 0 : 1,
-                        joint_k_addr,
-                        gathered_joint_k_addr,
-                        local_k_generator,
-                        gathered_k_generator,
-                        joint_q_input_tile_logical,
-                        joint_input_tile_logical,
-                        fetch_k);
+                    if constexpr (has_page_bundles) {
+                        if (source_is_local) {
+                            fetch_k(paged_k_generator);
+                        } else {
+                            fetch_k(gathered_k_generator);
+                        }
+                    } else {
+                        fetch_k_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
+                            kv_chunk_is_joint,
+                            joint_chunk_is_local,
+                            // Local vs gathered spatial source is keyed off the source ring id, not the
+                            // loop index, so the sliding-window plan's out-of-order K chunks resolve too.
+                            source_is_local ? 0 : 1,
+                            joint_k_addr,
+                            gathered_joint_k_addr,
+                            local_k_generator,
+                            gathered_k_generator,
+                            joint_q_input_tile_logical,
+                            joint_input_tile_logical,
+                            fetch_k);
+                    }
                 }
 
                 // Forward K chunk via chain (uses K's data size explicitly)
@@ -1136,17 +1223,25 @@ void kernel_main() {
                                 v_tile_bytes,
                                 false /*transpose*/);
                         };
-                        fetch_v_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
-                            kv_chunk_is_joint,
-                            joint_chunk_is_local,
-                            source_is_local ? 0 : 1,
-                            joint_v_addr,
-                            gathered_joint_v_addr,
-                            v_generators.local,
-                            v_generators.gathered,
-                            joint_q_input_tile_logical,
-                            joint_input_tile_logical,
-                            fetch_v);
+                        if constexpr (has_page_bundles) {
+                            if (source_is_local) {
+                                fetch_v(paged_v_generator);
+                            } else {
+                                fetch_v(v_generators.gathered);
+                            }
+                        } else {
+                            fetch_v_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
+                                kv_chunk_is_joint,
+                                joint_chunk_is_local,
+                                source_is_local ? 0 : 1,
+                                joint_v_addr,
+                                gathered_joint_v_addr,
+                                v_generators.local,
+                                v_generators.gathered,
+                                joint_q_input_tile_logical,
+                                joint_input_tile_logical,
+                                fetch_v);
+                        }
                     }
 
                     // Forward V to next core(s) before push_back — prevents compute from
