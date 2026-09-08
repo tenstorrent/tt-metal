@@ -591,9 +591,11 @@ def open_ring_joint_sdpa_runtime(
     reserve_llk_kernel_config: bool = True,
     full_mesh: bool = False,
     num_global_semaphores: int = 3,
+    fabric_config: ttnn.FabricConfig = None,
 ):
     if full_mesh:
-        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+        # The caller asks for a full-mesh gather; the op resolves whether that route closes.
+        fabric_config = fabric_config or ttnn.FabricConfig.FABRIC_2D_TORUS_XY
         topology = Topology.Ring
     else:
         use_ring = mesh_config.sp_size > 2 if topology is None else topology == Topology.Ring
@@ -3670,8 +3672,16 @@ def test_ring_mla_nd_sharded_indexed_kv_cache_accuracy():
 
 @pytest.mark.parametrize("mesh_scope", ["2x2", "complete"], ids=["2x2", "complete_mesh"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["unbalanced", "balanced"])
-def test_ring_mla_full_mesh_accuracy_row_major_gather_and_cache_reuse(mesh_scope, is_balanced):
-    """Run one snake ring across the complete 2D mesh and verify canonical KV placement."""
+@pytest.mark.parametrize(
+    "fabric_config",
+    [ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D],
+    ids=["torus_xy", "fabric_2d"],
+)
+def test_ring_mla_full_mesh_accuracy_row_major_gather_and_cache_reuse(mesh_scope, is_balanced, fabric_config):
+    """Run one snake across the complete 2D mesh and verify canonical KV placement.
+
+    A torus closes the snake; a plain 2D fabric has no closing edge and resolves the same walk as
+    an open path. The gathered KV placement must be identical either way."""
     if mesh_scope == "2x2":
         if MESH_CONFIG.num_devices != 4:
             pytest.skip("2x2 full-mesh ring_mla requires an exact four-device physical mesh")
@@ -3687,7 +3697,7 @@ def test_ring_mla_full_mesh_accuracy_row_major_gather_and_cache_reuse(mesh_scope
     if mesh_config.tp_size % 2 and mesh_config.sp_size % 2:
         pytest.skip(f"full-mesh ring_mla requires at least one even mesh dimension, got {mesh_config}")
 
-    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=True)
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=True, fabric_config=fabric_config)
     try:
         mesh_device = runtime.mesh_device
         ring_size = mesh_device.get_num_devices()
@@ -3862,7 +3872,7 @@ def test_ring_mla_full_mesh_kv_actual_isl_cache_patch_accuracy_and_determinism()
     )
 
 
-def test_ring_mla_full_mesh_rejects_invalid_topology_and_placements(expect_error):
+def test_ring_mla_full_mesh_rejects_invalid_placements(expect_error):
     """Full-mesh-only preconditions must fail on the host before any device dispatch."""
     mesh_config = (
         MESH_CONFIG if MESH_CONFIG.is_galaxy else replace(MESH_CONFIG, tp_size=2, sp_size=MESH_CONFIG.num_devices // 2)
@@ -3926,8 +3936,6 @@ def test_ring_mla_full_mesh_rejects_invalid_topology_and_placements(expect_error
                 use_column_major_ccl=True,
             )
 
-        with expect_error(RuntimeError, "requires Ring topology"):
-            invoke(tt_q, tt_kv, tt_persistent, Topology.Linear)
         with expect_error(RuntimeError, "requires Q sequence dim 2 and KV gather dim"):
             invoke(tt_axis_q, tt_axis_kv, tt_persistent, Topology.Ring)
         with expect_error(RuntimeError, "persistent gathered-KV buffer to be replicated"):

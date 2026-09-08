@@ -362,7 +362,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& ag = args.all_gather_operation_attributes;
     if (ag.full_mesh) {
         TT_FATAL(!ag.cluster_axis.has_value(), "Full-mesh RingJointSDPA must not carry a cluster axis");
-        TT_FATAL(ag.topology == ttnn::ccl::Topology::Ring, "Full-mesh RingJointSDPA requires Ring topology");
+        // Linear here is a full-mesh open path: same walk, no closing edge.
+        TT_FATAL(
+            ag.topology == ttnn::ccl::Topology::Ring || ag.topology == ttnn::ccl::Topology::Linear,
+            "Full-mesh RingJointSDPA requires Ring or Linear topology");
         TT_FATAL(!args.has_sliding_window(), "Full-mesh RingJointSDPA does not support sliding-window mode");
         TT_FATAL(
             ag.mesh_rows > 1 && ag.mesh_cols > 1 && ag.ring_size == ag.mesh_rows * ag.mesh_cols,
@@ -1191,8 +1194,12 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
     std::optional<uint64_t> route_plan_hash;
+    // The caller asks for a full-mesh gather; the proved route decides whether it closes.
+    ttnn::ccl::Topology resolved_topology = topology;
     if (full_mesh) {
-        TT_FATAL(topology == ttnn::ccl::Topology::Ring, "ring_mla cluster_axis=None requires Ring topology");
+        TT_FATAL(
+            topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
+            "ring_mla cluster_axis=None requires Ring or Linear topology");
         TT_FATAL(
             ttnn::operations::ccl::common::has_row_major_mesh_coordinates(input_tensor_q) &&
                 ttnn::operations::ccl::common::has_row_major_mesh_coordinates(input_tensor_k) &&
@@ -1220,8 +1227,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
             ttnn::ccl::get_axis_topology(input_tensor_q, fabric_config, 0),
             ttnn::ccl::get_axis_topology(input_tensor_q, fabric_config, 1)};
         const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-            input_tensor_q, std::nullopt, num_links, axis_topology, true, "ring_mla");
-        TT_FATAL(route.has_value(), "ring_mla could not resolve a direct-neighbor full-mesh snake ring");
+            input_tensor_q, std::nullopt, num_links, axis_topology, true, "ring_mla", /*allow_open_path=*/true);
+        TT_FATAL(route.has_value(), "ring_mla could not resolve a direct-neighbor full-mesh route");
         TT_FATAL(
             route->plan.ring_size <= std::numeric_limits<uint32_t>::digits,
             "ring_mla supports at most {} full-mesh ranks, got {}",
@@ -1232,6 +1239,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         mesh_cols = route->plan.mesh_cols;
         route_plan_hash = route->plan.route_plan_hash;
         num_devices = route->plan.ring_size;
+        resolved_topology = route->topology;
     } else {
         TT_FATAL(
             *cluster_axis < mesh_shape.dims(),
@@ -1246,7 +1254,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         num_links,
         num_devices,
         persistent_output_buffer_k.memory_config(),
-        topology,
+        resolved_topology,
         multi_device_global_semaphore,
         subdevice_id,
         cluster_axis,

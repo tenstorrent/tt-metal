@@ -607,7 +607,7 @@ def test_indexer_score_ring4_fused_program_cache_reuse(k_dtype):
         _close_ring4_ccl(parent, submesh, stall_group)
 
 
-def _run_full_mesh_accuracy_case(mesh_shape, *, block_cyclic):
+def _run_full_mesh_accuracy_case(mesh_shape, *, block_cyclic, fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY):
     """Exercise a non-identity snake permutation while retaining row-major causal and K-slot semantics."""
     ring_size = mesh_shape[0] * mesh_shape[1]
     local_sq = 64
@@ -620,7 +620,7 @@ def _run_full_mesh_accuracy_case(mesh_shape, *, block_cyclic):
         chunk_start = chunk_global
         t_len = 2 * chunk_global
 
-    mesh, semaphores, subdevice_id, stall_group = _open_full_mesh_ccl(mesh_shape)
+    mesh, semaphores, subdevice_id, stall_group = _open_full_mesh_ccl(mesh_shape, fabric_config=fabric_config)
     try:
         heads = 8
         q_g, k_nat, w_g = _global_inputs(heads, chunk_global, t_len, seed=2026)
@@ -1004,11 +1004,19 @@ def test_indexer_score_sptp_loudbox_ring_partial_readiness():
     and (os.getenv("MESH_DEVICE") != "TG" or os.getenv("TT_METAL_RING_INDEXER_RUN_32_RANK_ACCURACY") != "1"),
     reason="requires Galaxy/simulator opt-in for the 32-rank complete-mesh indexer test",
 )
-def test_indexer_score_full_mesh_galaxy_8x4_accuracy():
-    """Exercise the fixed 32-entry readiness tables at their supported Galaxy limit."""
+@pytest.mark.parametrize(
+    "fabric_config",
+    [ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D],
+    ids=["torus_xy", "fabric_2d"],
+)
+def test_indexer_score_full_mesh_galaxy_8x4_accuracy(fabric_config):
+    """Exercise the fixed 32-entry readiness tables at their supported Galaxy limit.
+
+    A torus closes the 8x4 snake; a plain 2D fabric has no closing edge and resolves the same
+    walk as an open path, and the gathered result must match either way."""
     if ttnn.get_num_devices() != 32:
         pytest.skip("8x4 full-mesh indexer coverage requires exactly 32 available devices")
-    _run_full_mesh_accuracy_case((8, 4), block_cyclic=False)
+    _run_full_mesh_accuracy_case((8, 4), block_cyclic=False, fabric_config=fabric_config)
 
 
 def test_indexer_score_full_mesh_indexed_bounded_gather_cache_hit_and_determinism():
@@ -1103,7 +1111,7 @@ def test_indexer_score_full_mesh_indexed_bounded_gather_cache_hit_and_determinis
 
 
 def test_indexer_score_full_mesh_rejects_invalid_contracts(expect_error):
-    """Reject invalid full-mesh topology, axis roles, placements, replication, and link requests on host."""
+    """Reject invalid full-mesh axis roles, placements, replication, and link requests on host."""
     if ttnn.get_num_devices() != 8:
         pytest.skip("complete 2x4 negative coverage requires the exact physical eight-device LoudBox")
 
@@ -1135,15 +1143,13 @@ def test_indexer_score_full_mesh_rejects_invalid_contracts(expect_error):
                 **kwargs,
             )
 
-        with expect_error(RuntimeError, "requires Ring topology"):
-            _call(topology=ttnn.Topology.Linear)
         with expect_error(RuntimeError, "does not allow seq_subshard_axis"):
             _call(seq_subshard_axis=0)
         with expect_error(RuntimeError, "does not allow block_cyclic_sp_axis"):
             _call(block_cyclic_sp_axis=0, block_cyclic_chunk_local=local_sq)
         with expect_error(RuntimeError, "requires num_links > 0"):
             _call(num_links=0)
-        with expect_error(RuntimeError, "could not resolve a direct-neighbor full-mesh snake ring"):
+        with expect_error(RuntimeError, "could not resolve a direct-neighbor full-mesh route"):
             _call(num_links=99)
 
         axis_mapper = ttnn.ShardTensor2dMesh(mesh, mesh_shape=(2, 4), dims=(None, 2))
