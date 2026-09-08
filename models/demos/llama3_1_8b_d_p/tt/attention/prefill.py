@@ -201,6 +201,11 @@ def attention_forward(
                 num_layers=kv_cache.num_layers,
                 # The per-layer seam already wrote this chunk's K/V into the cache.
                 write_chunk=False,
+                # Under trace, the op reads the slot and the prior cache length from these
+                # 1-element device tensors instead of the host ints above, so one capture replays
+                # across chunks. Absent (eager path) it falls back to the host scalars.
+                slot_id_tensor=metadata.slot_idx if metadata is not None else None,
+                kv_actual_tensor=metadata.kv_actual if metadata is not None else None,
             )
         else:
             full_seq_len = seq_len * sp

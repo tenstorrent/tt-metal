@@ -386,8 +386,14 @@ class TtPrefillRuntime:
         self.metadata.update(slot_idx=0, kv_actual=0)
 
         def _forward():
+            # The capture must mirror prefill_chunk exactly, embedding included: _trace_input holds
+            # TOKEN IDS (row-major uint32), and replay refreshes it in place with more token ids, so
+            # embed() has to live INSIDE the traced region. Handing the ids straight to
+            # forward_layers makes the first RMSNorm see a ROW_MAJOR uint32 tensor and fail.
+            # Unlike the eager path, _trace_input is persistent and must NOT be deallocated.
+            x = self.model.embed(self._trace_input) if self.config.is_first_rank else self._trace_input
             out = self.model.forward_layers(
-                self._trace_input,
+                x,
                 self.rope_indexed[chunk_size],
                 kv_cache=kv,
                 user_id=0,

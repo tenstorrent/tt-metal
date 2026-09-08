@@ -43,6 +43,8 @@ def dense_sp_attention(
     layer_idx=0,
     num_layers=1,
     write_chunk=True,
+    slot_id_tensor=None,
+    kv_actual_tensor=None,
 ):
     """Cache-read ring_joint over the accumulated prefix ``[0:logical_n]``.
 
@@ -77,6 +79,25 @@ def dense_sp_attention(
                 cluster_axis=cluster_axis,
             )
 
+    # --- trace-safe metadata path -------------------------------------------------------------
+    # ring_joint and ring_mla are two front-ends over the same primitive, and that primitive reads
+    # kv_cache_batch_idx (metadata[0]) and kv_actual_isl (metadata[1]) ON-DEVICE when both 1-element
+    # uint32 tensors are supplied, deriving logical_nt / q-mapping / ring masks from them. That is
+    # what lets ONE captured trace replay across chunks.
+    #
+    # Two things must change together, or the capture is silently wrong:
+    #   * the host scalars must NOT be passed -- a supplied kv_actual_isl re-enables the host-side
+    #     valid-pages patch, which a trace would freeze at chunk 0's value; and
+    #   * logical_n must become a per-chunk CONSTANT. The cache's global capacity is the natural
+    #     choice: it is identical for every chunk, so the capture carries no chunk-specific
+    #     geometry at all and every replay derives its own from the metadata tensors.
+    use_metadata = slot_id_tensor is not None and kv_actual_tensor is not None
+    assert (slot_id_tensor is None) == (kv_actual_tensor is None), (
+        "slot_id_tensor and kv_actual_tensor must be supplied together, or neither -- the op "
+        "requires both to take the on-device path"
+    )
+    ring_logical_n = cache_global if use_metadata else logical_n
+
     out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
         cache_k,
@@ -94,7 +115,7 @@ def dense_sp_attention(
             f"dense_v_{cache_global}", n_kv, cache_global, head_dim, ttnn.bfloat8_b
         ),
         joint_strategy="rear",
-        logical_n=logical_n,
+        logical_n=ring_logical_n,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
         dim=2,
@@ -111,7 +132,32 @@ def dense_sp_attention(
         # Fold the layer into the cache batch index, matching update_padded_kv_cache's write
         # (batch_idx = slot*num_layers + layer). Passing slot alone makes every layer read layer 0's
         # cache: L0 correct by coincidence, L1+ read stale and corrupt attention.
-        kv_cache_batch_idx=slot_idx * num_layers + layer_idx,
-        kv_actual_isl=kv_actual,
+        # On the metadata path the op does this fold itself from slot_id[0], num_layers and
+        # layer_idx, so the host index is withheld and the tensors are passed instead.
+        kv_cache_batch_idx=None if use_metadata else slot_idx * num_layers + layer_idx,
+        kv_actual_isl=None if use_metadata else kv_actual,
+        # Only forwarded on the metadata path: these kwargs exist on the ring_joint binding only
+        # once the front-end plumbs them (the primitive has always accepted them). Passing them
+        # unconditionally breaks the eager path on a build without that plumbing.
+        **_metadata_kwargs(use_metadata, slot_id_tensor, kv_actual_tensor, num_layers, layer_idx),
     )
     return out
+
+
+def _metadata_kwargs(use_metadata, slot_id_tensor, kv_actual_tensor, num_layers, layer_idx):
+    """The trace-safe metadata kwargs, or nothing at all on the eager path.
+
+    ``ttnn::prim::ring_joint_scaled_dot_product_attention`` -- the primitive shared by ring_joint and
+    ring_mla -- has read slot_id / kv_actual_isl on-device for a while, but only the ``ring_mla``
+    front-end plumbed the kwargs through its C++ wrapper and nanobind binding. On a build where
+    ``ring_joint`` has not yet been given the same plumbing, naming these kwargs is a TypeError, so
+    they are omitted entirely unless the metadata path is actually in use.
+    """
+    if not use_metadata:
+        return {}
+    return {
+        "slot_id": slot_id_tensor,
+        "kv_actual_isl_tensor": kv_actual_tensor,
+        "kv_cache_num_layers": num_layers,
+        "kv_cache_layer_idx": layer_idx,
+    }

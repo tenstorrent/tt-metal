@@ -494,21 +494,53 @@ model's chunk path three ops consume per-chunk values:
 | `deepseek_prefill.rotary_embedding_indexed` | **yes** — `kv_actual_global` overload |
 | `transformer.ring_joint_scaled_dot_product_attention` | **no** |
 
-The joint ring op binds `kv_actual_isl` and `kv_cache_batch_idx` as `std::optional<uint32_t>` and
-`logical_n` as `std::size_t`. The **MLA** ring op has exactly the pair that is missing —
-`ring_mla` takes `slot_id` and `kv_actual_isl_tensor` — so DeepSeek/Kimi can trace chunked prefill
-and every GQA model (this one, `gpt_oss_d_p`, `minimax_m3`) cannot.
+**Correction (measured).** An earlier revision of this section said the joint ring op "binds
+`kv_actual_isl` and `kv_cache_batch_idx` as `std::optional<uint32_t>`" with no tensor form, and that
+lifting it meant adding the pair and reading them in the reader kernel. **That reason was wrong**,
+and the error came from reading the model-side wrapper instead of the op.
 
-Capturing anyway is worse than not capturing: chunk 0's cache offset and causal bound get frozen into
-the trace, and every later chunk reads the KV cache at the wrong offset **with no error**. This
-package therefore refuses the capture (`tt/trace.py::assert_traceable`) rather than accept a
-silently-wrong model.
+`ring_joint_scaled_dot_product_attention` and `ring_mla` are two front-ends over the *same*
+primitive (`ttnn::prim::ring_joint_scaled_dot_product_attention`); MLA is simply the latent-V
+configuration. The primitive, its program factory and its kernels have supported the metadata path
+for some time: `slot_id` / `kv_actual_isl_tensor` are read **on-device**, and `logical_n` is dropped
+from the program cache key so one program serves every chunk. What was actually missing is narrow —
+the `ring_joint` front-end hardcoded four arguments:
 
-**What it would take:** add `slot_id` / `kv_actual_isl_tensor` optionals to
-`ring_joint_scaled_dot_product_attention`, mirroring `ring_mla`'s existing pair, and read them in the
-reader kernel where the scalars are read today. Everything on the model side is already in place and
-tested — `tests/unit/test_trace_metadata_vs_ref.py` shows the metadata path is bit-identical to the
-scalar path (PCC 1.0 at offsets 0, 512 and 1024), so the remaining change is confined to the op.
+```cpp
+std::nullopt,  // slot_id
+std::nullopt,  // kv_actual_isl_tensor
+1,             // kv_cache_num_layers
+0,             // kv_cache_layer_idx
+```
+
+where `ring_mla` forwards the real values. This branch patches that (34 lines across `sdpa.hpp`,
+`sdpa.cpp`, `sdpa_nanobind.cpp`).
+
+**The patch is necessary but NOT sufficient, and the original conclusion survives.** With the kwargs
+plumbed, `logical_n` set to the constant cache capacity, and embedding moved inside the captured
+region, a chunked capture succeeds and replays **13.9x faster than eager dispatch** (285 ms against
+3962 ms for 4 x 4096 chunks) — closely matching the ~12x predicted from the dispatch-bound analysis
+in `docs/PROFILING.md` §1. It is also **wrong**:
+
+| | |
+|---|---|
+| per-layer KV PCC, traced | **0.10 – 0.35** (gate 0.99), all 32 layers |
+| layer 0 specifically | K 0.352 / V 0.073 |
+
+Layer 0 being wrong rules out per-chunk offset drift — a frozen offset still leaves chunk 0 correct.
+The corruption is total from the first layer, which points at the causal geometry rather than the
+cache index. Upstream validates the on-device derivation only for `ring_mla` (latent-V); the
+explicit-V GQA configuration does not reproduce the scalar result. So **trace mode really is MLA-only
+today**, and the remaining work is in the op's GQA path, not in its argument list.
+
+Capturing anyway is worse than not capturing: the result is fast and silently wrong. This package
+therefore still refuses the capture (`tt/trace.py::assert_traceable`), now citing the measurement
+rather than an inferred API gap. The model side is otherwise complete and validated —
+`tests/unit/test_trace_metadata_vs_ref.py` shows the metadata path is bit-identical to the scalar
+path (PCC 1.0 at offsets 0, 512 and 1024).
+
+*Reproduce:* `PREFILL_USE_TRACE=1 PREFILL_CHUNKED=1 pytest
+models/demos/llama3_1_8b_d_p/tests/galaxy_prefill_kv_pcc.py -k 8x4`
 
 **Consequence for the spec.** `PREFILL_USE_TRACE` reads like a universal knob, and the engine
 advertises `PrefillRunParams.use_trace` for every model, but whether it is *usable* is a property of

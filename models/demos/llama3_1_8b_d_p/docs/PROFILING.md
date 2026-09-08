@@ -90,8 +90,24 @@ Per-chunk cost as the KV cache grows, chunk fixed at 4096, 32 layers:
 | 65,536 | 16 | 14,740.7 ms | 4,446 | 921 |
 | 131,072 | 32 | 27,031.0 ms | 4,849 | 845 |
 
-**Per-chunk cost is flat from an empty cache to a 128K one.** Attention over the growing cache never
-becomes the bottleneck at the spec's target context — the dispatch-bound conclusion is not an
+**Per-chunk cost is flat from an empty cache to a 128K one** — with one qualification the aggregate
+numbers above hide. Timing every chunk *within* a single 32-chunk run
+(`PREFILL_PERF_PER_CHUNK=1`) shows two regimes:
+
+| | |
+|---|---|
+| chunks 0-2 | **535 / 534 / 377 ms** — cheap, there is little or no cache to gather |
+| chunks 3-31 | plateau at ~930 ms; fit over this range is **+0.43 ms per chunk** (~1% across 29 chunks) |
+| whole run | spread 353-1164 ms, sd 237 ms; naive fit +7.45 ms/chunk but **R² = 0.084** |
+
+So there is a real ~2x ramp over the first three chunks, and then nothing: chunk index explains 8%
+of the variance and the rest is host scheduling noise (note the dip cluster at chunks 13-17). The
+first-quarter-vs-last-quarter "drift" of +20.9% is an artefact of those three cheap opening chunks
+sitting in the first quarter, not a progressive slowdown. Per-chunk syncing cost almost nothing
+overall (28,505 ms against 28,660 ms pipelined), which is itself consistent with a dispatch-bound
+pipeline that has little host/device overlap to lose.
+
+Attention over the growing cache never becomes the bottleneck at the spec's target context — the dispatch-bound conclusion is not an
 artefact of a small context, it holds all the way out. Device-side, the ring SDPA *does* get more
 expensive with a populated cache (§3a), but it is a small enough share that it does not move the
 wall clock.
@@ -219,6 +235,10 @@ PREFILL_PERF_SEQ_LEN=131072 PREFILL_PERF_CHUNK_SIZES=8192 \
 
 # context sweep at the spec chunk (per-chunk cost vs cache occupancy)
 PREFILL_PERF_SEQ_LEN=65536 PREFILL_PERF_CHUNK_SIZES=4096 \
+  pytest models/demos/llama3_1_8b_d_p/tests/prefill_perf.py -k 8x4 -s
+
+# per-chunk latency vs cache occupancy (two regimes: cheap first chunks, then a plateau)
+PREFILL_PERF_SEQ_LEN=131072 PREFILL_PERF_CHUNK_SIZES=4096 PREFILL_PERF_PER_CHUNK=1 \
   pytest models/demos/llama3_1_8b_d_p/tests/prefill_perf.py -k 8x4 -s
 
 # layer scaling (the measurement that identified the per-layer cost)

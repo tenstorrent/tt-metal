@@ -148,9 +148,17 @@ def test_galaxy_prefill_kv_pcc(mesh_device, device_params, reset_seeds):
             attn_weight_dtype=ttnn.bfloat16,
             mlp_weight_dtype=ttnn.bfloat16,
             owns_kv_cache=True,
+            # PREFILL_USE_TRACE=1 runs the chunks as ONE captured trace replayed per chunk. This is
+            # the discriminating test for the metadata path: if the capture froze chunk 0's cache
+            # offset, later chunks write/read the wrong slab and the per-layer KV PCC collapses.
+            use_trace=os.getenv("PREFILL_USE_TRACE", "0") == "1",
         ),
     )
     del device_state
+    if runtime.config.use_trace:
+        runtime.compile()
+        runtime.capture_trace()
+        logger.info("TRACE CAPTURED — chunks below are trace replays, not eager dispatch")
 
     tokens = input_ids[0].tolist()
     for c in range(seq_len // chunk_size):

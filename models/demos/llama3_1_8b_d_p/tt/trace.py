@@ -8,33 +8,39 @@ host Python value is frozen at capture time. Per-chunk values — the cache writ
 slot — must therefore live in **persistent device tensors** that the host updates in place between
 replays, and every op that consumes them must have a metadata-tensor form.
 
-Two of the three do::
+All three do::
 
     ttnn.experimental.deepseek_prefill.update_padded_kv_cache   scalar | metadata-tensor overload
     ttnn.experimental.deepseek_prefill.rotary_embedding_indexed scalar | metadata-tensor overload
-    ttnn.transformer.ring_joint_scaled_dot_product_attention    SCALAR ONLY
+    ttnn.transformer.ring_joint_scaled_dot_product_attention    scalar | metadata-tensor overload
 
 .. _trace-blocker:
 
-Why chunked prefill cannot be traced today
-------------------------------------------
+Correction: the GQA ring op is NOT the blocker it was documented as
+-------------------------------------------------------------------
 
-``ring_joint_scaled_dot_product_attention`` — the GQA cache-read attention this model uses — binds
-``kv_actual_isl`` and ``kv_cache_batch_idx`` as ``std::optional<uint32_t>``, and ``logical_n`` as a
-plain ``std::size_t``. There is no tensor form for any of them. The MLA ring op **does** have one
-(``ring_mla`` takes ``slot_id`` and ``kv_actual_isl_tensor``), which is why the MLA packages can
-trace chunked prefill and this one cannot: the disaggregated-prefill substrate was built MLA-first
-and the GQA path has not caught up.
+Earlier revisions of this module (and ``docs/SPEC_NOTES.md`` §8d) stated that
+``ring_joint_scaled_dot_product_attention`` had no metadata-tensor form and that chunked GQA prefill
+therefore could not be traced. **That was wrong**, and the error came from reading the model-side
+wrapper rather than the op.
 
-Capturing anyway would bake chunk 0's ``kv_actual_isl`` and ``logical_n`` into the trace. Chunk 1
-would then rotate the KV cache by the wrong offset and mask against the wrong causal bound — wrong
-KV, no error. So :func:`assert_traceable` refuses, loudly, rather than let that happen.
+``ring_joint_scaled_dot_product_attention`` and ``ring_mla`` are two front-ends over the *same*
+primitive (``ttnn::prim::ring_joint_scaled_dot_product_attention``); MLA is simply the latent-V
+configuration. The primitive takes ``slot_id`` and ``kv_actual_isl_tensor`` as optional 1-element
+uint32 tensors and reads **both on-device** — ``kv_cache_batch_idx`` is folded as
+``slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx`` in the all-gather reader, and
+``logical_nt`` / q-mapping / ring masks are derived from ``kv_actual_isl`` in the SDPA reader. So one
+capture replays across chunks. Upstream's own coverage asserts this: the metadata path is bit-exact
+against the host-scalar path, with one capture and fifteen replays in forward, reverse and
+out-of-order sequence.
 
-What it would take to lift this: add ``slot_id`` / ``kv_actual_isl_tensor`` optionals to
-``ring_joint_scaled_dot_product_attention``, mirroring ``ring_mla``'s existing pair, and read them in
-the reader kernel where the scalars are read now. The plumbing on this side — persistent buffers,
-in-place update, capture/replay — is already here and is exercised by
-``tests/unit/test_trace_metadata_vs_ref.py``.
+Using it correctly requires two things together, or the capture is silently wrong:
+
+* **Withhold the host scalars.** A supplied ``kv_actual_isl`` re-enables the host-side valid-pages
+  patch, which a trace freezes at chunk 0's value.
+* **Make ``logical_n`` a constant.** It remains a host argument, so it must not carry per-chunk
+  information; the cache's global capacity is the natural choice, identical for every chunk. See
+  ``tt/attention/dense_sp.py``, which switches both on the presence of the metadata tensors.
 
 What DOES work today
 --------------------
@@ -107,29 +113,39 @@ class TraceUnsupported(NotImplementedError):
 def assert_traceable(*, uses_cache_backed_ring: bool, num_users: int) -> None:
     """Refuse to capture a trace that would be silently wrong.
 
-    ``uses_cache_backed_ring``: the chunked path, where the ring SDPA reads the accumulated prefix out
-    of the KV cache. Its offsets are host scalars with no tensor form, so a capture freezes chunk 0's
-    values — see :ref:`the module docstring <trace-blocker>`.
+    MEASURED, not assumed. With the ring_joint front-end patched to forward slot_id /
+    kv_actual_isl_tensor (see the module docstring), a chunked capture now *succeeds* and replays
+    13.9x faster than eager dispatch (285 ms vs 3962 ms for 4 x 4096). It is also **wrong**:
+    ``tests/galaxy_prefill_kv_pcc.py`` with ``PREFILL_USE_TRACE=1`` gives per-layer KV PCC of
+    0.10-0.35 against a 0.99 gate, on all 32 layers.
 
-    ``num_users > 1``: ``kv_cache_batch_idx`` (``slot * num_layers + layer``) is likewise a scalar on
-    the ring op, so one capture cannot serve a second user's slot even on the one-shot path.
+    Layer 0 is wrong too (K 0.352 / V 0.073), which rules out per-chunk offset drift -- a frozen
+    offset would still leave chunk 0 correct. The corruption is total from the first layer, pointing
+    at the causal geometry rather than the cache index: on the metadata path ``logical_n`` must be a
+    per-chunk constant (the cache capacity) and the op is supposed to derive ``logical_nt`` on-device
+    from ``kv_actual_isl``. Upstream validates that derivation only for ``ring_mla`` -- the latent-V
+    configuration -- and the GQA/explicit-V configuration evidently is not covered.
+
+    So the original conclusion in ``docs/SPEC_NOTES.md`` §8d stands: chunked GQA prefill is not
+    traceable today. The *reason* recorded there was wrong (the kwargs were missing from the
+    ring_joint front-end, not the primitive), and lifting that is necessary but not sufficient.
     """
     if uses_cache_backed_ring:
         raise TraceUnsupported(
-            "trace capture refused: chunked prefill uses ring_joint_scaled_dot_product_attention, "
-            "whose kv_actual_isl / kv_cache_batch_idx / logical_n are host scalars with no tensor "
-            "form. A capture would freeze chunk 0's cache offset and causal bound, and every later "
-            "chunk would read the cache at the wrong offset with NO error. Lifting this needs "
-            "slot_id / kv_actual_isl_tensor added to the joint ring op, mirroring ring_mla. "
-            "Run with use_trace=False (PREFILL_USE_TRACE=0) until then; see tt/trace.py."
+            "trace capture refused: chunked GQA prefill replays 13.9x faster but produces WRONG KV "
+            "(per-layer PCC 0.10-0.35 vs a 0.99 gate, all 32 layers, layer 0 included). The "
+            "ring_joint front-end now forwards slot_id / kv_actual_isl_tensor, so the capture "
+            "succeeds -- but the on-device geometry derivation is validated upstream only for "
+            "ring_mla (latent-V), and the explicit-V GQA path does not reproduce the scalar result. "
+            "Reproduce with: PREFILL_USE_TRACE=1 PREFILL_CHUNKED=1 pytest "
+            "models/demos/llama3_1_8b_d_p/tests/galaxy_prefill_kv_pcc.py -k 8x4. "
+            "Run with use_trace=False (PREFILL_USE_TRACE=0); see tt/trace.py."
         )
     if num_users > 1:
         raise TraceUnsupported(
-            f"trace capture refused: num_users={num_users}, but the ring op's kv_cache_batch_idx is a "
-            f"host scalar, so one capture cannot serve more than one slot. Use num_users=1 or "
-            f"use_trace=False; see tt/trace.py."
+            f"trace capture refused: num_users={num_users}. The slot does live in a metadata tensor, "
+            f"but multi-slot replay has never been validated in this package. Use num_users=1."
         )
-
 
 def capture(mesh_device, fn, *, cq_id: int = 0) -> int:
     """Record ``fn()`` into a ttnn trace and return its id. The mesh needs a trace_region_size > 0."""

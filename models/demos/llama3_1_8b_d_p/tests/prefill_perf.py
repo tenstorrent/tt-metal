@@ -124,16 +124,31 @@ def test_prefill_perf(mesh_device, device_params, reset_seeds):
             attn_weight_dtype=ttnn.bfloat16,
             mlp_weight_dtype=ttnn.bfloat16,
             owns_kv_cache=True,
+            # PREFILL_USE_TRACE=1 captures the per-chunk forward once and replays it, which is the
+            # whole point of the metadata-tensor path in tt/attention/dense_sp.py.
+            use_trace=os.getenv("PREFILL_USE_TRACE", "0") == "1",
         ),
     )
     del device_state
+    if runtime.config.use_trace:
+        runtime.compile()
+        runtime.capture_trace()
+        logger.info("trace captured; measured iterations below replay it")
 
     g = torch.Generator().manual_seed(0)
     tokens = torch.randint(0, cfg.vocab_size, (seq_len,), generator=g).tolist()
 
+    # PREFILL_PERF_PER_CHUNK=1 synchronises after every chunk and records each chunk's latency, to
+    # answer "does per-chunk cost rise as the KV cache fills?". The sync serialises host and device,
+    # so absolute numbers run higher than the pipelined path above -- read the TREND across chunk
+    # index, not the magnitude, and compare against the pipelined total from the default mode.
+    per_chunk = os.getenv("PREFILL_PERF_PER_CHUNK", "0") == "1"
+    chunk_trace = []
+
     def one_prefill(chunk_size):
         for c in range(seq_len // chunk_size):
             start = c * chunk_size
+            t_c = time.perf_counter() if per_chunk else None
             runtime.prefill_chunk(
                 runtime.make_chunk_input(tokens[start : start + chunk_size], chunk_size),
                 slot_id=0,
@@ -141,6 +156,9 @@ def test_prefill_perf(mesh_device, device_params, reset_seeds):
                 actual_end=start + chunk_size,
                 chunk_size=chunk_size,
             )
+            if per_chunk:
+                ttnn.synchronize_device(mesh_device)
+                chunk_trace.append((c, start, (time.perf_counter() - t_c) * 1e3))
         ttnn.synchronize_device(mesh_device)
 
     summary = []
@@ -168,6 +186,20 @@ def test_prefill_perf(mesh_device, device_params, reset_seeds):
             latencies.append(dt)
             logger.info(f"[{label}] iter {i}: {dt * 1e3:.1f} ms  ({seq_len / dt:,.0f} tok/s)")
         signpost(header=f"prefill_{chunk_size}_end")
+
+        if per_chunk and chunk_trace:
+            n = seq_len // chunk_size
+            last = chunk_trace[-n:]  # the final measured prefill
+            logger.info(f"[{label}] per-chunk latency vs cache occupancy:")
+            for c, start, ms in last:
+                logger.info(f"[{label}]   chunk {c:>3}  cache_before={start:>7} tok  {ms:8.1f} ms")
+            first_q, last_q = last[: max(1, n // 4)], last[-max(1, n // 4) :]
+            fa = sum(m for _, _, m in first_q) / len(first_q)
+            la = sum(m for _, _, m in last_q) / len(last_q)
+            logger.info(
+                f"[{label}] first-quarter mean {fa:.1f} ms  last-quarter mean {la:.1f} ms  "
+                f"drift {100 * (la - fa) / fa:+.1f}%"
+            )
 
         best = min(latencies)
         avg = sum(latencies) / len(latencies)
