@@ -368,7 +368,7 @@ models:
     wh_n150: 105
     wh_n300: 60
     bh_p150: 33
-    bh_p300: 8
+    bh_p300: 13  # +5 for the Gemma-4-E4B one-off cold cache build (#55795)
     bh_quietbox_2: 42
   unit_tier1:
     wh_llmbox: 150
