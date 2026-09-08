@@ -525,9 +525,14 @@ def main() -> None:
         gate_mode_name=_gate_mode_name,
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
         dflash_enabled=DFLASH_ENABLED,
-        # The tensor-cache dump is collective across the tt-run world: a non-zero rank's dump only completes
-        # while rank 0 is also dumping, so only rank 0 uses the cache and the other ranks convert from source.
-        weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE) if rank == 0 else None,
+        # The tensor-cache dump is collective across the tt-run world: a rank's dump completes only while every
+        # other rank is dumping too. Only rank 0 uses the cache, and only when it is already complete for the
+        # run's dtypes (PREFILL_WEIGHT_CACHE=0 otherwise); the other ranks convert from source without dumping.
+        weight_cache_path=(
+            ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE)
+            if rank == 0 and os.environ.get("PREFILL_WEIGHT_CACHE", "1") == "1"
+            else None
+        ),
         tp_shard_kv=TP_SHARD_KV,
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,
