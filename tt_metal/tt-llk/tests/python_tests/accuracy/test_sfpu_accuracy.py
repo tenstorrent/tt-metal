@@ -12,7 +12,7 @@ shards into one CSV per op. Sanity-assert only (no ULP threshold gating).
 from itertools import product
 
 import pytest
-from conftest import skip_for_coverage
+from conftest import skip_for_coverage, skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
@@ -119,6 +119,7 @@ def _skip_if_unsupported(
         pytest.skip(reason="This combination is not supported on BH architecture")
 
 
+@skip_for_quasar
 @skip_for_coverage
 @pytest.mark.accuracy
 @pytest.mark.parametrize(
@@ -138,6 +139,7 @@ def test_sfpu_accuracy_sweep(
     run_case(mathop, formats, approx_mode, fast_mode, dest_acc)
 
 
+@skip_for_quasar
 @skip_for_coverage
 @pytest.mark.perf
 @pytest.mark.parametrize(
@@ -169,6 +171,7 @@ def test_sfpu_perf_sweep(
     )
 
 
+@skip_for_quasar
 @skip_for_coverage
 @pytest.mark.perf
 @pytest.mark.accuracy
