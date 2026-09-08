@@ -29,7 +29,20 @@
 // after it has finished its own send.)
 //
 // Running on two threads also means two NOCs, so the broadcasts overlap rather
-// than serialize -- that is MM_IN1_THREAD=1, the hardware configuration.
+// than serialize. Worth 8% to 19% over serializing them, most at small grids.
+//
+// WHICH broadcast gets WHICH NOC is worth more than that, and this file had it
+// backwards. The row broadcast belongs on NOC 1 and the column broadcast on NOC 0
+// -- MM_IN0_THREAD=1 with MM_IN1_THREAD=0 -- which is faster than the reverse in
+// every cell measured, by 6% to 44%, largest where the RHS is the bigger operand
+// (8x8 kt=32 2x4: 106.70us -> 59.94us, and 2.60x ttnn -> 1.47x). Both NOCs route
+// in opposite directions, so a broadcast pointed the wrong way takes the long
+// path; the old assignment pointed BOTH the wrong way, which is why the cost
+// looked like it belonged to whichever operand happened to be larger.
+//
+// The defaults here stay 0/0 all the same, because that is what ttsim can run and
+// the suite has to pass there. Hardware callers should pass 1/0; bench_matmul.py
+// does.
 //
 // ttsim cannot multicast on NOC 1 (it does not implement coordinate
 // virtualization), so MM_IN1_THREAD=0 puts both on NOC 0 where they serialize.
@@ -57,6 +70,10 @@
 //   MM_ACC_L1                  if set, accumulate in L1 rather than through DST
 //   MM_IN1_THREAD              DM thread for the RHS broadcast: 1 on hardware
 //                              (second NOC, overlapped), 0 on ttsim
+//   MM_IN0_THREAD              DM thread for the LHS broadcast, default 0. 1 with
+//                              MM_IN1_THREAD=0 is the MEASURED-BEST assignment on
+//                              hardware -- see the note above on which NOC each
+//                              direction wants.
 
 #include <tt/unified/core>
 #include "experimental/kernel_args.h"
@@ -80,7 +97,19 @@ void kernel_main() {
 
     u::matmul_init<In0, In1>(kDfbIn0, kDfbIn1, kDfbOut);
 
-    u::Input<0, kDfbIn0, In0> in0_storage;
+#ifndef MM_IN0_THREAD
+#define MM_IN0_THREAD 0
+#endif
+
+    // Each broadcast drives its own thread's handshake pair, which is the natural
+    // configuration; they only have to be NAMED when both land on one thread, since two
+    // broadcasts sharing a pair would interleave their ready counters and a
+    // wait-for-equality would miss.
+    constexpr int kIn0Pair = (MM_IN0_THREAD == MM_IN1_THREAD) ? 0 : MM_IN0_THREAD;
+    constexpr int kIn1Pair = (MM_IN0_THREAD == MM_IN1_THREAD) ? 1 : MM_IN1_THREAD;
+    static_assert(kIn0Pair != kIn1Pair, "the two broadcasts must not share a handshake pair");
+
+    u::Input<MM_IN0_THREAD, kDfbIn0, In0> in0_storage;
     u::Input<MM_IN1_THREAD, kDfbIn1, In1> in1_storage;
     u::Intermediate<kDfbAcc, Out> acc_storage;
     u::Output<0, kDfbOut, Out> out_storage;
@@ -105,13 +134,12 @@ void kernel_main() {
     for (uint32_t k = 0; k < MM_K_BLOCKS; ++k) {
         const bool finish = (k == MM_K_BLOCKS - 1);
 
-        // Thread 0 broadcasts the LHS along the row, thread 1 the RHS down the
-        // column; each takes its own reserved handshake pair, so the two never
+        // One thread broadcasts the LHS along the row, the other the RHS down the
+        // column; each takes a distinct reserved handshake pair, so the two never
         // collide. Both re-run every k step, feeding the next block while the
         // previous one is still being folded in.
-        u::ComputeBlock a = u::noc_load</*pair=*/0>(in0_storage, row, in0, me.y * MM_K_BLOCKS + k).wait();
-        u::ComputeBlock b =
-            u::noc_load</*pair=*/1>(in1_storage, col, in1, me.x * MM_K_BLOCKS + k).wait();
+        u::ComputeBlock a = u::noc_load<kIn0Pair>(in0_storage, row, in0, me.y * MM_K_BLOCKS + k).wait();
+        u::ComputeBlock b = u::noc_load<kIn1Pair>(in1_storage, col, in1, me.x * MM_K_BLOCKS + k).wait();
 
         u::Block result = acc.accumulate(u::matmul(a, b), finish);
         if (finish) {
