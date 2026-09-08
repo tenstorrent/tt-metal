@@ -55,7 +55,11 @@ OUT="${OUT:-$TT_METAL_HOME/mistral4_pp4_256k_$(hostname)}"
 mkdir -p "$OUT"
 
 TOPO=models/demos/common/prefill/runners/topology_configuration
-BASE="$TOPO/pipeline_prefill_request_intragalaxy_4rank_8x1_torus_y.yaml"
+# torus_y by default: its SP-axis RING matches the single-process 8x1 measurements, and it is what the
+# published headline was measured on. It needs the SP axis cabled as a torus. Where it is not, rank 0
+# dies in MGD mapping -- point PP_BINDING at the plain-2d sibling, which is LINE on that axis and maps
+# anywhere. The two are NOT interchangeable for a published number: Ring vs Linear SP collectives.
+BASE="${PP_BINDING:-$TOPO/pipeline_prefill_request_intragalaxy_4rank_8x1_torus_y.yaml}"
 # The column -> device map is PER-GALAXY and a wrong one does NOT error: it builds stages that are
 # not columns and reports plausible wrong numbers. gen_pipeline_binding.py writes <name>.<host>.yaml.
 if [ -f "${BASE%.yaml}.$(hostname).yaml" ]; then
@@ -87,7 +91,16 @@ PGID=$!
 deadline=$(( $(date +%s) + ${READY_TIMEOUT_S:-3000} ))
 while [ ! -e "$DESCRIPTOR" ]; do
   if ! kill -0 "$PGID" 2>/dev/null; then
-    echo "[repro] FAIL: runner exited during startup; tail:"; tail -40 "$OUT/runner.log"; exit 1
+    echo "[repro] FAIL: runner exited during startup."
+    # The common first failure on a new galaxy, and the tail alone does not say what to do about it.
+    if grep -q 'could not fit in the discovered physical topology' "$OUT/runner.log" 2>/dev/null; then
+      echo "[repro] The mesh-graph descriptor does not map here. If this is the torus_y binding, the"
+      echo "[repro] SP axis is not cabled as a torus on this galaxy. Retry with the plain-2d sibling:"
+      echo "[repro]   PP_BINDING=$TOPO/pipeline_prefill_request_intragalaxy_4rank_8x1.yaml $0"
+      echo "[repro] That is LINE on the SP axis, so its collectives are Linear, not Ring -- a valid"
+      echo "[repro] run but NOT comparable to the published torus_y headline."
+    fi
+    echo "[repro] tail:"; tail -40 "$OUT/runner.log"; exit 1
   fi
   if [ "$(date +%s)" -gt "$deadline" ]; then
     echo "[repro] FAIL: runner not ready within ${READY_TIMEOUT_S:-3000}s; tail:"; tail -40 "$OUT/runner.log"; exit 1
