@@ -18,6 +18,7 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_accessor.hpp"
 #include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils {
@@ -52,8 +53,9 @@ uint32_t sync_seed_across_ranks(tt_fabric::MeshId sender_mesh_id, tt_fabric::Mes
     for (int i = 0; i < *distributed_context->size(); i++) {
         rank_translation_table[Rank{i}] = Rank{i};
     }
-    std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(sender_mesh_id, rank_translation_table);
-    std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(recv_mesh_id, rank_translation_table);
+    auto& metal_env = tt::tt_metal::MetalEnvAccessor(tt::tt_metal::MetalContext::instance().get_env()).impl();
+    std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(metal_env, sender_mesh_id, rank_translation_table);
+    std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(metal_env, recv_mesh_id, rank_translation_table);
     Rank controller_rank = *std::min_element(sender_ranks.begin(), sender_ranks.end());
     if (distributed_context->rank() == controller_rank) {
         seed = std::chrono::steady_clock::now().time_since_epoch().count();

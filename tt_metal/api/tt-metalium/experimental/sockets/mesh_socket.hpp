@@ -10,6 +10,10 @@
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <utility>
 
+namespace tt::tt_metal {
+class MetalEnvImpl;
+}
+
 namespace tt::tt_metal::distributed {
 
 // Multi-Dimensional coordinate struct used to access individual cores in a MeshDevice.
@@ -199,8 +203,8 @@ private:
         config_buffer_(std::move(config_buffer)),
         config_(config),
         socket_endpoint_type_(socket_endpoint_type) {}
-    void process_host_ranks();
-    void process_mesh_ids();
+    void process_host_ranks(tt::tt_metal::MetalEnvImpl& metal_env);
+    void process_mesh_ids(tt::tt_metal::MetalEnvImpl& metal_env);
     static SocketConfig populate_mesh_ids(
         const std::shared_ptr<MeshDevice>& sender,
         const std::shared_ptr<MeshDevice>& receiver,
