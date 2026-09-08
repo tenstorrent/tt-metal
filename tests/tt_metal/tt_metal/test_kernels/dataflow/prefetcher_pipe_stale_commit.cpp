@@ -62,6 +62,7 @@ void kernel_main() {
     constexpr uint32_t new_entry_size = get_compile_time_arg_val(2);
     constexpr uint32_t poison_wr_ptr = get_compile_time_arg_val(3);
     const uint32_t staging_base = get_arg_val<uint32_t>(0);
+    const CoreLocalMem<uint8_t> staging(staging_base);
 
     static_assert(entry_size != new_entry_size, "stale-commit test requires distinct entry sizes");
 
@@ -70,7 +71,7 @@ void kernel_main() {
 
     // Advance one entry so the durable checkpoint is not fifo_start.
     dfb.reserve_back(1);
-    dfb.write_to_receiver(0, staging_base, 1, noc);
+    dfb.write_to_receiver(noc, 0, staging, 1);
     dfb.flush_writes(noc);
     dfb.push_back(1, noc);
 

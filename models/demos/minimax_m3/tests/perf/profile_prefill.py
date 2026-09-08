@@ -49,6 +49,13 @@ Env:
   PROFILE_READ_EVERY  call ttnn.ReadDeviceProfiler every N layers (<1000 ops/read!)   [default 1]
   PROFILE_SKIP_PREFIX "1" -> skip the prefix fill and attend a ZEROED cache. Shapes (and op costs)
                       are identical but MoE routing is not representative — bring-up only  [default 0]
+  PROFILE_STAGES      intra-galaxy pipeline depth: 1 (whole 8x4 galaxy), 2 ((4,4) sub-meshes, EP16) or
+                      4 ((2,4) sub-meshes, EP8). The galaxy is opened whole and stage PROFILE_STAGE's
+                      sub-mesh is carved out of it, so one process profiles one stage           [default 1]
+  PROFILE_STAGE       which stage to profile, 0..PROFILE_STAGES-1. Stage k owns global layers
+                      [k*60/S, (k+1)*60/S); PROFILE_LAYER_IDS must fall inside that range and
+                      PROFILE_NUM_LAYERS takes the first N of it                             [default 0]
+  PROFILE_FABRIC      fabric config: 1d | 1d_ring | 2d | 2d_torus_xy                        [default 1d]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8"                  [default bf4]
   HF_MODEL            real MiniMax-M3 weights dir (read by ModelArgs)
   M3_PROFILE_ZONES    set to 1 by this script before the model is imported
@@ -109,6 +116,16 @@ def _raise_nproc_limit():
 # so a chunk must cover at least this many tokens. Keep in sync with tt/attention/msa.py.
 MSA_MIN_TOKENS = 16 * 128  # 2048
 
+# sparse_attention_freq marks layers 0-2 dense and 3-59 sparse (tt/layer.py).
+FIRST_SPARSE_LAYER = 3
+
+FABRIC_CONFIGS = {
+    "1d": ttnn.FabricConfig.FABRIC_1D,
+    "1d_ring": ttnn.FabricConfig.FABRIC_1D_RING,
+    "2d": ttnn.FabricConfig.FABRIC_2D,
+    "2d_torus_xy": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+}
+
 
 def load_tokens(n: int):
     """Read PREFILL_TRACE_DIR/metadata.json's token_ids and tile them to exactly `n` tokens.
@@ -145,38 +162,60 @@ def plan(chunk: int, cache: int):
     return n_chunks, cache_aligned, n_chunks * chunk
 
 
-def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None):
-    """Build the real-weights model + KV cache. Returns (runtime, kv_cache, hf_config, num_layers)."""
+def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None, stages=1, stage=0):
+    """Build the real-weights model + KV cache for pipeline stage `stage` of `stages` on `mesh` (the
+    whole galaxy or one carved sub-mesh). Returns (runtime, kv_cache, hf_config, global_layer_indices)."""
     from models.demos.minimax_m3.tt.attention import allocate_kv_caches
     from models.demos.minimax_m3.tt.model_config import ModelArgs
     from models.demos.minimax_m3.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
     from models.demos.minimax_m3.tt.weight_cache import weight_cache_is_complete
 
-    rows, cols = 8, 4  # SP=8 (rows) x TP=4 (cols), EP=32
-
-    model_args = ModelArgs(mesh_device=mesh)  # HF_MODEL
+    model_args = ModelArgs(mesh_device=mesh)  # HF_MODEL; the tilized-cache path is keyed by mesh.shape
     hf_config = model_args.hf_config
-    num_layers = hf_config.num_hidden_layers
+    total_layers = hf_config.num_hidden_layers
+    assert total_layers % stages == 0, f"{total_layers} layers do not split evenly into {stages} stages"
+    per_stage = total_layers // stages
+    stage_first, stage_end = stage * per_stage, (stage + 1) * per_stage
+    is_last_stage = stage == stages - 1
+    first_layer_idx = stage_first
+    num_layers = per_stage
     if layer_ids:
         # Explicit layer selection, e.g. [0, 3] = one dense + one sparse. The layers keep their real
         # global indices (so weights, cache keys and the dense/sparse decision are the real ones) but
         # are stacked back to back, which makes a 2-layer run cover both classes. Needs the tilized
         # cache: a non-contiguous index may not live in the shards M3_LOAD_NLAYERS would read.
+        outside = [i for i in layer_ids if not stage_first <= i < stage_end]
+        assert (
+            not outside
+        ), f"PROFILE_LAYER_IDS {outside} lie outside stage {stage}/{stages}'s layers [{stage_first}, {stage_end})"
         num_layers = len(layer_ids)
-        hf_config.num_hidden_layers = num_layers
         os.environ.setdefault("M3_WEIGHTS_FROM_CACHE", "1")
         print(f"[zone-prof] PROFILE_LAYER_IDS={layer_ids}: building global layers {layer_ids}", flush=True)
-    if num_layers_override and not layer_ids:
+    elif num_layers_override:
         num_layers = int(num_layers_override)
-        hf_config.num_hidden_layers = num_layers
-        os.environ.setdefault("M3_LOAD_NLAYERS", str(num_layers))
-        print(f"[zone-prof] PROFILE_NUM_LAYERS={num_layers}: first {num_layers} layers only", flush=True)
-        if num_layers < 4:
+        assert num_layers <= per_stage, f"PROFILE_NUM_LAYERS={num_layers} exceeds the {per_stage} layers of a stage"
+        os.environ["M3_LOAD_NLAYERS"] = str(num_layers)
+        os.environ["M3_LOAD_LAYER_START"] = str(first_layer_idx)
+        print(
+            f"[zone-prof] PROFILE_NUM_LAYERS={num_layers}: global layers "
+            f"[{first_layer_idx}, {first_layer_idx + num_layers}) only",
+            flush=True,
+        )
+        if first_layer_idx + num_layers <= FIRST_SPARSE_LAYER:
             print(
-                f"[zone-prof] WARNING: {num_layers} layers covers no sparse layer "
-                f"(layers 0-2 are dense, sparse starts at 3) — use >=4 to profile both classes.",
+                f"[zone-prof] WARNING: layers [{first_layer_idx}, {first_layer_idx + num_layers}) cover no sparse "
+                f"layer (layers 0-{FIRST_SPARSE_LAYER - 1} are dense) — use >={FIRST_SPARSE_LAYER + 1} to profile "
+                "both classes.",
                 flush=True,
             )
+    hf_config.num_hidden_layers = num_layers
+    global_layer_indices = list(layer_ids or range(first_layer_idx, first_layer_idx + num_layers))
+    if stages > 1:
+        print(
+            f"[zone-prof] stage {stage}/{stages}: mesh {tuple(mesh.shape)}, stage layers [{stage_first}, {stage_end}), "
+            f"building {global_layer_indices}",
+            flush=True,
+        )
 
     expert_dtype = ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b
     cache_path = model_args.weight_cache_path(ttnn.bfloat8_b)
@@ -186,7 +225,15 @@ def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None):
     force_load = os.getenv("M3_FORCE_LOAD_WEIGHTS") == "1"
     cache_only = not force_load and (
         os.getenv("M3_WEIGHTS_FROM_CACHE") == "1"
-        or weight_cache_is_complete(cache_path, hf_config, num_layers, expert_dtype)
+        or weight_cache_is_complete(
+            cache_path,
+            hf_config,
+            num_layers,
+            expert_dtype,
+            first_layer_idx=first_layer_idx,
+            is_first_rank=True,
+            is_last_rank=is_last_stage,
+        )
     )
     if cache_only:
         print("[zone-prof] tilized weight cache complete -> loading from cache", flush=True)
@@ -195,16 +242,23 @@ def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None):
         print("[zone-prof] loading real bf16 weights (slow: ~869GB source read) ...", flush=True)
         state_dict = ModelArgs.load_state_dict(model_args.weights_path)
 
+    # Every stage embeds its own tokens (is_first_rank=True): there is no upstream stage to hand over a
+    # hidden state, and the zero placeholder a real middle rank warms up with would collapse the MoE
+    # router onto one expert per layer. The embedding runs outside the layer zones, so the per-layer
+    # report is unaffected. The tail (final norm + LM head) follows the real stage layout.
     cfg = TtPrefillRuntimeConfig(
         num_layers=num_layers,
         max_seq_len=total,
-        mesh_shape=(rows, cols),
+        mesh_shape=tuple(mesh.shape),
         chunk_size=chunk,
         num_users=1,
         expert_weight_dtype=expert_dtype,
         weight_cache_path=cache_path,
+        first_layer_idx=first_layer_idx,
         layer_indices=layer_ids,
         topology=getattr(ttnn.Topology, os.getenv("M3_CCL_TOPOLOGY", "Linear")),
+        is_first_rank=True,
+        is_last_rank=is_last_stage,
     )
     runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
     del state_dict
@@ -212,16 +266,18 @@ def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None):
     kv_cache = allocate_kv_caches(
         mesh, num_layers=num_layers, max_seq_len=total, num_users=1, head_dim=hf_config.head_dim
     )
-    return runtime, kv_cache, hf_config, num_layers
+    return runtime, kv_cache, hf_config, global_layer_indices
 
 
-def cache_traffic_note(hf_config, num_layers, total, sp=8):
+def cache_traffic_note(hf_config, global_layer_indices, total, sp):
     """Log the whole-cache de-shard traffic the `cache_read/deshard` zone should be moving.
 
     The packed cache is [num_users*num_layers, 1, seq_local, head_dim] per chip (kv_cache.py), and the
     MSA cache-read converts the WHOLE tensor per layer, for each of K / V / index_k. Printing the
     expected bytes up front makes the measured GB/s in the report immediately interpretable.
     """
+    num_layers = len(global_layer_indices)
+    n_sparse = sum(1 for i in global_layer_indices if i >= FIRST_SPARSE_LAYER)
     seq_local = total // sp
     elems = num_layers * seq_local * hf_config.head_dim  # per chip, per cache tensor
     kv_bytes = elems * 1.0625  # bf8_b: 1 byte + 1/16 block scale
@@ -233,8 +289,7 @@ def cache_traffic_note(hf_config, num_layers, total, sp=8):
         f"{elems/1e6:.1f}M elems/tensor ({kv_bytes/2**20:.0f} MiB K, {kv_bytes/2**20:.0f} MiB V, "
         f"{ik_bytes/2**20:.0f} MiB index_k)\n"
         f"    per sparse layer (read+write x3 tensors): {per_layer/2**20:.0f} MiB\n"
-        f"    x {max(0, num_layers - 3)} sparse layers: {per_layer * max(0, num_layers - 3)/2**30:.1f} GiB "
-        f"per chunk, per chip"
+        f"    x {n_sparse} sparse layers: {per_layer * n_sparse/2**30:.1f} GiB per chunk, per chip"
     )
 
 
@@ -246,6 +301,14 @@ def main():
     read_every = int(os.getenv("PROFILE_READ_EVERY", "1"))
     num_layers_override = os.getenv("PROFILE_NUM_LAYERS")
     layer_ids = [int(x) for x in os.getenv("PROFILE_LAYER_IDS", "").split(",") if x.strip()] or None
+    stages = int(os.getenv("PROFILE_STAGES", "1"))
+    stage = int(os.getenv("PROFILE_STAGE", "0"))
+    assert stages in (1, 2, 4), f"PROFILE_STAGES must be 1, 2 or 4 (got {stages})"
+    assert 0 <= stage < stages, f"PROFILE_STAGE={stage} out of range for {stages} stages"
+    fabric_name = os.getenv("PROFILE_FABRIC", "1d")
+    assert (
+        fabric_name in FABRIC_CONFIGS
+    ), f"PROFILE_FABRIC must be one of {sorted(FABRIC_CONFIGS)} (got {fabric_name!r})"
 
     n_chunks, cache, total = plan(chunk, cache_req)
     print(
@@ -259,22 +322,35 @@ def main():
         print("[zone-prof] PROFILE_DRY_RUN=1 -> chunk math + tokens only, exiting before device open", flush=True)
         return 0
 
-    # M3_FABRIC / M3_CCL_TOPOLOGY: fabric config and legacy-CCL topology (see tt_prefill_runtime). Default is
-    # the deployed pair: FABRIC_1D_RING fabric (with the torus_xy mesh graph descriptor the wrapper scripts set)
-    # so high_bw_all_gather rings, while the legacy CCLs stay Linear. Ring for the legacy CCLs and
-    # FABRIC_2D_TORUS_XY are measured and tracked in docs/ATTENTION_HIGH_BW_ALL_GATHER.md.
-    ttnn.set_fabric_config(getattr(ttnn.FabricConfig, os.getenv("M3_FABRIC", "FABRIC_1D_RING")))
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(8, 4))
+    # TODO(profiling): the pipeline runner's intra-galaxy bindings use 2D fabric (PREFILL_FABRIC_MODE=2d);
+    # 1d is the default here so stage captures compare like-for-like with the whole-galaxy baseline.
+    # 2d / 2d_torus_xy are wired through but not yet validated on a carved sub-mesh (torus also needs the
+    # matching *_torus_xy mesh graph descriptor).
+    ttnn.set_fabric_config(FABRIC_CONFIGS[fabric_name])
+    galaxy = ttnn.open_mesh_device(ttnn.MeshShape(8, 4))
     print(
-        f"[zone-prof] fabric={ttnn.get_fabric_config()} ccl_topology={os.getenv('M3_CCL_TOPOLOGY', 'Linear')}",
+        f"[zone-prof] galaxy opened {tuple(galaxy.shape)} ndev={galaxy.get_num_devices()} fabric={fabric_name} "
+        f"ccl_topology={os.getenv('M3_CCL_TOPOLOGY', 'Linear')}",
         flush=True,
     )
-    print(f"[zone-prof] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
+    mesh = galaxy
     try:
         from models.demos.minimax_m3.utils.profiler_utils import COARSE, ZONES_ENABLED, read_profiler, zone
 
-        runtime, kv_cache, hf_config, num_layers = build_runtime(mesh, chunk, total, num_layers_override, layer_ids)
-        cache_traffic_note(hf_config, num_layers, total)
+        if stages > 1:
+            # Contiguous row-block sub-meshes, in the same order the pipeline bindings assign stages.
+            mesh = galaxy.create_submeshes(ttnn.MeshShape(8 // stages, 4))[stage]
+            print(
+                f"[zone-prof] stage {stage}/{stages} sub-mesh {tuple(mesh.shape)} ndev={mesh.get_num_devices()}",
+                flush=True,
+            )
+        sp, tp = tuple(mesh.shape)
+
+        runtime, kv_cache, hf_config, global_layer_indices = build_runtime(
+            mesh, chunk, total, num_layers_override, layer_ids, stages=stages, stage=stage
+        )
+        num_layers = len(global_layer_indices)
+        cache_traffic_note(hf_config, global_layer_indices, total, sp)
 
         # Per-layer ReadDeviceProfiler for the UN-profiled phases only (warmup + prefix). The device
         # profiler buffer must be drained or it overflows and the next phase's data is dropped — but a
@@ -300,7 +376,7 @@ def main():
 
         # --- 1. WARMUP: JIT-compiles every op and populates the program cache. Its ops land in the CSV
         # too, but outside the `profiled_chunk` zone, so the parser drops them.
-        print(f"[zone-prof] warmup / compile ({num_layers}L, SP=8 x TP=4 + EP=32) ...", flush=True)
+        print(f"[zone-prof] warmup / compile ({num_layers}L, SP={sp} x TP={tp} + EP={sp * tp}) ...", flush=True)
         t0 = time.perf_counter()
         runtime.compile(kv_cache)
         print(f"[zone-prof] warmup done in {(time.perf_counter()-t0):.1f}s", flush=True)
@@ -310,7 +386,9 @@ def main():
         def prefill_chunk(c):
             a = c * chunk
             inp = runtime.make_chunk_input(tokens[a : a + chunk])
-            runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=a + chunk)
+            out = runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=a + chunk)
+            if out is not None:  # a non-last stage returns the hidden state meant for the next stage
+                out.deallocate(True)
 
         # --- 2. fill the cache to `cache` tokens. Not inside the `profiled_chunk` zone, so these ops are
         # excluded from the report; synced before the profiled chunk so it pays for no leftover barrier.
@@ -357,7 +435,8 @@ def main():
         chunk_reads = state["reads"] - prefix_reads
 
         print(
-            f"\n[zone-prof] PROFILED CHUNK: {chunk} tok @ {cache} cache, {num_layers} layers\n"
+            f"\n[zone-prof] PROFILED CHUNK: {chunk} tok @ {cache} cache, {num_layers} layers "
+            f"(stage {stage}/{stages}, mesh {sp}x{tp}, fabric {fabric_name})\n"
             f"  wall-clock: {wall*1e3:.1f} ms  ({chunk_reads} profiler reads inside the chunk, "
             f"{prefix_reads} before it)\n"
             f"  device-kernel time per zone: parse the ops CSV with\n"
@@ -367,7 +446,11 @@ def main():
         )
         print("[zone-prof] DONE", flush=True)
     finally:
-        ttnn.close_mesh_device(mesh)
+        # Sub-mesh first: closing the parent runs a final profiler read on the parent's command queue,
+        # and MeshDevice::close then refuses to close a mesh whose child still holds an in-use queue.
+        for sub in galaxy.get_submeshes():
+            ttnn.close_mesh_device(sub)
+        ttnn.close_mesh_device(galaxy)
     return 0
 
 

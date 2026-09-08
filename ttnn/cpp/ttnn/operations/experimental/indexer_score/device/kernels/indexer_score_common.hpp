@@ -111,18 +111,28 @@ struct WorkUnitSpan {
 
 /** One fused Ring Indexer work unit in shard-major physical order. Consecutive physical tiles stay within
  *  one SP shard, so the local shard can run without a Fabric dependency and every remote unit has exactly
- *  one readiness source. The block-cyclic inverse maps packed compute columns back to logical K positions. */
-template <bool BlockCyclic, uint32_t ChunkLocal, uint32_t Sp>
+ *  one readiness source. The block-cyclic inverse maps packed compute columns back to logical K positions.
+ *
+ *  KeyStripes may be finer than the physical SP sharding after a TP-inner gather. PhysicalSp remains the
+ *  ring size while KeyStripes == PhysicalSp * TP and KeyStripeChunk == ChunkLocal / TP. Keep both geometries:
+ *  using KeyStripes as the physical shard count shrinks tiles_per_shard, while using PhysicalSp for the
+ *  logical inverse loses the TP stripe ordering. */
+template <bool BlockCyclic, uint32_t KeyStripeChunk, uint32_t KeyStripes, uint32_t PhysicalSp>
 struct ShardMajorWorkUnitSpan {
     uint32_t group = 0;
     uint32_t physical_tile_start = 0;
     uint32_t tiles_per_shard = 0;
+    uint32_t key_stripe_capacity = 0;
     uint32_t valid_k_len_tiles = k_len_tiles;
 
     void set(uint32_t g, uint32_t physical_start, uint32_t shard_tiles) {
         group = g;
         physical_tile_start = physical_start;
         tiles_per_shard = shard_tiles;
+        if constexpr (BlockCyclic && KeyStripes != PhysicalSp) {
+            constexpr uint32_t key_stripe_split = KeyStripes / PhysicalSp;
+            key_stripe_capacity = tiles_per_shard / key_stripe_split;
+        }
     }
     void set_valid_k_len_tiles(uint32_t tiles) { valid_k_len_tiles = tiles; }
 
@@ -133,11 +143,20 @@ struct ShardMajorWorkUnitSpan {
     uint32_t logical_tile(uint32_t col) const {
         if constexpr (!BlockCyclic) {
             return physical_tile_start + col;
-        } else {
+        } else if constexpr (KeyStripes == PhysicalSp) {
             const uint32_t local = shard_offset() + col;
-            const uint32_t slab = local / ChunkLocal;
-            const uint32_t slab_offset = local - slab * ChunkLocal;
-            return (slab * Sp + shard()) * ChunkLocal + slab_offset;
+            const uint32_t slab = local / KeyStripeChunk;
+            const uint32_t slab_offset = local - slab * KeyStripeChunk;
+            return (slab * PhysicalSp + shard()) * KeyStripeChunk + slab_offset;
+        } else {
+            constexpr uint32_t key_stripe_split = KeyStripes / PhysicalSp;
+            const uint32_t local = shard_offset() + col;
+            const uint32_t tp_stripe = local / key_stripe_capacity;
+            const uint32_t within_stripe = local - tp_stripe * key_stripe_capacity;
+            const uint32_t slab = within_stripe / KeyStripeChunk;
+            const uint32_t within_chunk = within_stripe - slab * KeyStripeChunk;
+            const uint32_t chunk_local = KeyStripeChunk * key_stripe_split;
+            return (slab * PhysicalSp + shard()) * chunk_local + tp_stripe * KeyStripeChunk + within_chunk;
         }
     }
 
@@ -146,14 +165,37 @@ struct ShardMajorWorkUnitSpan {
         return shard_left < k_tiles_per_unit ? shard_left : k_tiles_per_unit;
     }
 
-    // Logical positions increase monotonically within one physical shard, though they jump between local
-    // block-cyclic runs. Therefore the runtime KV prefix is still a packed prefix of this work unit.
+    bool valid(uint32_t col) const { return col < capacity_tiles() && logical_tile(col) < valid_k_len_tiles; }
+
+    // Preserve the packed-prefix fast path when logical positions are monotonic (contiguous or SP-only).
+    // TP-striped positions can reset at a stripe-capacity boundary; there, if any column is valid, read and
+    // compute the whole in-capacity physical unit. Compute masks and writer suppresses each invalid column.
+    // Entirely invalid units still return zero so all three kernels skip them together.
     uint32_t k_tiles() const {
         const uint32_t capacity = capacity_tiles();
-        uint32_t valid = 0;
-        while (valid < capacity && logical_tile(valid) < valid_k_len_tiles) {
-            ++valid;
+        if constexpr (!BlockCyclic) {
+            const uint32_t left = valid_k_len_tiles > physical_tile_start ? valid_k_len_tiles - physical_tile_start : 0;
+            return left < capacity ? left : capacity;
         }
-        return valid;
+        if constexpr (KeyStripes == PhysicalSp) {
+            uint32_t valid_prefix = 0;
+            while (valid_prefix < capacity && valid(valid_prefix)) {
+                ++valid_prefix;
+            }
+            return valid_prefix;
+        }
+        // Within one TP stripe logical positions increase monotonically. Only the first column of each
+        // stripe segment can make an otherwise-empty unit active, so avoid scanning every KC column in
+        // capacity-sized schedules whose runtime prefix is short (the common Galaxy prefill case).
+        uint32_t col = 0;
+        while (col < capacity) {
+            if (valid(col)) {
+                return capacity;
+            }
+            const uint32_t local = shard_offset() + col;
+            const uint32_t within_stripe = local % key_stripe_capacity;
+            col += key_stripe_capacity - within_stripe;
+        }
+        return 0;
     }
 };

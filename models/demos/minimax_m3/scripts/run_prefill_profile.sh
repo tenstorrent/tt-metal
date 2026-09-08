@@ -13,8 +13,24 @@
 # re-rendered without paying for it again.
 #
 # Usage:  LEVEL=1 LAYERS=8 CACHE=25600 ./models/demos/minimax_m3/scripts/run_prefill_profile.sh
+#         STAGES=2 STAGE=1 LAYER_IDS=30,33 CACHE=51200 ./models/demos/minimax_m3/scripts/run_prefill_profile.sh
+#
+# Each successful capture's ops CSV is MOVED to RESULTS_DIR/<stamp>_stages<S>_stage<k>_layers<..>_cache<N>_<fabric>_<dtype>/
+# together with a copy of the log, so generated/profiler/ can be wiped between experiments and every
+# capture stays re-renderable.
 #
 # Flags (all optional, all env vars):
+#   STAGES=1|2|4    intra-galaxy pipeline depth: 1 = whole 8x4 galaxy (EP32), 2 = (4,4) sub-meshes
+#                   (EP16), 4 = (2,4) sub-meshes (EP8). The galaxy is opened whole and one stage's
+#                   sub-mesh carved out of it.                                          [default 1]
+#   STAGE=k         which stage to profile, 0..STAGES-1. Stage k owns global layers
+#                   [k*60/STAGES, (k+1)*60/STAGES); LAYER_IDS must fall inside that range and LAYERS
+#                   takes the first N of it. Only stage 0 has dense layers.          [default 0]
+#   FABRIC=1d|1d_ring|2d|2d_torus_xy   fabric config. 1d matches the whole-galaxy baseline; the
+#                   pipeline runner's intra-galaxy bindings use 2d.                  [default 1d]
+#   TT_CACHE_PATH   tilized weight-cache root; the sub-mesh shapes need their own
+#                   tensor_cache_bfp8_MeshShape([4, 4]) / ([2, 4]) (see docs/PIPELINE_PREFILL_TESTING.md).
+#   RESULTS_DIR     where finished captures are moved.        [default $TT_METAL_HOME/prefill_profile_results]
 #   LEVEL=1|2|3     zone detail. 1 = attn vs mlp only (~3 zones/layer), 2 = every block that costs
 #                   real time (~20), 3 = everything incl. norms and sub-splits (~35).   [default 2]
 #   LAYERS=N        build/run only the first N layers. Layers 0-2 are dense and 3+ sparse, so N>=4
@@ -37,8 +53,21 @@ set -uo pipefail
 # script is portable across checkouts and users instead of hard-coding one person's home.
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$_SCRIPT_DIR/../../../.." && pwd)}"
-export TT_MESH_GRAPH_DESC_PATH="${TT_MESH_GRAPH_DESC_PATH:-$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto}"
 export HF_MODEL="${HF_MODEL:-/mnt/models/MiniMaxAI/MiniMax-M3-ref}"
+STAGES="${STAGES:-1}"
+STAGE="${STAGE:-0}"
+FABRIC="${FABRIC:-1d}"
+export PROFILE_STAGES="$STAGES" PROFILE_STAGE="$STAGE" PROFILE_FABRIC="$FABRIC"
+# TODO(profiling): 1d_ring / 2d / 2d_torus_xy are passed through but not yet validated on a carved sub-mesh.
+# FABRIC_1D_RING refuses a plain mesh descriptor on Blackhole (tt_metal/fabric/topology_mapper.cpp,
+# ring_requires_torus), so ring and torus modes select the torus-XY descriptor. The M3 CCLs still run
+# with Topology.Linear (TtPrefillRuntimeConfig.topology), so a ring fabric alone does not make them ring
+# collectives.
+_DESC_DEFAULT="$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
+case "$FABRIC" in
+  1d_ring|2d_torus_*) _DESC_DEFAULT="$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto" ;;
+esac
+export TT_MESH_GRAPH_DESC_PATH="${TT_MESH_GRAPH_DESC_PATH:-$_DESC_DEFAULT}"
 export EXPERT_DTYPE="${EXPERT_DTYPE:-bf4}"
 export LOGURU_LEVEL=INFO       # suppress python DEBUG logs at the source
 export M3_PROFILE_ZONES=1      # arm the zone markers (utils/profiler_utils.py reads this at import)
@@ -57,8 +86,10 @@ FAILED=0
 WORKDIR="${PERF_WORKDIR:-/tmp/m3_prefill_perf_traces}"
 LOGDIR="${LOGDIR:-$TT_METAL_HOME/prefill_profile_logs}"
 REPORTS="${REPORTS:-$TT_METAL_HOME/generated/profiler/reports}"
+RESULTS_DIR="${RESULTS_DIR:-$TT_METAL_HOME/prefill_profile_results}"
+DESTS=()
 STAMP="$(date +%Y%m%d_%H%M%S)"
-LOG="$LOGDIR/prefill_profile_${EXPERT_DTYPE}_${STAMP}.log"
+LOG="$LOGDIR/prefill_profile_${EXPERT_DTYPE}_stages${STAGES}_stage${STAGE}_${FABRIC}_${STAMP}.log"
 CHUNK="${CHUNK:-${PROFILE_CHUNK:-5120}}"
 export M3_PROFILE_LEVEL="${LEVEL:-${M3_PROFILE_LEVEL:-2}}"
 # Default to 6 layers (3 dense + 3 sparse). Bare `./run_prefill_profile.sh` used to build all 60,
@@ -69,6 +100,9 @@ export M3_PROFILE_LEVEL="${LEVEL:-${M3_PROFILE_LEVEL:-2}}"
 [ -n "${LAYER_IDS:-}" ] && export PROFILE_LAYER_IDS="$LAYER_IDS"
 [ -n "${CACHE:-}" ] && PROFILE_CACHE="$CACHE"
 [ -n "${SKIP_PREFIX:-}" ] && export PROFILE_SKIP_PREFIX="$SKIP_PREFIX"
+# Layer tag for the results folder name: "0+3" for LAYER_IDS=0,3, "first6" for LAYERS=6.
+LAYER_TAG="${LAYER_IDS:+${LAYER_IDS//,/+}}"
+LAYER_TAG="${LAYER_TAG:-first${LAYERS:-}}"
 
 # Source of the tokens the synthetic traces are tiled from. Defined before the preflight below, which
 # checks it exists.
@@ -83,8 +117,33 @@ die () { echo "ERROR: $*" >&2; exit 1; }
 [ -d "$HF_MODEL" ]               || die "HF_MODEL does not exist: $HF_MODEL (set HF_MODEL=<weights dir>)"
 [ -f "$SRC_TRACE" ]              || die "source trace not found: $SRC_TRACE (set GOLDEN_DIR or SRC_TRACE)"
 command -v tt-smi >/dev/null     || die "tt-smi not on PATH — needed to reset the galaxy between runs"
+case "$STAGES" in 1|2|4) ;; *) die "STAGES must be 1, 2 or 4 (got $STAGES)" ;; esac
+[ "$STAGE" -ge 0 ] && [ "$STAGE" -lt "$STAGES" ] || die "STAGE=$STAGE out of range for STAGES=$STAGES"
+# The tilized cache is keyed by mesh shape; check the first requested layer is there instead of
+# discovering a ~869 GB bf16 source read several minutes in. self_attn is the last subtree the populate
+# run writes, so its presence distinguishes a finished layer from an aborted one. M3_FORCE_LOAD_WEIGHTS=1
+# (cache populate) is the one case that means to read the source.
+M3_NUM_LAYERS=60   # MiniMax-M3 num_hidden_layers; the harness reads the real value from hf_config
+STAGE_ROWS=$((8 / STAGES))
+STAGE_CACHE="${TT_CACHE_PATH:-$HF_MODEL}/tensor_cache_bfp8_MeshShape([$STAGE_ROWS, 4])"
+FIRST_LAYER="${LAYER_IDS:-}"
+FIRST_LAYER="${FIRST_LAYER%%,*}"
+FIRST_LAYER="${FIRST_LAYER:-$((STAGE * M3_NUM_LAYERS / STAGES))}"
+if [ "${M3_FORCE_LOAD_WEIGHTS:-0}" != "1" ] && [ ! -d "$STAGE_CACHE/model.layers.$FIRST_LAYER/self_attn" ]; then
+  die "no tilized cache for layer $FIRST_LAYER at $STAGE_CACHE — set TT_CACHE_PATH to a root that has the" \
+      "([$STAGE_ROWS, 4]) cache (see models/demos/minimax_m3/docs/PIPELINE_PREFILL_TESTING.md), or" \
+      "M3_FORCE_LOAD_WEIGHTS=1 to populate it from the bf16 source"
+fi
 
 cd "$TT_METAL_HOME"
+# tracy-capture and tracy-csvexport are siblings of the harness, spawned by `python3 -m tracy`, so the
+# harness raising its own RLIMIT_NPROC does not cover them. Saving a capture spawns one compression thread
+# per core; at the per-user default (512 on the galaxy hosts, counted across every process the user owns)
+# that fails with "Resource temporarily unavailable" and the trace is lost AFTER the run. Raise the soft
+# limit to the hard limit for everything launched from here.
+NPROC_HARD="$(ulimit -Hu)"
+ulimit -Su "$NPROC_HARD" 2>/dev/null || echo "WARNING: could not raise RLIMIT_NPROC (soft $(ulimit -Su), hard $NPROC_HARD)"
+NPROC_IN_USE="$(ps -L -u "$(id -un)" --no-headers 2>/dev/null | wc -l)"
 # shellcheck disable=SC1091
 source python_env/bin/activate
 export PYTHONPATH="$TT_METAL_HOME"   # after venv activate so model imports resolve
@@ -161,6 +220,16 @@ run_cfg () {  # $1=label  $2=cache_tokens
   # expensive part, and you will want to re-render it more than once.
   local csv; csv="$(find "$REPORTS" -name 'ops_perf_results_*.csv' -newermt "@$before" 2>/dev/null | sort | tail -1)"
   if [ -n "$csv" ]; then
+    # Park the CSV under RESULTS_DIR so generated/profiler/ can be wiped between experiments. The log
+    # is copied in once the whole run has finished (see the end of the script).
+    local dest="$RESULTS_DIR/${STAMP}_stages${STAGES}_stage${STAGE}_layers${LAYER_TAG}_cache${cache}_${FABRIC}_${EXPERT_DTYPE}"
+    if mkdir -p "$dest" && mv "$csv" "$dest/"; then
+      csv="$dest/$(basename "$csv")"
+      DESTS+=("$dest")
+    else
+      echo "# [$label] FAILED to move $csv into $dest — the capture is still at its original path" | tee -a "$LOG"
+      FAILED=1
+    fi
     { echo "# [$label] CSV: $csv"
       echo "# [$label] visualize: python3 $VISUALIZE $csv"; } | tee -a "$LOG"
     CSVS+=("$csv")
@@ -175,13 +244,18 @@ echo "logging to $LOG"
   echo "MiniMax-M3 prefill zone profile"
   echo "  HF_MODEL=$HF_MODEL  EXPERT_DTYPE=$EXPERT_DTYPE  CHUNK=$CHUNK  NOC_TRACES=${NOC_TRACES:-0}"
   echo "  LAYERS=${PROFILE_LAYER_IDS:-${PROFILE_NUM_LAYERS:-all}}  ZONE LEVEL=$M3_PROFILE_LEVEL  SKIP_PREFIX=${PROFILE_SKIP_PREFIX:-0}"
+  echo "  STAGES=$STAGES  STAGE=$STAGE  FABRIC=$FABRIC  MESH=($STAGE_ROWS, 4)  CACHE_DIR=$STAGE_CACHE"
+  echo "  TT_MESH_GRAPH_DESC_PATH=$TT_MESH_GRAPH_DESC_PATH"
+  echo "  RESULTS_DIR=$RESULTS_DIR"
+  echo "  RLIMIT_NPROC soft=$(ulimit -Su) hard=$NPROC_HARD  user threads in use=$NPROC_IN_USE"
 } | tee "$LOG"
 
+STAGE_LABEL="stage $STAGE/$STAGES $FABRIC"
 if [ -n "${PROFILE_CACHE:-}" ]; then
-  run_cfg "5k at ${PROFILE_CACHE}" "$PROFILE_CACHE"
+  run_cfg "$STAGE_LABEL 5k at ${PROFILE_CACHE}" "$PROFILE_CACHE"
 else
-  run_cfg "5k at 25k" 25600   # 5 prefix chunks + 1 profiled = 30720 capacity
-  run_cfg "5k at 55k" 56320   # 11 prefix chunks + 1 profiled = 61440 capacity
+  run_cfg "$STAGE_LABEL 5k at 25k" 25600   # 5 prefix chunks + 1 profiled = 30720 capacity
+  run_cfg "$STAGE_LABEL 5k at 55k" 56320   # 11 prefix chunks + 1 profiled = 61440 capacity
 fi
 
 {
@@ -191,6 +265,7 @@ fi
 } | tee -a "$LOG"
 echo ""
 echo "full log: $LOG"
+for d in "${DESTS[@]}"; do cp "$LOG" "$d/"; echo "results: $d"; done
 echo ""
 if [ "$FAILED" -ne 0 ]; then
   echo "=================== FAILED ==================="
