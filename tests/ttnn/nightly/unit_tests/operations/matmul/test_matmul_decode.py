@@ -426,6 +426,148 @@ def test_matmul_decode_fused_rms_norm(device, m, k, n, use_vector_gamma, expect_
     assert_with_pcc(ref, got_unfused, 0.99)
 
 
+def _make_matmul_decode_rms_norm_tensors(device, m, k, n):
+    """Minimal full-width matmul_decode operands for fused RMSNorm validation tests."""
+    num_inputB_cores = n // 64
+    grid = device.compute_with_storage_grid_size()
+    if grid.x * grid.y < num_inputB_cores:
+        pytest.skip(f"Skipping test as device doesn't have {num_inputB_cores} cores")
+
+    torch_a = torch.randn((m, k), dtype=torch.bfloat16)
+    torch_b = torch.randn((k, n), dtype=torch.bfloat16)
+    producer_grid = num_cores_to_rectangle_core_range_set(num_inputB_cores, device)
+    a = ttnn.from_torch(
+        torch_a.repeat(num_inputB_cores, 1),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=ttnn.create_sharded_memory_config(
+            (m, k),
+            core_grid=producer_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        ),
+    )
+    weight = ttnn.from_torch(
+        torch_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.create_sharded_memory_config(
+            (k, n // num_inputB_cores),
+            core_grid=producer_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        ),
+    )
+    return a, weight, num_inputB_cores, producer_grid
+
+
+def test_matmul_decode_params_rms_norm_group_size_default():
+    params = ttnn._ttnn.operations.experimental.MatmulDecodeParams()
+    assert params.rms_norm_group_size == 0
+
+
+@pytest.mark.parametrize("m, k, n", [(1, 4096, 1024)])
+def test_matmul_decode_rms_norm_group_size_zero_backcompat(device, m, k, n):
+    """Default group_size=0 preserves legacy full-row RMSNorm behavior."""
+    torch.manual_seed(0)
+    epsilon = 1e-5
+    scalar_gamma = 0.75
+    a, weight, num_inputB_cores, producer_grid = _make_matmul_decode_rms_norm_tensors(device, m, k, n)
+    torch_a = ttnn.to_torch(a)[:m]
+    torch_b = ttnn.to_torch(weight)
+    if torch_b.ndim == 4:
+        torch_b = torch_b.reshape(-1, torch_b.shape[-1])
+    mm = torch_a.float() @ torch_b.float()
+    ref = mm * scalar_gamma * torch.rsqrt(mm.square().mean(dim=-1, keepdim=True) + epsilon)
+
+    out = ttnn.experimental.matmul_decode(
+        a,
+        weight,
+        rms_norm=True,
+        rms_norm_gamma=scalar_gamma,
+        rms_norm_epsilon=epsilon,
+    )
+    assert_with_pcc(ref, ttnn.to_torch(out).float(), 0.99)
+
+
+@pytest.mark.parametrize("m", [1])
+@pytest.mark.parametrize("k, n", [(4096, 1024)])
+@pytest.mark.parametrize("group_size", [64, 128])
+def test_matmul_decode_rms_norm_group_size_requires_rms_norm(device, m, k, n, group_size, expect_error):
+    a, weight, _, _ = _make_matmul_decode_rms_norm_tensors(device, m, k, n)
+    with expect_error(RuntimeError, "rms_norm_group_size requires rms_norm"):
+        ttnn.experimental.matmul_decode(a, weight, rms_norm_group_size=group_size)
+
+
+@pytest.mark.parametrize("m", [1])
+@pytest.mark.parametrize("k, n", [(4096, 1024)])
+@pytest.mark.parametrize(
+    "group_size, message",
+    [
+        (2048, "must be <= N"),
+        (48, "divisible by 32"),
+        (96, "N .* divisible by group_size"),
+    ],
+)
+def test_matmul_decode_rms_norm_group_size_validation(device, m, k, n, group_size, message, expect_error):
+    a, weight, _, _ = _make_matmul_decode_rms_norm_tensors(device, m, k, n)
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.matmul_decode(
+            a,
+            weight,
+            rms_norm=True,
+            rms_norm_gamma=0.75,
+            rms_norm_epsilon=1e-5,
+            rms_norm_group_size=group_size,
+        )
+
+
+@pytest.mark.parametrize("m", [1])
+@pytest.mark.parametrize("k, n", [(4096, 1024)])
+@pytest.mark.parametrize("group_size", [64, 128])
+def test_matmul_decode_rms_norm_group_size_valid_accepts(device, m, k, n, group_size):
+    """Valid nonzero group_size passes API validation (kernel grouped math not tested here)."""
+    a, weight, _, _ = _make_matmul_decode_rms_norm_tensors(device, m, k, n)
+    ttnn.experimental.matmul_decode(
+        a,
+        weight,
+        rms_norm=True,
+        rms_norm_gamma=0.75,
+        rms_norm_epsilon=1e-5,
+        rms_norm_group_size=group_size,
+    )
+
+
+@pytest.mark.parametrize("m, k, n", [(1, 4096, 1024)])
+def test_matmul_decode_rms_norm_group_size_program_hash(device, m, k, n):
+    """group_size participates in the descriptor program hash."""
+    a, weight, _, _ = _make_matmul_decode_rms_norm_tensors(device, m, k, n)
+    prim = ttnn._ttnn.operations.experimental
+    attrs0 = prim.MatmulDecodeParams()
+    attrs0.M = m
+    attrs0.N = n
+    attrs0.K = k
+    attrs0.rms_norm = True
+    attrs0.rms_norm_gamma = 0.75
+    attrs0.rms_norm_epsilon = 1e-5
+    attrs0.rms_norm_group_size = 0
+    attrs64 = prim.MatmulDecodeParams()
+    attrs64.M = m
+    attrs64.N = n
+    attrs64.K = k
+    attrs64.rms_norm = True
+    attrs64.rms_norm_gamma = 0.75
+    attrs64.rms_norm_epsilon = 1e-5
+    attrs64.rms_norm_group_size = 64
+    tensor_args = prim.MatmulDecodeInputs(a, weight, None)
+    h0 = prim.MatmulDecodeDeviceOperation.compute_program_hash(attrs0, tensor_args)
+    h64 = prim.MatmulDecodeDeviceOperation.compute_program_hash(attrs64, tensor_args)
+    assert h0 != h64
+
+
 @pytest.mark.parametrize("m, k, n", [(1, 1024, 2048)])
 @pytest.mark.parametrize("output_mcast_two_hub", [False, True])
 @pytest.mark.parametrize("rms_norm", [False, True])

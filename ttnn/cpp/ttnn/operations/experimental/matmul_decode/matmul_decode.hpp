@@ -56,6 +56,7 @@ Tensor matmul_decode(
     bool output_mcast_two_hub = false,
     bool rms_norm = false,
     const std::optional<std::variant<float, Tensor>>& rms_norm_gamma = std::nullopt,
-    float rms_norm_epsilon = 1.0e-6F);
+    float rms_norm_epsilon = 1.0e-6F,
+    uint32_t rms_norm_group_size = 0);
 
 }  // namespace ttnn::experimental
