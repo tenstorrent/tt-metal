@@ -152,9 +152,10 @@ is not a dependency of any module test and is deferred to P1.
 
 All references and goldens are **fp16** (`torch.float16`), regardless of the checkpoint dtype and
 of the ttnn dtypes under test: the D1/M1 torch references compute in fp16 (input, weights, cos/sin),
-the per-module goldens they dump are fp16, and the golden trace P1-P3 compare against is written to
-disk as fp16. This is a fixed convention, not a per-model choice. The donors might **not** follow it,
-so when copying a reference or a golden runner, replace its casts rather than carrying them over.
+the per-module goldens they dump are fp16, and the golden trace P1-P2 compare against is written to
+disk as fp16. This is a fixed convention, not a per-model choice. The package you borrow a reference
+or a golden runner from might **not** follow it — its casts are shape-tuned, not structural (§2.3),
+so replace them rather than carrying them over.
 
 - **E — Exploration**
 
