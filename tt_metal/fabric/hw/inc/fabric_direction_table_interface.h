@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "hostdevcommon/fabric_common.h"
+// Only included from the bottom of hostdevcommon/fabric_common.h; including it back here would create a cycle.
 
 namespace tt::tt_fabric {
 
