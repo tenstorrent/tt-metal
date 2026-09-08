@@ -1,6 +1,6 @@
 {
-  "last_run": "2026-09-08T06:43:00Z",
-  "run_id": "34195551420",
+  "last_run": "2026-09-08T12:41:00Z",
+  "run_id": "34226949304",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -78,17 +78,15 @@
     "55435": {
       "ci_status_2026-09-07": "RTL Sim CI test FAILING (~14min run, unusual vs ~1s passes); other 4 Cycode checks green; job log 404 - could not self-diagnose; posted comment flagging for maintainer"
     },
-    "55605_aliased_binding": {
+    "55605_alias": {
       "issue": 55605,
-      "branch": "repo-assist/fix-issue-55605-aliased-tensor-binding",
-      "title": "fix(ttnn): resolve aliased TensorParameters to distinct slots on cache hit",
-      "status": "opened this run (2026-09-08); superseding closed draft PR #55606 from reporter; claim-based slot resolution in SpecBindingSupport::resolve_bindings; added regression test test_program_cache_tensor_aliasing.py; CI triggered via pr-gate.yaml, outcome unknown yet, docker unavailable in agent env so unverified locally, check next run"
+      "pr": 55670,
+      "status": "CI pre-checks 5/5 green, mergeable_state=behind, no build-artifact.yaml run found yet (PR Gate likely still pending maintainer approval); checked 2026-09-08"
     },
-    "55681_fix": {
+    "55681_docfix": {
       "issue": 55681,
-      "branch": "repo-assist/doc-fix-quasar-tensix-stale-macros",
-      "title": "docs(hw): flag stale tt-1xx instruction macros in Quasar tensix.h",
-      "status": "opened this run (2026-09-08); comment-only change (no macro value changes) warning that several INSTRN_* macros in quasar/tensix.h describe tt-1xx opcodes that were reassigned on Quasar; CI triggered via pr-gate.yaml, outcome unknown yet, check next run"
+      "pr": 55688,
+      "status": "CI pre-checks 5/5 green, mergeable_state=behind, no build-artifact.yaml run found yet; comment-only change so low risk; checked 2026-09-08"
     }
   },
   "issues_labeled": [
@@ -155,7 +153,9 @@
     "55393:bug",
     "55392:bug",
     "55599:bug",
-    "55622:bug"
+    "55622:bug",
+    "55735:bug",
+    "55733:bug"
   ],
   "covered_no_duplicate": {
     "52131": "PR #52136 already closes it",
@@ -1065,7 +1065,8 @@
     55519,
     "22706: 2026-09-05 already nudged 2026-08-05, author (jbedichekTT) still hasnt addressed changes-requested review; no new activity, skip re-nudge",
     "36227: 2026-09-05 approved by yieldthought 2026-05-05, mergeable_state unknown, low priority docs PR, no action needed",
-    "35515: 2026-09-05 already nudged 2026-08-09 for rebase (behind main), still dirty; independent repro comment posted 2026-08-15 supporting fix; not yet 3+ days new signal, monitor next run"
+    "35515: 2026-09-05 already nudged 2026-08-09 for rebase (behind main), still dirty; independent repro comment posted 2026-08-15 supporting fix; not yet 3+ days new signal, monitor next run",
+    "2026-09-08: reviewed fresh eltwise-family bugs 55735/55733/55725/55724/55723/55722/55721/55711/55710/55709/55684/55683/55673 - all already have reporter-opened fix PRs (55601,55734,55728,55727,55726,55714,55713,55712,55680,55687,55620); no duplicate PRs opened"
   ],
   "resolved": {
     "52673": {
