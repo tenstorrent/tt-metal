@@ -1835,7 +1835,15 @@ def run_chunked_transformer_updated(
                 for src, dst in zip(host_meta[c], trace_metadata):
                     ttnn.copy_host_to_device_tensor(src, dst)
                 chunk_start = time.time()
-                trace_controller.replay()
+                if os.environ.get("TT_GLM_META_NO_TRACE", "0") == "1":
+                    # Run the METADATA path eagerly instead of replaying the capture. The traced arm is the
+                    # only one that feeds metadata tensors, so a traced-vs-untraced gap is really TWO
+                    # differences at once: metadata-vs-host scalars, and replay-vs-eager. This knob splits
+                    # them -- if the gap survives here, it is the metadata math and trace is innocent.
+                    # (That is exactly what it showed for tp_shard_kv at multi-chunk.)
+                    _fwd_meta()
+                else:
+                    trace_controller.replay()
                 ttnn.synchronize_device(mesh_device)
                 chunk_seconds = time.time() - chunk_start
                 chunk_times.append(chunk_seconds)

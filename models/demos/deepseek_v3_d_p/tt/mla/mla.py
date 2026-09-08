@@ -2108,20 +2108,8 @@ class ttMLA:
         seq_local and stage 2 has to reach the LAST TP slot -- (tp-1)*seq_local + prefix_dev rows per
         SP rank instead of the prefix_dev*tp a compacting gather would move."""
         storage = kvpe_cache.storage
-        # Not made trace-safe: stage 2 reaches past the LAST TP slot ((tp-1)*seq_local + prefix_dev),
-        # which is not the "round the populated prefix up to whole slabs" closed form that
-        # gathered_prefix_tensor derives on-device, so the extent cannot be expressed in the tensor
-        # form the snake path uses. Fail loudly instead of silently baking this chunk's prefix and the
-        # capture-time slot into a replayed program. Reachable only where the snake cannot close its
-        # ring (see _can_full_mesh_gather_kvpe) -- notably sp == 1, which the SP-only path already
-        # refuses to trace for the same class of reason.
-        assert metadata is None, (
-            "trace-safe sparse prefill is not supported on the two-stage TP-sharded KV gather: this mesh "
-            "cannot close a full-mesh snake ring (sp_axis/tp_axis layout, mesh shape, or declared dim-2 "
-            "shard factor), and stage 2's extent has no on-device closed form. Run this shape untraced, "
-            "or use a mesh where _can_full_mesh_gather_kvpe holds."
-        )
         slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
+        multi_slot = storage.shape[0] > 1
         assert self._sparse_kv_gather_buffer is not None
         seq_local = storage.shape[2]  # per-DEVICE cache depth
         cl_dev = block_cyclic_chunk_local // self.tp_factor  # per-DEVICE slab width
@@ -2134,19 +2122,38 @@ class ttMLA:
         tp_stage_out = self._sparse_kv_gather_buffer if self.sp_factor == 1 else self._kvpe_tp_stage_buffer
         assert tp_stage_out is not None
         # Stage 1 (TP-inner): ND cache -> [1, 1, seq_local*tp, row_width], rank t at t*seq_local.
+        # Trace-safe form. Stage 2's extent reaches past the LAST TP slot, which is not the "round the
+        # populated prefix up to whole slabs" closed form gathered_prefix_tensor derives -- but it does not
+        # need one: pinning BOTH extents to the full buffer makes them chunk-INVARIANT, and a constant is
+        # safe to bake into a captured program. It moves more bytes than the prefix-bounded form on this
+        # fallback path; correctness first, and only where the snake cannot close its ring. The SLOT is
+        # per-(user, layer) and genuinely varies, so it still has to come from the tensor.
+        stage1_extent = seq_local * self.tp_factor if metadata is not None else prefix_dev * self.tp_factor
+        stage1_slot_kwargs = (
+            {
+                "input_batch_index_tensor": metadata[0],
+                "batch_slot_num_layers": self.layer_num,
+                "batch_slot_layer_idx": cache_batch_idx % self.layer_num,
+            }
+            if metadata is not None and multi_slot
+            else {"input_batch_index": slot_lo}
+        )
         tp_stage = ttnn.experimental.high_bw_all_gather(
             storage,
             dim=2,
             output_tensor=tp_stage_out,
             num_links=self.ccl_num_links,
             cluster_axis=self.tp_axis,
-            input_batch_index=slot_lo,
-            gathered_dim_size=prefix_dev * self.tp_factor,
+            gathered_dim_size=stage1_extent,
+            **stage1_slot_kwargs,
         )
         if self.sp_factor == 1:
             return MlaKvCache(format=kvpe_cache.format, storage=tp_stage, geometry=kvpe_cache.geometry)
         # Stage 2 (SP-outer): reach past the last TP slot, since stage 1 did not compact.
-        sp_rank_extent = (self.tp_factor - 1) * seq_local + prefix_dev
+        # Stage 2 carries no slot (its input is the batch-1 stage-1 output), so only the extent matters.
+        sp_rank_extent = (
+            seq_local * self.tp_factor if metadata is not None else (self.tp_factor - 1) * seq_local + prefix_dev
+        )
         gathered = ttnn.experimental.high_bw_all_gather(
             tp_stage,
             dim=2,
