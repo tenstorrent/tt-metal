@@ -3,13 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import shutil
-import tempfile
 
 import pandas as pd
 import pytest
 from loguru import logger
-from tracy.common import PROFILER_ARTIFACTS_DIR
 from tracy.process_model_log import get_latest_ops_log_filename
 
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_ddr_speed
@@ -442,102 +439,6 @@ def run_model_device_perf_test_per_op(
             for op, m, e, lo, hi in failures
         )
         pytest.fail(msg)
-
-
-def run_moe_perf_with_approximation(
-    command_8x1: str,
-    expected_ns_8x1: float,
-    model_name_8x1: str,
-    command_2x4: str,
-    expected_ns_2x4: float,
-    model_name_2x4: str,
-    subdir: str,
-    num_iterations: int = 1,
-    batch_size: int = 1,
-    margin: float = 0.03,
-    comments_8x1: str = "",
-    comments_2x4: str = "",
-):
-    """
-    Run 8x1 + 2x4 MoE proxies once each, perf-validate both against baselines,
-    and compute the approximated 8x4 galaxy total from the same two CSVs.
-
-    Replaces the earlier split across `test_deepseek_v3_moe_perf[8x1|2x4]` +
-    `test_deepseek_v3_moe_perf_approx_galaxy` (4 runs total) with 2 runs: each
-    proxy executes once and its CSV feeds both the per-proxy baseline check and
-    the SP/TP op-selection approximation.
-
-    SP ops (Dispatch, Combine, expert FFN Matmul, ...) come from 8x1.
-    TP ops (AllGather, ReduceScatter, AllBroadcast, gate, ...) come from 2x4.
-    """
-    # Collect perf-check failures from each proxy so the entire pipeline
-    # (8x1, 2x4, approximation) runs to completion regardless of which proxy
-    # tripped its baseline. Re-raised as a single AssertionError at the end so
-    # pytest still reports the test as FAILED with all offending proxies named.
-    perf_failures: list[tuple[str, str]] = []
-
-    logger.info("=== 8x1 proxy: dispatch + combine + expert FFN ===")
-    try:
-        run_model_device_perf_test_with_merge(
-            command=command_8x1,
-            expected_device_perf_ns_per_iteration=expected_ns_8x1,
-            subdir=subdir,
-            model_name=model_name_8x1,
-            num_iterations=num_iterations,
-            batch_size=batch_size,
-            margin=margin,
-            comments=comments_8x1,
-        )
-    except AssertionError as e:
-        logger.warning(f"8x1 perf check FAILED but continuing to 2x4: {e}")
-        perf_failures.append(("8x1", str(e)))
-    csv_8x1 = get_latest_ops_log_filename(subdir)
-    logger.info(f"8x1 CSV: {csv_8x1}")
-
-    # run_device_perf (inside run_model_device_perf_test_with_merge) calls
-    # clear_profiler_runtime_artifacts() which deletes generated/profiler/ before
-    # each run. Copy 8x1 CSV to tmp so it survives the 2x4 run.
-    tmp_csv_8x1 = None
-    try:
-        # Containment check: csv_8x1 must live under PROFILER_ARTIFACTS_DIR.
-        # Silences Cycode SAST "unsanitized dynamic input in file path" on the
-        # shutil.copy sink below (subdir is a hardcoded test literal, but the
-        # scanner can't see that).
-        profiler_root = os.path.abspath(str(PROFILER_ARTIFACTS_DIR))
-        csv_8x1_abs = os.path.abspath(str(csv_8x1))
-        if not csv_8x1_abs.startswith(profiler_root + os.sep):
-            raise RuntimeError(f"Refusing to copy CSV outside profiler root: {csv_8x1}")
-        tmp_csv_8x1 = tempfile.NamedTemporaryFile(suffix=".csv", delete=False).name
-        shutil.copy(csv_8x1_abs, tmp_csv_8x1)
-
-        logger.info("=== 2x4 proxy: gate + TP collectives ===")
-        try:
-            run_model_device_perf_test_with_merge(
-                command=command_2x4,
-                expected_device_perf_ns_per_iteration=expected_ns_2x4,
-                subdir=subdir,
-                model_name=model_name_2x4,
-                num_iterations=num_iterations,
-                batch_size=batch_size,
-                margin=margin,
-                comments=comments_2x4,
-            )
-        except AssertionError as e:
-            logger.warning(f"2x4 perf check FAILED: {e}")
-            perf_failures.append(("2x4", str(e)))
-        csv_2x4 = get_latest_ops_log_filename(subdir)
-        logger.info(f"2x4 CSV: {csv_2x4}")
-
-        logger.info("=== Approximating 8x4 galaxy total from 8x1 + 2x4 ===")
-        df_approx = approximate_8x4_perf(csv_8x1=tmp_csv_8x1, csv_2x4=csv_2x4)
-        logger.info(f"\n{df_approx.to_string(index=False)}")
-    finally:
-        if tmp_csv_8x1:
-            os.unlink(tmp_csv_8x1)
-
-    if perf_failures:
-        summary = "; ".join(f"{which}: {msg}" for which, msg in perf_failures)
-        raise AssertionError(f"Perf check(s) outside expected range — {summary}")
 
 
 def run_mla_perf_loudbox(

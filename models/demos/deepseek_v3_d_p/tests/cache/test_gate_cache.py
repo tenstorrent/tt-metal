@@ -56,7 +56,7 @@ def _ci_unsupported_param_combos(**params):
 
     if not on_ci:
         return False
-    if gate_mode != GateComputeMode.DEVICE:
+    if gate_mode != GateComputeMode.DEVICE_FP32:
         return True
     return False
 
@@ -74,10 +74,11 @@ def _ci_unsupported_param_combos(**params):
     ],
     indirect=["mesh_device", "device_params"],
 )
+# HOST_ALL is the local diagnostic half of the pair; CI collects device_fp32 only.
 @pytest.mark.parametrize(
     "gate_mode",
-    [GateComputeMode.DEVICE, GateComputeMode.HOST_MATMUL, GateComputeMode.HOST_GROUPED_GATE, GateComputeMode.HOST_ALL],
-    ids=["device_gate", "host_matmul", "host_grouped_gate", "host_all"],
+    [GateComputeMode.DEVICE_FP32, GateComputeMode.HOST_ALL],
+    ids=["device_fp32", "host_all"],
 )
 def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     """Test: weights → cold cache → warm cache produce identical outputs."""

@@ -12,7 +12,6 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
     _is_galaxy_env,
     adjust_margin_for_ddr_speed,
     run_model_device_perf_test_with_merge,
-    run_moe_perf_with_approximation,
 )
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 
@@ -22,7 +21,6 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_m
 # exactly one production TorusXY case.
 _CMD_8X4_pad0 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad0' --wrapper-invocation"
 _CMD_8X4_pad50 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad50' --wrapper-invocation"
-_CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and torus-y-8x1 and pad0' --wrapper-invocation"
 _CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0' --wrapper-invocation"
 
 
@@ -41,31 +39,28 @@ def _require_certified_torus_xy():
 
 @pytest.mark.timeout(0)
 def test_deepseek_v3_moe_perf_loudbox():
-    """Run the existing 8x1 + 2x4 proxies and retain their 8x4 approximation signal.
+    """Measure the 2x4 TP proxy on LoudBox.
 
-    The 8x1 SP proxy runs Fabric2d TorusY; the 2x4 TP proxy runs unwrapped Fabric2d because its
-    two-wide SP dimension cannot form a useful ring. approximate_8x4_perf takes every non-TP op
-    from the 8x1 slot, so that slot must stay an SP=8 run.
+    The 2x4 proxy runs unwrapped Fabric2d because its two-wide SP dimension cannot form a useful
+    ring. It used to be paired with an 8x1 SP proxy whose non-TP ops fed an approximated 8x4
+    total, but that slot was the 64-expert `perf-host-64` case: SP=8 with 64 experts needs the
+    host gate (the device grouped-topk requires 256 experts), and HOST_ALL no longer runs in CI.
+    The 8x4 numbers now come only from the galaxy ground-truth tests below.
     """
-    run_moe_perf_with_approximation(
-        command_8x1=_CMD_8X1,
-        # Re-cut 2026-08-28 on the CI LoudBox (bh_loudbox), run 33194029504. One sample.
-        # The 2D matmul program configs are the whole delta: against main on the same box and day
-        # the Matmul bucket falls 2,201,295 -> 381,174 ns while Other (3,615,143 -> 3,617,678) and
-        # CCL (17,690 -> 22,700) hold, so 5_895_298 centred on a matmul shape nothing builds now.
-        expected_ns_8x1=4_021_552,
-        model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
-        command_2x4=_CMD_2X4,
+    run_model_device_perf_test_with_merge(
+        command=_CMD_2X4,
         # Re-cut 2026-08-28 on the CI LoudBox (bh_loudbox), run 33194029504. One sample,
-        # superseding the 9_339_547 two-run CI mean cut earlier the same day. Same cause as 8x1:
-        # Matmul 715,503 -> 216,878 ns against main, Other flat within 0.2%. This gate still has
-        # to be cut on the CI runner -- the dev box bh-lb-15 reads it 2.7% slower.
-        expected_ns_2x4=8_840_595,
-        model_name_2x4="deepseek_v3_moe_lb_2x4_fabric2d_gate",
+        # superseding the 9_339_547 two-run CI mean cut earlier the same day. The 2D matmul
+        # program configs are the whole delta: Matmul 715,503 -> 216,878 ns against main on the
+        # same box and day, Other flat within 0.2%. This gate still has to be cut on the CI
+        # runner -- the dev box bh-lb-15 reads it 2.7% slower.
+        expected_device_perf_ns_per_iteration=8_840_595,
         subdir="deepseek_v3_moe",
+        model_name="deepseek_v3_moe_lb_2x4_fabric2d_gate",
+        num_iterations=1,
+        batch_size=1,
         margin=0.03,
-        comments_8x1="isl5k_lb_8x1_torus_y_dispatch_combine_proxy",
-        comments_2x4="isl5k_lb_2x4_fabric2d_gate_proxy",
+        comments="isl5k_lb_2x4_fabric2d_gate_proxy",
     )
 
 

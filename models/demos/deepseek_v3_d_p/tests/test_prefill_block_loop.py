@@ -70,7 +70,7 @@ def _ci_unsupported_param_combos(**params):
 
     if not on_ci:
         return False
-    if gate_fallback_mode != GateComputeMode.DEVICE:
+    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
         return True
     return False
 
@@ -78,7 +78,7 @@ def _ci_unsupported_param_combos(**params):
 @pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "gate_fallback_mode",
-    [GateComputeMode.DEVICE, GateComputeMode.HOST_ALL],
+    [GateComputeMode.DEVICE_FP32, GateComputeMode.HOST_ALL],
     ids=["gate_device", "gate_host"],
 )
 @pytest.mark.parametrize(
@@ -211,10 +211,10 @@ def test_prefill_block_loop(
     gate_mode_name = gate_fallback_mode.name.lower()
 
     # gate_fallback_mode is irrelevant for dense layers — skip duplicate runs
-    if is_dense and gate_fallback_mode != GateComputeMode.DEVICE:
+    if is_dense and gate_fallback_mode != GateComputeMode.DEVICE_FP32:
         pytest.skip("gate_fallback_mode only applies to MoE layers")
     # For uniform/zero experts, HOST=DEVICE (proven), skip HOST to save time
-    if layer_idx in (-1, -4, -5, -6) and gate_fallback_mode != GateComputeMode.DEVICE:
+    if layer_idx in (-1, -4, -5, -6) and gate_fallback_mode != GateComputeMode.DEVICE_FP32:
         pytest.skip("uniform/zero experts: DEVICE=HOST (proven), skipping HOST")
     # Torch reference + large isl OOMs host RAM (HF model of num_layers_hf=real_layer_idx+1
     # plus dequantized weights). Restrict the PCC path to small isl.

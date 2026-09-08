@@ -68,7 +68,9 @@ MAX_RANDOM_LAYERS = 12
     [pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="full 61-layer prefill only on Galaxy"))],
     ids=["61_layers"],
 )
-@pytest.mark.parametrize("n_routed_experts, gate_fallback_mode", [(384, GateComputeMode.DEVICE)], ids=["e384_device"])
+@pytest.mark.parametrize(
+    "n_routed_experts, gate_fallback_mode", [(384, GateComputeMode.DEVICE_FP32)], ids=["e384_device"]
+)
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
