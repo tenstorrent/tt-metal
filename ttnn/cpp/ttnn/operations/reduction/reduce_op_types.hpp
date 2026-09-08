@@ -7,15 +7,7 @@
 #include <map>
 #include <string>
 
-namespace tt::tt_metal {
-
-enum class ReduceOpMath { SUM, AVG, MAX, MIN, STD, VAR };
-
-enum class ReduceOpDim { H, W, HW };
-
-enum class ReduceOpParallelizationStrategy { MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW, SINGLE_CORE_HW };
-
-}  // namespace tt::tt_metal
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
 
 namespace reduce_op_utils {
 
