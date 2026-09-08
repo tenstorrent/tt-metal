@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -47,8 +48,27 @@ class PerfDebugZoneCsvConsumer {
 public:
     void operator()(const PerfDebugRecordBatch& batch);
     void write_csv(const std::string& path) const;
+    // TRANSLATED<->NOC0 per core, for resolving NOC-TRACE destinations. Written beside the CSV.
+    void write_coord_map(const std::string& path) const;
 
 private:
+    // One row of the TRANSLATED<->NOC0 table, snapshotted from the SoC descriptor on a
+    // delivery batch (never at exit -- see snapshot_coords in the .cpp).
+    struct CoordRow {
+        uint32_t chip = 0;
+        const char* core_type = "";
+        uint16_t noc0_x = 0, noc0_y = 0;
+        uint16_t translated_x = 0, translated_y = 0;
+        // LOGICAL too, because that is the space a framework's core grid is expressed in.
+        // With all three in one table, joining a framework-side core set to a captured
+        // transfer is a lookup rather than coordinate arithmetic -- and arithmetic is what
+        // breaks wherever the Tensix columns are not contiguous.
+        int16_t logical_x = -1, logical_y = -1;
+    };
+    std::vector<CoordRow> coord_rows_;
+    std::set<uint32_t> coord_chips_;
+    void snapshot_coords(const PerfDebugCaptureContext& ctx);
+
     // One emitted CSV row. Held rather than streamed to the file because the header
     // needs the chip frequency, which arrives with the first batch's context, and
     // because rows from different lanes interleave arbitrarily.

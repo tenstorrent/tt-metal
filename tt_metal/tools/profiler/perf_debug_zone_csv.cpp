@@ -9,7 +9,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <set>
 #include <string>
+
+#include <umd/device/types/core_coordinates.hpp>
+
+#include "context/metal_context.hpp"
+#include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal::perf_debug {
 
@@ -56,6 +62,13 @@ constexpr SyncName kSyncNames[] = {
     {"SYNC-CB-WAIT-KEY", 1008},
     {"SYNC-CB-RESERVE-KEY", 1009},
     {"SYNC-CB-POP", 1010},
+    // NOC-TRACE (noc_event_profiler.hpp) is not a synchronization event, but it is the only
+    // record that names the DESTINATION of a transfer, which is what a core-to-core feed graph
+    // needs. It gets an id OUTSIDE the 1000-1010 sync block precisely so the comment above still
+    // holds: a classic reader keying on the sync ids cannot mistake this row's `data` column for
+    // a CB id or a semaphore address. The payload is the full 8-byte LocalNocEvent
+    // (event_metadata.hpp) and `Row::data` is a uint64, so it lands intact.
+    {"NOC-TRACE", 1100},
 };
 
 }  // namespace
@@ -112,6 +125,7 @@ void PerfDebugZoneCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
     dropped_ += batch.dropped_delta;
 
     const PerfDebugCaptureContext& ctx = *batch.context;
+    snapshot_coords(ctx);  // once per chip, while the device is still open
 
     for (const auto& rec : batch.records) {
         const uint32_t dev = rec.meta.dev;
@@ -185,6 +199,79 @@ void PerfDebugZoneCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
             default: break;  // Event carries nothing the classic reader consumes
         }
     }
+}
+
+// The NOC-TRACE rows carry their destination in TRANSLATED space, because that is what a NoC
+// address on Blackhole holds (cluster.hpp, on TranslateCoreCoord). Every other column here -- and
+// every lane the profiler reports -- is NOC0. A reader cannot convert between them with
+// arithmetic: the Tensix columns are not contiguous in NOC0 (on a p150b they are x=1-6 and
+// x=11-16, split by an ETH/DRAM spine at x=7-10), and harvesting can remove more on other parts.
+// The mapping is a per-part table, so the capture ships it beside the data as "<stem>.coords.csv".
+//
+// The snapshot is taken HERE, on a delivery batch, and NOT at exit: at exit there is no
+// MetalContext left, and MetalContext::instance() would implicitly CONSTRUCT one -- reopening the
+// cluster from an atexit handler, which aborts (SIGABRT via create_default_instance_implicit_locked).
+// A batch callback runs while the device is open, so the cluster is alive and the query is valid.
+void PerfDebugZoneCsvConsumer::snapshot_coords(const PerfDebugCaptureContext& ctx) {
+    const auto& cluster = MetalContext::instance().get_cluster();
+    for (const auto& dev : ctx.devices) {
+        if (!coord_chips_.insert(dev.chip_id).second) {
+            continue;  // already snapshotted this chip
+        }
+        const auto& soc = cluster.get_soc_desc(dev.chip_id);
+        for (const auto& [ct, name] :
+             {std::pair{CoreType::TENSIX, "TENSIX"},
+              std::pair{CoreType::DRAM, "DRAM"},
+              std::pair{CoreType::ETH, "ETH"},
+              std::pair{CoreType::PCIE, "PCIE"}}) {
+            for (const auto& c : soc.get_cores(ct, CoordSystem::NOC0)) {
+                const auto t = soc.translate_coord_to(c, CoordSystem::TRANSLATED);
+                CoordRow row{
+                    dev.chip_id,
+                    name,
+                    static_cast<uint16_t>(c.x),
+                    static_cast<uint16_t>(c.y),
+                    static_cast<uint16_t>(t.x),
+                    static_cast<uint16_t>(t.y)};
+                // A core need not have a LOGICAL coordinate; -1 records that rather than
+                // inventing one.
+                try {
+                    const auto l = soc.translate_coord_to(c, CoordSystem::LOGICAL);
+                    row.logical_x = static_cast<int16_t>(l.x);
+                    row.logical_y = static_cast<int16_t>(l.y);
+                } catch (...) {
+                }
+                coord_rows_.push_back(row);
+            }
+        }
+    }
+}
+
+void PerfDebugZoneCsvConsumer::write_coord_map(const std::string& path) const {
+    if (coord_rows_.empty()) {
+        return;
+    }
+    FILE* f = std::fopen(path.c_str(), "w");
+    if (f == nullptr) {
+        std::fprintf(stderr, "[perf-debug zone-csv] cannot open %s\n", path.c_str());
+        return;
+    }
+    std::fprintf(f, "chip, core_type, noc0_x, noc0_y, translated_x, translated_y, logical_x, logical_y\n");
+    for (const CoordRow& r : coord_rows_) {
+        std::fprintf(
+            f,
+            "%u, %s, %u, %u, %u, %u, %d, %d\n",
+            r.chip,
+            r.core_type,
+            r.noc0_x,
+            r.noc0_y,
+            r.translated_x,
+            r.translated_y,
+            r.logical_x,
+            r.logical_y);
+    }
+    std::fclose(f);
+    std::fprintf(stderr, "[perf-debug zone-csv] wrote %zu coord rows to %s\n", coord_rows_.size(), path.c_str());
 }
 
 void PerfDebugZoneCsvConsumer::write_csv(const std::string& path) const {
@@ -262,6 +349,14 @@ const bool g_zone_csv_registered = [] {
     std::atexit([] {
         unregister_consumer(g_zone_csv->handle);
         g_zone_csv->consumer.write_csv(g_zone_csv->path);
+        // Ship the TRANSLATED<->NOC0 table beside the data: <stem>.coords.csv.
+        std::string cm = g_zone_csv->path;
+        const size_t dot = cm.find_last_of('.');
+        const size_t slash = cm.find_last_of('/');
+        if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) {
+            cm.erase(dot);
+        }
+        g_zone_csv->consumer.write_coord_map(cm + ".coords.csv");
     });
     return true;
 }();
