@@ -1,7 +1,7 @@
 # NOTE: the TT_VISIBLE_DEVICES lists below were read off bh-glx-b03u02 and are PER-GALAXY. Another
 # 32-chip galaxy enumerates differently (verified on bh-glx-110-a04u02) and a wrong map does NOT error --
 # it builds stages that are not columns. Regenerate for your host with
-#   python /data/kmabee/mistral4_pp4_perf/scripts/gen_pp4_binding.py [--profile]
+#   python models/demos/deepseek_v3_d_p/tests/perf/gen_pipeline_binding.py [--profile]
 # 4-stage intra-galaxy pipeline prefill at stage shape [8,1] (SP=8 x TP=1): one 8x4 galaxy carved into
 # 4 Z-connected COLUMN sub-meshes; the hidden state hops stage->stage over the Z-link MeshSocket.
 # Request mode — rank 0 serves an external prefill_producer. Model selected by PREFILL_MANIFEST.
