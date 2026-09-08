@@ -170,3 +170,9 @@ The W, H, and single-core HW factories now serialize their reduce calls and auxi
 Fixed the host planner's SFPU H output-slot calculation: reserve the work register before limiting by tensor width. Added 12 numerical regression cases for one/three columns, two batches, INT32/accurate FLOAT32, and SUM/MAX/MIN (T173).
 
 Validation: native build passed (`cmake --build build --target ttnn unit_tests_ttnn --parallel 8`). All five generic sanity selections passed (`reduce-migration-peko34_v`). Full T003/T012/T160 completed 641 cases: **589 passed, 52 upstream skips**, no failures (`reduce-migration-2272a4vn`). All 12 new SFPU cases passed (`reduce-migration-u_niosd1`).
+
+## DeepSeek grouped gate
+
+The normalization SUM now uses a host-planned call with the selected-expert count as its logical width. The writer creates the plan's auxiliary tiles, including the partial-tile recipe. Existing gather, sorting, epsilon, and route scaling remain unchanged.
+
+Validation: native build passed, SM018 passed (`reduce-migration-0f0kavqf`), and full T022 passed all 6 cases (`reduce-migration-_3qcre6w`).
