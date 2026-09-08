@@ -177,6 +177,31 @@ class TestUpdateCache:
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.parametrize("num_users", [3, 5])
+def test_update_cache_decode_odd_num_users(num_users, device):
+    """Odd Bcache must update every user; u_count = u_range / 2 used to skip the last."""
+    num_heads = 2
+    head_dim = 64
+    max_seq_len = 64
+    cache_idx = 1
+    input_shape = [num_users, num_heads, 1, head_dim]
+    cache_shape = [num_users, num_heads, max_seq_len, head_dim]
+    cache = torch.randn(cache_shape).bfloat16().float()
+    cachett = ttnn.Tensor(cache, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    x = torch.randn(input_shape).bfloat16().float()
+    x_new = torch.cat((x, torch.zeros(32 - num_users, num_heads, 1, head_dim)), dim=0)
+    xt = ttnn.Tensor(x_new.permute(2, 1, 0, 3), ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    cachett = ttnn.update_cache(cachett, xt, cache_idx)
+    cache[0:num_users, 0:num_heads, cache_idx : cache_idx + 1, 0:head_dim] = x
+
+    tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    eq_cache, output_cache = comp_equal(cache, tt_got_back)
+    logger.info(output_cache)
+    assert eq_cache
+
+
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("in_sharded", [False, True])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 def test_update_cache_decode_program_cache_hits(in_sharded, input_dtype, device):
