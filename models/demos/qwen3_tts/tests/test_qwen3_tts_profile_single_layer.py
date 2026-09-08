@@ -164,6 +164,19 @@ def _synthetic_cp_sd(cfg, talker_hidden=2048, num_layers=1):
     return sd
 
 
+def _talker_matmul_dtype():
+    """The matmul weight dtype the deployed Talker uses.
+
+    Must mirror ``talker.py``'s ``_matmul_dtype`` exactly. This fixture used to
+    hardcode bfloat16, so after ``QWEN3_TTS_BF8_WEIGHTS`` became default ON the
+    single-layer windows profiled a dtype the demo no longer runs — gate/up read
+    116 us here against 92 us in the model.
+    """
+    import os
+
+    return ttnn.bfloat8_b if os.environ.get("QWEN3_TTS_BF8_WEIGHTS", "1") != "0" else ttnn.bfloat16
+
+
 def _make_talker_layer(device, cfg):
     from models.demos.qwen3_tts.tt.decoder_layer import DecoderLayer
 
@@ -178,7 +191,7 @@ def _make_talker_layer(device, cfg):
         layer_idx=0,
         layer_prefix="talker.model",
         rms_norm_eps=cfg.rms_norm_eps,
-        weight_dtype=ttnn.bfloat16,
+        weight_dtype=_talker_matmul_dtype(),
     )
 
 
