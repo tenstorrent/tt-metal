@@ -3166,11 +3166,13 @@ class UnarySFPUGolden:
 
     def _relu_min(self, x, threshold=RELU_MIN_THRESHOLD):
         if isinstance(x, int):
-            # Integer dst. The kernel takes the vInt branch of _relu_min_, which loads an
-            # integer threshold into LREG2 and compares under INT32_2S_COMP, so the golden
-            # is an exact integer max with no float round-trip. Deliberately independent of
-            # self.dst_format: _call_integer returns before __call__ assigns it, so reading
-            # it here would pick up whatever the previous call left behind.
+            # Integer dst. The kernel takes the vInt branch of _relu_min_, which loads a
+            # hand-encoded sign+magnitude threshold into LREG2 and loads the input under
+            # InstrModLoadStore::INT32, so both operands reach SFPSWAP in sign+magnitude
+            # and the compare is an exact integer max with no float round-trip.
+            # Deliberately independent of self.dst_format: for an integer dst the max is
+            # exact, so the dest format cannot change the result, and nothing here should
+            # imply the golden tracks it.
             #
             # The threshold comes from _relu_min_int_threshold, not the float default: the
             # int32 sweep drives negative thresholds to reach the wrapper's sign+magnitude

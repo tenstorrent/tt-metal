@@ -194,9 +194,13 @@ inline void _relu_min_(T threshold)
             if (scalar < 0)
             {
                 // Negate in unsigned: -INT_MIN is signed overflow. INT_MIN has no
-                // sign+magnitude form either (the magnitude field is 31 bits), so it
-                // necessarily saturates to -(2^31 - 1) rather than round-tripping.
-                sign_mag = 0x80000000u | (-static_cast<std::uint32_t>(scalar) & 0x7FFFFFFFu);
+                // sign+magnitude form either -- the magnitude field is 31 bits -- so its
+                // magnitude saturates and the threshold lands on -(2^31 - 1) rather than
+                // round-tripping. The clamp is what makes that happen: masking instead
+                // would take INT_MIN's magnitude of 0x80000000 down to 0, i.e. encode
+                // sign+magnitude negative zero and clamp at 0 instead of at the low end.
+                const std::uint32_t magnitude = -static_cast<std::uint32_t>(scalar);
+                sign_mag                      = 0x80000000u | (magnitude > 0x7FFFFFFFu ? 0x7FFFFFFFu : magnitude);
             }
             _sfpu_load_imm32_(p_sfpu::LREG2, sign_mag);
         }
