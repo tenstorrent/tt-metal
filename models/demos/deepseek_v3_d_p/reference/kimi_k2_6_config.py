@@ -10,12 +10,15 @@ Values from HuggingFace config.json for Kimi-K2.6 (text_config).
 """
 
 
+from models.demos.common.prefill.fabric import moe_fabric_payload_size
+
+
 class KimiK26Config:
     """Kimi K2.6 model dimensions."""
 
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    FABRIC_PAYLOAD_SIZE = moe_fabric_payload_size(EMB_SIZE)
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     # Routed-expert hybrid split. moe_fused_swiglu beat the composite at EVERY measured
     # token count on the 7168x2048 routed-expert shape (1.02-2.37x across 0-5120 tokens),

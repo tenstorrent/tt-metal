@@ -23,7 +23,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import glm_hf_config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config, glm_hf_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_xy_device_params,
@@ -260,14 +260,14 @@ def ccl_mesh_param(collective_axis: int):
     to TorusY for SP-axis collectives, or the existing 2x4 Fabric2D proxy for TP collectives.
     """
     num_devices = detect_num_devices()
-    fabric_2d = fabric2d_device_params(trace_region_size=100000)
-    torus_xy = torus_xy_device_params(trace_region_size=100000)
+    fabric_2d = fabric2d_device_params(model_config=GLM51Config, trace_region_size=100000)
+    torus_xy = torus_xy_device_params(model_config=GLM51Config, trace_region_size=100000)
     if num_devices == 32:
         system, mesh_shape, mesh_topology, device_params = "galaxy_torus_xy", (8, 4), "mesh-8x4", torus_xy
     elif num_devices == 8:
         if collective_axis == SP_AXIS:
             system, mesh_shape, mesh_topology = "loudbox_torus_y", (8, 1), "ring"
-            device_params = torus_y_device_params(trace_region_size=100000)
+            device_params = torus_y_device_params(model_config=GLM51Config, trace_region_size=100000)
         else:
             system, device_params = "loudbox_fabric2d", fabric_2d
             mesh_shape, mesh_topology = (2, 4), "mesh-2x4"

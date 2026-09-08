@@ -12,7 +12,16 @@ from loguru import logger
 from ttnn.device import is_blackhole
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    fabric_1d_device_params,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
@@ -42,7 +51,11 @@ from tests.ttnn.utils_for_testing import assert_equal
 )
 @pytest.mark.parametrize(
     "device_params",
-    [torus_xy_device_params()],
+    [
+        torus_xy_device_params(
+            model_config=KimiK27Config,
+        )
+    ],
     ids=["torus-xy"],
     indirect=True,
 )
@@ -168,7 +181,11 @@ def test_kimi_kv_cache_table(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [torus_xy_device_params()],
+    [
+        torus_xy_device_params(
+            model_config=KimiK27Config,
+        )
+    ],
     ids=["torus-xy"],
     indirect=True,
 )
@@ -275,7 +292,11 @@ def test_kimi_kv_cache_mock(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [torus_xy_device_params()],
+    [
+        torus_xy_device_params(
+            model_config=DeepSeekV3Config,
+        )
+    ],
     ids=["torus-xy"],
     indirect=True,
 )
@@ -436,9 +457,7 @@ def test_dflash_kv_cache_mock(
 @pytest.mark.parametrize(
     "device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        },
+        fabric_1d_device_params(model_config=GLM51Config),
     ],
     ids=["line"],
     indirect=True,
@@ -662,12 +681,8 @@ def test_glm_kv_cache_table(
 @pytest.mark.parametrize(
     "device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-        },
+        fabric_1d_device_params(model_config=GLM52Config),
+        fabric_1d_device_params(model_config=GLM52Config, fabric_config=ttnn.FabricConfig.FABRIC_1D_RING),
     ],
     ids=["line", "ring"],
     indirect=True,
@@ -802,8 +817,20 @@ def test_glm52_tp_sharded_kv_cache_mock(
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [
-        pytest.param((2, 4), fabric2d_device_params(), id="fabric2d-2x4"),
-        pytest.param((8, 4), torus_xy_device_params(), id="torus-xy-8x4"),
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(
+                model_config=GLM52Config,
+            ),
+            id="fabric2d-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                model_config=GLM52Config,
+            ),
+            id="torus-xy-8x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -1174,7 +1201,7 @@ def test_glm52_tp_sharded_pipeline_stage_addresses():
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [fabric_1d_device_params(model_config=MistralSmall4Config)],
     ids=["line"],
     indirect=True,
 )

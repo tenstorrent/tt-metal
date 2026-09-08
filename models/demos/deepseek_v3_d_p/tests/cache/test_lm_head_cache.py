@@ -43,7 +43,9 @@ def _ci_unsupported_param_combos(**params):
     [
         pytest.param(
             (2, 2),
-            fabric2d_device_params(),
+            fabric2d_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
             id="fabric2d-2x2",
         ),

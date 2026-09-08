@@ -20,6 +20,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_y_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -205,7 +206,7 @@ def run_combine_op(
     [
         pytest.param(
             (4, 1),
-            torus_y_device_params(l1_small_size=512),
+            torus_y_device_params(model_config=DeepSeekV3Config, l1_small_size=512),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
             id="torus-y-4x1",
         ),

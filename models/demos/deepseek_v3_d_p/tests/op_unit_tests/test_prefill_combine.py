@@ -433,7 +433,7 @@ def _cross_product_conflated_cmb_test_dimensions():
     params = []
     for model_name, model_config_class, test_meshes in COMBINE_MODELS:
         for target_mesh, fabric_cfg in test_meshes.target_meshes.items():
-            device_params = fabric_to_device_params(fabric_cfg)
+            device_params = fabric_to_device_params(fabric_cfg, model_config_class)
             topo_marker = _topo_marker(target_mesh, fabric_cfg)
             marks = pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=topo_marker)
             test_scenarios = [
@@ -579,7 +579,7 @@ def _all_externally_owned_test_cases():
         model_name = model.__class__.__name__.removesuffix("Config")
         return pytest.param(
             mesh,
-            fabric_to_device_params(fabric_cfg),
+            fabric_to_device_params(fabric_cfg, model),
             seq_len_per_chip,
             model.EMB_SIZE,
             model.NUM_ROUTED_EXPERTS,
@@ -668,7 +668,7 @@ def _cmb_fabric2d_dimensions():
         params.append(
             pytest.param(
                 mesh,
-                fabric_to_device_params(fabric_cfg),
+                fabric_to_device_params(fabric_cfg, DeepSeekV3Config),
                 per_axis_topology(fabric_cfg)[0],  # sp axis; the op rings along cluster_axis=sp_axis
                 seq_len_per_chip,
                 model_config.EMB_SIZE,

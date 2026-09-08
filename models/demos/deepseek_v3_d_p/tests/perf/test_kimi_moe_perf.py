@@ -57,9 +57,6 @@ _SEQ_LEN_PER_CHIP = PREFILL_CHUNK_TOKENS_PER_CHIP
 # slots (top-8 -> top-16), so per-chip dispatch bytes are roughly unchanged.
 _DISPATCH_BUFFER_CAPACITY_FACTOR = 5
 
-# Both generations carry FABRIC_PAYLOAD_SIZE = 7168, so one device_params axis serves both.
-_FABRIC_PAYLOAD_SIZE = KimiK27Config.FABRIC_PAYLOAD_SIZE
-
 # The profiler's default 1s collection deadline is sized for a single block's programs. The MoE
 # forward at 896 experts dispatches far more, and records arrive asynchronously from the receiver
 # thread: a record still in flight when the window closes is NOT counted as dropped, so a short
@@ -146,8 +143,16 @@ _K3 = _MoEPerfCase(
 # "k2_7" / "k3", not "kimi_k2_7" / "kimi_k3": pytest -k is substring-based, so the ids must stay
 # disjoint -- a bare "kimi" id would match both generations and widen every `-k` selector.
 _CASES = [
-    pytest.param("kimi_k2_7", _K2_7, id="k2_7"),
-    pytest.param("kimi_k3", _K3, id="k3"),
+    pytest.param(
+        variant,
+        case,
+        (8, 4),
+        torus_xy_device_params(model_config=case.config),
+        2,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id=f"{label}-torus-xy-8x4",
+    )
+    for variant, case, label in [("kimi_k2_7", _K2_7, "k2_7"), ("kimi_k3", _K3, "k3")]
 ]
 
 
@@ -159,19 +164,10 @@ _CASES = [
 )
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    [
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(fabric_payload_size=_FABRIC_PAYLOAD_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
+    "variant, case, mesh_device, device_params, num_links",
+    _CASES,
+    indirect=["variant", "mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant, case", _CASES, indirect=["variant"])
 def test_kimi_moe_perf_galaxy(variant, case, config_only, mesh_device, device_params, num_links, request):
     """Device time of one MoE forward at the 5k production chunk, per Kimi generation."""
     require_realtime_profiler(f"the {case.label} MoE perf gate")

@@ -22,6 +22,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
@@ -32,13 +33,17 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 _MESHES = [
     pytest.param(
         (8, 4),
-        torus_xy_device_params(),
+        torus_xy_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
     ),
     pytest.param(
         (2, 4),
-        fabric2d_device_params(),
+        fabric2d_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
         id="fabric2d-2x4",
     ),
@@ -155,7 +160,9 @@ def test_moe_padding_config_left_padding(mesh_device):
     [
         pytest.param(
             (2, 4),
-            fabric2d_device_params(),
+            fabric2d_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
         )

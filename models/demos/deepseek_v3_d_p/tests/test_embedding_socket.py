@@ -28,7 +28,9 @@ from tests.ttnn.utils_for_testing import comp_pcc
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(),
+            torus_xy_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),

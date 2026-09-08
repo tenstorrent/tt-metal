@@ -16,6 +16,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_xy_device_params
@@ -38,12 +39,16 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
     ids=["isl_5k", "isl_5k-k3-33792-situ"],
 )
+# The model-shape and mesh axes are crossed independently. DeepSeek and Kimi K3
+# have the same embedding size and therefore the same fabric payload.
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
         pytest.param(
             (1, 4),
-            torus_x_device_params(),
+            torus_x_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="torus-x-1x4",
@@ -52,7 +57,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         # only param where the SiTU case can run at all -- SiTU needs ttnn.softcap, Blackhole-only.
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(model_config=DeepSeekV3Config),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",

@@ -8,12 +8,7 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn
-
-
-def _create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+from models.demos.common.prefill.fabric import create_fabric_router_config
 
 
 def open_mesh_device(
@@ -37,7 +32,7 @@ def open_mesh_device(
         fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
     logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
 
-    fabric_router_config = _create_fabric_router_config(
+    fabric_router_config = create_fabric_router_config(
         max_payload_size=model_cfg.FABRIC_PAYLOAD_SIZE,
     )
 

@@ -23,6 +23,7 @@ Test-id naming convention
 import pytest
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     fabric_1d_device_params,
@@ -30,10 +31,9 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
     torus_y_device_params,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_max_payload_size
 
 
-def _mesh_param(shape, fabric, payload, nlinks, topo_marker, test_id, reliability_mode=None):
+def _mesh_param(shape, fabric, model_config, nlinks, topo_marker, test_id, reliability_mode=None):
     """Build a single pytest.param for the mesh_device parametrize axis.
 
     `topo_marker` is the CI hardware-class string consumed by the `requires_mesh_topology`
@@ -45,7 +45,7 @@ def _mesh_param(shape, fabric, payload, nlinks, topo_marker, test_id, reliabilit
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y: torus_y_device_params,
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY: torus_xy_device_params,
     }[fabric]
-    device_params = profile(fabric_payload_size=payload)
+    device_params = profile(model_config=model_config)
     if reliability_mode is not None:
         device_params["reliability_mode"] = reliability_mode
     return pytest.param(
@@ -57,12 +57,14 @@ def _mesh_param(shape, fabric, payload, nlinks, topo_marker, test_id, reliabilit
     )
 
 
+# These topology-only fixtures are shared across model tests. DeepSeek has the largest
+# payload of the supported configs (tied with Kimi), so it is the safe dominant profile.
 ALL_MESH_CONFIGS = [
     # Local policy: one 2x2 QuietBox case, canonical 2x4 LoudBox, and one 4x2 axis diagnostic.
     _mesh_param(
         (2, 2),
         ttnn.FabricConfig.FABRIC_2D,
-        get_max_payload_size(),
+        DeepSeekV3Config,
         1,
         "mesh-4x2",
         "fabric2d-mesh-2x2",
@@ -71,7 +73,7 @@ ALL_MESH_CONFIGS = [
     _mesh_param(
         (4, 2),
         ttnn.FabricConfig.FABRIC_2D,
-        get_max_payload_size(),
+        DeepSeekV3Config,
         1,
         "mesh-4x2",
         "fabric2d-mesh-4x2",
@@ -80,7 +82,7 @@ ALL_MESH_CONFIGS = [
     _mesh_param(
         (4, 2),
         ttnn.FabricConfig.FABRIC_2D,
-        get_max_payload_size(),
+        DeepSeekV3Config,
         2,
         "mesh-4x2",
         "fabric2d-mesh-4x2-2link",
@@ -89,7 +91,7 @@ ALL_MESH_CONFIGS = [
     _mesh_param(
         (2, 4),
         ttnn.FabricConfig.FABRIC_2D,
-        get_max_payload_size(),
+        DeepSeekV3Config,
         1,
         "mesh-4x2",
         "fabric2d-mesh-2x4",
@@ -99,7 +101,7 @@ ALL_MESH_CONFIGS = [
     _mesh_param(
         (4, 1),
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-        get_max_payload_size(),
+        DeepSeekV3Config,
         1,
         "ring",
         "fabric2d-torus-y-4x1-1link",
@@ -108,7 +110,7 @@ ALL_MESH_CONFIGS = [
     _mesh_param(
         (4, 1),
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-        get_max_payload_size(),
+        DeepSeekV3Config,
         2,
         "ring",
         "fabric2d-torus-y-4x1-2link",
@@ -118,7 +120,7 @@ ALL_MESH_CONFIGS = [
     _mesh_param(
         (8, 1),
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-        get_max_payload_size(),
+        DeepSeekV3Config,
         1,
         "ring",
         "fabric2d-torus-y-8x1-1link",
@@ -127,7 +129,7 @@ ALL_MESH_CONFIGS = [
     _mesh_param(
         (8, 1),
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-        get_max_payload_size(),
+        DeepSeekV3Config,
         2,
         "ring",
         "fabric2d-torus-y-8x1-2link",
@@ -137,7 +139,7 @@ ALL_MESH_CONFIGS = [
     _mesh_param(
         (8, 4),
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-        get_max_payload_size(),
+        DeepSeekV3Config,
         2,
         "mesh-8x4",
         "fabric2d-torus-xy-8x4-2link",
@@ -146,7 +148,7 @@ ALL_MESH_CONFIGS = [
 ]
 
 
-def fabric_to_device_params(fabric_cfg):
+def fabric_to_device_params(fabric_cfg, model_config):
     assert fabric_cfg in (
         ttnn.FabricConfig.FABRIC_1D,
         ttnn.FabricConfig.FABRIC_2D,
@@ -155,11 +157,11 @@ def fabric_to_device_params(fabric_cfg):
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
     )
     if fabric_cfg == ttnn.FabricConfig.FABRIC_1D:
-        return fabric_1d_device_params()
+        return fabric_1d_device_params(model_config=model_config)
     if fabric_cfg == ttnn.FabricConfig.FABRIC_2D:
-        return fabric2d_device_params()
+        return fabric2d_device_params(model_config=model_config)
     if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_X:
-        return torus_x_device_params()
+        return torus_x_device_params(model_config=model_config)
     if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_Y:
-        return torus_y_device_params()
-    return torus_xy_device_params()
+        return torus_y_device_params(model_config=model_config)
+    return torus_xy_device_params(model_config=model_config)
