@@ -366,7 +366,7 @@ Data Hazard Stall Rate = (MATH_INSTRN_AVAILABLE - MATH_NOT_D2S_STALLED)
                          / MATH_INSTRN_AVAILABLE * 100
 ```
 
-The RTL counter `MATH_NOT_D2S_STALLED` is `math_instrn_valid & ~dest2src_post_stall` — cycles math was available AND *not* D2A-stalled. Subtracting from MATH_INSTRN_AVAILABLE gives the actual stall count.
+The RTL counter `MATH_NOT_D2S_STALLED` is `math_instrn_valid & ~dest2src_post_stall`: cycles math was available AND *not* D2A-stalled. Subtracting from MATH_INSTRN_AVAILABLE gives the actual stall count.
 
 - **High value (>20%)**: Significant dest-to-src data movement stalls. Expected for concat (22% max).
 - **Low value (~0%)**: No data hazard stalls. Expected for matmul and simple eltwise ops.
