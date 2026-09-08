@@ -9,7 +9,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
@@ -37,14 +37,14 @@ void kernel_main() {
     const auto d = TensorAccessor(tensor::dst);
 
     Noc noc;
-    // dfb::in0 and dfb::in1 are each 1 page; size depends on alignment:
+    // scratch::in0 and scratch::in1 are each 1 page; size depends on alignment:
     //   multiple of 16 -> original_page_size_bytes + 128
     //   multiple of  8 -> original_page_size_bytes * 2  + 128
     //   multiple of  4 -> original_page_size_bytes * 4  + 128
     //   multiple of  2 -> original_page_size_bytes * 8  + 128
     //   odd            -> original_page_size_bytes * 16 + 128
-    DataflowBuffer dfb0(dfb::in0);
-    DataflowBuffer dfb1(dfb::in1);
+    Scratchpad<uint8_t> dfb0(scratch::in0);
+    Scratchpad<uint8_t> dfb1(scratch::in1);
 
     // Number of times we must double the input page to make it write-aligned.
     constexpr uint32_t num_doublings = ((original_page_size_bytes % 16) == 0)  ? 0
@@ -55,12 +55,8 @@ void kernel_main() {
     // Max write size after doublings; used as template parameter to enable fast path.
     constexpr uint32_t max_write_size = original_page_size_bytes << num_doublings;
 
-    dfb0.reserve_back(1);
-    dfb1.reserve_back(1);
-    uint32_t input_buffer = dfb0.get_write_ptr();
-    uint32_t alignment_buffer = dfb1.get_write_ptr();
-    dfb1.push_back(1);
-    dfb0.push_back(1);
+    uint32_t input_buffer = dfb0.get_base_address();
+    uint32_t alignment_buffer = dfb1.get_base_address();
 
     constexpr uint64_t r_mask_to_use = decltype(s)::is_dram ? MASK_64 : MASK_16;
     constexpr uint64_t r_offset_to_use = decltype(s)::is_dram ? OFFSET_64 : OFFSET_16;
