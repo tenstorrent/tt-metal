@@ -10,7 +10,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_pcc,
     data_gen_with_range,
 )
-from tests.ttnn.utils_for_testing import assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_ulp, generate_all_bfloat16_bitpatterns
 
 pytestmark = pytest.mark.use_module_device
 
@@ -227,6 +227,34 @@ def test_unary_polygamma_boundary_ttnn(input_shapes, k, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=2)
+
+
+# Every bfloat16 in [0.5, bf16 max] for every supported order. Before the (-1)^(n+1) * n! scale
+# was folded into the accumulated terms, the raw Hurwitz sum sat n! below the result and flushed
+# to zero (Tensix has no subnormals) while psi^(n)(x) was still a normal fp32: every n >= 2 had a
+# band of large x returning exactly 0 (n = 11: x in [2256, 11072]).
+@pytest.mark.parametrize("k", list(range(1, 12)))
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_unary_polygamma_large_x_all_bitpatterns(k, dtype, device):
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    x = generate_all_bfloat16_bitpatterns()
+    # Only x >= 0.5 is supported; park everything else on an in-domain value.
+    x = torch.where((x >= 0.5) & torch.isfinite(x), x, torch.ones_like(x)).to(torch_dtype)
+    golden64 = torch.special.polygamma(k, x.to(torch.float64))
+
+    input_tensor = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.polygamma(input_tensor, k)).to(torch_dtype)
+
+    # The result is a normal fp32 (with margin for the last exact term): it must not flush to 0.
+    normal = golden64.abs() >= 2.0**-125
+    zeros = (output_tensor == 0) & normal
+    assert not zeros.any(), f"{int(zeros.sum())} lanes return 0 for a normal result, first x={x[zeros][0]}"
+
+    # ULP check above the flush region, where the six exact terms are all still representable.
+    keep = golden64.abs() >= 2.0**-100
+    golden = torch.where(keep, golden64.to(torch_dtype), torch.zeros_like(x))
+    output_tensor = torch.where(keep, output_tensor, torch.zeros_like(x))
+    assert_with_ulp(golden, output_tensor, ulp_threshold=2 if dtype == ttnn.bfloat16 else 32)
 
 
 @pytest.mark.parametrize(
