@@ -140,12 +140,31 @@ private:
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
+    // The view's local devices, which the view fixes when it is constructed. Held here because the
+    // accessors that cross-check a property against every device would otherwise rebuild this list
+    // on every call. Refreshed when a reshape swaps the view.
+    std::vector<IDevice*> local_devices_;
     // Only ever read on the dispatch path, which holds the api lock.
     mutable std::unordered_map<MeshCoordinateRange, std::vector<IDevice*>> local_devices_by_range_;
-    // Established once the devices are open (see establish_device_property_caches) so that the
-    // accessors below stay pure reads: ttnn calls them from many threads without the api lock.
-    std::optional<CoreCoord> compute_with_storage_grid_size_;
-    std::optional<uint32_t> l1_size_per_core_;
+    // The mesh-wide properties that are fixed once the devices are open. Each is otherwise answered
+    // by a cross-device agreement check that walks the whole mesh, and the dispatch path asks for
+    // several of them once per program on every enqueue. Established as a unit (see
+    // establish_device_property_caches) so that the accessors below stay pure reads: ttnn calls them
+    // from many threads without holding the api lock. Each accessor keeps the agreement check as
+    // its unestablished path, which covers the window before initialization runs and a remote-only
+    // mesh, where there is no local device to agree with and the check raises as it always did.
+    struct MeshProperties {
+        uint8_t num_hw_cqs = 0;
+        CoreCoord compute_with_storage_grid_size;
+        CoreCoord grid_size;
+        CoreCoord logical_grid_size;
+        CoreCoord dram_grid_size;
+        uint32_t l1_size_per_core = 0;
+        uint32_t dram_size_per_channel = 0;
+        std::set<CoreCoord> ethernet_cores;
+        std::set<CoreCoord> storage_only_cores;
+    };
+    std::optional<MeshProperties> mesh_properties_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;

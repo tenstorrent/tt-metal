@@ -153,6 +153,36 @@ TEST_F(MeshDevice2x4Test, MemoryAllocationStatistics) {
     }
 }
 
+// Checks the mesh-wide properties that MeshDevice establishes once its devices are open against
+// what the devices themselves report. Every device has to agree, so comparing each one also covers
+// the reference the mesh established from.
+void expect_properties_match_devices(const std::shared_ptr<MeshDevice>& mesh_device) {
+    const auto devices = mesh_device->get_devices();
+    ASSERT_FALSE(devices.empty());
+    for (auto* device : devices) {
+        EXPECT_EQ(mesh_device->num_hw_cqs(), device->num_hw_cqs());
+        EXPECT_EQ(mesh_device->compute_with_storage_grid_size(), device->compute_with_storage_grid_size());
+        EXPECT_EQ(mesh_device->grid_size(), device->grid_size());
+        EXPECT_EQ(mesh_device->logical_grid_size(), device->logical_grid_size());
+        EXPECT_EQ(mesh_device->dram_grid_size(), device->dram_grid_size());
+        EXPECT_EQ(mesh_device->l1_size_per_core(), device->l1_size_per_core());
+        EXPECT_EQ(mesh_device->dram_size_per_channel(), device->dram_size_per_channel());
+        EXPECT_EQ(mesh_device->ethernet_cores(), device->ethernet_cores());
+        EXPECT_EQ(mesh_device->storage_only_cores(), device->storage_only_cores());
+    }
+}
+
+TEST_F(MeshDeviceTest, MeshPropertiesMatchDevices) { expect_properties_match_devices(mesh_device_); }
+
+TEST_F(MeshDeviceTest, MeshPropertiesMatchDevicesAfterReshape) {
+    // A reshape swaps the view out from under the established properties, so they have to be
+    // re-established against the new one. Any mesh reshapes to a line of the same size.
+    const MeshShape line_shape(1, mesh_device_->num_devices());
+    mesh_device_->reshape(line_shape);
+    ASSERT_EQ(mesh_device_->shape(), line_shape);
+    expect_properties_match_devices(mesh_device_);
+}
+
 TEST_F(MeshDevice2x4Test, ViewIs2D) {
     std::vector<IDevice*> devices;
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
@@ -301,8 +331,7 @@ TEST(ThrowOnMultipleMeshDeviceInitialization, UnitMeshes) {
             /*trace_region_size=*/DEFAULT_TRACE_REGION_SIZE,
             /*worker_l1_size=*/DEFAULT_WORKER_L1_SIZE,
             /*l1_bank_remap=*/{},
-            /*minimal=*/false)
-        );
+            /*minimal=*/false));
     }
 }
 
