@@ -124,6 +124,11 @@ class Qwen36ModelArgs(ModelArgs):
 
         tp = self.num_devices
         self.cluster_shape = list(mesh_device.shape)
+        # Worker grid + DRAM bank count differ by arch (BH P150 11x10 / 8 banks, WH N150 8x8 / 12
+        # banks); everything grid- or bank-shaped below is derived from these, never hardcoded.
+        _grid = mesh_device.compute_with_storage_grid_size()
+        self.worker_grid = (_grid.x, _grid.y)
+        self.num_dram_banks = mesh_device.dram_grid_size().x
 
         # GDN dims (match qwen35_27b reference names).
         self.gdn_nk = self.linear_num_key_heads
@@ -150,8 +155,24 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_qkv_dim_tp = self.gdn_qkv_dim // tp
         # Native depthwise conv1d (prefill) keeps all qkv_dim_tp channels resident per core (L1_FULL);
         # the 35B-A3B channel count overflows L1 on BH. Split the conv over N channel chunks (exact —
-        # depthwise is per-channel-independent) so each call fits. 27B (chunks=1) is unchanged.
-        self.gdn_conv_channel_chunks = 2 if self.moe_num_experts > 0 else 1
+        # depthwise is per-channel-independent) so each call fits. 27B on BH (chunks=1) is unchanged.
+        #
+        # The conv is HEIGHT-sharded, so each core holds seq/num_cores rows x (C/chunks) channels:
+        # the per-core L1 footprint scales with C/chunks/num_cores. BH P150 (110 worker cores) needs
+        # 2 chunks for the 35B-A3B's C=2048 and 1 for the 27B; a WH N150 has only 64 cores (and
+        # slightly less L1 per core), so it holds ~1.7x more rows per core. Scale the chunk count by
+        # the core-count ratio and round up to a power of two — 4 for the MoE and 2 for the dense
+        # checkpoints on WH, unchanged on BH.
+        _bh_ref_chunks = 2 if self.moe_num_experts > 0 else 1
+        _bh_ref_cores = 110  # BH P150 worker grid (11 x 10), the grid these chunk counts were set on
+        _cores = self.worker_grid[0] * self.worker_grid[1]
+        chunks = _bh_ref_chunks
+        while chunks * _cores < _bh_ref_chunks * _bh_ref_cores:
+            chunks *= 2
+        # The split must be exact (assert in gdn/tp.py) — back off to the largest legal divisor.
+        while chunks > 1 and self.gdn_qkv_dim_tp % chunks:
+            chunks //= 2
+        self.gdn_conv_channel_chunks = chunks
         self.gdn_z_dim_tp = self.gdn_z_dim // tp
         self.gdn_qkvz_dim_tp = (self.gdn_qkv_dim + self.gdn_z_dim) // tp
         # Per-device width of the [qkv|z|a|b] fused in-projection: folding the tiny a/b (decay/beta)
@@ -163,41 +184,40 @@ class Qwen36ModelArgs(ModelArgs):
         self.attn_out_dim_tp = (self.n_heads * self.head_dim) // tp
         kv_dim_per_device = self.n_local_kv_heads * self.head_dim
 
-        # DRAM-sharded weights: column-parallel [hidden, out_tp]
-        self.gdn_qkvz_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.gdn_qkvz_dim_tp)
-        self.gdn_qkvzab_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.gdn_qkvzab_dim_tp)
-        self.attn_qg_weight_memcfg = tpc.create_dram_sharded_mem_config(
-            self.dim, self.n_local_heads * self.head_dim * 2
+        _dram_memcfg = lambda k, n: tpc.create_dram_sharded_mem_config(k, n, dram_cores=self.num_dram_banks)
+        _dram_progcfg = lambda m, k, n: tpc.create_dram_sharded_matmul_program_config(
+            m, k, n, dram_cores=self.num_dram_banks
         )
-        self.attn_k_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, kv_dim_per_device)
-        self.attn_v_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, kv_dim_per_device)
+
+        # DRAM-sharded weights: column-parallel [hidden, out_tp]
+        self.gdn_qkvz_weight_memcfg = _dram_memcfg(self.dim, self.gdn_qkvz_dim_tp)
+        self.gdn_qkvzab_weight_memcfg = _dram_memcfg(self.dim, self.gdn_qkvzab_dim_tp)
+        self.attn_qg_weight_memcfg = _dram_memcfg(self.dim, self.n_local_heads * self.head_dim * 2)
+        self.attn_k_weight_memcfg = _dram_memcfg(self.dim, kv_dim_per_device)
+        self.attn_v_weight_memcfg = _dram_memcfg(self.dim, kv_dim_per_device)
         # Fused [q+gate | k | v] in-projection (P4: QWEN36_FUSED_QKV) — one column-parallel matmul.
         self.attn_qkv_fused_dim_tp = self.n_local_heads * self.head_dim * 2 + 2 * kv_dim_per_device
-        self.attn_qkv_fused_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.attn_qkv_fused_dim_tp)
-        self.mlp_w1_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.hidden_dim // tp)
-        self.mlp_w3_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.hidden_dim // tp)
+        self.attn_qkv_fused_weight_memcfg = _dram_memcfg(self.dim, self.attn_qkv_fused_dim_tp)
+        self.mlp_w1_weight_memcfg = _dram_memcfg(self.dim, self.hidden_dim // tp)
+        self.mlp_w3_weight_memcfg = _dram_memcfg(self.dim, self.hidden_dim // tp)
         # row-parallel out-projections: DRAM-INTERLEAVED (None -> plain ttnn.linear); DRAM-sharding narrow-K here loses to the interleaved 1D kernel and adds 2 reshards/layer.
         self.gdn_out_weight_memcfg = None
         self.attn_wo_weight_memcfg = None
-        self.mlp_w2_weight_memcfg = tpc.create_dram_sharded_mem_config(self.hidden_dim // tp, self.dim)
+        self.mlp_w2_weight_memcfg = _dram_memcfg(self.hidden_dim // tp, self.dim)
 
         # DRAM-sharded matmul progcfgs (decode, M=1)
         M = 1
-        self.gdn_qkvz_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.gdn_qkvz_dim_tp)
-        self.gdn_qkvzab_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.gdn_qkvzab_dim_tp)
-        self.gdn_out_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.gdn_value_dim_tp, self.dim)
-        self.attn_qg_progcfg = tpc.create_dram_sharded_matmul_program_config(
-            M, self.dim, self.n_local_heads * self.head_dim * 2
-        )
-        self.attn_k_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, kv_dim_per_device)
-        self.attn_v_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, kv_dim_per_device)
-        self.attn_qkv_fused_progcfg = tpc.create_dram_sharded_matmul_program_config(
-            M, self.dim, self.attn_qkv_fused_dim_tp
-        )
-        self.attn_wo_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.attn_out_dim_tp, self.dim)
-        self.mlp_w1_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.hidden_dim // tp)
-        self.mlp_w3_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.hidden_dim // tp)
-        self.mlp_w2_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.hidden_dim // tp, self.dim)
+        self.gdn_qkvz_progcfg = _dram_progcfg(M, self.dim, self.gdn_qkvz_dim_tp)
+        self.gdn_qkvzab_progcfg = _dram_progcfg(M, self.dim, self.gdn_qkvzab_dim_tp)
+        self.gdn_out_progcfg = _dram_progcfg(M, self.gdn_value_dim_tp, self.dim)
+        self.attn_qg_progcfg = _dram_progcfg(M, self.dim, self.n_local_heads * self.head_dim * 2)
+        self.attn_k_progcfg = _dram_progcfg(M, self.dim, kv_dim_per_device)
+        self.attn_v_progcfg = _dram_progcfg(M, self.dim, kv_dim_per_device)
+        self.attn_qkv_fused_progcfg = _dram_progcfg(M, self.dim, self.attn_qkv_fused_dim_tp)
+        self.attn_wo_progcfg = _dram_progcfg(M, self.attn_out_dim_tp, self.dim)
+        self.mlp_w1_progcfg = _dram_progcfg(M, self.dim, self.hidden_dim // tp)
+        self.mlp_w3_progcfg = _dram_progcfg(M, self.dim, self.hidden_dim // tp)
+        self.mlp_w2_progcfg = _dram_progcfg(M, self.hidden_dim // tp, self.dim)
 
         # 1D decode MLP matmuls (DEFAULT): small grids beat the ~80-core DRAM-sharded grid on the
         # bandwidth-bound skinny (M<=1) decode matmuls. Interleaved weights.

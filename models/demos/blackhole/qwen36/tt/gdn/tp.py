@@ -225,7 +225,11 @@ class TPGatedDeltaNet:
         # PREFILL out-proj fusion (matmul_reduce_scatter, (8,8) grid). Slight TTFT cost at small ISL
         # (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL (e.g.
         # 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul.
-        self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1
+        # mmrs_prefill_supported() is the ARCH GUARD: the fused matmul+reduce-scatter hangs on
+        # Wormhole (the 1-link LINEAR hop wants 18 RS cores and no split of the 8x8 grid
+        # completes), so this arm is Blackhole-only. It returns True on BH, leaving the Blackhole
+        # path exactly as main had it.
+        self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1 and tpc.mmrs_prefill_supported()
         # PREFILL out-proj as column-parallel AG+matmul (takes precedence over the MMRS arm when the
         # col-sharded weight was loaded).
         self._out_colpar_prefill = "out_colpar" in tw
@@ -1121,9 +1125,8 @@ class TPGatedDeltaNet:
             # shift-register as below -- the conv sum's active rows [0:B] are exact and the downstream
             # q/k/v slices take [0:B]. This keeps the op COUNT identical to the baseline path (just a
             # single pad), vs a per-row slice/concat that added ~4*K ops/layer and erased the width win.
-            qkv_p = ttnn.pad(qkv, [(0, 0), (0, Bmax - B), (0, 0)], value=0.0, memory_config=_L1)
-            ttnn.deallocate(qkv)
-            qkv = qkv_p
+            # pad_and_free, NOT pad + deallocate: this pad can alias its input (tpc.pad_and_free).
+            qkv = tpc.pad_and_free(qkv, [(0, 0), (0, Bmax - B), (0, 0)], value=0.0, memory_config=_L1)
         for j in range(self.K - 1):
             ttnn.copy(st[j + 1], st[j])
         ttnn.copy(qkv, st[self.K - 1])
