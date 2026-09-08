@@ -60,6 +60,7 @@ uint32_t dfb_cache_stride_in_entries(const DfbCacheParams& p) {
 std::vector<uint32_t> dfb_cache_held_slots(const DfbCacheParams& p) {
     const uint32_t stride = dfb_cache_stride_in_entries(p);
     std::vector<uint32_t> slots;
+    slots.reserve(p.lock_n);
     for (uint32_t k = 0; k < p.lock_n; ++k) {
         slots.push_back((k * stride) % p.num_entries);
     }
@@ -75,8 +76,10 @@ std::vector<uint32_t> dfb_cache_expected(const DfbCacheParams& p) {
         p.mode == ScopedLockCacheMode::InvalidateOnAcquire ||
             (p.mode == ScopedLockCacheMode::FlushOnRelease && p.active_is_producer),
         "dfb_cache_expected: this mode does not freshen held slots, so there is nothing sound to assert");
+    const std::vector<uint32_t> slots = dfb_cache_held_slots(p);
     std::vector<uint32_t> exp;
-    for (uint32_t slot : dfb_cache_held_slots(p)) {
+    exp.reserve(slots.size());
+    for (uint32_t slot : slots) {
         exp.push_back(DFB_CACHE_NEW_BASE + slot);
     }
     return exp;
@@ -84,8 +87,10 @@ std::vector<uint32_t> dfb_cache_expected(const DfbCacheParams& p) {
 
 // Pick the held slots out of a per-slot read-back block.
 std::vector<uint32_t> dfb_cache_held(const std::vector<uint32_t>& block, const DfbCacheParams& p) {
+    const std::vector<uint32_t> slots = dfb_cache_held_slots(p);
     std::vector<uint32_t> got;
-    for (uint32_t slot : dfb_cache_held_slots(p)) {
+    got.reserve(slots.size());
+    for (uint32_t slot : slots) {
         got.push_back(block.at(slot));
     }
     return got;
@@ -443,6 +448,7 @@ const char* scoped_lock_cache_abstraction_define(ScopedLockCacheAbstraction a) {
 // cache-resident at the final read, and that is not guaranteed.
 std::vector<uint32_t> scoped_lock_cache_expected(const ScopedLockCacheParams& p) {
     std::vector<uint32_t> exp;
+    exp.reserve(p.lock_n_lines);
     for (uint32_t l = p.lock_off_lines; l < p.lock_off_lines + p.lock_n_lines; ++l) {
         exp.push_back(SCOPED_LOCK_CACHE_NEW_BASE + l);
     }
