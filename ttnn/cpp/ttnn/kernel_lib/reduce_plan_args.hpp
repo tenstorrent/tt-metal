@@ -242,4 +242,37 @@ template <std::uint32_t FIRST_CALL_CTA_OFFSET, std::uint32_t CALL_INDEX>
 using ReduceCallAtT =
     ReduceCallArgs<FIRST_CALL_CTA_OFFSET + CALL_INDEX * reduce_plan_args::call_compile_time_arg_count()>;
 
+// Metal 2 assigns physical buffer IDs when resolving ProgramSpec bindings.
+// Such factories serialize dense, kernel-local logical IDs and bind them here
+// to dfb::<name>. Only the CB namespace changes; every reduction decision,
+// including the output/accumulator choice, still comes from the host record.
+template <typename Call, std::uint32_t... CB_IDS>
+struct BoundReduceCallArgs : Call {
+private:
+    static constexpr std::uint32_t cb_ids[] = {CB_IDS...};
+
+public:
+    static_assert(Call::input_cb_id < sizeof...(CB_IDS));
+    static_assert(Call::auxiliary_cb_id < sizeof...(CB_IDS));
+    static_assert(Call::output_cb_id < sizeof...(CB_IDS));
+    static_assert(!Call::has_accumulator || Call::accumulator_cb_id < sizeof...(CB_IDS));
+    static_assert(((CB_IDS < reduce_plan_args::no_cb_id) && ...));
+
+    static constexpr std::uint32_t input_cb_id = cb_ids[Call::input_cb_id];
+    static constexpr std::uint32_t auxiliary_cb_id = cb_ids[Call::auxiliary_cb_id];
+    static constexpr std::uint32_t output_cb_id = cb_ids[Call::output_cb_id];
+    static constexpr std::uint32_t accumulator_cb_id =
+        Call::has_accumulator ? cb_ids[Call::accumulator_cb_id] : reduce_plan_args::no_cb_id;
+    static_assert(Call::accumulation_mode != ReduceAccumulationMode::Intermediate || output_cb_id == accumulator_cb_id);
+    static_assert(Call::accumulation_mode != ReduceAccumulationMode::Final || output_cb_id != accumulator_cb_id);
+};
+
+// The reader receives the same physical auxiliary recipe, bound to its
+// resolved producer endpoint rather than the host's logical ID.
+template <typename Auxiliary, std::uint32_t CB_ID>
+struct BoundReduceAuxiliaryArgs : Auxiliary {
+    static_assert(CB_ID < reduce_plan_args::no_cb_id);
+    static constexpr std::uint32_t cb_id = CB_ID;
+};
+
 }  // namespace ttnn::kernel_lib

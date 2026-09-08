@@ -24,6 +24,7 @@ import socket
 import statistics
 from pathlib import Path
 
+import pytest
 import torch
 import ttnn
 from loguru import logger
@@ -1005,6 +1006,27 @@ def test_reduce_block_avg_post_op(device):
                 lbl = f"{dim}/{accum} {Ht}x{Wt}x{NC}"
                 ma, _, _ = _check(out, golden * 2.0, dim, accum, "avg_post_op " + lbl)
                 logger.info(f"avg_post_op {lbl:24s} max_abs={ma:.5f}")
+
+
+@pytest.mark.parametrize("dim,tiles", [("row", 3), ("row", 9), ("col", 3), ("col", 9)])
+@pytest.mark.parametrize("accum", ["bf16", "fp32"])
+def test_reduce_block_accumulate_final_post_op(device, dim, tiles, accum):
+    """A fused post op runs once, after the final cross-call average."""
+    Ht, Wt = (1, tiles) if dim == "row" else (tiles, 1)
+    x, golden = _make_input(device, dim, Ht, Wt, 1)
+    out = run_accumulate(
+        x,
+        dim=dim,
+        Ht=Ht,
+        Wt=Wt,
+        NC=1,
+        accum=accum,
+        num_chunks=3,
+        mean=True,
+        avg_post_op=True,
+        kernel_iters=2,
+    )
+    _check(out, golden * 2.0, dim, accum, f"final_post_op {dim}/{tiles}/{accum}")
 
 
 def test_reduce_block_partial_stream(device):

@@ -26,7 +26,25 @@ audit.
   `python3 scripts/run_reduce_migration_sanity.py --group SM019` passed (1/1),
   with fresh device compilation; results in
   `generated/test_reports/reduce-migration-e0axez3j/summary.json`.
-- In progress: Metal 2 buffer binding support and planned fused post operations.
+- Added Metal 2 buffer binding support without changing planner-selected call
+  behavior, and optional fused post operations to `reduce<Call>`.
+- Moreh dot (S057, DF025): host-planned seed/middle/final calls handle the last
+  partial tile; removed the reader's obsolete manual mask. SM021 passed (1/1).
+  Full module T052 passed 21 enabled cases; four upstream BF8 cases skipped.
+  Results: `generated/test_reports/reduce-migration-npvcsg59/summary.json`.
+- Planned fused post-operation validation: the existing average/post-op test
+  passed, plus eight new cases testing final-only callbacks across three-call
+  sequences with both algorithms, H/W dimensions, and BF16/FP32 accumulation.
+  Logs: `/tmp/reduce-planned-post-op-20260908-r2.log` and
+  `/tmp/reduce-planned-final-post-op-20260908-r2.log`.
+  This exposed and fixed a pre-existing example bug: a batched column output's
+  logical planning width differs from its physical one-core shard width.
+- Moreh height mean/sum (S065/S078, DF027/DF034): one planned call replaces full
+  tiles plus masked-tail accumulation. Removed each factory's mask, accumulator,
+  and masked-input buffers. Native build and SM032/SM043 passed (2/2), results
+  `generated/test_reports/reduce-migration-bgr8odj8/summary.json`.
+- Sanity selection correction needed: SM033/SM034 used `p=2.5`, which dispatches
+  to abs-pow and sum, bypassing the claimed norm factories. Use `p=0` instead.
 
 ## Remaining work
 

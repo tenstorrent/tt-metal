@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_dot_device_operation.hpp"
+#include <algorithm>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
 
 namespace ttnn::operations::moreh::moreh_dot {
 
@@ -38,19 +40,48 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
 
     uint32_t num_tiles = input_a.physical_volume() / tt::constants::TILE_HW;
     const auto& a_shape_wo_padding = input_a.logical_shape();
-    uint32_t pad_h = a_shape_wo_padding[2] % tt::constants::TILE_HEIGHT;
     uint32_t pad_w = a_shape_wo_padding[3] % tt::constants::TILE_WIDTH;
-    uint32_t mask_h = (pad_h == 0) ? (tt::constants::TILE_HEIGHT) : (pad_h);
     uint32_t mask_w = (pad_w == 0) ? (tt::constants::TILE_WIDTH) : (pad_w);
 
     IDevice* device = input_a.device();
 
     const uint32_t in0_t = 2;   // a
     const uint32_t in1_t = 2;   // b
-    const uint32_t in2_t = 1;   // scaler
     const uint32_t out0_t = 2;  // out
     const uint32_t im0_t = 1;
     const uint32_t im1_t = 1;
+
+    namespace reduce_host = ttnn::kernel_lib::host;
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+    const TensorLayout tile_layout(input_a.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    std::vector<reduce_host::ReduceCbConfig> reductions;
+    // Keep a seed, a reusable middle call, and a final call instead of
+    // specializing one compute instantiation for every tile in a long vector.
+    const uint32_t num_call_descriptors = std::min(num_tiles, 3U);
+    for (uint32_t i = 0; i < num_call_descriptors; ++i) {
+        const uint32_t width = i + 1 == num_call_descriptors ? mask_w : tt::constants::TILE_WIDTH;
+        reductions.emplace_back(
+            0,
+            reduce_host::ReduceCallConfig{
+                TensorSpec(Shape{32, width}, tile_layout),
+                TensorSpec(Shape{32, 1}, tile_layout),
+                ReduceOpMath::SUM,
+                ReduceOpDim::W,
+                1.0F,
+                ReduceFp32Mode::Fast,
+                im0_t * cb_tile_size});
+    }
+    auto reduce_sequence = reduce_host::make_reduce_sequence_plan(
+        reductions,
+        {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2},
+        {.arch = device->arch(),
+         .fp32_dest_acc_en = fp32_dest_acc_en,
+         .dst_full_sync_en = dst_full_sync_en,
+         .available_l1_bytes = 16 * cb_tile_size});
+    reduce_sequence.calls.back().accumulation_index = num_tiles - 1;
+    const auto* auxiliary = reduce_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const uint32_t auxiliary_tiles = reduce_sequence.auxiliary.tiles.size();
 
     const NodeCoord node = {0, 0};
 
@@ -76,7 +107,10 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
     DataflowBufferSpec dfb_in1{
         .unique_id = IN1, .entry_size = cb_tile_size, .num_entries = in1_t, .data_format_metadata = cb_data_format};
     DataflowBufferSpec dfb_scaler{
-        .unique_id = SCALER, .entry_size = cb_tile_size, .num_entries = in2_t, .data_format_metadata = cb_data_format};
+        .unique_id = SCALER,
+        .entry_size = auxiliary->page_size,
+        .num_entries = auxiliary_tiles,
+        .data_format_metadata = auxiliary->data_format};
     DataflowBufferSpec dfb_out{
         .unique_id = OUT, .entry_size = cb_tile_size, .num_entries = out0_t, .data_format_metadata = cb_data_format};
     DataflowBufferSpec dfb_im0{
@@ -100,9 +134,10 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
                 TensorBinding{.tensor_parameter_name = INPUT_A, .accessor_name = "src0"},
                 TensorBinding{.tensor_parameter_name = INPUT_B, .accessor_name = "src1"},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id", "mask_h", "mask_w"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = create_reader_datamovement_config(device->arch()),
     };
+    reader.advanced_options.compile_time_varargs = reduce_sequence.get_auxiliary_compile_time_args();
 
     // ----- Writer kernel -----
     KernelSpec writer{
@@ -144,6 +179,8 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
         // Style A: op resolves a TTNN ComputeKernelConfig; translate it to the Gen1 hardware config.
         .hw_config = to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
     };
+    compute.compile_time_args = {{"reduce_auxiliary_tiles", auxiliary_tiles}};
+    compute.advanced_options.compile_time_varargs = reduce_sequence.get_compile_time_args();
 
     // ----- ProgramSpec -----
     ProgramSpec spec{
@@ -166,8 +203,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {
         {.kernel = READER,
-         .runtime_arg_values = MakeRuntimeArgsForSingleNode(
-             node, {{"num_tiles", num_tiles}, {"start_id", 0u}, {"mask_h", mask_h}, {"mask_w", mask_w}})},
+         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tiles}, {"start_id", 0u}})},
         {.kernel = WRITER,
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"num_tiles", 1u}, {"start_id", 0u}})},
         {.kernel = COMPUTE,

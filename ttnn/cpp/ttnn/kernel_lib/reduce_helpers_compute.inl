@@ -1602,8 +1602,8 @@ ALWI void reduce(
     }
 }
 
-template <typename Call>
-ALWI void reduce() {
+template <typename Call, typename PostReduceOp>
+ALWI void reduce(PostReduceOp post_reduce_op) {
     static_assert(
         Call::path == ttnn::kernel_lib::ReducePath::Tiled,
         "The planned reduce<Call>() overload currently supports tiled calls only");
@@ -1613,11 +1613,12 @@ ALWI void reduce() {
                                                   : ReduceInputMemoryLayout::with_row_stride(Call::row_stride);
     constexpr auto chunk = ReduceInputChunk::of(Call::reduce_axis_chunk_tiles, Call::output_chunk_tiles);
 
-    auto post_scale = [](uint32_t dst_index) {
+    auto post_scale = [&](uint32_t dst_index) {
         if constexpr (Call::post_scale_bits != ttnn::kernel_lib::reduce_plan_args::float_one_bits) {
             constexpr DataFormat input_format = static_cast<DataFormat>(unpack_src_format[Call::input_cb_id]);
             detail::reduce_post_mul_tile<input_format>(dst_index, Call::post_scale_bits);
         }
+        post_reduce_op(dst_index);
     };
 
     if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::None) {
