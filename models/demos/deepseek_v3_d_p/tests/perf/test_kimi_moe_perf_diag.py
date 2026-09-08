@@ -45,7 +45,9 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_ddr_speed, get_tdp_limit_max
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program, require_realtime_profiler
 
-_ITERS = int(os.environ.get("KIMI_MOE_DIAG_ITERS", "3"))
+# Clamped: _ITERS is a divisor below, and a 0 from the environment would crash only after the full
+# device forward had already run.
+_ITERS = max(1, int(os.environ.get("KIMI_MOE_DIAG_ITERS", "3")))
 # Generous: this harness cares about a complete record set, not about finishing fast.
 _RECORD_TIMEOUT_S = 30.0
 
@@ -130,7 +132,9 @@ def test_kimi_moe_perf_diag(variant, case, config_only, mesh_device, device_para
         entry["by_chip"][record["chip_id"]] = record["duration_ns"]
         entry["spans"][record["chip_id"]] = (record["start_ns"], record["end_ns"])
 
-    ordered = list(per_program.items())
+    # runtime_id increments per dispatch, so sorting by it gives dispatch order. Record arrival
+    # order does not: the receiver interleaves 32 chips and can deliver a later program first.
+    ordered = sorted(per_program.items())
     counts = sorted(len(entry["by_chip"]) for _, entry in ordered)
     mesh_size = mesh_device.get_num_devices()
     logger.info(
@@ -147,7 +151,11 @@ def test_kimi_moe_perf_diag(variant, case, config_only, mesh_device, device_para
         chunk = ordered[iteration * per_iter : (iteration + 1) * per_iter]
         total = sum(max(entry["by_chip"].values()) for _, entry in chunk)
         dispatch = [max(entry["by_chip"].values()) for _, entry in chunk if _DISPATCH_KERNEL in entry["kernels"]]
-        dispatch_ns = dispatch[0] if dispatch else 0.0
+        if len(dispatch) != 1:
+            # 0 would print as "dispatch 0 ns", indistinguishable from a healthy async record and so
+            # from "there is no bimodality here" -- the one conclusion this harness must not fake.
+            logger.error(f"DIAG {case.label} iter {iteration}: {len(dispatch)} programs match {_DISPATCH_KERNEL}")
+        dispatch_ns = dispatch[0] if len(dispatch) == 1 else float("nan")
         logger.info(
             f"DIAG {case.label} iter {iteration}: total {total:,.0f} ns | dispatch {dispatch_ns:,.0f} ns | "
             f"total without dispatch {total - dispatch_ns:,.0f} ns"
@@ -155,9 +163,20 @@ def test_kimi_moe_perf_diag(variant, case, config_only, mesh_device, device_para
 
     # One chip's timeline for the first iteration. The gap column is what shows a record closing
     # before its work is done: the time leaves the record and turns up in the gap behind it.
-    ref_chip = min(chip for _, entry in ordered for chip in entry["spans"])
-    timeline = [(entry["spans"][ref_chip], entry["kernels"]) for _, entry in ordered[:per_iter]]
-    origin = min(start for (start, _), _ in timeline)
+    # A chip every program in the slice reported. The global minimum would KeyError on exactly the
+    # partial record sets the short= count above exists to report.
+    common = set.intersection(*(set(entry["spans"]) for _, entry in ordered[:per_iter]))
+    if not common:
+        logger.warning(f"DIAG {case.label}: no chip reported every program in iteration 0, skipping timeline")
+        return
+    ref_chip = min(common)
+    # Sorted by start, not by dispatch order: the gap column is only meaningful on a start-ordered
+    # sequence, and a program whose record closed early can start after one dispatched later.
+    timeline = sorted(
+        ((entry["spans"][ref_chip], entry["kernels"]) for _, entry in ordered[:per_iter]),
+        key=lambda item: item[0][0],
+    )
+    origin = timeline[0][0][0]
     logger.info(f"DIAG {case.label} chip-{ref_chip} timeline (offset, duration, gap to next):")
     for idx, ((start, end), kernels) in enumerate(timeline):
         gap = timeline[idx + 1][0][0] - end if idx + 1 < len(timeline) else 0

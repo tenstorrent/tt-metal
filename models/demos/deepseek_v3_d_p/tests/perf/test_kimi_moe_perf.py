@@ -7,11 +7,15 @@ Kimi MoE device-perf gate on the 8x4 galaxy, one test parametrized over the Kimi
 (K2.7 dense-expert MoE and K3 LatentMoE), measured with the real-time program profiler -- same
 mechanism as ``test_ttnn_hca_perf.py``, which already gates HCA perf on this SKU.
 
-What the number is: over the programs the MoE forward dispatched, the sum of each program's
-critical path (max duration across the 32 chips). Close to but NOT the same as the tracy
-baseline it replaces -- ``merge_device_rows`` averages CCL ops across devices where this takes
-their max -- so these baselines were measured with the real-time profiler and must not be
+What the number is: over the programs the MoE forward dispatched EXCEPT the dispatch program, the
+sum of each program's critical path (max duration across the 32 chips). Close to but NOT the same as
+the tracy baseline it replaces -- ``merge_device_rows`` averages CCL ops across devices where this
+takes their max -- so these baselines were measured with the real-time profiler and must not be
 back-ported to the tracy path.
+
+The dispatch program is excluded because its record does not consistently bracket its own work,
+which made this gate bimodal (#55439). ``_split_off_dispatch`` carries the measurements; read it
+before re-cutting any baseline here, and do not re-add that program without re-cutting both.
 
 What the number excludes, verified on an 8x4 galaxy (warm caches, 58 programs x 32 chips =
 1856 records, 0 dropped, no program dispatched more than once per chip):
@@ -93,9 +97,12 @@ class _MoEPerfCase:
 # gated total, so the two clusters collapse into one and the midpoint describes every run.
 #
 # The six samples that measured the dispatch program async -- and so were already measuring today's
-# metric -- were 5,404,540 / 5,413,674 / 5,443,696 / 5,484,610 / 5,495,657 / 5,512,248 (runs
-# 33787697384, 33871578406, 33871606089, 33871618241, 33946052498). Median 5,464,153, 2.0% peak to
-# peak. Nine local runs of the dispatch-excluded metric agreed at 5,445,011 mean, 0.60% sd.
+# metric -- with the run each came from:
+#   5,404,540  run 33946052498 att1        5,484,610  run 33871606089 att1
+#   5,413,674  run 33787697384 att3        5,495,657  run 33787697384 att2
+#   5,443,696  run 33871578406 att3        5,512,248  run 33871618241 att3
+# Median 5,464,153, 2.0% peak to peak. Nine local runs of the dispatch-excluded metric agreed at
+# 5,445,011 mean, 0.60% sd.
 #
 # Previous history: 5,413,674 from 2026-09-03 (one sample, run 33787697384); 6,260,834 from
 # 2026-09-02; 6,574,780 from run 33194039175.
@@ -184,8 +191,13 @@ def _split_off_dispatch(per_program: dict, label: str) -> tuple[float, float]:
     from one run that happened to land in the async state.
 
     Excluding it leaves the other 23 programs, which are tight: nine runs on one box spanned 1.97%
-    peak to peak (sd 0.60%) against the 3-4% bands here. The dispatch op keeps its own deterministic
-    per-op gate in ``test_dispatch_combine_perf.py``; this gate does not cover it on 8x4.
+    peak to peak (sd 0.60%) against the 3-4% bands here.
+
+    What this gives up. ``test_dispatch_combine_perf.py`` gates DispatchDeviceOperation per-op, but
+    only for the K2.6/K2.7 shape (its ``_MODELS`` has no K3 entry) and only on torus-y 8x1. So the
+    K2.7 dispatch op keeps a gate on a different SKU, and K3's dispatch op is now gated nowhere --
+    it was only ever covered here, and only in whichever of the two states a run happened to land
+    in, which is not coverage. Closing that needs a K3 case in the per-op gate; tracked on #55439.
     """
     dispatch = [
         entry
@@ -272,8 +284,12 @@ def test_kimi_moe_perf_galaxy(variant, case, config_only, mesh_device, device_pa
     assert per_program, f"real-time profiler produced no program records for the {case.label} MoE forward"
 
     dispatch_ns, total_ns = _split_off_dispatch(per_program, case.label)
+    gated_programs = len(per_program) - 1
     tag = f"{case.label} moe 8x4 realtime perf ({case.shape_note})"
-    logger.info(
+    # WARNING, not info, on the bracketed state: it is the state whose 1.10 ms this gate used to
+    # swallow, so it must be greppable in a job log that is otherwise green.
+    dispatch_log = logger.warning if dispatch_ns >= _DISPATCH_BRACKETED_NS else logger.info
+    dispatch_log(
         f"{tag}: dispatch program {dispatch_ns:,.0f} ns, "
         f"{'BRACKETED (workers waited for the transfer)' if dispatch_ns >= _DISPATCH_BRACKETED_NS else 'ASYNC (workers returned first)'}"
         " -- excluded from the gated total, see _split_off_dispatch"
@@ -281,8 +297,9 @@ def test_kimi_moe_perf_galaxy(variant, case, config_only, mesh_device, device_pa
 
     if case.expected_ns is None:
         logger.warning(
-            f"{tag}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms) over {len(per_program)} programs "
-            f"-- REPORT ONLY, this run does NOT gate perf. Set expected_ns = {total_ns:,.0f} for "
+            f"{tag}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms) over {gated_programs} gated programs "
+            f"(+1 dispatch, excluded) -- REPORT ONLY, this run does NOT gate perf. "
+            f"Set expected_ns = {total_ns:,.0f} for "
             f"{case.label} in {os.path.basename(__file__)} to start gating."
         )
         return
@@ -290,8 +307,8 @@ def test_kimi_moe_perf_galaxy(variant, case, config_only, mesh_device, device_pa
     margin = adjust_margin_for_ddr_speed(case.margin)
     lower, upper = case.expected_ns * (1 - margin), case.expected_ns * (1 + margin)
     logger.info(
-        f"{tag}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms) over {len(per_program)} programs, "
-        f"expected {case.expected_ns:,} ns, band [{lower:,.0f}, {upper:,.0f}] "
+        f"{tag}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms) over {gated_programs} gated programs "
+        f"(+1 dispatch, excluded), expected {case.expected_ns:,} ns, band [{lower:,.0f}, {upper:,.0f}] "
         f"(margin +/- {margin * 100:.1f}%)"
     )
     assert lower <= total_ns <= upper, (
