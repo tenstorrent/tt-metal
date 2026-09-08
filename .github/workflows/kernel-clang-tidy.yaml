@@ -1,11 +1,10 @@
 name: "Kernel clang-tidy"
 
-# Post-hoc clang-tidy on runtime-JIT-compiled kernel code (prototype).
-# Runs the ttnn sanity suite on hardware with kernel clang-tidy enabled on
-# every leg; each leg captures its own JIT kernel compiles, lints them with
-# clang-tidy via CodeChecker and uploads the raw plists. A final job merges
-# every leg's plists and renders one deduplicated CodeChecker report, which is
-# published to GitHub Pages.
+# Post-hoc clang-tidy on runtime-JIT-compiled kernel code.
+# Runs the ttnn sanity suite on hardware with kernel clang-tidy enabled on every
+# leg: each leg captures its own JIT kernel compiles, lints them via CodeChecker
+# and uploads the raw plists. A final job merges those, renders one deduplicated
+# CodeChecker report and publishes it to GitHub Pages.
 # See tech_reports/code-indexing/kernel-clang-tidy.md.
 
 on:
@@ -66,8 +65,7 @@ jobs:
     timeout-minutes: 180
     # Renders one merged report, so it needs the analyzed sources on the same
     # absolute paths the legs used: /opt/venv/... (wheel, via setup-job) and
-    # /work/... (checkout). Without them CodeChecker emits index.html and
-    # statistics.html but zero finding pages.
+    # /work/... (checkout). Without them the render yields zero finding pages.
     container:
       image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.ci-test-docker-image) }}
       volumes:
@@ -119,14 +117,12 @@ jobs:
         run: |
           set -euo pipefail
           # Restore each leg's generated JIT sources to their original absolute
-          # paths. Without them CodeChecker skips every plist that references
-          # one, which is all of them, and renders an empty report.
+          # paths. CodeChecker skips any plist with a missing source, which here
+          # would be all of them.
           find /work/legs -name 'generated-sources.tar.gz' -print0 \
             | xargs -0 -r -I{} tar -xzf {} -C / 2>/dev/null || true
-          # Every TU re-reports the defects of the headers it includes, so the
-          # raw plists carry ~19x more diagnostics than there are distinct
-          # findings. parse is single-threaded and scales with that raw count,
-          # so drop the duplicates in parallel first.
+          # Raw plists carry ~19x more diagnostics than distinct findings, and
+          # parse is single-threaded and scales with that raw count.
           if [ -n "$(find /work/legs -name '*.plist' -print -quit)" ]; then
             python3 .github/scripts/utils/merge_kernel_tidy_plists.py /work/legs /work/merged
           fi
@@ -163,9 +159,9 @@ jobs:
               return (path, r.get("line"), r.get("column"), r.get("checker_name"))
           unique = {loc(r) for r in reports}
           by_severity = collections.Counter(r.get("severity") for r in reports)
-          # CodeChecker's own export carries bug paths and macro expansions and
-          # ran to 124 MB, over GitHub's 100 MB per-file limit. This is the
-          # queryable form, and the one to point an agent at.
+          # CodeChecker's own export carries bug paths and macro expansions
+          # and exceeds GitHub's 100 MB per-file limit. This is the queryable
+          # form, and the one to point an agent at.
           slim = [
               {"file": loc(r)[0], "line": r.get("line"), "col": r.get("column"),
                "checker": r.get("checker_name"), "severity": r.get("severity"),
@@ -193,9 +189,8 @@ jobs:
               print("Top severity checkers: " + ", ".join(f"{c} ({n})" for c, n in top.most_common()))
           PY
 
-      # The expensive step: renders a source-annotated page per finding.
-      # Bounded and non-fatal so a slow render cannot cost us the whole job;
-      # run 33984801327 hit the job timeout here and published nothing.
+      # The expensive step: renders a source-annotated page per finding. Bounded
+      # and non-fatal so a slow render cannot cost the whole job.
       - name: Render consolidated HTML report
         id: site
         if: ${{ steps.merge.outputs.merged != '0' }}
@@ -204,8 +199,7 @@ jobs:
         run: |
           CodeChecker parse /work/merged --export html --output /work/site || true
           # index.html alone is not success: CodeChecker writes it even when it
-          # skipped every plist for missing sources, which is how run
-          # 34006365739 published a report with no findings in it.
+          # skipped every plist for missing sources.
           pages=$(ls /work/site/*.plist.html 2>/dev/null | wc -l)
           echo "finding pages rendered: $pages"
           if [ -s /work/site/index.html ] && [ "$pages" -gt 0 ]; then

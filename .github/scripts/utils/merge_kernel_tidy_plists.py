@@ -4,17 +4,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Deduplicate kernel clang-tidy plists ahead of ``CodeChecker parse``.
 
-Every translation unit in a leg is a firmware wrapper with the kernel #included
-into it, so the same header defect is re-reported by every TU that pulls the
-header in, and again by every leg. Measured on two legs: 370,060 raw
-diagnostics for 19,863 distinct ones, an 18.7x redundancy.
+Every translation unit is a firmware wrapper with the kernel #included into it,
+so the same header defect is re-reported by every TU that pulls the header in,
+and again by every leg: two legs measured 370,060 raw diagnostics for 19,863
+distinct ones, an 18.7x redundancy.
 
 ``CodeChecker parse`` is single-threaded with no --jobs and its cost scales with
-raw diagnostic count, so it spends ~95% of its runtime rediscovering findings it
-has already seen. This drops the duplicates first, in parallel, and hands
-CodeChecker only the distinct ones. No finding is lost: a defect reported at the
-same file, line, column, checker and message is the same defect, and it is the
-one an agent would fix once.
+the raw count, so most of its runtime rediscovers findings it has already seen.
+This drops the duplicates in parallel first. Nothing is lost -- a defect at the
+same file, line, column, checker and message is the same defect.
 """
 
 from __future__ import annotations

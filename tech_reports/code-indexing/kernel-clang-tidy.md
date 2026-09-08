@@ -1,33 +1,25 @@
 # Post-hoc clang-tidy on JIT-compiled kernel code
 
 Device kernels are compiled at runtime by `tt_metal/jit_build/` with the SFPI
-cross-compiler, so they are invisible to the host build's static analysis.
-This flow runs clang-tidy on them **after the fact**: run any workload
-normally with the build system's own compile-command logging enabled
-(`TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1`), parse the logged real JIT compiler
-invocations, translate them for clang, and lint.
-([`bear`](https://github.com/rizsotto/Bear) capture is also supported as an
-alternative input — see the gotchas below for why it is not the default.)
+cross-compiler, so the host build's static analysis never sees them. This flow
+lints them after the fact: run any workload with the JIT build's compile-command
+logging enabled, parse the logged compiler invocations, translate them for
+clang, and run clang-tidy.
 
-No synthetic build system, no stub headers, no enumeration of kernel configs:
-the runtime already produced everything needed (real compile-time args, real
-defines, real generated headers) as a side effect of just running the test.
-Coverage is exactly the set of kernels that run JIT-compiled — no more.
+Nothing is synthesized — no stub headers, no enumerated kernel configs. The
+runtime already produced the real compile-time args, defines and generated
+headers as a side effect of running the test. Coverage is exactly the set of
+kernels that ran JIT-compiled.
 
-Prior art / related:
+Related reading:
 
-* Jira MINFRA-1199 ("Explore clang-tidy static analysis for device/kernel
-  code") — this flow is a concrete answer to it.
-* PR [#37252](https://github.com/tenstorrent/tt-metal/pull/37252) — earlier
-  clang-tidy attempt using host clang + hand-written stubs for SFPI internals
-  and generated files. This flow supersedes the stubs by capturing real
-  compiles instead (see `tt_metal/jit_build/kernel_clang_tidy/README.md` for
-  why no mock SFPI headers are needed anymore).
 * [`kernel-code-indexing.md`](./kernel-code-indexing.md) — the adjacent IDE
-  indexing flow. Note its script (`build_kernel_compile_commands_json.py`)
-  rewrites TUs to the bare kernel source and dedups TRISC roles, which is fine
-  for clangd but wrong for linting; this flow keeps the real wrapper TUs so
-  UNPACK/MATH/PACK stay distinct and role defines stay correct.
+  indexing flow. Its script rewrites TUs to the bare kernel source and dedups
+  TRISC roles, which suits clangd but is wrong for linting; this flow keeps the
+  real wrapper TUs so UNPACK/MATH/PACK stay distinct and role defines stay
+  correct.
+* `tt_metal/jit_build/kernel_clang_tidy/README.md` — why no mock SFPI headers
+  are needed.
 
 ## Running it locally
 
@@ -38,13 +30,12 @@ cd <tt-metal root>
 
 # 1. Cache hits skip the compile, so force real compiles.
 export TT_METAL_FORCE_JIT_COMPILE=1
-# 2. If kernel ccache is enabled (TT_METAL_CCACHE_KERNEL_SUPPORT), a ccache hit
-#    also skips the real compile. Take ccache out of the path entirely, and
-#    disable it as a fallback in case something else invokes it.
+# 2. Kernel ccache also skips the real compile on a hit. Take it out of the
+#    path, and disable it as a fallback in case something else invokes it.
 unset TT_METAL_CCACHE_KERNEL_SUPPORT
 export CCACHE_DISABLE=1
-# 3. Have the JIT build log every kernel compile command. The lines are logged
-#    at info level, so the logger must be at info too.
+# 3. Log every kernel compile command. The lines are logged at info level, so
+#    the logger must be at info too.
 export TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1
 export TT_LOGGER_LEVEL=info
 
@@ -61,651 +52,244 @@ python3 scripts/build_kernel_clang_tidy_commands.py \
 less /tmp/kernel_tidy/findings.txt
 ```
 
-Alternative capture: wrap the run in `bear --output raw.json --` and pass
-`--input raw.json` instead of `--input-log`. Equivalent output; see the bear
-gotcha below before relying on it in a container.
+Both capture modes see only compiles that actually happen, and every cache layer
+defeats them silently — the script warns on zero entries, but the failure to
+suspect is "cache hit", not "capture broke". Three layers exist: the tt-metal
+JIT cache (`~/.cache/tt-metal-cache`, defeated by `TT_METAL_FORCE_JIT_COMPILE`),
+kernel ccache (`TT_METAL_CCACHE_KERNEL_SUPPORT`, which prepends `ccache` to the
+SFPI command), and in CI a Redis-backed remote ccache configured by
+`.github/actions/setup-job`, which the capture leg clears.
 
 Do **not** clear the tt-metal cache (`~/.cache/tt-metal-cache` or
-`$TT_METAL_CACHE`) between the run and the lint: the captured commands
-reference the generated headers there (`chlkc_*.cpp`, `chlkc_descriptors.h`,
+`$TT_METAL_CACHE`) between the run and the lint: the captured commands reference
+the generated headers there (`chlkc_*.cpp`, `chlkc_descriptors.h`,
 `kernel_includes.hpp`, `defines_generated.h`), and clang-tidy re-parses from
-those sources. Object files do not need to survive (they don't; the JIT build
-uses temp names) — only sources/headers matter, and those are durable.
+those sources. Object files do not need to survive; only sources and headers do.
 
-### Gotcha: bear + `http_proxy` (why bear failed in CI)
-
-The first CI iteration of this flow used `bear` and failed instantly with
-`wrapper: failed with: gRPC call failed: failed to connect to all addresses`,
-killing the wrapped command **before pytest even started** (bear's nonzero
-exit then failed the leg). The verified mechanism, for anyone using bear
-locally:
-
-* bear ≥3.x runs an intercept supervisor as a **gRPC server on
-  `127.0.0.1:<random port>`**; the `wrapper`/`libexec.so` clients in every
-  intercepted process (including the initial one that launches the wrapped
-  command) connect back over that channel.
-* gRPC's C core routes **all** channels — including loopback ones — through
-  `http_proxy`/`https_proxy` unless the target host appears in `no_proxy`.
-* The CI runners inject
-  `http_proxy=http://proxy.restricted-proxy.svc.cluster.local:3128` into the
-  job container, with a `no_proxy` list that does **not** contain
-  `localhost`/`127.0.0.1` (visible verbatim in the job's `docker create`
-  command). So bear's client tried to reach its own loopback supervisor via
-  the cluster proxy, which cannot connect back into the container — hence
-  "failed to connect to all addresses" within milliseconds.
-* This is a documented upstream failure mode: Bear issues
-  [#296](https://github.com/rizsotto/Bear/issues/296) ("the solution was to
-  remove the HTTP proxy environment variables"),
-  [#635](https://github.com/rizsotto/Bear/issues/635), and PR
-  [#631](https://github.com/rizsotto/Bear/pull/631) (merged 2025), which makes
-  bear strip the proxy variables from its gRPC channel **by default** — a fix
-  newer than 3.0.18, the only version packaged for Ubuntu 22.04.
-
-It is *not* a container/namespace limitation per se: the supervisor and the
-intercepted compilers all run in one process tree inside one job container.
-Local workaround if you want bear: `no_proxy="$no_proxy,localhost,127.0.0.1"
-NO_PROXY="$NO_PROXY,localhost,127.0.0.1" bear -- <cmd>` (or unset the proxy
-vars, or use a bear release containing the #631 fix).
-
-CI still uses the log-based capture regardless: no wrapper process means
-capture is structurally incapable of failing the test run, and there is no
-third-party interception dependency at all.
-
-### Gotcha: every kernel-compile cache silently defeats the capture
-
-Both capture modes only see compiles that actually happen. A cache hit at
-**any** layer serves the result without running the real compile, and the
-capture silently comes up empty (the filter script warns on zero entries, but
-the failure mode to understand is "cache hit", not "capture broke"). There are
-three layers:
-
-1. **The tt-metal JIT cache** (`~/.cache/tt-metal-cache`): a hit means
-   `JitBuildState::need_compile` returns false and no process is spawned at
-   all. Defeat: `TT_METAL_FORCE_JIT_COMPILE=1`.
-2. **Kernel ccache** (`TT_METAL_CCACHE_KERNEL_SUPPORT`): when set,
-   `JitBuildEnv::init` prepends `ccache` to the SFPI command; a ccache hit
-   skips the compiler exec. Defeat: `unset TT_METAL_CCACHE_KERNEL_SUPPORT`
-   (removes ccache from the process tree), plus `CCACHE_DISABLE=1` as a
-   fallback (a disabled ccache is a pure pass-through, so the compile is still
-   observable even if ccache does get invoked).
-3. **The CI Redis-backed kernel ccache**: in CI, `.github/actions/setup-job`
-   (`enable-kernel-ccache: true`) configures kernel ccache with
-   `CCACHE_REMOTE_ONLY=true` and `CCACHE_REMOTE_STORAGE=redis://...` — i.e.
-   *all* kernel-compile cache lookups go to a shared Redis instance, and a
-   remote hit serves the object without ever running `riscv-tt-elf-g++`. This
-   is the same ccache from layer 2, so the same defeats apply; the CI wiring
-   additionally clears `CCACHE_REMOTE_STORAGE`/`CCACHE_REMOTE_ONLY` for the
-   capture leg to make the intent explicit and to avoid touching the shared
-   Redis cache from an instrumented run.
+A [`bear`](https://github.com/rizsotto/Bear)-captured `compile_commands.json`
+works as an alternative input (`--input` instead of `--input-log`). Note that
+bear 3.0.x's intercept channel is a gRPC server on loopback, and gRPC routes
+loopback through `http_proxy` unless `no_proxy` covers it — which is why it
+fails outright in containers that set a proxy, CI's included.
 
 ## What the translation does
 
-See the docstring of `scripts/build_kernel_clang_tidy_commands.py` for the
-full list. Summary: keep only SFPI `-c` compile entries; swap the compiler for
-`clang++ --target=riscv32-unknown-elf` (mapped from `-mcpu=tt-wh`/`tt-bh`);
-drop SFPI-GCC-only flags (`-ftt-*`, `-flto=auto`, `--param=min-pagesize=0`,
-dep-file flags); upgrade `-std=c++17` to `-std=c++20` (the `-ftt-*` flags
-backport C++20 features that tt-llk headers use); wire in the SFPI toolchain's
-own newlib/libstdc++ headers; apply the riscv32 `int32_t`-is-`long`
-type-model overrides that `sfpi.h` static_asserts. Everything else — CTAs,
-defines, include paths, generated files — passes through untouched.
+See the docstring of `scripts/build_kernel_clang_tidy_commands.py` for the full
+list. Summary: keep only SFPI `-c` compile entries; swap the compiler for
+`clang++ --target=riscv32-unknown-elf` (mapped from `-mcpu=tt-wh`/`tt-bh`); drop
+SFPI-GCC-only flags (`-ftt-*`, `-flto=auto`, `--param=min-pagesize=0`, dep-file
+flags); upgrade `-std=c++17` to `-std=c++20` (the `-ftt-*` flags backport C++20
+features that tt-llk headers use); wire in the SFPI toolchain's own
+newlib/libstdc++ headers; apply the riscv32 `int32_t`-is-`long` type-model
+overrides that `sfpi.h` static_asserts. Everything else — CTAs, defines, include
+paths, generated files — passes through untouched.
 
-By default entries are deduplicated to one per (kernel source, RISC target):
-the same kernel recompiled under many compile-time-arg configurations is
-linted once, with the first-captured config. Pass `--dedupe none` to lint
-every configuration.
+By default entries are deduplicated to one per (kernel source, RISC target): the
+same kernel recompiled under many compile-time-arg configurations is linted once,
+with the first-captured config. Pass `--dedupe none` to lint every configuration.
 
-## CI wiring (prototype)
+## CI wiring
 
-`.github/workflows/ttnn-sanity-tests-impl.yaml` has an opt-in experiment:
-callers pass `enable-kernel-clang-tidy: true` and **every** hardware leg
-captures and lints its own kernels, the same way `collect-coverage` applies to
-every leg. Each leg's pytest run gets
-`TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1` + `TT_LOGGER_LEVEL=info` (the logged
-compile commands land in the leg's run-with-log file), with all three
-kernel-compile cache layers defeated for that leg only (see the gotcha above:
-`TT_METAL_FORCE_JIT_COMPILE=1`, `TT_METAL_CCACHE_KERNEL_SUPPORT` unset,
-`CCACHE_DISABLE=1`, and the Redis `CCACHE_REMOTE_STORAGE` cleared). After the
-tests, a non-blocking (`continue-on-error`) step translates the captured
-commands (this script, no `--run`) and analyzes them with CodeChecker —
-`CodeChecker analyze compile_commands.json --config
-tt_metal/jit_build/kernel_clang_tidy/codechecker.json` — the same tooling
-`clang-static-analyzer.yaml` uses. See
-[Checker selection and scoping](#checker-selection-and-scoping) for how that
-config decides what runs and what is reported. The leg does not render HTML;
-it uploads one `kernel-clang-tidy-<group>` artifact (plists,
-compile_commands.json, `reports.json` counts, summary) and the consolidate job
-does all rendering. The suggested-fix YAMLs `CodeChecker` writes to
-`reports/fixit` are deleted before upload: measured at 304 MB of an 880 MB
-artifact, and nothing downstream reads them.
-Gotcha found while wiring this: CodeChecker's compilation-db parser consults
-`ClangSA.analyzer_binary()` unconditionally, so a `clang` binary must be
-resolvable even though only clang-tidy runs. Handled the way
-`tt-umd`'s `code-analysis.yaml` does it — `update-alternatives` symlinks for
-`clang`, `clang++` and `clang-tidy` so CodeChecker resolves them natively,
-rather than detecting versioned binaries and passing `CC_ANALYZER_BIN`. The
-`apt-get` fallback stays because these legs run in the ci-test image, not the
-dev image tt-umd uses, so the toolchain is not guaranteed present.
-
-The dedicated caller is `.github/workflows/kernel-clang-tidy.yaml` (structured
-after `code-coverage.yaml`): build → run the ttnn sanity suite on hardware via
-`ttnn-sanity-tests-impl.yaml` with the experiment enabled on every leg → a
-`consolidate-report` job that merges every leg's plists into one report and
-pushes it to `tenstorrent/tt-metal-kernel-clang-tidy-results` gh-pages (on
-main, or when dispatched with `publish-html: true`). Launch with:
+`.github/workflows/kernel-clang-tidy.yaml` is the entry point: build → run the
+ttnn sanity suite on hardware via `ttnn-sanity-tests-impl.yaml` with
+`enable-kernel-clang-tidy: true` → a `consolidate-report` job that merges every
+leg's findings into one report and publishes it to
+`tenstorrent/tt-metal-kernel-clang-tidy-results` gh-pages (on main, or when
+dispatched with `publish-html: true`).
 
 ```sh
 gh workflow run kernel-clang-tidy.yaml --ref <branch> \
   -f enabled-skus=wh_n300_civ2 -f publish-html=true
 ```
 
-### Consolidating the legs into one report
+**Every** hardware leg captures and lints its own kernels, the way
+`collect-coverage` applies to every leg. The leg's pytest run gets
+`TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1` and `TT_LOGGER_LEVEL=info` with all
+three cache layers defeated for that leg only, after which a non-blocking
+(`continue-on-error`) step translates the captured commands and runs
+`CodeChecker analyze --config
+tt_metal/jit_build/kernel_clang_tidy/codechecker.json` — the same tooling
+`clang-static-analyzer.yaml` uses. The leg renders no HTML. It uploads one
+`kernel-clang-tidy-<group>` artifact holding the plists, the compile database,
+finding counts, and the generated JIT sources those plists reference.
+CodeChecker's `reports/fixit` suggestions are deleted first: 304 MB of an 880 MB
+artifact, and nothing downstream reads them.
+
+CodeChecker's compilation-database parser consults `ClangSA.analyzer_binary()`
+unconditionally, so a `clang` binary must be resolvable even though only
+clang-tidy runs. Both jobs install `update-alternatives` symlinks for `clang`,
+`clang++` and `clang-tidy`, as `tt-umd`'s `code-analysis.yaml` does.
+
+### The consolidated report
 
 `consolidate-report` merges every leg's plists and runs `CodeChecker parse
---export html` once, so the published site is one genuine CodeChecker report: a
-sortable table with Severity, Checker name, File and Message columns, plus its
-own checker- and severity-statistics pages.
+--export html` once, so the published site is a genuine CodeChecker report: a
+sortable Severity / Checker / File / Message table plus its own checker- and
+severity-statistics pages. Leg provenance is dropped deliberately — the same
+kernel code is analyzed on many legs and only the finding matters.
+`.github/scripts/utils/brand_kernel_tidy_site.py` then sets a page title and
+favicon, neither of which `--export html` makes configurable.
 
-One cosmetic pass runs over that output.
-`.github/scripts/utils/brand_kernel_tidy_site.py` sets a `<title>` and adds a
-favicon, because `--export html` titles every page "Plist HTML Viewer" and
-references no icon, neither of which is configurable — so a published report is
-an unlabelled tab with the browser's default globe. The export is flat, with
-`index.html`, `statistics.html` and every `*.plist.html` in one directory, so a
-relative `favicon.svg` resolves from all of them; finding pages take their title
-from the source file encoded in their own filename. The pass is idempotent and
-runs only when the render actually produced finding pages.
+Three constraints shape that job.
 
-No hand-written HTML and no per-leg
-navigation — leg provenance is deliberately dropped, since the same kernel code
-is analyzed on many legs and the reader only cares about the finding.
+**The merge deduplicates before CodeChecker sees anything.** Each TU is a
+firmware wrapper with the kernel `#include`d into it, so every TU re-reports the
+defects of every header it pulls in, and every leg repeats that again: two legs
+produced 370,060 raw diagnostics for 19,863 distinct findings — 18.7x
+redundancy, 588 MB of plists. `CodeChecker parse` is single-threaded, has no
+`--jobs`, and its cost scales with the raw count, so most of its runtime
+rediscovers findings it has already seen.
+`.github/scripts/utils/merge_kernel_tidy_plists.py` drops the duplicates in
+parallel first, keying on file, line, column, checker and message; `parse` then
+takes 6.7s instead of 115s for an identical finding set.
 
-#### Why the merge deduplicates first
+**Rendering needs the analyzed sources at the same absolute paths the legs
+used**, which is why the job runs in the ci-test container with `setup-job`
+installing the wheel rather than on a bare `ubuntu-latest`. Two roots cover
+almost everything: `/opt/venv/...` (wheel-installed headers) and `/work/...`
+(the checkout). Without them, `--export html` silently writes `index.html` and
+`statistics.html` with **zero** finding pages. The generated JIT glue is the
+exception — it lives in the test runner's kernel cache, so each leg ships the
+referenced sources in its artifact and the consolidate job restores them.
 
-The first consolidated run (33984801327) exhausted a 90-minute job timeout
-mid-render. Profiling the cause rather than trimming checkers:
-
-* Each TU is a firmware wrapper with the kernel `#include`d into it, so every TU
-  re-reports the defects of every header it pulls in, and every leg repeats that
-  again. On two legs, **370,060 raw diagnostics represent 19,863 distinct
-  findings — 18.7x redundancy.** Plists run 11 MB mean, 588 MB for two legs.
-* `CodeChecker parse` is single-threaded — there is no `--jobs` — and its cost
-  scales with the *raw* count, so ~95% of its runtime rediscovers findings it has
-  already seen. Of the 115s it took on those two legs, 33s was `plistlib` XML
-  parsing and 82s was CodeChecker's own per-diagnostic processing.
-
-`.github/scripts/utils/merge_kernel_tidy_plists.py` therefore drops duplicates
-before CodeChecker sees them, keying on file, line, column, checker and message.
-It shrinks 588 MB to 31 MB, after which `parse` drops from **115s to 6.7s, a 17x
-speedup, with zero findings lost or gained — the unique finding set is
-identical.** The saving grows with leg count, since cross-leg repetition is most
-of the redundancy.
-
-Note where that 17x comes from: feeding CodeChecker 19,863 diagnostics instead
-of 370,060. It does not depend on the core count. Only the merge itself is
-parallel (the XML parse is embarrassingly so), and it is the cheap half. On the
-two-leg sample:
-
-| Workers | Merge wall time |
-| --- | --- |
-| 64 (capped to 52, one per plist) | 3.1s |
-| 16 (`tt-ubuntu-2204-large-stable`) | 5.3s |
-| 4 (a GitHub-hosted runner) | 16s |
-
-Against a budget that was overrunning 90 minutes, all three are noise; at 15
-legs the 16-core case projects to well under a minute. Worker count comes from
-`os.sched_getaffinity` and the cgroup v2 CPU quota rather than `cpu_count()`,
-which inside a CPU-limited container reports the host's cores and would
-oversubscribe while multiplying peak memory to match. Peak RSS is ~70 MB for the
-largest single plist and ~135 MB for the run.
-
-The merge makes two read passes over the inputs instead of one pass plus a
-staged rewrite. Duplicates are almost entirely *cross*-plist — within a single
-plist the raw and distinct counts are the same 370,060 — so a per-plist
-intermediate would be a byte-for-byte copy of the input, about 4 GB of writes at
-15 legs, to remove nothing. Note that `/tmp` in this container is a tmpfs, so
-that scratch would have come out of RAM.
-
-This is why no checker is disabled for volume: report size no longer drives CI
-cost, and the point of the report is a complete database of problems to fix.
-
-#### Rendering needs the sources
-
-Rendering needs the analyzed sources at the same absolute paths the legs used,
-which is why this job runs in the ci-test container with `setup-job` installing
-the wheel, rather than on a bare `ubuntu-latest`. Two roots cover everything:
-`/opt/venv/...` (16,829 of the 19,835 unique findings, wheel-installed headers)
-and `/work/...` (3,006, the checkout). Skip the sources and `--export html`
-silently produces `index.html` and `statistics.html` with **zero** finding pages
-— measured, not assumed, which is what an earlier attempt to merge on
-`ubuntu-latest` got wrong.
-
-The exception is the generated JIT glue, which is analyzed (see below) but lives
-in the kernel cache on the test runner, and only plists are uploaded. Those
-findings therefore appear in the tables and statistics with no browsable source.
-
-The JSON export runs before the render and uploads unconditionally: it is the
-machine-readable form of the same data, and it is what to point an agent at.
+**The JSON export runs before the render and uploads unconditionally.** It is
+the machine-readable form of the same data and the thing to point an agent at.
+`findings.json` is a slimmed projection of it; CodeChecker's own export carries
+bug paths and macro expansions and runs to ~124 MB, over GitHub's 100 MB
+per-file limit, so it stays in the artifact and is excluded from the published
+site.
 
 ### Why not the simulator legs?
 
-Capturing on a `sim_*` leg instead of hardware looks appealing — only the
-compile commands matter, not the device result — but it was tried and
-abandoned; the tidy steps skip `sim_*` SKUs. Three independent blockers:
+Only the compile commands matter, not the device result, so a `sim_*` leg looks
+appealing. It does not work, and the tidy steps skip those SKUs. Sim runs
+pytest-xdist `-n 4`, and xdist workers use their stdout as the execnet RPC
+channel, so the logged compile commands never reach the run log. Serializing the
+leg fixes that but forfeits the parallelism sim most needs — and ttsim runs slow
+dispatch, so tests needing trace or fast dispatch skip themselves: a serialized
+sim leg captured zero commands. Sim is also 10-50x slower per op on cloud
+runners, against a capture leg that is already slow by design.
 
-* **pytest-xdist.** Sim legs run `-n 4`, and xdist workers use their stdout as
-  the execnet RPC channel, so raw C++ stdout (tt-logger's default sink, and
-  with it the logged compile commands) never reaches the run log. Serializing
-  the leg does fix that — the repo-wide `-s` in `pytest.ini` keeps stdout
-  uncaptured in-process, which is why the HW capture works at all — but it
-  forfeits the parallelism sim needs most. `TT_LOGGER_FILE` is not a way
-  around it: the file sink opens with truncate, so each xdist worker and each
-  pytest invocation of a multi-command test group would wipe the previous
-  capture.
-* **Slow dispatch.** ttsim runs slow dispatch, so tests needing trace or fast
-  dispatch skip themselves ("not working for slow dispatch"). Verified in run
-  33931876161: a serialized `trace allocation tracker [sim_wh_n150]` leg
-  passed in ~2 minutes having skipped every device test — **0 captured
-  commands**. It also means the dispatch kernels that dominate a hardware
-  capture are never built under sim.
-* **Cost.** Sim is 10-50x slower per op on cloud runners (sim group timeouts
-  are 40-60 min against 10 for the same group on HW), and the capture leg is
-  already slow by design (`TT_METAL_FORCE_JIT_COMPILE=1`, every kernel cache
-  defeated).
+## Checker selection and scoping
 
-### Checker selection and scoping
+Both are driven by `tt_metal/jit_build/kernel_clang_tidy/codechecker.json`, not
+by a check list in `.clang-tidy`.
 
-Both are driven by CodeChecker, in
-`tt_metal/jit_build/kernel_clang_tidy/codechecker.json`, not by a check list in
-`.clang-tidy`.
+**Selection** is `--enable-all` minus a short `--disable` list. `--enable-all`
+is not literally all: of the 1,510 checkers CodeChecker knows, 1,288 run, and 50
+of the rest are excluded by `--enable-all` itself because they carry
+`profile:extreme`. That exclusion is silent and worth remembering when a checker
+seems absent — `google-readability-casting` is one such (see below).
 
-**Selection** is `--enable-all` minus a short `--disable` list. Note that
-`--enable-all` is not literally all: of the 1,510 checkers CodeChecker knows,
-1,288 run. Of the 222 that do not, 128 are the disables below, 44 are aliases of
-a disabled original, and **50 are excluded by `--enable-all` itself** because
-they carry the `profile:extreme` label, which it skips by design. 492 checkers
-carry that label in total, so most of them are disabled for other reasons as
-well, but the exclusion is silent and worth knowing about — see the note on
-old-style casts for a case where the checker behind it is the more useful one. Twelve of the entries are whole families that
-cannot apply to bare-metal RISC-V device code — `abseil`, `altera`, `android`,
-`boost`, `darwin`, `fuchsia`, `linuxkernel`, `llvmlibc`, `mpi`, `objc`,
-`openmp`, `zircon` — 72 checkers between them. The other three are specific to
-this domain:
+Twelve entries are whole families that cannot apply to bare-metal RISC-V device
+code (`abseil`, `altera`, `android`, `boost`, `darwin`, `fuchsia`,
+`linuxkernel`, `llvmlibc`, `mpi`, `objc`, `openmp`, `zircon` — 72 checkers
+between them). The rest are specific to this domain:
 
 | Disabled | Reason |
 | --- | --- |
-| `hicpp-no-assembler` | Inline asm is pervasive in `tt_metal/hw/inc` and tt-llk; recorded at 242K hits under the previous flow. |
+| `hicpp-no-assembler` | Inline asm is pervasive in `tt_metal/hw/inc` and tt-llk. |
 | `portability-simd-intrinsics` | SFPI *is* a SIMD intrinsics layer, by design. |
 | `clang-diagnostic-c++98-compat` | Device code is C++17/20. |
-| `performance-enum-size` | Measured zero saving on every enum it flags that is actually stored; see below. |
-| `bugprone-easily-swappable-parameters` | Every device API parameter is `uint32_t`, so it fires on nearly every function (`llk_unpack_AB`, `tilizeA_B_reduce_init`). 1,410 findings whose only fix is strong-typedef wrappers across the whole ABI. |
-| `clang-diagnostic-unsafe-buffer-usage` | The C++ Safe Buffers profile, 1,315 findings carrying just two distinct messages, both "unsafe buffer access" with no specifics. It wants `std::span` for all pointer arithmetic, but kernels address L1 at fixed hardware addresses through raw pointers, which a span cannot represent. |
-| `clang-diagnostic-unused-parameter` | Redundant: 846 of its 907 findings share an exact file, line *and* column with `misc-unused-parameters`, which is kept because it also carries an auto-fix. Costs 61 unique positions. |
-| `prefix:cert` | Every one of the 41 `cert-*` checks is an alias, so the prefix removes no capability; 461 of the 463 findings it drops are reported at an identical position under the aliased original. See the note on alias duplication for the two it does cost. |
-| `clang-diagnostic-reserved-identifier` | The third name for a rule `bugprone-reserved-identifier` already covers. Its only 3 unique findings are the linker-mandated `_start` entry symbol. |
-| `clang-diagnostic-documentation` | 561 of its 642 findings object to a documented LLK convention, in comments no docs build reads; see below. |
-| `clang-diagnostic-extra-semi-stmt` | 96% of its 347 findings are macro idioms where the semicolon is required, including macros that expand to nothing by design; the ~21 real ones were fixed in #55658. See below. |
+| `prefix:cert` | All 41 `cert-*` checks are aliases, so the prefix removes no capability; 461 of the 463 findings it drops are reported at an identical position under the aliased original. |
+| `clang-diagnostic-reserved-identifier` | A third name for what `bugprone-reserved-identifier` already covers. Its 3 unique findings are the linker-mandated `_start`. |
+| `clang-diagnostic-unused-parameter` | 846 of its 907 findings share an exact position with `misc-unused-parameters`, which is kept because it also carries a fix-it. |
+| `modernize-use-trailing-return-type` | Pure style, 1,182 findings; tt-umd mutes it too. |
+| `bugprone-easily-swappable-parameters` | Every device API parameter is `uint32_t`, so it fires on nearly every function. 1,410 findings whose only fix is strong-typedef wrappers across the whole ABI. |
+| `clang-diagnostic-unsafe-buffer-usage` | Wants `std::span` for all pointer arithmetic, but kernels address L1 at fixed hardware addresses through raw pointers. 1,315 findings carrying two distinct messages, neither specific. |
+| `clang-diagnostic-documentation` | 561 of its 642 findings object to LLK's prescribed `@param name:` style — clang reads the colon as part of the parameter name — in comments no docs build parses (`docs/Doxyfile` names no tt-llk path). |
+| `clang-diagnostic-extra-semi-stmt` | 96% of its 347 findings are function-like macros invoked in statement position (`v_endif;` and friends), where the semicolon belongs to the call site and some macros expand to nothing by design. |
+| `performance-enum-size` | Measured zero saving. Of 86 enums flagged, most are never the type of a stored field; the ~5 that are either pad back to the same size or are ABI contracts whose offsets are fixed by `static_assert`. |
+| `modernize-avoid-c-arrays` | 21,785 findings, 98.3% of them generated `chlkc_descriptors.h` tables. `std::array` is available and used in device code, but measured on those tables the cost is the header, not the type: `<array>` is ~42 ms per TU to parse against ~0.5 ms to convert, and kernels compile at runtime. |
 
-Two more are muted on volume. `modernize-use-trailing-return-type` (1,182
-findings) is pure style and tt-umd mutes it too.
+Nothing else is muted, and volume alone is not a reason to mute: deduplication,
+not disabling checkers, is what keeps the report affordable, and the point of it
+is a complete database of problems to fix.
 
-`modernize-avoid-c-arrays` (21,785 findings, 35% of the whole report) is muted
-for a measured reason rather than a stylistic one. It is not that the codebase
-merely prefers C arrays: 98.3% of its findings are in generated JIT code, almost
-all in `chlkc_descriptors.h`, which emits ~23 constexpr tables per kernel variant
-across 451 kernel names. Only 364 findings are in hand-written code, and the
-checker collapses to 377 distinct locations.
+`take-config-from-directory` must stay off, or CodeChecker returns an empty
+checker list (`clangtidy/analyzer.py:471`) and every `--enable`/`--disable` is
+inert.
 
-The reason not to act on it is compile time, which matters here because kernels
-are compiled at runtime. `std::array` is available and already used in device
-code (15 files in `tt_metal/hw/inc`, 14 in tt-llk, 43 of 1,475 ttnn kernel
-files), so this is not a capability limit. But measured on 23 constexpr integer
-tables, the cost is almost entirely the header, not the type:
+`clangsa` is deliberately not enabled yet. Nothing path-sensitive runs today,
+and on riscv32 code leaning on SFPI's analysis-fallback builtins it may report
+false positives from the intrinsic stubs; it is a follow-up once the
+`--enable-all` volume is understood.
 
-| Translation unit | g++ | clang |
-| --- | --- | --- |
-| C arrays, no `<array>` | 14.4 ms | 30.6 ms |
-| `#include <array>` alone | 56.4 ms | 84.4 ms |
-| C arrays with `<array>` already included | 56.4 ms | — |
-| `std::array` tables | 56.9 ms | 86.7 ms |
+**Scoping** is `--skip <skiplist> --drop-reports-from-skipped-files`. The
+skiplist is preferred to `HeaderFilterRegex` because it also drops
+`clang-diagnostic-*` findings, which a header filter structurally cannot, and it
+keeps scope in one reviewable file. It is exclusion-only, and an allow-list is
+not an option: the TUs are the firmware wrappers under
+`tt_metal/hw/firmware/src/` with kernels `#include`d into them, so no TU path
+contains `kernels/` and an allow-list keyed on it would analyze nothing.
+Exclusion-only also fails open as new in-repo device directories appear. The
+list now covers only upstream SFPI and host libc.
 
-Pulling in `<array>` costs ~42 ms per TU on g++; converting the tables once it is
-present costs ~0.5 ms. A cache-missing JIT build of twenty-odd TUs would pay
-close to a second of runtime compile if this newly introduced the header, for
-constexpr tables that only generated code indexes. Whether it *would* introduce
-it is unresolved: every firmware wrapper transitively reaches 5 or 6 headers that
-include `<array>`, but several are conditional (`device_print.h` is DPRINT-gated,
-`compile_time_args.h` is prolog-emitted only for named-arg kernels,
-`dataflow_buffer.h` guards its include with `__has_include`). Settling it needs
-`g++ -H` on a captured compile command in the CI container.
+**SFPI headers are demoted to `-isystem` during capture**, which is what
+actually saves analysis time; the skiplist only discards findings the analyzer
+has already produced. The device build passes `-I /opt/tenstorrent/sfpi/include`
+while every other SFPI path already arrives as `-isystem`, so clang-tidy treats
+`sfpi.h` as first-party — the same distinction CMake's `SYSTEM` keyword draws for
+host dependencies. `-isystem` is the only lever available, because CodeChecker
+forces `HeaderFilterRegex=".*"` whenever no `--analyzer-config` is given
+(`clangtidy/analyzer.py:665`), and clang-tidy's `SystemHeaders` defaults to false
+independently of it. The parse still happens — the TU needs the AST — but
+diagnostic matching and fix-it construction do not. The rewrite is in the capture
+script, so it cannot affect the device build, and the skiplist keeps its SFPI
+entry as a backstop since `clang-diagnostic-error` can still surface from system
+headers.
 
-`performance-enum-size` (88 findings) is disabled on a different basis again:
-not volume, and not that the advice is unwelcome, but that it buys nothing here.
-Of the 86 distinct enums it flags, 48 are never used as the type of a declared
-variable at all — they are constant namespaces whose values get assigned into
-explicitly sized fields elsewhere. Most of the remainder are template non-type
-parameters or `constexpr` values, which occupy no storage at runtime, or
-host-side classes under `tt_metal/api`. Around five are genuinely fields in
-device structs, and those measure out at zero. `EriscDynamicEntry` goes 24 B to
-24 B, because its neighbours are 8-byte-aligned `RiscTimestampV2` unions and the
-alignment padding absorbs the saving. `RouterStateManager` shrinks 32 B to 26 B
-only by moving `command` from offset 16 to 13, which breaks a host/device
-contract on a struct that documents both widths and pads the two fields 16 bytes
-apart so each side can write its own; preserving the offsets returns it to 32 B.
+**The generated JIT glue in the kernel cache is analyzed on purpose.**
+`genfiles.cpp` emits the `chlkc_*` prologs, the `kernel_main()` shim and the
+`chlkc_descriptors.h` tables, and a generator emitting bad code is a bug worth
+filing. One consequence is accepted: cache paths embed the kernel name and two
+content hashes, so a single generator defect lands once per kernel variant
+instead of collapsing under deduplication. If that becomes unmanageable, the fix
+is to canonicalise cache paths during the merge, not to stop looking. Kernel
+coverage is unaffected either way — kernels resolve to wheel or checkout paths.
 
-The codebase already applies the underlying advice wherever it does pay. The
-launch message stores `volatile uint8_t mode` rather than the `dispatch_mode`
-enum type, `enum noc_mode : uint8_t` sits directly beside the unfixed
-`noc_index`, `DynamicStatistics` is a `uint8_t` bitmask, and the fabric packet
-header derives `HopMaskType` through `std::conditional_t` on hop count under
-`static_assert(sizeof(LowLatencyPacketHeaderT<0>) == 48)`. Layouts that matter
-here are hand-specified because they are ABI, and the enums this checker reaches
-are the ones that belong to no layout.
-
-Nothing else is muted for volume — see
-[Report consolidation](#report-consolidation) for why finding count no longer
-drives CI cost.
-
-Everything else is on. This replaced an inherited 189-entry opt-out list (13
-families plus 176 individual checks) carried over from the `kernel_clang_tidy`
-CMake target in PR #37252, which had been assembled by muting whatever fired
-under that static flow and never re-triaged. It had `clang-analyzer-*` off
-wholesale along with `bugprone-narrowing-conversions`,
-`bugprone-integer-division`, `bugprone-too-small-loop-variable`,
-`bugprone-sizeof-expression`, `misc-const-correctness` and
-`performance-no-int-to-ptr` — close to the bug classes device code most wants.
-Note that `take-config-from-directory` must stay off for any of this to take
-effect: with it set, CodeChecker returns an empty checker list
-(`clangtidy/analyzer.py:471`) and every `--enable`/`--disable` is inert.
-
-**Scoping** is `--skip <skiplist> --drop-reports-from-skipped-files`, which
-replaced `HeaderFilterRegex`. Two reasons the skiplist is the better mechanism
-here: it also drops `clang-diagnostic-*` findings, which a header filter
-structurally cannot (hence the SFPI and glibc parse noise in earlier reports),
-and it keeps scope in one reviewable file. The list is exclusion-only — the
-same shape as tt-umd's `.codechecker.skiplist` — and now covers only upstream
-SFPI and host libc, neither of which is fixable in this repo.
-
-**SFPI headers are demoted to `-isystem`**, which is the mechanism that actually
-saves analysis time; the skiplist only discards findings after the analyzer has
-already produced them. The device build passes `-I /opt/tenstorrent/sfpi/include`
-while every other SFPI path already arrives as `-isystem`, so clang-tidy treated
-`sfpi.h` as first-party and reported on it — the same distinction CMake's
-`SYSTEM` keyword draws for host dependencies like nlohmann/json.
-`build_kernel_clang_tidy_commands.py` rewrites it during capture (21 of 44
-entries on a sample leg, the compute TUs; project `-I` flags are untouched), so
-this is analysis-only and cannot affect the device build.
-
-This matters more than it looks. CodeChecker forces `HeaderFilterRegex=".*"`
-whenever no `--analyzer-config` is given (`clangtidy/analyzer.py:665`), so every
-non-system header is fair game; `-isystem` is what takes SFPI back out, since
-clang-tidy's `SystemHeaders` defaults to false and is not overridden by the
-header filter. Measured on a synthetic 4,000-function vendor header, moving it
-from `-I` to `-isystem` took clang-tidy from **1.93s and 23,834 warnings to
-0.10s and 2**. That is a pathological density and an upper bound, not a
-prediction for SFPI, but the mechanism is the point: the parse still happens
-because the TU needs the AST, while diagnostic matching, fix-it construction and
-message rendering do not.
-
-The skiplist keeps its SFPI entry as a backstop, since `clang-diagnostic-error`
-and friends can still surface from system headers.
-
-The machine-generated JIT glue in the kernel cache used to be excluded too, on
-the grounds that findings there belong to the generator rather than the output.
-That was the wrong call: `genfiles.cpp` emits the `chlkc_*.cpp` prologs, the
-`kernel_main()` shim for `TT_KERNEL`-tagged entries and the
-`chlkc_descriptors.h` format tables, and a generator emitting bad code is a bug
-worth filing. It is analyzed now. Two consequences are accepted deliberately:
-cache paths embed the kernel name and two content hashes, so one generator
-defect lands once per kernel variant instead of collapsing under deduplication;
-and those findings have no browsable source in the report, per the note above.
-If the volume proves unmanageable, the fix is to canonicalise cache paths during
-the merge and ship one representative copy of the generated tree — not to stop
-looking. Note this does not affect coverage of the kernels themselves, which
-resolve to wheel or checkout paths and were always analyzed.
-
-Worth knowing why an
-allow-list is not an option here: the translation units are the firmware
-wrappers under `tt_metal/hw/firmware/src/`, with kernels `#include`d into them,
-so no TU path contains `kernels/` and an allow-list keyed on it would analyze
-nothing at all. Exclusion-only also fails open as new in-repo device
-directories appear.
-
-**Per-path exceptions** are the fourth mechanism, and the right one when a
-checker is correct in general but wrong about a specific construct.
-`tt_metal/jit_build/kernel_clang_tidy/review_status.yaml` assigns a review status
-to findings matched by `filepath` (an fnmatch glob), `checker_name` (exact) or
-`report_hash` (prefix). `parse` defaults `--review-status` to
+**Per-path exceptions** are the right mechanism when a checker is correct in
+general but wrong about a specific construct.
+`tt_metal/jit_build/kernel_clang_tidy/review_status.yaml` assigns a review
+status to findings matched by `filepath` (an fnmatch glob), `checker_name`
+(exact) or `report_hash` (prefix). `parse` defaults `--review-status` to
 `confirmed,unreviewed`, so anything marked `intentional` or `false_positive`
-drops out of the HTML report, `findings.json` and the statistics alike: the
-filter runs before the exporter picks a format
-(`codechecker_analyzer/cli/parse.py:646`, CodeChecker 6.27.1). The schema key is
-`$version`, not `version`, which `--help` does not mention.
+drops out of the HTML report, `findings.json` and the statistics alike. The
+schema key is `$version`, not `version`, which `--help` does not mention.
 
-It is applied by the consolidate job, which copies the file into the merged
-report directory, rather than by the legs via `analyze --review-status-config`.
-`parse` reads `review_status.yaml` out of whatever directory it is handed, so an
-exception can be added or withdrawn by re-running one job instead of sixteen
-hardware legs. The cost is that suppressed findings are still analyzed, which for
-the one rule below is immaterial.
+The consolidate job applies it by copying the file into the merged report
+directory, rather than the legs applying it at analyze time, so an exception
+costs one job re-run instead of sixteen hardware legs. Suppressed findings are
+still analyzed. Two rules qualify today:
 
-That rule is `bugprone-suspicious-include` (1,488 findings), which objects to
-`#include`ing a `.cpp` — exactly how the JIT builds a kernel. `kernel_includes.hpp`
-(687) and the `chlkc_{math,pack,unpack}.cpp` prologs (798) pull the kernel body in
-as a source file, and `chlkc_list.h` (3) does the same in-repo. Two globs,
-`*/kernel_includes.hpp` and `*/chlkc_*`, cover all 1,488 exactly while leaving the
-21,550 findings other checkers report in those same files visible, which a
-`--disable` would not.
+* `bugprone-suspicious-include` on `*/kernel_includes.hpp` and `*/chlkc_*`
+  (1,488 findings). Including a `.cpp` is exactly how the JIT builds a kernel.
+  The globs cover all 1,488 while leaving the 21,550 findings other checkers
+  report in those same files visible, which a `--disable` would not.
+* `modernize-macro-to-enum` on `*/hw/inc/internal/*` (3,968 findings, every one
+  of them under that path, 3,181 in `cfg_defines.h` alone). Those are Tensix
+  register definitions that track the hardware and are tested with `#if`, where
+  an enum is invisible to the preprocessor.
 
-The second rule is `modernize-macro-to-enum` (3,968 findings), and it is the
-cleanest scoping case in the report: **every** finding, without exception, is
-under `*/hw/inc/internal/*`, the Tensix register and configuration headers, with
-`cfg_defines.h` alone holding 3,181 of them and `noc_overlay_parameters.h`,
-`tensix.h`, `noc_parameters.h` and `dev_mem_map.h` accounting for most of the
-rest. Those headers track the hardware rather than being hand-maintained, and the
-macros in them are tested with `#if`, where an enum is invisible to the
-preprocessor — so the suggested change is not merely unwelcome but incorrect. The
-checker stays enabled everywhere else, which a `--disable` would not allow.
+The bar is that the finding is *wrong about this code* — not that it is
+unwelcome or numerous — and that it is scopable by path.
+`readability-magic-numbers` (2,567) fails the first test: it concentrates in
+SFPU polynomial coefficients, tile geometry and Tensix instruction encodings,
+and bit positions are precisely what should be a named constant.
+`performance-no-int-to-ptr` (694) and `clang-diagnostic-old-style-cast` (766)
+fail the second, their top five files holding only 13-29% of their findings.
+`misc-non-private-member-variables-in-classes` (416) fails both: roughly 115
+findings are genuine hardware layouts with `sizeof`/`offsetof` asserts, but the
+rest are ordinary classes carrying dozens of member functions, and the two kinds
+are mixed within single files.
 
-The bar for a rule is that the finding is wrong about this code — not that it is
-unwelcome or numerous — and that it is scopable by path. Most volume candidates
-fail one of those. `readability-magic-numbers` (2,567) was proposed for an
-exception on the grounds that it fires on register offsets and bit positions, and
-the data did not support it: only 5% is generated, and the concentrations are SFPU
-polynomial coefficients (`ckernel_sfpu_trigonometry.h`, 139), tile geometry in
-dataflow helpers (`moreh_common.hpp`, 159 — `1024`, `16`, `>> 16`) and Tensix
-instruction encodings (`tensix_functions.h`, 102 — `(addr_mode << 15) |
-(zero_write << 12)`). Bit positions are precisely what should be a named constant,
-so the checker is right. The one arguable case is the NOC coordinate table in
-`eth_chan_noc_mapping.h` (65), which is tabular data whose shifts are already
-named, and 65 findings do not justify a rule. `performance-no-int-to-ptr` (694) and
-`clang-diagnostic-old-style-cast` (766) fail the scoping test instead — their top
-five files hold 13–29% of their findings, so any path glob would be arbitrary.
-`readability-uppercase-literal-suffix` (3,766) failed it too, but turned out to be
-addressable through a check option instead; see below.
-
-`clang-diagnostic-documentation` (642) is disabled because the great majority of
-it disputes a deliberate house style rather than reporting a defect. 561 findings
-are the two messages `parameter 'X:' not found in the function declaration` and
-its `@tparam` twin — note the trailing colon inside the quotes. The LLK headers
-write `@param name: description`, and clang takes `name:` including the colon as
-the parameter name, so it never matches. The documentation is correct; clang even
-emits `did you mean 'name'?` alongside.
-
-That style is prescribed, not accidental.
-`tt_metal/tt-llk/.claude/references/doxygen-style.md` states "The codebase uses
-`@param name: description` (colon after the name). Match it.", and PRs #45825 and
-#45841 bulk-applied it to the Blackhole and Wormhole `llk_lib` on that basis.
-Since the file is agent guidance, a report telling an agent to delete the colons
-directly contradicts the instructions the same agent reads, which is the more
-expensive failure mode. It also costs nothing today: `docs/Doxyfile` uses an
-explicit INPUT list with `RECURSIVE = NO` and names no `tt-llk` path, so no
-documentation build parses these comments.
-
-Three routes were considered before disabling. A narrower compiler flag does not
-exist — `-Wdocumentation`'s only sub-groups are `-Wdocumentation-html` and
-`-Wdocumentation-deprecated-sync`, and the parameter-mismatch diagnostic sits in
-the parent with no separate switch. A `review_status.yaml` rule on `*/tt-llk/*`
-and `*/llk_api/*` would have scoped it well, the colon findings being 98%
-concentrated there, at the cost of 9 genuine findings in those paths. Removing
-the colons would be mechanical rather than manual, since clang emits applicable
-FixIts, but it needs the style guide changed first and is not a call to make from
-a static-analysis report. Disabling was chosen over the path rule because the 81
-genuine findings — 41 `@tparam` on a non-template, 11 and 10 real parameter-name
-mismatches, 6 `@return` on a void function, 6 empty paragraphs — did not justify
-carrying the config. Revisit if the LLK convention ever changes.
-
-`clang-diagnostic-extra-semi-stmt` (347) is disabled because the semicolon it
-objects to is, in almost every case, load-bearing. 254 findings are `v_endif;`
-and 7 are `v_endblock;`, the SFPI predication macros, and a further 72 are other
-function-like macro invocations. Together that is 96% of the check, and none of
-it is removable: the macro is invoked in statement position, so the semicolon
-belongs to the call site.
-
-The `PREPROCESS` family in the eltwise kernels shows why a fix is not even
-locally possible:
-
-```c
-#define PREPROCESS(op, ...) P_CAT(PREPROCESS_, HAS_ACTIVATIONS(op))(op, __VA_ARGS__)
-#define PREPROCESS_0(...)          // expands to nothing
-#define PREPROCESS_1(op, cb_pre, cb_post, cb_out, per_core_block_size) \ ...
-```
-
-`PREPROCESS_0` expands to nothing, so in a kernel without activations
-`PREPROCESS(LHS, ...);` reduces to a bare `;` and the diagnostic fires. Deleting
-it would break the `HAS_ACTIVATIONS=1` expansion, which needs it. Suppressing a
-no-op macro this way is idiomatic C, and clang offers no way to mark a macro as
-legitimately empty.
-
-That left ~21 genuine stray semicolons, all of them a null statement after a
-`switch` block or an empty spin loop:
-
-```cpp
-while (semaphore_read(semaphore::MATH_PACK) > 0)
-{
-}; // Wait for previous packs to finish before claiming all dest
-```
-
-Those were fixed upstream in #55658 rather than suppressed — they were spread
-over 11 device headers (`ckernel_defs.h`, `llk_math_common.h`, `ckernel_debug.h`,
-`dataflow_api_addrgen.h`, `stream_interface.h`) and are a one-character change
-each. With them gone the check reports nothing that can be acted on, so it is
-muted rather than left to contribute 300-odd permanent findings.
-
-**Rejected: `misc-non-private-member-variables-in-classes`** (416) is recorded
-here because it looks like the same kind of candidate and is not. The premise
-would be that device structs are memory layouts rather than encapsulated types,
-which holds for a good number of them — `fabric_edm_packet_header.hpp` (34
-findings, 25 `sizeof`/`offsetof` asserts), `edm_fabric_counters.hpp` (26, no
-member functions at all), `ckernel_addrmod.h` (27 designated-init aggregates),
-`tensix_types.h` (13). That is around 115 findings where public data is the
-point.
-
-The remainder are ordinary classes. `worker_sync_utils.hpp` (29) holds
-`OpSignaler`, which has ten member functions and public state with default
-initializers; `edm_fabric_worker_adapters.hpp` (20) has 49 member functions and
-`compute_streaming.hpp` (9) has 147. Public data there is arguable technical
-debt, not a hardware constraint, and the checker is right to say so.
-
-Nor does it scope by path, which is what a `review_status.yaml` rule would need.
-The 416 findings span 38 files across `fabric`, `ccl`, `tt-llk`, `hw/inc` and the
-TTNN kernel trees, and layouts and behaviour classes are mixed *within* files —
-`ckernel_addrmod.h` reads as a behaviour-heavy file by member-function count, yet
-all 27 of its findings are on genuine aggregates. Left enabled in full.
-
-**Not acted on: `clang-diagnostic-old-style-cast`** (766). Recorded because the
-analysis is easy to redo badly. Of the 546 findings that resolve to a concrete
-cast, 73% are value conversions that would become `static_cast` — `(uint32_t)`
-alone is 170 — and 27% are pointer casts that would become `reinterpret_cast`,
-led by `(tt_l1_ptr uint32_t*)` at 72; 99 involve `tt_l1_ptr`/`tt_reg_ptr` and 26
-`volatile`.
-
-The case for converting is not that the C++ spelling is prettier, because it is
-longer. It is that the two groups are written identically today: `(uint32_t)x`
-narrows a value and `(tt_l1_ptr uint32_t*)addr` reinterprets an integer as an L1
-pointer, with the alignment and aliasing consequences that implies. Converting
-separates them by name and makes the second greppable, which a C-style cast
-never is — worth something in a codebase where `performance-no-int-to-ptr` finds
-694 such conversions.
-
-If it is ever taken on, switch checker first. The compiler diagnostic emits one
-message, "use of old-style cast", with no fix. `google-readability-casting`
-covers the same ground, names the replacement (`use static_cast`,
-`use reinterpret_cast`) and emits FixIts for the mechanical cases, while
-deliberately declining to fix integer-to-pointer casts — those get an ambiguous
-`use static_cast/const_cast/reinterpret_cast` and no replacement, which puts the
-risky quarter in front of a human by construction. It is off here only because
-it carries `profile:extreme`; one `--enable` line turns it on.
-
-**Fixed in the generator, not the config.**
-`clang-diagnostic-missing-prototypes` (542) is the largest diagnostic remaining,
-and 461 of it is one fact repeated per translation unit: kernels define
-`kernel_main()` at global scope and nothing declares it first. The situation is
-benign — the firmware calls it from the *same* TU, since the generated header
-`#include`s the kernel body into it — so only the declaration was missing.
-`get_kernel_source_to_include()` now emits `void kernel_main();` ahead of the
-body (#55659); both entry paths share that helper, so one line covers
-`kernel_includes.hpp` and all four `chlkc_*.cpp`.
-
-Worth recording why a declaration and not `static`, since `static` is the more
-obvious reading of the warning and needs no kernel edits either — a `static`
-forward declaration alone gives the later definition internal linkage:
-
-| | warning | `kernel_main` in ELF | `.text` |
-| --- | --- | --- | --- |
-| today | 1 per TU | present | — |
-| `void kernel_main();` | none | present | 4,431 B |
-| `static void kernel_main();` | none | gone, inlined away | 4,423 B |
-
-With a single in-TU call site the compiler inlines the body at `-O2` and the
-symbol leaves the ELF, which breaks `tt_metal/tools/dump-consts.py`
-(`--function=kernel_main`) and `llk-audit`, whose `registry.py` sets
-`KERNEL_ENTRY_NAMES = ("kernel_main",)`. Internal linkage also buys nothing:
-the definition is already in the caller's TU, so the optimiser has full
-visibility regardless, and the out-of-line copy it would let us drop measured 8
-bytes. The remaining 81 findings are genuine — `run` (12), `_start` (3,
-linker-mandated) and header helpers such as `recip_block_inplace` and
-`copy_block` in `compute_common.hpp` that want `static` or `inline` where they
-are defined.
-
-**Alias duplication** is a side effect of `--enable-all` worth knowing about,
-because it inflates the report without adding problems. Aliased checkers report
-the same diagnostic under a second name, and reserved identifiers were the worst
-case: `bugprone-reserved-identifier`, `cert-dcl37-c`, `cert-dcl51-cpp` and
-`clang-diagnostic-reserved-identifier` between them contributed 886 findings for
-228 distinct problems, the two cert names being aliases of the same check.
-Report-wide, 461 of the 464 findings from alias-prefixed checkers shared an
-exact file, line and column with a non-alias checker.
-
-All 41 `cert-*` checks clang-tidy offers are aliases — checked against the
-upstream checks list, none is standalone — so `prefix:cert` cannot disable a
-capability. It does cost exactly two findings, and the reason is worth recording
-because it is not obvious: some cert aliases ship *stricter defaults* than the
-check they alias. `cert-oop54-cpp` is `bugprone-unhandled-self-assignment` with
-its "only if the class has a suspicious field" guard off, and `cert-dcl59-cpp`
-relates similarly to `misc-anonymous-namespace-in-header`; both originals report
-nothing at default options, so both findings disappear with the prefix. That was
-accepted for a one-line config against two findings in ~24,000. If either
-construct ever matters, the fix is to configure the original checker rather than
-to re-enable `cert-*` and take the 461 duplicates back.
-
-`clang-diagnostic-reserved-identifier` (202) is disabled for the same reason,
-leaving `bugprone-reserved-identifier` as the single name for the rule. It is not
-a clean subset — 199 of its positions are shared, 3 are unique to it and 29 to
-the other — but all three of its unique findings are the firmware entry symbol
-`_start`, in `brisck.cc`, `trisck.cc` and `idle_erisck.cc`. That name is dictated
-by the linker, so the cost of dropping the diagnostic is nil.
-
-**Check options are the quietest suppressor here**, so they are worth reading as
-carefully as the `--disable` list. Nothing readability- or complexity-related is
-disabled, but ten options retune six checks. Five were mirrored verbatim from
-the repo's root host `.clang-tidy` ("mirror host .clang-tidy strategy for kernel
-checks") rather than chosen for device code:
+**Check options** retune six checks. Three values are inherited from the repo's
+root host `.clang-tidy`; the rest are chosen for device code.
 
 | Option | clang-tidy default | Ours |
 | --- | --- | --- |
-| `readability-function-cognitive-complexity.Threshold` | 25 | 25 (was 312) |
-| `readability-function-cognitive-complexity.IgnoreMacros` | false | false (was true) |
+| `readability-function-cognitive-complexity.Threshold` | 25 | 25 (host config: 312) |
+| `readability-function-cognitive-complexity.IgnoreMacros` | false | false (host config: true) |
 | `readability-simplify-boolean-expr.SimplifyDeMorgan` | true | false |
 | `readability-else-after-return.WarnOnUnfixable` | true | false |
 | `readability-else-after-return.WarnOnConditionVariables` | true | false |
@@ -715,183 +299,87 @@ checks") rather than chosen for device code:
 | `readability-identifier-length.IgnoredParameterNames` | `^[n]$` | `^(n\|[xyzab]\|[ijk]\|id\|cb\|vc\|[WHCND]t)$` |
 | `readability-uppercase-literal-suffix.NewSuffixes` | (all) | `L;UL;LL;ULL` |
 
-The first two are now back at clang-tidy's defaults, deliberately diverging from
-the host config. At `Threshold=312` with `IgnoreMacros=true`, cognitive
-complexity produced **5 findings out of 62,710** — a 12.5x-loosened threshold
-that also ignored precisely the macro-driven complexity that dominates LLK and
-the SFPU headers. That pairing suits a blocking host gate; it defeats a
-non-blocking report whose purpose is to enumerate problems. Both files state the
-values explicitly so a future "sync with host" edit does not silently undo it.
+Cognitive complexity is the one place that deliberately does *not* follow the
+host config, whose `Threshold=312` with `IgnoreMacros=true` produced 5 findings
+out of 62,710 while ignoring exactly the macro-driven complexity that dominates
+LLK and the SFPU headers. That pairing suits a blocking gate, not a report meant
+to enumerate problems. Both config files restate clang-tidy's defaults
+explicitly so a future "sync with host" edit does not silently undo it.
 
-`modernize-use-auto.MinTypeNameLength` is the one option chosen for this
-codebase rather than inherited. The check fires only on cast initialisers here —
-no `new`, no iterators — and at the default of 5 it reported 2,137 times, 89% of
-them on the kernel runtime-arg preamble, `uint32_t x = get_arg_val<uint32_t>(i)`,
-where the duplication it objects to is eight characters on the same line. The
-option measures the *base* type name, ignoring `const`, `volatile` and `*`, and
-fires when that length is **at least** the threshold — so 9 is the value that
-excludes `uint32_t` (8) while keeping the ~131 sites with a genuinely long name
-to duplicate: `sfpi::vFloat`, `RealtimeProfilerState`, `DataFormat`. Both
-semantics are worth stating because neither is obvious from the documentation and
-an off-by-one leaves the check unchanged.
+`modernize-use-auto.MinTypeNameLength` measures the *base* type name, ignoring
+`const`, `volatile` and `*`, and fires when it is **at least** the threshold. At
+the default of 5 the check reported 2,137 times, 89% of them on the kernel
+runtime-arg preamble `uint32_t x = get_arg_val<uint32_t>(i)`, where the
+duplication it objects to is eight characters on the same line. 9 is the value
+that excludes `uint32_t` (8) while keeping the ~131 sites with a genuinely long
+name to duplicate: `sfpi::vFloat`, `RealtimeProfilerState`, `DataFormat`.
+Compile time played no part — measured front-end only, `auto` costs about a
+microsecond per declaration and the sign flips between compilers.
 
-Compile time was checked before tuning rather than assumed, since kernels build
-at runtime. Measured front-end only on the exact pattern, `auto` costs about a
-microsecond per declaration and the sign flips between compilers — 5,000
-declarations took g++ 182 ms explicit against 187 ms auto, and clang 127 ms
-against 122 ms. At the ~27 declarations a real kernel carries that is tens of
-microseconds, so it played no part in the decision. (`auto` does have a real
-build-time cost as a deduced *return* type, which cannot be forward-declared and
-so pulls definitions into translation units that previously needed only a
-declaration. This check never suggests that.)
+`readability-identifier-length` exempts this domain's vocabulary: NCDHW layout
+letters as loop counters, `Wt`/`Ht` tile dimensions, `cb` for circular buffers,
+`x`/`y`/`z` NOC coordinates, `vc` for virtual channels, `a`/`b` as SFPU binary
+operands. The three lists are separate options because the check scores
+variables, parameters and loop counters separately, and they are deliberately
+asymmetric: `h` is fine as a counter bounded three lines away but not as a
+function-scope variable. Together they take the check from 3,243 findings to
+1,385, leaving the terse-rather-than-conventional names (`s`, `r`, `v`, `p`)
+reported. The blunter `MinimumVariableNameLength=2` was rejected because it
+accepts any two-character name rather than naming what is exempt and why.
 
-`readability-identifier-length` is the other option set chosen here, and it is
-the one place where the check's own defaults are demonstrably mis-tuned for a
-tensor-compute codebase. The three exemption lists are separate options because
-the check treats variables, parameters and loop counters as separate categories
-with separate minimum lengths (3, 3 and 2). Its defaults already exempt `i`,
-`j`, `k` and `_` as counters, `n` as a parameter and `e` as an exception name,
-which is why none of those appear in the report.
+`readability-uppercase-literal-suffix.NewSuffixes` keeps only the l-family. The
+check exists because a lowercase `l` is confusable with `1`, so `1l` reads as
+`11`; no such ambiguity exists for `u` or `f`, which is all this codebase writes
+(2,713 and 1,052, against a single `ul` and no bare `l`). Two non-obvious
+details: each listed suffix is also the *suggested replacement*, so entries must
+be spelled fully uppercase or the fix-it produces `3uL`; and matching is against
+the suffix as written, so an all-uppercase list still catches lowercase literals.
 
-What does appear, 3,243 findings, is dominated by names that are this domain's
-vocabulary:
-
-| Category | Findings | Dominated by |
-| --- | --- | --- |
-| variable | 1,799 | `Wt` (160), `Ht` (113), `N` (82), `in` (77), `cb` (65) |
-| loop variable | 786 | `d` (249), `w` (130), `c` (67), `n` (65), `h` (61) |
-| parameter | 658 | `a` (58), `i` (58), `x` (56), `id` (54), `cb` (41) |
-
-The loop-counter column is the clearest case. `n`, `c`, `h`, `w` and `d` are
-NCHW/NCDHW layout letters, standard across every tensor framework, and the loops
-they index are literally the batch/channel/height/width dimensions;
-`for (uint32_t h = 0; h < Ht; ++h)` reads better than `height_index`, not worse.
-`Wt` and `Ht` ("width/height in tiles") are this repo's own published vocabulary,
-and `cb` is the central abstraction, named in the API itself (`cb_wait_front`,
-`cb_id`). `x`/`y`/`z` are NOC coordinates and `vc` is a virtual channel.
-
-The lists are deliberately asymmetric rather than one shared set. A loop
-counter's meaning comes from its bound three lines away and its scope ends with
-the loop; a variable lives for a whole function and a parameter is read at every
-call site. So `h` is exempt as a counter but still reported as a variable, and
-`a`/`b` are exempt as parameters — where they are conventional binary operands in
-the SFPU math helpers — but still reported as locals. That granularity is real,
-not aspirational: clang-tidy applies each regex only to its own category.
-
-Together these take the check from 3,243 findings to 1,385, a 57% cut, and what
-survives is what the check exists for: `s` (115), `in` (77), `r` (64), `a` (58),
-`s0` (54), `v` (52), plus `p`, `g`, `m`, `l`. Those are terse rather than
-conventional, and no domain argument rescues them.
-
-`readability-uppercase-literal-suffix.NewSuffixes` narrows the third check on the
-same principle: keep the case the check exists for, drop the rest. The check's
-rationale is that a lowercase `l` is confusable with `1`, so `1l` reads as `11`.
-No such ambiguity exists for `u` or `f`, and `u` and `f` are all this codebase
-produces — 2,713 and 1,052 respectively, against exactly one `ul` and not a
-single bare `l`. Listing only the l-family takes the check from 3,766 findings to
-that one, while still catching a future `1l`.
-
-Two things about the option are worth recording because both are easy to get
-wrong. Each listed suffix is also the *suggested replacement*, so the entries
-must be spelled fully uppercase: `L;uL;UL;LL;uLL;ULL` flags the same literals but
-rewrites `3ul` to `3uL`, whereas `L;UL;LL;ULL` yields `3UL`. And matching is
-against the suffix as written, so an all-uppercase list still catches lowercase
-literals; verified by fixing a file holding all seven suffix forms. (Separately,
-`cert-dcl16-c` is an alias of this check that CERT already scopes to the
-l-family. It reports nothing in the current run, but see the note on alias
-duplication.)
-
-The blunter alternative, `MinimumVariableNameLength=2`, was rejected. It
-silences slightly more (860 variable findings against 761) but accepts *any*
-two-character name, including `s0` today and whatever appears tomorrow, whereas
-the regex names what it is exempting and why.
-
-**Check options** go through `--checker-config
-clang-tidy:<checker>:<option>=<value>`, not through a config file. Forwarding
-`--config-file` via `cc-verbatim-args-file` was the first attempt and it fails:
-once `take-config-from-directory` is off, CodeChecker builds its own `-config`
-for clang-tidy (`clangtidy/analyzer.py:509`) and appends our verbatim args
-too, so clang-tidy aborts every TU with "--config-file and --config are
-mutually exclusive". CodeChecker does merge a `-config=<JSON>` supplied in the
-verbatim args, but only matches args starting with `-config`, so
-`--config-file` slips past the merge. `--checker-config` avoids the whole
-problem by landing the options inside that single `-config`, and CodeChecker
-then also defaults `HeaderFilterRegex` to `.*`, which is what we want with the
-skiplist doing the scoping. Verified by reading the built command out of a
-failed-analysis zip: one `-config`, no `--config-file`, every option
-present. `tt_metal/jit_build/kernel_clang_tidy/.clang-tidy` survives only for
-the local `--run` path and mirrors those options.
-
-`clangsa` is deliberately not enabled yet. Nothing path-sensitive runs today,
-and on riscv32 cross-compiled code leaning on SFPI's analysis-fallback
-builtins it may report false positives from the intrinsic stubs; it is a
-follow-up once the `--enable-all` volume is understood.
+Options go through `--checker-config clang-tidy:<checker>:<option>=<value>`,
+never a config file. Once `take-config-from-directory` is off, CodeChecker
+builds its own `-config` for clang-tidy (`clangtidy/analyzer.py:509`), and
+passing `--config-file` alongside it makes clang-tidy abort every TU with
+"--config-file and --config are mutually exclusive".
+`tt_metal/jit_build/kernel_clang_tidy/.clang-tidy` exists only for the local
+`--run` path and mirrors the same options; keep the two in sync.
 
 ## Coverage and known gaps
 
-* **What limits the finding count.** The first all-hardware run should be read
-  with three suppressors in mind, because they explain a surprisingly small
-  number far better than "the kernels are clean". First, coverage is per-leg
-  JIT compiles: a single small group (`trace allocation tracker`) compiled
-  only **8** TUs, against ~2450 kernel sources in the tree — hence wiring
-  every leg. Second, `--dedupe kernel-role` (the default) lints one config per
-  (kernel, RISC target), so the same kernel under many compile-time-arg
-  configurations is analyzed once. Third and largest, the two gates described
-  in [Checker selection and scoping](#checker-selection-and-scoping) were both
-  set far tighter than anyone had reviewed: 189 muted checks including all of
-  `clang-analyzer-*`, and a `HeaderFilterRegex` covering only the `kernels/`
-  directories, which dropped every check finding from some 2000 in-repo device
-  headers (`tt_metal/hw/ckernels` 447, `tt_metal/hw/inc` 378, `tt_metal/tt-llk`
-  1138, `tt_metal/fabric/hw` 55) — where much of the device logic actually
-  lives. Both have since been replaced. Any comparison against the early runs
-  should account for that rather than reading it as a regression.
-* **Colourized log suffix (fixed).** tt-logger appends a `(build.cpp:NNN)`
-  source location, and with colour on it arrives wrapped in SGR escapes:
-  `...idle_erisck.cc \x1b[90m(build.cpp:686)\x1b[0m`. The escapes pushed the
-  suffix off the `$` anchor in `LOG_CMD_RE`, so the strip missed and the whole
-  escape run was spliced into the argv as an extra input file — every captured
-  entry carried it, and `clang++` reported "no such file or directory" once
-  per TU. The parser now strips SGR sequences before matching, with a
-  `--self-test` case covering the colourized form.
-* **Defines containing a space (fixed).** `build.cpp:686` logs the argv as
-  `fmt::join(args, " ")` with no quoting, and ttnn emits a handful of defines
-  whose value holds a space —
-  `-DFILL_WITH_VALUE=fill_with_val<1024, int32_t>`. Those arrived as two tokens,
-  so the macro reached clang as a truncated template-id
-  (`expected '>'`, a `clang-diagnostic-error`) and the remainder became a stray
-  input file. `rejoin_split_defines` merges the fragments while the angle
-  brackets are unbalanced, and leaves them alone if the run does not close
-  before the next option, so a define holding a bare `<` cannot swallow the
-  rest of the command. Two of 81 commands in one leg were affected.
-* **Coverage = what the run compiled.** One test lints one test's kernels; a
-  suite lints what the suite exercises. Kernels (or TRISC roles, or `#ifdef`
-  branches) the run never compiled are not analyzed.
-* **Data-movement / ethernet / dispatch / fabric kernels: parse cleanly** (no
-  SFPI intrinsics involved). Verified on wormhole BRISC reader kernels.
-* **Compute (TRISC) kernels: MATH and UNPACK parse cleanly** against the real
-  `sfpi.h` header stack, thanks to SFPI's shipped analysis fallback
-  (`tensix_builtins.h` + machine-generated `tensix_builtins.def`; present in
-  the pinned SFPI ≥ 7.73.0). **Wormhole PACK TUs currently fail to parse**:
-  `tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_pack.h:393` puts
-  `[[maybe_unused]]` on a template parameter, a GCC extension clang rejects.
-  `ckernel_sfpu_recip.h` has the same pattern. This surfaces in the report as
-  a `clang-diagnostic-error` and is left there deliberately, for the LLK
-  owners to judge: `tt_metal/tt-llk` is part of this repo, so it is fixable
-  here, but the call belongs to them rather than to this tooling change.
-  Until it is resolved, wormhole PACK TUs contribute parse errors instead of
-  check findings.
+* **Coverage is what the run compiled.** One test lints one test's kernels; a
+  suite lints what the suite exercises. Kernels, TRISC roles or `#ifdef`
+  branches the run never compiled are not analyzed. The scale of that matters:
+  one small test group compiled 8 TUs against ~2,450 kernel sources in the tree,
+  which is why every leg captures. `--dedupe kernel-role` then lints one config
+  per (kernel, RISC target).
+* **Wormhole PACK TUs currently fail to parse.**
+  `tt_llk_wormhole_b0/llk_lib/llk_pack.h` and `ckernel_sfpu_recip.h` put
+  `[[maybe_unused]]` on a template parameter, a GCC extension clang rejects, so
+  those TUs contribute a `clang-diagnostic-error` instead of check findings.
+  [#55669](https://github.com/tenstorrent/tt-metal/pull/55669) removes it.
+  Data-movement, ethernet, dispatch and fabric kernels parse cleanly, as do the
+  MATH and UNPACK roles.
 * Blackhole is expected to behave like wormhole (same mechanisms; multilib and
   `-mcpu` mappings are in place) but has not been exercised yet. Quasar is
-  untested and its headers use the same template-parameter-attribute extension
-  in several places.
-* Findings quality: the parse differs from the device build in controlled ways
-  (clang vs GCC, generic `rv32im` instead of the TT cpu model, address-space
-  attributes `rvtt_l1_ptr`/`rvtt_reg_ptr` ignored). Fine for tidy checks;
-  don't expect codegen-dependent diagnostics to be meaningful.
-* The `--disable` list is deliberately short and is not a triage backlog: the
-  report is meant to be a complete database of problems, and deduplication —
-  not muting checkers — is what keeps it affordable. Note that finding *counts*
-  cannot be reproduced locally: the captured translation units reference
+  untested and uses the same template-parameter-attribute extension in several
+  places.
+* **Findings quality.** The parse differs from the device build in controlled
+  ways: clang rather than GCC, generic `rv32im` rather than the TT cpu model,
+  address-space attributes `rvtt_l1_ptr`/`rvtt_reg_ptr` ignored. Fine for tidy
+  checks; codegen-dependent diagnostics are not meaningful.
+* **Finding counts cannot be reproduced locally.** The captured TUs reference
   wheel-installed sources that exist only in the CI container, so a local
-  analyze fails with `no-sources`. The numbers here come from CI plists parsed
-  locally.
+  analyze fails with `no-sources`. The counts quoted here come from CI plists
+  parsed locally.
+* Fixes filed from this report:
+  [#55658](https://github.com/tenstorrent/tt-metal/pull/55658) (stray
+  semicolons), [#55659](https://github.com/tenstorrent/tt-metal/pull/55659)
+  (declare `kernel_main()`, which is 461 of the 542
+  `clang-diagnostic-missing-prototypes` findings — kernels define it at global
+  scope and nothing declares it first),
+  [#55669](https://github.com/tenstorrent/tt-metal/pull/55669)
+  (template-parameter attributes).
+* If `clang-diagnostic-old-style-cast` (766) is ever taken on, switch checker
+  first: the compiler diagnostic emits one message and no fix, whereas
+  `google-readability-casting` names the replacement and emits fix-its for the
+  mechanical cases while declining to auto-fix integer-to-pointer casts. It is
+  off only because it carries `profile:extreme`; one `--enable` turns it on.

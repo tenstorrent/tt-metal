@@ -1,12 +1,11 @@
-# CodeChecker review statuses for kernel (device) code analysis: mark specific
-# findings intentional rather than disabling a checker everywhere. Filters are
-# filepath (an fnmatch glob), checker_name (exact) and report_hash (prefix).
-# The schema key is $version, not version, which --help does not mention.
+# Per-path exceptions: mark specific findings intentional rather than disabling
+# a checker everywhere. Filters are filepath (an fnmatch glob), checker_name
+# (exact) and report_hash (prefix). The schema key is $version, not version,
+# which --help does not mention.
 #
-# Applied by the consolidate job at parse time, so an exception costs one job
-# re-run rather than sixteen hardware legs. When a rule is warranted, and which
-# candidates were rejected, in
-# tech_reports/code-indexing/kernel-clang-tidy.md.
+# Applied by the consolidate job at parse time, so a change costs one job re-run
+# rather than sixteen hardware legs. When a rule is warranted, and which
+# candidates were rejected: tech_reports/code-indexing/kernel-clang-tidy.md.
 
 $version: 1
 
@@ -29,10 +28,9 @@ rules:
       reason: "The JIT includes the kernel body as a source file by design."
 
   # Tensix register and config definitions, derived from the hardware rather
-  # than hand-written; cfg_defines.h alone holds 3,181 of these. An enum cannot
-  # be tested with #if, which these are, and the headers track the RTL. Scoped
-  # rather than disabled because the checker is worth having on kernel code:
-  # all 3,968 findings are under this one path.
+  # than hand-written. An enum is invisible to #if, which these are tested with.
+  # Scoped rather than disabled: all 3,968 findings are under this one path, and
+  # the checker is worth keeping on kernel code.
   - filters:
       filepath: "*/hw/inc/internal/*"
       checker_name: modernize-macro-to-enum

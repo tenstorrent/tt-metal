@@ -13,24 +13,16 @@ Two capture sources are supported:
                      TT_LOGGER_LEVEL=info: jit_build/build.cpp logs the exact
                      compile argv of every kernel ("g++ compile cmd: ...").
                      No interception tooling needed; works in any container.
-  --input FILE       A bear-captured compile_commands.json. Works locally, but
-                     note bear 3.0.x's gRPC-over-localhost intercept channel is
-                     known to fail inside some CI containers ("gRPC call
-                     failed: failed to connect to all addresses"), killing the
-                     wrapped command outright -- which is why the CI flow uses
-                     --input-log instead.
+  --input FILE       A bear-captured compile_commands.json. Local use only:
+                     bear 3.0.x's gRPC-over-localhost intercept channel fails
+                     in containers that set http_proxy, CI's included.
 
-Background
-----------
 Device kernels are JIT-compiled at runtime by tt_metal/jit_build/build.cpp using
-the SFPI cross-compiler (riscv-tt-elf-g++, a GCC). Capturing a real run (with
-TT_METAL_FORCE_JIT_COMPILE=1 so cache hits don't suppress compiles) yields every
-real kernel compile: real compile-time args, real generated headers
-(chlkc_*.cpp, chlkc_descriptors.h, kernel_includes.hpp, defines_generated.h --
-all durable in the tt-metal-cache dir), real defines.
-
-clang-tidy needs *clang* to parse, so this script translates each captured
-SFPI-GCC invocation into an equivalent clang invocation:
+the SFPI cross-compiler (riscv-tt-elf-g++, a GCC), so a captured run yields real
+compile-time args, real defines and the real generated headers (chlkc_*.cpp,
+chlkc_descriptors.h, kernel_includes.hpp, defines_generated.h, all durable in
+the tt-metal-cache dir). clang-tidy needs *clang* to parse, so each captured
+SFPI-GCC invocation is translated into an equivalent clang one:
 
   * compiler -> clang++ with --target=riscv32-unknown-elf -march=... -mabi=...
     (mapped from -mcpu=tt-wh / tt-bh / tt-wh-tensix / ...)
@@ -53,19 +45,18 @@ fallback (include/tensix_builtins.h detects a non-SFPI compiler, defines the
 __xtt_vector types and pulls machine-generated __builtin_rvtt_* declarations
 from tensix_builtins.def). See tt_metal/jit_build/kernel_clang_tidy/README.md.
 
-IMPORTANT: unlike scripts/build_kernel_compile_commands_json.py (the IDE
-indexing flow), this script does NOT rewrite the TU to the user's kernel
-source. The captured TUs are kept as-is (brisck.cc / ncrisck.cc / trisck.cc /
-erisck.cc wrapping the generated per-kernel files), so all three TRISC roles
-(UNPACK/MATH/PACK) stay distinct and the exact real preprocessing context is
-preserved. Findings inside kernel sources surface via --header-filter, since
-the kernel .cpp is #included by the generated wrapper.
+Unlike scripts/build_kernel_compile_commands_json.py (the IDE indexing flow),
+this script does NOT rewrite the TU to the user's kernel source. The captured
+TUs are kept as-is (brisck.cc / ncrisck.cc / trisck.cc / erisck.cc wrapping the
+generated per-kernel files), so all three TRISC roles stay distinct and the real
+preprocessing context is preserved. Findings inside kernel sources surface via
+--header-filter, since the kernel .cpp is #included by the generated wrapper.
 
-Because many entries share the same TU path (e.g. every compute kernel's TU is
-trisck.cc), running plain `clang-tidy -p <dir> <file>` would only analyze ONE
-entry per file. The --run mode therefore invokes clang-tidy per-entry using the
-`clang-tidy <file> -- <flags>` form, with cwd set to the entry's directory so
-the -I. / -I.. generated-file includes resolve exactly like the real compile.
+Many entries share one TU path (every compute kernel's TU is trisck.cc), so
+plain `clang-tidy -p <dir> <file>` would analyze only one entry per file. --run
+therefore uses the `clang-tidy <file> -- <flags>` form per entry, with cwd set
+to the entry's directory so the -I. / -I.. generated-file includes resolve
+exactly as they did in the real compile.
 
 Typical use (see tech_reports/code-indexing/kernel-clang-tidy.md):
 
@@ -150,30 +141,23 @@ NOISE_SUPPRESSIONS = [
 #   <cache>/<key>/kernels/<kernel_name>/<hash>/<target>/
 KERNEL_DIR_RE = re.compile(r"/kernels/(?P<kname>[^/]+)/(?P<khash>[^/]+)/(?P<target>[^/]+)/?$")
 
-# jit_build/build.cpp logs, under TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 (at
-# info level, so the run needs TT_LOGGER_LEVEL=info), two distinct line kinds:
-#   "    g++ compile cmd: <space-joined argv>"   (compile_one, build.cpp)
-#   "    g++ link cmd: cd <dir> && <shell cmd>"  (link,        build.cpp)
-# Only the compile lines are wanted: link commands have no source file and no
-# -c, and feeding one to clang-tidy would error out (or worse, quietly produce
-# a bogus result). This regex matches the literal "g++ compile cmd: " label
-# ONLY, so link lines are discarded at the parse stage. Two further layers
-# enforce the same invariant downstream: entries_from_log requires a .cc/.cpp
-# source token (a link line has only .o/.elf), and is_sfpi_compile requires
-# "-c" present and "-E" absent. Exercised explicitly by --self-test.
+# build.cpp logs two line kinds under TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1:
+#   "    g++ compile cmd: <space-joined argv>"
+#   "    g++ link cmd: cd <dir> && <shell cmd>"
+# Only compiles are wanted; a link fed to clang-tidy errors out or, worse,
+# quietly produces a bogus result. Matching the literal "compile cmd" label
+# discards links here, and two downstream layers enforce the same invariant:
+# entries_from_log requires a .cc/.cpp token, is_sfpi_compile requires -c and
+# rejects -E. All three are exercised by --self-test.
 #
-# The logger appends a "(build.cpp:NNN)" source-location suffix, and when
-# stdout is a terminal (or tt-logger's colour is otherwise on) wraps it in SGR
-# escapes: "...idle_erisck.cc \x1b[90m(build.cpp:686)\x1b[0m". Those escapes
-# push the suffix off the "$" anchor, so the strip below silently misses and
-# the whole "\x1b[90m(build.cpp:686)\x1b[0m" run ends up spliced into the argv
-# as an extra input file -- clang++ then reports "no such file or directory"
-# once per translation unit. Strip SGR sequences before matching.
+# The logger appends a "(build.cpp:NNN)" suffix, wrapped in SGR escapes when
+# colour is on, which would push it past the "$" anchor and leave the escape run
+# spliced into the argv as a bogus input file. Strip SGR before matching.
 #
-# argv elements are joined with single spaces and never quoted, so split() is
-# used rather than shlex, which would eat the literal quotes some defines carry.
-# That loses the boundary for the few defines whose value holds a space;
-# rejoin_split_defines puts those back.
+# argv is joined with single spaces and never quoted, so split() is used rather
+# than shlex, which would eat the literal quotes some defines carry. That loses
+# the boundary for defines whose value holds a space; rejoin_split_defines puts
+# those back.
 ANSI_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
 LOG_CMD_RE = re.compile(r"g\+\+ compile cmd: (?P<cmd>.+?)(?:\s*\(build\.cpp:\d+\))?\s*$")
 
@@ -181,13 +165,12 @@ LOG_CMD_RE = re.compile(r"g\+\+ compile cmd: (?P<cmd>.+?)(?:\s*\(build\.cpp:\d+\
 def rejoin_split_defines(argv):
     """Repair -D values that the log's unquoted join split on a space.
 
-    build.cpp logs argv as fmt::join(args, " "), so a define whose value holds a
-    space arrives as two tokens: ttnn emits several of the form
-    -DFILL_WITH_VALUE=fill_with_val<1024, int32_t>, which reaches clang as a
-    truncated template-id ("expected '>'") plus a stray input file. Rejoin while
-    the angle brackets are unbalanced, and leave the tokens alone if the run does
-    not close before the next option, so a define holding a bare '<' as
-    less-than cannot swallow the rest of the command.
+    ttnn emits defines of the form -DFILL_WITH_VALUE=fill_with_val<1024, int32_t>,
+    which arrive as two tokens and reach clang as a truncated template-id plus a
+    stray input file. Rejoin while the angle brackets are unbalanced, and leave
+    the tokens alone if the run does not close before the next option, so a
+    define holding a bare '<' as less-than cannot swallow the rest of the
+    command.
     """
     out, i = [], 0
     while i < len(argv):
