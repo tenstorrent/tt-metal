@@ -13,48 +13,80 @@ using namespace ckernel::math;
 
 constexpr std::uint8_t FULL_TILE_MVMULS_PER_K_FACE = NUM_FACES * (MAX_FACE_R_DIM / MAX_FPU_ROWS);
 
-// Shape-dependent counter increments for one matmul replay transition.
-struct _llk_math_matmul_transition_t
+// Counter increments programmed into one matmul ADDR_MOD slot.
+struct _llk_math_matmul_step_t
 {
-    std::uint8_t src_a_increment;
-    std::uint8_t src_b_increment;
-    std::uint16_t dest_increment;
+    std::uint8_t src_a;
+    std::uint8_t src_b;
+    std::uint16_t dest;
 };
 
+/**
+ * @brief Replay window and per-slot counter increments for one matmul shape.
+ *
+ * The replay image is a fixed nest. ADDR_MOD_0 applies after every MVMUL, ADDR_MOD_1
+ * after every second, ADDR_MOD_2 after every fourth, and ADDR_MOD_3 after every eighth.
+ * The active traversal axes fill the slots from ADDR_MOD_0 upward, in the order FPU row
+ * group, then column face, then face row. ADDR_MOD_3 always advances K. A shape with
+ * fewer active axes leaves the deeper slots inert, and @ref replay_start_idx selects a
+ * window that never executes them:
+ *
+ *   SrcB face_r_dim | output faces (r x c) | ADDR_MOD_0     | ADDR_MOD_1  | ADDR_MOD_2
+ *   ----------------+----------------------+----------------+-------------+------------
+ *   16              | 2 x 2                | SrcB row group | column face | face row
+ *   16              | 1 x 2                | SrcB row group | column face | inert
+ *   16              | 2 x 1                | SrcB row group | face row    | inert
+ *   16              | 1 x 1                | SrcB row group | inert       | inert
+ *   <= 8            | 1 x 2                | SrcA column    | inert       | inert
+ *   <= 8            | 1 x 1                | inert          | inert       | inert
+ *
+ * A sub-16 face_r_dim always comes with num_faces_r_dim == 1, so the two remaining rows
+ * of that table are unreachable. See @ref validate_matmul_tensor_shapes_.
+ *
+ * Every MVMUL writes the next eight destination rows, so ADDR_MOD_0, ADDR_MOD_1, and
+ * ADDR_MOD_2 all carry a Dest increment of one FPU row group wherever they execute.
+ * ADDR_MOD_3 rewinds Dest to the start of the tile through its carriage return instead.
+ */
 struct _llk_math_matmul_execution_geometry_t
 {
     std::uint8_t replay_start_idx;
     std::uint8_t replay_len;
     std::uint16_t dst_rows_per_tile;
     std::uint16_t dst_tile_row_increment;
-    _llk_math_matmul_transition_t first_output_axis;
-    _llk_math_matmul_transition_t second_output_axis;
-    _llk_math_matmul_transition_t next_row_face;
-    _llk_math_matmul_transition_t next_k_face;
-    bool has_second_output_axis;
-    bool has_next_row_face;
+    _llk_math_matmul_step_t next_fpu_rows;      ///< ADDR_MOD_0: advance Dest by one FPU row group.
+    _llk_math_matmul_step_t next_face;          ///< ADDR_MOD_1: next available face, column before row.
+    _llk_math_matmul_step_t next_face_row_incr; ///< ADDR_MOD_2: next row of the output face grid.
+    _llk_math_matmul_step_t next_k_face_src;    ///< ADDR_MOD_3: next K face on each of SrcB and SrcA.
+    // One flag per slot that uses a carriage return. ADDR_MOD_2 and ADDR_MOD_3 apply theirs
+    // to both SrcA and SrcB; ADDR_MOD_1 applies it to SrcB only.
+    bool has_next_face;
+    bool has_next_face_row;
     bool has_next_k_face;
 };
 
 /**
  * @brief Derives the replay window and address-modifier geometry for matmul.
  *
- * Standard 32x32 operands have four 16x16 faces, two K faces, and two 8-row
- * passes per face. The four output faces therefore require eight MVMULs per K
- * face, giving replay_start_idx = 0 and replay_len = 8 * 2 - 1 = 15. Each
- * output tile occupies 4 * 16 = 64 destination rows. Its active transitions
- * advance the 8-row pass, column face, row face, and K face respectively.
+ * Standard 32x32 operands have four 16x16 faces, two K faces, and two FPU row groups per
+ * face. The four output faces therefore require eight MVMULs per K face, giving
+ * replay_start_idx = 0 and replay_len = 8 * 2 - 1 = 15. Each output tile occupies
+ * 4 * 16 = 64 destination rows.
  *
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
  * @param src_b_shape: Input 0/SrcB tile shape.
  * @param src_a_shape: Input 1/SrcA tile shape.
+ * @note @ref _llk_math_matmul_execution_geometry_t documents which axis each slot carries
+ * at a given shape.
  */
 inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry_(
     const std::uint8_t ct_dim, const std::uint8_t rt_dim, const TensorShape src_b_shape, const TensorShape src_a_shape)
 {
     LLK_ASSERT(validate_matmul_tensor_shapes_(src_b_shape, src_a_shape), "unsupported SrcB/SrcA TensorShape pair for matmul");
 
+    // output_shape looks redundant, because only its face counts are read. Keep it: it
+    // consolidates the three counts into one packed word, and reading them from the two
+    // operand structs instead costs 128 bytes per math kernel (measured).
     const TensorShape output_shape =
         make_tensor_shape(src_b_shape.face_r_dim, src_a_shape.face_c_dim, src_b_shape.num_faces_r_dim, src_a_shape.num_faces_c_dim);
     const std::uint8_t face_rows          = src_b_shape.face_r_dim < MAX_FPU_ROWS ? MAX_FPU_ROWS : src_b_shape.face_r_dim;
@@ -63,71 +95,83 @@ inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry
     const std::uint8_t face_row_passes    = src_b_shape.face_r_dim > MAX_FPU_ROWS ? 2 : 1;
     const std::uint8_t mvmuls_per_k_face  = output_shape.total_num_faces() * face_row_passes;
 
-    const bool row_pass_axis            = face_rows > MAX_FPU_ROWS;
-    const bool column_axis              = output_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM;
-    const bool row_axis                 = output_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM;
+    // Which traversal axes this shape leaves active. A face holds one or two FPU row
+    // groups, and has_row_faces implies two of them: a sub-16 face_r_dim forces
+    // num_faces_r_dim == 1, so no shape has row faces and a single row group. The slot
+    // predicates below lean on that implication.
+    //
+    // Keep these predicates named. Each is read two to five times, and substituting them
+    // at their use sites costs 204 bytes per math kernel (measured): the compiler reloads
+    // and re-compares the shape word at every site instead of once here.
+    const bool face_has_two_row_groups  = face_rows > MAX_FPU_ROWS;
+    const bool has_column_faces         = output_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM;
+    const bool has_row_faces            = output_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM;
     const std::int32_t src_b_row_stride = face_rows * num_k_faces;
 
-    const std::int32_t x_src_a = row_pass_axis ? 0 : (column_axis ? MAX_FACE_C_DIM : 0);
-    const std::int32_t x_src_b = row_pass_axis ? MAX_FPU_ROWS : (column_axis ? 0 : (row_axis ? src_b_row_stride : 0));
-    const std::int32_t x_dest  = row_pass_axis ? MAX_FPU_ROWS : (column_axis ? face_rows : (row_axis ? face_rows * output_shape.num_faces_c_dim : 0));
+    // A single-row-group face has no SrcB row group to step, so SrcA takes the column face
+    // instead. Dest advances one row group either way: every MVMUL writes eight rows.
+    const std::int32_t fpu_rows_src_a = !face_has_two_row_groups && has_column_faces ? MAX_FACE_C_DIM : 0;
+    const std::int32_t fpu_rows_src_b = face_has_two_row_groups ? MAX_FPU_ROWS : 0;
+    const std::int32_t fpu_rows_dest  = face_has_two_row_groups || has_column_faces ? MAX_FPU_ROWS : 0;
 
-    const bool y_is_column         = row_pass_axis && column_axis;
-    const bool y_is_row            = !y_is_column && row_axis && (row_pass_axis || column_axis);
-    const bool has_y               = y_is_column || y_is_row;
-    const std::int32_t y_src_a     = y_is_column ? MAX_FACE_C_DIM : 0;
-    const std::int32_t y_src_b     = y_is_row ? src_b_row_stride : 0;
-    const std::int32_t y_axis_dest = y_is_column ? face_rows : (y_is_row ? face_rows * output_shape.num_faces_c_dim : 0);
-    const std::int32_t y_dest      = has_y ? y_axis_dest - x_dest : 0;
+    // Slot assignment, innermost first. The column face outranks the face row. Because
+    // has_row_faces implies face_has_two_row_groups, the face row is active exactly when
+    // there are row faces and no column face.
+    const bool next_face_is_column = face_has_two_row_groups && has_column_faces;
+    const bool next_face_is_row    = has_row_faces && !has_column_faces;
+    const bool has_next_face       = next_face_is_column || next_face_is_row;
+    const std::int32_t face_src_a  = next_face_is_column ? MAX_FACE_C_DIM : 0;
+    const std::int32_t face_src_b  = next_face_is_row ? src_b_row_stride : 0;
+    const std::int32_t face_dest   = has_next_face ? MAX_FPU_ROWS : 0;
 
-    const bool has_z           = row_pass_axis && column_axis && row_axis;
-    const std::int32_t z_src_b = has_z ? src_b_row_stride : 0;
-    const std::int32_t z_dest  = has_z ? face_rows * output_shape.num_faces_c_dim - MAX_FPU_ROWS - face_rows : 0;
+    const bool has_next_face_row      = has_column_faces && has_row_faces;
+    const std::int32_t face_row_src_b = has_next_face_row ? src_b_row_stride : 0;
+    const std::int32_t face_row_dest  = has_next_face_row ? MAX_FPU_ROWS : 0;
 
-    const bool has_k           = num_k_faces > 1;
-    const std::int32_t k_src_a = has_k ? MAX_FACE_C_DIM * output_shape.num_faces_c_dim : 0;
+    const bool has_next_k_face      = num_k_faces > 1;
+    const std::int32_t k_face_src_a = has_next_k_face ? MAX_FACE_C_DIM * output_shape.num_faces_c_dim : 0;
     // The SrcB counter wraps modulo 64. Encode negative increments as 6-bit two's complement.
-    const std::int32_t k_src_b = has_k ? face_rows - (row_axis ? src_b_row_stride : 0) : 0;
+    const std::int32_t k_face_src_b = has_next_k_face ? face_rows - (has_row_faces ? src_b_row_stride : 0) : 0;
 
     return _llk_math_matmul_execution_geometry_t {
         .replay_start_idx       = static_cast<std::uint8_t>(FULL_TILE_MVMULS_PER_K_FACE - mvmuls_per_k_face),
         .replay_len             = static_cast<std::uint8_t>(mvmuls_per_k_face * num_k_faces - 1),
         .dst_rows_per_tile      = dst_rows_per_tile,
         .dst_tile_row_increment = static_cast<std::uint16_t>((ct_dim >= rt_dim ? 1 : ct_dim) * dst_rows_per_tile),
-        .first_output_axis =
+        .next_fpu_rows =
             {
-                .src_a_increment = static_cast<std::uint8_t>(x_src_a),
-                .src_b_increment = static_cast<std::uint8_t>(0x3F & x_src_b),
-                .dest_increment  = static_cast<std::uint16_t>(x_dest),
+                .src_a = static_cast<std::uint8_t>(fpu_rows_src_a),
+                .src_b = static_cast<std::uint8_t>(0x3F & fpu_rows_src_b),
+                .dest  = static_cast<std::uint16_t>(fpu_rows_dest),
             },
-        .second_output_axis =
+        .next_face =
             {
-                .src_a_increment = static_cast<std::uint8_t>(y_src_a),
-                .src_b_increment = static_cast<std::uint8_t>(0x3F & y_src_b),
-                .dest_increment  = static_cast<std::uint16_t>(y_dest),
+                .src_a = static_cast<std::uint8_t>(face_src_a),
+                .src_b = static_cast<std::uint8_t>(0x3F & face_src_b),
+                .dest  = static_cast<std::uint16_t>(face_dest),
             },
-        .next_row_face =
+        .next_face_row_incr =
             {
-                .src_a_increment = 0,
-                .src_b_increment = static_cast<std::uint8_t>(0x3F & z_src_b),
-                .dest_increment  = static_cast<std::uint16_t>(z_dest),
+                .src_a = 0,
+                .src_b = static_cast<std::uint8_t>(0x3F & face_row_src_b),
+                .dest  = static_cast<std::uint16_t>(face_row_dest),
             },
-        .next_k_face =
+        .next_k_face_src =
             {
-                .src_a_increment = static_cast<std::uint8_t>(k_src_a),
-                .src_b_increment = static_cast<std::uint8_t>(0x3F & k_src_b),
-                .dest_increment  = 0,
+                .src_a = static_cast<std::uint8_t>(k_face_src_a),
+                .src_b = static_cast<std::uint8_t>(0x3F & k_face_src_b),
+                .dest  = 0,
             },
-        .has_second_output_axis = has_y,
-        .has_next_row_face      = has_z,
-        .has_next_k_face        = has_k,
+        .has_next_face     = has_next_face,
+        .has_next_face_row = has_next_face_row,
+        .has_next_k_face   = has_next_k_face,
     };
 }
 
 /**
  * @brief Initializes addrmod for matrix multiply operation.
  *
- * Non-2x matmul derives compacted X/Y/Z/K transitions from geometry. The 2x path retains its fixed layout.
+ * Non-2x matmul derives its four per-slot steps from geometry. The 2x path retains its fixed layout.
  *
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
@@ -209,36 +253,37 @@ inline void _llk_math_matmul_addrmod_(const std::uint8_t ct_dim, const std::uint
         return;
     }
 
-    // Advance the first output axis in the replay.
+    // Advance Dest by one FPU row group. This slot never uses a carriage return.
     addr_mod_t {
-        .srca = {.incr = geometry.first_output_axis.src_a_increment, .clr = 0, .cr = 0},
-        .srcb = {.incr = geometry.first_output_axis.src_b_increment, .clr = 0, .cr = 0},
-        .dest = {.incr = geometry.first_output_axis.dest_increment, .clr = 0, .cr = 0},
+        .srca = {.incr = geometry.next_fpu_rows.src_a, .clr = 0, .cr = 0},
+        .srcb = {.incr = geometry.next_fpu_rows.src_b, .clr = 0, .cr = 0},
+        .dest = {.incr = geometry.next_fpu_rows.dest, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_0);
 
-    // Advance the second output axis. This axis is the column when present and the row otherwise.
-    // SrcB CR discards the first output-axis step.
+    // Advance to the next available face, the column face when present and the row face
+    // otherwise. SrcB CR discards the row-group step taken by ADDR_MOD_0.
     addr_mod_t {
-        .srca = {.incr = geometry.second_output_axis.src_a_increment, .clr = 0, .cr = 0},
-        .srcb = {.incr = geometry.second_output_axis.src_b_increment, .clr = 0, .cr = geometry.has_second_output_axis},
-        .dest = {.incr = geometry.second_output_axis.dest_increment, .clr = 0, .cr = 0},
+        .srca = {.incr = geometry.next_face.src_a, .clr = 0, .cr = 0},
+        .srcb = {.incr = geometry.next_face.src_b, .clr = 0, .cr = geometry.has_next_face},
+        .dest = {.incr = geometry.next_face.dest, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_1);
 
-    // Rewind the SrcA column face and advance SrcB CR to the next row face.
+    // Advance to the next row of the output face grid: rewind the SrcA column face and
+    // rebase SrcB one row of faces down.
     addr_mod_t {
-        .srca = {.incr = geometry.next_row_face.src_a_increment, .clr = 0, .cr = geometry.has_next_row_face},
-        .srcb = {.incr = geometry.next_row_face.src_b_increment, .clr = 0, .cr = geometry.has_next_row_face},
-        .dest = {.incr = geometry.next_row_face.dest_increment, .clr = 0, .cr = 0},
+        .srca = {.incr = geometry.next_face_row_incr.src_a, .clr = 0, .cr = geometry.has_next_face_row},
+        .srcb = {.incr = geometry.next_face_row_incr.src_b, .clr = 0, .cr = geometry.has_next_face_row},
+        .dest = {.incr = geometry.next_face_row_incr.dest, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_2);
 
-    // Rewind the output axes through CR and advance both sources to the next K face.
+    // Advance both sources one K face and rewind Dest to the start of the tile.
     addr_mod_t {
-        .srca = {.incr = geometry.next_k_face.src_a_increment, .clr = 0, .cr = geometry.has_next_k_face},
-        .srcb = {.incr = geometry.next_k_face.src_b_increment, .clr = 0, .cr = geometry.has_next_k_face},
-        .dest = {.incr = geometry.next_k_face.dest_increment, .clr = 0, .cr = 1},
+        .srca = {.incr = geometry.next_k_face_src.src_a, .clr = 0, .cr = geometry.has_next_k_face},
+        .srcb = {.incr = geometry.next_k_face_src.src_b, .clr = 0, .cr = geometry.has_next_k_face},
+        .dest = {.incr = geometry.next_k_face_src.dest, .clr = 0, .cr = 1},
     }
         .set(ADDR_MOD_3);
 
@@ -380,21 +425,22 @@ inline void _llk_math_matmul_load_replay_()
             []
             {
                 // Tiny tiles select a window and derive each transition from their geometry.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #0 advances to the next 8-row destination block.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // #1 advances to the next column or row and resets SrcB.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #2 advances to the next 8-row destination block.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // #3 advances the row, resets the SrcA column, and advances the SrcB row.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #4 advances to the next 8-row destination block.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // #5 advances to the next column or row and resets SrcB.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #6 advances to the next 8-row destination block.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // #7 restarts the output and advances both sources.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #8 advances to the next 8-row destination block.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // #9 advances to the next column or row and resets SrcB.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #10 advances to the next 8-row destination block.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // #11 advances the row, resets the SrcA column, and advances the SrcB row.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #12 advances to the next 8-row destination block.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // #13 advances to the next column or row and resets SrcB.
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #14 processes the final 8-row destination block.
+                // For full-tile input (32x32 x 32x32), the transitions are as follows:
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca,  srcb+=8, dest+=8
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16/32, srcb=0, dest+=8 // srca+=32 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1 // srca=srca, srcb+=8, dest+=8 // A1 -> A2 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A1 // srca=0, srcb=32, dest+=8 // A1 -> A2 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A0 // srca=srca, srcb+=8, dest+=8
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B2A0 // srca+=16/32, srcb=0, dest+=8 // srca+=32 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A1 // srca=srca, srcb+=8, dest+=8 // A1 -> A2 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B2A1 // srca=32/16,srcb=16, dest=0 // A1 -> A2 && srca=16 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A2 // srca=srca, srcb+=8, dest+=8 // A2 -> A1 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B1A2 // srca+=16,  srcb=16, dest+=8 // A2 -> A1 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A3 // srca=srca, srcb+=8, dest+=8
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B1A3 // srca=32, srcb=48, dest+=8
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A2 // srca=srca, srcb+=8, dest+=8 // A2 -> A1 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B3A2 // srca+=16, srcb=0, dest+=8 // A2 -> A1 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A3 // srca=srca, srcb+=8, dest+=8
             });
     }
 }
