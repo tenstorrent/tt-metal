@@ -1960,6 +1960,7 @@ class ttMLA:
         TT_MLA_DISABLE_SNAKE_KV_GATHER=1 forces the two-stage route on a mesh that could take the snake.
         The fallback is what SC4-shaped meshes actually run and has no other coverage, so this is how a
         test on a snake-capable mesh exercises it."""
+
         def _no(reason):
             # Which condition rejected the snake decides whether traced TP is possible at all on this
             # mesh (the two-stage fallback has no metadata path), so name it rather than silently

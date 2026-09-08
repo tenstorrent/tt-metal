@@ -77,8 +77,8 @@ constexpr uint32_t reader_k_local_batch_offset = reader_k_local_addr + 1;       
 constexpr uint32_t reader_metadata_base = reader_k_local_batch_offset + 1;                                   // 38
 // Cache-slot select block (slot_id address, index_cache_num_layers, index_cache_layer_idx). Fixed width,
 // always present (zeroed when unused), so the kernel consumes it unconditionally and band_perm stays const.
-constexpr uint32_t reader_slot_base = reader_metadata_base + 3;                                              // 41
-constexpr uint32_t reader_band_perm_base = reader_slot_base + 3;                                             // 44
+constexpr uint32_t reader_slot_base = reader_metadata_base + 3;   // 41
+constexpr uint32_t reader_band_perm_base = reader_slot_base + 3;  // 44
 // Compute RT: schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, then perm.
 constexpr uint32_t compute_kv_len_tiles = 6;
 constexpr uint32_t compute_chunk_start_tiles = compute_kv_len_tiles + 1;

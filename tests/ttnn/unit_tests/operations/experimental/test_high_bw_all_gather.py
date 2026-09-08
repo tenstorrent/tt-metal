@@ -490,9 +490,7 @@ def _run_high_bw_all_gather_accuracy(
     # main's split: a partial collective replicates rather than concatenating, so it needs the
     # replicated-output compare. Keep the metadata slot index on the full-mesh branch.
     if collective_size == mesh_device.get_num_devices():
-        _assert_exact_all_gather(
-            device_input, persistent_output, mesh_device, dtype, batch_index=metadata_batch_index
-        )
+        _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype, batch_index=metadata_batch_index)
     else:
         _assert_exact_replicated_output(host_input, persistent_output, mesh_device, dtype, layout)
 

@@ -649,6 +649,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // (patched on cache hits) -- which rows this chip owns depends on the chunk start. Metadata path ->
     // the kv_actual_global tensor's raw DRAM address, which the reader reads element [0] of on-device;
     // scalar path -> the value itself. Same dual use as the writer's args 8/9.
+    const uint32_t reader_kv_actual =
+        has_metadata ? tensor_args.kv_actual_global->buffer()->address() : args.kv_actual_global;
     reader_kernel.emplace_common_runtime_args({
         linear_coord,
         linear_factor,
@@ -657,7 +659,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         sp_factor,
         tp_factor,
         Wt,
-        has_metadata ? tensor_args.kv_actual_global->buffer()->address() : args.kv_actual_global,
+        reader_kv_actual,  // smuggled-rta-ok: metadata path -> 1-element tensor DRAM addr, read on-device;
+                           // override_runtime_arguments patches this common arg (index 7) on every cache hit
     });
 
     // Per-core runtime args. The input/cache buffers are passed as Buffer* bindings (not raw
