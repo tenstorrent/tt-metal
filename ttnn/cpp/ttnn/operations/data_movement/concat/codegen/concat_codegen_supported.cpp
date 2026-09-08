@@ -50,6 +50,27 @@ namespace {
 // itself -- alignment only selects which regime (staged vs. fast-path) applies.
 constexpr uint64_t kStagedCopyDemotionBytes = 2400;
 
+// Bytes of one output row the two-input width reader stages through scratch and assembles with
+// RISC stores; zero when both sides take the batched direct write.
+//
+// Mirror of the reader's compile-time path selection (kernel :60-68) over the same buffer
+// values create_descriptor_rm_width hands it. Input1's payload lands at input0's stick size
+// inside the assembly page, and IN1_NOC_ALIGNMENT is input1's own buffer alignment, so input1
+// writes directly only when its stick fills its page *and* input0's stick is a multiple of
+// that alignment. Two inputs may sit in different memory configurations -- only N > 2 is held
+// to one shared config -- so input0 filling its own page does not answer the second term.
+uint32_t rm_width_2in_staged_row_bytes(const Tensor& in0, const Tensor& in1) {
+    const auto* src0 = in0.buffer();
+    const auto* src1 = in1.buffer();
+    const uint32_t in0_stick = static_cast<uint32_t>(src0->page_size());
+    const uint32_t in1_stick = static_cast<uint32_t>(src1->page_size());
+    const uint32_t in1_noc_alignment = static_cast<uint32_t>(src1->alignment());
+    const bool in0_direct = in0_stick == static_cast<uint32_t>(src0->aligned_page_size());
+    const bool in1_direct =
+        in1_stick == static_cast<uint32_t>(src1->aligned_page_size()) && in0_stick % in1_noc_alignment == 0;
+    return (in0_direct ? 0 : in0_stick) + (in1_direct ? 0 : in1_stick);
+}
+
 bool rm_width_2in_unaligned_staged_copy_volume(const std::vector<Tensor>& input_tensors, uint32_t dim) {
     if (input_tensors.size() != 2) {
         return false;
@@ -61,28 +82,12 @@ bool rm_width_2in_unaligned_staged_copy_volume(const std::vector<Tensor>& input_
         return false;
     }
 
-    // Mirror of the reader's compile-time path selection (kernel :60-68) over the same buffer
-    // values create_descriptor_rm_width hands it. Input1's payload lands at input0's stick size
-    // inside the assembly page, and IN1_NOC_ALIGNMENT is input1's own buffer alignment, so input1
-    // writes directly only when its stick fills its page *and* input0's stick is a multiple of
-    // that alignment. Two inputs may sit in different memory configurations -- only N > 2 is held
-    // to one shared config -- so input0 filling its own page does not answer the second term.
-    const auto* src0 = in0.buffer();
-    const auto* src1 = in1.buffer();
-    const uint32_t in0_stick = static_cast<uint32_t>(src0->page_size());
-    const uint32_t in1_stick = static_cast<uint32_t>(src1->page_size());
-    const uint32_t in1_noc_alignment = static_cast<uint32_t>(src1->alignment());
-    const bool in0_direct = in0_stick == static_cast<uint32_t>(src0->aligned_page_size());
-    const bool in1_direct =
-        in1_stick == static_cast<uint32_t>(src1->aligned_page_size()) && in0_stick % in1_noc_alignment == 0;
-    if (in0_direct && in1_direct) {
+    const uint32_t staged_row_bytes = rm_width_2in_staged_row_bytes(in0, in1);
+    if (staged_row_bytes == 0) {
         // The reader takes the batched direct-write fast path, which wins at
         // every measured size in this regime.
         return false;
     }
-
-    // Only the sides that miss the direct path pay the scratch-staged byte copy.
-    const uint32_t staged_row_bytes = (in0_direct ? 0 : in0_stick) + (in1_direct ? 0 : in1_stick);
 
     tt::tt_metal::IDevice* device = in0.device();
     uint32_t total_out_sticks = 1;
@@ -122,6 +127,28 @@ bool width_nway_all_direct(const std::vector<Tensor>& input_tensors) {
         offset += stick_size;
     }
     return true;
+}
+
+// Both width readers assemble a non-direct segment with a RISC byte-copy loop out of NOC-filled
+// scratch. That copy is not cache-coherent on Quasar: its data path is Core -> L1 D$ -> L2 -> TL1,
+// so the scratch line the loop reads can be stale and the stores it makes land short of TL1 (the
+// TODO(ARCH_QUASAR) note in common/kernels/common.hpp, deferred to #51763). Native's own unaligned
+// concat factory declines Quasar for the same reason. Only the staged regime is affected -- the
+// all-direct paths are pure NOC -- so the gate is the reader's own directness predicate, not the
+// width dim.
+bool width_staged_copy_on_quasar(const std::vector<Tensor>& input_tensors, uint32_t dim) {
+    const Tensor& first = input_tensors[0];
+    if (first.device()->arch() != tt::ARCH::QUASAR) {
+        return false;
+    }
+    const uint32_t ndim = first.logical_shape().rank();
+    if (dim != ndim - 1) {
+        return false;
+    }
+    if (input_tensors.size() == 2) {
+        return rm_width_2in_staged_row_bytes(first, input_tensors[1]) != 0;
+    }
+    return !width_nway_all_direct(input_tensors);
 }
 
 }  // namespace
@@ -187,6 +214,10 @@ bool supported_by_codegen(
                 return false;
             }
         }
+    }
+
+    if (width_staged_copy_on_quasar(input_tensors, dim)) {
+        return false;
     }
 
     return ttnn::prim::plan_concat_cbs(input_tensors, dim, output_mem_config, usable_l1_bytes(first.device()))

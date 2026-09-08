@@ -30,6 +30,12 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
+#if !defined(ARCH_QUASAR)
+// ckernel::load_blocking, for the staged copy's store-visibility drain. WH/BH only: on Quasar this
+// header is unusable from a data-movement build and has no load_blocking, and the host gate keeps
+// Quasar off the staged path entirely.
+#include "ckernel.h"
+#endif
 
 void kernel_main() {
     uint32_t num_pages = get_arg_val<uint32_t>(0);
@@ -97,6 +103,7 @@ void kernel_main() {
             }
             noc.async_read_barrier();
         } else {
+            uint32_t staged_end = 0;
             for (uint32_t page = 0; page < batch; ++page) {
                 uint32_t dst = out_base + page * OUT_PAGE_SIZE;
                 for (uint32_t input = 0; input < N_INPUTS; ++input) {
@@ -124,7 +131,24 @@ void kernel_main() {
                     for (uint32_t byte = 0; byte < stick_sizes[input]; ++byte) {
                         target[byte] = src[byte];
                     }
+                    staged_end = dst + dst_offsets[input] + stick_sizes[input];
                 }
+            }
+
+            if (staged_end != 0) {
+                // A RISC store can retire before its write-request reaches L1, and
+                // the NoC and the unpacker are separate L1 clients with no program order against
+                // this core (TensixTile/BabyRISCV/MemoryOrdering.md). push_back only bumps a stream
+                // register -- a different memory region -- so it orders nothing. Read back the word
+                // holding the last staged byte: same-client L1 requests are processed in order, so
+                // that one landing puts the whole copy ahead of the page becoming visible.
+                volatile tt_l1_ptr uint32_t* drain_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>((staged_end - 1) & ~uint32_t{3});
+#if defined(ARCH_QUASAR)
+                (void)*drain_ptr;
+#else
+                (void)ckernel::load_blocking(drain_ptr);
+#endif
             }
         }
 
