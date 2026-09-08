@@ -55,10 +55,18 @@ import time
 from collections import defaultdict, namedtuple
 
 # UtilShmHeader, common/shm_schema.hpp:42 -- 72 bytes, no interior padding.
-H = struct.Struct("<4sHHQIIQQ8I")
+# 4s+2H+Q+2I+2Q = 40, then 7I = 68, then the v4 thermals 8H = 84, throttler I = 88, and
+# the v5/v6 power pair 4H = 96. Grew 72 -> 96 across schema v4 (per-die thermals and power
+# from the ARC frame) and v5 (PCIe slot power and whole-card power from the M3 mailbox);
+# this table was not updated with them, so every probe and test run had been failing on the
+# size assert until now.
+H = struct.Struct("<4sHHQIIQQ7I8HI4H")
 # PerCoreView, common/shm_schema.hpp:72 -- 6x u8, 10x u16, 2 bytes tail padding
 # (u32 alignment), 3x u32. Identical to tests/test_ttnvtop_accuracy.py:27.
-V = struct.Struct("<6B10H2x3I")
+# 6B + 10H + 2 pad + 2I + 2H = 40 B, 20 slots. The trailing 2H were reserved_1 until
+# schema v6 took them for per-core NOC; the struct size is unchanged, which is exactly why
+# the field-for-field check below exists and a size assert alone would not have caught it.
+V = struct.Struct("<6B10H2x2I2H")
 
 # Header tuple indices (named so a future field insertion breaks loudly, not silently).
 # _check_layout() proves each of these against the C declaration -- ttnvtop_py.py:74 read
@@ -67,6 +75,12 @@ H_MAGIC, H_VERSION, H_STRUCT_SIZE, H_ASIC_ID = 0, 1, 2, 3
 H_ARCH_ID, H_SIGNAL_SRC, H_EPOCH_US, H_LAST_UPDATE_US = 4, 5, 6, 7
 H_NUM_CORES, H_PROGRAM_ID, H_PID, H_AICLK_MHZ = 8, 9, 10, 11
 H_DRAM_RD_MBPS, H_DRAM_WR_MBPS, H_DRAM_PEAK_MBPS = 12, 13, 14
+# v4: per-die thermals and power, carried in the frame by the die that produced it.
+H_ASIC_TEMP_C16, H_ASIC_MAX_C16, H_VREG_TEMP_C, H_BOARD_TEMP_C = 15, 16, 17, 18
+H_VCORE_MV, H_TDP_W, H_TDC_A, H_RESERVED0 = 19, 20, 21, 22
+H_THROTTLER = 23
+# v5/v6: board-level power from the M3 mailbox. slot_* is the PCIe edge rails ONLY.
+H_SLOT_12V_W, H_SLOT_3V3_W, H_BOARD_POWER_W, H_RESERVED1 = 24, 25, 26, 27
 
 H_EXPECTED = {
     "magic": H_MAGIC,
@@ -84,6 +98,19 @@ H_EXPECTED = {
     "dram_rd_mbps": H_DRAM_RD_MBPS,
     "dram_wr_mbps": H_DRAM_WR_MBPS,
     "dram_peak_mbps": H_DRAM_PEAK_MBPS,
+    "asic_temp_c16": H_ASIC_TEMP_C16,
+    "asic_max_c16": H_ASIC_MAX_C16,
+    "vreg_temp_c": H_VREG_TEMP_C,
+    "board_temp_c": H_BOARD_TEMP_C,
+    "vcore_mv": H_VCORE_MV,
+    "tdp_w": H_TDP_W,
+    "tdc_a": H_TDC_A,
+    "reserved0": H_RESERVED0,
+    "throttler": H_THROTTLER,
+    "slot_12v_w": H_SLOT_12V_W,
+    "slot_3v3_w": H_SLOT_3V3_W,
+    "board_power_w": H_BOARD_POWER_W,
+    "reserved1": H_RESERVED1,
 }
 
 # (tuple index, C field name, byte offset within PerCoreView, width in bytes).
@@ -108,7 +135,12 @@ V_FIELDS = (
     (15, "noc1_out_mbps", 24, 2),
     (16, "samples_seen", 28, 4),
     (17, "last_kernel_id", 32, 4),
-    (18, "reserved_1", 36, 4),
+    # Schema v6: reserved_1 became per-core NOC, per-mille of the core's own cycles, as
+    # published by ARC bundle 152+ in the two u8 tail bytes of a 10 B sample (x4 to
+    # per-mille). Zero from the SHM collector, which does not write them -- readers gate on
+    # SIGNAL_SRC_NOC rather than on the value.
+    (18, "noc_in_p1000", 36, 2),
+    (19, "noc_out_p1000", 38, 2),
 )
 
 

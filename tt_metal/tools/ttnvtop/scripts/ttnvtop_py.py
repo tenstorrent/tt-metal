@@ -52,9 +52,14 @@ from textual.widgets import DataTable, Footer, Header, Static
 # ─── On-disk schemas (mirror common/shm_schema.hpp + program_registry.hpp) ──
 
 # Per-chip util SHM header. See shm_schema.hpp.
-HEADER_FMT = "<4sHHQIIQQIIII4I"
+# 4s+2H+Q+2I+2Q = 40, 7I = 68, v4 thermals 8H = 84, throttler I = 88, v5/v6 power 4H = 96.
+# MUST match sizeof(UtilShmHeader): HEADER_SIZE below locates the per-core array, so a
+# stale format does not fail, it reads every core 24 bytes early. Fields 0..14 keep their
+# tuple positions; everything after dram_peak_mbps is new since schema v4.
+HEADER_FMT = "<4sHHQIIQQ7I8HI4H"
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
-PER_CORE_FMT = "<6B10H2x3I"
+# reserved_1 became per-core NOC in schema v6; 40 B unchanged, 20 slots not 19.
+PER_CORE_FMT = "<6B10H2x2I2H"
 PER_CORE_SIZE = struct.calcsize(PER_CORE_FMT)
 
 # Program registry. See program_registry.hpp (v3 schema, 128-byte entry).
