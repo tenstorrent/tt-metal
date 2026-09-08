@@ -35,6 +35,7 @@
 #include "common/executor.hpp"
 #include "impl/jit_server/rpc.capnp.h"
 #include "jit_build/build.hpp"
+#include "jit_build/build_cache_telemetry.hpp"
 #include "jit_build/depend.hpp"
 #include "jit_build/jit_build_utils.hpp"
 #include "jit_build/types.hpp"
@@ -580,6 +581,11 @@ void initialize_prewarm_shutdown_dependencies() {
     (void)detail::GetExecutorMutex();
     (void)detail::GetExecutor();
     jit_build::initialize_file_hash_cache();
+    // dependencies_up_to_date() records into this singleton on every pool-thread compile, so its
+    // destructor must also be ordered after the exit join. With precompiled firmware nothing builds
+    // before launch, so an unwarmed singleton would first construct on a pool thread -- after the
+    // join handler -- and tear down before it.
+    (void)BuildCacheTelemetry::inst();
 }
 
 }  // namespace
