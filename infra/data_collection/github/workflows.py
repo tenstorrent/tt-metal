@@ -465,7 +465,7 @@ def get_civ2_node_name_and_serial_from_job_log(workflow_outputs_dir, workflow_ru
     From the API, we can always see the annotations.
     E.g. https://api.github.com/repos/tenstorrent/tt-metal/check-runs/<job id>/annotations
 
-    09/08/2026: Due to Github rate limits, we only download annotations for failed jobs. 
+    09/08/2026: Due to Github rate limits, we only download annotations for failed jobs.
     This is now the usual path to resolve the host_name for CIv2 (tt-ubuntu) runners.
 
     Returns (node_name, serial), each None if not found (CPU-only runners have no serial).
