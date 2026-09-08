@@ -7,4 +7,5 @@ set(UNIT_TESTS_NOC_SRC
     test_quasar_att_address.cpp
     test_quasar_att_config.cpp
     test_quasar_att_image.cpp
+    test_quasar_att_umd_agreement.cpp
 )
