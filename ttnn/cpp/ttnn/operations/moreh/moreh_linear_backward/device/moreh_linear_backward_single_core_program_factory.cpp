@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <string>
+
+#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
 #include <vector>
 
 #include "moreh_linear_backward_device_operation.hpp"
@@ -43,7 +46,6 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
     uint32_t num_tiles = output_grad.physical_volume() / constants::TILE_HW;
 
     const uint32_t in0_t = 2;
-    const uint32_t in1_t = 1;
     const uint32_t in2_t = (do_mask_h || do_mask_w) ? 2 : 0;  // mask_h_w
 
     const uint32_t out0_t = 1;
@@ -92,6 +94,31 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
     auto dfb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : dfb_data_format;
 
+    namespace reduce_host = ttnn::kernel_lib::host;
+    const TensorLayout input_layout(output_grad.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    const TensorLayout output_layout(bias_grad.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    // The scalar path still masks the two-dimensional edge before reduction;
+    // a one-axis partial recipe cannot describe both edges of an HW reduction.
+    const reduce_host::ReduceCallConfig reduction{
+        TensorSpec(Shape{32, 32}, input_layout),
+        TensorSpec(Shape{1, 1}, output_layout),
+        ReduceOpMath::SUM,
+        ReduceOpDim::HW,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        tile_size(dfb_data_format)};
+    std::vector<reduce_host::ReduceCbConfig> reductions(std::min(num_tiles, 3U), {0, reduction});
+    auto reduce_sequence = reduce_host::make_reduce_sequence_plan(
+        reductions,
+        {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2},
+        {.arch = arch,
+         .fp32_dest_acc_en = fp32_dest_acc_en,
+         .dst_full_sync_en = dst_full_sync_en,
+         .available_l1_bytes = 16 * tile_size(dfb_data_format)});
+    reduce_sequence.calls.back().accumulation_index = num_tiles - 1;
+    const auto* auxiliary = reduce_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const uint32_t auxiliary_tiles = reduce_sequence.auxiliary.tiles.size();
+
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN0_DFB,
         .entry_size = tile_size(dfb_data_format),
@@ -100,9 +127,9 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
     });  // output_grad
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALER_DFB,
-        .entry_size = tile_size(dfb_data_format),
-        .num_entries = in1_t,
-        .data_format_metadata = dfb_data_format,
+        .entry_size = auxiliary->page_size,
+        .num_entries = auxiliary_tiles,
+        .data_format_metadata = auxiliary->data_format,
     });  // scaler
     if (do_mask_h_w) {
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
@@ -176,6 +203,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
         .runtime_arg_schema =
             {.runtime_arg_names = {"num_tiles", "start_id", "mask_h", "mask_w", "do_mask_h", "do_mask_w"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = reduce_sequence.get_auxiliary_compile_time_args()},
     });
 
     spec.kernels.push_back(KernelSpec{
@@ -297,8 +325,10 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
         // O2, so the level has to be stated explicitly to keep the compute kernel where it was.
         .compiler_options = {.defines = std::move(compute_defines), .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
+        .compile_time_args = {{"reduce_auxiliary_tiles", auxiliary_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"batch_num", "Ht", "Wt", "do_mask_h", "do_mask_w"}},
         .hw_config = compute_hw,
+        .advanced_options = {.compile_time_varargs = reduce_sequence.get_compile_time_args()},
     });
 
     ////////////////////////////////////////////////////////////////////////////

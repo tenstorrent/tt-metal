@@ -3,111 +3,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/kernel/compute/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
+constexpr uint32_t reduce_call_count = get_compile_time_arg_val(0);
+template <uint32_t I>
+using ReduceCall = ttnn::kernel_lib::
+    BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallAtT<1, I>, dfb::in0, dfb::scaler, dfb::out, dfb::intermed1>;
+
 void kernel_main() {
-    constexpr int onetile = 1;
-    const uint32_t batch_num = get_arg(args::batch_num);
-    const uint32_t Ht = get_arg(args::Ht);
-    const uint32_t Wt_per_core = get_arg(args::Wt_per_core);
-    const bool do_mask_h = (get_arg(args::do_mask_h) == 1);
-    const bool do_mask_w = (get_arg(args::do_mask_w) == 1);
+    constexpr uint32_t repetitions = get_arg(args::reduce_repetitions);
+    using First = ReduceCall<0>;
+    constexpr uint32_t startup_src_b =
+        First::algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd ? dfb::in0 : dfb::scaler;
+    compute_kernel_hw_startup(dfb::in0, startup_src_b, dfb::out);
 
-    // in0 holds the output_grad tiles the reader streams in; scaler and mask_h_w are the reader's
-    // prepared constant tiles; intermed0 stages a masked input tile; intermed1 carries the running
-    // reduction accumulator; out is the bias_grad tile the writer drains.
-    DataflowBuffer dfb_in0_obj(dfb::in0);
-    DataflowBuffer dfb_scaler_obj(dfb::scaler);
-    DataflowBuffer dfb_mask_h_w_obj(dfb::mask_h_w);
-    DataflowBuffer dfb_intermed0_obj(dfb::intermed0);
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
-
-    compute_kernel_hw_startup(dfb::in0, dfb::in0, dfb::out);
-    dfb_scaler_obj.wait_front(onetile);
-
-    if (do_mask_h || do_mask_w) {
-        dfb_mask_h_w_obj.wait_front(onetile * 2);
-    }
-
-    uint32_t num_tiles = batch_num * Ht;
-    for (uint32_t wt = 0; wt < Wt_per_core; ++wt) {
-        uint32_t num_tile_done = 0;
-        for (uint32_t b = 0; b < batch_num; ++b) {
-            for (uint32_t ht = 0; ht < Ht; ++ht) {
-                bool last_row = (ht == Ht - 1);
-                bool last_col = (wt == Wt_per_core - 1);
-                bool last_out = (num_tile_done == num_tiles - 1);
-                bool do_mask = (do_mask_h && last_row) || (do_mask_w && last_col);
-
-                if (do_mask) {
-                    // get tile from reader and apply mask
-                    dfb_in0_obj.wait_front(onetile);
-                    tile_regs_acquire();
-#if defined FP32_DEST_ACC_EN
-                    reconfig_data_format_srca(dfb::in0);
-#endif
-                    copy_init(dfb::in0);
-                    copy_tile(dfb::in0, 0, dst0);
-
-                    if (do_mask_h && last_row) {
-#if defined FP32_DEST_ACC_EN
-                        reconfig_data_format_srca(dfb::mask_h_w);
-#endif
-                        copy_init(dfb::mask_h_w);
-                        copy_tile(dfb::mask_h_w, 0, dst1);
-                        mask_tile_init();
-                        mask_tile(dst0, dst1);
-                    }
-
-                    if (do_mask_w && last_col) {
-#if defined FP32_DEST_ACC_EN
-                        reconfig_data_format_srca(dfb::mask_h_w);
-#endif
-                        copy_init(dfb::mask_h_w);
-                        copy_tile(dfb::mask_h_w, 1, dst1);
-                        mask_tile_init();
-                        mask_tile(dst0, dst1);
-                    }
-                    tile_regs_commit();
-
-                    tile_regs_wait();
-                    dfb_intermed0_obj.reserve_back(onetile);
-#if defined FP32_DEST_ACC_EN
-                    pack_reconfig_data_format(dfb::intermed0);
-#endif
-                    pack_tile(dst0, dfb::intermed0);
-                    dfb_intermed0_obj.push_back(onetile);
-                    tile_regs_release();
-
-                    dfb_in0_obj.pop_front(onetile);
-                }
-
-                const auto reduce_block = compute_kernel_lib::ReduceInputBlockShape::single();
-                const auto reduce_layout = compute_kernel_lib::ReduceInputMemoryLayout::contiguous();
-                const auto reduce_accum = compute_kernel_lib::Accumulate::at(dfb::intermed1, num_tile_done);
-                if (do_mask) {
-                    if (last_out) {
-                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::intermed0, dfb::scaler, dfb::out>(
-                            reduce_block, reduce_layout, reduce_accum);
-                    } else {
-                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::intermed0, dfb::scaler, dfb::intermed1>(
-                            reduce_block, reduce_layout, reduce_accum);
-                    }
+    for (uint32_t column = 0; column < get_arg(args::units_per_core); ++column) {
+        for (uint32_t batch = 0; batch < repetitions; ++batch) {
+            if (batch == 0) {
+                compute_kernel_lib::reduce<ReduceCall<0>>();
+            } else if constexpr (reduce_call_count > 1) {
+                if (batch + 1 == repetitions) {
+                    compute_kernel_lib::reduce<ReduceCall<reduce_call_count - 1>>();
                 } else {
-                    if (last_out) {
-                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::in0, dfb::scaler, dfb::out>(
-                            reduce_block, reduce_layout, reduce_accum);
-                    } else {
-                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::in0, dfb::scaler, dfb::intermed1>(
-                            reduce_block, reduce_layout, reduce_accum);
-                    }
+                    compute_kernel_lib::reduce<ReduceCall<1>>();
                 }
-
-                num_tile_done++;
             }
         }
     }
+    DataflowBuffer(dfb::scaler).pop_front(get_arg(args::reduce_auxiliary_tiles));
 }
