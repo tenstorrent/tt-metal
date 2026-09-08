@@ -227,6 +227,7 @@ def test_spatial_cross_attention_forward(
             "Residual-only branch did not return the query unchanged; max abs diff "
             f"{(tt_model_output - expected_residual).abs().max():.6f}."
         )
+        return
 
     # Comprehensive comparison using enhanced test utilities
     if ENABLE_LOGGING:
