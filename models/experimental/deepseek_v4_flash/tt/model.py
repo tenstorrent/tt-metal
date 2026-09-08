@@ -270,12 +270,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self.tp_size = tp_size
         if system_config is None:
             system_config = load_system_config(mesh_device=full_device).log()
-        # 8-chip and 32-chip TP4 share the same unfused, full-width q_a/kv replicas.
+        # 8-chip and 32-chip TP4 share the same full-width q_a/kv replicas.
         if tp_size == 4:
             system_config = system_config.with_overrides(
                 attention={
                     "qkv_tp_strategy": "replicated",
-                    "fuse_qa_kv_proj": False,
                     "keep_qa_kv_weights_in_l1": False,
                 }
             )
