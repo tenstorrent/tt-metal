@@ -157,7 +157,12 @@ public:
     static std::pair<MeshSocket, MeshSocket> create_socket_pair(
         const std::shared_ptr<MeshDevice>& sender,
         const std::shared_ptr<MeshDevice>& receiver,
-        const SocketConfig& base_config);
+        const SocketConfig& base_config,
+        bool defer_data_buffer = false);
+    // Complete a pair created with defer_data_buffer=true. Config buffers keep
+    // stable addresses throughout graph construction; only the receiver FIFO
+    // and the metadata that points at it are installed here.
+    static void materialize_socket_pair(MeshSocket& sender_socket, MeshSocket& receiver_socket);
     // Access the data-buffer associated with the socket on the receiver mesh. Can only be queried for receiver sockets.
     std::shared_ptr<MeshBuffer> get_data_buffer() const;
     // Access the config buffer associated with this socket.
@@ -203,6 +208,7 @@ private:
     SocketConfig config_;
     SocketEndpoint socket_endpoint_type_;
     bool rank_scoped_socket_ = false;
+    bool materialized_ = false;
     std::unordered_map<multihost::Rank, multihost::Rank> rank_translation_table_;
     // TODO: replace with enchantum::array
     std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, enchantum::count<SocketEndpoint>>
