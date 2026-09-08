@@ -31,7 +31,47 @@ MeshDevice& MeshTraceBuilder::device() const {
 
 void MeshTraceBuilder::deallocate() {}
 
-class MeshTrace::Impl {};
+class MeshTrace::Impl {
+private:
+    // Probable wont keep this struct, but this is what defines a
+    // mesh trace so the contents should stay.
+    struct MeshTraceBuffer {
+        class MeshTraceDescriptor {
+        public:
+            struct TraceWorkerDescriptor {
+                uint32_t num_completion_worker_cores = 0;
+                uint32_t num_traced_programs_needing_go_signal_multicast = 0;
+                uint32_t num_traced_programs_needing_go_signal_unicast = 0;
+                bool operator==(const TraceWorkerDescriptor& other) const {
+                    return num_completion_worker_cores == other.num_completion_worker_cores &&
+                           num_traced_programs_needing_go_signal_multicast ==
+                               other.num_traced_programs_needing_go_signal_multicast &&
+                           num_traced_programs_needing_go_signal_unicast ==
+                               other.num_traced_programs_needing_go_signal_unicast;
+                }
+            };
+            struct MeshTraceData {
+                MeshCoordinateRange device_range = MeshCoordinateRange(MeshShape(0, 0));
+                std::vector<uint32_t> data;
+            };
+            std::unordered_map<SubDeviceId, TraceWorkerDescriptor> descriptors;
+            std::vector<SubDeviceId> sub_device_ids;
+            std::vector<MeshTraceData> ordered_trace_data;
+            uint32_t total_trace_size = 0;
+        };
+
+        std::shared_ptr<MeshTraceDescriptor> desc = nullptr;  // host
+        std::shared_ptr<MeshBuffer> mesh_buffer = nullptr;    // device
+
+        // Passed in or calculated hwm. I wonder if we could refactor
+        // this into something more appropriate for the current use
+        // case of "get max hwm to make sure I don't alloc beneath it"
+        DeviceAddr dram_high_water_mark = 0;
+
+        // Gone
+        // ~MeshTraceBuffer();
+    };
+};
 
 MeshTrace::MeshTrace(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 
@@ -63,7 +103,7 @@ void EnqueueMeshTrace(MeshCommandQueue& /*mesh_cq*/, MeshTrace& /*mesh_trace*/, 
 // All the trace code from everywhere else
 
 // ============================================================================
-// tt_metal/distributed/mesh_trace.hpp
+// tt_metal/distributed/mesh_trace.hpp && tt_metal/impl/trace/trace_buffer.hpp
 // ============================================================================
 
 // MeshTrace capture consists of 3 steps:
@@ -71,6 +111,18 @@ void EnqueueMeshTrace(MeshCommandQueue& /*mesh_cq*/, MeshTrace& /*mesh_trace*/, 
 // 2. Assembly: On trace end, dispatch commands are generated for all MeshTraceNodes and stored in a
 // MeshTraceDescriptor.
 // 3. Commit to Mesh: Write assembled trace to DRAM buffer.
+
+struct TraceWorkerDescriptor {
+    uint32_t num_completion_worker_cores = 0;
+    uint32_t num_traced_programs_needing_go_signal_multicast = 0;
+    uint32_t num_traced_programs_needing_go_signal_unicast = 0;
+    bool operator==(const TraceWorkerDescriptor& other) const {
+        return num_completion_worker_cores == other.num_completion_worker_cores &&
+               num_traced_programs_needing_go_signal_multicast ==
+                   other.num_traced_programs_needing_go_signal_multicast &&
+               num_traced_programs_needing_go_signal_unicast == other.num_traced_programs_needing_go_signal_unicast;
+    }
+};
 
 struct MeshTraceData {
     MeshCoordinateRange device_range = MeshCoordinateRange(MeshShape(0, 0));
@@ -85,9 +137,10 @@ public:
     uint32_t total_trace_size = 0;
 };
 
+// This is literally what a mesh trace is. A device side buffer and host side metadata.
 struct MeshTraceBuffer {
-    std::shared_ptr<MeshTraceDescriptor> desc = nullptr;
-    std::shared_ptr<MeshBuffer> mesh_buffer = nullptr;
+    std::shared_ptr<MeshTraceDescriptor> desc = nullptr;// host
+    std::shared_ptr<MeshBuffer> mesh_buffer = nullptr;// device
     DeviceAddr dram_high_water_mark = 0;
 
     ~MeshTraceBuffer();
@@ -96,6 +149,9 @@ struct MeshTraceBuffer {
 // ============================================================================
 // tt_metal/distributed/mesh_trace.cpp
 // ============================================================================
+
+// Note: classic MeshTrace is just a class with several static methods,
+// essentially a glorified namespace.
 
 MeshTraceId MeshTrace::next_id() {
     static std::atomic<uint32_t> global_trace_id{0};
@@ -112,21 +168,34 @@ void MeshTrace::populate_mesh_buffer(
     DeviceAddr dram_allocation_high_water_mark,
     DeviceAddr dram_deletion_high_water_mark,
     DeviceAddr max_live_trace_high_water_mark) {
+    // Rounding up the trace buffer size to the nearest page
     uint64_t unpadded_size = trace_buffer->desc->total_trace_size;
     size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(
         unpadded_size, mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM));
     size_t padded_size = round_up(unpadded_size, page_size);
 
+    // Expanding the current mesh_cq total trace buffers size by the size of our new trace
     const auto current_trace_buffers_size = mesh_cq.device()->get_trace_buffers_size();
     mesh_cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
+
+    // This appears to be the complete capacity for trace that the allocator is configured to support.
+    // mesh_cq holds on to the current size.
+    // TODO: I wonder if this capacity allows overlap or not. I would assume not since I haven't seen a high
+    //       level DRAM size sanity check yet.
+    // TODO: Would be interesting to see what other capacity configs are stored within the allocator config.
     auto trace_region_size = mesh_cq.device()->allocator_impl()->get_config().trace_region_size;
 
+
     BufferType buffer_type = BufferType::TRACE;
+    // I guess this is an optional because DeviceLocalBufferConfig accepts an optional,
+    // but it feels weird. Why not just true or false?
+    // TODO: Does this represent trace buffer growth or trace scratch growth?
     std::optional<bool> bottom_up = std::nullopt;
 
     if (trace_region_size == 0) {
-        buffer_type = BufferType::DRAM;
-        bottom_up = false;
+        // TODO: Dynamic trace "scratch" region for allocation, I think.
+        buffer_type = BufferType::DRAM;// TODO: out of curiosity what other buffer types are there?
+        bottom_up = false; // TODO: This leads me to believe it's trace buffer growth
     } else {
         TT_FATAL(
             mesh_cq.device()->get_trace_buffers_size() <= trace_region_size,
@@ -136,33 +205,41 @@ void MeshTrace::populate_mesh_buffer(
             trace_region_size);
     }
 
-    DeviceLocalBufferConfig device_local_trace_buf_config = {
-        .page_size = page_size,
-        .buffer_type = buffer_type,
-        .bottom_up = bottom_up,
-    };
-
-    ReplicatedBufferConfig global_trace_buf_config = {
-        .size = padded_size,
-    };
-
+    // Creating some global context scope then creating a mesh buffer. Appears to actually allocate the new trace across the mesh device.
+    // TODO: Why is a context guard needed?
+    //
     {
+        // TODO: Device local? Like a single physical device? Or does this still mean a mesh device?
+        DeviceLocalBufferConfig device_local_trace_buf_config = {
+            .page_size = page_size, // TODO: interesting that we grab that from the mesh_cq, can every cq have a diff page size?
+            .buffer_type = buffer_type, // TODO: What is the diff in logic between DRAM vs TRACE buffer type?
+            .bottom_up = bottom_up, // TODO: What is the logic for nullopt here? Is it the same as true?
+        };
+        ReplicatedBufferConfig global_trace_buf_config = {
+            .size = padded_size,
+        };
         auto trace_storage_context = tt::tt_metal::make_allocation_context_guard("trace_storage");
         trace_buffer->mesh_buffer =
             MeshBuffer::create(global_trace_buf_config, device_local_trace_buf_config, mesh_cq.device());
     }
 
+    // Set the hwm value of the trace buffer based on input args
     trace_buffer->dram_high_water_mark = std::max(dram_allocation_high_water_mark, dram_deletion_high_water_mark);
-    const DeviceAddr effective_high_water_mark =
+    const DeviceAddr effective_high_water_mark = // gets the global hwm for all traces
         std::max({trace_buffer->dram_high_water_mark, max_live_trace_high_water_mark});
-    if (trace_region_size == 0 && effective_high_water_mark > 0) {
+    bool is_dynamic_trace = trace_region_size == 0;
+    if (is_dynamic_trace && effective_high_water_mark > 0) {
         DeviceAddr trace_buffer_address = trace_buffer->mesh_buffer->address();
+        // detect overlap
         if (trace_buffer_address < effective_high_water_mark) {
+            // always fail, just have to figure out why
+
             bool allocation_overlap =
                 dram_allocation_high_water_mark > 0 && trace_buffer_address < dram_allocation_high_water_mark;
             bool deletion_overlap =
                 dram_deletion_high_water_mark > 0 && trace_buffer_address < dram_deletion_high_water_mark;
 
+            // TODO: this could totally just be some logs and a final tt fatal
             if (allocation_overlap && deletion_overlap) {
                 TT_FATAL(
                     false,
@@ -200,28 +277,51 @@ void MeshTrace::populate_mesh_buffer(
         }
     }
 
+    // Store write offset for each device range
     std::unordered_map<MeshCoordinateRange, uint32_t> write_offset_per_device_range = {};
+
+    // Write our mesh trace data one by one. Each data buffer has a device range. If device ranges are identical,
+    // then data is offset to ensure no overwrite. If there were to be a partial overlap, trace data would be overwritten,
+    // so I guess that never happens.
     for (auto& mesh_trace_data : trace_buffer->desc->ordered_trace_data) {
+        // insert new range into offsets
         auto& device_range = mesh_trace_data.device_range;
         if (!write_offset_per_device_range.contains(device_range)) {
             write_offset_per_device_range.insert({device_range, 0});
         }
+
+
         std::vector<uint32_t> write_data = mesh_trace_data.data;
-        auto unpadded_data_size = write_data.size() * sizeof(uint32_t);
-        auto padded_data_size = round_up(unpadded_data_size, page_size);
-        size_t numel_padding = (padded_data_size - unpadded_data_size) / sizeof(uint32_t);
-        if (numel_padding > 0) {
-            write_data.resize(write_data.size() + numel_padding, 0);
+
+        {// figure out if we need padding for page alignment, add it to our temp write data
+            auto unpadded_data_size = write_data.size() * sizeof(uint32_t);
+            auto padded_data_size = round_up(unpadded_data_size, page_size);
+
+            // Numel is a fire🔥/ground🛘 Pokemon
+            // Num(ber) el(ements) of padding, elements being 32bit uints
+            size_t numel_padding = (padded_data_size - unpadded_data_size) / sizeof(uint32_t);
+
+            if (numel_padding > 0) {// if we need padding, append write_data with it
+                write_data.resize(write_data.size() + numel_padding, 0);
+            }
         }
+
         auto write_region =
             BufferRegion(write_offset_per_device_range.at(device_range), write_data.size() * sizeof(uint32_t));
+        // TODO: I know this writes the mesh trace data to the sub grid, but not sure how all these other params fit
         mesh_cq.enqueue_write_shard_to_sub_grid(
             *(trace_buffer->mesh_buffer), write_data.data(), device_range, true, write_region);
+
+        // Update offset by the size of mesh trace data (no padding)
         write_offset_per_device_range.at(device_range) += mesh_trace_data.data.size() * sizeof(uint32_t);
     }
 }
 
 MeshTraceBuffer::~MeshTraceBuffer() {
+    // subtract size of this mesh buffer from the total tracebuffers size inside device
+    // This was added back in populate mesh buffer. It is the size of the mesh buffer, which is the padded size of the trace.
+    // If populate mesh buffer was never called, the mesh_buffer is also 0, so that's good.
+    //
     if (this->mesh_buffer && this->mesh_buffer->is_allocated() && this->mesh_buffer->device()) {
         auto current_trace_buffers_size = this->mesh_buffer->device()->get_trace_buffers_size();
         this->mesh_buffer->device()->set_trace_buffers_size(current_trace_buffers_size - this->mesh_buffer->size());
@@ -231,6 +331,9 @@ MeshTraceBuffer::~MeshTraceBuffer() {
 // ============================================================================
 // tt_metal/impl/sub_device/sub_device_manager.cpp
 // ============================================================================
+
+// SubDeviceManager owns the legacy mesh traces in the trace buffer pool
+std::unordered_map<distributed::MeshTraceId, std::shared_ptr<distributed::MeshTraceBuffer>> SubDeviceManager::trace_buffer_pool_;
 
 std::shared_ptr<MeshTraceBuffer>& SubDeviceManager::create_trace(const MeshTraceId& trace_id) {
     auto [trace, emplaced] =
@@ -270,26 +373,6 @@ DeviceAddr SubDeviceManagerTracker::get_max_trace_high_water_mark() const {
 // ============================================================================
 // tt_metal/distributed/mesh_device.cpp -- MeshDeviceImpl trace lifecycle
 // ============================================================================
-
-void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
-    TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
-
-    validate_sub_device_manager_tracker();
-    sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
-
-    if (tensor_prefetcher_) {
-        tensor_prefetcher_->release_trace(trace_id);
-    }
-
-    tt::tt_metal::experimental::inspector::ReleaseTraceDebugEntries(trace_id);
-
-    this->unregister_active_trace(trace_id);
-}
-
-std::shared_ptr<MeshTraceBuffer> MeshDeviceImpl::get_mesh_trace(const MeshTraceId& trace_id) {
-    validate_sub_device_manager_tracker();
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_trace(trace_id);
-}
 
 MeshTraceId MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id) {
     auto trace_id = MeshTrace::next_id();
@@ -374,6 +457,26 @@ void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_i
         tensor_prefetcher_->replay_trace(trace_id);
     }
     mesh_command_queues_[cq_id]->enqueue_trace(trace_id, blocking);
+}
+
+void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
+    TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
+
+    validate_sub_device_manager_tracker();
+    sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
+
+    if (tensor_prefetcher_) {
+        tensor_prefetcher_->release_trace(trace_id);
+    }
+
+    tt::tt_metal::experimental::inspector::ReleaseTraceDebugEntries(trace_id);
+
+    this->unregister_active_trace(trace_id);
+}
+
+std::shared_ptr<MeshTraceBuffer> MeshDeviceImpl::get_mesh_trace(const MeshTraceId& trace_id) {
+    validate_sub_device_manager_tracker();
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_trace(trace_id);
 }
 
 uint32_t MeshDeviceImpl::get_trace_buffers_size() const { return trace_buffers_size_; }

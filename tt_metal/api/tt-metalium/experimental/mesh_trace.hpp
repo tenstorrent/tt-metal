@@ -100,6 +100,9 @@ public:
     // runtime arg values are invisible here and must stay valid until the last
     // replay. The trace itself lives in the reserved trace region if one is
     // configured, otherwise in regular DRAM.
+    //
+    // Should build the program binaries and load them onto DRAM as well,
+    // removing the need for a warm up.
     MeshTrace build(MeshCommandQueue& cq) const;
 
     MeshDevice& device() const;
