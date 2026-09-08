@@ -103,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
 
     // Implied math format disable for SrcS (unpacker). Load/store decode uses explicit sfpmem.
-    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
+    cfg_rmw(DISABLE_IMPLIED_SRCS_FORMAT_RMW, !IMPLIED_MATH_FORMAT);
 
     // SFPU load reads what UNP_S wrote; store writes what PACK1 will read.
     const std::uint32_t load_sfpmem  = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.unpack_S_dst));
