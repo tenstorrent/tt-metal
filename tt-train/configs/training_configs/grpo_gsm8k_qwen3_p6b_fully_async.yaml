@@ -36,7 +36,9 @@ remote_rollout_config:
   # TT-Transformers only needs the matching architecture at boot. The trainer's
   # mandatory version-0 snapshot installs the actual custom SFT weights before
   # the first rollout, avoiding checkpoint-cache collectives on the two ranks.
-  architecture_model_id: "Qwen/Qwen3-0.6B"
+  # This basename is the existing key for the checked-in Qwen3-0.6B dummy
+  # architecture parameters; no access to that remote repository is required.
+  architecture_model_id: "ichovpanTT/qwen3-0.6b-base-think-sft"
   mesh_shape: [1, 1]
   max_batch_size: 2
   max_seq_len: 512
