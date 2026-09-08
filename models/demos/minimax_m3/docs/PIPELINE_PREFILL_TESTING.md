@@ -28,29 +28,26 @@ Run the commands below from inside the allocation.
 ## Accuracy — KV PCC
 
 Same two processes as the perf run below (runner under `tt-run`, producer on rank 0's host); the producer
-reads the KV back and PCCs it against the golden trace. Single-rank, `PREFILL_MOCK_MIGRATION=1` makes the
-runner publish its KV chunk table for the read-back gate (without it the producer has nothing to PCC).
-Multi-rank, bare `PREFILL_MOCK_MIGRATION=1` is rejected (each rank would publish a table covering only its
-own layer slice); set `PREFILL_ENABLE_MIGRATION: "1"` ALONGSIDE it in the binding's `global_env` to select
-the merged mock — every rank joins the stage-layout all-gather, rank 0 publishes ONE table spanning all
-layers, and each rank writes a rank-scoped device map (`<stem>_r<rank>.json`; the producer merges the
-local ones). The table path must then be on shared storage (`PREFILL_MIGRATION_TABLE_PATH`, not `/tmp`).
+reads the KV back and PCCs it against the golden trace. The runner always publishes a KV chunk table, at
+any rank count and with no flag: every rank joins the stage-layout all-gather, rank 0 writes ONE table
+spanning all layers, and each rank writes a rank-scoped device map (`<stem>_r<rank>.json`; the producer
+merges the local ones). Leave `PREFILL_ENABLE_MIGRATION` at `0` so the table stays on disk for the
+read-back instead of going to a migration worker. Multi-rank, point `PREFILL_MIGRATION_TABLE_PATH` at
+shared storage — rank 0 writes it and every other host's producer reads it, so `/tmp` cannot work.
 On the producer (Process 2) add `PREFILL_PRODUCER_CHECK_PCC=1` and set `PREFILL_PRODUCER_MAX_REQUESTS=1`
 so every slot's KV is still resident when it is read back. PASS = `[producer] KV cache PCC PASSED`
 (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, default `0.93`).
 
-Both `PREFILL_MANIFEST` and `PREFILL_MOCK_MIGRATION` are shell-forwarded with `mpirun -x`, which lands on
-the launch-host rank only — fine at 1 galaxy (one rank), but at 2+ galaxies the remote ranks never see
-them and silently run the default model without publishing their table. For multi-host, put both in the
-request binding's `global_env` (the same `_minimax.yaml` copy made under Process 1, plus
-`PREFILL_MOCK_MIGRATION: "1"` and `PREFILL_ENABLE_MIGRATION: "1"` — see above) and drop them from the
-shell. A ready-made 2-rank example (intragalaxy) is
+`PREFILL_MANIFEST` is shell-forwarded with `mpirun -x`, which lands on the launch-host rank only — fine at
+1 galaxy (one rank), but at 2+ galaxies the remote ranks never see it and silently run the default model.
+For multi-host, put it in the request binding's `global_env` (the same `_minimax.yaml` copy made under
+Process 1, plus the shared `PREFILL_MIGRATION_TABLE_PATH` — see above) and drop it from the shell. A
+ready-made 2-rank example (intragalaxy) is
 `models/demos/minimax_m3/tt/runners/manifests/m3_binding_mock_migration_intragalaxy_2rank.yaml`.
 
 ### 1 galaxy
 ```bash
 PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
-PREFILL_MOCK_MIGRATION=1 \
   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
   models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_1rank.yaml \
   bh-glx-b08u02:1
@@ -58,7 +55,7 @@ PREFILL_MOCK_MIGRATION=1 \
 
 ### 2 galaxies
 ```bash
-# binding copy carries PREFILL_MANIFEST (absolute) + PREFILL_MOCK_MIGRATION: "1" in global_env
+# binding copy carries PREFILL_MANIFEST (absolute) + a shared PREFILL_MIGRATION_TABLE_PATH in global_env
 ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
   models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_2rank_minimax.yaml \
   bh-glx-b08u02:1,bh-glx-b08u08:1
@@ -209,9 +206,9 @@ TT_CACHE_PATH=<pp-cache-root> PREFILL_MANIFEST=models/demos/minimax_m3/tt/runner
 The producer command is the multi-galaxy one with `PREFILL_SP=4` (2-stage) / `PREFILL_SP=2` (4-stage) —
 same plot/readout (`parse_iteration_times.py`, `plot_pipeline_trace`).
 
-### Accuracy — KV PCC (merged mock)
+### Accuracy — KV PCC (merged table on disk)
 
-Ready-made manifests (10240 ISL, 2 chunks/slot; the merged-mock env, table on shared storage, producer
+Ready-made manifests (10240 ISL, 2 chunks/slot; table on shared storage, producer
 PCC threshold set to M3's 0.88 gate):
 
 ```bash

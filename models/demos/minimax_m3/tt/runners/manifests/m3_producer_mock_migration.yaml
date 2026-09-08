@@ -1,7 +1,7 @@
 # MiniMax-M3 — Gate 1 producer manifest: push 2 slots x 2 chunks, then read the KV back device-lessly
 # through the published table and PCC it against the golden trace.
 #
-# Pairs with m3_binding_mock_migration_1rank.yaml (PREFILL_MOCK_MIGRATION=1). No migration endpoint.
+# Pairs with m3_binding_mock_migration_1rank.yaml (table left on disk). No migration endpoint.
 #
 #   python -m models.demos.common.prefill.runners.prefill_producer \
 #     --manifest models/demos/minimax_m3/tt/runners/manifests/m3_producer_mock_migration.yaml
