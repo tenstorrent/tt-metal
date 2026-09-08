@@ -276,6 +276,10 @@ class TPGatedDeltaNet:
         # the single-step delta rule). Replaces the ~35-op ttnn recurrent step. Constants built lazily.
         self._decode_kda = os.environ.get("QWEN36_GDN_DECODE_KDA") == "1"
         self._kda_dec_const = None
+        # QWEN36_GDN_DECODE_FUSED=1: single fused device op for the decode recurrence + gated norm
+        # (ttnn.experimental.kda.gdn_decode_step, one core per value head, state updated in place).
+        self._decode_fused = os.environ.get("QWEN36_GDN_DECODE_FUSED") == "1"
+        self._norm_w_1d = None
         # QWEN36_KDA_RM_L1=1: ROW_MAJOR fallback tuning. The untilize itself cannot use more than 64 cores
         # for a [1,2048,2560] chunk -- UntilizeCodegen splits work over tile-rows only
         # (untilize_codegen_program_factory.cpp:562 choose_2d_ncol returns 1 whenever
@@ -1332,6 +1336,46 @@ class TPGatedDeltaNet:
         self._kda_dec_const = {"e_q": dev(e_q), "e_g": dev(e_g), "gate": dev(gate), "norm_w": dev(w_host)}
         return self._kda_dec_const
 
+    def _decode_fused_step(self, conv, z, a, b):
+        """Decode recurrence + gated RMSNorm in one device op (see _decode_fused); returns gated [1,1,value_dim] (L1)."""
+        tw, Nv, Nk, Dk, Dv = self.tw, self.Nv, self.Nk, self.Dk, self.Dv
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        if self._norm_w_1d is None:
+            w_host = ttnn.to_torch(ttnn.get_device_tensors(tw["norm_w"])[0]).float().reshape(-1)[:Dv]
+            self._norm_w_1d = ttnn.from_torch(
+                w_host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+        beta = ttnn.sigmoid(b, memory_config=_L1)
+        ttnn.deallocate(b)
+        g = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"]), memory_config=_L1)
+        ttnn.deallocate(a)
+        out_n = ttnn.experimental.kda.gdn_decode_step(
+            conv,
+            beta,
+            g,
+            self.rec_state,
+            self._norm_w_1d,
+            Nv,
+            Nk,
+            Dk,
+            Dv,
+            scale=self.scale,
+            memory_config=_L1,
+            output_dtype=ttnn.bfloat16,
+        )
+        ttnn.deallocate(conv)
+        ttnn.deallocate(beta)
+        ttnn.deallocate(g)
+        gated = _silu_mul(out_n, z, _L1)
+        ttnn.deallocate(out_n)
+        ttnn.deallocate(z)
+        return gated
+
     def _decode_kda_step(self, conv, z, a, b):
         """One decode step of the gated delta rule via the fused KDA chunk ops (see _decode_kda).
         conv: TILE [1,1,qkv_dim_tp] bf16 (post conv+silu, B=1). z/a/b: [1,1,value_dim]/[1,1,Nv]/[1,1,Nv].
@@ -1432,8 +1476,10 @@ class TPGatedDeltaNet:
         conv = ttnn.silu(conv, memory_config=_L1)
 
         kd = self.key_dim_tp
-        if self._decode_kda and B == 1:
-            gated = self._decode_kda_step(conv, z, a, b)
+        if (self._decode_fused or self._decode_kda) and B == 1:
+            gated = (
+                self._decode_fused_step(conv, z, a, b) if self._decode_fused else self._decode_kda_step(conv, z, a, b)
+            )
             partial = self._row_proj(gated, tw["out"])
             ttnn.deallocate(gated)
             partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
