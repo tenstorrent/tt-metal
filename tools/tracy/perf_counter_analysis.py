@@ -1003,7 +1003,9 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     if packer_busy is not None and packer_busy.sum() > 0:
         math_pack_eff = (available_math / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
     elif available_math is not None:
-        avail_ref = get_counter_ref_cnt("MATH_NOT_SCOREBOARD_STALLED") if has_counter("MATH_NOT_SCOREBOARD_STALLED") else None
+        avail_ref = (
+            get_counter_ref_cnt("MATH_NOT_SCOREBOARD_STALLED") if has_counter("MATH_NOT_SCOREBOARD_STALLED") else None
+        )
         if avail_ref is not None:
             math_pack_eff = (available_math / avail_ref * 100).replace([float("inf"), -float("inf")], nan)
         else:
@@ -1223,7 +1225,9 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_AVAILABLE"
         )
     if has_counter("SRCA_WRITE_NOT_BLOCKED_PORT") and has_counter("SRCA_WRITE_AVAILABLE"):
-        per_op_stats["SrcA Write Actual Efficiency"] = compute_ratio_metric("SRCA_WRITE_NOT_BLOCKED_PORT", "SRCA_WRITE_AVAILABLE")
+        per_op_stats["SrcA Write Actual Efficiency"] = compute_ratio_metric(
+            "SRCA_WRITE_NOT_BLOCKED_PORT", "SRCA_WRITE_AVAILABLE"
+        )
     if has_counter("SRCB_WRITE_NOT_BLOCKED_PORT") and has_counter("SRCB_WRITE_AVAILABLE"):
         per_op_stats["SrcB Write Actual Efficiency"] = compute_ratio_metric(
             "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_AVAILABLE"
@@ -1472,7 +1476,9 @@ def compute_device_only_metrics(
         )
     elif "ref_cnt_MATH_NOT_SCOREBOARD_STALLED" in eff_pivot.columns:
         eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_MATH_NOT_SCOREBOARD_STALLED", 0), x.get("ref_cnt_MATH_NOT_SCOREBOARD_STALLED", 0)),
+            lambda x: safe_div(
+                x.get("value_MATH_NOT_SCOREBOARD_STALLED", 0), x.get("ref_cnt_MATH_NOT_SCOREBOARD_STALLED", 0)
+            ),
             axis=1,
         )
     eff_pivot["Unpacker-to-Math Data Flow"] = eff_pivot.apply(
