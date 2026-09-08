@@ -145,15 +145,18 @@ void kernel_main() {
             }
 
             if constexpr (!in0_aligned || !in1_direct) {
-                // A RISC store can retire before its write-request reaches L1, and
-                // the NoC and the unpacker are separate L1 clients with no program order against
-                // this core (TensixTile/BabyRISCV/MemoryOrdering.md). push_back only bumps a stream
-                // register -- a different memory region -- so it orders nothing. Read back the word
-                // holding the last staged byte: same-client L1 requests are processed in order, so
-                // that one landing puts the whole copy ahead of the page becoming visible.
+                // A RISC store can retire before its write-request reaches L1, and the NoC and the
+                // unpacker are separate L1 clients with no program order against this core
+                // (TensixTile/BabyRISCV/MemoryOrdering.md). push_back only bumps a stream register -- a
+                // different memory region -- so neither it nor a fence orders the copy against it. Read
+                // the last stored halfword back instead: obtaining the read-response proves L1 processed
+                // that write, and the store queue is FIFO into a single region, so every earlier store
+                // landed with it. The load has to start at exactly the last store's address -- Wormhole
+                // detects store/load conflicts on the starting byte address alone, so a load of the
+                // containing word is not ordered against a halfword stored partway into it.
                 constexpr uint32_t staged_end = in1_direct ? IN0_STICK_SIZE : IN0_STICK_SIZE + IN1_STICK_SIZE;
-                volatile tt_l1_ptr uint32_t* drain_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>((l1_addr + staged_end - 1) & ~uint32_t{3});
+                volatile tt_l1_ptr uint16_t* drain_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr + staged_end - 2);
 #if defined(ARCH_QUASAR)
                 (void)*drain_ptr;
 #else
