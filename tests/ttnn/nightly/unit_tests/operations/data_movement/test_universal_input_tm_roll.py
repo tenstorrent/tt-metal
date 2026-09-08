@@ -15,7 +15,7 @@ Covers:
   - DRAM-sharded TILE: per-tile NOC read/write (tile-size naturally DRAM-aligned)
   - Program-cache hash correctness: distinct shifts produce distinct programs
   - Optional output memory_config parameter (sharded → interleaved and vice versa)
-  - COL_MAJOR shard orientation (HEIGHT and BLOCK)
+  - COL_MAJOR shard orientation (HEIGHT / WIDTH / BLOCK, including genuinely 2D core grids)
 """
 
 import pytest
@@ -77,6 +77,33 @@ def run_roll(device, torch_input, layout, mem_config, shifts, dims):
     got = ttnn.to_torch(ttnn_output.cpu())
     ref = torch.roll(torch_input, list(shifts), list(dims))
     assert_with_pcc(ref.float(), got.float(), _PCC)
+
+
+def run_roll_exact(device, shape, sh, sw, grid_x, grid_y, tensor_layout, orientation, shifts, dims, layout):
+    """Roll on an explicit grid_x-by-grid_y core grid, compared bit-exactly.
+
+    Every element gets a distinct value, so a gather that reads the right offset from the *wrong*
+    core cannot coincide with the expected result. Values stay inside bfloat16's exactly
+    representable integer range (0..256), which is what lets this assert equality instead of PCC.
+    """
+    compute_grid = device.compute_with_storage_grid_size()
+    if grid_x > compute_grid.x or grid_y > compute_grid.y:
+        pytest.skip(f"Device grid ({compute_grid.x}x{compute_grid.y}) too small for {grid_x}x{grid_y}")
+    numel = int(torch.tensor(shape).prod())
+    assert numel <= 256, f"{numel} elements would alias in bfloat16; keep the distinct fill exact"
+    torch_input = torch.arange(numel, dtype=torch.float32).reshape(shape).to(torch.bfloat16)
+    spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}),
+        (sh, sw),
+        orientation,
+    )
+    mem_config = ttnn.MemoryConfig(tensor_layout, ttnn.BufferType.L1, spec)
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem_config
+    )
+    got = ttnn.to_torch(ttnn.roll(ttnn_input, list(shifts), list(dims)).cpu())
+    ref = torch.roll(torch_input, list(shifts), list(dims))
+    assert torch.equal(ref.float(), got.float())
 
 
 # ─── DRAM / L1 interleaved — backward compatibility ──────────────────────────
@@ -400,7 +427,12 @@ def test_roll_output_memory_config_l1_interleaved(device):
     ],
 )
 def test_roll_col_major_height_sharded(device, shape, sh, sw, shifts, dims, layout):
-    """HEIGHT_SHARDED with COL_MAJOR orientation — native kernel."""
+    """HEIGHT_SHARDED with COL_MAJOR orientation — native kernel.
+
+    `num_cores_to_corerangeset` packs these shard counts onto a single row of cores, where the
+    ROW_MAJOR and COL_MAJOR core enumerations coincide. The multi-row grids that actually
+    distinguish them are covered by test_roll_col_major_height_sharded_multi_row_grid below.
+    """
     torch.manual_seed(14)
     compute_grid = device.compute_with_storage_grid_size()
     total_rows = shape[0] * shape[1] * shape[2]
@@ -414,6 +446,85 @@ def test_roll_col_major_height_sharded(device, shape, sh, sw, shifts, dims, layo
     )
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     run_roll(device, torch.randn(shape, dtype=torch.bfloat16), layout, mem_config, shifts, dims)
+
+
+# On a single row (or single column) of cores the ROW_MAJOR and COL_MAJOR enumerations agree, so
+# HEIGHT/WIDTH + COL_MAJOR only diverge once the grid is genuinely 2D. These three tests pin the
+# shard -> core map for each sharded layout: HEIGHT on a multi-row grid used to gather whole shards
+# from the wrong core, WIDTH used to index past the end of the per-core transfer table and segfault
+# inside the program factory, and BLOCK — the one layout whose shard grid matches its core grid —
+# was and stays correct.
+
+
+@pytest.mark.parametrize("grid_x,grid_y", [(8, 2), (2, 8), (4, 4)])
+@pytest.mark.parametrize(
+    "shifts,dims",
+    [
+        ([2], [2]),  # height dim: rows cross shard boundaries -> src core != dst core
+        ([1], [1]),  # higher dim: whole cell-rows permute across shards
+        ([3], [3]),  # last dim: rotates within each shard, src core == dst core
+    ],
+)
+def test_roll_col_major_height_sharded_multi_row_grid(device, grid_x, grid_y, shifts, dims):
+    """HEIGHT_SHARDED + COL_MAJOR on a 2D core grid: 16 shards of 2 rows over 16 cores."""
+    run_roll_exact(
+        device,
+        [1, 2, 16, 8],
+        sh=2,
+        sw=8,
+        grid_x=grid_x,
+        grid_y=grid_y,
+        tensor_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,
+        shifts=shifts,
+        dims=dims,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+
+@pytest.mark.parametrize("grid_x,grid_y", [(8, 1), (4, 2), (2, 4), (1, 8)])
+@pytest.mark.parametrize("shifts,dims", [([2], [3]), ([1], [2])])
+def test_roll_col_major_width_sharded(device, grid_x, grid_y, shifts, dims):
+    """WIDTH_SHARDED + COL_MAJOR: 8 shards of 2 columns over 8 cores."""
+    run_roll_exact(
+        device,
+        [1, 1, 8, 16],
+        sh=8,
+        sw=2,
+        grid_x=grid_x,
+        grid_y=grid_y,
+        tensor_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,
+        shifts=shifts,
+        dims=dims,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+
+@pytest.mark.parametrize(
+    "orientation,grid_x,grid_y",
+    [
+        # 2 shard-rows x 4 shard-cols. ROW_MAJOR sends height->y and width->x; COL_MAJOR swaps them.
+        (ttnn.ShardOrientation.ROW_MAJOR, 4, 2),
+        (ttnn.ShardOrientation.COL_MAJOR, 2, 4),
+    ],
+)
+@pytest.mark.parametrize("shifts,dims", [([2], [3]), ([4], [2])])
+def test_roll_block_sharded_orientations(device, orientation, grid_x, grid_y, shifts, dims):
+    """BLOCK_SHARDED in both orientations still matches torch.roll exactly."""
+    run_roll_exact(
+        device,
+        [1, 1, 16, 16],
+        sh=8,
+        sw=4,
+        grid_x=grid_x,
+        grid_y=grid_y,
+        tensor_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        orientation=orientation,
+        shifts=shifts,
+        dims=dims,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
 
 
 # rd=(2,6) shard_h=4 shift=1 dim=2: 3-source case (past reader's 2-slot `src_base`) routed via interleaved round-trip.
