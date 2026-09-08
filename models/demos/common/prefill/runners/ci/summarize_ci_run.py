@@ -254,9 +254,7 @@ def _perf_metrics(kept, cs_sorted, disp, chunk_size, probe_chunks=None):
             continue
         span = end[hi] - end[lo]
         tput = (hi - lo) * chunk_size / span
-        out.append(
-            f"  throughput {lbl:>14} (chunk {d:>3}): {tput:>12,.1f} tok/s" f"  ({hi - lo} chunks over {span:.3f} s)"
-        )
+        out.append(f"  throughput {lbl:>14} (chunk {d:>3}): {tput:>12,.1f} tok/s")
         rec["throughput_tok_s"][lbl] = tput
 
     # Occupancy compares a rank against its own timeline, so it is meaningless without a pipeline.
