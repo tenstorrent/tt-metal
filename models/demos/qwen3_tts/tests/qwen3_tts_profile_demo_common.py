@@ -799,11 +799,10 @@ def capture_speaker_encoder_forward_trace(device, model, main_weights) -> Dict[s
     """Capture the ECAPA forward trace the demo uses with ``QWEN3_TTS_SE_TRACE=1``.
 
     ``SpeakerEncoder.capture_forward_trace`` forces device conv/ASP for the capture
-    region so every conv is on device inside the Metal trace. The partial
-    ``speaker_tdnn`` / ``speaker_block`` tests in ``test_qwen3_tts_profile_single_layer``
-    profile untraced slices with synthetic weights and default host-fuse — they miss
-    most conv work (entry TDNN conv runs on the host; one SERes2Net block is not the
-    full encoder).
+    region so every conv is on device inside the Metal trace. The matching
+    ``test_speaker_encoder`` in ``test_qwen3_tts_profile_single_layer`` replays that
+    same capture; ``speaker_tdnn`` / ``speaker_block`` are traced device-conv slices
+    of the same path (not the host-fuse eager default).
     """
     from models.demos.qwen3_tts.tt.server import encode_reference_audio
 
