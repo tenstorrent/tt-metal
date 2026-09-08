@@ -988,6 +988,13 @@ def _run_spec_decode(
     )
     input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
+    # Spec decode warms prefill with can_sample_on_device=False (above) and
+    # samples on HOST via _host_sample, so there are no device sampling params.
+    # ign/gemma4_31B_MTP_Dflash got this from _prepare_demo_prefill_warmup's
+    # return value; this path keeps the inline warmup, so state it explicitly
+    # rather than inheriting a name from a helper it does not call.
+    device_sampling_params = build_device_sampling_params(sampling_params, can_sample=False)
+
     logger.info("Spec-decode prefill...")
     _, prefill_out, prefill_elapsed = _run_demo_prefill(
         generator=generator,
