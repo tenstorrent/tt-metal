@@ -19,6 +19,7 @@
 #include "ops/distributed/losses.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
+#include "test_utils/mesh_utils.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "tt-metalium/host_api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -53,7 +54,7 @@ constexpr bool is_nigthly_tt_train_tests_enabled = false;
 
 [[nodiscard]] bool should_run_multi_device_tests() {
     bool enable_nightly = should_run_nightly_tests();
-    bool sufficient_devices = tt::tt_metal::GetNumAvailableDevices() >= 2;
+    bool sufficient_devices = ttml::test_utils::host_device_count() >= 2;
     return enable_nightly && sufficient_devices;
 }
 }  // namespace
