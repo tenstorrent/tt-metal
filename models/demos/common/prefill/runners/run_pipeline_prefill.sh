@@ -14,7 +14,6 @@ cd "$TT_METAL_HOME"
 FWD_ENV=""
 [ -n "${PREFILL_MANIFEST:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MANIFEST"
 [ -n "${PREFILL_MODEL:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MODEL"
-[ -n "${PREFILL_MOCK_MIGRATION:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MOCK_MIGRATION"
 
 exec python3 ttnn/ttnn/distributed/ttrun.py \
   --tcp-interface "$TCP_IFACE" \
