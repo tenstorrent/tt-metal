@@ -15,6 +15,11 @@ namespace ckernel {
 // Mirrors ckernel::sfpu::TopkTieOrder, which is math-TRISC only.
 enum class TopkTieOrder : std::uint8_t { Unset, Ascending, Descending };
 
+// The tie order follows the GLOBAL sort order, never a call's per-pair idir.
+constexpr TopkTieOrder topk_tie_order_from_global_direction(bool descending) {
+    return descending ? TopkTieOrder::Descending : TopkTieOrder::Ascending;
+}
+
 // topK local sort
 // clang-format off
 /**
@@ -340,7 +345,11 @@ ALWI void topk_stamp_tile_rank_range(uint32_t idst, uint32_t dst_tile_index, uin
  */
 ALWI void topk_strip_rank_tags(std::uint32_t idst) { MATH((ckernel::sfpu::_topk_strip_rank_tags_(idst))); }
 
-// Before packing a uint16 index tile that lives in 32-bit DEST as a plain integer.
+/**
+ * Moves a uint16 index tile that lives in 32-bit DEST as a plain integer into the packer-visible
+ * high half (SFPSTORE mode 9), before it is packed. Must run on MATH while DEST is still acquired
+ * (before tile_regs_commit / pack_tile).
+ */
 ALWI void topk_finalize_uint16_indices(std::uint32_t idst) { MATH((ckernel::sfpu::_topk_finalize_hi16_index_tile_(idst))); }
 
 /**

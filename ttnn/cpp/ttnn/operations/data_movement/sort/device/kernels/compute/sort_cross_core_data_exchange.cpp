@@ -88,9 +88,7 @@ void kernel_main() {
     ckernel::topk_tile_init();
     transpose_init(dfb::input_tensor);
 
-    // Tie order follows the GLOBAL sort order, never the per-call idir.
-    constexpr auto tie_order =
-        (!ascending) ? ckernel::TopkTieOrder::Descending : ckernel::TopkTieOrder::Ascending;
+    constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(!ascending);
 
     for (uint32_t h = 0; h < Ht; h++) {
 #ifdef IS_ROW_MAJOR

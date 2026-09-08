@@ -601,23 +601,11 @@ def _hex_row(bits_u16):
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-        ]
-    ),
-    # Single 2-tile slab per stage; also satisfies the fused-mode W == 128
-    # constraint, so no mode is skipped.
-    input_dimensions=[[32, 128]],
-    K=[32],
     sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
     sort_mode=["stable", "fused", "rank_stamped"],
     stimuli_class=ADVERSARIAL_STIMULI_CLASSES,
 )
 def test_topk_sfpu_adversarial(
-    formats: InputOutputFormat,
-    input_dimensions: list,
-    K: int,
     sort_direction: TopKSortDirection,
     sort_mode: str,
     stimuli_class: str,
@@ -632,6 +620,11 @@ def test_topk_sfpu_adversarial(
     The unstable engine is deliberately excluded: with heavy ties its output
     order is unspecified, so no exact golden exists for these classes.
     """
+    formats = input_output_formats([DataFormat.Float16_b])[0]
+    # Single 2-tile slab per stage; also satisfies the fused-mode W == 128
+    # constraint, so no mode is skipped.
+    input_dimensions = [32, 128]
+    K = 32
     stable_sort = sort_mode == "stable"
     fused_stable = sort_mode == "fused"
     rank_stamped = sort_mode == "rank_stamped"

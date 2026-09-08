@@ -132,9 +132,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(input_dfb_index, index_dfb_index, input_transposed_dfb_index);
     ckernel::topk_tile_init<fused_keys>();
-    // Tie order follows the GLOBAL sort order, never the per-call idir.
-    constexpr auto tie_order =
-        (largest != 0) ? ckernel::TopkTieOrder::Descending : ckernel::TopkTieOrder::Ascending;
+    constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(largest != 0);
 
     DataflowBuffer input_transposed_dfb(input_transposed_dfb_index);
     DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
