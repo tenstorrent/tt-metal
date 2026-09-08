@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "attn_res_gather_softmax_program_factory.hpp"
 
 #include <algorithm>
@@ -335,11 +336,23 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     // `pending` aliases running_sum where no write was handed in, so the accessor list is
     // the same length either way and the kernel's compile-time offsets do not move. The
     // kernel never reads through it there.
+    namespace rh = ttnn::kernel_lib::host;
+    auto reduce_plan = rh::make_reduce_plan(
+        TensorSpec(Shape{32, Wt * 32}, TensorLayout(partial.dtype(), PageConfig(Layout::TILE), MemoryConfig{})),
+        TensorSpec(Shape{32, 1}, TensorLayout(shift.dtype(), PageConfig(Layout::TILE), MemoryConfig{})),
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        {target_device->arch(), fp32_dest_acc_en, dst_full_sync_en, target_device->l1_size_per_core()});
+    reduce_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop;
+
     std::vector<uint32_t> reader_ct_args = {Wt, static_cast<uint32_t>(fuse_add)};
     TensorAccessorArgs(*running_sum.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*partial.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*q.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*pending.buffer()).append_to(reader_ct_args);
+    rh::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).append_to(reader_ct_args);
 
     const auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -361,12 +374,14 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         all_fold_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
-    const std::vector<uint32_t> compute_ct_args = {
+    std::vector<uint32_t> compute_ct_args = {
         Wt,
         ring_size,
         std::bit_cast<uint32_t>(operation_attributes.inv_hidden_size),
         std::bit_cast<uint32_t>(operation_attributes.eps),
         static_cast<uint32_t>(fuse_add)};
+
+    rh::ReduceCallArgs(reduce_plan, {6, 1, 7}).append_to(compute_ct_args);
 
     const auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,

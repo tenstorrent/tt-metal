@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "dit_fused_distributed_rmsnorm_program_factory.hpp"
 
 #include <algorithm>
@@ -1055,6 +1056,27 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // Per-head norm reduces over head_dim only, so the AVG scalar divides by
     // head_dim instead of H_full.
     const uint32_t reduce_factor = args.per_head_norm ? (W / args.num_heads_per_device) : H_full;
+    namespace rh = ttnn::kernel_lib::host;
+    const TensorLayout reduce_layout(DataType::FLOAT32, PageConfig(Layout::TILE), MemoryConfig{});
+    const auto make_local_call = [&](float scalar) {
+        auto plan = rh::make_reduce_plan(
+            TensorSpec(Shape{32, 32}, reduce_layout),
+            TensorSpec(Shape{32, 1}, reduce_layout),
+            ReduceOpMath::SUM,
+            ReduceOpDim::W,
+            scalar,
+            ReduceFp32Mode::Fast,
+            {device->arch(), fp32_dest_acc_en, false, device->l1_size_per_core()});
+        plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
+        return plan;
+    };
+    const auto pre_reduce_plan = make_local_call(1.0F);
+    const auto post_reduce_plan = make_local_call(1.0F / reduce_factor);
+    const auto append_reduce_auxiliary = [&](std::vector<uint32_t>& writer_args) {
+        rh::ReduceAuxiliaryArgs({reduce_scalar_sum_cb_id, pre_reduce_plan.auxiliary_tiles}).append_to(writer_args);
+        rh::ReduceAuxiliaryArgs({reduce_scalar_avg_cb_id, post_reduce_plan.auxiliary_tiles}).append_to(writer_args);
+    };
+
     std::vector<uint32_t> reader_compile_args = {
         input_cb_id,
         weight_cb_id,
@@ -1174,6 +1196,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
         }
 
+        append_reduce_auxiliary(writer_compile_args);
         writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
@@ -1216,6 +1239,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         } else {
             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
         }
+        append_reduce_auxiliary(writer_compile_args);
         writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
@@ -1325,6 +1349,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         static_cast<uint32_t>(per_batch_bias),
         rows_per_batch_tiles,
     };
+
+    rh::ReduceCallArgs(pre_reduce_plan, {0, 1, 2}).append_to(compute_compile_args);
+    rh::ReduceCallArgs(post_reduce_plan, {0, 1, 2}).append_to(compute_compile_args);
 
     // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32
     // input. It is what keeps every internal CB (stats, reduce, intermediate,
