@@ -294,3 +294,40 @@ def test_atanh(device, h, w):
     # The log1p reformulation makes the fp32 path stable on (-1, 1); the default
     # [0, 1) input exercises the small-x stable region.
     run_unary_test(device, h, w, ttnn.atanh, ulp=2)
+
+
+@pytest.mark.parametrize("exponent", [100, 111, 114, 118, 119, 122, 125])
+def test_reciprocal_fp32_large_magnitude(device, exponent):
+    """1/x must keep its Newton refinement over the whole float32 normal range.
+
+    The Blackhole fp32 path applied the refinement additively, y = y + y*(e + e**2 + e**3) with
+    e = 1 - x*y.  The correction *term* y*(e + ...) is about 2**-8/x, which is below FLT_MIN for
+    |x| >= 2**119, so the SFPU flushed it to zero and the op returned the raw ~7-bit SFPARECIP
+    seed: 0.56% relative error (90,174 ULP) on every value of the seven binades 2**119..2**126,
+    with partial loss from 2**111 up.  2**100 is a control binade that was never affected.
+    """
+    mantissas = 1.0 + torch.arange(256, dtype=torch.float64) / 256.0
+    values = (mantissas * (2.0**exponent)).to(torch.float32)
+    torch_input_tensor = torch.cat([values, -values]).reshape(16, 32)
+    golden = (1.0 / torch_input_tensor.to(torch.float64)).to(torch.float32)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.reciprocal(input_tensor))
+
+    assert_with_ulp(golden, output_tensor, 2)
+
+
+def test_reciprocal_fp32_special_values(device):
+    """Signs and poles of the fp32 reciprocal: 1/+-0 = +-inf, 1/+-inf = +-0, and exact powers of two."""
+    torch_input_tensor = torch.tensor([[0.0, -0.0, float("inf"), float("-inf"), 1.0, -1.0, 2.0, 0.5]])
+    expected = torch.tensor(
+        [[float("inf"), float("-inf"), 0.0, -0.0, 1.0, -1.0, 0.5, 2.0]],
+        dtype=torch.float32,
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.reciprocal(input_tensor))
+
+    assert torch.equal(
+        output_tensor.view(torch.int32), expected.view(torch.int32)
+    ), f"expected {expected}, got {output_tensor}"
