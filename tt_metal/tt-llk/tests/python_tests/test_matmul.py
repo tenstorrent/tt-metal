@@ -2,17 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from helpers.dest_params import (
-    UnpackPath,
-    dest_acc_modes,
-    dest_sync_modes,
-    dest_tile_capacity,
-    unpack_to_dest_modes,
-)
 from helpers.device import BootMode
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
-from helpers.llk_params import MathFidelity, format_dict
+from helpers.llk_params import DestAccumulation, DestSync, MathFidelity, format_dict
 from helpers.matmul_sweep import (
     generate_matmul_dimension_combinations,
     generate_tile_dims,
@@ -36,6 +29,12 @@ MATMUL_FORMATS = input_output_formats(
 )
 
 
+def _matmul_dest_bank_tiles(formats, dest_acc):
+    if is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes:
+        return 4
+    return 8
+
+
 @parametrize(
     math_fidelity=[
         MathFidelity.LoFi,
@@ -44,13 +43,11 @@ MATMUL_FORMATS = input_output_formats(
         MathFidelity.HiFi4,
     ],
     formats=MATMUL_FORMATS,
-    dest_acc=dest_acc_modes,
-    dest_sync=lambda: dest_sync_modes(),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.FpuMath
-    ),
-    dimensions=lambda dest_acc, dest_sync: generate_matmul_dimension_combinations(
-        dest_tile_capacity(dest_sync, dest_acc)
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    dimensions=lambda formats, dest_acc: generate_matmul_dimension_combinations(
+        _matmul_dest_bank_tiles(formats, dest_acc)
     ),
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself

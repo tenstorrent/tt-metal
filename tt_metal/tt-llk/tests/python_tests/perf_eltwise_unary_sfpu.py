@@ -4,23 +4,19 @@
 
 import pytest
 from conftest import skip_for_blackhole
-from helpers.dest_params import (
-    UnpackPath,
-    dest_acc_modes,
-    dest_sync_modes,
-    unpack_to_dest_modes,
-)
+from helpers.constraints import distinct_dest_accumulation_modes
+from helpers.dest_params import UnpackPath, unpack_to_dest_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
+    DestSync,
     FastMode,
     MathOperation,
     StableSort,
     Transpose,
 )
 from helpers.param_config import (
-    generate_perf_input_dimensions,
     input_output_formats,
     parametrize,
 )
@@ -81,8 +77,12 @@ _OPS_WITH_STABLE_SORT = {
 
 def _get_dest_acc_modes(mathop, formats):
     if mathop in _OPS_WITHOUT_DEST_ACC:
-        return dest_acc_modes(formats, allowed=[DestAccumulation.No], distinct=True)
-    return dest_acc_modes(formats, distinct=True)
+        return [DestAccumulation.No]
+    # TestConfig promotes dest_acc=No to Yes for outlier format combos, so asking
+    # for both would record two rows with an identical key (the same kernel twice).
+    return distinct_dest_accumulation_modes(
+        formats, [DestAccumulation.Yes, DestAccumulation.No]
+    )
 
 
 def _get_fast_modes(mathop):
@@ -165,7 +165,7 @@ def _get_formats(mathop):
     ],
     mathop=PERF_SWEEP_OPS,
     dest_acc=lambda mathop, formats: _get_dest_acc_modes(mathop, formats),
-    dest_sync=lambda: dest_sync_modes(is_perf=True),
+    dest_sync=[DestSync.Half],
     unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
         formats, dest_acc, path=UnpackPath.Sfpu
     ),
@@ -177,9 +177,9 @@ def _get_formats(mathop):
     ],  # Number of SFPU iterations
     fast_mode=lambda mathop: _get_fast_modes(mathop),
     stable_sort=lambda mathop: _get_stable_sort_modes(mathop),
-    input_dimensions=lambda dest_acc, dest_sync: generate_perf_input_dimensions(
-        dest_acc, dest_sync
-    ),
+    input_dimensions=[
+        [128, 64],  # tile_cnt: 8
+    ],
 )
 def test_perf_eltwise_unary_sfpu(
     perf_report,

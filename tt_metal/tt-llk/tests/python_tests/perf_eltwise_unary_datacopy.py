@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.dest_params import dest_sync_modes
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_eltwise_unary_datacopy import (
@@ -14,7 +13,7 @@ from test_eltwise_unary_datacopy import (
 
 @pytest.mark.perf
 @parametrize(
-    **{**DATACOPY_SWEEP, "dest_sync": lambda: dest_sync_modes(is_perf=True)},
+    **DATACOPY_SWEEP,
     run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[32],
     is_perf=[True],
@@ -49,7 +48,7 @@ def test_perf_eltwise_unary_datacopy(
 
 @pytest.mark.perf
 @parametrize(
-    **{**DATACOPY_SUB_BYTE_SWEEP, "dest_sync": lambda: dest_sync_modes(is_perf=True)},
+    **DATACOPY_SUB_BYTE_SWEEP,
     run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[32],
     is_perf=[True],

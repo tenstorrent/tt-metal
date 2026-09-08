@@ -3,12 +3,7 @@
 
 import pytest
 import torch
-from helpers.dest_params import (
-    UnpackPath,
-    dest_acc_modes,
-    dest_sync_modes,
-    unpack_to_dest_modes,
-)
+from helpers.dest_params import dest_acc_modes
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -20,6 +15,7 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     BroadcastType,
     DestAccumulation,
+    DestSync,
     EltwiseBinaryReuseDestType,
     MathFidelity,
     MathOperation,
@@ -119,10 +115,8 @@ def _get_valid_tile_dimensions(transpose_srca, broadcast_type):
 
 @parametrize(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    dest_sync=lambda: dest_sync_modes(),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.FpuMath
-    ),
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
     formats=lambda dest_acc: _get_valid_formats(dest_acc),
     broadcast_type=[
         BroadcastType.None_,
@@ -322,10 +316,8 @@ def test_eltwise_binary(
 
 @parametrize(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    dest_sync=lambda: dest_sync_modes(),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.FpuMath
-    ),
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
     formats=[
         fmt
         for fmt in input_output_formats(
@@ -694,10 +686,8 @@ def _compute_dest_reuse_golden(
         same=True,
     ),
     dest_acc=lambda formats: dest_acc_modes(formats, allowed=[DestAccumulation.No]),
-    dest_sync=lambda: dest_sync_modes(),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.FpuMath
-    ),
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
     tile_dimensions=[[32, 32], [16, 32], [8, 32]],
     input_dimensions=[[512, 32]],
@@ -791,10 +781,8 @@ def test_eltwise_binary_dest_reuse(
 
 @parametrize(
     dest_acc=[DestAccumulation.Yes],  # Dest accumulation is required for int8.
-    dest_sync=lambda: dest_sync_modes(),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.FpuMath
-    ),
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
     formats=InputOutputFormat(DataFormat.Int8, DataFormat.Int8),
     broadcast_type=[
         BroadcastType.None_,

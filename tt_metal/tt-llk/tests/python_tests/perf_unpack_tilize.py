@@ -3,14 +3,8 @@
 
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.dest_params import (
-    UnpackPath,
-    dest_acc_modes,
-    dest_sync_modes,
-    unpack_to_dest_modes,
-)
 from helpers.format_config import DataFormat
-from helpers.llk_params import PerfRunType
+from helpers.llk_params import DestSync, PerfRunType
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
@@ -33,20 +27,14 @@ from helpers.test_variant_parameters import (
             DataFormat.Fp8_e4m3,
         ]
     ),
-    dest_acc=dest_acc_modes,
-    dest_sync=lambda: dest_sync_modes(is_perf=True),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.ForceFalse
-    ),
+    dest_sync=[DestSync.Half],
     rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
     ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
 )
 def test_perf_unpack_tilize_float(
     perf_report,
     formats,
-    dest_acc,
     dest_sync,
-    unpack_to_dest,
     rt_dim,
     ct_dim,
 ):
@@ -64,9 +52,7 @@ def test_perf_unpack_tilize_float(
     _perf_unpack_tilize(
         perf_report,
         formats,
-        dest_acc,
         dest_sync,
-        unpack_to_dest,
         rt_dim,
         ct_dim,
     )
@@ -75,29 +61,21 @@ def test_perf_unpack_tilize_float(
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
-    dest_acc=dest_acc_modes,
-    dest_sync=lambda: dest_sync_modes(is_perf=True),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.Int32Dest
-    ),
+    dest_sync=[DestSync.Half],
     rt_dim=[1, 2],
     ct_dim=[1, 2],
 )
 def test_perf_unpack_tilize_int(
     perf_report,
     formats,
-    dest_acc,
     dest_sync,
-    unpack_to_dest,
     rt_dim,
     ct_dim,
 ):
     _perf_unpack_tilize(
         perf_report,
         formats,
-        dest_acc,
         dest_sync,
-        unpack_to_dest,
         rt_dim,
         ct_dim,
     )
@@ -106,9 +84,7 @@ def test_perf_unpack_tilize_int(
 def _perf_unpack_tilize(
     perf_report,
     formats,
-    dest_acc,
     dest_sync,
-    unpack_to_dest,
     rt_dim,
     ct_dim,
 ):
@@ -142,8 +118,7 @@ def _perf_unpack_tilize(
             tile_count_B=tile_count,
             tile_count_res=tile_count,
         ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        unpack_to_dest=formats.input_format == DataFormat.Int32,
     )
 
     configuration.run(perf_report)

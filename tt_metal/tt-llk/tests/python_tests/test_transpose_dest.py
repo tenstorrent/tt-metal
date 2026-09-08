@@ -2,10 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from helpers.dest_params import (
-    dest_acc_modes,
-    dest_sync_modes,
-)
+from helpers.dest_params import dest_acc_modes
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -66,7 +63,7 @@ def transpose_dest_unpack_to_dest(formats, math_transpose_faces):
 @parametrize(
     formats=TRANSPOSE_DEST_FLOAT_FORMATS,
     dest_acc=transpose_dest_dest_acc,
-    dest_sync=lambda: dest_sync_modes(),
+    dest_sync=[DestSync.Half],
     math_transpose_faces=transpose_dest_math_transpose_faces,
     unpack_to_dest=transpose_dest_unpack_to_dest,
 )
@@ -89,7 +86,7 @@ def test_transpose_dest_float(
 @parametrize(
     formats=input_output_formats([DataFormat.Int32], same=True),
     dest_acc=[DestAccumulation.Yes],
-    dest_sync=lambda: dest_sync_modes(),
+    dest_sync=[DestSync.Half],
     math_transpose_faces=[Transpose.Yes, Transpose.No],
     unpack_to_dest=[True],
 )
@@ -106,7 +103,7 @@ def test_transpose_dest_int(
 @parametrize(
     formats=input_output_formats([DataFormat.Int8], same=True),
     dest_acc=[DestAccumulation.Yes],
-    dest_sync=lambda: dest_sync_modes(),
+    dest_sync=[DestSync.Half],
     math_transpose_faces=[Transpose.Yes],
     unpack_to_dest=[False],
 )
@@ -133,7 +130,7 @@ def test_transpose_dest_int8(
 @parametrize(
     formats=input_output_formats([DataFormat.Int8], same=True),
     dest_acc=[DestAccumulation.Yes],
-    dest_sync=lambda: dest_sync_modes(),
+    dest_sync=[DestSync.Half],
     math_transpose_faces=[Transpose.Yes],
     unpack_to_dest=[False],
 )

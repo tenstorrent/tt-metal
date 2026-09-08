@@ -3,11 +3,6 @@
 
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.dest_params import (
-    UnpackPath,
-    dest_acc_modes,
-    unpack_to_dest_modes,
-)
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestSync,
@@ -39,20 +34,14 @@ from helpers.test_variant_parameters import (
             DataFormat.Fp8_e4m3,
         ]
     ),
-    dest_acc=lambda formats: dest_acc_modes(formats, distinct=True),
     dest_sync=[DestSync.Half],
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.Sfpu
-    ),
     full_rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
     full_ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
 )
 def test_perf_pack_untilize(
     perf_report,
     formats,
-    dest_acc,
     dest_sync,
-    unpack_to_dest,
     full_rt_dim,
     full_ct_dim,
 ):
@@ -114,8 +103,7 @@ def test_perf_pack_untilize(
             tile_count_B=tile_count,
             tile_count_res=tile_count,
         ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        unpack_to_dest=formats.input_format.is_32_bit(),
     )
 
     configuration.run(perf_report)

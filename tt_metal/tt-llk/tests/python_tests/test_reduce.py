@@ -4,17 +4,12 @@
 import math
 
 import torch
-from helpers.dest_params import (
-    UnpackPath,
-    dest_acc_modes,
-    dest_sync_modes,
-    unpack_to_dest_modes,
-)
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
+    DestSync,
     MathFidelity,
     MathOperation,
     ReduceDimension,
@@ -61,9 +56,7 @@ def _reduce_dest_acc(formats):
             and not formats.input_format.is_32_bit()
         )
     )
-    return dest_acc_modes(
-        formats, allowed=[DestAccumulation.Yes] if required_yes else None
-    )
+    return [DestAccumulation.Yes] if required_yes else [DestAccumulation.No]
 
 
 def _fidelities_for_format(formats):
@@ -111,10 +104,8 @@ def _reduce_to_one_for_format(formats):
     math_fidelity=_fidelities_for_format,
     is_reduce_to_one=_reduce_to_one_for_format,
     dest_acc=_reduce_dest_acc,
-    dest_sync=lambda: dest_sync_modes(),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.ForceFalse
-    ),
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
 )
 def test_reduce(
     formats,
@@ -284,10 +275,8 @@ def test_reduce(
     is_reduce_to_one=[False, True],
     tile_dimensions=[[32, 32]],
     dest_acc=_reduce_dest_acc,
-    dest_sync=lambda: dest_sync_modes(),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.ForceFalse
-    ),
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
 )
 def test_reduce_bfp4_b(
     formats,

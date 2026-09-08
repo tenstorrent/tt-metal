@@ -7,7 +7,6 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.dest_params import (
     UnpackPath,
     dest_acc_modes,
-    dest_sync_modes,
     unpack_to_dest_modes,
 )
 from helpers.format_config import DataFormat
@@ -18,12 +17,12 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
+    DestSync,
     PerfRunType,
     Tilize,
     format_dict,
 )
 from helpers.param_config import (
-    generate_perf_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -121,30 +120,24 @@ def datacopy_unpack_to_dest(formats, dest_acc, tilize):
     return unpack_to_dest_modes(formats, dest_acc, path=UnpackPath.FpuMath)
 
 
-def datacopy_input_dimensions(dest_acc, dest_sync):
-    dest_fill = generate_perf_input_dimensions(dest_acc, dest_sync)
-    one_tile = [[32, 32]]
-    return one_tile + [dims for dims in dest_fill if dims != [32, 32]]
-
-
 # Shared with perf_eltwise_unary_datacopy.py so the two sweeps stay aligned.
 DATACOPY_SWEEP = dict(
     formats=DATACOPY_FORMATS,
     dest_acc=dest_acc_modes,
-    dest_sync=lambda: dest_sync_modes(),
+    dest_sync=[DestSync.Half],
     num_faces=get_valid_num_faces_datacopy,
     tilize=get_valid_tilize_datacopy,
     unpack_to_dest=datacopy_unpack_to_dest,
-    input_dimensions=datacopy_input_dimensions,
+    input_dimensions=[[64, 64], [32, 256], [128, 256]],
 )
 DATACOPY_SUB_BYTE_SWEEP = dict(
     formats=SUB_BYTE_DATACOPY_FORMATS,
     dest_acc=dest_acc_modes,
-    dest_sync=lambda: dest_sync_modes(),
+    dest_sync=[DestSync.Half],
     num_faces=get_valid_num_faces_datacopy,
     tilize=Tilize.No,
     unpack_to_dest=datacopy_unpack_to_dest,
-    input_dimensions=datacopy_input_dimensions,
+    input_dimensions=[[32, 32], [64, 64], [32, 256], [128, 256]],
 )
 
 

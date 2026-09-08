@@ -3,12 +3,6 @@
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.dest_params import (
-    UnpackPath,
-    dest_acc_modes,
-    dest_sync_modes,
-    unpack_to_dest_modes,
-)
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_FACE,
@@ -19,7 +13,6 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import (
-    generate_perf_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -48,23 +41,11 @@ from helpers.utils import passed_test
             DataFormat.Fp8_e4m3,
         ]
     ),
-    dest_acc=dest_acc_modes,
-    dest_sync=lambda: dest_sync_modes(),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.ForceFalse
-    ),
     num_faces=[2, 4],
-    input_dimensions=lambda dest_acc, dest_sync: generate_perf_input_dimensions(
-        dest_acc, dest_sync
-    ),
 )
 def test_unpack_tilize_float(
     formats,
-    dest_acc,
-    dest_sync,
-    unpack_to_dest,
     num_faces,
-    input_dimensions,
 ):
     if (
         formats.input_format == DataFormat.Fp8_e4m3
@@ -80,104 +61,54 @@ def test_unpack_tilize_float(
     if formats.output_format == DataFormat.Bfp8_b and num_faces != FACES_PER_TILE:
         pytest.skip("Bfp8_b output format only works with num_faces=4")
 
-    unpack_tilize(
-        formats,
-        dest_acc=dest_acc,
-        dest_sync=dest_sync,
-        unpack_to_dest=unpack_to_dest,
-        num_faces=num_faces,
-        input_dimensions=input_dimensions,
-    )
+    unpack_tilize(formats, num_faces=num_faces)
 
 
 @parametrize(
     formats=input_output_formats([DataFormat.Float32], same=True),
     dest_acc=[DestAccumulation.Yes],
-    dest_sync=lambda: dest_sync_modes(),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.ForceTrue
-    ),
     num_faces=[2, 4],
-    input_dimensions=lambda dest_acc, dest_sync: generate_perf_input_dimensions(
-        dest_acc, dest_sync
-    ),
 )
 def test_unpack_tilize_float32_lossless(
     formats,
     dest_acc,
-    dest_sync,
-    unpack_to_dest,
     num_faces,
-    input_dimensions,
 ):
     unpack_tilize(
         formats,
-        unpack_to_dest=unpack_to_dest,
+        unpack_to_dest=True,
         validate_lossless=True,
         dest_acc=dest_acc,
-        dest_sync=dest_sync,
         num_faces=num_faces,
-        input_dimensions=input_dimensions,
     )
 
 
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
-    dest_acc=dest_acc_modes,
-    dest_sync=lambda: dest_sync_modes(),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.Int32Dest
-    ),
     num_faces=[2, 4],
-    input_dimensions=lambda dest_acc, dest_sync: generate_perf_input_dimensions(
-        dest_acc, dest_sync
-    ),
 )
 def test_unpack_tilize_int(
     formats,
-    dest_acc,
-    dest_sync,
-    unpack_to_dest,
     num_faces,
-    input_dimensions,
 ):
-    unpack_tilize(
-        formats,
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
-        dest_sync=dest_sync,
-        num_faces=num_faces,
-        input_dimensions=input_dimensions,
-    )
+    unpack_tilize(formats, unpack_to_dest=True, num_faces=num_faces)
 
 
 @parametrize(
     formats=input_output_formats([DataFormat.Int8]),
     dest_acc=[DestAccumulation.Yes],
-    dest_sync=lambda: dest_sync_modes(),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.ForceFalse
-    ),
     num_faces=[2, 4],
-    input_dimensions=lambda dest_acc, dest_sync: generate_perf_input_dimensions(
-        dest_acc, dest_sync
-    ),
 )
 def test_unpack_tilize_int8(
     formats,
     dest_acc,
-    dest_sync,
-    unpack_to_dest,
     num_faces,
-    input_dimensions,
 ):
     unpack_tilize(
         formats,
-        unpack_to_dest=unpack_to_dest,
+        unpack_to_dest=False,
         dest_acc=dest_acc,
-        dest_sync=dest_sync,
         num_faces=num_faces,
-        input_dimensions=input_dimensions,
     )
 
 

@@ -5,15 +5,10 @@ import pytest
 from helpers.constraints import (
     get_valid_math_fidelities,
 )
-from helpers.dest_params import (
-    UnpackPath,
-    dest_acc_modes,
-    dest_sync_modes,
-    dest_tile_capacity,
-    unpack_to_dest_modes,
-)
+from helpers.dest_params import dest_acc_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    DestSync,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -40,11 +35,9 @@ from helpers.test_variant_parameters import (
         formats, mathop, PERF_RUN=True
     ),
     dest_acc=lambda formats: dest_acc_modes(formats, distinct=True),
-    dest_sync=lambda: dest_sync_modes(is_perf=True),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.FpuMath
-    ),
-    tile_count=lambda dest_acc, dest_sync: dest_tile_capacity(dest_sync, dest_acc),
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    tile_count=16,
 )
 def test_perf_eltwise_binary(
     perf_report,

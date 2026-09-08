@@ -2,16 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.dest_params import (
-    UnpackPath,
-    dest_acc_modes,
-    dest_sync_modes,
-    dest_tile_capacity,
-    unpack_to_dest_modes,
-)
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     MathOperation,
     PerfRunType,
     ReduceDimension,
@@ -48,14 +42,12 @@ REDUCE_MATHOP = {
             DataFormat.Bfp8_b,
         ]
     ),
-    dest_acc=lambda formats: dest_acc_modes(formats, allowed=[DestAccumulation.No]),
-    dest_sync=lambda: dest_sync_modes(is_perf=True),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.ForceFalse
-    ),
+    dest_acc=[DestAccumulation.No],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
-    tile_count=lambda dest_acc, dest_sync: dest_tile_capacity(dest_sync, dest_acc),
+    tile_count=16,
 )
 def test_perf_reduce(
     perf_report,

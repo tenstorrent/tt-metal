@@ -2,15 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.dest_params import (
-    UnpackPath,
-    dest_acc_modes,
-    dest_sync_modes,
-    dest_tile_capacity,
-    unpack_to_dest_modes,
+from helpers.format_config import DataFormat, is_dest_acc_needed
+from helpers.llk_params import (
+    DestAccumulation,
+    DestSync,
+    MathFidelity,
+    PerfRunType,
+    Transpose,
 )
-from helpers.format_config import DataFormat
-from helpers.llk_params import MathFidelity, PerfRunType, Transpose
 from helpers.matmul_sweep import (
     generate_matmul_dimension_combinations,
     generate_tile_dims,
@@ -33,6 +32,12 @@ from helpers.test_variant_parameters import (
 KT_DIMS = [1, 2, 3, 4, 8, 32]
 
 
+def _matmul_dest_bank_tiles(formats, dest_acc):
+    if is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes:
+        return 4
+    return 8
+
+
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
@@ -43,13 +48,11 @@ KT_DIMS = [1, 2, 3, 4, 8, 32]
             DataFormat.Bfp8_b,
         ]
     ),
-    dest_acc=lambda formats: dest_acc_modes(formats, distinct=True),
-    dest_sync=lambda: dest_sync_modes(is_perf=True),
-    unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
-        formats, dest_acc, path=UnpackPath.FpuMath
-    ),
-    dimensions=lambda dest_acc, dest_sync: generate_matmul_dimension_combinations(
-        dest_tile_capacity(dest_sync, dest_acc), kt_dims=KT_DIMS
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    dimensions=lambda formats, dest_acc: generate_matmul_dimension_combinations(
+        _matmul_dest_bank_tiles(formats, dest_acc), kt_dims=KT_DIMS
     ),
     math_fidelity=[
         MathFidelity.LoFi,
@@ -67,6 +70,9 @@ def test_perf_matmul(
     dimensions,
     math_fidelity,
 ):
+    if is_dest_acc_needed(formats) and dest_acc == DestAccumulation.No:
+        pytest.skip("Dest accumulation must be enabled for this format")
+
     run_types = [
         PerfRunType.L1_TO_L1,
         PerfRunType.UNPACK_ISOLATE,

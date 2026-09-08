@@ -9,8 +9,6 @@ import torch
 from helpers.chip_architecture import ChipArchitecture
 from helpers.dest_params import (
     UnpackPath,
-    dest_acc_modes,
-    dest_sync_modes,
     unpack_to_dest_modes,
 )
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -29,7 +27,6 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     build_param_id,
-    generate_perf_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -155,6 +152,9 @@ BROAD_FORMATS = input_output_formats(
 # and fp32 for full precision.
 STANDARD_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
+BROAD_DIMENSIONS = [[64, 64], [128, 256]]
+STANDARD_DIMENSIONS = [[64, 64]]
+
 # Bfp4_b is only exercised as an input format, so the input is pinned to Bfp4_b here
 # rather than building the full matrix and skipping the 12 non-Bfp4_b-input combos.
 FORMATS_BFP4_B = [
@@ -225,14 +225,14 @@ def _skip_coverage_unsupported(mathop):
         )
 
 
-def _sweep_params(formats, mathops, approx_modes):
+def _sweep_params(formats, mathops, approx_modes, input_dimensions):
     """Build dest-flag and occupancy tuples for the unary SFPU sweep.
 
     Fast-mode-capable ops are swept with FastMode.No and FastMode.Yes; every other op
-    runs with FastMode.No only. dest_acc, dest_sync, and unpack_to_dest are independent
-    axes; input_dimensions dest-fills Dest for that dest_acc × dest_sync.
+    runs with FastMode.No only. dest_acc stays a sweep; dest_sync is pinned to Half
+    (the pre-refactor default). unpack_to_dest is derived per combo, one legal value.
     """
-    dest_syncs = dest_sync_modes()
+    dest_syncs = [DestSync.Half]
     fast_ops = [op for op in mathops if op in SUPPORTED_FAST_MODE_OPS]
     non_fast_ops = [op for op in mathops if op not in SUPPORTED_FAST_MODE_OPS]
     combinations = []
@@ -247,11 +247,9 @@ def _sweep_params(formats, mathops, approx_modes):
             fast_modes,
             dest_syncs,
         ):
-            for dest_acc in dest_acc_modes(fmt):
+            for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
                 unpacks = unpack_to_dest_modes(fmt, dest_acc, path=UnpackPath.Sfpu)
-                for unpack_to_dest, input_dimensions in product(
-                    unpacks, generate_perf_input_dimensions(dest_acc, dest_sync)
-                ):
+                for unpack_to_dest, dims in product(unpacks, input_dimensions):
                     combinations.append(
                         (
                             fmt,
@@ -261,7 +259,7 @@ def _sweep_params(formats, mathops, approx_modes):
                             dest_acc,
                             dest_sync,
                             unpack_to_dest,
-                            input_dimensions,
+                            dims,
                         )
                     )
     return combinations
@@ -309,16 +307,19 @@ UNARY_SWEEP_PARAMS = (
         BROAD_FORMATS,
         BROAD_SWEEP_OPS,
         [ApproximationMode.No, ApproximationMode.Yes],
+        BROAD_DIMENSIONS,
     )
     + _sweep_params(
         FORMATS_BFP4_B,
         BROAD_SWEEP_OPS,
         [ApproximationMode.No, ApproximationMode.Yes],
+        BROAD_DIMENSIONS,
     )
     + _sweep_params(
         STANDARD_FORMATS,
         STANDARD_SWEEP_OPS,
         [ApproximationMode.No],
+        STANDARD_DIMENSIONS,
     )
 )
 

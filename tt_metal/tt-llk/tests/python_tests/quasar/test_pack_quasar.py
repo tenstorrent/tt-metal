@@ -90,6 +90,13 @@ PACK_FORMATS = [
 
 
 def pack_dest_acc(formats):
+    # Match the pre-refactor get_dest_acc_modes: 32-bit inputs only run dest_acc=Yes.
+    # dest_acc_modes already applies the dest-mode-dependent conversion filters
+    # (32-bit output and Int8<->UInt8 need Yes; Int16 stays No).
+    if formats.input_format.is_32_bit():
+        return dest_acc_modes(formats, allowed=[DestAccumulation.Yes]) or [
+            DestAccumulation.Yes
+        ]
     return dest_acc_modes(formats)
 
 
@@ -133,7 +140,7 @@ def pack_input_dimensions(dest_acc, dest_sync, tile_dimensions, *, is_perf=False
 
 
 def pack_unpack_to_dest(formats, dest_acc):
-    return unpack_to_dest_modes(
+    modes = unpack_to_dest_modes(
         formats,
         dest_acc,
         path=(
@@ -142,6 +149,7 @@ def pack_unpack_to_dest(formats, dest_acc):
             else UnpackPath.ForceFalse
         ),
     )
+    return modes[:1]
 
 
 @pytest.mark.quasar

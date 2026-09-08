@@ -7,18 +7,17 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.dest_params import (
     UnpackPath,
     dest_acc_modes,
-    dest_sync_modes,
     unpack_to_dest_modes,
 )
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
+    DestSync,
     MathOperation,
     Transpose,
 )
 from helpers.param_config import (
-    generate_perf_input_dimensions,
     input_output_formats,
     parametrize,
 )
@@ -65,7 +64,7 @@ def get_dest_accum_modes(formats):
         MathOperation.SfpuElwpow,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
-    dest_sync=lambda: dest_sync_modes(is_perf=True),
+    dest_sync=[DestSync.Half],
     unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
         formats, dest_acc, path=UnpackPath.Sfpu
     ),
@@ -75,9 +74,9 @@ def get_dest_accum_modes(formats):
     iterations=[
         32,
     ],
-    input_dimensions=lambda dest_acc, dest_sync: generate_perf_input_dimensions(
-        dest_acc, dest_sync
-    ),
+    input_dimensions=[
+        [128, 64],  # tile_cnt: 8
+    ],
 )
 def test_perf_eltwise_binary_sfpu_float(
     perf_report,
@@ -150,7 +149,7 @@ def test_perf_eltwise_binary_sfpu_float(
         MathOperation.SfpuElwsub,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
-    dest_sync=lambda: dest_sync_modes(is_perf=True),
+    dest_sync=[DestSync.Half],
     unpack_to_dest=lambda formats, dest_acc: unpack_to_dest_modes(
         formats, dest_acc, path=UnpackPath.Sfpu
     ),
@@ -160,9 +159,9 @@ def test_perf_eltwise_binary_sfpu_float(
     iterations=[
         32,
     ],
-    input_dimensions=lambda dest_acc, dest_sync: generate_perf_input_dimensions(
-        dest_acc, dest_sync
-    ),
+    input_dimensions=[
+        [128, 64],  # tile_cnt: 8
+    ],
 )
 def test_perf_eltwise_binary_sfpu_int(
     perf_report,
