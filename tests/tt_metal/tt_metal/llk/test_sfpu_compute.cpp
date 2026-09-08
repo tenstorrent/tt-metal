@@ -347,6 +347,20 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
         // is simply well-conditioned, finite bf16 input with independent lhs/rhs signs.
         auto lhs = generate_div_operand(numel, seed);
         auto rhs = generate_div_operand(numel, seed + 1);
+        if (op_name == "mul_float") {
+            // Pin operand pairs whose exact product is not representable in bf16, so
+            // round-to-nearest-even and truncation give different results regardless of seed.
+            const vector<std::pair<float, float>> pinned = {
+                {1.25f, 1.609375f}, {0.1064453125f, -2.359375f}, {3.25f, 1.1953125f}, {0.75f, 2.703125f}};
+            auto lhs_unpacked = unpack_vector<bfloat16, uint32_t>(lhs);
+            auto rhs_unpacked = unpack_vector<bfloat16, uint32_t>(rhs);
+            for (size_t i = 0; i < pinned.size() && i < lhs_unpacked.size(); ++i) {
+                lhs_unpacked[i] = bfloat16(pinned[i].first);
+                rhs_unpacked[i] = bfloat16(pinned[i].second);
+            }
+            lhs = pack_vector<uint32_t, bfloat16>(lhs_unpacked);
+            rhs = pack_vector<uint32_t, bfloat16>(rhs_unpacked);
+        }
         return {lhs, rhs};
     }
     if (op_name == "atan2") {
@@ -410,6 +424,11 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_des
 bool is_close_packed_sfpu_output(
     const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const std::string& op_name) {
     if (is_int8_binary_sfpu_op(op_name) || op_name == "binary_max" || op_name == "binary_min") {
+        return vec_a == vec_b;
+    }
+    if (op_name == "mul_float") {
+        // A bf16 x bf16 product is exact in fp32, so the bf16 result must be bit-identical to the
+        // round-to-nearest-even golden: a 1-ULP truncation error would pass the rtol/atol check.
         return vec_a == vec_b;
     }
     if (op_name == "where") {
