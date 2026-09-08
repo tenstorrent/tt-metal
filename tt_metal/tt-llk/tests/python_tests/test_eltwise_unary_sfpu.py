@@ -953,6 +953,12 @@ def test_eltwise_unary_sfpu_int(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
+    # ReluMin is in both BROAD_SWEEP_OPS and COVERAGE_COMPILE_SKIP_OPS, so this sweep needs
+    # the same coverage guard the float ones use. It was unreachable before ReluMin joined
+    # _INT_UNARY_OPS -- no integer-only op is in either list -- but without it the coverage
+    # job compiles the relu_min kernel and fails at build time instead of skipping.
+    _skip_coverage_unsupported(mathop)
+
     int_format = (
         DataFormat.UInt32 if mathop in _UINT32_INT_UNARY_OPS else DataFormat.Int32
     )
@@ -1036,6 +1042,9 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
     The non-negative cases are the control and pass: they take the straight-through path
     where sign+magnitude and two's complement coincide.
     """
+    # ReluMin is hardcoded here rather than parametrized, so the guard takes it directly.
+    _skip_coverage_unsupported(MathOperation.ReluMin)
+
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
 
     # First execution of this branch, and it does not work. Measured on n300 at
@@ -1366,6 +1375,9 @@ def test_eltwise_unary_sfpu_threshold(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
+    # ReluMin/ReluMax are COVERAGE_COMPILE_SKIP_OPS members, so this sweep needs the guard
+    # too now that _THRESHOLD_OPS carries them.
+    _skip_coverage_unsupported(mathop)
     _skip_bh_unless_fp32(formats, dest_acc)
 
     eltwise_unary_sfpu(

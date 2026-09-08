@@ -3164,12 +3164,23 @@ class UnarySFPUGolden:
             # int32 sweep drives negative thresholds to reach the wrapper's sign+magnitude
             # re-encoding branch, and a negative value has no float-path equivalent here.
             return max(x, int(self._relu_min_int_threshold))
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
-        )
-        return torch.max(input_tensor, torch.tensor(threshold)).item()
+        # Float dst. The kernel is a single SFPSWAP fold, so this is a max under the SFPU's
+        # total order and not IEEE's -- see sfpu_total_order_key. Measured on n150, threshold
+        # 5.0, Float32 end to end:
+        #
+        #   -NaN (0xFFC00000) -> 5.0        +NaN (0x7FC00000) -> +NaN
+        #   -inf              -> 5.0        +inf              -> +inf
+        #
+        # torch.max agrees on four of those and not on -NaN, which it propagates: -NaN ranks
+        # below -inf under the total order, so the fold discards it for the threshold exactly
+        # as it does -inf. FLOAT_SPECIALS injects only +NaN, so no sweep reaches that lane
+        # today and switching to sfpu_max changes no sweep's outcome -- but the device answer
+        # is measured, so the golden may as well be right there rather than resting on which
+        # NaN sign the specials set happens to carry.
+        #
+        # ReluMax states the same thing through sfpu_relu_max, whose first compare is this
+        # fold; relu_min is that compare with no relu clamp after it.
+        return sfpu_max(float(x), float(threshold))
 
     def _lrelu(self, x, negative_slope=LRELU_NEGATIVE_SLOPE):
         input_tensor = (

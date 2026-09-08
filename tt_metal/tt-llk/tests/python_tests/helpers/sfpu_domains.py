@@ -1811,15 +1811,22 @@ _COMPARISON_EDGE_OPS = (
 
 _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     **{op: (0.0, -0.0) for op in _ZERO_EDGE_OPS},
-    # UnaryGt/Lt/Ge/Le reach the edge sweep through edge_spec(). UnaryEq and UnaryNe do not
-    # -- they are outside _OP_DOMAIN_REGISTRY, so their consumer is
-    # test_eltwise_unary_sfpu._threshold_op_stimuli_spec, which reads op_edge_points() directly to
-    # place the exact threshold in its stimuli, as the int32 comparison ops below do.
+    # UnaryGt/Lt/Ge/Le reach the edge sweep through edge_spec(), which is what consumes these.
+    #
+    # UnaryEq, UnaryNe and LogicalNot below have no consumer today, and are listed anyway.
+    # They are outside _OP_DOMAIN_REGISTRY, so sfpu_unary_ops() never puts them in an edge
+    # sweep and edge_spec() never sees them; their one reader used to be
+    # test_eltwise_unary_sfpu._threshold_op_stimuli_spec, which took the threshold from
+    # op_edge_points(op)[0] until that positional read was replaced by op_threshold() and
+    # _OP_COMPARISON_THRESHOLD (see the table below for why). Kept as the recorded cutoff so
+    # registering any of the three later gets a correct edge sweep for free -- but treat these
+    # three entries as documentation, not as something a test is reading. The threshold the
+    # sweeps actually use lives in _OP_COMPARISON_THRESHOLD, and moving one here alone moves
+    # nothing.
     **{op: (UNARY_COMP_THRESHOLD,) for op in _COMPARISON_EDGE_OPS},
     # logical_not(x) = (x == 0). Same shape as _ZERO_EDGE_OPS but it is a threshold op
     # rather than a sign op, so keep it named. (LogicalNotUnary is an alias of this
-    # member — see the note in llk_params.py — so listing both would be one key.) Also
-    # outside the registry, and read by _threshold_op_stimuli_spec as above.
+    # member — see the note in llk_params.py — so listing both would be one key.)
     MathOperation.LogicalNot: (0.0, -0.0),
     # unary max/min compare x against UNARY_MAX_MIN_VALUE. Keyed on the constant rather
     # than folded into _ZERO_EDGE_OPS: it happens to be 0.0 today, and if it moves the
@@ -2183,6 +2190,14 @@ SPECIALS_READY_OPS.update(
         "two share one golden by construction. The identity is pinned host-side.",
         MathOperation.ReluMax: "_relu_max_body_: a total-order `> threshold` replaces a NaN "
         "with the threshold, and the relu clamp then sees a finite value.",
+        MathOperation.ReluMin: "max(x, threshold) as a single SFPSWAP fold -- the same "
+        "total-order compare _relu_max_body_ opens with, minus the relu clamp after it. A "
+        "+NaN outranks the threshold and the fold keeps it, which is what IEEE propagation "
+        "gives too, so the golden agrees at every injected special. Read the scope narrowly: "
+        "FLOAT_SPECIALS carries only a positive NaN. A *negative* one folds to the threshold, "
+        "since -NaN ranks below -inf -- measured on n150 as 0xFFC00000 -> 5.0, against IEEE's "
+        "propagation -- so _relu_min's golden models the total order rather than torch.max and "
+        "is correct there too. That lane is not swept, so enrolment rests on the +NaN result.",
         MathOperation.Hardsigmoid: "x * (1/6) + 0.5 through the same _relu_max_body_ the "
         "kernel shares with ReluMax, so a NaN clamps to 1.0.",
     }

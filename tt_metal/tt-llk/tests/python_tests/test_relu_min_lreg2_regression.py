@@ -126,10 +126,12 @@ def test_relu_min_ignores_stale_lreg2():
 
     golden = torch.maximum(src_A, torch.tensor(RELU_MIN_THRESHOLD))
 
-    # Exact, not a tolerance: relu_min is an SFPSWAP, which *selects* one of its two
-    # operands rather than computing anything, and the whole path is fp32. Any deviation
-    # at all is a wrong operand, not rounding.
-    poisoned = torch.isclose(res, torch.tensor(LREG2_POISON))
+    # Both assertions below are exact rather than tolerances, and can be: relu_min is an
+    # SFPSWAP, which *selects* one of its two operands rather than computing anything, and
+    # the pipeline is Float32 end to end. Any deviation at all is a wrong operand, not
+    # rounding -- so the poison probe compares bit-for-bit too, instead of admitting a
+    # near-1024.0 result that could only come from a different defect.
+    poisoned = res == LREG2_POISON
     assert not poisoned.any(), (
         f"{poisoned.sum().item()}/{res.numel()} lanes came back as the LREG2 poison "
         f"({LREG2_POISON}), so _relu_min_ used the stale register instead of its own "
