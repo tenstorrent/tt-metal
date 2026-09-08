@@ -27,11 +27,13 @@ namespace {
 
 // Two-input width-dim demotion: the staged-copy volume past which codegen loses to native.
 //
-// Calibration: measured on Wormhole only. The predicate around it is arch-adaptive -- the grid
-// comes from the live device, so max_sticks_per_core differs between a WH 8x8 and a BH 13x10 --
-// but this byte threshold does not, and Blackhole has never been swept. It demotes the
-// unaligned-width two-input class as a whole, including the cases inside it where codegen still
-// wins, in exchange for never losing badly on the ones where the byte-copy loop dominates.
+// Calibration: the crossover is a Wormhole measurement. The predicate around it is arch-adaptive
+// -- the grid comes from the live device, so max_sticks_per_core differs between a WH 8x8 and a
+// BH 13x10 -- but this byte threshold is a constant, and nothing has varied the staged volume
+// around it on Blackhole, so the number is carried over there rather than re-derived. Within the
+// unaligned two-input width class it demotes only the configs whose staged volume reaches the
+// threshold, including the ones inside that set where codegen still wins, in exchange for never
+// losing badly once the byte-copy loop dominates.
 //
 // Mechanism: reader_concat_rm_width_interleaved.cpp
 // gates a batched direct-write fast path on both input rows filling their

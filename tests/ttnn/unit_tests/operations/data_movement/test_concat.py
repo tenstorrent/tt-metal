@@ -643,6 +643,8 @@ def test_concat_fp32_last_dim_mantissa_not_truncated(device, width, layout):
 # beyond two must additionally share one memory config. Every case below is hand-picked to satisfy
 # that gate, so the forced entry resolves instead of raising. concat copies values verbatim, so a
 # lossless round-trip means assert_equal holds.
+_MAX_NWAY = ttnn._ttnn.operations.data_movement.CONCAT_MAX_NWAY_INPUTS
+
 codegen_supported_cases = [
     # (shapes, dim) -- 2-input, non-width dim
     ([(1, 32, 64), (1, 32, 64)], 0),
@@ -663,6 +665,12 @@ codegen_supported_cases = [
     # byte copy runs instead of the batched direct write. is_demoted() sends exactly this regime to
     # native, so the forced entry is the only way the branch is reached.
     ([(1, 32, 36), (1, 32, 20), (1, 32, 36)], -1),
+    # The advertised input ceiling, in both reader regimes: the N-way readers size five stack
+    # arrays by input count against a 256 B guaranteed dataflow-RISC stack, so this is where an
+    # off-by-one in the gate or a stack overrun would surface. Only max + 1 is otherwise covered,
+    # and only for rejection.
+    ([(1, 32, 32)] * _MAX_NWAY, -1),
+    ([(1, 32, 36)] * _MAX_NWAY, -1),
 ]
 
 codegen_dtypes = [ttnn.bfloat16, ttnn.int32, ttnn.uint32]
