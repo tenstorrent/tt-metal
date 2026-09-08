@@ -19,16 +19,15 @@ void kernel_main() {
     uint32_t input_num_blocks_h = get_arg_val<uint32_t>(3);
     uint32_t input_total_blocks_w = get_arg_val<uint32_t>(4);
 
-    constexpr uint32_t cb_id_in2 = 2;
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_id_in2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
+    using ReduceAuxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<0>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<ReduceAuxiliary>();
 
     constexpr uint32_t cb_id_in0 = 0;
     CircularBuffer cb_in0(cb_id_in0);
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    constexpr auto src_args = TensorAccessorArgs<0>();
+    constexpr auto src_args = TensorAccessorArgs<ReduceAuxiliary::next_compile_time_args_offset()>();
     const auto s = TensorAccessor(src_args, src_addr);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker

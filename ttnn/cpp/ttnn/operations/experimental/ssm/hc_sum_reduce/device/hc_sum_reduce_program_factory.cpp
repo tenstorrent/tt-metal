@@ -9,6 +9,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
+#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
+
 namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
@@ -51,7 +53,23 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
     const uint32_t intermed_cb_id2 = tt::CBIndex::c_26;
     const uint32_t output_cb_id = tt::CBIndex::c_16;
 
-    std::vector<uint32_t> reader_compile_time_args = {};
+    // Each transposed slice is one tile; the host supplies both the compute
+    // call and the matching persistent auxiliary-tile recipe.
+    namespace reduce_host = ttnn::kernel_lib::host;
+    const auto intermediate_dtype = input_format == tt::DataFormat::Float32 ? DataType::FLOAT32 : DataType::BFLOAT16;
+    const TensorLayout intermediate_layout(intermediate_dtype, PageConfig(Layout::TILE), MemoryConfig{});
+    auto reduce_plan = reduce_host::make_reduce_plan(
+        TensorSpec(Shape{32, 32}, intermediate_layout),
+        TensorSpec(Shape{1, 32}, intermediate_layout),
+        ReduceOpMath::SUM,
+        ReduceOpDim::H,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        {.arch = tensor_args.input.device()->arch(), .available_l1_bytes = 6 * intermediary_tile_size},
+        cb_size * intermediary_tile_size);
+    reduce_plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::NONE;
+    std::vector<uint32_t> reader_compile_time_args =
+        reduce_host::ReduceAuxiliaryArgs({scalar_cb_id, reduce_plan.auxiliary_tiles}).get_compile_time_args();
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
         intermed_cb_id1,
@@ -67,6 +85,8 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
         intermed_cb_id2,
         output_cb_id,
     };
+    reduce_host::ReduceCallArgs(reduce_plan, {intermed_cb_id0, scalar_cb_id, intermed_cb_id1})
+        .append_to(compute_compile_time_args);
 
     uint32_t g1_numcores = core_group_1.num_cores();
     std::vector<CoreCoord> cores = grid_to_cores(
