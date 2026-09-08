@@ -220,10 +220,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         num_groups_per_core);
 
     // subblock
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
     uint32_t num_rows_per_batch_per_core = per_core_M / num_batches_per_core;
     auto [block_wt, num_groups_per_reset] = find_max_tile_span(per_core_N, group_size);
     uint32_t block_ht = per_core_Mt / num_batches_per_core;
-    uint32_t subblock_wt = get_max_subblock(block_wt, 8);
+    // FullBlock consumers must use the same physical block size as the dataflow kernels.
+    // FP32 DEST has room for four tiles under half sync; do not let the chain shrink it.
+    uint32_t subblock_wt = get_max_subblock(block_wt, fp32_dest_acc_en && !dst_full_sync_en ? 4 : 8);
     uint32_t num_subblocks_w = block_wt / subblock_wt;
     bool block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
 
@@ -757,8 +761,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     mcast_receiver_compute_compile_time_args.push_back(pad.padded_hw);
     mcast_receiver_compute_compile_time_args.push_back(static_cast<uint32_t>(pad.active));
     // compute kernel
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
 
     // Float32 input requires fp32_dest_acc_en=true on both GroupNorm paths:

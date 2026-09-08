@@ -238,8 +238,7 @@ void kernel_main() {
         uint32_t tile_id = b * block_hw;
         dfb_ex_partial.reserve_back(2);
         if constexpr (welford_fp32_alias) {
-            // Reconfigure the transpose op for the alias buffer index consumed by the
-            // welford loop below.
+            reconfig_data_format_srca(dfb_welford_in_id);
             transpose_init(dfb_welford_in_id);
         } else {
             transpose_init(dfb_in0_id);

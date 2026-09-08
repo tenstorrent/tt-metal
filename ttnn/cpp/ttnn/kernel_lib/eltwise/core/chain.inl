@@ -94,8 +94,7 @@ constexpr bool is_legal_output_policy_with_base(ReservePolicy reserve, PushPolic
 // from input() itself so new reader elements and policy additions
 // cannot drift through copied per-element flags.
 constexpr bool input_owns_cb_window(InputSpec spec) noexcept {
-    return spec.wait == WaitPolicy::Upfront ||
-           ((spec.wait == WaitPolicy::Cumulative) && (spec.pop == PopPolicy::AtEnd));
+    return spec.wait == WaitPolicy::Upfront || spec.wait == WaitPolicy::Cumulative;
 }
 
 // A peer which pops a staged CB front invalidates the owner's absolute window indices.
@@ -2375,6 +2374,14 @@ constexpr bool reserves_upfront() {
 }
 
 template <class E>
+constexpr bool reserves_upfront_pushes_per_block() {
+    if constexpr (is_cb_writer_op_v<E>) {
+        return E::Reserve == ReservePolicy::Upfront && E::Push == PushPolicy::PerBlockSize;
+    }
+    return false;
+}
+
+template <class E>
 constexpr bool pops_at_end() {
     if constexpr (is_binary_fpu_op_v<E>) {
         return E::APop == PopPolicy::AtEnd || (!E::same_dfb && E::BPop == PopPolicy::AtEnd);
@@ -3034,6 +3041,9 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     if (shape.Ht == 0 || shape.Wt == 0) {
         return;
     }
+    if constexpr ((detail::reserves_upfront_pushes_per_block<Es>() || ...)) {
+        ASSERT(shape.tail_sync != BlockTailSync::FullBlock);
+    }
     // Per-cohort hoist decisions: math-MOP init can be hoisted at boot even when SFPU isn't
     // uniform; the SFPU side then re-inits per tile.
     constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
@@ -3196,7 +3206,7 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                          detail::ChainTraits<Es...>::prev.pack[Is],
                          detail::ChainTraits<Es...>::last_pack_cb,
                          detail::ChainTraits<Es...>::pack_hetero>>(elts),
-                 row_base,
+                 ht,
                  ht,
                  0,
                  1,

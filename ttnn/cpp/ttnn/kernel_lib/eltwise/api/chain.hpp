@@ -434,8 +434,8 @@ constexpr uint32_t to_u32(Dst s) noexcept;
 /// `block_size * chain_lane_width` always fits DEST (`DEST_AUTO_LIMIT`): an oversized value can't
 /// overflow DEST, it only costs extra outer iterations. Streaming CB-reader chains consume one
 /// tile per iter, so block_size is clamped to 1 for them. A shape using `FullBlock` mode instead
-/// describes a physical CB contract and must already fit; the chain
-/// asserts rather than changing it.
+/// describes a physical CB contract and callers must supply a block size that fits DEST.
+/// FullBlock with Upfront reserve and PerBlockSize push is unsupported (debug assertion).
 
 // =============================================================================
 // 4. Operation selectors
