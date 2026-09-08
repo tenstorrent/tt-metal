@@ -11,6 +11,12 @@ _DEFAULT_MAX_PREFILL = 8192
 
 
 def pytest_addoption(parser):
+    parser.addoption(
+        "--kv-pcc",
+        action="store_true",
+        default=False,
+        help="Measure traced prefill K/V PCC using the workspace gemma_gpu_traces reference instead of performance.",
+    )
     parser.addoption("--skip-model-load", action="store_true", default=False, help="Skip loading the model state dict")
     parser.addoption(
         "--speculative",
