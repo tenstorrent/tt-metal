@@ -169,8 +169,8 @@ def kv_cache_pcc_check(
     # un-rotates with an SP-only period. Under KV dedup both are wrong, so the PCC would be meaningless.
     assert not getattr(cfg, "tp_shard_kv", False), (
         "kv_cache_pcc_check has no TP-sharded reconstruction: it keeps one TP column and un-rotates with an "
-        "SP-only block-cyclic period. Validate a TP-sharded cache with the mock-migration producer "
-        "read-back (PREFILL_MOCK_MIGRATION=1) instead of PREFILL_STANDALONE_PCC / PREFILL_VALIDATE_MIGRATION."
+        "SP-only block-cyclic period. Validate a TP-sharded cache with the producer's device-less read-back "
+        "instead of PREFILL_STANDALONE_PCC / PREFILL_VALIDATE_MIGRATION."
     )
     mesh_device = pipeline.mesh_device
     sp = cfg.sp_factor

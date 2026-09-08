@@ -955,12 +955,12 @@ class TtPrefillRuntime:
         #   * real migration must not COPY drafter KV yet. All num_layers layer-acks fire inside
         #     model.forward, while the drafter write happens after forward returns (see prefill_chunk
         #     above), so a worker acting on the last ack would migrate drafter chunks the current chunk
-        #     has not written yet. Registering it for the mock path (which only reads) is safe; wiring it
-        #     into live migration needs that ordering fixed first.
+        #     has not written yet. Registering it for a reader that never copies is safe; wiring it into
+        #     live migration needs that ordering fixed first.
         dflash_caches = None
         if self._dflash_k_cache is not None:
-            # The runner all-gathers whenever migration is enabled, so a layout carrying one stage still
-            # means single-rank; only a genuine cross-stage merge has to drop the drafter.
+            # The runner always all-gathers, so a layout carrying one stage still means single-rank; only
+            # a genuine cross-stage merge has to drop the drafter.
             if stage_layouts is None or all(len(layout) == 1 for layout in stage_layouts):
                 dflash_caches = (self._dflash_k_cache, self._dflash_v_cache)
             else:
@@ -1013,7 +1013,7 @@ class TtPrefillRuntime:
         # KV dedup each column holds a distinct 1/tp of its row, so it would drop (tp-1)/tp of the tokens.
         assert not self.config.tp_shard_kv, (
             "read_slot_kv (and the pairwise dst==src migration validation built on it) has no TP-sharded "
-            "host reconstruction. Use the mock-migration producer read-back to validate a TP-sharded cache."
+            "host reconstruction. Use the producer's device-less read-back to validate a TP-sharded cache."
         )
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers
