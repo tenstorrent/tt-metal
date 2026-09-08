@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
@@ -28,8 +29,13 @@ void kernel_main() {
     DataflowBuffer dfb_max_obj(dfb_max);
     constexpr auto dfb_x_m_max = dfb::x_minus_max;
     DataflowBuffer dfb_x_m_max_obj(dfb_x_m_max);
-    constexpr auto dfb_tmp = dfb::tmp;
-    DataflowBuffer dfb_tmp_obj(dfb_tmp);
+    using MaxCall =
+        ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, dfb_in0, dfb_max_scaler, dfb_max>;
+    using SumCall = ttnn::kernel_lib::BoundReduceCallArgs<
+        ttnn::kernel_lib::ReduceCallArgs<ttnn::kernel_lib::reduce_plan_args::call_compile_time_arg_count()>,
+        dfb_exps,
+        dfb_sum_scaler,
+        dfb_recipsumexps>;
 
     compute_kernel_hw_startup(dfb_in0, dfb_max_scaler, dfb_out0);
 
@@ -43,38 +49,12 @@ void kernel_main() {
     std::uint32_t Wt = get_arg(args::Wt);
 
     dfb_mask_obj.wait_front(onetile);
-    dfb_max_scaler_obj.wait_front(onetile);
-    dfb_sum_scaler_obj.wait_front(onetile);
+    dfb_max_scaler_obj.wait_front(MaxCall::auxiliary_tile_count);
+    dfb_sum_scaler_obj.wait_front(SumCall::auxiliary_tile_count);
 
     for (std::uint32_t n = 0; n < N; ++n) {
-        // find max value
-        if (Wt == 1) {
-            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/0, /*popm=*/0);
-
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp, dfb_max_scaler, dfb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
-        } else {
-            // Phase 1: reduce Wt-1 full tiles into dfb_max via the helper.
-            // dfb_in0 holds all Wt tiles persistently for later steps, so use
-            // WaitUpfrontNoPop — the helper waits for the slice it needs and never pops.
-            compute_kernel_lib::reduce<
-                PoolType::MAX,
-                ReduceDim::REDUCE_ROW,
-                dfb_in0,
-                dfb_max_scaler,
-                dfb_max,
-                compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-                compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
-
-            // Phase 2: mask the last tile (index Wt-1, no pop) and continue reducing
-            // into dfb_max via Accumulate. The accumulator and output are both dfb_max:
-            // the helper waits+pops the previous tile, then packs+pushes the new one.
-            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp, dfb_max_scaler, dfb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::row(1),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/1));
-        }
+        // The host plan covers the complete logical extent, including its tail.
+        compute_kernel_lib::reduce<MaxCall>();
 
         // compute x - max(x)
         dfb_x_m_max_obj.reserve_back(Wt);
@@ -126,39 +106,15 @@ void kernel_main() {
         }
         dfb_exps_obj.push_back(Wt);
 
+        compute_kernel_lib::reduce<SumCall>([](std::uint32_t dst_idx) {
 #ifdef LOG
-        // log(sum) - pop tiles after reduce
-        compute_kernel_lib::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            dfb_exps,
-            dfb_sum_scaler,
-            dfb_recipsumexps,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
-            [](std::uint32_t dst_idx) {
-                log_tile_init();
-                log_tile(dst_idx);
-            });
+            log_tile_init();
+            log_tile(dst_idx);
 #else
-        // 1/sum - keep tiles for subsequent multiplication
-        compute_kernel_lib::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            dfb_exps,
-            dfb_sum_scaler,
-            dfb_recipsumexps,
-            compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
-            [](std::uint32_t dst_idx) {
-                recip_tile_init();
-                recip_tile(dst_idx);
-            });
+            recip_tile_init();
+            recip_tile(dst_idx);
 #endif
+        });
 
         // compute final result
         dfb_out0_obj.reserve_back(Wt);
@@ -200,4 +156,6 @@ void kernel_main() {
         dfb_exps_obj.pop_front(Wt);
 #endif
     }
+    dfb_max_scaler_obj.pop_front(MaxCall::auxiliary_tile_count);
+    dfb_sum_scaler_obj.pop_front(SumCall::auxiliary_tile_count);
 }

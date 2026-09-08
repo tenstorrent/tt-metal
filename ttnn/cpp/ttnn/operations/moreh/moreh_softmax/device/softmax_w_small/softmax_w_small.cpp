@@ -7,6 +7,7 @@
 #include <tt_stl/assert.hpp>
 #include "ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -85,9 +86,49 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
     const DFBSpecName RECIP{"recip_sum_exps"};
     const DFBSpecName MAX{"max"};
     const DFBSpecName X_MINUS_MAX{"x_minus_max"};
-    const DFBSpecName TMP{"tmp"};
 
     // ---- DataflowBuffers (formerly circular buffers) ----
+    namespace reduce_host = ttnn::kernel_lib::host;
+    const TensorLayout input_layout(input.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    const TensorLayout intermediate_layout(
+        fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    const reduce_host::ReduceHardwareConfig reduce_hardware{
+        .arch = arch,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .available_l1_bytes = (Wt + 8) * tile_size_intermed};
+    auto max_plan = reduce_host::make_reduce_plan(
+        TensorSpec(Shape{32, input.logical_shape()[-1]}, input_layout),
+        TensorSpec(Shape{32, 1}, intermediate_layout),
+        ReduceOpMath::MAX,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        reduce_hardware,
+        Wt * tile_size_data);
+    max_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+    // The exponentials retain their output-padding mask, so their padded
+    // extent is a complete reduction input with zero-valued padding.
+    auto sum_plan = reduce_host::make_reduce_plan(
+        TensorSpec(Shape{32, Wt * 32}, intermediate_layout),
+        TensorSpec(Shape{32, 1}, intermediate_layout),
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        reduce_hardware,
+        Wt * tile_size_intermed);
+    sum_plan.input_policy = op == MorehSoftmaxOp::LOGSOFTMAX ? compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop
+                                                             : compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+    std::vector<uint32_t> compute_reduce_args;
+    reduce_host::ReduceCallArgs(max_plan, {0, 1, 2}).append_to(compute_reduce_args);
+    reduce_host::ReduceCallArgs(sum_plan, {0, 1, 2}).append_to(compute_reduce_args);
+    std::vector<uint32_t> reader_reduce_args;
+    reduce_host::ReduceAuxiliaryArgs({1, max_plan.auxiliary_tiles}).append_to(reader_reduce_args);
+    reduce_host::ReduceAuxiliaryArgs({1, sum_plan.auxiliary_tiles}).append_to(reader_reduce_args);
+    const auto* max_auxiliary = max_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const auto* sum_auxiliary = sum_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+
     Group<DataflowBufferSpec> dfbs = {
         DataflowBufferSpec{
             .unique_id = IN, .entry_size = tile_size_data, .num_entries = Wt, .data_format_metadata = data_format},
@@ -95,14 +136,14 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
             .unique_id = MASK, .entry_size = tile_size_data, .num_entries = 1, .data_format_metadata = data_format},
         DataflowBufferSpec{
             .unique_id = MAX_SCALER,
-            .entry_size = tile_size_data,
-            .num_entries = 1,
-            .data_format_metadata = data_format},
+            .entry_size = max_auxiliary->page_size,
+            .num_entries = max_auxiliary->page_count,
+            .data_format_metadata = max_auxiliary->data_format},
         DataflowBufferSpec{
             .unique_id = SUM_SCALER,
-            .entry_size = tile_size_data,
-            .num_entries = 1,
-            .data_format_metadata = data_format},
+            .entry_size = sum_auxiliary->page_size,
+            .num_entries = sum_auxiliary->page_count,
+            .data_format_metadata = sum_auxiliary->data_format},
         DataflowBufferSpec{
             .unique_id = OUT, .entry_size = tile_size_data, .num_entries = Wt, .data_format_metadata = data_format},
         DataflowBufferSpec{
@@ -126,11 +167,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
             .entry_size = tile_size_intermed,
             .num_entries = Wt,
             .data_format_metadata = intermed_data_format},
-        DataflowBufferSpec{
-            .unique_id = TMP,
-            .entry_size = tile_size_intermed,
-            .num_entries = 1,
-            .data_format_metadata = intermed_data_format},
     };
 
     // ---- Reader kernel ----
@@ -152,6 +188,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
         .compile_time_args = {{"is_fp32", static_cast<std::uint32_t>(input.dtype() == DataType::FLOAT32)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Wt", "mask_w"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = reader_reduce_args},
     };
 
     // ---- Writer kernel ----
@@ -194,7 +231,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
                 {RECIP, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {MAX, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {X_MINUS_MAX, tt::tt_metal::UnpackMode::UnpackToSrc},
-                {TMP, tt::tt_metal::UnpackMode::UnpackToSrc},
             };
         }
         return hw;
@@ -227,8 +263,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
                 .dfb_spec_name = X_MINUS_MAX,
                 .accessor_name = "x_minus_max",
                 .endpoint_type = DFBEndpointType::CONSUMER},
-            DFBBinding{.dfb_spec_name = TMP, .accessor_name = "tmp", .endpoint_type = DFBEndpointType::PRODUCER},
-            DFBBinding{.dfb_spec_name = TMP, .accessor_name = "tmp", .endpoint_type = DFBEndpointType::CONSUMER},
         };
     };
 
@@ -240,6 +274,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
             .dfb_bindings = compute_dfb_bindings(),
             .compile_time_args = {{"N", N}, {"Wt", Wt}},
             .hw_config = make_compute_hw(),
+            .advanced_options = {.compile_time_varargs = compute_reduce_args},
         };
     };
 

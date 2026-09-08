@@ -70,8 +70,26 @@ audit.
   Native build and SM030/SM031 passed. Full group T055 passed 173 enabled cases
   with 168 upstream skips (341 collected); results
   `generated/test_reports/reduce-migration-15umv7i2/summary.json`.
-- In progress: small Moreh softmax H/W paths; replace split MAX reductions
-  with one partial-aware plan, and plan SUM with the fused log/reciprocal op.
+- Moreh softmax forward/backward H/W, small/large (S070–S077, DF028–DF033,
+  DP016/DP017): all eight factories now pass host plans and auxiliary recipes.
+  Forward MAX covers the full logical axis in one call. Large forward sums and
+  non-log gradients use bounded transformed blocks and planned accumulation;
+  large log-softmax gradients reduce the incoming dy stream directly. Removed
+  obsolete mask/staging buffers; small forward kernels retain their output
+  padding mask. Native build and all eight sanity cases passed.
+  Full groups T059–T062 passed 367 cases with 96 upstream BF8 skips (463 total),
+  including all 162 existing ULP cases. Results:
+  `generated/test_reports/reduce-migration-o97h1hu_/summary.json`.
+- Added T171 with 108 forward/backward boundary cases covering H/W, small/large,
+  softmax/softmin/log-softmax, partial padding poisoned with 42, block transitions,
+  repeated accumulation and BF16/FP32 destination formats. The sweep uses SMALL
+  shapes within its existing 512-KB gate and retains 1025-element cases for LARGE.
+  Its PyTorch autograd reference uses BF16 outputs matching the device inputs;
+  near-zero log-softmax gradients allow one BF16 ULP at unit intermediate scale.
+  All 108 passed; results in
+  `generated/test_reports/reduce-migration-h6zf0w0c/summary.json`.
+- In progress: Moreh gradient clipping and the shared layer/group normalization
+  kernels, replacing their manual accumulation with planned block reductions.
 
 ## Remaining work
 

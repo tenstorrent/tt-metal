@@ -11,6 +11,9 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <ttnn/metal_v2_artifacts.hpp>
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
+
+#include <algorithm>
 #include <cstdint>
 #include <string>
 
@@ -74,7 +77,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
     const TensorParamName DST{"dst"};
 
     const DFBSpecName IN{"in"};
-    const DFBSpecName MASK{"mask"};
     const DFBSpecName MAX_SCALER{"max_scaler"};
     const DFBSpecName SUM_SCALER{"sum_scaler"};
     const DFBSpecName OUT{"out"};
@@ -84,27 +86,83 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
     const DFBSpecName MAX{"max"};
     const DFBSpecName TMP{"tmp"};
 
+    namespace reduce_host = ttnn::kernel_lib::host;
+    const TensorLayout input_layout(input.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    const TensorLayout intermediate_layout(
+        fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    const reduce_host::ReduceHardwareConfig reduce_hardware{
+        .arch = arch,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .available_l1_bytes = 24 * tile_size_intermed};
+    const auto max_plan = reduce_host::make_reduce_plan(
+        TensorSpec(Shape{input.logical_shape()[-2], 32}, input_layout),
+        TensorSpec(Shape{1, 32}, intermediate_layout),
+        ReduceOpMath::MAX,
+        ReduceOpDim::H,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        reduce_hardware,
+        2 * tile_size_data);
+
+    // Keep a full block with the tail so long sums use AccumulateViaAdd
+    // consistently across the seed, repeated middle, and final calls.
+    constexpr uint32_t reduce_block_tiles = 8;
+    const uint32_t reduce_buffer_tiles = std::min(Ht, 2 * reduce_block_tiles - 1);
+    const uint32_t num_blocks = std::max(1U, Ht / reduce_block_tiles);
+    const uint32_t num_descriptors = std::min(num_blocks, 3U);
+    std::vector<reduce_host::ReduceCbConfig> reductions;
+    for (uint32_t i = 0; i < num_descriptors; ++i) {
+        const uint32_t extent = i + 1 == num_descriptors
+                                    ? input.logical_shape()[-2] - (num_blocks - 1) * reduce_block_tiles * 32
+                                    : reduce_block_tiles * 32;
+        reductions.emplace_back(
+            0,
+            reduce_host::ReduceCallConfig{
+                TensorSpec(Shape{extent, 32}, intermediate_layout),
+                TensorSpec(Shape{1, 32}, intermediate_layout),
+                ReduceOpMath::SUM,
+                ReduceOpDim::H,
+                1.0F,
+                ReduceFp32Mode::Fast,
+                reduce_buffer_tiles * tile_size_intermed});
+    }
+    auto sum_sequence = reduce_host::make_reduce_sequence_plan(
+        reductions, {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2}, reduce_hardware);
+    sum_sequence.calls.back().accumulation_index = num_blocks - 1;
+    for (auto& call : sum_sequence.calls) {
+        call.plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+    }
+    std::vector<uint32_t> compute_reduce_args;
+    reduce_host::ReduceCallArgs(max_plan, {0, 1, 2}).append_to(compute_reduce_args);
+    const auto sum_args = sum_sequence.get_compile_time_args();
+    compute_reduce_args.insert(compute_reduce_args.end(), sum_args.begin(), sum_args.end());
+    std::vector<uint32_t> reader_reduce_args;
+    reduce_host::ReduceAuxiliaryArgs({1, max_plan.auxiliary_tiles}).append_to(reader_reduce_args);
+    reduce_host::ReduceAuxiliaryArgs(sum_sequence.auxiliary).append_to(reader_reduce_args);
+    const auto* max_auxiliary = max_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const auto* sum_auxiliary = sum_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const uint32_t sum_auxiliary_tiles = sum_sequence.auxiliary.tiles.size();
+
     Group<DataflowBufferSpec> dfbs = {
         DataflowBufferSpec{
             .unique_id = IN, .entry_size = tile_size_data, .num_entries = 2, .data_format_metadata = data_format},
         DataflowBufferSpec{
-            .unique_id = MASK, .entry_size = tile_size_data, .num_entries = 1, .data_format_metadata = data_format},
-        DataflowBufferSpec{
             .unique_id = MAX_SCALER,
-            .entry_size = tile_size_data,
-            .num_entries = 1,
-            .data_format_metadata = data_format},
+            .entry_size = max_auxiliary->page_size,
+            .num_entries = max_auxiliary->page_count,
+            .data_format_metadata = max_auxiliary->data_format},
         DataflowBufferSpec{
             .unique_id = SUM_SCALER,
-            .entry_size = tile_size_data,
-            .num_entries = 1,
-            .data_format_metadata = data_format},
+            .entry_size = sum_auxiliary->page_size,
+            .num_entries = sum_auxiliary_tiles,
+            .data_format_metadata = sum_auxiliary->data_format},
         DataflowBufferSpec{
             .unique_id = OUT, .entry_size = tile_size_data, .num_entries = 2, .data_format_metadata = data_format},
         DataflowBufferSpec{
             .unique_id = EXPS,
             .entry_size = tile_size_intermed,
-            .num_entries = 2,
+            .num_entries = reduce_buffer_tiles,
             .data_format_metadata = intermed_data_format},
         // reduce output
         DataflowBufferSpec{
@@ -136,7 +194,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
         .source = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_h_large.cpp",
         .dfb_bindings =
             {DFBBinding{.dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{.dfb_spec_name = MASK, .accessor_name = "mask", .endpoint_type = DFBEndpointType::PRODUCER},
              DFBBinding{
                  .dfb_spec_name = MAX_SCALER,
                  .accessor_name = "max_scaler",
@@ -146,10 +203,11 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
                  .accessor_name = "sum_scaler",
                  .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"}},
-        .compile_time_args = {{"is_fp32", static_cast<std::uint32_t>(input.dtype() == DataType::FLOAT32)}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Ht", "Wt", "mask_h"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Ht", "Wt"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
+
+    reader.advanced_options.compile_time_varargs = reader_reduce_args;
 
     KernelSpec writer{
         .unique_id = WRITER,
@@ -180,7 +238,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
         if (fp32_dest_acc_en) {
             std::get<ComputeGen1Config>(hw).unpack_modes = {
                 {IN, tt::tt_metal::UnpackMode::UnpackToSrc},
-                {MASK, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {MAX_SCALER, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {SUM_SCALER, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {EXPS, tt::tt_metal::UnpackMode::UnpackToSrc},
@@ -196,7 +253,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
     auto compute_dfb_bindings = [&]() {
         return Group<DFBBinding>{
             DFBBinding{.dfb_spec_name = IN, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
-            DFBBinding{.dfb_spec_name = MASK, .accessor_name = "mask", .endpoint_type = DFBEndpointType::CONSUMER},
             DFBBinding{
                 .dfb_spec_name = MAX_SCALER, .accessor_name = "max_scaler", .endpoint_type = DFBEndpointType::CONSUMER},
             DFBBinding{
@@ -218,14 +274,21 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
     };
 
     auto make_compute = [&](const KernelSpecName& id, std::uint32_t N) {
-        return KernelSpec{
+        KernelSpec kernel{
             .unique_id = id,
             .source = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_h_large.cpp",
             .compiler_options = {.defines = compute_defines, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
             .dfb_bindings = compute_dfb_bindings(),
-            .compile_time_args = {{"N", N}, {"Ht", Ht}},
+            .compile_time_args =
+                {{"N", N},
+                 {"Ht", Ht},
+                 {"reduce_block_tiles", reduce_block_tiles},
+                 {"reduce_buffer_tiles", reduce_buffer_tiles},
+                 {"sum_auxiliary_tiles", sum_auxiliary_tiles}},
             .hw_config = make_compute_hw(),
         };
+        kernel.advanced_options.compile_time_varargs = compute_reduce_args;
+        return kernel;
     };
 
     bool has_core_group_2 = !core_group_2.ranges().empty();
@@ -261,11 +324,6 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
     auto core_x_offset = core_range.start_coord.x;
     auto core_y_offset = core_range.start_coord.y;
 
-    std::uint32_t mask_h = input.logical_shape()[-2] % tt::constants::TILE_HEIGHT;
-    if (mask_h == 0) {
-        mask_h = tt::constants::TILE_HEIGHT;
-    }
-
     for (std::uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         std::uint32_t num_tiles_per_core;
@@ -280,11 +338,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
         AddRuntimeArgsForNode(
             reader_ra.runtime_arg_values,
             core,
-            {{"num_rows", num_tiles_per_core},
-             {"tile_offset", tile_offset},
-             {"Ht", Ht},
-             {"Wt", Wt},
-             {"mask_h", mask_h}});
+            {{"num_rows", num_tiles_per_core}, {"tile_offset", tile_offset}, {"Ht", Ht}, {"Wt", Wt}});
         AddRuntimeArgsForNode(
             writer_ra.runtime_arg_values,
             core,

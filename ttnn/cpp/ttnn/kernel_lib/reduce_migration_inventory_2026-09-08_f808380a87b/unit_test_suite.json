@@ -3382,11 +3382,33 @@
         "Migration regression checks for post-scaling and final-only fused callbacks."
       ],
       "id": "T170"
+    },
+    {
+      "kind": "pytest",
+      "source": "tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax_reduce_boundaries.py",
+      "family": "Moreh softmax planned reduction boundaries",
+      "factories": [
+        "F070",
+        "F071",
+        "F072",
+        "F073",
+        "F074",
+        "F075",
+        "F076",
+        "F077"
+      ],
+      "tests": [
+        "test_moreh_softmax_reduce_boundaries"
+      ],
+      "notes": [
+        "Partial and long reductions with poisoned padding, all H/W strategies and both destination accumulation formats."
+      ],
+      "id": "T171"
     }
   ],
   "migration_regressions": {
-    "added_test_definitions": 3,
-    "added_collected_cases": 69,
+    "added_test_definitions": 4,
+    "added_collected_cases": 177,
     "note": "The original report describes the base inventory; current runner also includes these migration regressions."
   }
 }

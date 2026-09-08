@@ -58,38 +58,63 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::create_program
     const uint32_t tile_size_data = tile_size(data_format);
     const uint32_t tile_size_intermed = tile_size(intermed_data_format);
 
+    namespace reduce_host = ttnn::kernel_lib::host;
+    const auto intermediate_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : input_grad.dtype();
+    const auto reduce_dtype = op == MorehSoftmaxBackwardOp::LOGSOFTMAX ? output_grad.dtype() : intermediate_dtype;
+    const TensorLayout reduce_layout(reduce_dtype, PageConfig(Layout::TILE), MemoryConfig{});
+    const TensorLayout intermediate_layout(intermediate_dtype, PageConfig(Layout::TILE), MemoryConfig{});
+    auto reduce_plan = reduce_host::make_reduce_plan(
+        TensorSpec(Shape{32, input_grad.logical_shape()[-1]}, reduce_layout),
+        TensorSpec(Shape{32, 1}, intermediate_layout),
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        {.arch = device.arch(),
+         .fp32_dest_acc_en = fp32_dest_acc_en,
+         .dst_full_sync_en = compute_kernel_config.dst_full_sync_en,
+         .available_l1_bytes = (Wt + 8) * tile_size_intermed},
+        Wt * tile_size(tt::tt_metal::datatype_to_dataformat_converter(reduce_dtype)));
+    reduce_plan.input_policy = op == MorehSoftmaxBackwardOp::LOGSOFTMAX
+                                   ? compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop
+                                   : compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop;
+    const auto* auxiliary = reduce_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const auto compute_reduce_args = reduce_host::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
+    const auto reader_reduce_args =
+        reduce_host::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();
+
     // create read/write kernel
     KernelSpec reader_spec{
         .unique_id = READER_KERNEL,
-        .source = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/"
-                  "reader_moreh_softmax_backward_w.cpp",
+        .source =
+            "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/"
+            "reader_moreh_softmax_backward_w.cpp",
         .dfb_bindings =
-            {DFBBinding{
-                 .dfb_spec_name = Y_DFB,
-                 .accessor_name = "y",
-                 .endpoint_type = DFBEndpointType::PRODUCER,
-             },
-             DFBBinding{
-                 .dfb_spec_name = DY_DFB,
-                 .accessor_name = "dy",
-                 .endpoint_type = DFBEndpointType::PRODUCER,
-             },
-             DFBBinding{
-                 .dfb_spec_name = SCALER_DFB,
-                 .accessor_name = "scaler",
-                 .endpoint_type = DFBEndpointType::PRODUCER,
-             },
-             DFBBinding{
-                 .dfb_spec_name = MASK_DFB,
-                 .accessor_name = "mask",
-                 .endpoint_type = DFBEndpointType::PRODUCER,
-             }},
+            {
+                DFBBinding{
+                    .dfb_spec_name = Y_DFB,
+                    .accessor_name = "y",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = DY_DFB,
+                    .accessor_name = "dy",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = SCALER_DFB,
+                    .accessor_name = "scaler",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
         .tensor_bindings =
             {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "y"},
              TensorBinding{.tensor_parameter_name = OUTPUT_GRAD_TENSOR, .accessor_name = "dy"}},
-        .runtime_arg_schema = {.runtime_arg_names = {"N", "tile_offset", "Wt", "mask_w"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"N", "tile_offset", "Wt"}},
         .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
     };
+
+    reader_spec.advanced_options.compile_time_varargs = reader_reduce_args;
 
     KernelSpec writer_spec{
         .unique_id = WRITER_KERNEL,
@@ -110,8 +135,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::create_program
         fp32_dest_acc_en,
         {{Y_DFB, data_format},
          {DY_DFB, data_format},
-         {SCALER_DFB, data_format},
-         {MASK_DFB, data_format},
+         {SCALER_DFB, auxiliary->data_format},
          {YDY_DFB, intermed_data_format},
          {SUM_DFB, intermed_data_format},
          {DY_M_SUM_DFB, intermed_data_format}});
@@ -120,7 +144,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::create_program
     // One KernelSpec per core group, each baking in that group's per-core tile count. The groups
     // cover disjoint nodes, so every node still runs exactly one compute instance.
     auto make_compute_spec = [&](const KernelSpecName& unique_id, uint32_t num_tiles_per_core) {
-        return KernelSpec{
+        KernelSpec kernel{
             .unique_id = unique_id,
             .source =
                 "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_w.cpp",
@@ -141,11 +165,6 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::create_program
                  DFBBinding{
                      .dfb_spec_name = SCALER_DFB,
                      .accessor_name = "scaler",
-                     .endpoint_type = DFBEndpointType::CONSUMER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = MASK_DFB,
-                     .accessor_name = "mask",
                      .endpoint_type = DFBEndpointType::CONSUMER,
                  },
                  DFBBinding{
@@ -188,6 +207,8 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::create_program
             .compile_time_args = {{"N", num_tiles_per_core}, {"Wt", Wt}},
             .hw_config = compute_hw_config,
         };
+        kernel.advanced_options.compile_time_varargs = compute_reduce_args;
+        return kernel;
     };
 
     // Set Runtime Args
@@ -207,14 +228,10 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::create_program
             TT_THROW("Core not in specified core ranges");
         }
 
-        uint32_t mask_w = input_grad.logical_shape()[-1] % tt::constants::TILE_WIDTH;
-        if (mask_w == 0) {
-            mask_w = tt::constants::TILE_WIDTH;
-        }
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
-            {{"N", num_tiles_per_core}, {"tile_offset", tile_offset}, {"Wt", Wt}, {"mask_w", mask_w}});
+            {{"N", num_tiles_per_core}, {"tile_offset", tile_offset}, {"Wt", Wt}});
 
         AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
@@ -230,8 +247,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::create_program
         .dataflow_buffers =
             {MakeDFB(Y_DFB, Wt, tile_size_data, data_format),
              MakeDFB(DY_DFB, Wt, tile_size_data, data_format),
-             MakeDFB(SCALER_DFB, 1, tile_size_data, data_format),
-             MakeDFB(MASK_DFB, 1, tile_size_data, data_format),
+             MakeDFB(SCALER_DFB, auxiliary->page_count, auxiliary->page_size, auxiliary->data_format),
              MakeDFB(DX_DFB, 2, tile_size_data, data_format),
              MakeDFB(YDY_DFB, Wt, tile_size_intermed, intermed_data_format),
              MakeDFB(SUM_DFB, 1, tile_size_intermed, intermed_data_format),
