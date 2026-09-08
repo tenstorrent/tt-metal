@@ -1,5 +1,5 @@
 {
-  "test_attention_tp": 0.97,
+  "test_attention_tp": 0.99,
   "test_attention_tp_prefill": 0.95,
   "test_attention_tp_paged": 0.97,
   "test_attention_tp_paged_peruser": 0.97,
@@ -7,7 +7,7 @@
   "test_gdn_tp_peruser_state": 0.92,
   "test_gdn_tp_batched_prefill": 0.92,
   "test_gdn_tp_prefill": 0.95,
-  "test_mlp_tp": 0.97,
+  "test_mlp_tp": 0.99,
   "test_partial_rope_prefill": 0.99,
   "test_partial_rope_decode": 0.99,
   "test_model_tp_contract": 0.99,
@@ -22,5 +22,11 @@
   "test_lm_head_precision": 0.999,
   "test_embedding_pcc": 0.999,
   "test_full_depth_prefill_logits_pcc": 0.98,
-  "test_full_depth_decode_logits_pcc": 0.95
+  "test_full_depth_decode_logits_pcc": 0.95,
+  "test_rms_norm_tp": 0.999,
+  "test_qk_head_norm_tp": 0.999,
+  "test_encoder_tp": 0.99,
+  "test_rope_tp": 0.999,
+  "test_layer_tp": 0.99,
+  "test_drafter_pcc": 0.99
 }
