@@ -5,7 +5,8 @@
 // NOTE: This is the Metal 2.0 fork of reader_unary_interleaved_wh_multicore.cpp, which lives beside
 // it. Ops ported to Metal 2.0 bind this file; the original serves the consumers still on the legacy
 // API. Until the last of them migrates and the original is retired, changes here likely belong there
-// too.
+// too. One deliberate exception: the BACKWARDS walk below is corrected here and still carries the
+// original's unsigned-comparison form there, so do not sync that block back from the original.
 //
 // The binding names below (dfb::in, tensor::src) and the named argument set are this fork's
 // interface: every later consumer inherits them, so they are taken from the kernel's own vocabulary
@@ -38,16 +39,14 @@ void kernel_main() {
     DataflowBuffer dfb(dfb::in);
     const uint32_t tile_bytes = dfb.get_tile_size();
 
-#ifdef BACKWARDS
-    for (uint32_t dim = 0; dim > -third_dim; dim--) {
-        for (uint32_t c = 0; c > -single_block_size_col_arg; c--) {
-            for (uint32_t r = 0; r > -single_block_size_row_arg; r--) {
-                uint32_t tile = -start_id + dim * num_tiles_per_2d + c * total_tiles_per_row + r;
-#else
     for (uint32_t dim = 0; dim < third_dim; dim++) {
         for (uint32_t c = 0; c < single_block_size_col_arg; c++) {
             for (uint32_t r = 0; r < single_block_size_row_arg; r++) {
-                uint32_t tile = start_id + dim * num_tiles_per_2d + c * total_tiles_per_row + r;
+                const uint32_t offset = dim * num_tiles_per_2d + c * total_tiles_per_row + r;
+#ifdef BACKWARDS
+                const uint32_t tile = start_id - offset;
+#else
+                const uint32_t tile = start_id + offset;
 #endif
                 dfb.reserve_back(onetile);
                 noc.async_read(s, dfb, tile_bytes, {.page_id = tile}, {.offset_bytes = 0});
