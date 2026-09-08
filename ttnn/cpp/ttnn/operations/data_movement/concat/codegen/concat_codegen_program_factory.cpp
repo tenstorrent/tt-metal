@@ -108,10 +108,17 @@ std::optional<ConcatCbSelection> plan_concat_cbs(
         // cascade. One L1 CB granule of headroom is what keeps the composition in bounds.
         scratch_page += device->allocator()->get_alignment(BufferType::L1);
     }
-    if (scratch_page > l1_budget_bytes) {
+    // Only the width paths allocate a second CB, and program allocation DRAM-aligns every local CB
+    // start, so a main CB whose total size is not DRAM-aligned pushes scratch up by the padding.
+    // Charge that gap here: admitting a plan the allocator cannot place turns what should be a
+    // native fallback into a circular-buffer validation failure. depth * out_page inherits
+    // out_page's alignment, so the gap is zero whenever out_page already clears it.
+    const uint32_t cb_start_alignment = device->allocator()->get_alignment(BufferType::DRAM);
+    const uint32_t reserved = scratch_page + (out_page % cb_start_alignment == 0 ? 0 : cb_start_alignment - 1);
+    if (reserved > l1_budget_bytes) {
         return std::nullopt;
     }
-    const auto plan = plan_concat_cb(out_page, kConcatWidthWriteBatch, l1_budget_bytes - scratch_page);
+    const auto plan = plan_concat_cb(out_page, kConcatWidthWriteBatch, l1_budget_bytes - reserved);
     if (!plan.has_value()) {
         return std::nullopt;
     }
