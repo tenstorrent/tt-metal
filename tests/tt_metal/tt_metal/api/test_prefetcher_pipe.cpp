@@ -762,14 +762,18 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
             /*is_metal2_kernel=*/true,
             handles);
         bool saw_binding = false;
-        kernel->process_dataflow_buffer_binding_handles(
-            [&](const std::string& name, uint16_t logical_id, bool is_relay, uint8_t prefetcher_pipe_id) {
-                EXPECT_EQ(name, "relay_dfb");
-                EXPECT_EQ(logical_id, expected_slot);
-                EXPECT_TRUE(is_relay);
-                EXPECT_EQ(prefetcher_pipe_id, 0u);
-                saw_binding = true;
-            });
+        kernel->process_dataflow_buffer_binding_handles([&](const std::string& name,
+                                                            uint16_t logical_id,
+                                                            bool is_relay,
+                                                            uint8_t prefetcher_pipe_id,
+                                                            const std::optional<LLKMetadata>& llk_metadata) {
+            EXPECT_EQ(name, "relay_dfb");
+            EXPECT_EQ(logical_id, expected_slot);
+            EXPECT_TRUE(is_relay);
+            EXPECT_EQ(prefetcher_pipe_id, 0u);
+            EXPECT_FALSE(llk_metadata.has_value());
+            saw_binding = true;
+        });
         EXPECT_TRUE(saw_binding);
     }
 

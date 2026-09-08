@@ -201,17 +201,19 @@ inline void BindTensorParameterToKernel(
 // Defaults give a simple legal layout: BFLOAT16 tile-layout tensor of `logical_shape`,
 // sharded across the first `num_cores` cores of the worker grid with shard shape
 // `shard_shape`. Caller is responsible for choosing a shape that fits the grid.
+// `tile` overrides the default 32x32 page tile (e.g. to exercise narrow / partial tiles).
 inline TensorParameter MakeShardedTensorParameter(
     std::string name,
     const tt::tt_metal::Shape& logical_shape,
     const std::array<uint32_t, 2>& shard_shape,
-    uint32_t num_cores) {
+    uint32_t num_cores,
+    const std::optional<Tile>& tile = std::nullopt) {
     auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, CoreCoord{num_cores, 1}, /*row_wise=*/true);
     tt::tt_metal::ShardSpec shard_spec{
         shard_grid, {shard_shape[0], shard_shape[1]}, tt::tt_metal::ShardOrientation::ROW_MAJOR};
     tt::tt_metal::MemoryConfig memory_config{
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
-    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE);
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, tile);
     auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
     return TensorParameter{
         .unique_id = TensorParamName{std::move(name)},
