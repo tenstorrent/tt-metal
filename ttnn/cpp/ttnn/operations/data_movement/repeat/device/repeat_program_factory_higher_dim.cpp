@@ -27,7 +27,6 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryHigherDim::create_p
     const auto& output = tensor_return_value;
     const uint32_t num_repeats = operation_attributes.m_num_repeats;
     // get datum size
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const uint32_t data_size = input.element_size();
     IDevice* device = input.device();
     // Multi device pre-computation
@@ -77,39 +76,32 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryHigherDim::create_p
     // Metal 2.0 named resource ids. Declared function-local so the unity build (both repeat factory
     // .cpp files land in one translation unit) sees no duplicate anonymous-namespace symbols.
     const KernelSpecName READER{"reader"};
-    const DFBSpecName SRC0{"src0"};
-    const DFBSpecName SRC1{"src1"};
+    const ScratchpadSpecName SRC0{"src0"};
+    const ScratchpadSpecName SRC1{"src1"};
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
 
-    // Dataflow buffers: one page each, staging a page for the read-repeat-write. Each is a single-toucher
-    // scratchpad the reader fills and drains itself, so it self-loops (reader bound PRODUCER + CONSUMER).
-    Group<DataflowBufferSpec> dataflow_buffers;
-    dataflow_buffers.push_back(DataflowBufferSpec{
+    // One page each, staging a page for the read-repeat-write. Each is a reader-private scratchpad the
+    // reader fills and drains itself. (Formerly self-loop DFBs; a single DM kernel filled and drained
+    // each, so the FIFO synchronized nothing — a shape Quasar rejects.)
+    Group<ScratchpadSpec> scratchpads;
+    scratchpads.push_back(ScratchpadSpec{
         .unique_id = SRC0,
-        .entry_size = cb_size_bytes,
-        .num_entries = 1,
-        .data_format_metadata = cb_data_format,
+        .size_per_node = cb_size_bytes,  // entry_size * num_entries (1)
     });
     // Second buffer only for interleaved RM (write-alignment scratchpad).
     if (needs_alignment_cb) {
-        dataflow_buffers.push_back(DataflowBufferSpec{
+        scratchpads.push_back(ScratchpadSpec{
             .unique_id = SRC1,
-            .entry_size = cb_size_bytes,
-            .num_entries = 1,
-            .data_format_metadata = cb_data_format,
+            .size_per_node = cb_size_bytes,
         });
     }
 
-    // Self-loop the DFBs: bind the reader as both PRODUCER and CONSUMER of each (one accessor name each).
-    Group<DFBBinding> dfb_bindings = {
-        DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
-        DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER}};
+    // The reader privately fills and drains each scratchpad (one accessor name each).
+    Group<ScratchpadBinding> scratchpad_bindings = {
+        ScratchpadBinding{.scratchpad_spec_name = SRC0, .accessor_name = "in0"}};
     if (needs_alignment_cb) {
-        dfb_bindings.push_back(
-            DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER});
-        dfb_bindings.push_back(
-            DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER});
+        scratchpad_bindings.push_back(ScratchpadBinding{.scratchpad_spec_name = SRC1, .accessor_name = "in1"});
     }
 
     std::filesystem::path kernel_source;
@@ -125,7 +117,7 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryHigherDim::create_p
     KernelSpec reader{
         .unique_id = READER,
         .source = kernel_source,
-        .dfb_bindings = dfb_bindings,
+        .scratchpad_bindings = scratchpad_bindings,
         .tensor_bindings =
             {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"},
              TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
@@ -204,7 +196,7 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryHigherDim::create_p
     ProgramSpec spec{
         .name = "repeat_higher_dim",
         .kernels = {reader},
-        .dataflow_buffers = dataflow_buffers,
+        .scratchpads = scratchpads,
         .tensor_parameters =
             {TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
              TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()}},
