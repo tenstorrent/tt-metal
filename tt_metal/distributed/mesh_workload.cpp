@@ -105,13 +105,8 @@ void MeshWorkloadImpl::set_finalized(uint32_t max_program_kernels_sizeB) {
             metadata.program_config_sizes = program_config_sizes;
         } else {
             TT_FATAL(
-                metadata.program_config_sizes.size() == program_config_sizes.size(),
+                metadata.program_config_sizes == program_config_sizes,
                 "Expected config sizes to be identical across all programs in a MeshWorkload.");
-            for (size_t i = 0; i < metadata.program_config_sizes.size(); i++) {
-                TT_FATAL(
-                    metadata.program_config_sizes[i] == program_config_sizes[i],
-                    "Expected config sizes to be identical across all programs in a MeshWorkload.");
-            }
         }
 
         if (!program_impl.get_per_core_cross_node_dfbs().empty()) {
@@ -340,15 +335,18 @@ const std::vector<uint64_t>& MeshWorkloadImpl::get_cross_node_program_ids() {
 
 const std::unordered_set<SubDeviceId>& MeshWorkloadImpl::determine_sub_device_ids(MeshDevice* mesh_device) {
     auto& sub_device_ids_by_manager = sub_device_ids_by_mesh_and_manager_[mesh_device->id()];
-    auto [entry, inserted] = sub_device_ids_by_manager.try_emplace(*mesh_device->get_active_sub_device_manager_id());
-    auto& sub_device_ids = entry->second;
-    if (inserted) {
-        for (auto& [device_range, program] : programs_) {
-            auto sub_devices_for_program = program.impl().determine_sub_device_ids(mesh_device);
-            sub_device_ids.insert(sub_devices_for_program.begin(), sub_devices_for_program.end());
-        }
+    const uint64_t manager_id = *mesh_device->get_active_sub_device_manager_id();
+    if (auto entry = sub_device_ids_by_manager.find(manager_id); entry != sub_device_ids_by_manager.end()) {
+        return entry->second;
     }
-    return sub_device_ids;
+    // Collect before inserting: a program that raises partway through would otherwise leave the
+    // programs walked so far cached as the whole workload's sub-device set.
+    std::unordered_set<SubDeviceId> sub_device_ids;
+    for (auto& [device_range, program] : programs_) {
+        auto sub_devices_for_program = program.impl().determine_sub_device_ids(mesh_device);
+        sub_device_ids.insert(sub_devices_for_program.begin(), sub_devices_for_program.end());
+    }
+    return sub_device_ids_by_manager.emplace(manager_id, std::move(sub_device_ids)).first->second;
 }
 
 ProgramCommandSequence& MeshWorkloadImpl::get_dispatch_cmds_for_program(Program& program, uint64_t command_hash) {
@@ -455,6 +453,12 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
         semaphores_getter,
         programs);
 
+    // The programs were laid out jointly above, so each one is finalized. Say so: finalize_offsets()
+    // and LaunchProgram() both re-lay out a program that still reports unfinalized, which would
+    // replace these joint offsets with standalone ones while dispatch keeps using the snapshot.
+    for (auto* program_impl : program_impls) {
+        program_impl->set_finalized();
+    }
     set_finalized(max_program_kernels_sizeB);
 }
 

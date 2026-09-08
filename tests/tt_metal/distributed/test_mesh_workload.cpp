@@ -969,12 +969,19 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
             .compile_args = {updated_cb_index}});
+    // The test grows every CB below (num_pages *= 2) and then halves one page size, so the CB region
+    // is at its largest right after the growth. Size the report slot from that footprint and leave a
+    // page of slack, so adding a CB or changing the growth factor cannot land the report inside a
+    // live CB and decide the test for the wrong reason.
+    constexpr uint32_t cb_growth_factor = 2;
+    constexpr uint32_t report_slack_bytes = 4096;
     uint32_t max_cb_region_size = 0;
     for (const auto& cb_config : cb_config_vector) {
-        max_cb_region_size += 2 * cb_config.num_pages * cb_config.page_size;
+        max_cb_region_size += cb_growth_factor * cb_config.num_pages * cb_config.page_size;
     }
     const uint32_t report_addr =
-        mesh_device_->get_devices().front()->allocator()->get_base_allocator_addr(HalMemType::L1) + max_cb_region_size;
+        mesh_device_->get_devices().front()->allocator()->get_base_allocator_addr(HalMemType::L1) + max_cb_region_size +
+        report_slack_bytes;
     SetRuntimeArgs(*program, report_kernel, cr_set, {report_addr});
 
     auto mesh_workload = MeshWorkload();

@@ -189,8 +189,9 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # Traced and untraced get SEPARATE tables and SEPARATE margins, selected by mode in
 # `kimi_chunked_perf_gate` -- a traced baseline can never gate an untraced run or vice versa. The two
 # are different regimes, not a small delta: traced measures 0.6-0.95 s/chunk (a ramp, since chunk c
-# attends to KV[0:c*CHUNK]) while untraced is a flat ~0.81 s/chunk, host-dispatch bound so the op2op
-# gap swamps the depth ramp entirely.
+# attends to KV[0:c*CHUNK]) while untraced sits near 0.81 s/chunk for most of the run, host-dispatch
+# bound so the op2op gap all but swamps the depth ramp. Only the last chunks show it at all, and
+# whether that tail is real is exactly what the two ungated entries below are waiting on.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
@@ -219,7 +220,7 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # (55k / code_debug), 2026-09-01 on an 8x4 galaxy, per-chunk medians of run 33534897935/job
     # 99949625303.
     #
-    # WITHIN a run the untraced spread is huge -- per-chunk stddev reaches 0.33 s (~30%), because every
+    # WITHIN a run the untraced spread is huge -- per-chunk stddev reaches 0.33 s (~41%), because every
     # iteration re-dispatches every op from host and pays a fresh, variable op2op gap. The MEDIAN of the
     # 9 post-warmup iterations is not: on the previous baseline no chunk median across 32 recorded runs
     # landed further than 3.2% from its median-of-runs value. So the gate is on the median, with
@@ -227,7 +228,14 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     #
     # If this goes flaky, re-center on the median over several runs before widening. Widening to 10% is
     # the fallback after that -- a band that needs more than 10% is a regression, not noise.
-    (61, 11, 10): [0.805, 0.808, 0.811, 0.816, 0.808, 0.806, 0.806, 0.805, 0.802, 0.823, 0.854],
+    #
+    # Chunks 9 and 10 are None (record-only) rather than 0.823 and 0.854. Those two came from the tail
+    # of the single run above, where they sit 2% and 6% over the other nine, and the file's own rule is
+    # to cut from the median across several runs. Gating them on one run inverts the test: the band for
+    # chunk 10 is [0.811, 0.897], so a run that comes in flat at 0.806 -- faster than the baseline --
+    # fails as a regression. Re-cut all eleven from 2-3 runs to arm them; if the tail ramp survives
+    # that, it is real and the "near 0.81" note above needs to say so.
+    (61, 11, 10): [0.805, 0.808, 0.811, 0.816, 0.808, 0.806, 0.806, 0.805, 0.802, None, None],
 }
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
 # program, so the device is its only noise source; untraced re-dispatches from host every iteration and
@@ -1276,8 +1284,10 @@ def run_chunked_transformer_updated(
     Perf gate: when `baseline_chunk_times_s` is provided (a per-chunk list of baseline medians pulled
     from a known-good CI run), each chunk's measured median must stay within +/- `perf_margin` of its
     baseline; a single `perf_margin` covers every chunk. The table appends the baseline, tolerance band,
-    and PASS/FAIL per chunk, and the run fails if any chunk is out of band. When no baseline is given the
-    table is record-only (perf-exploration combos)."""
+    and PASS/FAIL per chunk, and the run fails if any chunk is out of band. A None entry in the list
+    leaves that ONE chunk record-only (shown as RECORD) while the others stay gated, for a chunk whose
+    baseline is not yet trustworthy. When no baseline is given at all the whole table is record-only
+    (perf-exploration combos)."""
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
 
@@ -1319,20 +1329,25 @@ def run_chunked_transformer_updated(
             row = [f"chunk {chunk_idx}", format_duration(median_time), format_duration(stddev_time)]
             if gated:
                 baseline = baseline_chunk_times_s[chunk_idx]
-                low = baseline * (1.0 - margin)
-                high = baseline * (1.0 + margin)
-                ok = low <= median_time <= high
-                row += [
-                    format_duration(baseline),
-                    format_duration(low),
-                    format_duration(high),
-                    "PASS" if ok else "FAIL",
-                ]
-                if not ok:
-                    failures.append(
-                        f"chunk {chunk_idx} median {median_time:.3f}s outside "
-                        f"baseline {baseline:.3f}s +/- {margin * 100:.1f}% band [{low:.3f}s, {high:.3f}s]"
-                    )
+                if baseline is None:
+                    # A None entry means this chunk has no baseline worth gating on yet: record it and
+                    # leave the rest of the table armed.
+                    row += ["-", "-", "-", "RECORD"]
+                else:
+                    low = baseline * (1.0 - margin)
+                    high = baseline * (1.0 + margin)
+                    ok = low <= median_time <= high
+                    row += [
+                        format_duration(baseline),
+                        format_duration(low),
+                        format_duration(high),
+                        "PASS" if ok else "FAIL",
+                    ]
+                    if not ok:
+                        failures.append(
+                            f"chunk {chunk_idx} median {median_time:.3f}s outside "
+                            f"baseline {baseline:.3f}s +/- {margin * 100:.1f}% band [{low:.3f}s, {high:.3f}s]"
+                        )
             rows.append(row)
 
         margin_note = f", baseline gate +/- {margin * 100:.1f}%" if gated else ", record-only (no baseline)"
