@@ -795,7 +795,7 @@ class TTSampling(LightweightModule):
         """Untilize a vocabulary row in bounded chunks while preserving its exact width."""
         num_untilize_chunks = self._untilize_chunk_count(x.shape[-1])
         # DRAM-interleaved ttnn.split/slice does not honor sub_core_grids (same
-        # senders-column spill as the vocab-trim slice above). 
+        # senders-column spill as the vocab-trim slice above).
         if num_untilize_chunks > 1 and self._force_argmax_sub_core_grids is None:
             # Untilizing the full row in one program needs a static circular-buffer
             # region proportional to the row width with past  around 150K elements it clashes

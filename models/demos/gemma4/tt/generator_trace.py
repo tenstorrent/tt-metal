@@ -891,7 +891,6 @@ def warmup_gemma4_batched_prefill_traces(
 def _warmup_gemma4_prefill_sweep(
     generator, kv_cache, *, enable_trace, can_sample_on_device, greedy_only, prefill_forward_fn
 ):
-
     prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
 
     model_args = generator.model_args[0]
