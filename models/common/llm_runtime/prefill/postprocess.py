@@ -310,13 +310,10 @@ class PrefillPostprocessor:
         else:
             output = ttnn.untilize(logits, use_multicore=True)
             if request.kind == "single" and not request.uses_chunked_prefill and int(output.shape[2]) > 1:
-                # Only the static q128-topk family still yields a 32-row tile here; the row-picked
-                # logits are already a single row. Row 0 keeps this slice offset-independent.
+                # Host sampling uses runtime row selection above. If the model returns a
+                # padded tile, the selected token is in row 0; discard the extra rows.
                 retain_owned(owned, output)
-                row = (
-                    relative_last[0] % _TILE_SIZE if self.uses_static_q128_topk(request, prepared.sampling_path) else 0
-                )
-                output = ttnn.slice(output, (0, 0, row, 0), (1, 1, row + 1, int(output.shape[-1])))
+                output = ttnn.slice(output, (0, 0, 0, 0), (1, 1, 1, int(output.shape[-1])))
         retain_owned(owned, output)
         return output
 

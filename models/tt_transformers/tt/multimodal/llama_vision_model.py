@@ -739,7 +739,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             h,
         )
         # Build the rope matrices for the padded bucket, not the exact prompt length.
-        # Otherwise every distinct prompt length otherwise materialises its own cos/sin tensors and
+        # Otherwise every distinct prompt length materialises its own cos/sin tensors and
         # its own rotary_embedding_llama programs, compiled on the first real request after the decode
         # trace is live.
         rot_mats = get_rot_mats(

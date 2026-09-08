@@ -137,6 +137,10 @@ class WarmupForwardMixin:
             )
             if skip_trace_precompile:
                 decode_kwargs["skip_trace_precompile"] = True
+            if not enable_trace and hasattr(self, "_prepare_decode_trace_variant"):
+                # Run through decode_forward so model-specific page-table routing
+                # is active while staging.
+                decode_kwargs["prepare_trace"] = True
             self.decode_forward(**decode_kwargs)
 
         logger.info("Decode warmup completed")

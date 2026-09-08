@@ -1350,7 +1350,7 @@ targets:
           - batch_size: 32
             seq_len: 686
             status: active
-            #Raised again 691 / 21.6 -> 931 / 29.1:
+            # Raised again 691 / 21.6 -> 931 / 29.1:
             # runs 33710384109 (main) and 33967118837 both measured 931 / 29.1,
             # above the old +15% ceiling.
             perf:

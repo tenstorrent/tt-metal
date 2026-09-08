@@ -50,6 +50,9 @@ class Transformer(LightweightModule):
         self.tt_ccl = TT_CCL(self.mesh_device)
         # Runtime bounds for the post-prefill tail's slice. Allocated here, before any trace exists,
         # and rewritten in place per call - see process_logits_after_prefill_trace.
+        # These buffers belong to this model/DP lane. Calls on a lane enqueue the
+        # copy and slice on the same command queue, in order. Concurrent host
+        # calls on the same model instance are not supported.
         self._tail_slice_start = ttnn.from_torch(
             torch.zeros(4, dtype=torch.int32),
             device=self.mesh_device,

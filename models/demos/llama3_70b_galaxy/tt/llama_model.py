@@ -78,8 +78,10 @@ class TtTransformer(LightweightModule):
         self.is_decode_setup = False
         self.prefetcher_setup = None
         # Device-side prefill inputs, reused across requests. Keyed by the host inputs' shape /
-        # dtype / layout signature, which is bounded because prompts are padded to a small set of
-        # prefill buckets. See prepare_inputs_prefill.
+        # dtype / layout signature. Callers must keep page-table widths fixed at the
+        # configured block-pool size as well as padding prompts to prefill buckets.
+        # Entries live for the model lifetime; arbitrary page-table widths would add
+        # signatures beyond the warmup set. See prepare_inputs_prefill.
         self._prefill_input_cache = {}
         self.mesh_sub_device_manager_id_decode = None
         self.mesh_sub_device_manager_id_prefill = None

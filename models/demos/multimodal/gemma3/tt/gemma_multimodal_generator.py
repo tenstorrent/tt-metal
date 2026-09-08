@@ -589,8 +589,6 @@ class GemmaMultimodalGenerator(Generator):
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
         warmup_batch_sizes = (1,)
 
-        skip_sequence_lengths = False
-
         # Every data-parallel lane is a separate device with its own program cache, and Gemma's prefill is
         # never traced, so the base gate (warm lanes 1..N-1 only for traced lengths) left those lanes
         # compiling their whole prefill graph on the first real request - behind the decode traces warmup
@@ -602,6 +600,7 @@ class GemmaMultimodalGenerator(Generator):
             logger.info("Using batch-1-only traced prefill warmup; runtime batched prefill remains enabled")
 
         for model_id in range(self.data_parallel):
+            skip_sequence_lengths = False
             for supported_length in sequence_lengths_to_warmup:
                 # Token-limit guard below skips combinations that would
                 # exceed MAX_BATCHED_PREFILL_SEQ_LEN.

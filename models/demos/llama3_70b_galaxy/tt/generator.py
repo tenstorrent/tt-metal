@@ -280,6 +280,33 @@ class Generator(WarmupForwardMixin):
         # "allocated while a trace is active" count. Recording happens in one block at the end.
         self._defer_trace_recording = enable_trace
 
+        try:
+            self._prefill_warmup_sweep(
+                page_table,
+                kv_cache,
+                enable_trace,
+                sampling_params,
+                tt_out_logits_all_users,
+            )
+            self._defer_trace_recording = False
+            self._record_pending_traces()
+        except BaseException:
+            self.already_warmed_up_prefill = False
+            raise
+        finally:
+            self._defer_trace_recording = False
+            self._pending_prefill_traces.clear()
+            self.warming_up_prefill = False
+        logger.info("Prefill warmup completed")
+
+    def _prefill_warmup_sweep(
+        self,
+        page_table,
+        kv_cache,
+        enable_trace,
+        sampling_params,
+        tt_out_logits_all_users,
+    ):
         # Llama70b always supports on-device sampling from metal
         on_device_sampling_enabled = True
 
@@ -411,16 +438,6 @@ class Generator(WarmupForwardMixin):
                 tt_out_logits_all_users,
                 start_pos=[num_cached],
             )
-
-        # Every variant has compiled and staged its buffers, and nothing is recorded yet.
-        # Record them all now, back to back, with no allocation in between.
-        if self._defer_trace_recording:
-            self._defer_trace_recording = False
-            self._record_pending_traces()
-
-        # trace_id_prefill dict check
-        logger.info("Prefill warmup completed")
-        self.warming_up_prefill = False
 
     def prefill_forward_text(
         self,

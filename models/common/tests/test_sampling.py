@@ -1177,6 +1177,15 @@ def test_ttsampling_force_argmax_matches_row_max_on_wide_vocab(vocab_size, mesh_
     assert sampler.force_argmax_sampling, "greedy params must take the argmax fast path"
 
     logits_host = torch.randn(1, 1, batch_size, vocab_size)
+    # Exercise both sides of every chunk boundary, including the last element.
+    # Negative logits make accidental zero padding observable as a wrong argmax.
+    logits_host = -logits_host.abs() - 2
+    split = TTSampling._untilize_chunk_width(vocab_size, TTSampling._untilize_chunk_count(vocab_size))
+    boundary_indices = [0, vocab_size - 1]
+    for boundary in range(split, vocab_size, split):
+        boundary_indices.extend((boundary - 1, boundary))
+    for user in range(batch_size):
+        logits_host[0, 0, user, boundary_indices[user % len(boundary_indices)]] = -1
     logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
     logits_bf16 = ttnn.to_torch(logits_tt).float().reshape(batch_size, vocab_size)
 
@@ -1191,6 +1200,47 @@ def test_ttsampling_force_argmax_matches_row_max_on_wide_vocab(vocab_size, mesh_
             f"user {user}: token {token} has logit {logits_bf16[user, token].item():.6f}, "
             f"but the row maximum is {row_max[user].item():.6f}"
         )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 2_000_000}], indirect=True)
+def test_uneven_untilize_preserves_logits_and_argmax_under_trace(mesh_device):
+    # Isolate the argmax conversion: the single-device constructor also validates
+    # a top-k split, which deliberately does not support this padded width.
+    sampler = TTSampling.__new__(TTSampling)
+    sampler._force_argmax_sub_core_grids = None
+    width = 262208
+    split = sampler._untilize_chunk_width(width, sampler._untilize_chunk_count(width))
+    boundaries = [0, width - 1]
+    for boundary in range(split, width, split):
+        boundaries.extend((boundary - 1, boundary))
+    expected = torch.tensor([boundaries[row % len(boundaries)] for row in range(32)])
+    logits = torch.full((1, 1, 32, width), -2.0, dtype=torch.bfloat16)
+    logits[0, 0, torch.arange(32), expected] = -1.0
+    device_logits = ttnn.from_torch(logits, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    untilized = sampler._untilize_for_argmax(device_logits)
+    assert torch.equal(ttnn.to_torch(untilized), logits)
+    tokens = ttnn.argmax(untilized, dim=-1, keepdim=False)
+    assert torch.equal(ttnn.to_torch(tokens).flatten().long(), expected)
+    ttnn.deallocate(tokens)
+    ttnn.deallocate(untilized)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    untilized = sampler._untilize_for_argmax(device_logits)
+    tokens = ttnn.argmax(untilized, dim=-1, keepdim=False)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    try:
+        # Reuse the capture with different maxima to detect stale inputs/outputs.
+        for expected in (expected.flip(0), expected):
+            logits.fill_(-2)
+            logits[0, 0, torch.arange(32), expected] = -1
+            host_logits = ttnn.from_torch(logits, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            ttnn.copy_host_to_device_tensor(host_logits, device_logits)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            assert torch.equal(ttnn.to_torch(tokens).flatten().long(), expected)
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
 
 
 def _single_device_sampling_args(mesh_device, vocab_size, max_top_k=32, max_batch_size=32):

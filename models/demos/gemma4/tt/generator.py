@@ -500,7 +500,7 @@ class ChunkedPrefillPageTableGuardMixin:
         if valid_len > 0:
             update(valid_len)
 
-    def _capture_trace_prefill(
+    def _prepare_trace_prefill(
         self,
         prefill_ids,
         page_table=None,
@@ -512,99 +512,59 @@ class ChunkedPrefillPageTableGuardMixin:
         user_id=0,
         start_pos=0,
     ):
-        """Capture prefill trace; reset sliding tails between compile and capture.
-
-        The compile forward (outside begin_trace) leaves per-layer sliding K/V
-        tails on the attention modules. Without a reset, the capture forward
-        takes the middle-chunk branch and loads new programs mid-capture
-        (TT_FATAL). sp0 must compile+capture with ``sliding_tail_in is None``;
-        sp1 must start capture from the *same* tail state compile started with.
-        APC / vLLM chunked continuations often JIT-capture sp1 with no prior
-        stash — compile takes the no-tail SDPA path then stashes a tail, and
-        capture would otherwise hit ``q_pad`` concat (program not in cache).
-        """
-        import ttnn
-        from models.tt_transformers.tt.common import copy_host_to_device
-
-        if batch_size > 1:
-            return super()._capture_trace_prefill(
-                prefill_ids,
-                page_table=page_table,
-                chunk_page_table=chunk_page_table,
-                kv_cache=kv_cache,
-                model_id=model_id,
-                global_user_id=global_user_id,
-                batch_size=batch_size,
-                user_id=user_id,
-                start_pos=start_pos,
-            )
-
-        prefill_kwargs = {
-            "page_table": page_table,
-            "chunk_page_table": chunk_page_table,
-            "chunk_start_idx": start_pos,
-            "user_id": user_id,
-        }
-        if global_user_id is not None:
-            prefill_kwargs["global_user_id"] = global_user_id
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
-        tt_rot_mats_prefill_global = host_inputs[1]
-        tt_rot_mats_prefill_local = host_inputs[2]
-        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
-
-        # Snapshot pre-compile sliding state so capture can restore it. Compile
-        # always mutates `_sliding_prefill_tail` (and may first-alloc or copy
-        # into `sliding_prefill_tail_persistent`).
+        """Compile on persistent trace inputs, retaining Gemma4's starting tail state."""
         had_starting_tails = self._any_sliding_prefill_tails(model_id)
         had_persistent = self._any_sliding_prefill_persistent(model_id)
-
-        # Match Python graph for both compile and capture (sp0: first-alloc,
-        # no ttnn.copy). Soft release leaves sliding_prefill_tail_persistent set
-        # after compile, so capture would take the copy path and TT_FATAL
-        # (program not in cache). Hard-clear persistent on both sides.
-        if int(start_pos) == 0:
+        if batch_size == 1 and int(start_pos) == 0:
             self._release_all_sliding_prefill_tails(model_id, clear_persistent=True)
-
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-        transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
-        tt_out_trace = self.model[model_id].ttnn_prefill_forward(
-            x=transformed_inputs[0],
-            rot_mats_global=tt_rot_mats_prefill_global,
-            rot_mats_local=tt_rot_mats_prefill_local,
-            page_table=transformed_inputs[1],
-            chunk_page_table=transformed_inputs[2],
-            chunk_start_idx=transformed_inputs[3],
+        prepared = super()._prepare_trace_prefill(
+            prefill_ids,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
             kv_cache=kv_cache,
+            model_id=model_id,
+            global_user_id=global_user_id,
+            batch_size=batch_size,
+            user_id=user_id,
+            start_pos=start_pos,
         )
-        ttnn.synchronize_device(self.model_args[model_id].mesh_device)
-        logger.info("Done Compiling Model")
+        prepared["gemma4_tail_state"] = (batch_size, int(start_pos), had_starting_tails, had_persistent)
+        # The bridge and input preparation route auxiliary inputs through model
+        # attributes. Other buckets may change them before deferred recording.
+        model = self.model[model_id]
+        prepared["gemma4_prefill_context"] = {
+            name: getattr(model, name, None)
+            for name in (
+                "_active_page_tables_per_layer",
+                "_prefill_input_ids_torch",
+                "_prefill_embeds_torch",
+                "_prefill_batch_size",
+                "_prefill_seq_len_per_user",
+            )
+        }
+        return prepared
 
-        # Restore the same starting tail state as compile before capture.
-        if int(start_pos) == 0:
-            self._release_all_sliding_prefill_tails(model_id, clear_persistent=True)
-        elif not had_starting_tails:
-            # sp1 JIT (APC / first middle chunk): compile ran no-tail SDPA then
-            # stashed a new tail. Drop that stash so capture matches. Keep
-            # persistent only when compile also started with it (end-of-forward
-            # copy path); otherwise hard-clear so both passes first-alloc.
-            self._release_all_sliding_prefill_tails(model_id, clear_persistent=not had_persistent)
-
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-        trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
-        transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
-        tt_out_trace = self.model[model_id].ttnn_prefill_forward(
-            x=transformed_inputs[0],
-            rot_mats_global=tt_rot_mats_prefill_global,
-            rot_mats_local=tt_rot_mats_prefill_local,
-            page_table=transformed_inputs[1],
-            chunk_page_table=transformed_inputs[2],
-            chunk_start_idx=transformed_inputs[3],
-            kv_cache=kv_cache,
-        )
-        ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
-        ttnn.synchronize_device(self.model_args[model_id].mesh_device)
-        logger.info("Done Capturing Prefill Trace")
-        return trace_id, tt_out_trace, *device_inputs
+    def _record_trace_prefill(self, prepared):
+        """Restore the compiled branch and record using the already allocated inputs."""
+        model_id = prepared["model_id"]
+        batch_size, start_pos, had_starting_tails, had_persistent = prepared["gemma4_tail_state"]
+        if batch_size == 1:
+            if start_pos == 0:
+                # sp0 must take the no-tail branch in compile and capture. A
+                # soft release would retain the ring and add an unwarmed copy.
+                self._release_all_sliding_prefill_tails(model_id, clear_persistent=True)
+            elif not had_starting_tails:
+                self._release_all_sliding_prefill_tails(model_id, clear_persistent=not had_persistent)
+        model = self.model[model_id]
+        context = {**prepared["gemma4_prefill_context"], "_prefill_trace_mode": True}
+        previous = {name: getattr(model, name, None) for name in context}
+        try:
+            for name, value in context.items():
+                setattr(model, name, value)
+            return super()._record_trace_prefill(prepared)
+        finally:
+            for name, value in previous.items():
+                setattr(model, name, value)
 
     def _capture_trace_prefill_sampling(self, model_id, sampling_batch):
         """Gemma4 override: replicate the sampling trace input, do not column-shard it.
@@ -1375,6 +1335,7 @@ class ChunkedPrefillPageTableGuardMixin:
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         defer_device_sampling: bool = False,
+        prepare_trace: bool = False,
         **kwargs,
     ):
         """Gemma4 decode with safe async-ahead merge (no ``tt_transformers`` edits).
@@ -1478,6 +1439,8 @@ class ChunkedPrefillPageTableGuardMixin:
                 **decode_kwargs,
                 reset_batch=reset_batch or mode_switched,
             )
+        elif prepare_trace:
+            tt_decode_output = self._prepare_decode_trace_variant(**decode_kwargs)
         else:
             tt_decode_output = self._decode_forward_no_trace_text(
                 **decode_kwargs,
@@ -1501,6 +1464,26 @@ class ChunkedPrefillPageTableGuardMixin:
             return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
         return tt_decode_output
 
+    def _decode_trace_key(self, on_device_sampling, tokens):
+        return on_device_sampling, int(tokens[0].shape[0]) if tokens else 1
+
+    def _prepare_decode_trace_text(self, *args, **kwargs):
+        prepared = super()._prepare_decode_trace_text(*args, **kwargs)
+        # The vLLM bridge routes these through model attributes. Recording may
+        # happen after another batch or prefill has changed that routing.
+        prepared["gemma4_page_tables"] = [getattr(m, "_active_page_tables_per_layer", None) for m in self.model]
+        return prepared
+
+    def _record_decode_trace_text(self, prepared):
+        previous = [getattr(m, "_active_page_tables_per_layer", None) for m in self.model]
+        try:
+            for model, tables in zip(self.model, prepared["gemma4_page_tables"]):
+                model._active_page_tables_per_layer = tables
+            return super()._record_decode_trace_text(prepared)
+        finally:
+            for model, tables in zip(self.model, previous):
+                model._active_page_tables_per_layer = tables
+
     def _decode_forward_trace_text(
         self,
         tokens,
@@ -1522,7 +1505,7 @@ class ChunkedPrefillPageTableGuardMixin:
         from models.tt_transformers.tt.generator import DECODE_PAGE_TABLE_INPUT_IDX
 
         batch = int(tokens[0].shape[0]) if tokens else 1
-        decode_trace_key = (on_device_sampling, batch)
+        decode_trace_key = self._decode_trace_key(on_device_sampling, tokens)
         if not self.trace_ids_decode[decode_trace_key]:
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
                 tokens,
