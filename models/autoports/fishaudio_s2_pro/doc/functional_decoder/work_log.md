@@ -52,3 +52,12 @@
 - 22:40 first rebuild with `lock: requirements.lock` failed: tt-model's finalize froze the image's own `ttnn==...`
   (two lines), `tt-smi`, `tt-umd`, `pyluwen` into the lock, which no index can resolve. Dropped them by hand;
   follow-up PR for tt-model-manager: filter image-provided packages in `freeze_from_image`.
+
+## 2026-09-08 23:35 — stage 11 (container serve/prove) p300x2 boot failure
+- p150 and p300 containers booted, proved (health mesh 1x1 / 1x2, ASR ok) and stopped cleanly.
+- p300x2 (1x4, FABRIC_1D) failed in `open_mesh_device`: `Device 0: Timed out while waiting for active ethernet
+  core 29-25 to become active again` — a dirty ERISC left behind by the just-closed 1x2 container (its own
+  `tt-model stop` reported a clean shutdown). Recoverable signature; needs `tt-smi -r`.
+- The runner's reset+retry did not fire because the signature only appears in `docker logs`, not in the
+  stage log. Fix: stage 11 now copies the container boot log into the stage log and does ONE bounded reset +
+  retry per profile on a DIRTY_ETH_RE match (recorded as advisory `retried`).
