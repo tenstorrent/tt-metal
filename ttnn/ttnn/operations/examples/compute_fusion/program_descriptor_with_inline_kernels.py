@@ -246,6 +246,7 @@ _REDUCE_RECIP_KERNEL = (
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 """
     + _ZONE_MACRO
     + r"""
@@ -264,20 +265,15 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_x, cb_scaler, cb_out);
 
-    constexpr auto shape = ReduceInputBlockShape::of(1, Wt, 1);
+    using Call = ttnn::kernel_lib::ReduceCallAtT<5, 0>;
+    cb_wait_front(cb_x, Wt);
     for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
         if constexpr (method == 0) {
             CF_PHASE("CF_FUSED");
-            reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_x, cb_scaler, cb_out,
-                   ReduceInputPolicy::WaitUpfrontNoPop>(
-                shape,
-                ReduceInputMemoryLayout::contiguous(),
-                NoAccumulation{},
-                [](uint32_t dst) { recip_tile_init(); recip_tile(dst); });
+            reduce<Call>([](uint32_t dst) { recip_tile_init(); recip_tile(dst); });
         } else {
             { CF_PHASE("CF_REDUCE");
-              reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_x, cb_scaler, cb_s1,
-                     ReduceInputPolicy::WaitUpfrontNoPop>(shape); }
+              reduce<Call>(); }
             { CF_PHASE("CF_RECIP");
               eltwise_chain(
                 IterationShape::tiles(1),
@@ -300,9 +296,8 @@ _SCALER_KERNEL = r"""
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
-    constexpr uint32_t cb_scaler = 2;
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<0>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 }
 """
 
@@ -362,6 +357,44 @@ def create_program_descriptor(
     compile_time_args = [num_tiles, blk, kernel_iters, method]
     defines = [("CF_MICROBENCH", "1")] if microbench else []
 
+    auxiliary_args = []
+    if scenario == "reduce_recip":
+        planner = ttnn.reduce_planner
+        sequence = planner.make_reduce_sequence_plan(
+            reductions=[
+                (
+                    CB_IN0,
+                    planner.ReduceCallConfig(
+                        input_spec=input_tensors[0].spec,
+                        output_spec=ttnn.TensorSpec(
+                            ttnn.Shape([32, 1]),
+                            ttnn.bfloat16,
+                            ttnn.TILE_LAYOUT,
+                            ttnn.TensorMemoryLayout.INTERLEAVED,
+                            None,
+                            ttnn.BufferType.L1,
+                        ),
+                        reduce_math=planner.ReduceMath.SUM,
+                        reduce_dim=planner.ReduceDimension.ROW,
+                        scalar=1.0,
+                        fp32_mode=planner.ReduceFp32Mode.FAST,
+                        max_input_cb_bytes=0,
+                    ),
+                )
+            ],
+            cb_ids=planner.ReduceSequenceCbIds(
+                auxiliary_cb_id=CB_SCALER, accumulator_cb_id=31, output_cb_id=CB_OUT if method == 0 else CB_S1
+            ),
+            hardware=planner.ReduceHardwareConfig(
+                arch=input_tensors[0].device().arch(),
+                fp32_dest_acc_en=False,
+                dst_full_sync_en=False,
+                available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
+            ),
+        )
+        sequence.append_to(compile_time_args)
+        sequence.auxiliary.append_to(auxiliary_args)
+
     kernels = []
     compute = ttnn.KernelDescriptor(
         kernel_source=_KERNEL_SOURCE[scenario],
@@ -379,12 +412,12 @@ def create_program_descriptor(
     cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor))
 
     if scenario == "reduce_recip":
-        cbs.append(_scratch_cb(CB_SCALER, 2))
+        cbs.append(_scratch_cb(CB_SCALER, len(sequence.auxiliary.tiles)))
         scaler = ttnn.KernelDescriptor(
             kernel_source=_SCALER_KERNEL,
             source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
             core_ranges=_single_core(),
-            compile_time_args=[],
+            compile_time_args=auxiliary_args,
             runtime_args=[],
             config=ttnn.ReaderConfigDescriptor(),
         )

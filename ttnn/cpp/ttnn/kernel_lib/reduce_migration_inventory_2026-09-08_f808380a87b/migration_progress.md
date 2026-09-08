@@ -239,3 +239,9 @@ Validation: native build passed. SM053 passed (`reduce-migration-7_26p8ry`). Ful
 The compute and writer now use separate planned local, first-stage, second-stage, and post-gather scalars. First-stage worker partials remain unscaled in the two-stage path; only the final worker normalizes their sum. The existing fused square accumulation and cross-core protocol remain intact.
 
 Validation: native build passed (`/tmp/reduce-rms-allgather-build-v2-20260908.log`). SM069 passed (`reduce-migration-96kgms4k`). The earlier incorrect two-stage scalar assignment failed PCC and was corrected before this commit. Multi-device topologies beyond the local N300 remain unverified.
+
+## Inline reduction examples
+
+All helper-based inline examples now serialize host calls and auxiliary recipes. The examples retain their explicitly compared manual/FPU/SFPU benchmark variants. Compute fusion describes the aliased sharded input without consuming it and attaches the reciprocal callback to the planned reduction.
+
+Validation: SM055/SM056/SM057 passed (`reduce-migration-96kgms4k`). Full T074/T075/T076 passed all 7 collected cases, including device performance variants (`reduce-migration-n4ve55eh`). These Python/inline-kernel changes required no native build; device JIT compilation ran through the safe wrapper.
