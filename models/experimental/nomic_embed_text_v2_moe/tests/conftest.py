@@ -4,8 +4,7 @@
 """Fixtures for the nomic-embed-text-v2-moe reference tests.
 
 The checkpoint and the upstream model each cost ~1.8 GB of host RAM, so both are
-session-scoped. test_reference_modules.py uses none of these fixtures, which is what keeps the
-structural suite runnable with no network and no weights.
+session-scoped. The guard fixtures skip rather than fail when the checkpoint is not cached.
 """
 
 import pytest

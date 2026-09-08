@@ -23,7 +23,20 @@ from models.experimental.nomic_embed_text_v2_moe.reference.modeling_nomic_moe im
 
 
 def expected_checkpoint_keys(config: NomicMoEConfig) -> dict[str, tuple[int, ...]]:
-    """The full key to shape contract implied by config."""
+    """Generate the full key-to-shape contract implied by the config.
+
+    Computed from the config rather than recorded from a checkpoint, so comparing it against
+    the real file tests this generator's own logic: the MoE placement predicate, the expert
+    packing shapes, and the bias-free router.
+
+    Args:
+        config: NomicMoEConfig describing the architecture.
+
+    Returns:
+        dict[str, tuple[int, ...]]: 148 entries for this checkpoint, mapping each parameter
+        name to its exact shape. Dense layers contribute mlp.fc1/fc2, MoE layers contribute
+        mlp.router and mlp.experts.
+    """
     hidden = config.hidden_size
     ffn = config.intermediate_size
     experts = config.num_experts
@@ -76,6 +89,15 @@ ABSENT_KEY_SUBSTRINGS = (
 
 
 def load_state_dict_from_safetensors(path) -> dict[str, torch.Tensor]:
+    """Read a safetensors file into a plain state dict.
+
+    Args:
+        path: Path to the .safetensors file, from resolve_checkpoint.
+
+    Returns:
+        dict[str, torch.Tensor]: Parameter name to tensor, 148 entries and all fp32 for this
+        checkpoint.
+    """
     from safetensors.torch import load_file
 
     return load_file(str(path))
@@ -85,10 +107,22 @@ def load_reference_model(
     config: NomicMoEConfig,
     state_dict: Optional[dict[str, torch.Tensor]] = None,
 ) -> NomicBertModel:
-    """Build the reference and, when a state dict is given, load it with strict=True.
+    """Build the reference model and optionally load weights into it.
 
-    strict=True is the point: the module tree mirrors upstream's names, so a clean load is the
-    structural proof that the reference holds the same parameters in the same places.
+    strict=True is the point, not a precaution: the module tree mirrors upstream's names, so a
+    clean load with zero missing and zero unexpected keys is the structural proof that the
+    reference holds the same parameters in the same places.
+
+    Args:
+        config: NomicMoEConfig to build from.
+        state_dict: Weights to load. None leaves the randomly initialised parameters in place,
+            which is what the shape-only tests want.
+
+    Returns:
+        NomicBertModel: In eval mode.
+
+    Raises:
+        RuntimeError: If state_dict is given and any key or shape does not match.
     """
     model = NomicBertModel(config)
     if state_dict is not None:
@@ -98,11 +132,20 @@ def load_reference_model(
 
 
 def load_pretrained_reference_model(allow_download: bool = True) -> NomicBertModel:
-    """One call for a reference model holding the real pinned checkpoint weights.
+    """Load a reference model holding the real pinned checkpoint weights.
 
-    Composes checkpoint resolution, the safetensors load and the strict load. Prefer this over
-    repeating the sequence; `load_reference_model` stays available for callers that already
-    hold a state dict, such as the synthetic-weight tests.
+    Composes checkpoint resolution, the safetensors read, and the strict load. Prefer this over
+    repeating the sequence; load_reference_model stays available for callers that already hold
+    a state dict.
+
+    Deliberately offers no revision argument: the config comes from the vendored snapshot, so a
+    revision knob here would pair one revision's weights with another's config.
+
+    Args:
+        allow_download: When False, fail instead of fetching the 1.8 GB checkpoint.
+
+    Returns:
+        NomicBertModel: In eval mode, holding the pinned checkpoint's 475,292,928 parameters.
     """
     state_dict = load_state_dict_from_safetensors(resolve_checkpoint(allow_download=allow_download))
     return load_reference_model(load_vendored_config(), state_dict)

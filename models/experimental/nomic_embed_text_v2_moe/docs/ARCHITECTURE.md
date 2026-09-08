@@ -2,7 +2,7 @@
 
 Encoder-only multilingual text-embedding transformer; every other layer replaces the dense FFN
 with a Mixture-of-Experts FFN. 475M parameters, ~305M active per token. No decoder, no KV
-cache, no generation. The reference in [`../reference/`](../reference/) is bit-exact against
+cache, no generation. The reference in [`../reference/modeling_nomic_moe.py`](../reference/modeling_nomic_moe.py) is bit-exact against
 upstream at the pinned revisions (PCC 1.0, max-abs 0.0, at all 13 capture points and end to
 end).
 
@@ -97,7 +97,7 @@ pinned to `SDPBackend.MATH`, which decomposes attention into its matmul, scale, 
 matmul rather than dispatching one fused kernel; leaving the backend to auto-selection would
 make this list a property of the host rather than of the model.
 
-| operator | input shapes (representative) | output shape |
+| operator | input shapes | output shape |
 |---|---|---|
 | `aten.view.default` | `[2, 16, 768]` | `[32, 768]` |
 | `aten.select.int` | `[2, 16, 3, 12, 64]` | `[2, 16, 12, 64]` |
@@ -146,9 +146,10 @@ make this list a property of the host rather than of the model.
 upstream's ragged expert loop, which gathers each expert's tokens by value. Being
 data-dependent, the model is not `torch.fx`-traceable.
 `NomicExperts.dense_forward` replaces all four with two broadcast-batch matmuls, a multiply and
-a reduce, asserted equal to the loop in `tests/pcc/test_reference_modules.py`. It gives every
-expert every token, so it materialises `(num_experts, tokens, ffn_hidden)` per MoE layer, where
-tokens is batch times sequence length rather than sequence length alone.
+a reduce. It gives every expert every token, so it materialises
+`(num_experts, tokens, ffn_hidden)` per MoE layer, where tokens is batch times sequence length
+rather than sequence length alone. `test_dense_forward_matches_the_ragged_loop` asserts the two
+formulations agree.
 
 ## 5. Embedding pipeline
 
@@ -156,7 +157,7 @@ From the checkpoint's `modules.json`, `1_Pooling/config.json` and
 `config_sentence_transformers.json`:
 
 ```
-task prefix -> tokenize -> encoder -> mask-weighted mean pool -> [truncate] -> L2 normalize
+task prefix -> tokenize -> model -> mask-weighted mean pool -> [truncate] -> L2 normalize
 ```
 
 Prefixes are trained-in, not decoration: `search_query: `, `search_document: `,

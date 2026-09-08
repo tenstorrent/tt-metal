@@ -7,32 +7,55 @@ Encoder-only multilingual text-embedding transformer with a Mixture-of-Experts F
 other layer. 475M total parameters, ~305M active per token. Produces sentence embeddings; no
 decoder, no KV cache, no generation.
 
-## Status
+## Embedding specification
 
-| Phase | Issue | State |
-|---|---|---|
-| 0: architectural overview | [#54917](https://github.com/tenstorrent/tt-metal/issues/54917) | done, PR [#55503](https://github.com/tenstorrent/tt-metal/pull/55503) |
-| 0: PyTorch reference | [#54919](https://github.com/tenstorrent/tt-metal/issues/54919) | done, same PR |
-| 1: first working TTNN PoC | [#54918](https://github.com/tenstorrent/tt-metal/issues/54918) | not started |
-| 2: device performance | | not started |
+**In:** B strings, plus a `prompt_name` selecting which task prefix step 1 prepends.
 
-`tt/` is empty and `tests/perf/` does not exist yet; both arrive with Phase 1. A perf test in
-this repo means a device performance test: it needs the device fixture, the
-`models_device_performance_bare_metal` marker and `prep_device_perf_report`. A CPU-only
-placeholder would be dead code that could pollute perf dashboards selecting by directory and
-marker.
+**Out:** one unit-norm vector per string.
+
+```
+ in   ["Hello!", "¡Hola!"]                                      B strings
+
+  1   apply_prompt          ["search_document: Hello!", ...]    B strings
+  2   tokenize              input_ids                           (B, S)        int64
+                            attention_mask                      (B, S)        int64
+  3   forward               last_hidden_state                   (B, S, 768)   fp32
+  4   mean_pool             pooled                              (B, 768)      fp32
+  5   matryoshka_truncate   pooled                              (B, dim)      fp32   optional
+  6   l2_normalize          embeddings                          (B, dim)      fp32
+
+out   embeddings[0] @ embeddings[1]                             float        similarity
+```
+
+Steps 1 and 2 are `preprocessing.py`, step 3 `inference.py`, steps 4 to 6 `postprocessing.py`.
+`embedding.encode` runs all six in one call.
+
+1. The prefix is trained-in, and it is prepended to the text rather than injected as a special
+   token, so it becomes ordinary tokens the encoder attends to. The same text under `"query"`
+   and under `"passage"` gives different vectors.
+2. S is the longest tokenized text in the batch, so it varies with the input. Shorter rows are
+   right-padded and `attention_mask` records which positions are real.
+3. One 768-wide vector per token, still per token.
+4. Where the sequence axis disappears: B*S token vectors become B text vectors. Mask-weighted,
+   so padding is excluded and a text's embedding never depends on its batch-mates.
+5. Optional. The leading features carry the most information, so a narrower vector stays
+   usable: the Matryoshka property.
+6. Unit norm is what makes the dot product on the output line a cosine similarity.
 
 ## Layout
 
 ```
-README.md                     this file: status, layout, setup, test commands
+README.md                     this file: layout, setup, test commands
 common.py                     pinned revisions, contracts, checkpoint resolution, test helpers
 docs/ARCHITECTURE.md          what the model is; see Documentation below
 reference/
   modeling_nomic_moe.py       golden PyTorch reference
   configuration_nomic_moe.py  config projected from the pinned config.json snapshot
   loader.py                   checkpoint contract, generated from the config
-  pipeline.py                 task prefixes, pooling, Matryoshka, L2 normalize
+  preprocessing.py            task prefixes, tokenization
+  inference.py                runs the model
+  postprocessing.py           mean pooling, Matryoshka truncation, L2 normalize
+  embedding.py                drives the three stages end to end
   hf_reference.py             containment for the transformers native-class trap
   config.json                 pinned config snapshot for the no-network tests
 tests/
@@ -65,35 +88,57 @@ Tests needing the checkpoint skip rather than fail when it is absent.
 ## Tests
 
 ```bash
-# everything, ~26 s with a warm cache
 pytest models/experimental/nomic_embed_text_v2_moe/tests/pcc/ -v
-
-# structural backbone: no network, no weights, no device, ~9 s
-pytest models/experimental/nomic_embed_text_v2_moe/tests/pcc/ -m "not needs_weights" -v
 ```
+
+Every test needs the checkpoint and a warm HF cache or network; they skip rather than fail when
+the checkpoint is absent.
 
 | File | Covers | Needs weights |
 |---|---|---|
-| `test_reference_modules.py` | rotary, QKV layout, post-norm structure, router, experts, GELU, pooling, each with a negative control | no |
 | `test_checkpoint_contract.py` | 148 keys/shapes/dtypes generated from the config, absence assertions, strict load | yes |
-| `test_reference_vs_hf.py` | end-to-end and per-layer parity with upstream | yes, plus network |
-| `test_embedding_pipeline.py` | tokenizer, prefixes, model-card similarity, Matryoshka, ragged batches | yes, plus network |
+| `test_reference_vs_hf_e2e.py` | end to end vs upstream: per-layer parity, tokenizer, prefixes, model-card similarity, Matryoshka, ragged batches | yes, plus network |
 
 Phase 0 is CPU-only. Do not set `TT_VISIBLE_DEVICES`; on a p300c it fails with
 `Custom fabric mesh graph descriptor path must be specified for CUSTOM cluster type`.
 
-## Three things that fail silently
+### Quick test
 
-Each is measured, and each has a negative control in the test suite.
+```python
+from models.experimental.nomic_embed_text_v2_moe.common import load_tokenizer
+from models.experimental.nomic_embed_text_v2_moe.reference import inference, postprocessing, preprocessing
+from models.experimental.nomic_embed_text_v2_moe.reference.loader import load_pretrained_reference_model
 
-1. `AutoModel.from_pretrained` returns the wrong model without raising. transformers >= 5
-   ships a native `nomic_bert` targeting v1.5, no MoE, registered for this `model_type`.
-   Always load through `reference/hf_reference.load_hf_model`.
-2. The MoE top-2 weights are not renormalized. Mixtral and Switch both divide by the top-k
-   sum, so copying either by reflex produces a bug that lands right on a 0.99 PCC gate.
-3. PCC cannot catch the shared-bias bug at all. The expert bias is added once after the
-   weighted sum; folding it into the loop gives a near-constant offset that PCC mean-centres
-   away. Gate that class of bug on max-abs.
+model, tokenizer = load_pretrained_reference_model(), load_tokenizer()
+texts = ["Hello!", "¡Hola!"]
+
+prefixed = preprocessing.apply_prompt(texts, "passage")                 # 2 strings, prefixed
+encoded = preprocessing.tokenize(tokenizer, prefixed)                   # ids, mask (2, 10) i64
+last_hidden_state = inference.forward(model, encoded["input_ids"], encoded["attention_mask"])  # (2,10,768)
+pooled = postprocessing.mean_pool(last_hidden_state, encoded["attention_mask"])  # (2, 768), ~15
+embeddings = postprocessing.l2_normalize(pooled)                        # (2, 768), norms 1.0
+
+print(float(embeddings[0] @ embeddings[1]))   # 0.911788
+```
+
+`mean_pool` is where the sequence axis disappears. Row 0 is padded here, since `"Hello!"`
+tokenizes shorter than `"¡Hola!"`, which is why pooling is mask-weighted: `<pad>` has a
+non-zero embedding, so counting it would make row 0 depend on its batch-mate. Insert
+`pooled = postprocessing.matryoshka_truncate(pooled, 256)` before the normalize for `(2, 256)`.
+
+### Correctness traps
+
+These failures do not raise exceptions, so the test suite includes measurements and negative controls for each:
+
+1. **Do not use `AutoModel.from_pretrained` directly.**
+   With `transformers >= 5`, it may resolve this model to the native `nomic_bert` implementation, which targets v1.5 and does not include the MoE layers. Always load through `reference/hf_reference.load_hf_model`.
+
+2. **Do not renormalize the MoE top-2 routing weights.**
+   `moe_normalize_expert_weights` is `false` in this checkpoint, so the two selected weights are used as they come out of the softmax and sum to less than 1. Dividing them by their top-2 sum, which Mixtral and Switch both do and which is the easy thing to copy by reflex, still scores around `0.99` PCC.
+
+3. **Use max-absolute error for shared-bias validation.**
+   PCC can hide the shared-bias bug because it mean-centers the resulting offset. The expert bias must be added once after the weighted expert sum, not inside the expert loop.
+
 
 ## References
 

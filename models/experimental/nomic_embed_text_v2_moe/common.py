@@ -83,6 +83,19 @@ PARITY = ParityThresholds(
 
 
 def resolve_checkpoint(allow_download: bool = True) -> Path:
+    """Locate model.safetensors at the pinned revision.
+
+    Resolves through the Hugging Face cache, so repeated calls cost nothing once the 1.8 GB
+    file is present. The upstream loader resolves the same cache entry, so both models read
+    one copy on disk.
+
+    Args:
+        allow_download: When False, fail instead of fetching over the network. Used by the
+            test fixtures to skip rather than download on a cold cache.
+
+    Returns:
+        Path: Absolute path to the cached checkpoint file.
+    """
     from huggingface_hub import hf_hub_download
 
     return Path(
@@ -96,6 +109,17 @@ def resolve_checkpoint(allow_download: bool = True) -> Path:
 
 
 def resolve_config(allow_download: bool = True) -> Path:
+    """Locate the live config.json at the pinned revision.
+
+    This is upstream's file, not the vendored snapshot in reference/. The two are asserted
+    equal by test_vendored_config_matches_the_pinned_revision.
+
+    Args:
+        allow_download: When False, fail instead of fetching over the network.
+
+    Returns:
+        Path: Absolute path to the cached config file.
+    """
     from huggingface_hub import hf_hub_download
 
     return Path(
@@ -109,6 +133,11 @@ def resolve_config(allow_download: bool = True) -> Path:
 
 
 def checkpoint_is_cached() -> bool:
+    """Report whether the checkpoint is already in the local cache.
+
+    Returns:
+        bool: True if resolve_checkpoint would succeed without network access.
+    """
     try:
         resolve_checkpoint(allow_download=False)
         return True
@@ -117,18 +146,37 @@ def checkpoint_is_cached() -> bool:
 
 
 def load_tokenizer():
-    """AutoTokenizer is safe here even though AutoModel is not: tokenizer_config.json's
-    explicit tokenizer_class outranks the nomic_bert model-type mapping."""
+    """Load the tokenizer at the pinned revision.
+
+    AutoTokenizer is safe here even though AutoModel is not: tokenizer_config.json's explicit
+    tokenizer_class outranks the nomic_bert model-type mapping, so there is no native-class
+    collision to contain.
+
+    Returns:
+        XLMRobertaTokenizerFast: 250002 tokens, pad 1 / bos 0 / eos 2.
+    """
     from transformers import AutoTokenizer
 
     return AutoTokenizer.from_pretrained(MODEL.model_id, revision=MODEL.revision)
 
 
 def capture_hidden_states(model: torch.nn.Module, module_paths: list[str]) -> tuple[dict, list]:
-    """Register forward hooks on module_paths, returning (captures, handles).
+    """Register forward hooks that record each named module's output.
 
     End-to-end PCC can hide compensating errors, so parity is checked at every layer boundary
-    instead. The caller must remove the handles.
+    instead.
+
+    Args:
+        model: Module to instrument.
+        module_paths: Dotted paths as they appear in model.named_modules().
+
+    Returns:
+        tuple: (captures, handles). captures is a dict filled in during the next forward pass,
+        mapping each path to a detached clone of its output tensor. handles are the hook
+        handles, which the caller must remove.
+
+    Raises:
+        KeyError: If any path is not a module of model.
     """
     captures: dict[str, torch.Tensor] = {}
     handles = []
@@ -152,36 +200,15 @@ def capture_hidden_states(model: torch.nn.Module, module_paths: list[str]) -> tu
 
 
 def layer_ladder_paths(num_hidden_layers: int) -> list[str]:
-    """Capture points for the parity ladder: post-embedding norm, then each block."""
-    return ["emb_ln"] + [f"encoder.layers.{i}" for i in range(num_hidden_layers)]
+    """List the module paths that make up the parity ladder.
 
+    Args:
+        num_hidden_layers: Number of encoder blocks, 12 for this checkpoint.
 
-def synthetic_state_dict(config, seed: int = 0) -> dict[str, torch.Tensor]:
-    """A deterministic state dict matching the real key/shape contract.
-
-    Lets the structural tests run with no network and no 1.8 GB download at the model's real
-    dimensions. The model is never shrunk; only the weights are synthetic. Norm weights are
-    ones and biases zeros so norms start as identity.
+    Returns:
+        list[str]: The post-embedding norm followed by each block, so 13 paths in total.
     """
-    from models.experimental.nomic_embed_text_v2_moe.reference.loader import expected_checkpoint_keys
-
-    generator = torch.Generator().manual_seed(seed)
-    state: dict[str, torch.Tensor] = {}
-    for key, shape in expected_checkpoint_keys(config).items():
-        is_norm = "norm" in key or "emb_ln" in key
-        if is_norm:
-            state[key] = torch.zeros(shape) if key.endswith(".bias") else torch.ones(shape)
-        elif key.endswith(".bias") and not key.endswith("experts.bias"):
-            state[key] = torch.zeros(shape)
-        else:
-            state[key] = torch.randn(shape, generator=generator) * 0.02
-    return state
-
-
-def build_synthetic_model(config, seed: int = 0):
-    from models.experimental.nomic_embed_text_v2_moe.reference.loader import load_reference_model
-
-    return load_reference_model(config, synthetic_state_dict(config, seed=seed))
+    return ["emb_ln"] + [f"encoder.layers.{i}" for i in range(num_hidden_layers)]
 
 
 def random_input_ids(
@@ -191,7 +218,20 @@ def random_input_ids(
     seed: int = 0,
     pad_lengths: Optional[list[int]] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Random (input_ids, attention_mask). pad_lengths right-pads row b by that many tokens."""
+    """Generate reproducible random model inputs, optionally with ragged padding.
+
+    Args:
+        batch: Number of rows, B.
+        seqlen: Sequence length, S.
+        config: NomicMoEConfig, read for vocab_size and pad_token_id.
+        seed: Seed for the id generator.
+        pad_lengths: Per-row padding counts. Row i gets its last pad_lengths[i] positions set
+            to pad_token_id and masked out. None means no padding.
+
+    Returns:
+        tuple: (input_ids, attention_mask), both (B, S) int64. attention_mask holds 1 for real
+        tokens and 0 for padding.
+    """
     generator = torch.Generator().manual_seed(seed)
     input_ids = torch.randint(0, config.vocab_size, (batch, seqlen), generator=generator)
     attention_mask = torch.ones((batch, seqlen), dtype=torch.long)
