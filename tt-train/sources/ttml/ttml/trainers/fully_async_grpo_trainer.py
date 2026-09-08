@@ -76,7 +76,6 @@ class FullyAsyncGRPOTrainer(GRPOTrainer):
         rollout_queue: Any,
         weight_bridge: Any,
         weights_export_fn: WeightsExportFn,
-        max_steps: int,
         max_staleness: int,
         dataset: Any = None,
         reward_func: Optional[Callable[..., List[float]]] = None,
@@ -109,7 +108,6 @@ class FullyAsyncGRPOTrainer(GRPOTrainer):
         self._rollout_queue: Any = rollout_queue
         self._weight_bridge: Any = weight_bridge
         self._weights_export_fn: WeightsExportFn = weights_export_fn
-        self._max_steps: int = int(max_steps)
         self._max_staleness: int = int(max_staleness)
 
     # -- preflight -----------------------------------------------------------
@@ -125,8 +123,6 @@ class FullyAsyncGRPOTrainer(GRPOTrainer):
                     f"FullyAsyncGRPOTrainer requires the completer to expose "
                     f"{name}; {type(self.completer).__name__} does not."
                 )
-        if self._max_steps <= 0:
-            raise ValueError(f"max_steps must be positive (got {self._max_steps})")
         if self._max_staleness < 0:
             raise ValueError(f"max_staleness must be non-negative (got {self._max_staleness})")
 
@@ -301,7 +297,7 @@ class FullyAsyncGRPOTrainer(GRPOTrainer):
         self.metrics = {"step": 0}
         self._reset_step_metrics()
 
-        while self.metrics["step"] < self._max_steps:
+        while self.metrics["step"] < self._total_optimizer_steps:
             batch, stale = self._pop_fresh_batch()
             if batch is None:
                 # Producer closed with no fresh batch left.

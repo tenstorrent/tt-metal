@@ -255,7 +255,7 @@ def _assert_fully_async_config(raw: dict) -> None:
     if num_iterations != 1:
         raise ValueError(f"gsm8k_fully_async requires grpo_config.num_iterations == 1 (got {num_iterations}).")
     fa = raw["training_config"].get("fully_async_config", {})
-    for key in ("max_steps", "max_staleness"):
+    for key in ("max_staleness",):
         if key not in fa:
             raise ValueError(f"training_config.fully_async_config must contain '{key}'")
 
@@ -289,7 +289,6 @@ def _ttml_main() -> None:
 
     model_id = raw["training_config"]["model_id"]
     fa = raw["training_config"]["fully_async_config"]
-    max_steps: int = int(fa["max_steps"])
     max_staleness: int = int(fa["max_staleness"])
     rollout_queue_capacity: int = int(fa.get("rollout_queue_capacity", 2))
 
@@ -361,7 +360,6 @@ def _ttml_main() -> None:
             weights_export_fn=lambda: qwen3_weights_ref_hf_dict(
                 completer.model, tie_word_embeddings=completer._tie_word_embeddings
             ),
-            max_steps=max_steps,
             max_staleness=max_staleness,
             reward_funcs=REWARD_FUNCS,
             optimizer_dict=optimizer_dict,

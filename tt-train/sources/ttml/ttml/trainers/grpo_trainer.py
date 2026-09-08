@@ -830,6 +830,7 @@ class GRPOTrainer:
         self._generation_batch_prompts: int = 0
         self._prompts: List[List[int]] = []
         self._extra_dataset_columns: dict[str, list] = {}
+        self._total_optimizer_steps: int = 0
 
         # Auto-append the framework's default GRPOMonitor unless the config
         # opts out. Placed last so any user-supplied callbacks (e.g. eval)
@@ -1074,7 +1075,11 @@ class GRPOTrainer:
         prompts_per_microbatch = completions_per_microbatch // grpo_cfg.num_generations
         generation_batch_prompts = prompts_per_microbatch * grad_accum
 
-        total_prompts = min(grpo_cfg.prompts_to_train, len(self.dataset))
+        total_prompts = int(grpo_cfg.prompts_to_train)
+        if len(self.dataset) > 0:
+            # Sync / one-step-async trainers: prompts come from ``self.dataset``,
+            # so we cap by its size and pre-tokenize the prompt strings.
+            total_prompts = min(total_prompts, len(self.dataset))
         if total_prompts % generation_batch_prompts != 0:
             raise ValueError(
                 f"prompts_to_train ({total_prompts}) must be divisible by the generation batch size "
@@ -1082,9 +1087,16 @@ class GRPOTrainer:
                 f"{grad_accum} = {generation_batch_prompts}) to avoid a ragged final batch that can break "
                 "micro-batch sharding"
             )
-        dataset = self.dataset.select(range(total_prompts))
-        prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
-        extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
+        if len(self.dataset) > 0:
+            dataset = self.dataset.select(range(total_prompts))
+            prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
+            extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
+        else:
+            # Queue-driven trainer (e.g. FullyAsyncGRPOTrainer): dataset is a
+            # 0-row stub because prompts arrive from a ``RolloutQueue``. Skip
+            # dataset tokenization; run length still comes from ``prompts_to_train``.
+            prompts = []
+            extra_columns = {}
 
         # Publish outputs onto self for the per-batch helpers.
         self._tokenizer = tokenizer
@@ -1105,6 +1117,10 @@ class GRPOTrainer:
         self._generation_batch_prompts = generation_batch_prompts
         self._prompts = prompts
         self._extra_dataset_columns = extra_columns
+        # Total optimizer steps this run will take. Derived from prompts_to_train
+        # (capped by dataset len for sync/onestep trainers), so all GRPO trainers
+        # -- sync, onestep, fully-async -- share one source of truth for run length.
+        self._total_optimizer_steps = (total_prompts // generation_batch_prompts) * self.config.num_iterations
 
     # -- phase helpers -------------------------------------------------------
     #

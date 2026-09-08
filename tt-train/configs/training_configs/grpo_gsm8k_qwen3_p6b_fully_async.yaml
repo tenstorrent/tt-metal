@@ -8,7 +8,8 @@
 #     updates through a ThreadedWeightBridge asynchronously; rank 1 generates
 #     continuously without per-step handshakes.
 #   - ``fully_async_config`` replaces the WeightSyncCallback + weight_bridge
-#     knobs. Sets aReal-style max_staleness, hard step count, and queue depth.
+#     knobs. Sets aReal-style max_staleness and queue depth. Run length is
+#     shared with the sync/onestep trainers: ``grpo_config.prompts_to_train``.
 #
 # The single-chip batch ceiling on Blackhole is unchanged: 32 completions per
 # generate call (per_device_train_batch_size * gradient_accumulation_steps),
@@ -29,7 +30,7 @@ training_config:
 
   optimizer:
     type: MorehAdamW
-    lr: 1.0e-5
+    lr: 7.5e-6
     beta1: 0.9
     beta2: 0.99
     epsilon: 1.0e-8
@@ -49,13 +50,12 @@ training_config:
     temperature: 1.0
     max_completion_length: 512
     num_generations: 16
-    warmup_steps: 20
+    warmup_steps: 30
 
-  # FullyAsyncGRPOTrainer knobs.
+  # FullyAsyncGRPOTrainer knobs. Run length is derived from
+  # ``grpo_config.prompts_to_train`` (see GRPOTrainer._setup); there is no
+  # separate ``max_steps`` knob on the fully-async trainer.
   fully_async_config:
-    # Hard rank-0 optimizer step count.
-    max_steps: 100
-
     # aReal-style stale-drop: at step s (1-indexed) with a rollout tagged
     # version vgen, drop if (s - 1) - vgen > max_staleness. 1 keeps rollouts
     # at most one theta version behind; raise to trade freshness for
@@ -65,7 +65,7 @@ training_config:
     # In-flight bound on the SPSC rollout queue between rank 1 (producer)
     # and rank 0 (consumer). Caps memory footprint + provides back-pressure.
     # Not a staleness bound (the aReal check above does that job).
-    rollout_queue_capacity: 2
+    rollout_queue_capacity: 8
 
 device_config:
   enable_ddp: false
