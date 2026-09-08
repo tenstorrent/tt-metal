@@ -282,15 +282,28 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # Percent-encode the whole ref, not just its slashes. Each of these is a
+          # legal branch name and each fails silently with a valid sha for the
+          # wrong commit, which the 40-character check below cannot catch:
+          #   `main#foo`   -> '#' starts a URL fragment, so this addresses `main`
+          #   `foo%2Fbar`  -> the '%' is decoded, so this addresses `foo/bar`
+          #   `x/comments` -> reaches the /commits/{ref}/comments sub-resource
+          # Written out rather than shelling to jq so the job needs nothing extra.
+          encode_ref() {
+            local s="$1" out="" i c
+            for (( i = 0; i < ${#s}; i++ )); do
+              c="${s:i:1}"
+              case "$c" in
+                [a-zA-Z0-9.~_-]) out+="$c" ;;
+                *) out+=$(printf '%%%02X' "'$c") ;;
+              esac
+            done
+            printf '%s' "$out"
+          }
           if [ -z "$REF" ]; then
             SHA="$FALLBACK"
           else
-            # Percent-encode the slashes. A slash-containing branch does resolve
-            # literally, because {ref} is greedy, but the endpoint has sub-resources
-            # (/status, /comments, /pulls, /check-runs), so a branch named like
-            # `x/comments` would address one of those instead and return an array
-            # where a commit is expected. Encoding keeps the ref one path segment.
-            SHA=$(gh api "repos/${REPO}/commits/${REF//\//%2F}" --jq '.sha')
+            SHA=$(gh api "repos/${REPO}/commits/$(encode_ref "$REF")" --jq '.sha')
           fi
           printf '%s' "$SHA" | grep -qE '^[0-9a-f]{40}$' \
             || { echo "::error::could not resolve '${REF:-HEAD}' to a full commit sha, got '${SHA}'"; exit 1; }
