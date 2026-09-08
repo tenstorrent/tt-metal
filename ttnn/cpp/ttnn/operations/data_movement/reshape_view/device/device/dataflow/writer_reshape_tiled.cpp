@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
@@ -26,11 +27,10 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer dfb_mapping(dfb::mapping);  // scratch: mapping-page FIFO (consumer)
     DataflowBuffer dfb_in_tiles(dfb::in_tiles);  // input-tile FIFO (consumer)
-    DataflowBuffer dfb_working(dfb::working);  // L1 scratch page (self-loop producer+consumer)
+    Scratchpad<uint8_t> working(scratch::working);  // writer-private L1 scratch page
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;
-    dfb_working.reserve_back(1);
-    const uint32_t working_write_addr = dfb_working.get_write_ptr();
+    const uint32_t working_write_addr = working.get_base_address();
     for (uint32_t output_page_idx = start_output_page; output_page_idx < end_output_page; ++output_page_idx) {
         dfb_mapping.wait_front(1);
         const uint32_t map_addr = dfb_mapping.get_read_ptr();
@@ -75,5 +75,4 @@ void kernel_main() {
         noc.async_write_barrier();
         dfb_in_tiles.pop_front(1);
     }
-    dfb_working.push_back(1);
 }
