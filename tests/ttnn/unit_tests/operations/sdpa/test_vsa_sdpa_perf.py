@@ -111,3 +111,38 @@ def test_vsa_sdpa_bench(device):
             print(f"{label}  {mode:<6s}  {ms:8.3f} ms   util {util:5.2f} %   grid {grid}")
         for t in args[:5]:
             ttnn.deallocate(t)
+
+
+@skip_for_wormhole_b0("vsa_sdpa is Blackhole-only")
+def test_vsa_sdpa_sparsity_scaling(device):
+    """Time and utilization against `row_blocks` at the fixed 15s/768p shard.
+
+    Answers whether the kernel converts a smaller top-k into proportionally less work. Utilization is
+    the discriminator, not time: flat utilization across the sweep means time tracks k and the only
+    lever left is k itself, while utilization falling as k falls means a k-independent floor
+    (index walk, KV streaming setup, per-row fixed cost) that dominates at production sparsity and is
+    worth attacking directly.
+
+    `row_blocks=1808` lists every block, so it is the dense reference the sparse rows are measured
+    against. Both orderings run because they separate two different floors: "topk" scatters the
+    listed blocks across DRAM while "model" keeps them spatially correlated as the coarse stage
+    actually selects them, so a gap between the two is a locality cost rather than a fixed one.
+    """
+    n_blocks = 1808
+    # 197 is the production listing at sparsity 0.9; the rest bracket it over two octaves each way.
+    sweep = [1808, 904, 452, 226, 197, 128, 64, 32]
+    print()
+    for order in ("model", "topk"):
+        dense_ms = None
+        for row_blocks in sweep:
+            args = make_inputs(
+                device, s_local=14464, n_blocks=n_blocks, row_blocks=row_blocks, dense_rows=0, order=order
+            )
+            ms, util, grid = bench(device, args, 1, streaming=True)
+            dense_ms = dense_ms if dense_ms is not None else ms
+            print(
+                f"{order:<6s} k={row_blocks:5d}/{n_blocks} ({row_blocks / n_blocks * 100:5.1f} %)  "
+                f"{ms:8.3f} ms  util {util:5.2f} %  {dense_ms / ms:5.2f}x vs dense  grid {grid}"
+            )
+            for t in args[:5]:
+                ttnn.deallocate(t)
