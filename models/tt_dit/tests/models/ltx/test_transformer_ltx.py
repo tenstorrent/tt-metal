@@ -1878,3 +1878,11 @@ def test_ring_sdpa_defaults_reach_per_n_configs_when_env_unset(monkeypatch):
     }
     # An N with no tuned stage falls back to the ring program config.
     assert attention._ring_pc_by_n.get(99999, attention.ring_sdpa_program_config) is attention.ring_sdpa_program_config
+
+
+@pytest.mark.parametrize("bad", ["abc,256", "128,", "128", "1,2,3"])
+def test_ring_sdpa_chunk_override_malformed_names_env_var(bad, expect_error):
+    # Both the non-numeric parse and the wrong-arity check must name the env var, so a bad sweep
+    # value fails with an actionable message rather than a raw int() error.
+    with expect_error(ValueError, "LTX_SDPA_RING_CHUNK"):
+        attention_ltx.LTXAttention.resolve_ring_sdpa_chunks((True, 8, 4), bad)

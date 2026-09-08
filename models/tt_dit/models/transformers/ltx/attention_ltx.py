@@ -78,9 +78,12 @@ class LTXAttention(Module):
         fallback = cls.sdpa_chunk_size_map.get(mesh_key, cls.default_sdpa_chunk_size)
         selected = None
         if override:
-            selected = tuple(int(value) for value in override.split(","))
+            try:
+                selected = tuple(int(value) for value in override.split(","))
+            except ValueError as e:
+                raise ValueError(f"LTX_SDPA_RING_CHUNK must be q,k (got {override!r})") from e
             if len(selected) != 2:
-                raise ValueError("LTX_SDPA_RING_CHUNK must be q,k")
+                raise ValueError(f"LTX_SDPA_RING_CHUNK must be q,k (got {override!r})")
             fallback = selected
         per_n = {
             n: selected if selected is not None else chunk
