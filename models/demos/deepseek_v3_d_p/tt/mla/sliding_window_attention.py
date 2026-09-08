@@ -429,6 +429,10 @@ class TtSWA(LightweightModule):
             f"max_seq_len {state.max_seq_len}"
         )
         sw = self.sliding_window
+        # The carry is only fully real once the prefix reaches sw; before that it still holds zeros.
+        assert (
+            state.kv_actual == 0 or state.kv_actual >= sw
+        ), f"a further chunk needs a prefix of at least {sw} tokens, got {state.kv_actual}"
         # On the ACCUMULATED length: a final chunk may end mid-tile, a non-final one may not.
         assert state.kv_actual % TILE_HEIGHT == 0, (
             f"cannot append after a chunk with {state.kv_actual % TILE_HEIGHT} leftover tokens; only "
