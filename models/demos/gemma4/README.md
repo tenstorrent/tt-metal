@@ -264,6 +264,34 @@ HF_MODEL=google/gemma-4-31B-it MESH_DEVICE=P150x8 \
   pytest models/demos/gemma4/tests/e2e/test_isl_sweep.py -k "batch-1" -sv
 ```
 
+### DFlash speculative decoding (31B, T3K)
+
+`DFlashFusedDecoder` (`tt/dflash_drafter.py`) is the B=1 fused-trace speculative-decoding
+loop that backs `Gemma4DFlashForCausalLM` in vLLM serving (`tt/generator_vllm.py`). Requires
+the z-lab dFlash drafter snapshot in the HF cache (auto-discovered) or `GEMMA4_DFLASH_DRAFTER`.
+`GEMMA4_DFLASH_SHARD_ARGMAX=1` is required — it routes dFlash's own on-device argmax around a
+known TTSampling multi-row broadcast limitation (see the demo's module docstring).
+
+Baseline (no DFlash), for a same-hardware comparison:
+
+```bash
+HF_MODEL=google/gemma-4-31B-it \
+  pytest models/demos/gemma4/tests/e2e/test_isl_sweep.py -k "batch-1" -s --timeout 1800
+```
+
+With DFlash (traced):
+
+```bash
+HF_MODEL=google/gemma-4-31B-it \
+MODEL_WEIGHTS_DIR=<path to the target snapshot dir, for the drafter's tied lm_head> \
+GEMMA4_DFLASH_SHARD_ARGMAX=1 \
+  pytest models/demos/gemma4/demo/dflash_fused_decoder_demo.py -k 1x8 -s
+```
+
+Measured on T3K (1×8): baseline 21.96 tok/s vs. DFlash 59.7–62.6 tok/s (~2.7–2.85x), on a
+code-completion prompt (DFlash's drafter is validated against chat/instruct-formatted
+prompts, and code prompts see notably higher draft-acceptance than prose).
+
 ### Single-layer smoke test
 
 ```bash
