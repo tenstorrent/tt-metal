@@ -159,7 +159,11 @@ def _rollout_main() -> None:
             top_p=1.0,
             seed=None,
             return_logprobs=True,
-            dummy_weights=True,
+            # Custom checkpoint names are not present in tt-transformers'
+            # dummy-weight architecture table. Load the requested SFT once at
+            # boot; the mandatory version-0 trainer snapshot then verifies and
+            # exercises the real update path before generation begins.
+            dummy_weights=False,
         )
         bridge = AsyncHostWeightBridge.init_receiver(peer_rank=TTML_RANK, submeshes=worker.submeshes)
         transport = MPIRolloutWorkerTransport(
