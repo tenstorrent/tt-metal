@@ -208,7 +208,34 @@ jobs:
       - name: Install dependencies
         run: pip3 install PyYAML
       - name: Verify test timeouts against team time budgets
-        run: python3 .github/scripts/utils/verify_time_budget.py
+        run: |
+          python3 .github/scripts/utils/verify_time_budget.py \
+            --comment-file "${{ runner.temp }}/budget-report.md"
+      # Every failure kind gets explained on the PR, not just an over-budget bucket:
+      # a missing budget_type or an undeclared bucket is just as opaque to the author.
+      # One comment is kept up to date across pushes rather than stacking per run, and
+      # a run that passes edits an existing comment to say so instead of leaving a
+      # stale failure behind. A pass with no prior comment posts nothing.
+      - name: Explain a time budget failure on the PR
+        if: ${{ always() && github.event_name == 'pull_request' && hashFiles(format('{0}/budget-report.md', runner.temp)) != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          BODY_FILE: ${{ runner.temp }}/budget-report.md
+        run: |
+          set -euo pipefail
+          existing=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+            --jq 'map(select(.body | contains("<!-- time-budget-check"))) | .[-1].id // empty')
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$existing" \
+              -F "body=@$BODY_FILE" >/dev/null
+            echo "Updated existing time-budget comment $existing."
+          elif grep -q "status=fail" "$BODY_FILE"; then
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$BODY_FILE"
+          else
+            echo "Check passed and no existing comment to clear; nothing to post."
+          fi
 
   build-runtime-smoke-image:
     needs: [asan-build, build-docker-images, find-changed-files]
