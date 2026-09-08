@@ -250,6 +250,7 @@ from ttnn._ttnn.global_semaphore import (
 
 from ttnn._ttnn.mesh_socket import (
     create_socket_pair,
+    materialize_socket_pair,
     MeshSocket,
     SocketConfig,
     SocketMemoryConfig,

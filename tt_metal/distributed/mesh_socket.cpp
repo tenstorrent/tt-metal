@@ -301,18 +301,20 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
         std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(config_.receiver_mesh_id.value(), rank_translation_table_);
         execute_with_timeout([&]() { barrier_across_send_recv_ranks(sender_ranks, recv_ranks, context); });
     }
+    materialized_ = true;
 }
 
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
     const std::shared_ptr<MeshDevice>& sender,
     const std::shared_ptr<MeshDevice>& receiver,
-    const SocketConfig& base_config) {
+    const SocketConfig& base_config,
+    bool defer_data_buffer) {
     TT_FATAL(!base_config.socket_connection_config.empty(), "Socket connection config cannot be empty.");
 
     auto config = populate_mesh_ids(sender, receiver, base_config);
     auto sender_config_buffer = create_socket_config_buffer(sender, config, SocketEndpoint::SENDER);
     auto recv_config_buffer = create_socket_config_buffer(receiver, config, SocketEndpoint::RECEIVER);
-    auto socket_data_buffer = create_socket_data_buffer(receiver, config);
+    auto socket_data_buffer = defer_data_buffer ? nullptr : create_socket_data_buffer(receiver, config);
 
     auto sender_socket = MeshSocket(
         nullptr,  // The sender socket does not have a data-buffer allocated
@@ -321,20 +323,46 @@ std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
         SocketEndpoint::SENDER);
     auto receiver_socket = MeshSocket(socket_data_buffer, recv_config_buffer, config, SocketEndpoint::RECEIVER);
 
-    auto send_peer_descriptor = generate_local_endpoint_descriptor(sender_socket);
-    auto recv_peer_descriptor = generate_local_endpoint_descriptor(receiver_socket);
-
-    write_socket_configs(
-        sender_config_buffer, send_peer_descriptor, recv_peer_descriptor, SocketEndpoint::SENDER, receiver);
-    write_socket_configs(
-        recv_config_buffer, recv_peer_descriptor, send_peer_descriptor, SocketEndpoint::RECEIVER, sender);
-
-    auto fabric_node_id_map = generate_fabric_node_id_map(config, sender, receiver);
-
-    sender_socket.fabric_node_id_map_ = fabric_node_id_map;
-    receiver_socket.fabric_node_id_map_ = fabric_node_id_map;
+    if (!defer_data_buffer) {
+        materialize_socket_pair(sender_socket, receiver_socket);
+    }
 
     return {sender_socket, receiver_socket};
+}
+
+void MeshSocket::materialize_socket_pair(MeshSocket& sender_socket, MeshSocket& receiver_socket) {
+    TT_FATAL(
+        sender_socket.socket_endpoint_type_ == SocketEndpoint::SENDER &&
+            receiver_socket.socket_endpoint_type_ == SocketEndpoint::RECEIVER,
+        "materialize_socket_pair expects (sender, receiver) endpoints.");
+    TT_FATAL(
+        std::hash<SocketConfig>{}(sender_socket.config_) == std::hash<SocketConfig>{}(receiver_socket.config_),
+        "Socket pair endpoint configs must match.");
+
+    // Idempotence lets PipelineBlock traverse aliased pairs without tracking
+    // ownership separately.
+    if (sender_socket.materialized_ && receiver_socket.materialized_) {
+        return;
+    }
+
+    auto sender = sender_socket.config_buffer_->device()->shared_from_this();
+    auto receiver = receiver_socket.config_buffer_->device()->shared_from_this();
+    if (!receiver_socket.data_buffer_) {
+        receiver_socket.data_buffer_ = create_socket_data_buffer(receiver, receiver_socket.config_);
+    }
+
+    auto send_peer_descriptor = generate_local_endpoint_descriptor(sender_socket);
+    auto recv_peer_descriptor = generate_local_endpoint_descriptor(receiver_socket);
+    write_socket_configs(
+        sender_socket.config_buffer_, send_peer_descriptor, recv_peer_descriptor, SocketEndpoint::SENDER, receiver);
+    write_socket_configs(
+        receiver_socket.config_buffer_, recv_peer_descriptor, send_peer_descriptor, SocketEndpoint::RECEIVER, sender);
+
+    auto fabric_node_id_map = generate_fabric_node_id_map(receiver_socket.config_, sender, receiver);
+    sender_socket.fabric_node_id_map_ = fabric_node_id_map;
+    receiver_socket.fabric_node_id_map_ = fabric_node_id_map;
+    sender_socket.materialized_ = true;
+    receiver_socket.materialized_ = true;
 }
 
 std::shared_ptr<MeshBuffer> MeshSocket::get_data_buffer() const {
