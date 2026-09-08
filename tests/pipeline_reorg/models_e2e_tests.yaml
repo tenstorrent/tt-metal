@@ -1013,7 +1013,7 @@
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
-    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/flux2/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
     # One config, one resolution. require_exact_physical_num_devices leaves all four 4x8 rows
     # eligible on a galaxy, so the mesh id is still needed here to pick the headline Ring config;
     # 1024x1024 matches what the Flux.1 legs measure and keeps the other three resolutions
