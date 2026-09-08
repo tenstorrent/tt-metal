@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fused_rmsnorm_post_all_gather_device_operation.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 #include <bit>
 
@@ -82,7 +83,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats_tensor.dtype());
     tt::DataFormat intermediate_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat reduce_scalar_data_format =
-        (input_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        stats_tensor.dtype() == DataType::FLOAT32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     tt::DataFormat weight_data_format =
         has_weight ? tt::tt_metal::datatype_to_dataformat_converter(weight_tensor.value().dtype())
@@ -178,6 +179,26 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
 
     const uint32_t epsilon_packed = std::bit_cast<uint32_t>(eps);
 
+    namespace rh = ttnn::kernel_lib::host;
+    const TensorLayout stats_layout(stats_tensor.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    const TensorLayout result_layout(
+        fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{});
+    auto reduce_plan = rh::make_reduce_plan(
+        TensorSpec(Shape{TILE_HEIGHT, stats_tiles_cols * TILE_WIDTH}, stats_layout),
+        TensorSpec(Shape{TILE_HEIGHT, 1}, result_layout),
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F / (input_tensor.logical_shape()[-1] * num_devices),
+        ReduceFp32Mode::Fast,
+        {device->arch(), fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()});
+    reduce_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
+    const rh::ReduceCallPlan reduce_call{
+        .input_cb_id = stats_cb_id,
+        .auxiliary_cb_id = reduce_scalar_cb_id,
+        .output_cb_id = reduce_result_cb_id,
+        .accumulator_cb_id = std::nullopt,
+        .plan = reduce_plan};
+
     std::vector<uint32_t> reader_compile_time_args = {
         input_cb_id,
         stats_cb_id,
@@ -206,6 +227,8 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
         .append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(fuse_rope ? rope_sin.value().buffer() : nullptr)
         .append_to(reader_compile_time_args);
+
+    rh::ReduceAuxiliaryArgs({reduce_scalar_cb_id, reduce_plan.auxiliary_tiles}).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         output_cb_id,
@@ -238,6 +261,8 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
         static_cast<uint32_t>(has_weight),
         static_cast<uint32_t>(fuse_rope),
         head_dim_tiles};
+
+    rh::ReduceCallArgs(reduce_call).append_to(compute_args);
 
     const auto* compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/"
@@ -344,12 +369,12 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
             .page_size = reduce_scalar_tile_size}}}});
 
     program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = epsilon_cb_num_tiles * reduce_scalar_tile_size,
+        .total_size = epsilon_cb_num_tiles * tt::tile_size(tt::DataFormat::Float16_b),
         .core_ranges = core_grid_set,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(epsilon_cb_id),
-            .data_format = reduce_scalar_data_format,
-            .page_size = reduce_scalar_tile_size}}}});
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = tt::tile_size(tt::DataFormat::Float16_b)}}}});
 
     program_descriptor.cbs.push_back(CBDescriptor{
         .total_size = reduce_result_cb_num_tiles * intermediate_tile_size,

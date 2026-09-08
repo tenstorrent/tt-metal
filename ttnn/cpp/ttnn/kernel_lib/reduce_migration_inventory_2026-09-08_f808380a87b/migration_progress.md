@@ -227,3 +227,9 @@ Validation: native build passed. All five attention sanity selections passed (`w
   (`reduce-migration-ugdiw030`). T160/T170/T173 passed 48/48 across C++ reduction
   smoke tests, final-only callbacks, and narrow SFPU cases
   (`reduce-migration-5zis0zdd`).
+
+## Fused distributed RMSNorm
+
+The pre-all-gather kernel now squares each block and uses a planned reduction sequence instead of manually accumulating one L1 tile. The planner selects a common algorithm for full blocks and short tails. Post-all-gather uses a planned SUM with the full logical width/device divisor. Both readers materialize the host auxiliary recipes; epsilon remains BF16 independently of the statistics format.
+
+Validation: native build passed. SM053 passed (`reduce-migration-7_26p8ry`). Full T070 passed **52 cases with 2 upstream skips** (`reduce-migration-lyl_rblk`), including all four odd-width cases and FP32 statistics/rope. An earlier forced-Add attempt rejected short tails at planning time; automatic sequence planning corrected those failures.
