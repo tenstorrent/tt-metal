@@ -83,28 +83,6 @@ def matryoshka_truncate(embeddings: torch.Tensor, dim: Optional[int]) -> torch.T
     return embeddings[..., :dim]
 
 
-def pool_and_normalize(
-    last_hidden_state: torch.Tensor,
-    attention_mask: torch.Tensor,
-    matryoshka_dim: Optional[int] = None,
-) -> torch.Tensor:
-    """Run the whole of stage 3: pool, truncate, normalize.
-
-    Normalizing before truncation instead gives a different norm but the same direction, and
-    the model's declared similarity is cosine, so the order does not affect any intended use.
-
-    Args:
-        last_hidden_state: Per-token model output, (B, S, 768) fp32.
-        attention_mask: (B, S) int64, 1 for real tokens and 0 for padding.
-        matryoshka_dim: Target width, at most 768, or None for the full 768.
-
-    Returns:
-        torch.Tensor: (B, matryoshka_dim or 768) fp32, unit norm.
-    """
-    pooled = mean_pool(last_hidden_state, attention_mask)
-    return l2_normalize(matryoshka_truncate(pooled, matryoshka_dim))
-
-
 def cosine_similarity_matrix(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Compute pairwise cosine similarity between two sets of embeddings.
 

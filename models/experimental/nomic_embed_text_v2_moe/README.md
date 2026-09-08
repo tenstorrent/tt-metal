@@ -9,38 +9,51 @@ decoder, no KV cache, no generation.
 
 ## Embedding specification
 
-**In:** B strings, plus a `prompt_name` selecting which task prefix step 1 prepends.
+B strings in, B unit-norm vectors out, in six steps across three stages. `embedding.encode`
+runs all of them in one call.
 
-**Out:** one unit-norm vector per string.
+### Preprocessing, `preprocessing.py`
 
+| Step | Operation | Output |
+|---|---|---|
+| 1 | `apply_prompt`: prepend a task prefix to each string | B prefixed strings |
+| 2 | `tokenize`: tokenize and right-pad | `input_ids`, `attention_mask`, both `(B, S)` int64 |
+
+Prefixes are trained-in, so the same string embeds differently as a query than as a document.
+`prompt_prefix` takes one `NomicPromptPrefix` for the batch or one per string:
+
+```python
+apply_prompt(
+    ["How do you say hello in Spanish?", "¡Hola!"],
+    [NomicPromptPrefix.QUERY, NomicPromptPrefix.PASSAGE],
+)
 ```
- in   ["Hello!", "¡Hola!"]                                      B strings
 
-  1   apply_prompt          ["search_document: Hello!", ...]    B strings
-  2   tokenize              input_ids                           (B, S)        int64
-                            attention_mask                      (B, S)        int64
-  3   forward               last_hidden_state                   (B, S, 768)   fp32
-  4   mean_pool             pooled                              (B, 768)      fp32
-  5   matryoshka_truncate   pooled                              (B, dim)      fp32   optional
-  6   l2_normalize          embeddings                          (B, dim)      fp32
+S is the batch's longest tokenized sequence, truncated at 512.
 
-out   embeddings[0] @ embeddings[1]                             float        similarity
+### Inference, `inference.py`
+
+| Step | Operation | Output |
+|---|---|---|
+| 3 | `forward`: run the encoder | `last_hidden_state`, `(B, S, 768)` fp32 |
+
+One 768-wide vector per token.
+
+### Postprocessing, `postprocessing.py`
+
+| Step | Operation | Output |
+|---|---|---|
+| 4 | `mean_pool`: average the token vectors, excluding padding | `pooled`, `(B, 768)` fp32 |
+| 5 | `matryoshka_truncate`: keep the leading `dim` features, optional | `pooled`, `(B, dim)` fp32 |
+| 6 | `l2_normalize`: scale to unit norm | `embeddings`, `(B, dim)` fp32 |
+
+Step 4 collapses the sequence axis, masked so a string's embedding never depends on its
+batch-mates. Step 5 is optional; `dim` is 768 without it. Unit norm makes a dot product of two
+rows their cosine similarity:
+
+```python
+similarity = float(embeddings[0] @ embeddings[1])
 ```
-
-Steps 1 and 2 are `preprocessing.py`, step 3 `inference.py`, steps 4 to 6 `postprocessing.py`.
-`embedding.encode` runs all six in one call.
-
-1. The prefix is trained-in, and it is prepended to the text rather than injected as a special
-   token, so it becomes ordinary tokens the encoder attends to. The same text under `"query"`
-   and under `"passage"` gives different vectors.
-2. S is the longest tokenized text in the batch, so it varies with the input. Shorter rows are
-   right-padded and `attention_mask` records which positions are real.
-3. One 768-wide vector per token, still per token.
-4. Where the sequence axis disappears: B*S token vectors become B text vectors. Mask-weighted,
-   so padding is excluded and a text's embedding never depends on its batch-mates.
-5. Optional. The leading features carry the most information, so a narrower vector stays
-   usable: the Matryoshka property.
-6. Unit norm is what makes the dot product on the output line a cosine similarity.
 
 ## Layout
 
@@ -112,13 +125,13 @@ from models.experimental.nomic_embed_text_v2_moe.reference.loader import load_pr
 model, tokenizer = load_pretrained_reference_model(), load_tokenizer()
 texts = ["Hello!", "¡Hola!"]
 
-prefixed = preprocessing.apply_prompt(texts, "passage")                 # 2 strings, prefixed
-encoded = preprocessing.tokenize(tokenizer, prefixed)                   # ids, mask (2, 10) i64
-last_hidden_state = inference.forward(model, encoded["input_ids"], encoded["attention_mask"])  # (2,10,768)
-pooled = postprocessing.mean_pool(last_hidden_state, encoded["attention_mask"])  # (2, 768), ~15
-embeddings = postprocessing.l2_normalize(pooled)                        # (2, 768), norms 1.0
+prefixed = preprocessing.apply_prompt(texts, preprocessing.NomicPromptPrefix.PASSAGE)
+encoded = preprocessing.tokenize(tokenizer, prefixed)
+last_hidden_state = inference.forward(model, encoded["input_ids"], encoded["attention_mask"])
+pooled = postprocessing.mean_pool(last_hidden_state, encoded["attention_mask"])
+embeddings = postprocessing.l2_normalize(pooled)
 
-print(float(embeddings[0] @ embeddings[1]))   # 0.911788
+print(float(embeddings[0] @ embeddings[1]))  # 0.911788
 ```
 
 `mean_pool` is where the sequence axis disappears. Row 0 is padded here, since `"Hello!"`

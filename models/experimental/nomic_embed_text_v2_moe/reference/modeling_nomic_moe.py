@@ -553,7 +553,7 @@ def build_extended_attention_mask(attention_mask: torch.Tensor, dtype: torch.dty
 class NomicBertModel(nn.Module):
     """Encoder-only backbone returning last_hidden_state. No pooler, no task head.
 
-    Pooling to (B, 768) is postprocessing.pool_and_normalize, not part of this model.
+    Pooling to (B, 768) is postprocessing.mean_pool, not part of this model.
 
     Two upstream behaviours are deliberately not reproduced:
       - Upstream requires attention_mask and raises AttributeError without it; here it

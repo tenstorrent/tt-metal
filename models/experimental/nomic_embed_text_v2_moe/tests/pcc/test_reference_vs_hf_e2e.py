@@ -34,6 +34,7 @@ from models.experimental.nomic_embed_text_v2_moe.reference.hf_reference import (
     hf_layer_ladder,
     hf_forward,
 )
+from models.experimental.nomic_embed_text_v2_moe.reference.preprocessing import NomicPromptPrefix
 
 pytestmark = pytest.mark.needs_weights
 
@@ -247,9 +248,9 @@ def test_runs_on_small_inputs(config, reference_model, batch, seqlen):
     assert out.shape == (batch, seqlen, config.hidden_size)
     assert torch.isfinite(out).all()
 
-    pooled = postprocessing.pool_and_normalize(out, attention_mask)
-    assert pooled.shape == (batch, config.hidden_size)
-    assert torch.isfinite(pooled).all()
+    embeddings = postprocessing.l2_normalize(postprocessing.mean_pool(out, attention_mask))
+    assert embeddings.shape == (batch, config.hidden_size)
+    assert torch.isfinite(embeddings).all()
 
 
 # Upstream behaviours the reference deliberately does not reproduce.
@@ -291,7 +292,9 @@ def test_upstream_matryoshka_dim_slices_the_sequence_axis(config, hf_model):
 
 
 def test_model_card_similarity(config, reference_model, tokenizer):
-    embeddings = embedding.encode(reference_model, tokenizer, list(MODEL_CARD.sentences), prompt_name="passage")
+    embeddings = embedding.encode(
+        reference_model, tokenizer, list(MODEL_CARD.sentences), prompt_prefix=NomicPromptPrefix.PASSAGE
+    )
 
     assert embeddings.shape == (len(MODEL_CARD.sentences), config.hidden_size)
     similarity = float(embeddings[0] @ embeddings[1])
@@ -309,7 +312,9 @@ def test_pipeline_matches_hf_backbone(reference_model, hf_model, tokenizer):
 
 
 def test_embeddings_are_unit_norm(reference_model, tokenizer):
-    embeddings = embedding.encode(reference_model, tokenizer, ["one", "two", "three"], prompt_name="query")
+    embeddings = embedding.encode(
+        reference_model, tokenizer, ["one", "two", "three"], prompt_prefix=NomicPromptPrefix.QUERY
+    )
     norms = embeddings.norm(dim=-1)
     torch.testing.assert_close(norms, torch.ones_like(norms), rtol=1e-5, atol=1e-5)
 
@@ -317,17 +322,44 @@ def test_embeddings_are_unit_norm(reference_model, tokenizer):
 def test_task_prefix_changes_the_embedding(reference_model, tokenizer):
     """The prefixes are trained-in, not decoration."""
     text = ["how tall is the eiffel tower"]
-    query = embedding.encode(reference_model, tokenizer, text, prompt_name="query")
-    passage = embedding.encode(reference_model, tokenizer, text, prompt_name="passage")
-    bare = embedding.encode(reference_model, tokenizer, text, prompt_name=None)
+    query = embedding.encode(reference_model, tokenizer, text, prompt_prefix=NomicPromptPrefix.QUERY)
+    passage = embedding.encode(reference_model, tokenizer, text, prompt_prefix=NomicPromptPrefix.PASSAGE)
+    bare = embedding.encode(reference_model, tokenizer, text, prompt_prefix=None)
 
     assert float(query[0] @ passage[0]) < 0.999
     assert float(query[0] @ bare[0]) < 0.999
 
 
+def test_per_query_prefixes_match_encoding_each_query_alone(reference_model, tokenizer):
+    """Asymmetric retrieval: a search query and its candidate documents, embedded in one batch."""
+    queries = ["blackhole", "Tenstorrent's architecture"]
+    prefixes = [NomicPromptPrefix.QUERY, NomicPromptPrefix.PASSAGE]
+
+    together = embedding.encode(reference_model, tokenizer, queries, prompt_prefix=prefixes)
+    separate = [
+        embedding.encode(reference_model, tokenizer, [query], prompt_prefix=prefix)[0]
+        for query, prefix in zip(queries, prefixes)
+    ]
+
+    torch.testing.assert_close(together, torch.stack(separate), rtol=1e-5, atol=1e-5)
+
+
+def test_prompt_prefix_rejects_a_task_name_string(expect_error):
+    """The MTEB task names are enum member names, not values, so a bare string is not one."""
+    with expect_error(ValueError, "not a valid NomicPromptPrefix"):
+        preprocessing.apply_prompt(["hola"], "passage")
+
+
+def test_per_query_prefixes_must_cover_every_query(expect_error):
+    with expect_error(ValueError, "1 prompt prefixes for 2 queries"):
+        preprocessing.apply_prompt(["hola", "mundo"], [NomicPromptPrefix.QUERY])
+
+
 @pytest.mark.parametrize("dim", MATRYOSHKA_DIMS)
 def test_matryoshka_truncation(reference_model, tokenizer, dim):
-    embeddings = embedding.encode(reference_model, tokenizer, ["hola mundo"], prompt_name="passage", matryoshka_dim=dim)
+    embeddings = embedding.encode(
+        reference_model, tokenizer, ["hola mundo"], prompt_prefix=NomicPromptPrefix.PASSAGE, matryoshka_dim=dim
+    )
 
     assert embeddings.shape == (1, dim)
     torch.testing.assert_close(embeddings.norm(dim=-1), torch.ones(1), rtol=1e-5, atol=1e-5)
@@ -363,8 +395,8 @@ def test_mean_pool_excludes_padding(reference_model, tokenizer):
     short = ["hello"]
     ragged = ["hello", "a considerably longer sentence that forces the batch to pad the first one"]
 
-    alone = embedding.encode(reference_model, tokenizer, short, prompt_name="passage")
-    batched = embedding.encode(reference_model, tokenizer, ragged, prompt_name="passage")
+    alone = embedding.encode(reference_model, tokenizer, short, prompt_prefix=NomicPromptPrefix.PASSAGE)
+    batched = embedding.encode(reference_model, tokenizer, ragged, prompt_prefix=NomicPromptPrefix.PASSAGE)
 
     assert float(alone[0] @ batched[0]) > 0.9999
     assert compute_max_abs_error(alone[0], batched[0]) < 1e-3
@@ -383,7 +415,7 @@ def test_mean_pool_is_not_cls_pooling(reference_model, tokenizer):
 
 def test_multilingual_pairs_are_closer_than_unrelated_ones(reference_model, tokenizer):
     texts = ["the cat sits on the mat", "el gato se sienta en la alfombra", "quarterly revenue exceeded forecasts"]
-    embeddings = embedding.encode(reference_model, tokenizer, texts, prompt_name="passage")
+    embeddings = embedding.encode(reference_model, tokenizer, texts, prompt_prefix=NomicPromptPrefix.PASSAGE)
 
     translation = float(embeddings[0] @ embeddings[1])
     unrelated = float(embeddings[0] @ embeddings[2])

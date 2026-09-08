@@ -11,7 +11,7 @@ encode() runs the three stages in order and owns nothing itself:
                       attention_mask (B, S) int64
       -> inference.forward
                       (B, S, 768) fp32
-      -> postprocessing.pool_and_normalize
+      -> postprocessing.mean_pool / matryoshka_truncate / l2_normalize
                       (B, matryoshka_dim or 768) fp32, unit norm
 
 The model is a duck-typed argument, not an import: anything accepting (input_ids,
@@ -22,14 +22,19 @@ the pre- or post-processing on either side.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 
 import torch
 
 from models.experimental.nomic_embed_text_v2_moe.reference.inference import forward
-from models.experimental.nomic_embed_text_v2_moe.reference.postprocessing import pool_and_normalize
+from models.experimental.nomic_embed_text_v2_moe.reference.postprocessing import (
+    l2_normalize,
+    matryoshka_truncate,
+    mean_pool,
+)
 from models.experimental.nomic_embed_text_v2_moe.reference.preprocessing import (
     MAX_SEQ_LENGTH,
+    NomicPromptPrefix,
     apply_prompt,
     tokenize,
 )
@@ -39,7 +44,7 @@ def encode(
     model,
     tokenizer,
     texts: Sequence[str],
-    prompt_name: Optional[str] = None,
+    prompt_prefix: Optional[Union[NomicPromptPrefix, Sequence[Optional[NomicPromptPrefix]]]] = None,
     matryoshka_dim: Optional[int] = None,
     max_length: int = MAX_SEQ_LENGTH,
 ) -> torch.Tensor:
@@ -53,16 +58,19 @@ def encode(
         model: The vendored NomicBertModel or the upstream HF model.
         tokenizer: The XLMRobertaTokenizerFast loaded from the checkpoint.
         texts: The input strings, length B.
-        prompt_name: Task prefix key ("query", "passage", ...), or None for no prefix.
+        prompt_prefix: One NomicPromptPrefix for every text, a sequence of B of them for one per
+            text, or None for no prefix.
         matryoshka_dim: Target embedding width, at most 768, or None for the full 768.
         max_length: Tokenizer truncation limit, defaulting to MAX_SEQ_LENGTH (512).
 
     Returns:
         torch.Tensor: (B, matryoshka_dim or 768) fp32, unit norm.
     """
-    encoded = tokenize(tokenizer, apply_prompt(texts, prompt_name), max_length=max_length)
+    encoded = tokenize(tokenizer, apply_prompt(texts, prompt_prefix), max_length=max_length)
     attention_mask = encoded["attention_mask"]
 
     hidden = forward(model, encoded["input_ids"], attention_mask)
 
-    return pool_and_normalize(hidden, attention_mask, matryoshka_dim=matryoshka_dim)
+    pooled = mean_pool(hidden, attention_mask)
+
+    return l2_normalize(matryoshka_truncate(pooled, matryoshka_dim))
