@@ -15,6 +15,7 @@
 //      - Two buffers at distinct positions in the same kernel
 //      - Error path: buffer not enumerated in tensor_buffers
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -59,11 +60,11 @@ KernelDescriptor MakeBlankReaderKernel(CoreCoord core = {0, 0}) {
 }
 
 std::shared_ptr<Buffer> MakeDramBuffer(IDevice* device, uint32_t size = 2048) {
-    return Buffer::create(device, size, size, BufferType::DRAM);
+    return BufferImpl::create(device, size, size, BufferType::DRAM);
 }
 
 std::shared_ptr<Buffer> MakeL1Buffer(IDevice* device, uint32_t size = 2048) {
-    return Buffer::create(device, size, size, BufferType::L1);
+    return BufferImpl::create(device, size, size, BufferType::L1);
 }
 
 MeshTensor MakeSingleTileL1MeshTensor(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
