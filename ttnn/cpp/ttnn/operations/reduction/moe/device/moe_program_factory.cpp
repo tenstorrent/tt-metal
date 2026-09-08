@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/moe/device/moe_program_factory.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -72,8 +73,6 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
     tt::DataFormat expert_mask_dfb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(expert_mask_tensor.dtype());
     tt::DataFormat out_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(out_tensor.dtype());
-    tt::DataFormat scalar_df =
-        (input_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat index_dfb_data_format = tt::DataFormat::UInt16;
     tt::DataFormat value_dfb_data_format = tt::DataFormat::Float16_b;
 
@@ -81,7 +80,6 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
     uint32_t topk_mask_tile_size = tile_size(topk_mask_dfb_data_format);
     uint32_t expert_mask_tile_size = tile_size(expert_mask_dfb_data_format);
     uint32_t out_tile_size = tile_size(out_dfb_data_format);
-    uint32_t scalar_tile_size = tile_size(scalar_df);
     uint32_t index_tile_size = tile_size(index_dfb_data_format);
     uint32_t value_tile_size = tile_size(value_dfb_data_format);
 
@@ -89,12 +87,36 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
     const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     const uint32_t tile_hw = input_tensor.tensor_spec().tile().get_tile_hw();
     uint32_t num_out_tiles = out_tensor.physical_volume() / tile_hw;
-    uint32_t scale_tiles = 1;
 
     auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
     uint32_t Wt = input_shape[3] / tile_width;
     uint32_t Kt = (k + tile_width - 1) / tile_width;
+
+    namespace rh = ttnn::kernel_lib::host;
+    // The top-k mask already excludes entries beyond k; both reductions see
+    // the same resident tiled values and leave them for the following transform.
+    const TensorLayout values_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{});
+    const TensorLayout output_layout(out_tensor.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    const TensorSpec values_spec(Shape{Ht * tile_height, Kt * tile_width}, values_layout);
+    const TensorSpec result_spec(Shape{Ht * tile_height, 1}, output_layout);
+    const rh::ReduceHardwareConfig hardware{
+        input_tensor.device().arch(), false, false, input_tensor.device().l1_size_per_core()};
+    auto max_plan = rh::make_reduce_plan(
+        values_spec, result_spec, ReduceOpMath::MAX, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+    auto sum_plan = rh::make_reduce_plan(
+        values_spec, result_spec, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+    max_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+    sum_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+    const auto& auxiliary = *max_plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    const uint32_t scale_tiles = auxiliary.page_count;
+    const auto scalar_df = auxiliary.data_format;
+    const auto scalar_tile_size = auxiliary.page_size;
+    // Complete, unit-scaled W calls share this one auxiliary recipe. The SUM
+    // call can switch between ReduceTile and AccumulateViaAdd without changing it.
+    std::vector<uint32_t> reduce_args = rh::ReduceCallArgs(max_plan, {0, 1, 2}).get_compile_time_args();
+    rh::ReduceCallArgs(sum_plan, {0, 1, 2}).append_to(reduce_args);
+    auto auxiliary_args = rh::ReduceAuxiliaryArgs({1, max_plan.auxiliary_tiles}).get_compile_time_args();
 
     // for streaming in input
     uint32_t num_dfb_unit = 2;
@@ -276,6 +298,7 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
             },
         .compile_time_args = {{"Ht", Ht}, {"K", k}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = auxiliary_args},
     };
 
     Group<DFBBinding> compute_dfb_bindings{
@@ -351,6 +374,7 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
                 {"tile_width", tile_width},
             },
         .hw_config = ComputeGen1Config{},
+        .advanced_options = {.compile_time_varargs = reduce_args},
     };
 
     ProgramSpec spec{

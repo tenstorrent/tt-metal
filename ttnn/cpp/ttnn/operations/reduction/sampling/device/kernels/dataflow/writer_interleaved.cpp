@@ -13,6 +13,7 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 /* This kernel does:
 Top-p Cumulative Probability Filtering:
@@ -52,10 +53,13 @@ void kernel_main() {
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
     constexpr uint32_t out_chunk_size = num_cores * sizeof(uint32_t);   // 4 bytes per uint32_t
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::scaler_max, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::scaler_sum, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    using MaxAuxArgs = ttnn::kernel_lib::ReduceAuxiliaryArgs<0>;
+    using MaxAux = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<MaxAuxArgs, dfb::scaler_max>;
+    using SumAux = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
+        ttnn::kernel_lib::ReduceAuxiliaryArgs<MaxAuxArgs::next_compile_time_args_offset()>,
+        dfb::scaler_sum>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<MaxAux>();
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<SumAux>();
     // read k, p, temp
 
     Noc noc;

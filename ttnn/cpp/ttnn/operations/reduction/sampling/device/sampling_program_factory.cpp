@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/sampling/device/sampling_program_factory.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -50,7 +51,7 @@ const DFBSpecName SAMPLING_INDEX{"index"};
 // The row-major index tensor, read in by the reader and looked up by the writer to turn a local sorted
 // position back into a global token id.
 const DFBSpecName SAMPLING_FINAL_INDICES_RM{"final_indices_rm"};
-// Reduce scalers: separate buffers because MAX and SUM use different tile fill layouts.
+// Auxiliary recipes for the independent MAX and SUM calls.
 const DFBSpecName SAMPLING_SCALER_MAX{"scaler_max"};
 const DFBSpecName SAMPLING_SCALER_SUM{"scaler_sum"};
 // The top-k mask the writer builds from this core's k, added to the sorted values to drop everything
@@ -195,11 +196,24 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     uint32_t num_dfb_unit = 2;
     uint32_t dfb_in_units = 2 * num_dfb_unit;
 
-    // Reduce scaler format — MAX and SUM share it even though they need separate buffers
-    tt::DataFormat scalar_df =
-        (input_values_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    uint32_t scale_tiles = 1;
-    uint32_t scalar_tile_size = tile_size(scalar_df);
+    namespace rh = ttnn::kernel_lib::host;
+    // The top-k stage keeps 32 candidates; the writer masks the per-user k.
+    const TensorLayout reduce_layout(input_values_tensor.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
+    const TensorSpec values_spec(Shape{Ht * tile_height, 32}, reduce_layout);
+    const TensorSpec result_spec(Shape{Ht * tile_height, 1}, reduce_layout);
+    const rh::ReduceHardwareConfig hardware{device->arch(), use_32bit_index, false, device->l1_size_per_core()};
+    auto max_plan = rh::make_reduce_plan(
+        values_spec, result_spec, ReduceOpMath::MAX, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+    auto sum_plan = rh::make_reduce_plan(
+        values_spec, result_spec, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+    max_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+    sum_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+    const auto& max_aux = *max_plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    const auto& sum_aux = *sum_plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    std::vector<uint32_t> reduce_args = rh::ReduceCallArgs(max_plan, {0, 1, 2}).get_compile_time_args();
+    rh::ReduceCallArgs(sum_plan, {0, 1, 2}).append_to(reduce_args);
+    auto auxiliary_args = rh::ReduceAuxiliaryArgs({1, max_plan.auxiliary_tiles}).get_compile_time_args();
+    rh::ReduceAuxiliaryArgs({1, sum_plan.auxiliary_tiles}).append_to(auxiliary_args);
 
     uint32_t num_out_tiles = Ht;
 
@@ -226,8 +240,8 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         // stalls, so allocate four tiles of space
         make_dfb(SAMPLING_INPUT_VALUES, input_values_tile_size, dfb_in_units, input_values_dfb_data_format),
         make_dfb(SAMPLING_INDEX, index_tile_size, dfb_in_units, index_dfb_data_format),
-        make_dfb(SAMPLING_SCALER_MAX, scalar_tile_size, scale_tiles, scalar_df),
-        make_dfb(SAMPLING_SCALER_SUM, scalar_tile_size, scale_tiles, scalar_df),
+        make_dfb(SAMPLING_SCALER_MAX, max_aux.page_size, max_aux.page_count, max_aux.data_format),
+        make_dfb(SAMPLING_SCALER_SUM, sum_aux.page_size, sum_aux.page_count, sum_aux.data_format),
         make_dfb(SAMPLING_TOPK_MASK, input_values_tile_size, dfb_in_units, input_values_dfb_data_format),
         // Single buffered buffer that holds the transposed input tiles
         make_dfb(SAMPLING_INPUT_TRANSPOSED, input_values_tile_size, Wt, input_values_dfb_data_format),
@@ -413,6 +427,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
              {"tile_width", tile_width},
              {"stable_sort", static_cast<uint32_t>(stable_sort)}},
         .hw_config = ComputeHardwareConfig{compute_config},
+        .advanced_options = {.compile_time_varargs = reduce_args},
     };
 
     // One writer per running core. `core_id` is the only value that differs between them, and it is a
@@ -522,6 +537,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
                  {"use_32bit_index", static_cast<uint32_t>(use_32bit_index)},
                  {"num_users", num_users}},
             .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .advanced_options = {.compile_time_varargs = auxiliary_args},
         };
     };
 
