@@ -118,10 +118,6 @@ def matmul_register_format_hints(format):
     )
 
 
-def matmul_enable_direct_indexing(register_format_hint):
-    return [False] if register_format_hint is None else [True, False]
-
-
 # Generate format-aware combinations. MxFp4 is an input-only (L1) format here: the
 # unpacker produces MxFp4_2x_A/B in the src registers, so drop the cross-product
 # entries where MxFp4 would land as an output.
@@ -155,7 +151,7 @@ _ARCH = get_chip_architecture()
     ),
     implied_math_format=lambda format: matmul_implied_math_formats(format),
     register_format_hint=matmul_register_format_hints,
-    enable_direct_indexing=matmul_enable_direct_indexing,
+    enable_direct_indexing=[False, True],
     transpose=[Transpose.No],
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
