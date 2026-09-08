@@ -1513,7 +1513,16 @@ def _bridge_depth_env(
     _, _, seq2 = _run_op_sigs(repo_root, probe_env, devices, node, case, _cov_int)
     cap_op = _work_signal(seq2)
     cap_sp = _blocks_ran(seq2)
-    if full_sp > 1 and cap_sp >= 1 and cap_sp <= full_sp * 0.7:
+    # Prefer block-signpost whenever it's structurally valid (full_sp > 1, cap_sp >= 1) -- it counts
+    # layer *instances* actually run, which a capped depth always shrinks regardless of which experts
+    # a MoE model's data-dependent routing happens to pick. op-count doesn't have that guarantee: two
+    # separate probe invocations of the same model at the same depth can route through a different
+    # number of experts and produce a HIGHER op-count for the capped run than the full run (observed:
+    # op-count 38258->39755, capped > full), which used to make a working cap look like it did
+    # nothing. The reduction-size check below (>= full * 0.7) still decides accept/reject for
+    # whichever metric is in play -- this only decides which measurement to trust, so a model with no
+    # signposts at all still falls through to op-count exactly as before.
+    if full_sp > 1 and cap_sp >= 1:
         full, capped, metric = full_sp, cap_sp, "block-signpost"
     else:
         full, capped, metric = full_op, cap_op, "op-count"
