@@ -90,17 +90,17 @@ WelfordReducePlan WelfordReduceDeviceOperation::WelfordReduceProgramFactory::sel
     // processes multiple outputs than when it processes a single output.
     constexpr std::uint32_t multi_output_replay_min_tiles = 8;
     constexpr std::uint32_t single_output_replay_min_tiles = 24;
-    // A Blackhole HW output can replay multiple columns, including NC slices
-    // merged into one output. Ht >= 16 wins across the measured core counts and
-    // dtypes; Ht == 8 can lose reader run-ahead and regress single-core workloads.
-    // Retain the existing Wormhole crossover until it is calibrated on hardware.
-    constexpr std::uint32_t blackhole_hw_multi_column_replay_min_tiles = 16;
-    const bool blackhole_hw_multi_column =
-        arch == tt::ARCH::BLACKHOLE && plan.reduce_hw && (plan.reduce_batch_size > 1 || plan.Wt > 1);
+    // An HW output can replay multiple columns, including NC slices merged into
+    // one output. Ht >= 16 wins across the measured core counts and dtypes on
+    // Wormhole and Blackhole; Ht == 8 can lose reader run-ahead and regress
+    // single-core workloads on Blackhole.
+    constexpr std::uint32_t hw_multi_column_replay_min_tiles = 16;
+    const bool hw_multi_column = (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE) && plan.reduce_hw &&
+                                 (plan.reduce_batch_size > 1 || plan.Wt > 1);
     const std::uint32_t replay_min_tiles =
         plan.work_group_1 > 1 || plan.work_group_2 > 1
             ? multi_output_replay_min_tiles
-            : (blackhole_hw_multi_column ? blackhole_hw_multi_column_replay_min_tiles : single_output_replay_min_tiles);
+            : (hw_multi_column ? hw_multi_column_replay_min_tiles : single_output_replay_min_tiles);
     std::uint64_t footprint =
         static_cast<std::uint64_t>(replay_tiles) * plan.input_tile_size + 2 * plan.output_tile_size;
     footprint += plan.reduce_hw ? 4 * tile_size(DataFormat::Float32) + tile_size(plan.combined_format) : 0;

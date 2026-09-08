@@ -56,6 +56,8 @@ def test_std_var_hw_large_constant(device, ttnn_op, correction, value):
         ((1, 1, 481, 128), (-2, -1)),
         ((1, 4, 512, 32), (1, 2, 3)),
         ((1, 32, 481, 65), (-2, -1)),
+        ((1, 1, 512, 64), (-2, -1)),
+        ((1, 32, 736, 96), (-2, -1)),
     ],
     ids=[
         "partial_height",
@@ -68,6 +70,8 @@ def test_std_var_hw_large_constant(device, ttnn_op, correction, value):
         "hw_replay_partial_height",
         "hw_replay_batch_columns",
         "hw_replay_partial_width",
+        "hw_replay_narrow_single_core",
+        "hw_replay_narrow_multi_core",
     ],
 )
 def test_std_var_hw_compact_lane_combine(device, enabled_program_cache, dtype, correction, shape, dim):
