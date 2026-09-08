@@ -17,7 +17,15 @@ set -euo pipefail
 T="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$T/../../../../.." && pwd)}"
 export PYTHONPATH="$TT_METAL_HOME"
+export LD_LIBRARY_PATH="$TT_METAL_HOME/build_Release/lib:${LD_LIBRARY_PATH:-}"
 cd "$TT_METAL_HOME"
+
+# The harness got this from its env.sh, which is not in-tree. Without it a bare python3 has no ttnn.
+if [ -z "${VIRTUAL_ENV:-}" ] && [ -f "$TT_METAL_HOME/python_env/bin/activate" ]; then
+  # shellcheck disable=SC1091
+  source "$TT_METAL_HOME/python_env/bin/activate"
+fi
+python3 -c 'import ttnn' 2>/dev/null || { echo "[repro] FAIL: python3 cannot import ttnn -- build the venv (./create_venv.sh) or activate it"; exit 1; }
 
 # --- artifacts: multi-GB, not in the repo, so both must be pointed at your copies ----------------
 export MISTRAL4_HF_MODEL="${MISTRAL4_HF_MODEL:?set to the Mistral-Small-4-119B checkpoint}"
