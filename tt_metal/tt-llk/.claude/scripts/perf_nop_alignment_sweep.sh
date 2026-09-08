@@ -12,6 +12,7 @@
 # run, so any change in behaviour is layout, not time.
 set -uo pipefail
 LLK=~/tt-metal/tt_metal/tt-llk; PT=$LLK/tests/python_tests; SRC=$LLK/tests/sources
+PACKC=$LLK/tt_llk_wormhole_b0/llk_lib/llk_pack_common.h
 OUT="${OUT:-$HOME/nopsweep}"
 RUNS="${RUNS:-40}"; IDX="${IDX:-5742}"; LF="${LF:-64}"
 NOPS="${NOPS:-0 1 2 3 4 6 8 12 16}"
@@ -22,15 +23,17 @@ NOPS="${NOPS:-0 1 2 3 4 6 8 12 16}"
 # INSIDE=math  nops inside the MATH loop after the wait for DEST. Math is on the
 #              critical path, so each one costs a cycle per iteration and moves
 #              math's handshake signal by that cycle.
+# INSIDE=thcon the one LLK change from PR 54157 (stall on PACK | THCON in
+#              _llk_pack_dest_section_done_). N is ignored; pass name is then.
 INSIDE="${INSIDE:-0}"
 export RUNNER_TEMP="${RUNNER_TEMP:-$HOME/llk-wh-build}"
 
 mkdir -p "$OUT"; cd "$PT"; source "$LLK/tests/.venv/bin/activate"
 say() { echo "=== $* -- $(date -u +%H:%M:%SZ) ==="; }
 restore() { cd "$PT"; git checkout -- perf_math_matmul.py helpers/profiler.py \
-            "$SRC/math_matmul_perf.cpp" 2>/dev/null; }
+            "$SRC/math_matmul_perf.cpp" "$PACKC" 2>/dev/null; }
 
-git diff --quiet -- perf_math_matmul.py helpers/profiler.py "$SRC/math_matmul_perf.cpp" \
+git diff --quiet -- perf_math_matmul.py helpers/profiler.py "$SRC/math_matmul_perf.cpp" "$PACKC" \
   || { echo "FATAL: tree dirty"; exit 1; }
 
 # Install the cleanup trap only AFTER the dirty-tree check. If it is installed
@@ -72,6 +75,7 @@ run_pass() {
     local N=$1 NAME="nop$1"
     [ "$INSIDE" = 1 ] && NAME="in$1"
     [ "$INSIDE" = math ] && NAME="im$1"
+    [ "$INSIDE" = thcon ] && NAME="th$1"
     say "pass $NAME  nops=$N"
     restore
     sed -i "s/^            LOOP_FACTOR(1024),\$/            LOOP_FACTOR($LF),/" perf_math_matmul.py
@@ -81,9 +85,9 @@ run_pass() {
     grep -q "run_count=$RUNS" perf_math_matmul.py         || { echo "FATAL: run_count sed"; exit 1; }
     grep -q "ALL_TEST_PARAMS\[$IDX\]" perf_math_matmul.py || { echo "FATAL: config sed"; exit 1; }
 
-python3 - "$PT/helpers/profiler.py" "$SRC/math_matmul_perf.cpp" "$N" "$INSIDE" <<'PY'
+python3 - "$PT/helpers/profiler.py" "$SRC/math_matmul_perf.cpp" "$N" "$INSIDE" "$PACKC" <<'PY'
 import sys
-prof, kern, n, mode = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+prof, kern, n, mode, packc = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
 inside = mode == "1"
 
 # Host side only: dump the raw profiler frame. The kernel's own zones are untouched.
@@ -98,6 +102,13 @@ b = a + '''    import os as _os
 assert t.count(a) == 1, "profiler anchor not unique"
 open(prof, "w").write(t.replace(a, b))
 
+if mode == "thcon":
+    OLD = "    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK); // wait for pack to finish"
+    NEW = "    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK | p_stall::THCON); // PR 54157: also drain THCON"
+    s = open(packc).read()
+    assert s.count(OLD) == 1, f"pack_common anchor matched {s.count(OLD)} times"
+    open(packc, "w").write(s.replace(OLD, NEW))
+    sys.exit(0)
 if n == 0:
     sys.exit(0)
 
