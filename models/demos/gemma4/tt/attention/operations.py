@@ -74,16 +74,15 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
     ``memory_config`` lets the packed-verify decode keep the projection output
     resident on L1; ``None`` keeps the op default (DRAM) for existing callers.
 
-    ``tied`` selects the Q+K weight on global (K=V tied) layers, dropping the duplicate V
-    columns from the matmul -- 512 of 3072 output columns per device at TP=8. The caller
-    must then split with ``kv_tied=True``, since the output is one section narrower.
-    Falls back to the full weight when it was not built (GEMMA4_TIED_QKV=0, sliding layers).
+    ``kv_tied=True`` uses the Q+K weight without duplicate V columns. Callers must
+    ensure ``weights.wqk`` is available and split the output with ``kv_tied=True``.
+    ``kv_tied=False`` uses the full QKV weight.
     """
-    if kv_tied and weights.wqk is not None:
-        return ttnn.linear(hidden_states, weights.wqk, memory_config=memory_config)
-    if isinstance(weights.wqkv, DramShardedLinear):
+    if not kv_tied and isinstance(weights.wqkv, DramShardedLinear):
         return weights.wqkv(hidden_states, out_memory_config=memory_config)
-    return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config)
+
+    w_tensor = weights.wqk if kv_tied else weights.wqkv
+    return ttnn.linear(hidden_states, w_tensor, memory_config=memory_config)
 
 
 def qkv_projection_is_tied(weights: AttentionWeights, kv_tied: bool = False) -> bool:
