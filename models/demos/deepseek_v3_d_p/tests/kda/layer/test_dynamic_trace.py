@@ -7,6 +7,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     assert_matches_reference,
@@ -154,8 +155,8 @@ def test_changing_actual_start_single_capture(mesh_device, sp_axis, tp_axis, dev
 @pytest.mark.parametrize(
     "mesh_device,tp_axis,device_params",
     [
-        pytest.param((1, 8), 1, fabric_1d_device_params(), id="SP1xTP8"),
-        pytest.param((8, 1), 0, fabric_1d_device_params(), id="SP1xTP8-transposed"),
+        pytest.param((1, 8), 1, fabric_1d_device_params(model_config=KimiK3Config), id="SP1xTP8"),
+        pytest.param((8, 1), 0, fabric_1d_device_params(model_config=KimiK3Config), id="SP1xTP8-transposed"),
     ],
     indirect=["mesh_device", "device_params"],
 )

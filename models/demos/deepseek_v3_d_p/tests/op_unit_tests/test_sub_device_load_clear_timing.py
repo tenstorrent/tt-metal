@@ -37,6 +37,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 
 # Path the test writes its host-profiler samples to so the wrapper can include
@@ -93,7 +94,9 @@ def _two_ops_subdevice(mesh_device, x, w, sd_id, core_grid, ckc):
     [
         pytest.param(
             (4, 2),
-            fabric2d_device_params(),
+            fabric2d_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-mesh-4x2",
         ),

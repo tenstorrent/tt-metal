@@ -16,6 +16,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_xy_device_params,
@@ -51,13 +52,17 @@ _FORMAT_IDS = ["bfp8_tile", "bf16_rm", "fp8_rm"]
 _MESHES = [
     pytest.param(
         (8, 1),
-        torus_y_device_params(),
+        torus_y_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
         id="torus-y-8x1",
     ),
     pytest.param(
         (8, 4),
-        torus_xy_device_params(),
+        torus_xy_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
     ),
@@ -169,7 +174,9 @@ def _assert_cache_windows(
     [
         pytest.param(
             (2, 4),
-            fabric2d_device_params(),
+            fabric2d_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
         )

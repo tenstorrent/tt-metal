@@ -9,7 +9,6 @@ Compares torch.nn.Linear (reference) against TtLMHead (multi-chip TTNN)
 to verify correctness with DeepSeek 671B LM head dimensions.
 """
 
-
 import pytest
 import torch
 from loguru import logger
@@ -83,7 +82,9 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
         # test is kept as a minimal standalone check and runs only on a 2x2 mesh.
         pytest.param(
             (2, 2),
-            fabric2d_device_params(),
+            fabric2d_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
             id="fabric2d-2x2",

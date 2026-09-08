@@ -24,6 +24,8 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import DeepseekV32Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config, glm_5_2_hf_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
@@ -934,7 +936,8 @@ def test_glm52_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
         pytest.param(
             (4, 2),
             fabric2d_device_params(
-                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
+                model_config=GLM51Config,
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
             ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-4x2",
@@ -1014,7 +1017,8 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant,
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
+                model_config=GLM52Config,
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
             ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1068,10 +1072,10 @@ def test_glm52_shared_layer_cache_skips_indexer(mesh_device, device_params, vari
     [
         pytest.param(
             (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
+            fabric2d_device_params(
+                model_config=DeepseekV32Config,
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="linear"),
             id="fabric2d-4x2",
         ),

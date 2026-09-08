@@ -36,6 +36,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
 
 _THIS = "models/demos/minimax_m3/tests/perf/test_model_perf.py"
 
@@ -122,7 +123,7 @@ def _build_real_model(mesh, seq):
 def test_model_fwd():
     from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 
-    fabric_payload_size = 6144  # M3 hidden_size (max fabric packet payload)
+    fabric_payload_size = MiniMaxM3Config.FABRIC_PAYLOAD_SIZE
 
     seq = int(os.getenv("PERF_SEQ", "512"))
     layers = int(os.getenv("PERF_LAYERS", "4"))

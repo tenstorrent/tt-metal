@@ -32,6 +32,7 @@ included, is plain bf16. Only the MoE routed experts are quantized.
 import types
 from typing import Any
 
+from models.demos.common.prefill.fabric import moe_fabric_payload_size
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 
 
@@ -40,7 +41,7 @@ class KimiK3Config:
 
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    FABRIC_PAYLOAD_SIZE = moe_fabric_payload_size(EMB_SIZE)
     # The one definition of K3's l1_small pool, read by the adapter (and so by the runner) and by
     # the pytest gates, whose mesh fixture is built before any adapter is resolved. Only a CEILING
     # is known: 24576 (this package's usual value) starves MLA chunked attention of circular

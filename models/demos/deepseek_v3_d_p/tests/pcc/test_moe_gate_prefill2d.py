@@ -31,7 +31,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     GATE_KEY_PREFIX_KIMI_K3,
     create_fabric_router_config,
     create_gate_weights,
-    get_max_payload_size,
     get_sp_mesh_composer,
     load_gate_weights_from_hf,
 )
@@ -198,25 +197,33 @@ def _try_load_real_gate_input(max_seq_len: int, dim: int) -> torch.Tensor | None
     return load_trace_gate_input(trace_dir, layer_idx=_MOE_LAYER_IDX, max_seq_len=max_seq_len, dim=dim)
 
 
-# Mesh topologies shared by the regular-gate and hash-gate PCC tests.
+# Mesh topologies shared by every model in the regular-gate and hash-gate PCC tests.
+# DeepSeek's payload is the largest supported value (tied with Kimi), so it is the
+# safe dominant config for this independent pytest axis.
 MESH_CONFIGS = [
     pytest.param(
         (2, 2),
-        fabric2d_device_params(),
+        fabric2d_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
         id="fabric2d-mesh-2x2",
     ),
     pytest.param(
         (2, 4),
-        fabric2d_device_params(),
+        fabric2d_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
         id="fabric2d-mesh-2x4",
     ),
     pytest.param(
         (8, 4),
-        torus_xy_device_params(),
+        torus_xy_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
@@ -228,7 +235,7 @@ LOUDBOX_TP1_MESH_CONFIG = pytest.param(
     (8, 1),
     {
         "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+        "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
     },
     1,
     ttnn.Topology.Linear,
@@ -243,7 +250,7 @@ GALAXY_TP4_MESH_CONFIG = pytest.param(
     (8, 4),
     {
         "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+        "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
     },
     2,
     ttnn.Topology.Linear,

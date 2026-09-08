@@ -8,7 +8,6 @@ path separate while reusing the same TT execution helper and the production mesh
 / fabric axes from the dense MLA tests.
 """
 
-
 import pytest
 import torch
 from loguru import logger
@@ -16,6 +15,7 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_x_device_params,
@@ -100,10 +100,10 @@ def _worker_l1_size():
 def _device_params_for_mesh(mesh):
     """Assign one fabric to each existing mesh; topology is not a separate test axis."""
     if mesh == (1, 4):
-        return torus_x_device_params(worker_l1_size=_worker_l1_size())
+        return torus_x_device_params(model_config=GLM51Config, worker_l1_size=_worker_l1_size())
     if mesh == (8, 4):
-        return torus_xy_device_params(worker_l1_size=_worker_l1_size())
-    return fabric2d_device_params(worker_l1_size=_worker_l1_size())
+        return torus_xy_device_params(model_config=GLM51Config, worker_l1_size=_worker_l1_size())
+    return fabric2d_device_params(model_config=GLM51Config, worker_l1_size=_worker_l1_size())
 
 
 def _seq_ok_for_mesh(seq_len, mesh):
@@ -127,7 +127,7 @@ def _sparse_cases(seqs, anchor_only):
                 SPARSE_VARIANTS[0],
                 (2, 2),
                 seqs[-1],
-                fabric2d_device_params(worker_l1_size=_worker_l1_size()),
+                fabric2d_device_params(model_config=GLM51Config, worker_l1_size=_worker_l1_size()),
                 marks=pytest.mark.skip(reason=f"unsupported device count {num_devices}"),
                 id="unsupported-fabric2d",
             )
